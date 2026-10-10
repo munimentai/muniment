@@ -7,9 +7,11 @@ import './styles/selection.css'
 import './styles/code-diff.css'
 import { applyTheme, readStoredTheme } from './lib/theme-state.js'
 import { applyType, readStoredType } from './lib/type-state.js'
+import { applyFrame, readStoredFrame } from './lib/frame-state.js'
 
 applyTheme(document.documentElement, readStoredTheme())
 applyType(document.documentElement, readStoredType())
+applyFrame(document.documentElement, readStoredFrame())
 const query = new URLSearchParams(location.search)
 if (query.has('workspace-menu')) document.documentElement.classList.add('workspace-popup-window')
 // The installed probe loads after the page. Reuse the terminal workspace's VT parser on demand.

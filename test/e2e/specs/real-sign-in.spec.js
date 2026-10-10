@@ -4,7 +4,7 @@ import { access, appendFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { remote } from 'webdriverio'
 import { withAuthDiagnostics } from '../support/auth-diagnostics.mjs'
-import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
 const rawDir = process.env.MUNIMENT_E2E_RAW_DIR
 
@@ -119,7 +119,7 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
       await openFirstRunModelSettings()
     }
     await localMode.waitForDisplayed({ timeout: 120000 })
-    const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    const settings = await $('[role="dialog"][aria-label="Settings"]')
     if (!(await settings.isDisplayed())) {
       await expandSidebar()
       await (await $('button=Settings')).click()
@@ -129,7 +129,7 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     expect(await (await sections.$('button=Account')).isExisting()).toBe(false)
     expect(await (await $('button=Sign in for cloud features')).isExisting()).toBe(false)
     await (await settings.$('button=Connect account')).waitForDisplayed()
-    await (await settings.$('button[aria-label="Close settings"]')).click()
+    await closeSettings()
     expect(await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()).toBe(true)
   })
 })

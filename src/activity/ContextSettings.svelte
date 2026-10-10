@@ -25,9 +25,8 @@
     finally { saving = false }
   }
 </script>
-<section aria-labelledby="context-heading">
-  <h3 id="context-heading">Conversation context</h3>
-  <p>Summarize older messages to make room. Full history stays saved.</p>
+<section aria-label="Conversation context">
+  <p class="settings-intro">Summarize older messages to make room. Full history stays saved.</p>
   {#if ready}
     <form onsubmit={(event) => { event.preventDefault(); void save() }}>
       <label class="toggle"><Toggle bind:checked={enabled} disabled={saving} /> Compact automatically</label>
@@ -43,8 +42,7 @@
   {#if status}<p role="status">{status}</p>{/if}
 </section>
 <style>
-  section { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
-  h3 { font: var(--text-13) var(--font-mono); color: var(--muted); }
+  section { display: grid; gap: 14px; }
   p { font-size: var(--text-13); color: var(--muted); }
   form, details[open] { display: grid; gap: 10px; }
   label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--text-13); }

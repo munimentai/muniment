@@ -580,12 +580,12 @@ function advanceScanFixture() {
 // The account sections live in Settings, so the fixture opens that section.
 function advanceAccessFixture() {
   if (!accessFixture || fixtureRendered()) return
-  const panel = document.querySelector('.settings-panel')
+  const panel = document.querySelector('.settings-layout')
   if (!panel) {
     document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
     return
   }
-  const account = Array.from(panel.querySelectorAll('.settings-nav button'))
+  const account = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
     .find((button) => button.textContent.trim() === 'Account')
   if (account && account.getAttribute('aria-current') !== 'true') account.click()
 }

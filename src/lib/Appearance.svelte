@@ -1,12 +1,10 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
-  import ContextSettings from '../activity/ContextSettings.svelte'
-  import BrowserLanguage from './BrowserLanguage.svelte'
-  import BrowserSearch from './BrowserSearch.svelte'
   import { onMount } from 'svelte'
   import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
   import RunMark from './RunMark.svelte'
   import { MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
+  import { FRAME_OPTIONS, commitFrame, readStoredFrame } from './frame-state.js'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
   let { tauri } = $props()
@@ -25,6 +23,7 @@
   })
 
   let theme = $state(readStoredTheme())
+  let frame = $state(readStoredFrame())
 
   // Type: one size step for the body register, and a family for each register
   // picked from the fonts installed on this device. The shipped pair stays the default.
@@ -82,16 +81,25 @@
 </script>
 
 <section aria-labelledby="appearance-heading">
-  <h3 id="appearance-heading" class="access-label">Themes</h3>
+  <p class="settings-intro">Choose how Muniment looks on this device.</p>
+  <h3 id="appearance-heading" class="section-heading settings-heading">Theme</h3>
   <div class="theme-options" role="group" aria-label="Mode">
     {#each modeOptions as option}
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
-  <details class="theme-browser"><DisclosureSummary>Browse themes</DisclosureSummary>
-  <div class="themes" role="group" aria-labelledby="appearance-heading">
+  <div class="frame-options" role="group" aria-label="Frame">
+    {#each FRAME_OPTIONS as [id, label] (id)}
+      <button type="button" class="frame-pick" aria-pressed={frame === id} onclick={() => { frame = commitFrame(id) }}>
+        <span class="frame-sketch" data-sketch={id} aria-hidden="true"><i class="sketch-band"></i><i class="sketch-side"></i><i class="sketch-main"></i></span>
+        <span>{label}</span>
+      </button>
+    {/each}
+  </div>
+  <details class="theme-browser"><DisclosureSummary>Browse color schemes</DisclosureSummary>
+  <div class="themes" role="group" aria-label="Color schemes">
     {#each themeGroups as [label, row]}
-      <p class="group-label">{label}</p>
+      <p class="group-label settings-subheading">{label}</p>
       <div class="theme-grid">
         {#each row as name}
           <button type="button" class="theme-pick" aria-pressed={picked(name)} onclick={() => chooseTheme(name)}>
@@ -105,7 +113,7 @@
   </details>
 
   <div class="type-section" role="group" aria-labelledby="type-heading">
-  <h3 id="type-heading" class="access-label">Type</h3>
+  <h3 id="type-heading" class="section-heading settings-heading">Type</h3>
   <div class="type-size" role="group" aria-label="Size">
     <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
     <span class="type-readout" role="status">{bodySize(type.step)} px body</span>
@@ -130,7 +138,7 @@
   </div>
 
   <div class="mark-section" role="group" aria-labelledby="mark-heading">
-  <h3 id="mark-heading" class="access-label">Thinking indicator</h3>
+  <h3 id="mark-heading" class="section-heading settings-heading">Thinking indicator</h3>
   <div class="theme-options" role="group" aria-label="Thinking indicator">
     {#each MARK_OPTIONS as [id, label] (id)}
       <button type="button" aria-pressed={mark === id} onclick={() => { mark = commitMark(id) }}>{label}</button>
@@ -142,15 +150,10 @@
   </div>
 </section>
 
-<ContextSettings {tauri} />
-
-<div class="browser-preferences">
-  <BrowserLanguage {tauri} />
-  <BrowserSearch />
-</div>
 
 <style>
-  .access-label { margin: 0 0 6px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
+  .settings-intro { margin: 0 0 22px; }
+  .section-heading { margin: 0 0 8px; }
   .theme-options { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .theme-options button { position: relative; font: inherit; font-size: var(--text-13); border: 0; border-radius: 0; background: transparent; color: var(--muted); padding: 5px 12px; cursor: pointer; }
   .theme-options button + button { border-left: 1px solid var(--border); }
@@ -158,12 +161,26 @@
   .theme-options button:last-child { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
   .theme-options button:hover { background: var(--faint); color: var(--ink); }
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  /* Each frame pick sketches its layout in the current theme: a title band, the sidebar with three lines, and the thread. */
+  .frame-options { display: flex; gap: 8px; margin-top: 12px; }
+  .frame-pick { display: grid; justify-items: start; gap: 6px; padding: 6px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); cursor: pointer; }
+  .frame-pick:hover, .frame-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  .frame-sketch { display: grid; grid-template-columns: 32% minmax(0, 1fr); grid-template-rows: 9px minmax(0, 1fr); box-sizing: border-box; width: 112px; height: 68px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-chip); }
+  .frame-sketch i { display: block; min-width: 0; }
+  .sketch-band { grid-column: 1 / -1; }
+  .sketch-side { background: linear-gradient(var(--muted), var(--muted)) 5px 6px / 60% 2px no-repeat, linear-gradient(var(--muted), var(--muted)) 5px 12px / 45% 2px no-repeat, linear-gradient(var(--muted), var(--muted)) 5px 18px / 55% 2px no-repeat; opacity: .8; }
+  .frame-sketch[data-sketch="framed"] { column-gap: 3px; padding: 0 3px 3px 0; background: var(--paper); }
+  .frame-sketch[data-sketch="framed"] .sketch-main { border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); box-shadow: var(--shadow-window); }
+  .frame-sketch[data-sketch="frameless"] { gap: 1px; background: var(--border); }
+  .frame-sketch[data-sketch="frameless"] .sketch-band { background: var(--paper); }
+  .frame-sketch[data-sketch="frameless"] .sketch-side { background-color: var(--frame-sidebar-panel); }
+  .frame-sketch[data-sketch="frameless"] .sketch-main { background: var(--surface); }
   /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
   .theme-browser { margin-top: 14px; }
-  .mark-section { margin-top: 22px; }
+  .mark-section { margin-top: 28px; }
   .mark-preview { display: flex; align-items: center; min-height: 64px; margin-top: 10px; padding: 0 16px; max-width: 560px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .themes { margin-top: 10px; max-width: 560px; }
-  .group-label { margin: 8px 0 4px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+  .group-label { margin: 10px 0 4px; }
   .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .theme-pick { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
   .theme-pick > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -179,7 +196,7 @@
   .swatch-card { position: relative; }
   .swatch-signal { width: 8px; background: var(--signal); }
   /* Type: the size row is three quiet buttons around a mono readout, and each register is one search over the installed families with the shipped family first. */
-  .type-section { margin-top: 22px; max-width: 560px; }
+  .type-section { margin-top: 28px; max-width: 560px; }
   .type-size { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .type-size button { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 10px; cursor: pointer; }
   .type-size button:hover:not(:disabled) { background: var(--faint); }
@@ -200,6 +217,4 @@
   .font-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   .font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .font-note { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  /* Browser language and search sit side by side, and stack when the panel is narrow. */
-  .browser-preferences { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 24px; border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
 </style>

@@ -1,4 +1,5 @@
 <script>
+  // Settings → Language: one language for the app and its Browser tab.
   import ChoiceField from './ui/ChoiceField.svelte'
   import { onMount } from 'svelte'
   let { tauri } = $props()
@@ -21,7 +22,7 @@
   const restart = $derived(view && (view.selected ?? null) !== (view.active ?? null))
 
   onMount(async () => {
-    try { view = await tauri.invoke('browser_language') } catch { error = 'The browser language could not be read.' }
+    try { view = await tauri.invoke('browser_language') } catch { error = 'The language could not be read.' }
   })
   async function choose(value) {
     pending = true; error = ''
@@ -31,15 +32,15 @@
     finally { pending = false; downloading = false }
   }
 </script>
-<section aria-labelledby="browser-language-heading">
-  <h3 id="browser-language-heading">Browser language</h3>
-  <p>Menus, error pages and site requests in the Browser tab use this language.</p>
+<section aria-labelledby="app-language-heading">
+  <h3 id="app-language-heading" class="settings-heading">App language</h3>
+  <p>Muniment's menus, messages and settings use this language, and so do the Browser tab's pages and site requests.</p>
   {#if view}
     <ChoiceField label="Language" value={view.selected ?? 'system'} {options} disabled={pending} onchange={choose} />
     {#if view.languages.some(language => language.state === 'available')}<p>Languages marked Download fetch about {megabytes} MB once.</p>{/if}
   {/if}
   {#if downloading}<p role="status">Downloading the language…</p>{/if}
-  {#if restart && !pending}<p role="status">Restart Muniment to change the browser language.</p>{/if}
+  {#if restart && !pending}<p role="status">Restart Muniment to change the language.</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>

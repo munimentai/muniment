@@ -1,7 +1,10 @@
 <script>
   import { onMount } from 'svelte'
   import { parseProfile, serializeProfile } from './profile-fields.js'
-  let { tauri, agentId = null } = $props()
+  // `part` shows one Settings page: profile, memory, or both for an agent.
+  let { tauri, agentId = null, part = 'all' } = $props()
+  const showProfile = $derived(!agentId && part !== 'memory')
+  const showMemory = $derived(part !== 'profile')
   const memory = { invoke: (action, args = {}) => agentId ? tauri.invoke("agent_memory", { id: agentId, action, fact: args.fact, factId: args.id }) : tauri.invoke(action, args) }
   let profile = $state(parseProfile())
   let facts = $state([])
@@ -69,9 +72,9 @@
     finally { busy = false }
   }
 </script>
-<section aria-label={agentId ? "Agent memory" : "Profile and memory"}>
-  {#if !agentId}
-  <p>Your profile and saved facts guide replies.</p>
+<section aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+  {#if showProfile}
+  <p class="settings-intro">{part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}</p>
   <div class="profile-fields">
     <label>Name<input bind:value={profile.name} disabled={!loaded || busy} autocomplete="name" /></label>
     <label>Preferred name<input bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></label>
@@ -84,9 +87,10 @@
     <button disabled={!loaded || busy} onclick={saveProfile}>Save profile</button>
     <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
   </div>
-  {:else}<p>Facts saved here belong to this agent. Its chat can create, correct, and remove them.</p>{/if}
-  <h4>Saved memories</h4>
-  <p>Save one fact and its source.</p>
+  {:else if agentId}<p>Facts saved here belong to this agent. Its chat can create, correct, and remove them.</p>{/if}
+  {#if showMemory}
+  {#if part === 'all'}<h4>Saved memories</h4>{/if}
+  <p class="settings-intro">Save one fact and its source.</p>
   {#if facts.length}<input aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
   {#each shown as fact (fact.id)}
     <article>
@@ -110,7 +114,7 @@
     {:else}<p>No deleted memories.</p>{/each}
   {/if}
   <form onsubmit={saveFact}>
-    <h4>{draft.id ? 'Edit memory' : 'Add memory'}</h4>
+    <h4 class="settings-heading">{draft.id ? 'Edit memory' : 'Add memory'}</h4>
     <label>Title<input bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
     <label>Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
     <label>Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
@@ -118,6 +122,7 @@
       {#if draft.id}<button type="button" onclick={() => { draft = { id: '', title: '', content: '', source: 'Added in settings' } }}>Cancel edit</button>{/if}
     </div>
   </form>
+  {/if}
   {#if status}<p role="status">{status}</p>{/if}
 </section>
 <style>

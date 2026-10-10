@@ -3332,7 +3332,7 @@ describe('installed local-mode chat contract', () => {
     expect(localProvider).toContain('10.1.10.105')
     expect(spec).toContain("import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'")
     expect(spec).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
-    expect(spec).toContain("import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'")
+    expect(spec).toContain("import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'")
     expect(spec).toContain('await openFirstRunModelSettings()')
     expect(firstRun).toContain("panel.$('button=Open model settings')")
     expect(firstRun).toContain("$('#onboarding-model-panel')")
@@ -3916,7 +3916,8 @@ describe('installed model settings controls', () => {
     expect(firstRun).toContain("panel.$('button=Open model settings')")
     expect(firstRun).toContain('await settings.click()')
     expect(onboardingSpec).toContain("expect(await (await settings.$('button=Connect account')).isDisplayed()).toBe(true)")
-    expect(onboardingSpec).toContain("await (await settings.$('button[aria-label=\"Close settings\"]')).click()")
+    expect(onboardingSpec).toContain('await closeSettings()')
+    expect(firstRun).toContain("await (await $('button=Back to threads')).click()")
   })
 
   it('includes the model settings panel in the failure diagnostic', () => {

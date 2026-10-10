@@ -1,8 +1,6 @@
 /* Vibrant: a second accent paired with signal. It marks the user's own
    turns and the current place, while signal keeps computation. */
 .user-message { background: var(--accent2-soft) !important; color: var(--ink); }
-.sidebar .active-thread, .sidebar [aria-current="true"],
-html.settings-docked .settings-nav li > button[aria-current="true"] { background: var(--accent2-side) !important; }
-html.settings-docked .settings-nav li > button[aria-current="true"] svg,
+.sidebar .active-thread, .sidebar [aria-current="true"] { background: var(--accent2-side) !important; }
 .sidebar [aria-current="true"] svg { color: var(--accent2) !important; }
 .composer:focus-within { border-color: var(--accent2) !important; }

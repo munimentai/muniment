@@ -76,8 +76,8 @@
   .profile-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
   .profile-button:hover { background: var(--faint); }
   .profile-button > span:last-child { min-width: 0; display: grid; }
-  .profile-button strong { overflow: hidden; text-overflow: ellipsis; font-size: var(--text-13); }
-  .profile-button small { overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+  .profile-button strong { overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); font-size: var(--text-13); }
+  .profile-button small { overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   /* The menu carries the shell's menu padding: 4px around items of 3px 8px. */
   .profile-menu { position: absolute; z-index: 5; left: 0; right: 0; bottom: calc(100% + 6px); padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .profile-menu button { width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }

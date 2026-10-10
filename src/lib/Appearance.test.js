@@ -8,6 +8,7 @@ afterEach(() => {
   localStorage.clear()
   delete document.documentElement.dataset.theme
   delete document.documentElement.dataset.scheme
+  delete document.documentElement.dataset.frame
 })
 
 const stored = () => JSON.parse(localStorage.getItem('muniment.theme'))
@@ -18,7 +19,7 @@ describe('Appearance', () => {
     render(Appearance)
     const modes = screen.getByRole('group', { name: 'Mode' })
     expect(within(modes).getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
-    const themes = screen.getByRole('group', { name: 'Themes' })
+    const themes = screen.getByRole('group', { name: 'Color schemes' })
     expect(within(themes).getAllByRole('button').map((button) => button.textContent.trim())).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Daybreak', 'Afterglow', 'Canopy', 'Coral']])
     expect([...themes.querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Daybreak', 'Afterglow', 'Canopy', 'Coral']].map((name) => name.toLowerCase()))
     expect([...themes.querySelectorAll('p')].map((label) => label.textContent)).toEqual(['Light', 'Dark', 'Vibrant'])
@@ -34,7 +35,7 @@ describe('Appearance', () => {
   it('picks a theme with its mode, keeps the last pick per mode, and follows the OS in System', async () => {
     render(Appearance)
     const modes = screen.getByRole('group', { name: 'Mode' })
-    const themes = screen.getByRole('group', { name: 'Themes' })
+    const themes = screen.getByRole('group', { name: 'Color schemes' })
     await fireEvent.click(within(themes).getByRole('button', { name: 'Vault' }))
     expect(document.documentElement.dataset).toMatchObject({ theme: 'vault', scheme: 'dark' })
     expect(stored()).toEqual({ mode: 'dark', light: 'paper', dark: 'vault' })
@@ -64,5 +65,18 @@ describe('Appearance', () => {
     }
     expect(preview.querySelector('.walker')).not.toBeNull()
     expect(localStorage.getItem('muniment.thinking-mark')).toBe('motion')
+  })
+
+  it('picks Framed or Frameless and applies it at once beside the theme', async () => {
+    render(Appearance)
+    const frames = screen.getByRole('group', { name: 'Frame' })
+    expect(within(frames).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Framed', 'Frameless'])
+    expect(pressed(frames)).toEqual(['Framed'])
+    await fireEvent.click(within(frames).getByRole('button', { name: 'Frameless' }))
+    expect(document.documentElement.dataset.frame).toBe('frameless')
+    expect(localStorage.getItem('muniment.frame')).toBe('frameless')
+    expect(pressed(frames)).toEqual(['Frameless'])
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Color schemes' })).getByRole('button', { name: 'Vault' }))
+    expect(document.documentElement.dataset).toMatchObject({ theme: 'vault', frame: 'frameless' })
   })
 })

@@ -74,9 +74,8 @@
   }
 </script>
 
-<section class="settings-companies" aria-labelledby="settings-companies-title">
-  <h4 id="settings-companies-title" class="settings-label">Companies</h4>
-  <p class="support">Company records stay on this device. Deleting a company removes its records.</p>
+<section class="settings-companies" aria-label="Companies">
+  <p class="settings-intro">Company records stay on this device. Deleting a company removes its records.</p>
   {#if companies.length === 0}
     <p class="support">No company yet.</p>
   {:else}
@@ -116,7 +115,6 @@
 
 <style>
   .settings-companies { display: grid; gap: 10px; justify-items: start; }
-  .settings-label { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .error { color: var(--ink); }
   .company-list { width: 100%; max-width: 640px; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }

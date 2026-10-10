@@ -41,7 +41,7 @@ is evidence. Every component type size resolves through the named `--text-*`
 register. Desktop scale 12 / 13 / 15 body / 17 / 22 / 28, mono one step
 smaller than adjacent body text, line-height 1.55 body and 1.3 headings. No
 display serif. No italic except semantic emphasis in user content.
-Preferences moves two things and nothing else: a size step scales every
+Appearance moves two things and nothing else: a size step scales every
 `--text-*` token and `--text-provenance` together by a tenth per step, from
 two steps down to four up, and a family picked from the device's installed
 fonts sits in front of the shipped stack in `--font-human`, `--font-heading` or `--font-mono`. Headers have a separate picker.
@@ -70,9 +70,9 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no decorative sparkles or wands, no emoji in UI
    copy, pill radius only on Settings tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
-   The one blur is the Settings scrim: the workspace under Settings blurs
+   The one blur is the routing details scrim: the workspace under it blurs
    behind the theme's paper, dark in dark mode and light in light mode, while
-   the popup covers most of it.
+   the overlay covers most of it.
 4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
    or, for the composer's send and stop control, in a glyph with an accessible
    name that says it. Errors state what happened and the next step and never
@@ -92,7 +92,7 @@ The record seal keeps the woven graph ring, whose vertices live in `src/lib/grap
 Native app icons are the pocket-fold symbol in white with its verdigris ear, centered on the dark brand card.
 Provider sign-in pages show the 56px symbol. A finished sign-in plays it once: the elephant rears, curls the J,
 flaps its ear and settles. Reduced motion shows it still.
-The 20px chat mark is the pocket-fold symbol from `brand/v2`: the body in `muted` and its ear in `signal`. Preferences picks one of four indicators: the
+The 20px chat mark is the pocket-fold symbol from `brand/v2`: the body in `muted` and its ear in `signal`. Appearance picks one of four indicators: the
 motion elephant, ear flap only, the still elephant, or the stage word with a text sheen. The motion elephant moves with the run: it stands while the model routes or
 writes, raises its front on the hind hip with both feet down and curls its trunk up into a J while it thinks, walks in the same raised pose while a tool runs, and runs in it through a burst of tools. Reduced motion stills every choice.
 
@@ -109,7 +109,7 @@ never dots. Tool activity folds under one `N tools used` line with a chevron.
 It opens to groups of file reads, searches, commands and edits, indented. Each group opens its action list,
 and each action opens its input, output, state and duration. A neutral text
 sheen marks active actions and stops with reduced motion. Lucide icons name
-the action type. The receipt's Tools row tallies the calls only when the transcript shows none, and the receipt never lists memory reads. Routing details appear only for a turn whose model the router chose, not for a model the user picked, and open in an overlay like Settings: the blurred scrim, the same panel size, and the turns scrolling inside. The provenance line sits under every response in mono at
+the action type. The receipt's Tools row tallies the calls only when the transcript shows none, and the receipt never lists memory reads. Routing details appear only for a turn whose model the router chose, not for a model the user picked, and open in an overlay: the blurred scrim, a 1080 by 760 panel, and the turns scrolling inside. The provenance line sits under every response in mono at
 `--text-provenance`, with the route in signal. Composer focus shifts the
 border to `muted`, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
@@ -129,26 +129,27 @@ Search loads older titles and includes archives. Archived threads has Restore.
 Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
-Settings is a popup over the workspace with a
-section list on its left: Models & decisions, Extend, Preferences, Profile & Memory and Storage.
+Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
+then Models, Extend, Preferences (Appearance, Context, Language), Personal (Profile, Memory) and Workspace (Storage). Each page has a Lucide icon and no title of its own, and opens with a muted 15px intro, its actions right-aligned under it, then semibold sentence-case headings and no dividers.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
-section on its right; the sidebar control, the composer's model chip and the
+section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
-open it. Dismissal returns focus to the opener.
+open it. Back to threads or Escape returns focus to the opener.
 With the company-record flag enabled, Companies lists every company on the machine with Open, Rename and Delete,
 Delete asks once and names the company, and New company sits under the list.
-Models & decisions has Accounts, Models, and Decisions pill tabs. Account
+Model providers, Model list and Decision models are three pages of one component. Account
 rows span the page, with allowances visible and usage in details.
 A searchable model list holds visibility and routing statements. Each provider leads with the newest model of each family and the models turned on.
 The rest fold under Other models and stay out of the picker until turned on. Connect
 account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
-opens a picker over the shown models with Models & decisions at its foot. The
+opens a picker over the shown models with Model providers at its foot. The
 sidebar is resizable by its divider and collapses to nothing: no rail. Each divider
 shows Lucide's vertical ellipsis as its grip, and on hover, focus or drag its gap fills with `border` that fades out at both ends.
 The mark appears on the launch screen and in the thinking state, never in
-the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Sidebar, thread and rail sit
-on `surface` at `--radius-panel` with a hairline inside a four-pixel `paper` frame that shows at every edge and between panels. The update control is a circular
+the sidebar. Icons are Lucide, vendored as inline SVG at a 1.6px stroke. Appearance picks a frame beside the theme, and `src/styles/panels.css` derives both from the theme's tokens.
+Both share one geometry, a one-pixel frame and a 35px title band, so a switch moves no content. Framed fills the frame with `paper`, sets the sidebar on it with no panel and quieter text,
+and draws the thread and rail as `surface` cards clipped `--card-ring` inside their boxes with a hairline. Frameless fills it with `border` seams, a sidebar panel a step toward `ink`, and flat panels. The update control is a circular
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
 The composer band is one mono row under the composer. The vertical ellipsis,
@@ -207,10 +208,10 @@ component. Hidden features leave no controls, Settings entries or empty space.
 
 ## Extend
 
-Extend uses the shared Settings panel. MCP servers, Skills and Plugins occupy
-three theme-colored pill tabs through `SettingsTabs`, shared with Models & decisions.
-Tab icons stay neutral on selection. MCPs use the MCP mark, Skills use
-`pencil-sparkles`, and Plugins use `unplug`. Nonzero counts follow labels in smaller type. Search, category, installation and sort filters
+Extend uses the shared Settings panel. MCP servers, Skills and Plugins are
+three sidebar pages of one component, and `SettingsTabs` draws its pill tabs only outside Settings.
+Their sidebar icons are the MCP mark,
+`pencil-sparkles` and `unplug`, and catalog cards keep the MCP mark. Search, category, installation and sort filters
 search names, descriptions, publishers and categories in the official remote-server catalog.
 Details open an in-app dialog with descriptions, connection details and provider links.
 Directory relays and example servers stay out. Popularity uses the source catalog score.
@@ -243,7 +244,7 @@ operation blocks all dismissal paths together. Dismissal never approves an actio
 Confirmation dialogs keep explicit decision buttons and focus the safe choice.
 Menus close on selection, Escape or outside click without an extra close row.
 Dialogs fit their content, cap height to the viewport, and scroll only as needed.
-Preferences spaces Browse themes below the mode control. Skills and plugins use
+Appearance spaces Browse color schemes below the frame control. Skills and plugins use
 managed storage under `~/.muniment`, with Open folder in Extend.
 Threads, agent chats and artifact chats use one-to-three-word generated titles.
 Project cards keep their vertical ellipsis menu for actions, including Rename.

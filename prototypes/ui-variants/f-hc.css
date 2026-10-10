@@ -9,4 +9,4 @@
   --composer-bg: #000000; --composer-border: #FFFFFF; --title-ink: #FFFFFF;
 }
 .user-message { border: 1px solid #8C9490; }
-.sidebar [aria-current="true"], html.settings-docked .settings-nav li > button[aria-current="true"] { outline: 1px solid #FFFFFF; outline-offset: -1px; }
+.sidebar [aria-current="true"] { outline: 1px solid #FFFFFF; outline-offset: -1px; }

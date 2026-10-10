@@ -7,14 +7,20 @@
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
   import SettingsTabs from '../lib/SettingsTabs.svelte'
   import Toggle from '../lib/Toggle.svelte'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { catalog, categories, categoryLabel, filterCatalog, sortCatalog } from './catalog.js'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
-  let { tauri, oncreate } = $props()
-  let state = $state({ items: [], threads: {} }), tab = $state('mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
+  // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row.
+  let { tauri, oncreate, sidebarTab = null } = $props()
+  // svelte-ignore state_referenced_locally
+  let state = $state({ items: [], threads: {} }), tab = $state(sidebarTab ?? 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let filtersOpen = $state(false), formDialog = $state()
+  function showTab(id) { tab = id; resetSearch(); form = null; preview = null }
+  $effect(() => {
+    if (sidebarTab && sidebarTab !== untrack(() => tab)) showTab(sidebarTab)
+  })
   $effect(() => { if (form && formDialog && !formDialog.open) formDialog.showModal() })
   let details = $state(null), detailsDialog
   // A server's tools reach a chat through scripts that find them when needed,
@@ -78,8 +84,8 @@
   function update(item) { form = {}; source = item.source; replaceId = item.id; preview = null; error = '' }
 </script>
 <section class="extend" aria-label="Extend">
-  <p class="intro">Add tools and instructions to your local workspace.</p>
-  <SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'unplug',count:counts.plugin}]} onchange={id => { tab = id; resetSearch(); form = null; preview = null }} />
+  <p class="intro settings-intro">Add tools and instructions to your local workspace.</p>
+  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'unplug',count:counts.plugin}]} onchange={showTab} />{/if}
   <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0}>
     {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
   </SearchToolbar>

@@ -30,7 +30,7 @@ describe('BrowserLanguage', () => {
     expect(invoke).toHaveBeenLastCalledWith('browser_language_set', { code: 'nl' })
     expect(await screen.findByText('Downloading the language…')).toBeTruthy()
     finish()
-    expect(await screen.findByText('Restart Muniment to change the browser language.')).toBeTruthy()
+    expect(await screen.findByText('Restart Muniment to change the language.')).toBeTruthy()
     expect(screen.queryByText('Downloading the language…')).toBeNull()
   })
 
@@ -47,6 +47,6 @@ describe('BrowserLanguage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Language: français (French)' }))
     await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Match system' }))
     expect(invoke).toHaveBeenLastCalledWith('browser_language_set', { code: null })
-    expect(await screen.findByText('Restart Muniment to change the browser language.')).toBeTruthy()
+    expect(await screen.findByText('Restart Muniment to change the language.')).toBeTruthy()
   })
 })

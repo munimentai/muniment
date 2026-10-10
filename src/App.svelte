@@ -2,6 +2,8 @@
   import { accountCache } from './lib/account-cache.js'
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
+  import { settingsGroups, settingsPage } from './lib/settings-sections.js'
+  import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
@@ -339,16 +341,17 @@
     filterThreads()
     await refreshAgents()
   }
-  let settingsSection = $state('models')
+  let settingsSection = $state('providers')
   let settingsButton = $state()
   // The control that opened Settings takes focus back when it closes.
   let settingsOpener = null
 
-  function openSettings(section = 'models', opener = settingsButton) {
-    settingsSection = section
+  function openSettings(section = 'providers', opener = settingsButton) {
+    settingsSection = settingsPage(section)
     settingsOpener = opener ?? null
     pickerOpen = false
     settingsOpen = true
+    void tick().then(() => document.querySelector('#sidebar nav [aria-current="true"]')?.focus())
   }
 
   async function createExtensionDraft(kind) {
@@ -362,8 +365,11 @@
 
   function closeSettings() {
     settingsOpen = false
-    const opener = settingsOpener ?? settingsButton ?? composer
-    void tick().then(() => opener?.focus?.())
+    // The sidebar's Settings control remounts when Settings closes, so a detached opener hands focus to it.
+    void tick().then(() => {
+      const opener = settingsOpener?.isConnected ? settingsOpener : settingsButton ?? composer
+      opener?.focus?.()
+    })
   }
 
   function toggleSettings() {
@@ -2146,7 +2152,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen} class:tools-open={!!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen} class:tools-open={!!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -2182,7 +2188,20 @@
                     </div>
                   {/if}
         <aside data-panel="sidebar" id="sidebar" class="sidebar">
-          {#if !sidebarCollapsed}
+          {#if !sidebarCollapsed && settingsOpen}
+            <!-- Settings lists its sections in this same sidebar, in its rows and spacing. -->
+            <div class="side-top">
+              <button class="side-action settings-back" aria-keyshortcuts="Escape" onclick={closeSettings}><LucideIcon name="arrow-left" /><span>Back to threads</span></button>
+            </div>
+            <nav class="side-scroll" aria-label="Settings sections" use:panelScroll>
+              {#each settingsGroups() as [group, pages] (group)}
+                <h2 class="side-heading">{group}</h2>
+                {#each pages as [id, label, icon] (id)}
+                  <button class="side-action" aria-current={settingsSection === id ? 'true' : undefined} onclick={() => { settingsSection = id }}>{#if icon === 'mcp'}<span class="side-mark"><McpIcon /></span>{:else}<LucideIcon name={icon} />{/if}<span>{label}</span></button>
+                {/each}
+              {/each}
+            </nav>
+          {:else if !sidebarCollapsed}
             <div class="side-top">
               <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => newSidebarThread()}>
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
@@ -2245,7 +2264,7 @@
             {/if}
             </div>
           {/if}
-          {#if !sidebarCollapsed}
+          {#if !sidebarCollapsed && !settingsOpen}
           <div class="side-foot">
             <div class="settings-block">
               <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
@@ -2687,6 +2706,13 @@
   {/key}{/if}
   {#if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={!!active || threadSwitching || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} onclose={() => projectsOpen = false} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={()=>startCreation('artifact')} onclose={()=>artifactsOpen=false}/>{/if}
+        <!-- Settings sits in the workspace grid: its section list takes the sidebar column. -->
+        {#if settingsOpen}
+          {#await loadSettings() then module}
+          {@const Settings = module.default}
+          <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} />
+          {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
+        {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever
              a run is currently saying there, and be overwritten by the next phase. -->
@@ -2706,12 +2732,6 @@
     <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
       <p>{deletingThreadIds.length > 1 ? 'The selected threads and their messages will be deleted.' : 'This thread and its messages will be deleted.'}</p>
     </ConfirmDialog>
-  {/if}
-  {#if settingsOpen}
-    {#await loadSettings() then module}
-    {@const Settings = module.default}
-    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} />
-    {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
   {/if}
 {#if pairingRequests[0]}
   {#key pairingRequests[0]}
@@ -2838,7 +2858,7 @@
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
   .agent-chat-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 180px; }
-  .agent-chat-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-chat-title span { overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .workspace.agent-profile-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--agent-panel-width); grid-template-areas: "title title title" "side thread rail"; }
   .workspace.tools-open { grid-template-columns:minmax(0,var(--sidebar-column)) minmax(320px,1fr) var(--workspace-panel-width); grid-template-areas:"title title title" "side thread rail"; }
   @media (max-width:950px) { .workspace.tools-open { grid-template-columns:0 minmax(280px,1fr) var(--workspace-panel-width); } .workspace.tools-open .sidebar { display:none; } }
@@ -2946,7 +2966,14 @@
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   /* A narrow sidebar shortens the first control, never its start. */
-  .side-action span { flex: 1; min-width: 0; }
+  /* Sidebar labels overrun the way thread titles do: one line, faded over the last 28px. */
+  .side-action span { flex: 1; min-width: 0; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .side-action kbd { flex: none; }
+  .side-heading:first-child { margin-top: 6px; }
+  .side-heading { margin: 14px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); font-weight: var(--weight-regular); }
+  .settings-back { color: var(--muted); }
+  /* The MCP mark takes a Lucide icon's 18px slot and its muted color. */
+  .side-action .side-mark { flex: 0 0 18px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); mask-image: none; }
   /* The foot of the sidebar: Settings above the account row, under one edge-to-edge hairline. */
   .side-foot { position: relative; margin-top: auto; padding: 4px 6px 6px; }
   /* The menu separator: a straight line inset to the foot's 6px padding at three-quarter strength. */
@@ -2972,6 +2999,9 @@
   .artifact-divider:hover .divider-grip, .sidebar-divider:hover .divider-grip, .artifact-divider:focus-visible .divider-grip, .sidebar-divider:focus-visible .divider-grip, .artifact-divider:active .divider-grip, .sidebar-divider:active .divider-grip { opacity: 0; }
   .artifact-divider { grid-area: rail; }
   .sidebar-divider { grid-area: thread; }
+  /* Settings covers the thread and rail. The title band, the sidebar, its divider and the announcement region stay. */
+  .workspace.settings-open > :global(:not(.titlebar, .sidebar, .sidebar-divider, .visually-hidden, .settings-layout, [role="alert"])) { visibility: hidden; }
+  .workspace.settings-open .titlebar-thread { visibility: hidden; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }

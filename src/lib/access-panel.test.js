@@ -101,9 +101,12 @@ describe('signed-in profile menu', () => {
     await waitFor(() => expect(calls).toBeGreaterThanOrEqual(3))
   })
 
-  it('keeps profile metadata on one readable line', () => {
-    expect(rules.get('.profile-button small')).toMatch(/overflow:\s*hidden/)
-    expect(rules.get('.profile-button small')).toMatch(/text-overflow:\s*ellipsis/)
-    expect(rules.get('.profile-button small')).toMatch(/white-space:\s*nowrap/)
+  it('keeps profile metadata on one line that fades where it overruns', () => {
+    for (const selector of ['.profile-button strong', '.profile-button small']) {
+      expect(rules.get(selector)).toMatch(/overflow:\s*hidden/)
+      expect(rules.get(selector)).toMatch(/white-space:\s*nowrap/)
+      expect(rules.get(selector)).toMatch(/mask-image:\s*linear-gradient\(to right, currentColor calc\(100% - 28px\), transparent\)/)
+      expect(rules.get(selector)).not.toMatch(/text-overflow/)
+    }
   })
 })

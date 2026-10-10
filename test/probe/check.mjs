@@ -97,8 +97,8 @@ async function checkWindowChrome(browser, baseUrl) {
                 name: control.getAttribute('aria-label'),
                 width: box.width,
                 height: box.height,
-                // The row ends where its controls end, so the paper under them is the frame.
-                flush: Math.abs(box.bottom - rect.bottom) < 0.5,
+                // The controls center in the row, which fills the band above the one-pixel frame.
+                flush: Math.abs((box.top + box.bottom) / 2 - (rect.top + rect.bottom) / 2) < 0.5,
                 visible: control.contains(target),
                 inside: box.left >= rect.left && box.right <= rect.right && box.top >= rect.top && box.bottom <= rect.bottom,
                 draggable: control.hasAttribute('data-tauri-drag-region'),
@@ -106,8 +106,8 @@ async function checkWindowChrome(browser, baseUrl) {
             }),
           }
         })
-        // The title row is 30px on the 36px band the workspace grid names.
-        assert.equal(row.height, 30)
+        // The title row is 35px on the 36px band the workspace grid names, above the one-pixel frame.
+        assert.equal(row.height, 35)
         assert.equal(row.top, 0)
         if (platform.startsWith('Mac')) assert.equal(row.clearance, 78)
         else assert.equal(row.padding, '12px')
@@ -161,20 +161,26 @@ async function checkArtifactCreation(page) {
   assert.equal(await page.locator('#composer-message').inputValue(), '')
 }
 
+// Both frames share one geometry: a one-pixel frame and gaps, so switching moves no content.
+// Framed: a paper frame, a sidebar with no panel, and content panels drawn as cards clipped inside their boxes.
+// Frameless: border seams, a flat sidebar panel, and flat surface panels.
 async function checkPaperFrame(browser, baseUrl) {
+  for (const frameName of ['framed', 'frameless']) {
   for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
     for (const colorScheme of ['light', 'dark']) {
       const page = await browser.newPage({ colorScheme })
       try {
-        await page.addInitScript((platform) => {
+        await page.addInitScript(([platform, frameName]) => {
           Object.defineProperty(navigator, 'platform', { get: () => platform })
-        }, platform)
+          localStorage.setItem('muniment.frame', frameName)
+        }, [platform, frameName])
         await page.goto(`${baseUrl}/test/probe/history.html`)
         await page.waitForSelector('[data-probe-ready]')
         await page.evaluate(() => document.fonts.ready)
 
         const checkFrame = async (transition = false) => {
-          const failures = await page.evaluate(async (transition) => {
+          const failures = await page.evaluate(async ([transition, frameName]) => {
+            const framed = frameName === 'framed'
             const failures = []
             const check = () => {
               const workspace = document.querySelector('.workspace')
@@ -191,6 +197,8 @@ async function checkPaperFrame(browser, baseUrl) {
               const paper = color('--paper')
               const surface = color('--surface')
               const border = color('--border')
+              const sidebarPanel = color('--frame-sidebar-panel')
+              const chrome = framed ? paper : border
               // A collapsed sidebar is gone: the panels are the thread and the rail, and the thread slides to the frame.
               const collapsed = workspace.classList.contains('sidebar-collapsed')
               const panels = [...workspace.querySelectorAll(collapsed ? '.thread-panel, .record-panel' : '.sidebar, .thread-panel, .record-panel')]
@@ -199,8 +207,9 @@ async function checkPaperFrame(browser, baseUrl) {
               const fail = (condition, message) => { if (!condition) failures.push(message) }
               const near = (left, right) => Math.abs(left - right) < 1
               const sliding = transition && (collapsed || parseFloat(getComputedStyle(workspace.querySelector('.thread-panel')).marginLeft) !== 0)
-              fail(frame === 4, `Frame width: ${frame}`)
-              fail(style.backgroundColor === paper, 'The workspace lacks paper.')
+              fail(document.documentElement.dataset.frame === frameName, `The root carries ${document.documentElement.dataset.frame}.`)
+              fail(frame === 1, `Frame width: ${frame}`)
+              fail(style.backgroundColor === chrome, 'The workspace lacks its frame color.')
               fail(sliding ? boxes[0].left >= frame - 0.5 : near(boxes[0].left, frame), 'The left frame changed.')
               fail(near(boxes.at(-1).right, innerWidth - frame), 'The right frame changed.')
               for (const [index, panel] of panels.entries()) {
@@ -208,14 +217,22 @@ async function checkPaperFrame(browser, baseUrl) {
                 const panelStyle = getComputedStyle(panel)
                 // The panels start at the 36px band the workspace grid names, not at the title row plus the frame.
                 fail(near(box.top, parseFloat(style.getPropertyValue('--titlebar-band'))), 'The top frame changed.')
+                const sidebar = panel.classList.contains('sidebar')
                 fail(near(box.bottom, innerHeight - frame), 'The bottom frame changed.')
-                fail(panelStyle.backgroundColor === surface, `${panel.className} lacks surface.`)
-                for (const edge of ['Top', 'Right', 'Bottom', 'Left']) {
-                  fail(panelStyle[`border${edge}Width`] === '1px', `${panel.className} lacks a hairline.`)
-                  fail(panelStyle[`border${edge}Color`] === border, `${panel.className} has the wrong border color.`)
+                if (sidebar) {
+                  fail(panelStyle.backgroundColor === (framed ? 'rgba(0, 0, 0, 0)' : sidebarPanel), `The sidebar has the wrong ground: ${panelStyle.backgroundColor}.`)
+                  for (const edge of ['Top', 'Right', 'Bottom', 'Left']) fail(panelStyle[`border${edge}Width`] === '0px', 'The sidebar keeps a border.')
+                  continue
                 }
+                fail(panelStyle.backgroundColor === surface, `${panel.className} lacks surface.`)
+                for (const edge of ['Top', 'Right', 'Bottom', 'Left']) fail(panelStyle[`border${edge}Width`] === '0px', `${panel.className} keeps a border.`)
+                // A framed card sits inside its box: a clip inset by the ring, and a hairline drawn as an inset shadow.
+                const ring = style.getPropertyValue('--card-ring').trim()
+                const radius = style.getPropertyValue('--radius-panel').trim()
+                fail(panelStyle.clipPath === (framed ? `inset(${ring} round ${radius})` : 'none'), `${panel.className} has the wrong clip: ${panelStyle.clipPath}.`)
+                if (framed) fail(panelStyle.boxShadow.includes(border) && panelStyle.boxShadow.includes('inset'), `${panel.className} lacks the card hairline.`)
                 for (const corner of ['TopLeft', 'TopRight', 'BottomLeft', 'BottomRight']) {
-                  fail(panelStyle[`border${corner}Radius`] === style.getPropertyValue('--radius-panel').trim(), `${panel.className} has the wrong radius.`)
+                  fail(panelStyle[`border${corner}Radius`] === (framed ? `${parseFloat(radius) + parseFloat(ring)}px` : '0px'), `${panel.className} has the wrong radius.`)
                 }
                 if (index) fail(index === 1 && sliding ? box.left - boxes[0].right <= frame + 0.5 : near(box.left - boxes[index - 1].right, frame), 'The panel gap changed.')
               }
@@ -250,12 +267,15 @@ async function checkPaperFrame(browser, baseUrl) {
                 }
                 return null
               }
-              for (const [x, y] of [[innerWidth / 2, 1], [1, innerHeight / 2], [innerWidth - 1, innerHeight / 2], [innerWidth / 2, innerHeight - 1]]) {
-                fail(backgroundAt(x, y) === paper, 'A window edge lacks paper.')
+              // The title band is paper. The other edges and the gaps between panels take the frame color.
+              fail(backgroundAt(innerWidth / 2, 1) === paper, 'The title band lacks paper.')
+              // Hit testing takes whole pixels, and the outermost pixel row is frame in both styles.
+              for (const [x, y] of [[0, innerHeight / 2], [innerWidth - 1, innerHeight / 2], [innerWidth / 2, innerHeight - 1]]) {
+                fail(backgroundAt(x, y) === chrome, 'A window edge lacks its frame color.')
               }
               for (let index = sliding ? 2 : 1; index < boxes.length; index++) {
                 for (let y = boxes[index].top + 1; y < boxes[index].bottom; y += 4) {
-                  fail(backgroundAt(boxes[index - 1].right + 1, y) === paper, 'A panel gap lacks paper.')
+                  fail(backgroundAt(Math.floor(boxes[index - 1].right + frame / 2), y) === chrome, 'A panel gap lacks its frame color.')
                 }
               }
             }
@@ -265,8 +285,8 @@ async function checkPaperFrame(browser, baseUrl) {
               check()
             } while (transition && performance.now() - start < 240)
             return [...new Set(failures)]
-          }, transition)
-          assert.deepEqual(failures, [], `${platform} ${colorScheme} ${JSON.stringify(page.viewportSize())}`)
+          }, [transition, frameName])
+          assert.deepEqual(failures, [], `${frameName} ${platform} ${colorScheme} ${JSON.stringify(page.viewportSize())}`)
           if (platform.startsWith('Mac')) {
             const aligned = await page.evaluate(() => {
               const workspace = document.querySelector('.workspace')
@@ -312,11 +332,12 @@ async function checkPaperFrame(browser, baseUrl) {
           await checkFrame()
           await page.emulateMedia({ reducedMotion: 'no-preference' })
         }
-        console.log(`Paper frame checks passed for ${platform} in ${colorScheme}.`)
+        console.log(`${frameName} checks passed for ${platform} in ${colorScheme}.`)
       } finally {
         await page.close()
       }
     }
+  }
   }
 }
 

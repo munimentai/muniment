@@ -262,6 +262,7 @@ export function buildProbeCommandTable(fixtureName) {
   const olderThreadSummaries = history.length
     ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
     : []
+  const browserLanguage = { selected: null, active: null, downloadSize: 9e6, languages: [['en-US', 'installed'], ['de', 'installed'], ['es', 'installed'], ['fr', 'installed'], ['ja', 'installed'], ['pt-BR', 'installed'], ['nl', 'available'], ['ko', 'available']].map(([code, state]) => ({ code, state })) }
   let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
   let savedFacts = []
   let deletedFacts = []
@@ -491,7 +492,12 @@ export function buildProbeCommandTable(fixtureName) {
     ]
     if (command === 'attach_revoke_companion') return null
     unknownCommands.push(command)
-    if (command.startsWith('browser_')) return { url: '' }
+    if (command === 'browser_command') return { url: '' }
+    // The app language: a few installed languages and one that downloads on demand.
+    if (command === 'browser_language' || command === 'browser_language_set') {
+      if (command === 'browser_language_set') browserLanguage.selected = payload?.code ?? null
+      return { ...browserLanguage, languages: browserLanguage.languages.map((language) => ({ ...language, state: language.code === browserLanguage.selected ? 'installed' : language.state })) }
+    }
     throw new Error(`Unknown probe command: ${command}`)
   }
 
@@ -587,12 +593,12 @@ function advanceScanFixture() {
 // The account sections live in Settings, so the fixture opens that section.
 function advanceAccessFixture() {
   if (!accessFixture || fixtureRendered()) return
-  const panel = document.querySelector('.settings-panel')
+  const panel = document.querySelector('.settings-layout')
   if (!panel) {
     document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
     return
   }
-  const account = Array.from(panel.querySelectorAll('.settings-nav button'))
+  const account = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
     .find((button) => button.textContent.trim() === 'Account')
   if (account && account.getAttribute('aria-current') !== 'true') account.click()
 }

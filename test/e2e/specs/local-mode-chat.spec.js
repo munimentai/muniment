@@ -2,7 +2,7 @@ import path from 'node:path'
 import { access, readFile } from 'node:fs/promises'
 import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
 import { piAgentDirectory } from '../support/pi-agent-directory.mjs'
-import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 import { readPins } from '../../../scripts/check-agent-dependencies.mjs'
 
 async function checkCandidatePackages() {
@@ -67,9 +67,9 @@ describe('installed local-mode chat', () => {
     await composer.waitForDisplayed({ timeout: 120000 })
     expect(await composer.getValue()).toBe('Help me organize my notes.')
     // The first Send opens Settings → Models; the composer chip's picker reopens it through Manage models.
-    let settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    let settings = await $('[role="dialog"][aria-label="Settings"]')
     if (await settings.isDisplayed()) {
-      await (await settings.$('button[aria-label="Close settings"]')).click()
+      await closeSettings()
       await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
     }
     const emptyChat = await localMode.$('.thread .empty')
@@ -81,8 +81,8 @@ describe('installed local-mode chat', () => {
       const modelChip = await localMode.$('.model-chip')
       await modelChip.waitForDisplayed()
       await modelChip.click()
-      await (await $('button=Models & decisions')).click()
-      settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+      await (await $('button=Model providers')).click()
+      settings = await $('[role="dialog"][aria-label="Settings"]')
       await settings.waitForDisplayed()
     }
     await (await settings.$('button=Connect account')).click()
@@ -92,7 +92,7 @@ describe('installed local-mode chat', () => {
     await baseUrlInput.setValue(OLLAMA_BASE_URL)
     await (await $('button=Save Ollama server')).click()
     await (await $('p=Muniment saved the Ollama server.')).waitForDisplayed({ timeout: 30000 })
-    await (await settings.$('button[aria-label="Close settings"]')).click()
+    await closeSettings()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
 
     await browser.waitUntil(async () => await emptyChat.getText() === 'Ask a question or request a file.', {

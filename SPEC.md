@@ -29,7 +29,7 @@ These are developer build options, not controls in user Settings.
 
 The flags are independent. Enabling either does not enable the other.
 Disabled sections have no visible controls, empty placeholders or working
-shortcuts. A request for a hidden Settings section opens Models & decisions.
+shortcuts. A request for a hidden Settings page opens Model providers.
 With cloud disabled, startup enters local mode without reading a cloud session.
 A local startup failure offers a local retry, never a cloud sign-in prompt.
 Provider sign-in, model routing, allowances, MCP pairing and local tools remain
@@ -71,7 +71,7 @@ Chat can list, read, save and run agents through harness tools backed by the sam
 Daily, weekday and weekly schedules use the host time zone and the local background service.
 Due runs wait for the current reply. A missed schedule runs once when the service returns.
 An interrupted dispatch requires review instead of an automatic retry. Run results link to their thread.
-Profile & Memory has separate name, preferred name, work and instructions fields backed by `memory/profile.md`.
+Profile has separate name, preferred name, work and instructions fields backed by `memory/profile.md`. Memory lists, edits and restores saved facts.
 Unrecognized profile sections remain editable. Each new reply receives the saved profile.
 Durable facts live in `memory/facts/<id>.md` with their source. Users can edit and delete them.
 The memory-save tool records the originating thread and run. It rejects credentials.
@@ -165,8 +165,8 @@ the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the first Send opens Settings
 → Models. The user supplies model access through a provider or local server.
 
-**Settings → Models & decisions is one screen.** Model selection and classifier
-settings lead. Full-width account rows show allowance, with usage
+**Settings → Models is one component on three pages.** Model providers, Model list
+and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
 in account details. One searchable model list holds visibility and routing
 statements. Each provider leads with the newest model of each family, dated from models.dev, and the models the user turned on. Older models fold under Other models and stay out of the picker until turned on. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
@@ -188,7 +188,7 @@ first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
-**Routing leads Settings → Models & decisions.** Pi's `auth.json` holds one credential per
+**Routing leads Settings → Decision models.** Pi's `auth.json` holds one credential per
 provider id, so a second account of one provider cannot live there. The router
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
@@ -366,7 +366,7 @@ onboarding spec proves the composer, the three chips and a first Send.
     writes back to a source.
 14. **Monetization, launch and publicity are owner-only.**
 
-Settings loads on demand. Models & decisions has Accounts, Models, and Decisions pill tabs. Storage distinguishes the workspace from managed extensions.
+Settings loads on demand. Its sidebar groups pages under Models, Extend, Preferences, Personal and Workspace. Storage distinguishes the workspace from managed extensions.
 ## Workspace panels
 
 The title bar menu opens Browser, Files and Terminal in a shared tab panel.
@@ -377,7 +377,7 @@ leading `www.`. Long browser labels fade on the right. Terminal and Files labels
 show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names.
 Terminal and Files path headers share `OverflowText.svelte`: the full path stays on one line, starts at its end, and scrolls horizontally without a scrollbar.
 Fades mark clipped content and clear when the content fits. A new browser tab opens https://muniment.ai/docs/. Closing a browser tab releases its native view.
-Preferences sets the browser language. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Preferences names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
+Settings → Language picks one language for the app and its Browser tab. The Browser tab applies it, and the app's own text ships in English. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Language names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
 
 **The file panel.** A read or edited file opens in the shared rail, exclusive
 with records and artifacts, with the same resize and maximize controls.
@@ -389,7 +389,7 @@ through a hover pencil and inline form. Grok allowance uses its credits window.
 
 The composer highlights URLs and attached file references. Typing `@` searches
 file names under the selected Files folder or the active workspace; selecting a result attaches it. Search excludes hidden
-files, generated folders and symbolic links. Preferences controls automatic
+files, generated folders and symbolic links. Settings → Context controls automatic
 context compaction and its token limits. Compaction preserves the conversation
 and reports start, completion, cancellation or failure in the action feed.
 Web search returns sources without opening a browser unless configured to do so.
@@ -500,7 +500,7 @@ the exact pin.
 ## Local models
 
 **The cloud-routing classifier is bundled.** It is separate from the optional
-local provider classifier configured in Models & decisions. Its taxonomy is three
+local provider classifier configured in Decision models. Its taxonomy is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, about
 282 MB with its tokenizer, and [ADR

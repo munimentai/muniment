@@ -1,17 +1,9 @@
-/* Framed: the sidebar sits flush on the chrome with dimmed text so content
-   leads. The thread is one raised card inside a 6px frame. */
-.workspace { --frame-width: 6px !important; column-gap: 6px !important; background: var(--chrome) !important; }
+/* Framed palette mapping. The app's frame rules own the geometry; this file
+   maps a variant's chrome, sidebar and card colors onto them. */
+.workspace { background: var(--chrome) !important; }
 .titlebar { background: var(--chrome); --ink: var(--title-ink, var(--side-ink)); --muted: var(--side-muted); --faint: var(--side-faint); }
-.sidebar[data-panel], html.settings-docked .settings-nav {
-  --surface: var(--chrome); --faint: var(--side-faint); --ink: var(--side-ink); --muted: var(--side-muted); --border: transparent;
-  background: transparent !important; border-color: transparent !important; color: var(--ink);
-}
+.sidebar[data-panel] { --surface: var(--chrome); --faint: var(--side-faint); --ink: var(--side-ink); --muted: var(--side-muted); color: var(--ink); }
 .sidebar .thread-search { background: var(--side-search) !important; border: var(--side-search-border, 0) !important; color: var(--ink); }
-/* Every content panel beside the sidebar wears the thread's card: the rail too. */
-.workspace > [data-panel]:not([data-panel="sidebar"]), html.settings-docked .settings-body {
-  border: 1px solid var(--card-border) !important; border-radius: var(--radius-panel) !important;
-  box-shadow: var(--card-shadow);
-}
+.workspace > [data-panel]:not([data-panel="sidebar"]) { box-shadow: inset 0 0 0 calc(var(--card-ring) + 1px) var(--card-border) !important; }
 .composer { background: var(--composer-bg) !important; border-color: var(--composer-border) !important; }
 html { background: var(--chrome); }
-html.settings-docked { --frame: 6px; --gap: 6px; }

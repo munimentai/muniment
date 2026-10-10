@@ -2,7 +2,7 @@ import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
-import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
 const FOLDER_DIALOG_WAIT_SECONDS = 30
 const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -143,10 +143,10 @@ describe('installed nightly model-ready onboarding', () => {
       } catch {}
       throw new Error(`${waitError.message} Model settings: ${failure} ${await shellState()}`)
     }
-    const settings = await $('[role="dialog"][aria-labelledby="settings-title"]')
+    const settings = await $('[role="dialog"][aria-label="Settings"]')
     await settings.waitForDisplayed()
     expect(await (await settings.$('button=Connect account')).isDisplayed()).toBe(true)
-    await (await settings.$('button[aria-label="Close settings"]')).click()
+    await closeSettings()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
     expect(await (await $('[aria-label="First-run settings"]')).isExisting()).toBe(false)
 

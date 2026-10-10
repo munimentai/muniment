@@ -42,7 +42,7 @@ const keyInventory = { providers: [{ id: 'anthropic', name: 'Anthropic', source:
 const openSettings = async (section) => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
   const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-  if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
+  if (section) await fireEvent.click(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
   await vi.dynamicImportSettled(); await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument())
   return dialog
 }
@@ -1424,7 +1424,7 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup')).not.toBeInTheDocument()
   })
 
-  it('opens Settings as a popup with Models, Preferences, Home, Companies and Account sections', async () => {
+  it('opens Settings in the sidebar column with Models, Preferences, Home, Companies and Account sections', async () => {
     localModeStatus = true
     render(App)
     await screen.findByTestId('local-mode')
@@ -1436,18 +1436,32 @@ describe('workspace composer entry', () => {
     // Wait for the lazy import before the DOM query starts its timeout.
     await vi.dynamicImportSettled()
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-    expect(settings).toHaveAttribute('aria-expanded', 'true')
-    expect(dialog).toHaveAttribute('aria-modal', 'true')
-    expect(screen.getByTestId('settings-scrim')).toContainElement(dialog)
-    // The workspace under the popup blurs behind the theme's paper: dark in dark mode, light in light mode.
-    expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
-    expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*background:\s*var\(--overlay-backdrop\)/)
-    const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & decisions', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
-    expect(within(nav).getByRole('button', { name: 'Models & decisions' })).toHaveAttribute('aria-current', 'true')
+    // The sidebar swaps its threads and footer, Settings control included, for the section list.
+    expect(settings).not.toBeInTheDocument()
+    // Settings takes the workspace, not a popup: no modal, no scrim, no blur.
+    expect(dialog).not.toHaveAttribute('aria-modal')
+    expect(screen.queryByTestId('settings-scrim')).not.toBeInTheDocument()
+    expect(settingsStyles).not.toMatch(/backdrop-filter/)
+    // The sidebar lists the sections in its own rows, and the section takes the thread and rail columns.
+    expect(screen.getByTestId('local-mode')).toContainElement(dialog)
+    expect(document.getElementById('sidebar')).toContainElement(screen.getByRole('navigation', { name: 'Settings sections' }))
+    expect(within(document.getElementById('sidebar')).getByRole('button', { name: 'Back to threads' })).toHaveClass('side-action')
+    expect(settingsStyles).toMatch(/\.settings-layout \{[^}]*grid-column:\s*2 \/ -1/)
+    expect(appStyles).toMatch(/\.workspace\.settings-open > :global\(:not\(\.titlebar, \.sidebar, \.sidebar-divider,/)
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+    // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
+    expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
+    expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Model list' }))
+    expect(await within(dialog).findByRole('button', { name: 'Refresh models' })).toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Appearance' }))
     expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
+    expect(within(dialog).queryByText('Summarize older messages to make room. Full history stays saved.')).not.toBeInTheDocument()
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Context' }))
+    expect(await within(dialog).findByText('Summarize older messages to make room. Full history stays saved.')).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Storage' }))
     expect(within(dialog).getByRole('button', { name: 'Change workspace folder…' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
@@ -1455,7 +1469,7 @@ describe('workspace composer entry', () => {
 
     await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
-    await waitFor(() => expect(document.activeElement).toBe(settings))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Settings' })))
   })
 
   it('opens Settings from the settings shortcut with a collapsed sidebar and toggles it', async () => {
@@ -1468,14 +1482,15 @@ describe('workspace composer entry', () => {
 
     await fireEvent.keyDown(document, shortcut)
     expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
-    // The popup needs no sidebar.
+    // Settings keeps the sidebar's state: a collapsed sidebar stays collapsed.
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
 
     await fireEvent.keyDown(document, shortcut)
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
     await fireEvent.keyDown(document, shortcut)
     expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
+    // A collapsed sidebar shows no Back to threads, so Escape closes Settings.
+    await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
 
     await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
@@ -1489,11 +1504,11 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     localStorage.setItem('muniment.theme', 'light')
     render(App)
-    await openSettings('Preferences')
+    await openSettings('Appearance')
     const appearance = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
-    const themes = within(screen.getByRole('group', { name: 'Themes' }))
+    const themes = within(screen.getByRole('group', { name: 'Color schemes' }))
     expect(themes.getAllByRole('button').map((button) => button.textContent.trim()).slice(0, 4)).toEqual(['Paper', 'Vellum', 'Ledger', 'Foolscap'])
 
     await fireEvent.click(appearance.getByRole('button', { name: label }))
@@ -1507,7 +1522,7 @@ describe('workspace composer entry', () => {
     const reopened = await screen.findByRole('button', { name: 'Settings' })
     expect(screen.queryByRole('group', { name: 'Mode' })).not.toBeInTheDocument()
     await fireEvent.click(reopened)
-    await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Settings' })).getByRole('button', { name: 'Preferences' }))
+    await fireEvent.click(within(await screen.findByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'Appearance' }))
     const restored = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
@@ -1518,7 +1533,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     localStorage.removeItem('muniment.type')
     render(App)
-    await openSettings('Preferences')
+    await openSettings('Appearance')
     const size = within(await screen.findByRole('group', { name: 'Size' }))
     expect(size.getByRole('status')).toHaveTextContent('15 px body')
     expect(size.getByRole('button', { name: 'Default type size' })).toBeDisabled()
@@ -1658,7 +1673,7 @@ describe('workspace composer entry', () => {
     const dialog = await openSettings()
     // The startup read seeds the page, so the list shows while the fresh read runs.
     expect(within(dialog).getByRole('region', { name: 'Ollama' })).toBeInTheDocument()
-    await fireEvent.click(within(dialog).getByRole('tab', {name:'Models',exact:true}))
+    await fireEvent.click(screen.getByRole('button', {name:'Model list'}))
     expect(within(dialog).getByText('Llama 3.2:3B')).toBeInTheDocument()
     expect(reads).toBe(2)
     fresh.resolve({ ...held, providers: [{ ...ollama, models: [...ollama.models, { id: 'granite4.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }] })
@@ -7133,7 +7148,7 @@ describe('provenance line', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
     expect(screen.getByRole('region', { name: 'Routing turn 1' })).toHaveTextContent('First account')
     expect(screen.getByRole('region', { name: 'Routing turn 2' })).toHaveTextContent('Rate limited')
-    // The overlay sits on the page body like Settings, and Escape closes it.
+    // The overlay sits on the page body, and Escape closes it.
     const panel = screen.getByRole('dialog', { name: 'Routing details' })
     expect(panel.closest('.routing-scrim').parentElement).toBe(document.body)
     expect(panel).toHaveAttribute('data-panel-variant', 'overlay')
@@ -7654,7 +7669,7 @@ describe('signed-in access popover', () => {
 
   it('applies and persists an accessible per-device appearance choice', async () => {
     render(App)
-    await openSettings('Preferences')
+    await openSettings('Appearance')
     const appearance = within(screen.getByRole('group', { name: 'Mode' }))
     const system = appearance.getByRole('button', { name: 'System' })
     const dark = appearance.getByRole('button', { name: 'Dark' })
@@ -7994,11 +8009,11 @@ describe('release feature flags', () => {
     expect(Boolean(screen.queryByRole('button', {name: 'Sign in to cloud'}))).toBe(cloud)
     expect(Boolean(screen.queryByRole('button', {name: 'Open record panel'}))).toBe(companyRecord)
     const dialog = await openSettings()
-    const nav = within(dialog).getByRole('navigation', {name: 'Settings sections'})
+    const nav = screen.getByRole('navigation', {name: 'Settings sections'})
     expect(Boolean(within(nav).queryByRole('button', {name: 'Account', exact: true}))).toBe(cloud)
     expect(Boolean(within(nav).queryByRole('button', {name: 'Companies', exact: true}))).toBe(companyRecord)
-    expect(within(nav).getByRole('button', {name: 'Models & decisions'})).toBeInTheDocument()
-    await fireEvent.click(within(dialog).getByRole('button', {name: 'Close settings'}))
+    expect(within(nav).getByRole('button', {name: 'Model providers'})).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', {name: 'Back to threads'}))
     if (!companyRecord) {
       await fireEvent.keyDown(window, {key: 'k', metaKey: true, ctrlKey: true})
       expect(screen.queryByRole('button', {name: 'Close record panel'})).toBeNull()
@@ -8029,7 +8044,7 @@ describe('release feature flags', () => {
     const Settings = (await import('./lib/Settings.svelte')).default
     for (const section of ['account', 'companies']) {
       const view = render(Settings, {tauri: {invoke}, section, onclose: vi.fn()})
-      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & decisions'})).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByRole('heading', {name: 'Model providers'})).toBeInTheDocument())
       expect(invoke).not.toHaveBeenCalledWith('auth_entitlement_snapshot')
       expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
       view.unmount()

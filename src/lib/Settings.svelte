@@ -1,23 +1,24 @@
 <script>
-  import { dialogDismiss } from './dialog-dismiss.js'
-  import PopupClose from './PopupClose.svelte'
+  import { EXTEND_TABS, MODEL_TABS, pageForTab, settingsPage, settingsSections } from './settings-sections.js'
   import SettingsSection from './SettingsSection.svelte'
   const ExtendSection = () => import('../extend/ExtendSection.svelte')
   import { featureFlags } from '../feature-flags.js'
   import { panelScroll } from './panel-scroll.js'
-  // Settings is one popup over the workspace: a section list on its left, the
-  // section on its right, and the workspace darkened and blurred behind it.
-  import { onMount, tick } from 'svelte'
+  // Settings takes over the workspace: the sidebar lists its pages under group
+  // headings, and this panel shows the picked page across the thread and rail.
+  import { onMount } from 'svelte'
   const Appearance = () => import('./Appearance.svelte')
   const MemorySection = () => import('./MemorySection.svelte')
   const ModelsSection = () => import('./ModelsSection.svelte')
   const AccountSettings = () => import('./AccountSettings.svelte')
   const CompaniesSection = () => import('./CompaniesSection.svelte')
+  const ContextSettings = () => import('../activity/ContextSettings.svelte')
+  const LanguageSection = () => import('./LanguageSection.svelte')
 
   let {
     tauri,
     listen = (...args) => window.__TAURI__?.event?.listen(...args),
-    section = $bindable('models'),
+    section = $bindable('providers'),
     onclose,
     homePath = '',
     oncreateextension,
@@ -35,16 +36,18 @@
     defaultVoiceShortcut = '',
   } = $props()
 
-  const sections = [['models', 'Models & decisions'], ['extend', 'Extend'], ['appearance', 'Preferences'], ['memory', 'Profile & Memory'], ['home', 'Storage'], ...(featureFlags.companyRecord ? [['companies', 'Companies']] : []), ...(featureFlags.cloud ? [['account', 'Account']] : [])]
+  const sections = settingsSections()
   $effect(() => {
-    if ((section === 'companies' && !featureFlags.companyRecord) || (section === 'account' && !featureFlags.cloud)) section = 'models'
+    if (settingsPage(section) !== section) section = settingsPage(section)
+    else if (!sections.some(([id]) => id === section)) section = 'providers'
   })
   let storageError = $state('')
   let panel = $state()
-  const sectionLabel = $derived(section === 'routing' ? 'Models & decisions' : sections.find(([id]) => id === section)?.[1] ?? 'Settings')
+  const sectionLabel = $derived(sections.find(([id]) => id === settingsPage(section))?.[1] ?? 'Settings')
+  // A Models tab that moves itself, such as Connect account from Decision models, moves the sidebar with it.
+  const showModelTab = (tab) => { section = pageForTab(MODEL_TABS, tab) ?? section }
 
   onMount(() => {
-    void tick().then(() => panel?.querySelector('[aria-current="true"]')?.focus())
     const onKeydown = (event) => {
       // Native child dialogs own focus and Escape until they close.
       if (event.target?.closest?.('dialog[open]')) return
@@ -56,18 +59,6 @@
         onclose()
         return
       }
-      if (event.key !== 'Tab' || !panel) return
-      const controls = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [href]')]
-      if (controls.length === 0) return
-      const first = controls[0]
-      const last = controls.at(-1)
-      if (event.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
-        event.preventDefault()
-        first.focus()
-      }
     }
     document.addEventListener('keydown', onKeydown, true)
     return () => {
@@ -77,61 +68,49 @@
 
 </script>
 
-<div class="settings-scrim" data-testid="settings-scrim" use:dialogDismiss={{onclose}}>
-  <div data-panel="settings" data-panel-variant="overlay" class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" bind:this={panel}>
-    <nav class="settings-nav" aria-label="Settings sections">
-      <h2 id="settings-title">Settings</h2>
-      <ul>
-        {#each sections as [id, label]}
-          <li><button type="button" class="quiet" aria-current={section === id ? 'true' : undefined} onclick={() => { section = id }}>{label}</button></li>
-        {/each}
-      </ul>
-    </nav>
-    <div class="settings-body">
-      <header data-panel-header class="settings-head">
-        <h3 id="settings-section-title">{sectionLabel}</h3>
-        <PopupClose label="Close settings" onclick={onclose} />
-      </header>
-      <div class="settings-content" use:panelScroll>
-        {#if section === 'extend'}
-          <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension}} />
-        {:else if section === 'models' || section === 'routing'}
-          {#key section}
-            <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, initialTab: section === 'routing' ? 'routing' : 'accounts'}} />
-          {/key}
-        {:else if section === 'appearance'}
-          <SettingsSection load={Appearance} properties={{tauri}} />
-        {:else if section === 'memory'}
-          <SettingsSection load={MemorySection} properties={{tauri}} />
-        {:else if section === 'home'}
-          <section class="settings-home" aria-labelledby="settings-home-title">
-            <h4 id="settings-home-title" class="settings-label">Workspace</h4>
-            <p class="settings-path">{homePath}</p>
-            <p class="support">Your workspace holds memory, agents, projects and session files.</p>
-            <button type="button" onclick={onchangehome}>Change workspace folder…</button>
-            <h4 class="settings-label">Managed extensions</h4>
-            <p class="settings-path">~/.muniment</p>
-            <p class="support">Installed skills and plugins live in managed storage, separate from your workspace.</p>
-            <button type="button" onclick={() => tauri.invoke('extend_command', {action:'open_folder',data:{}}).catch(() => storageError = 'The extension folder could not open.')}>Open extension folder</button>
-            {#if storageError}<p role="alert">{storageError}</p>{/if}
-          </section>
-        {:else if featureFlags.companyRecord && section === 'companies'}
-          <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange}} />
-        {:else if featureFlags.cloud && section === 'account'}
-          <section class="settings-account" aria-labelledby="settings-account-title">
-            <h4 id="settings-account-title" class="settings-label">Account</h4>
-            {#if local}
-              <p class="support">Local mode runs on this device with your own providers. A free account adds the mobile relay.</p>
-              <button type="button" disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</button>
-            {/if}
-            {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
-            {#if !local}
-              <SettingsSection load={AccountSettings} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
-            {/if}
-          </section>
+<div data-panel="settings" class="settings-layout" role="dialog" aria-label="Settings" bind:this={panel}>
+  <!-- The sidebar already names the page, so its heading is for assistive tech only. -->
+  <h3 id="settings-section-title" class="visually-hidden">{sectionLabel}</h3>
+  <div class="settings-content" use:panelScroll>
+    {#if section in EXTEND_TABS}
+      <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, sidebarTab: EXTEND_TABS[section]}} />
+    {:else if section in MODEL_TABS}
+      <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, sidebarTab: MODEL_TABS[section], ontab: showModelTab}} />
+    {:else if section === 'appearance'}
+      <SettingsSection load={Appearance} properties={{tauri}} />
+    {:else if section === 'context'}
+      <SettingsSection load={ContextSettings} properties={{tauri}} />
+    {:else if section === 'language'}
+      <SettingsSection load={LanguageSection} properties={{tauri}} />
+    {:else if section === 'profile' || section === 'memory'}
+      <SettingsSection load={MemorySection} properties={{tauri, part: section}} />
+    {:else if section === 'home'}
+      <section class="settings-home" aria-labelledby="settings-home-title">
+        <p class="settings-intro">Muniment keeps your work and its extensions in two places on this device.</p>
+        <h4 id="settings-home-title" class="settings-heading">Workspace folder</h4>
+        <p class="settings-path">{homePath}</p>
+        <p class="support">Your workspace holds memory, agents, projects and session files.</p>
+        <button type="button" onclick={onchangehome}>Change workspace folder…</button>
+        <h4 class="settings-heading">Managed extensions</h4>
+        <p class="settings-path">~/.muniment</p>
+        <p class="support">Installed skills and plugins live in managed storage, separate from your workspace.</p>
+        <button type="button" onclick={() => tauri.invoke('extend_command', {action:'open_folder',data:{}}).catch(() => storageError = 'The extension folder could not open.')}>Open extension folder</button>
+        {#if storageError}<p role="alert">{storageError}</p>{/if}
+      </section>
+    {:else if featureFlags.companyRecord && section === 'companies'}
+      <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange}} />
+    {:else if featureFlags.cloud && section === 'account'}
+      <section class="settings-account" aria-label="Account">
+        {#if local}
+          <p class="settings-intro">Local mode runs on this device with your own providers. A free account adds the mobile relay.</p>
+          <button type="button" disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</button>
         {/if}
-      </div>
-    </div>
+        {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
+        {#if !local}
+          <SettingsSection load={AccountSettings} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
+        {/if}
+      </section>
+    {/if}
   </div>
 </div>
 
@@ -139,21 +118,11 @@
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
-  .quiet { background: transparent; border-color: transparent; }
-  /* The one blur in the app: the workspace under Settings blurs behind the theme's paper, dark in dark mode and light in light mode, and Settings covers most of it. */
-  .settings-scrim { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 40px; background: var(--overlay-backdrop); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-  .settings-panel { width: min(1080px, 100%); height: min(760px, 100%); display: grid; grid-template-columns: 216px minmax(0, 1fr); overflow: hidden;      }
-  .settings-nav { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 20px 12px; border-right: 1px solid var(--border); background: var(--paper); }
-  .settings-nav h2 { margin: 0 8px 12px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
-  .settings-nav ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
-  .settings-nav button { width: 100%; padding: 7px 10px; text-align: left; font-size: var(--text-13); }
-  .settings-nav button[aria-current="true"] { background: var(--faint); }
-  .settings-body { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .settings-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: var(--panel-control-inset); }
-  .settings-head h3 { margin: 0; font-size: var(--text-15); font-weight: 600; }
-  .settings-content { flex: 1; min-height: 0; padding: 16px 28px 28px; overflow-y: auto; }
+  /* Settings takes the thread and rail columns under the title band. The sidebar beside it lists the sections. */
+  .settings-layout { grid-row: 2; grid-column: 2 / -1; position: relative; z-index: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+  .settings-content { flex: 1; min-height: 0; padding: 32px 36px 36px; overflow-y: auto; }
   .settings-home, .settings-account { display: grid; gap: 8px; justify-items: start; }
-  .settings-label { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+  .settings-home .settings-heading { margin-top: 14px; }
   .settings-path { margin: 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .settings-home button, .settings-account button { min-height: 28px; padding: 4px 10px; }

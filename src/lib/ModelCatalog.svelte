@@ -128,7 +128,7 @@
   .capability-options { display: flex; gap: 8px; }
   @media (max-width: 1050px) { .filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .clear-filters { justify-self: end; } }
   @media (max-width: 600px) { .filter-fields { grid-template-columns: 1fr; } .clear-filters { justify-self: start; } }
-  h5 { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); margin: 8px 0; }
+  h5 { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); font-weight: 600; margin: 8px 0; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
   .model { padding: 10px 0; border-bottom: 1px solid var(--border); }
   .model-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }

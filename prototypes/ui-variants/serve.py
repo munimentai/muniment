@@ -17,8 +17,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return os.path.join(HERE, 'index.html')
         if p.startswith('/variants/'):
             return os.path.join(HERE, p[len('/variants/'):])
-        # Lazy chunks preload their styles from the bundle's root-relative asset path.
-        if p.startswith('/assets/'):
+        # Lazy chunks and extension icons load from the bundle's root-relative paths.
+        if p.startswith('/assets/') or p.startswith('/extension-icons/'):
             return os.path.join(REPO, 'dist', p.lstrip('/'))
         return os.path.join(REPO, p.lstrip('/'))
 

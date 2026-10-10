@@ -10,7 +10,7 @@
   }
 </script>
 <section aria-labelledby="browser-search-heading">
-  <h3 id="browser-search-heading">Browser search</h3>
+  <h3 id="browser-search-heading" class="settings-heading">Browser search</h3>
   <p>Words in the Browser tab address bar search with this engine.</p>
   <ChoiceField label="Search engine" value={engine} {options} onchange={choose} />
   <p>Add a bang before or after the words to search one site, such as !w for Wikipedia, !yt for YouTube or !gh for GitHub. DuckDuckGo answers other bangs.</p>

@@ -46,3 +46,51 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
 [data-panel-control]:hover {background:var(--faint);color:var(--ink);}
 [data-panel-control="corner"] {position:absolute;top:var(--panel-control-inset);right:var(--panel-control-inset);z-index:3;}
 [data-panel-header] > button {height:var(--panel-control-size);min-height:var(--panel-control-size);box-sizing:border-box;padding-top:4px;padding-bottom:4px;}
+
+/*
+ * Frames. The root's data-frame picks one, and both derive from the theme's
+ * own tokens, so every theme works in each. Both share one geometry: a
+ * one-pixel frame and gaps and a 35px title band, so switching moves no
+ * content. Frameless fills the frame with border seams, gives the sidebar a
+ * panel a step from surface toward ink, and leaves content panels flat.
+ * Framed fills the frame with paper, sets the sidebar on it with no panel and
+ * text a step quieter, and draws each content panel as a card inset by
+ * --card-ring inside its box, clipped to the card and edged with a hairline.
+ */
+:root {
+  --card-ring: 3px;
+  --frame-sidebar-ink: color-mix(in srgb, var(--ink) 78%, var(--paper));
+  --frame-sidebar-muted: color-mix(in srgb, var(--muted) 85%, var(--paper));
+  --frame-sidebar-faint: color-mix(in srgb, var(--ink) 7%, var(--paper));
+  --frame-sidebar-panel: color-mix(in srgb, var(--ink) 5%, var(--surface));
+  --frame-sidebar-panel-faint: color-mix(in srgb, var(--ink) 10%, var(--surface));
+}
+:root[data-frame] .workspace,
+:root[data-frame] .workspace.macos { --frame-width: 1px; --titlebar-height: 35px; }
+/* The band has no gap under it, so its controls center in it instead of resting on the edge below. */
+:root[data-frame] .workspace .titlebar,
+:root[data-frame] .workspace.macos .titlebar-sidebar,
+:root[data-frame] .workspace.macos .titlebar-thread { align-items: center; }
+:root[data-frame] .workspace > [data-panel] { border: 0; border-radius: 0; }
+
+:root[data-frame="framed"] .workspace { background: var(--paper); }
+:root[data-frame="framed"] .workspace > [data-panel="sidebar"] {
+  --surface: var(--paper); --faint: var(--frame-sidebar-faint); --ink: var(--frame-sidebar-ink); --muted: var(--frame-sidebar-muted);
+  background: transparent; color: var(--ink);
+}
+:root[data-frame="framed"] .workspace > [data-panel]:not([data-panel="sidebar"]) {
+  border-radius: calc(var(--radius-panel) + var(--card-ring));
+  box-shadow: inset 0 0 0 calc(var(--card-ring) + 1px) var(--border);
+  clip-path: inset(var(--card-ring) round var(--radius-panel));
+}
+/* A scrollbar rests on its box's right edge, so a card's scrollers step inside the ring and keep their content in place. */
+:root[data-frame="framed"] .workspace > [data-panel] .thread { width: calc(100% - var(--card-ring)); padding-right: calc(36px - var(--card-ring)); }
+:root[data-frame="framed"] .workspace > [data-panel] .settings-content { margin-right: var(--card-ring); padding-right: calc(36px - var(--card-ring)); }
+/* The native browser view ignores CSS clipping, so its host stays inside the card. */
+:root[data-frame="framed"] .workspace > [data-panel] .browser-host { margin: 0 var(--card-ring) var(--card-ring); }
+
+:root[data-frame="frameless"] .workspace { background: var(--border); }
+:root[data-frame="frameless"] .workspace > [data-panel="sidebar"] {
+  --surface: var(--frame-sidebar-panel); --faint: var(--frame-sidebar-panel-faint);
+  background: var(--frame-sidebar-panel);
+}

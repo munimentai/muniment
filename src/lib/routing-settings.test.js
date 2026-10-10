@@ -19,16 +19,18 @@ afterEach(() => { cleanup(); vi.useRealTimers() })
 describe('Routing settings', () => {
   it('separates accounts, models and routing on one settings screen', async () => {
     const tauri = { invoke: vi.fn(async (command) => command === 'model_router_settings' ? routing() : inventory) }
-    render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
+    // The Settings sidebar picks each page; the section carries no tab row of its own.
+    const { rerender } = render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
     await screen.findByRole('button', { name: 'Connect account' })
+    expect(screen.queryByRole('tablist', { name: 'Model settings' })).toBeNull()
     expect(screen.queryByRole('searchbox', { name: 'Search models' })).toBeNull()
-    await fireEvent.click(screen.getByRole('tab', { name: 'Models', exact: true }))
+    await rerender({ section: 'model-list' })
     expect(screen.getByRole('searchbox', { name: 'Search models' })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh models' })).toBeEnabled())
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }))
     await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { force: true }))
     expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull()
-    await fireEvent.click(screen.getByRole('tab', { name: 'Decisions', exact: true }))
+    await rerender({ section: 'decisions' })
     expect(await screen.findByRole('switch', { name: 'Use routing' })).toBeDisabled()
     expect(screen.queryByText('Classifier and fallback')).toBeNull()
     expect(screen.queryByText('Test routing', { selector: 'summary' })).toBeNull()

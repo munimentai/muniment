@@ -12,6 +12,12 @@ export async function openFirstRunModelSettings() {
   await settings.click()
 }
 
+// Back to threads sits at the top of the sidebar, so the sidebar opens first.
+export async function closeSettings() {
+  await expandSidebar()
+  await (await $('button=Back to threads')).click()
+}
+
 export async function expandSidebar() {
   const toggle = await $('button[aria-controls="sidebar"]')
   await toggle.waitForDisplayed()

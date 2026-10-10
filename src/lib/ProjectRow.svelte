@@ -47,7 +47,7 @@
 <style>
   .project-row { display: flex; align-items: center; position: relative; }
   .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 6px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
-  .project-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project-title span { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .project-title :global(.lucide) { flex: none; width: 18px; height: 18px; }
   .project-title:hover { background: var(--faint); }
   .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 4px; border-radius: var(--radius-control); opacity: 0; border: 0; background: transparent; color: var(--muted); }

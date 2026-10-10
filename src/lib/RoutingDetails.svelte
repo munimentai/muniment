@@ -4,9 +4,9 @@
   import PopupClose from './PopupClose.svelte'
   import { receiptRows } from './chat-state.js'
 
-  // A long run routes every turn, so the turns open in an overlay that looks
-  // like Settings: a blurred scrim over the window and a panel of the same size
-  // that scrolls instead of growing the transcript.
+  // A long run routes every turn, so the turns open in an overlay: a blurred
+  // scrim over the window and a fixed panel that scrolls instead of growing
+  // the transcript.
   let { routing = [] } = $props()
   let shown = $state(false)
   let trigger = $state()
@@ -51,7 +51,7 @@
 <style>
   .routing-trigger { display: block; margin-top: 10px; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); cursor: pointer; }
   .routing-trigger:hover, .routing-trigger:focus-visible { color: var(--ink); }
-  /* The same scrim, blur and panel size as Settings. */
+  /* The app's one blurred scrim, over a 1080 by 760 panel. */
   .routing-scrim { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; padding: 40px; background: var(--overlay-backdrop); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
   .routing-panel { display: flex; flex-direction: column; width: min(1080px, 100%); height: min(760px, 100%); overflow: hidden; }
   .routing-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: var(--panel-control-inset) var(--panel-control-inset) var(--panel-control-inset) 28px; border-bottom: 1px solid var(--border); }

@@ -7,7 +7,7 @@
   // its provider, key or subscription, with its allowance and usage on the
   // card, the provider's models once, the connector that adds a provider, and
   // routing controls and one shared model catalog.
-  import { onDestroy, onMount, tick } from 'svelte'
+  import { onDestroy, onMount, tick, untrack } from 'svelte'
   import SettingsTabs from './SettingsTabs.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
@@ -21,15 +21,29 @@
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts' } = $props()
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts', sidebarTab = null, ontab } = $props()
 
   // svelte-ignore state_referenced_locally
   let inventory = $state(initial)
   let loadError = $state('')
   let status = $state('')
   let query = $state('')
+  // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row. A tab
+  // this section moves to itself reports through `ontab`.
   // svelte-ignore state_referenced_locally
-  let tab = $state(initialTab)
+  let tab = $state(sidebarTab ?? initialTab)
+  $effect(() => {
+    if (sidebarTab && sidebarTab !== untrack(() => tab)) { tab = sidebarTab; view = 'list' }
+  })
+  const INTROS = {
+    accounts: 'Connect the accounts, keys and local servers your models run on.',
+    models: 'Choose the models the picker shows and routing can use.',
+    routing: 'Decision models route each message to a model and assist chats with tools and the browser.',
+  }
+  function showTab(next) {
+    tab = next
+    ontab?.(next)
+  }
   let view = $state('list')
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
@@ -39,7 +53,7 @@
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let classifierId = $state('')
-  // The saved classifier connection whose form is open in Accounts.
+  // The saved classifier connection whose form is open in Model providers.
   let editingClassifier = $state('')
   const classifierEntry = $derived(CLASSIFIERS.find(entry => entry.id === classifierId))
   let providerId = $state('')
@@ -372,17 +386,22 @@
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
+    <div class="page-head">
+    {#if sidebarTab}<p class="settings-intro">{INTROS[tab]}</p>{/if}
+    {#if !sidebarTab || tab !== 'routing'}
     <div class="tabs-row">
-      <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />
+      {#if !sidebarTab}<SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />{/if}
       {#if tab === 'accounts'}<div class="tab-action"><Button icon="plus" variant="primary" onclick={openConnector}>Connect account</Button></div>{/if}
       {#if tab === 'models'}<div class="tab-action"><Button icon="refresh-cw" disabled={discovering} onclick={() => load(true)}>{discovering ? 'Refreshing models…' : 'Refresh models'}</Button></div>{/if}
+    </div>
+    {/if}
     </div>
     {#if tab === 'routing'}
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection onconnect={() => { tab = 'accounts'; openConnector() }} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={() => { showTab('accounts'); openConnector() }} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
 
     {:else if tab === 'accounts'}
@@ -463,7 +482,7 @@
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list'; tab = 'accounts' }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list'; showTab('accounts') }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
@@ -575,6 +594,7 @@
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .provider-group { display: grid; gap: 4px; padding: 10px 0 6px; border-top: 1px solid var(--border); }
   .provider-group:first-of-type { border-top: 0; padding-top: 0; }
+  .page-head { display: grid; gap: 14px; }
   .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .provider-group header { display: flex; align-items: center; gap: 8px; min-height: 28px; }
