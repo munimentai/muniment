@@ -4,7 +4,7 @@
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import { onMount } from 'svelte'
-  import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
+  import { COLORS, STYLES, THEME_STORAGE_KEY, applyTheme, paletteId, paletteName, readStoredTheme, serializeTheme, themeId } from './theme-state.js'
   import RunMark from './RunMark.svelte'
   import { MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
   import { FRAME_OPTIONS, commitFrame, readStoredFrame } from './frame-state.js'
@@ -59,7 +59,11 @@
     type = commitType({ ...type, [register]: family })
   }
   const modeOptions = [['System', 'system'], ['Light', 'light'], ['Dark', 'dark']]
-  const themeGroups = [['Light', LIGHT_THEMES.filter(name => !VIBRANT_THEMES.includes(name))], ['Dark', DARK_THEMES.filter(name => !VIBRANT_THEMES.includes(name))], ['Vibrant', VIBRANT_THEMES]]
+  const STYLE_NOTES = {
+    normal: 'Quiet neutrals with one color for activity.',
+    vibrant: 'Tinted surfaces with an accent for actions.',
+    contrast: 'Black and white with strong hairlines.',
+  }
 
   function commit(next) {
     theme = next
@@ -67,19 +71,13 @@
     try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(theme)) } catch (_) {}
   }
 
-  // A mode keeps the last theme picked in it. System shows the two defaults.
+  // Mode picks the light or dark version, and a palette keeps its mode.
   function chooseMode(mode) {
     commit({ ...theme, mode })
   }
 
-  function chooseTheme(name) {
-    const scheme = themeScheme(name)
-    commit({ ...theme, mode: scheme, [scheme]: name })
-  }
-
-  function picked(name) {
-    if (theme.mode === THEME_SYSTEM) return name === DEFAULT_LIGHT_THEME || name === DEFAULT_DARK_THEME
-    return theme[theme.mode] === name
+  function choosePalette(palette) {
+    commit({ ...theme, palette })
   }
 </script>
 
@@ -103,21 +101,26 @@
     {/each}
   </div>
   </Row>
-  <details class="theme-browser"><DisclosureSummary>Browse color schemes</DisclosureSummary>
-  <div class="themes" role="group" aria-label="Color schemes">
-    {#each themeGroups as [label, row]}
-      <p class="group-label settings-subheading">{label}</p>
-      <div class="theme-grid">
-        {#each row as name}
-          <button type="button" class="theme-pick" aria-pressed={picked(name)} onclick={() => chooseTheme(name)}>
-            <span class="swatch" data-swatch data-theme={name} aria-hidden="true"><span class="swatch-card"><i class="swatch-ink"></i><i class="swatch-muted"></i><i class="swatch-signal"></i>{#if VIBRANT_THEMES.includes(name)}<i class="swatch-accent"></i>{/if}</span></span>
-            <span>{THEME_NAMES[name]}</span>
+  </Group>
+
+  <Group heading="Color scheme" description="Four colors, each in three styles. Mode picks the light or dark version.">
+  {#each STYLES as [style, styleName] (style)}
+    <Row title={styleName} description={STYLE_NOTES[style]}>
+      <div class="palettes" role="group" aria-label={`${styleName} color schemes`}>
+        {#each COLORS as [color, colorName] (color)}
+          {@const palette = paletteId(color, style)}
+          <button type="button" class="palette-pick" aria-label={paletteName(palette)} aria-pressed={theme.palette === palette} onclick={() => choosePalette(palette)}>
+            <span class="palette-swatches" aria-hidden="true">
+              {#each ['light', 'dark'] as scheme (scheme)}
+                <span class="swatch" data-swatch data-theme={themeId(palette, scheme)}><span class="swatch-card"><i class="swatch-ink"></i><i class="swatch-muted"></i><i class="swatch-signal"></i>{#if style === 'vibrant'}<i class="swatch-accent"></i>{/if}</span></span>
+              {/each}
+            </span>
+            <span>{colorName}</span>
           </button>
         {/each}
       </div>
-    {/each}
-  </div>
-  </details>
+    </Row>
+  {/each}
   </Group>
 
   <Group heading="Type">
@@ -184,16 +187,14 @@
   .frame-sketch[data-sketch="frameless"] .sketch-band { background: var(--paper); }
   .frame-sketch[data-sketch="frameless"] .sketch-side { background-color: var(--frame-sidebar-panel); }
   .frame-sketch[data-sketch="frameless"] .sketch-main { background: var(--surface); }
-  /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
-  .theme-browser { padding: 12px 0; font-size: var(--text-13); }
   .mark-preview { display: flex; align-items: center; min-height: 64px; }
-  .themes { margin-top: 10px; }
-  .group-label { margin: 10px 0 4px; }
-  .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .theme-pick { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
-  .theme-pick > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .theme-pick:hover { background: var(--faint); color: var(--ink); }
-  .theme-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  /* Each palette pick shows its light and dark versions side by side over the color's name. */
+  .palettes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .palette-pick { display: grid; justify-items: start; gap: 6px; min-width: 0; padding: 6px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }
+  .palette-pick:hover, .palette-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  .palette-pick[aria-pressed="true"] { border-color: var(--muted); }
+  .palette-swatches { display: flex; }
+  .palette-swatches .swatch + .swatch { margin-left: -1px; }
   /* The swatch element carries the theme's own tokens: a page of its paper, a surface card on it, an ink line, a muted line and a signal mark. */
   .swatch { flex: none; display: block; box-sizing: border-box; width: 40px; height: 28px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--paper); }
   .swatch-card { display: grid; align-content: start; gap: 3px; box-sizing: border-box; height: 100%; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); }

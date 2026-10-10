@@ -10,6 +10,8 @@ import { applyType, readStoredType } from './lib/type-state.js'
 import { applyFrame, readStoredFrame } from './lib/frame-state.js'
 
 applyTheme(document.documentElement, readStoredTheme())
+// In System a palette other than the default shows its light or dark version, so an OS switch reapplies it.
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(document.documentElement, readStoredTheme())) } catch (_) {}
 applyType(document.documentElement, readStoredType())
 applyFrame(document.documentElement, readStoredFrame())
 const query = new URLSearchParams(location.search)

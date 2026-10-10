@@ -10,14 +10,13 @@ default. The interface is the user's territory and the model is a visitor.
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
 first-class, the OS picks the default, and a user override persists per device.
 Every theme carries ten core color tokens in one `:root[data-theme]`
-block. The house sets are Paper, Vellum, Ledger and Foolscap in light and
-Moss, Vault, Graphite and Inkwell in dark. Parchment, Manila and Linen carry
-the light neutrals of Solarized, Gruvbox and Catppuccin, and Lagoon, Umber,
-Fjord, Plum, Nocturne, Nightshade, Basalt and Obsidian carry the dark
-neutrals of Solarized, Gruvbox, Nord, Catppuccin, Tokyo Night, Dracula,
-Monokai and One Dark. Broadsheet and Carbon are the high contrast sets, pure
-ink on pure paper with strong hairlines. Paper and Vault are the two defaults
-below.
+block. Appearance offers four colors, Sage, Harbor, Clay and Iris, in three
+rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
+version, and Mode picks between them, so System follows the OS with the
+picked palette. Normal sets are quiet neutrals tinted by the color, with the
+color as signal. Vibrant sets tint paper and add an accent. High contrast sets
+hold pure ink on pure paper with strong hairlines. Sage light and Sage dark
+are the two defaults below.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
@@ -32,8 +31,8 @@ below.
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Vibrant themes add paired accents: Daybreak and Afterglow use teal and orange, Canopy green and mint, Coral teal and red. House neutrals carry a faint green cast. The one
-exception is Vault's black paper: its surface and faint keep the cast, so the
+Vibrant sets pair the color with a complementary accent: Sage with raspberry, Harbor with orange, Clay with teal and Iris with amber. Sage neutrals carry a faint green cast. The one
+exception is Sage dark's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 
 Type: Schibsted Grotesk for everything human, Commit Mono for everything that

@@ -17,10 +17,9 @@ const block = (pattern) => {
   return declarations(body)
 }
 
-const themes = [
-  'paper', 'vellum', 'ledger', 'foolscap', 'parchment', 'manila', 'linen', 'broadsheet',
-  'moss', 'vault', 'graphite', 'inkwell', 'lagoon', 'umber', 'fjord', 'plum', 'nocturne', 'nightshade', 'basalt', 'obsidian', 'carbon', 'daybreak', 'afterglow', 'canopy', 'coral',
-]
+const colors = ['sage', 'harbor', 'clay', 'iris']
+const palettesOf = colors.flatMap((color) => [color, `${color}-vibrant`, `${color}-contrast`])
+const themes = palettesOf.flatMap((palette) => [`${palette}-light`, `${palette}-dark`])
 const themeBlock = (name) => new RegExp(`:root\\[data-theme="${name}"\\][^{]*\\{([^}]*)\\}`)
 
 const palettes = {
@@ -65,12 +64,17 @@ describe('§1.3 text token contrast', () => {
       expect(body).toMatch(/color-scheme:\s*(light|dark)\s*;/)
       expect(source).toContain(`[data-swatch][data-theme="${name}"]`)
     }
-    expect(palettes.paper).toEqual(palettes['default light'])
-    expect(palettes.vault).toEqual(palettes['default dark'])
-    expect(palettes.vault.paper).toBe('#000000')
-    // The two high contrast sets hold pure ink on pure paper.
-    expect([palettes.broadsheet.ink, palettes.broadsheet.paper]).toEqual(['#000000', '#FFFFFF'])
-    expect([palettes.carbon.ink, palettes.carbon.paper]).toEqual(['#FFFFFF', '#000000'])
+    expect(themes).toHaveLength(24)
+    expect(palettes['sage-light']).toEqual(palettes['default light'])
+    expect(palettes['sage-dark']).toEqual(palettes['default dark'])
+    expect(palettes['sage-dark'].paper).toBe('#000000')
+    // Every high contrast set holds pure ink on pure paper.
+    for (const color of colors) {
+      expect([palettes[`${color}-contrast-light`].ink, palettes[`${color}-contrast-light`].paper]).toEqual(['#000000', '#FFFFFF'])
+      expect([palettes[`${color}-contrast-dark`].ink, palettes[`${color}-contrast-dark`].paper]).toEqual(['#FFFFFF', '#000000'])
+    }
+    // Every vibrant set carries an accent, and every other set leaves it out.
+    for (const name of themes) expect(source.match(themeBlock(name))[1].includes('--accent:'), name).toBe(name.includes('-vibrant-'))
   })
 
   it('detects a color below the contrast floor', () => {
@@ -80,7 +84,7 @@ describe('§1.3 text token contrast', () => {
 })
 
 it('keeps vibrant accents readable on action surfaces and filled buttons', () => {
-  for (const name of ['daybreak', 'afterglow', 'canopy', 'coral']) {
+  for (const name of themes.filter((theme) => theme.includes('-vibrant-'))) {
     const palette = palettes[name]
     expect(contrastRatio(palette.accent, palette['accent-soft'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(palette.accent, palette['on-accent'])).toBeGreaterThanOrEqual(4.5)

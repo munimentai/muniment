@@ -23,12 +23,16 @@ afterEach(() => {
 })
 
 it.each([
-  ['light', 'paper'],
-  ['dark', 'vault'],
-  ['moss', 'moss'],
-  ['{"mode":"light","light":"ledger","dark":"vault"}', 'ledger'],
-  ['{"mode":"dark","light":"ledger","dark":"vault"}', 'vault'],
-  ['{"mode":"system","light":"ledger","dark":"vault"}', undefined],
+  ['light', 'sage-light'],
+  ['dark', 'sage-dark'],
+  ['moss', 'sage-dark'],
+  ['iris-contrast-dark', 'iris-contrast-dark'],
+  ['{"mode":"light","palette":"harbor"}', 'harbor-light'],
+  ['{"mode":"dark","palette":"clay-vibrant"}', 'clay-vibrant-dark'],
+  ['{"mode":"system","palette":"iris"}', 'iris-light'],
+  ['{"mode":"light","light":"ledger","dark":"vault"}', 'harbor-light'],
+  ['{"mode":"dark","light":"ledger","dark":"vault"}', 'sage-dark'],
+  ['{"mode":"system","palette":"sage"}', undefined],
   ['system', undefined],
   [null, undefined],
   ['', undefined],

@@ -90,7 +90,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* §1.3 dark color tokens: Vault, black paper with the green cast kept on surface and faint */
+    /* §1.3 dark color tokens: Sage dark, black paper with the green cast kept on surface and faint */
     --paper: #000000;
     --surface: #0E1110;
     --faint: #161A18;
@@ -108,12 +108,15 @@
 }
 
 /*
- * The themes. An explicit pick sets data-theme on the root, which
- * outranks the OS media block. A swatch element carries the same block, so
- * Appearance shows every theme's paper and surface without a second source.
+ * The color schemes: four colors, Sage, Harbor, Clay and Iris, each in a
+ * normal, a vibrant and a high contrast style, and each style in a light and
+ * a dark version. A theme id reads color-scheme for the normal style and
+ * color-style-scheme for the others. An explicit pick sets data-theme on the
+ * root, which outranks the OS media block. A swatch element carries the same
+ * block, so Appearance shows every theme without a second source. Sage light
+ * and Sage dark are the two defaults above.
  */
-/* The default light: the §1.3 light set. */
-:root[data-theme="paper"], [data-swatch][data-theme="paper"] {
+:root[data-theme="sage-light"], [data-swatch][data-theme="sage-light"] {
   --paper: #F6F7F6;
   --surface: #FFFFFF;
   --faint: #EDEFEE;
@@ -127,73 +130,7 @@
   --ochre: #B98A2F;
   color-scheme: light;
 }
-
-/* The light set on warm cream neutrals. */
-:root[data-theme="vellum"], [data-swatch][data-theme="vellum"] {
-  --paper: #F7F4EC;
-  --surface: #FDFBF5;
-  --faint: #EFEAE0;
-  --ink: #1F1B15;
-  --muted: #6B6257;
-  --border: #E5DFD2;
-  --signal: #2A7264;
-  --signal-opacity: .10;
-  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
-  --oxide: #B4483E;
-  --ochre: #B98A2F;
-  color-scheme: light;
-}
-
-/* The light set on cool slate neutrals. */
-:root[data-theme="ledger"], [data-swatch][data-theme="ledger"] {
-  --paper: #F3F5F8;
-  --surface: #FBFCFE;
-  --faint: #E9EDF2;
-  --ink: #171B21;
-  --muted: #5A6470;
-  --border: #DCE2E9;
-  --signal: #2A7264;
-  --signal-opacity: .10;
-  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
-  --oxide: #B4483E;
-  --ochre: #B98A2F;
-  color-scheme: light;
-}
-
-/* The light set on a near-white paper with a darker ink. */
-:root[data-theme="foolscap"], [data-swatch][data-theme="foolscap"] {
-  --paper: #FCFCFB;
-  --surface: #FEFEFD;
-  --faint: #F2F3F1;
-  --ink: #0F1211;
-  --muted: #4E5552;
-  --border: #E4E6E4;
-  --signal: #2A7264;
-  --signal-opacity: .10;
-  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
-  --oxide: #B4483E;
-  --ochre: #B98A2F;
-  color-scheme: light;
-}
-
-/* The §1.3 dark set on green-cast neutrals. */
-:root[data-theme="moss"], [data-swatch][data-theme="moss"] {
-  --paper: #141716;
-  --surface: #1C201E;
-  --faint: #222624;
-  --ink: #E8EBE9;
-  --muted: #8A928E;
-  --border: #2A2F2C;
-  --signal: #58B39F;
-  --signal-opacity: .12;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #C96A61;
-  --ochre: #CBA14E;
-  color-scheme: dark;
-}
-
-/* The default dark: black paper, surface and faint stepped up from black with the green cast kept, and a hairline border that reads on both. */
-:root[data-theme="vault"], [data-swatch][data-theme="vault"] {
+:root[data-theme="sage-dark"], [data-swatch][data-theme="sage-dark"] {
   --paper: #000000;
   --surface: #0E1110;
   --faint: #161A18;
@@ -207,92 +144,44 @@
   --ochre: #CBA14E;
   color-scheme: dark;
 }
-
-/* The dark set on plain gray neutrals with no green cast. */
-:root[data-theme="graphite"], [data-swatch][data-theme="graphite"] {
-  --paper: #141414;
-  --surface: #1C1C1C;
-  --faint: #232323;
-  --ink: #E8E8E8;
-  --muted: #8E8E8E;
-  --border: #2B2B2B;
-  --signal: #58B39F;
+:root[data-theme="sage-vibrant-light"], [data-swatch][data-theme="sage-vibrant-light"] {
+  --paper: #E4F4EC;
+  --surface: #FFFFFF;
+  --faint: #D4ECE0;
+  --ink: #10302A;
+  --muted: #3D5D55;
+  --border: #A9D5C2;
+  --signal: #006B4E;
+  --signal-opacity: .10;
+  --signal-soft: rgba(0, 107, 78, var(--signal-opacity));
+  --oxide: #B13D42;
+  --ochre: #7A5A00;
+  --accent: #B4235A;
+  --accent-soft: #FCE3EC;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="sage-vibrant-dark"], [data-swatch][data-theme="sage-vibrant-dark"] {
+  --paper: #0D2A22;
+  --surface: #14362C;
+  --faint: #1B4136;
+  --ink: #E8FAF3;
+  --muted: #A6CCBF;
+  --border: #3B6B5D;
+  --signal: #4FD6A5;
   --signal-opacity: .12;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #C96A61;
-  --ochre: #CBA14E;
+  --signal-soft: rgba(79, 214, 165, var(--signal-opacity));
+  --oxide: #FF9B9B;
+  --ochre: #EFCA5A;
+  --accent: #FF8FB1;
+  --accent-soft: #4A2433;
+  --on-accent: #0D2A22;
   color-scheme: dark;
 }
-
-/* The dark set on blue-black neutrals. */
-:root[data-theme="inkwell"], [data-swatch][data-theme="inkwell"] {
-  --paper: #101318;
-  --surface: #171B22;
-  --faint: #1E232B;
-  --ink: #E6E9EE;
-  --muted: #8C95A3;
-  --border: #2A3039;
-  --signal: #58B39F;
-  --signal-opacity: .12;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #C96A61;
-  --ochre: #CBA14E;
-  color-scheme: dark;
-}
-
-/* Solarized light on its cream bases. */
-:root[data-theme="parchment"], [data-swatch][data-theme="parchment"] {
-  --paper: #FDF6E3;
-  --surface: #FFFCF2;
-  --faint: #EEE8D5;
-  --ink: #073642;
-  --muted: #4F6670;
-  --border: #E0D8C0;
-  --signal: #2A7264;
-  --signal-opacity: .10;
-  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
-  --oxide: #B5281F;
-  --ochre: #B58900;
-  color-scheme: light;
-}
-
-/* Gruvbox light on its warm folder yellows. */
-:root[data-theme="manila"], [data-swatch][data-theme="manila"] {
-  --paper: #FBF1C7;
-  --surface: #FDF6DC;
-  --faint: #EBDBB2;
-  --ink: #3C3836;
-  --muted: #5F574D;
-  --border: #D5C4A1;
-  --signal: #2A6A5A;
-  --signal-opacity: .12;
-  --signal-soft: rgba(42, 106, 90, var(--signal-opacity));
-  --oxide: #9D0006;
-  --ochre: #B57614;
-  color-scheme: light;
-}
-
-/* Catppuccin Latte on its cool pastel grays. */
-:root[data-theme="linen"], [data-swatch][data-theme="linen"] {
-  --paper: #EFF1F5;
-  --surface: #F7F8FA;
-  --faint: #E6E9EF;
-  --ink: #4C4F69;
-  --muted: #5F6278;
-  --border: #CCD0DA;
-  --signal: #2A7264;
-  --signal-opacity: .10;
-  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
-  --oxide: #D20F39;
-  --ochre: #DF8E1D;
-  color-scheme: light;
-}
-
-/* High contrast light: black ink on white with strong hairlines. */
-:root[data-theme="broadsheet"], [data-swatch][data-theme="broadsheet"] {
+:root[data-theme="sage-contrast-light"], [data-swatch][data-theme="sage-contrast-light"] {
   --paper: #FFFFFF;
   --surface: #FFFFFF;
-  --faint: #EDEDED;
+  --faint: #E8F0ED;
   --ink: #000000;
   --muted: #2B2B2B;
   --border: #6E6E6E;
@@ -303,140 +192,10 @@
   --ochre: #6F4A00;
   color-scheme: light;
 }
-
-/* Solarized dark on its deep teal bases. */
-:root[data-theme="lagoon"], [data-swatch][data-theme="lagoon"] {
-  --paper: #002B36;
-  --surface: #073642;
-  --faint: #0A3F4B;
-  --ink: #EEE8D5;
-  --muted: #9DABAB;
-  --border: #1B5563;
-  --signal: #58B39F;
-  --signal-opacity: .14;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #E0645C;
-  --ochre: #D2A21C;
-  color-scheme: dark;
-}
-
-/* Gruvbox dark on its warm browns. */
-:root[data-theme="umber"], [data-swatch][data-theme="umber"] {
-  --paper: #282828;
-  --surface: #32302F;
-  --faint: #3C3836;
-  --ink: #EBDBB2;
-  --muted: #BDAE93;
-  --border: #504945;
-  --signal: #58B39F;
-  --signal-opacity: .12;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #FB4934;
-  --ochre: #FABD2F;
-  color-scheme: dark;
-}
-
-/* Nord on its polar night blues, with its frost teal as signal. */
-:root[data-theme="fjord"], [data-swatch][data-theme="fjord"] {
-  --paper: #2E3440;
-  --surface: #343A48;
-  --faint: #3B4252;
-  --ink: #ECEFF4;
-  --muted: #A6B0C3;
-  --border: #4C566A;
-  --signal: #8FBCBB;
-  --signal-opacity: .14;
-  --signal-soft: rgba(143, 188, 187, var(--signal-opacity));
-  --oxide: #BF616A;
-  --ochre: #EBCB8B;
-  color-scheme: dark;
-}
-
-/* Catppuccin Mocha on its violet-black bases. */
-:root[data-theme="plum"], [data-swatch][data-theme="plum"] {
-  --paper: #1E1E2E;
-  --surface: #252536;
-  --faint: #313244;
-  --ink: #CDD6F4;
-  --muted: #A6ADC8;
-  --border: #45475A;
-  --signal: #58B39F;
-  --signal-opacity: .12;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #F38BA8;
-  --ochre: #F9E2AF;
-  color-scheme: dark;
-}
-
-/* Tokyo Night on its indigo blacks. */
-:root[data-theme="nocturne"], [data-swatch][data-theme="nocturne"] {
-  --paper: #1A1B26;
-  --surface: #1F2335;
-  --faint: #292E42;
-  --ink: #C0CAF5;
-  --muted: #A9B1D6;
-  --border: #3B4261;
-  --signal: #58B39F;
-  --signal-opacity: .12;
-  --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-  --oxide: #F7768E;
-  --ochre: #E0AF68;
-  color-scheme: dark;
-}
-
-/* Dracula on its violet grays. */
-:root[data-theme="nightshade"], [data-swatch][data-theme="nightshade"] {
-  --paper: #282A36;
-  --surface: #2F3140;
-  --faint: #44475A;
-  --ink: #F8F8F2;
-  --muted: #B6BBD1;
-  --border: #4F5268;
-  --signal: #7FD6C2;
-  --signal-opacity: .14;
-  --signal-soft: rgba(127, 214, 194, var(--signal-opacity));
-  --oxide: #FF5555;
-  --ochre: #F1FA8C;
-  color-scheme: dark;
-}
-
-/* Monokai on its olive blacks. */
-:root[data-theme="basalt"], [data-swatch][data-theme="basalt"] {
-  --paper: #272822;
-  --surface: #2D2E27;
-  --faint: #3E3D32;
-  --ink: #F8F8F2;
-  --muted: #B3AF98;
-  --border: #49483E;
-  --signal: #66BFAB;
-  --signal-opacity: .12;
-  --signal-soft: rgba(102, 191, 171, var(--signal-opacity));
-  --oxide: #F92672;
-  --ochre: #E6DB74;
-  color-scheme: dark;
-}
-
-/* One Dark on its blue-gray blacks. */
-:root[data-theme="obsidian"], [data-swatch][data-theme="obsidian"] {
-  --paper: #282C34;
-  --surface: #2C313A;
-  --faint: #353B45;
-  --ink: #DCDFE4;
-  --muted: #ABB2BF;
-  --border: #3E4451;
-  --signal: #66BFAB;
-  --signal-opacity: .12;
-  --signal-soft: rgba(102, 191, 171, var(--signal-opacity));
-  --oxide: #E06C75;
-  --ochre: #E5C07B;
-  color-scheme: dark;
-}
-
-/* High contrast dark: white ink on black with strong hairlines. */
-:root[data-theme="carbon"], [data-swatch][data-theme="carbon"] {
+:root[data-theme="sage-contrast-dark"], [data-swatch][data-theme="sage-contrast-dark"] {
   --paper: #000000;
   --surface: #000000;
-  --faint: #1C1C1C;
+  --faint: #16201C;
   --ink: #FFFFFF;
   --muted: #D6D6D6;
   --border: #9A9A9A;
@@ -447,88 +206,286 @@
   --ochre: #FFD166;
   color-scheme: dark;
 }
+:root[data-theme="harbor-light"], [data-swatch][data-theme="harbor-light"] {
+  --paper: #F3F5F8;
+  --surface: #FBFCFE;
+  --faint: #E9EDF2;
+  --ink: #171B21;
+  --muted: #5A6470;
+  --border: #DCE2E9;
+  --signal: #2B5F9E;
+  --signal-opacity: .10;
+  --signal-soft: rgba(43, 95, 158, var(--signal-opacity));
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+  color-scheme: light;
+}
+:root[data-theme="harbor-dark"], [data-swatch][data-theme="harbor-dark"] {
+  --paper: #0F1318;
+  --surface: #161B22;
+  --faint: #1D232C;
+  --ink: #E6E9EE;
+  --muted: #8F98A6;
+  --border: #2A313B;
+  --signal: #6FA6E6;
+  --signal-opacity: .12;
+  --signal-soft: rgba(111, 166, 230, var(--signal-opacity));
+  --oxide: #C96A61;
+  --ochre: #CBA14E;
+  color-scheme: dark;
+}
+:root[data-theme="harbor-vibrant-light"], [data-swatch][data-theme="harbor-vibrant-light"] {
+  --paper: #E8F1FC;
+  --surface: #FFFFFF;
+  --faint: #D8E7F8;
+  --ink: #12243D;
+  --muted: #3F5672;
+  --border: #B3CDEB;
+  --signal: #0B5FA5;
+  --signal-opacity: .10;
+  --signal-soft: rgba(11, 95, 165, var(--signal-opacity));
+  --oxide: #B13D42;
+  --ochre: #7A5A00;
+  --accent: #A94700;
+  --accent-soft: #FFE8D5;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="harbor-vibrant-dark"], [data-swatch][data-theme="harbor-vibrant-dark"] {
+  --paper: #0E1E36;
+  --surface: #152946;
+  --faint: #1C3354;
+  --ink: #EDF4FF;
+  --muted: #A9BEDB;
+  --border: #3B5680;
+  --signal: #6CB2FF;
+  --signal-opacity: .12;
+  --signal-soft: rgba(108, 178, 255, var(--signal-opacity));
+  --oxide: #FF9B9B;
+  --ochre: #EFCA5A;
+  --accent: #FFA64D;
+  --accent-soft: #433324;
+  --on-accent: #0E1E36;
+  color-scheme: dark;
+}
+:root[data-theme="harbor-contrast-light"], [data-swatch][data-theme="harbor-contrast-light"] {
+  --paper: #FFFFFF;
+  --surface: #FFFFFF;
+  --faint: #E8EDF4;
+  --ink: #000000;
+  --muted: #2B2B2B;
+  --border: #6E6E6E;
+  --signal: #0B4A8C;
+  --signal-opacity: .14;
+  --signal-soft: rgba(11, 74, 140, var(--signal-opacity));
+  --oxide: #A80000;
+  --ochre: #6F4A00;
+  color-scheme: light;
+}
+:root[data-theme="harbor-contrast-dark"], [data-swatch][data-theme="harbor-contrast-dark"] {
+  --paper: #000000;
+  --surface: #000000;
+  --faint: #151B24;
+  --ink: #FFFFFF;
+  --muted: #D6D6D6;
+  --border: #9A9A9A;
+  --signal: #8EC5FF;
+  --signal-opacity: .16;
+  --signal-soft: rgba(142, 197, 255, var(--signal-opacity));
+  --oxide: #FF7B72;
+  --ochre: #FFD166;
+  color-scheme: dark;
+}
+:root[data-theme="clay-light"], [data-swatch][data-theme="clay-light"] {
+  --paper: #F7F3EC;
+  --surface: #FDFBF6;
+  --faint: #EFE9DF;
+  --ink: #211B15;
+  --muted: #6B6157;
+  --border: #E5DED1;
+  --signal: #9A4A1A;
+  --signal-opacity: .10;
+  --signal-soft: rgba(154, 74, 26, var(--signal-opacity));
+  --oxide: #B0263A;
+  --ochre: #9A7020;
+  color-scheme: light;
+}
+:root[data-theme="clay-dark"], [data-swatch][data-theme="clay-dark"] {
+  --paper: #17130F;
+  --surface: #1F1A15;
+  --faint: #27211B;
+  --ink: #EFE8DF;
+  --muted: #A39888;
+  --border: #3A322A;
+  --signal: #E0955A;
+  --signal-opacity: .12;
+  --signal-soft: rgba(224, 149, 90, var(--signal-opacity));
+  --oxide: #E07A82;
+  --ochre: #D9B05C;
+  color-scheme: dark;
+}
+:root[data-theme="clay-vibrant-light"], [data-swatch][data-theme="clay-vibrant-light"] {
+  --paper: #FBE4D6;
+  --surface: #FFF6F0;
+  --faint: #F6D6C3;
+  --ink: #2E2220;
+  --muted: #6E4C44;
+  --border: #DDB09C;
+  --signal: #963C10;
+  --signal-opacity: .10;
+  --signal-soft: rgba(150, 60, 16, var(--signal-opacity));
+  --oxide: #9A2731;
+  --ochre: #785000;
+  --accent: #00706B;
+  --accent-soft: #D6F2EE;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="clay-vibrant-dark"], [data-swatch][data-theme="clay-vibrant-dark"] {
+  --paper: #2A160E;
+  --surface: #361D13;
+  --faint: #42251A;
+  --ink: #FFEFE6;
+  --muted: #D4AE9C;
+  --border: #6B4030;
+  --signal: #FF9A5C;
+  --signal-opacity: .12;
+  --signal-soft: rgba(255, 154, 92, var(--signal-opacity));
+  --oxide: #FF9BA3;
+  --ochre: #EFCA5A;
+  --accent: #5FE0D2;
+  --accent-soft: #173B36;
+  --on-accent: #2A160E;
+  color-scheme: dark;
+}
+:root[data-theme="clay-contrast-light"], [data-swatch][data-theme="clay-contrast-light"] {
+  --paper: #FFFFFF;
+  --surface: #FFFFFF;
+  --faint: #F2ECE6;
+  --ink: #000000;
+  --muted: #2B2B2B;
+  --border: #6E6E6E;
+  --signal: #8A3300;
+  --signal-opacity: .14;
+  --signal-soft: rgba(138, 51, 0, var(--signal-opacity));
+  --oxide: #A80000;
+  --ochre: #6F4A00;
+  color-scheme: light;
+}
+:root[data-theme="clay-contrast-dark"], [data-swatch][data-theme="clay-contrast-dark"] {
+  --paper: #000000;
+  --surface: #000000;
+  --faint: #221A15;
+  --ink: #FFFFFF;
+  --muted: #D6D6D6;
+  --border: #9A9A9A;
+  --signal: #FFB27A;
+  --signal-opacity: .16;
+  --signal-soft: rgba(255, 178, 122, var(--signal-opacity));
+  --oxide: #FF7B72;
+  --ochre: #FFD166;
+  color-scheme: dark;
+}
+:root[data-theme="iris-light"], [data-swatch][data-theme="iris-light"] {
+  --paper: #F5F4F9;
+  --surface: #FDFCFF;
+  --faint: #ECEAF4;
+  --ink: #1D1A26;
+  --muted: #5F5B70;
+  --border: #E0DDEA;
+  --signal: #6447B0;
+  --signal-opacity: .10;
+  --signal-soft: rgba(100, 71, 176, var(--signal-opacity));
+  --oxide: #B4483E;
+  --ochre: #B98A2F;
+  color-scheme: light;
+}
+:root[data-theme="iris-dark"], [data-swatch][data-theme="iris-dark"] {
+  --paper: #120F1A;
+  --surface: #1A1724;
+  --faint: #221E2E;
+  --ink: #ECE9F4;
+  --muted: #9C97AE;
+  --border: #302B3F;
+  --signal: #A894F2;
+  --signal-opacity: .12;
+  --signal-soft: rgba(168, 148, 242, var(--signal-opacity));
+  --oxide: #E0707E;
+  --ochre: #D4AE5C;
+  color-scheme: dark;
+}
+:root[data-theme="iris-vibrant-light"], [data-swatch][data-theme="iris-vibrant-light"] {
+  --paper: #EEE8FC;
+  --surface: #FFFFFF;
+  --faint: #E2D9FA;
+  --ink: #1E163A;
+  --muted: #54497A;
+  --border: #C6B8EE;
+  --signal: #5B32C8;
+  --signal-opacity: .10;
+  --signal-soft: rgba(91, 50, 200, var(--signal-opacity));
+  --oxide: #B13D42;
+  --ochre: #7A5A00;
+  --accent: #9A5A00;
+  --accent-soft: #FFF0D1;
+  --on-accent: #FFFFFF;
+  color-scheme: light;
+}
+:root[data-theme="iris-vibrant-dark"], [data-swatch][data-theme="iris-vibrant-dark"] {
+  --paper: #1A1235;
+  --surface: #231944;
+  --faint: #2C2052;
+  --ink: #F1ECFF;
+  --muted: #B9ADE0;
+  --border: #4E3F86;
+  --signal: #B49CFF;
+  --signal-opacity: .12;
+  --signal-soft: rgba(180, 156, 255, var(--signal-opacity));
+  --oxide: #FF9B9B;
+  --ochre: #EFCA5A;
+  --accent: #FFC75F;
+  --accent-soft: #3F3420;
+  --on-accent: #1A1235;
+  color-scheme: dark;
+}
+:root[data-theme="iris-contrast-light"], [data-swatch][data-theme="iris-contrast-light"] {
+  --paper: #FFFFFF;
+  --surface: #FFFFFF;
+  --faint: #EEEBF6;
+  --ink: #000000;
+  --muted: #2B2B2B;
+  --border: #6E6E6E;
+  --signal: #4B2A9E;
+  --signal-opacity: .14;
+  --signal-soft: rgba(75, 42, 158, var(--signal-opacity));
+  --oxide: #A80000;
+  --ochre: #6F4A00;
+  color-scheme: light;
+}
+:root[data-theme="iris-contrast-dark"], [data-swatch][data-theme="iris-contrast-dark"] {
+  --paper: #000000;
+  --surface: #000000;
+  --faint: #1B1726;
+  --ink: #FFFFFF;
+  --muted: #D6D6D6;
+  --border: #9A9A9A;
+  --signal: #C9B8FF;
+  --signal-opacity: .16;
+  --signal-soft: rgba(201, 184, 255, var(--signal-opacity));
+  --oxide: #FF7B72;
+  --ochre: #FFD166;
+  color-scheme: dark;
+}
 
 /* Code colors follow every named palette and the system theme. */
 :root { --code-added: light-dark(#276349, #8DC7A5); --code-name: light-dark(#62518E, #C1B0E2); }
 
 :root { --reference: light-dark(#285C9E, #86B8F4); }
 
-/* Vibrant themes add an orange action accent to teal selection and activity. */
-:root[data-theme="daybreak"], [data-swatch][data-theme="daybreak"] {
-  --paper: #EAF5FA;
-  --surface: #FFFFFF;
-  --faint: #DCEEF5;
-  --ink: #142E38;
-  --muted: #435F69;
-  --border: #B7D4DF;
-  --signal: #006D6D;
-  --signal-opacity: .10;
-  --signal-soft: rgba(0, 109, 109, var(--signal-opacity));
-  --oxide: #B13D42;
-  --ochre: #805A00;
-  --accent: #A94700;
-  --accent-soft: #FFE8D5;
-  --on-accent: #FFFFFF;
-  color-scheme: light;
-}
-:root[data-theme="afterglow"], [data-swatch][data-theme="afterglow"] {
-  --paper: #10242D;
-  --surface: #17333D;
-  --faint: #20414A;
-  --ink: #EDF8FC;
-  --muted: #AAC8D4;
-  --border: #3D626C;
-  --signal: #51D6C6;
-  --signal-opacity: .12;
-  --signal-soft: rgba(81, 214, 198, var(--signal-opacity));
-  --oxide: #FF9B9B;
-  --ochre: #EFCA08;
-  --accent: #FFA64D;
-  --accent-soft: #433324;
-  --on-accent: #10242D;
-  color-scheme: dark;
-}
-/* Optional accent roles must reset when leaving a vibrant theme. */
-:root:not([data-theme="daybreak"]):not([data-theme="afterglow"]):not([data-theme="canopy"]):not([data-theme="coral"]),
-[data-swatch]:not([data-theme="daybreak"]):not([data-theme="afterglow"]):not([data-theme="canopy"]):not([data-theme="coral"]) {
+/* Vibrant styles add an action accent beside selection and activity. Every other theme resets it. */
+:root:not([data-theme*="-vibrant-"]),
+[data-swatch]:not([data-theme*="-vibrant-"]) {
   --accent: initial;
   --accent-soft: initial;
   --on-accent: initial;
-}
-
-/* Navy, green and mint from the Canopy source palette. */
-:root[data-theme="canopy"], [data-swatch][data-theme="canopy"] {
-  --paper: #1D263B;
-  --surface: #243047;
-  --faint: #2C3A50;
-  --ink: #EAF8F4;
-  --muted: #B3C2D3;
-  --border: #5C6784;
-  --signal: #4CB963;
-  --signal-opacity: .12;
-  --signal-soft: rgba(76, 185, 99, var(--signal-opacity));
-  --oxide: #FFAAA2;
-  --ochre: #E8C978;
-  --accent: #A0EADE;
-  --accent-soft: #173B36;
-  --on-accent: #1D263B;
-  color-scheme: dark;
-}
-/* Blush and peach surfaces, with teal selection and coral actions. */
-:root[data-theme="coral"], [data-swatch][data-theme="coral"] {
-  --paper: #FAD8D6;
-  --surface: #FFF5F0;
-  --faint: #F3D7C1;
-  --ink: #2E282A;
-  --muted: #70514F;
-  --border: #D3ABA3;
-  --signal: #006764;
-  --signal-opacity: .10;
-  --signal-soft: rgba(0, 103, 100, var(--signal-opacity));
-  --oxide: #9A2731;
-  --ochre: #785000;
-  --accent: #B92D27;
-  --accent-soft: #FDE4E1;
-  --on-accent: #FFFFFF;
-  color-scheme: light;
 }

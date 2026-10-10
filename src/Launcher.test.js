@@ -114,7 +114,7 @@ describe('launcher', () => {
 
   it('syncs Light, Dark, and System from another window while hidden and on reopen', async () => {
     const input = await open()
-    const applied = { light: 'paper', dark: 'vault', system: undefined, moss: 'moss' }
+    const applied = { light: 'sage-light', dark: 'sage-dark', system: undefined, moss: 'sage-dark' }
     for (const theme of ['light', 'dark', 'system', 'dark', 'light', 'moss']) {
       await fireEvent.keyDown(input, { key: 'Escape' })
       localStorage.setItem('muniment.theme', theme)
@@ -135,10 +135,10 @@ describe('launcher', () => {
   it('uses System for malformed or unavailable storage and ignores unrelated changes', async () => {
     localStorage.setItem('muniment.theme', 'dark')
     await open()
-    expect(document.documentElement.dataset.theme).toBe('vault')
+    expect(document.documentElement.dataset.theme).toBe('sage-dark')
     localStorage.setItem('muniment.theme', 'invalid')
     await fireEvent(window, new StorageEvent('storage', { key: 'other', storageArea: localStorage }))
-    expect(document.documentElement.dataset.theme).toBe('vault')
+    expect(document.documentElement.dataset.theme).toBe('sage-dark')
     handlers['launcher-opened']()
     expect(document.documentElement.dataset.theme).toBeUndefined()
     const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })

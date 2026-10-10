@@ -4,7 +4,7 @@
 const { mode, frame, open } = document.documentElement.dataset
 try {
   // A variant page pins its base scheme and frame. The preferences page keeps the viewer's picks.
-  if (mode) localStorage.setItem('muniment.theme', mode === 'dark' ? 'vault' : 'paper')
+  if (mode) localStorage.setItem('muniment.theme', JSON.stringify({ mode, palette: 'sage' }))
   if (frame) localStorage.setItem('muniment.frame', frame)
   localStorage.setItem('muniment.sidebar-width', '256')
 } catch (_) {}

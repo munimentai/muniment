@@ -1508,12 +1508,12 @@ describe('workspace composer entry', () => {
     const appearance = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
-    const themes = within(screen.getByRole('group', { name: 'Color schemes' }))
-    expect(themes.getAllByRole('button').map((button) => button.textContent.trim()).slice(0, 4)).toEqual(['Paper', 'Vellum', 'Ledger', 'Foolscap'])
+    const themes = within(screen.getByRole('group', { name: 'Normal color schemes' }))
+    expect(themes.getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Sage', 'Harbor', 'Clay', 'Iris'])
 
     await fireEvent.click(appearance.getByRole('button', { name: label }))
-    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: label.toLowerCase(), light: 'paper', dark: 'vault' })
-    expect(document.documentElement.dataset.theme).toBe({ System: undefined, Light: 'paper', Dark: 'vault' }[label])
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: label.toLowerCase(), palette: 'sage' })
+    expect(document.documentElement.dataset.theme).toBe({ System: undefined, Light: 'sage-light', Dark: 'sage-dark' }[label])
     expect(appearance.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
 
     cleanup()
@@ -7678,9 +7678,9 @@ describe('signed-in access popover', () => {
     expect(dark).toHaveAttribute('aria-pressed', 'false')
 
     await fireEvent.click(dark)
-    expect(document.documentElement.dataset.theme).toBe('vault')
+    expect(document.documentElement.dataset.theme).toBe('sage-dark')
     expect(document.documentElement.dataset.scheme).toBe('dark')
-    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', light: 'paper', dark: 'vault' })
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', palette: 'sage' })
     expect(dark).toHaveAttribute('aria-pressed', 'true')
 
     await fireEvent.click(system)

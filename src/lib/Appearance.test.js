@@ -15,45 +15,43 @@ const stored = () => JSON.parse(localStorage.getItem('muniment.theme'))
 const pressed = (group) => within(group).getAllByRole('button').filter((button) => button.getAttribute('aria-pressed') === 'true').map((button) => button.textContent.trim())
 
 describe('Appearance', () => {
-  it('offers three modes and every theme, each with a tile of its own tokens', () => {
+  it('offers three modes and four colors in each of three styles, each with its light and dark tiles', () => {
     render(Appearance)
     const modes = screen.getByRole('group', { name: 'Mode' })
     expect(within(modes).getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
-    const themes = screen.getByRole('group', { name: 'Color schemes' })
-    expect(within(themes).getAllByRole('button').map((button) => button.textContent.trim())).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Daybreak', 'Afterglow', 'Canopy', 'Coral']])
-    expect([...themes.querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual([...['Paper', 'Vellum', 'Ledger', 'Foolscap', 'Parchment', 'Manila', 'Linen', 'Broadsheet'], ...['Moss', 'Vault', 'Graphite', 'Inkwell', 'Lagoon', 'Umber', 'Fjord', 'Plum', 'Nocturne', 'Nightshade', 'Basalt', 'Obsidian', 'Carbon', 'Daybreak', 'Afterglow', 'Canopy', 'Coral']].map((name) => name.toLowerCase()))
-    expect([...themes.querySelectorAll('p')].map((label) => label.textContent)).toEqual(['Light', 'Dark', 'Vibrant'])
-    // Every tile shows the six tokens that differ between themes.
-    for (const swatch of themes.querySelectorAll('[data-swatch]')) {
-      expect(swatch.querySelector('.swatch-card')).not.toBeNull()
-      expect([...swatch.querySelectorAll('i')].map((bar) => bar.classList[0])).toEqual(['swatch-ink', 'swatch-muted', 'swatch-signal', ...(['daybreak', 'afterglow', 'canopy', 'coral'].includes(swatch.dataset.theme) ? ['swatch-accent'] : [])])
+    const rows = ['Normal', 'Vibrant', 'High contrast'].map((style) => screen.getByRole('group', { name: `${style} color schemes` }))
+    for (const row of rows) expect(within(row).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Sage', 'Harbor', 'Clay', 'Iris'])
+    expect(within(rows[1]).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Sage vibrant', 'Harbor vibrant', 'Clay vibrant', 'Iris vibrant'])
+    expect([...rows[2].querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual(['sage', 'harbor', 'clay', 'iris'].flatMap((color) => [`${color}-contrast-light`, `${color}-contrast-dark`]))
+    // Every tile shows the tokens that differ between themes, and a vibrant tile its accent.
+    for (const [index, row] of rows.entries()) {
+      for (const swatch of row.querySelectorAll('[data-swatch]')) {
+        expect([...swatch.querySelectorAll('i')].map((bar) => bar.classList[0])).toEqual(['swatch-ink', 'swatch-muted', 'swatch-signal', ...(index === 1 ? ['swatch-accent'] : [])])
+      }
     }
     expect(pressed(modes)).toEqual(['System'])
-    expect(pressed(themes)).toEqual(['Paper', 'Vault'])
+    expect(rows.flatMap(pressed)).toEqual(['Sage'])
   })
 
-  it('picks a theme with its mode, keeps the last pick per mode, and follows the OS in System', async () => {
+  it('keeps a palette across modes, shows its light or dark version, and follows the OS in System', async () => {
     render(Appearance)
     const modes = screen.getByRole('group', { name: 'Mode' })
-    const themes = screen.getByRole('group', { name: 'Color schemes' })
-    await fireEvent.click(within(themes).getByRole('button', { name: 'Vault' }))
-    expect(document.documentElement.dataset).toMatchObject({ theme: 'vault', scheme: 'dark' })
-    expect(stored()).toEqual({ mode: 'dark', light: 'paper', dark: 'vault' })
-    expect(pressed(modes)).toEqual(['Dark'])
-    expect(pressed(themes)).toEqual(['Vault'])
-    await fireEvent.click(within(themes).getByRole('button', { name: 'Ledger' }))
-    expect(document.documentElement.dataset).toMatchObject({ theme: 'ledger', scheme: 'light' })
-    expect(stored()).toEqual({ mode: 'light', light: 'ledger', dark: 'vault' })
+    const vibrant = screen.getByRole('group', { name: 'Vibrant color schemes' })
+    await fireEvent.click(within(vibrant).getByRole('button', { name: 'Iris vibrant' }))
+    expect(document.documentElement.dataset.theme).toBe('iris-vibrant-light')
+    expect(document.documentElement.dataset.scheme).toBeUndefined()
+    expect(stored()).toEqual({ mode: 'system', palette: 'iris-vibrant' })
+    expect(pressed(vibrant)).toEqual(['Iris'])
     await fireEvent.click(within(modes).getByRole('button', { name: 'Dark' }))
-    expect(document.documentElement.dataset.theme).toBe('vault')
-    expect(pressed(themes)).toEqual(['Vault'])
+    expect(document.documentElement.dataset).toMatchObject({ theme: 'iris-vibrant-dark', scheme: 'dark' })
     await fireEvent.click(within(modes).getByRole('button', { name: 'Light' }))
-    expect(document.documentElement.dataset.theme).toBe('ledger')
+    expect(document.documentElement.dataset).toMatchObject({ theme: 'iris-vibrant-light', scheme: 'light' })
+    expect(stored()).toEqual({ mode: 'light', palette: 'iris-vibrant' })
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Sage' }))
     await fireEvent.click(within(modes).getByRole('button', { name: 'System' }))
     expect(document.documentElement.dataset.theme).toBeUndefined()
     expect(document.documentElement.dataset.scheme).toBeUndefined()
-    expect(stored()).toEqual({ mode: 'system', light: 'ledger', dark: 'vault' })
-    expect(pressed(themes)).toEqual(['Paper', 'Vault'])
+    expect(stored()).toEqual({ mode: 'system', palette: 'sage' })
   })
 
   it('swaps the thinking indicator preview in place, one indicator at a time', async () => {
@@ -76,7 +74,7 @@ describe('Appearance', () => {
     expect(document.documentElement.dataset.frame).toBe('frameless')
     expect(localStorage.getItem('muniment.frame')).toBe('frameless')
     expect(pressed(frames)).toEqual(['Frameless'])
-    await fireEvent.click(within(screen.getByRole('group', { name: 'Color schemes' })).getByRole('button', { name: 'Vault' }))
-    expect(document.documentElement.dataset).toMatchObject({ theme: 'vault', frame: 'frameless' })
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Harbor' }))
+    expect(document.documentElement.dataset).toMatchObject({ theme: 'harbor-light', frame: 'frameless' })
   })
 })
