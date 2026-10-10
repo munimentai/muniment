@@ -1,0 +1,12 @@
+:root:root:root {
+  --paper: #000000; --surface: #000000; --faint: #1C1C1C;
+  --ink: #FFFFFF; --muted: #D2D6D4; --border: #8C9490;
+  --signal: #5CF2C8; --signal-soft: rgba(92,242,200,.18);
+  --oxide: #FF7B70; --ochre: #FFD166; --radius-panel: 10px;
+  --shadow-overlay: 0 0 0 1px #FFFFFF; color-scheme: dark;
+  --chrome: #000000; --side-ink: #FFFFFF; --side-muted: #D2D6D4; --side-faint: #262626; --side-search: #000000; --side-search-border: 1px solid #8C9490;
+  --card-border: #FFFFFF; --card-shadow: none;
+  --composer-bg: #000000; --composer-border: #FFFFFF; --title-ink: #FFFFFF;
+}
+.user-message { border: 1px solid #8C9490; }
+.sidebar [aria-current="true"], html.settings-docked .settings-nav li > button[aria-current="true"] { outline: 1px solid #FFFFFF; outline-offset: -1px; }

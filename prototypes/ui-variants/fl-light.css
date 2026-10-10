@@ -1,0 +1,9 @@
+:root:root:root {
+  --paper: #E3E6EA; --surface: #FAFBFC; --faint: #EEF0F3;
+  --ink: #22252A; --muted: #5E6672; --border: #D5DAE0;
+  --signal: #3366CC; --signal-soft: rgba(51,102,204,.10);
+  --oxide: #C2453E; --ochre: #A87814; color-scheme: light;
+  --chrome: #E3E6EA; --seam: #CDD2D9; --side-bg: #EDEFF2; --side-faint: #DFE3E8; --side-border: #D2D7DE;
+  --side-ink: #22252A; --side-muted: #5E6672; --side-search: #FFFFFF; --side-search-border: 1px solid #D5DAE0;
+  --composer-bg: #FFFFFF; --composer-border: #CDD2D9;
+}

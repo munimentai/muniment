@@ -1,0 +1,10 @@
+:root:root:root {
+  --paper: #ECEEED; --surface: #FFFFFF; --faint: #F1F3F2;
+  --ink: #141716; --muted: #69716D; --border: #E1E5E3;
+  --signal: #1C8467; --signal-soft: rgba(28,132,103,.10);
+  --oxide: #B4483E; --ochre: #A9802B; --radius-panel: 12px;
+  --shadow-overlay: 0 8px 32px rgba(20,30,25,.14); color-scheme: light;
+  --chrome: #ECEEED; --side-ink: #3F4743; --side-muted: #7A827E; --side-faint: #E0E4E2; --side-search: #E3E6E5;
+  --card-border: #DDE1DF; --card-shadow: 0 1px 2px rgba(20,30,25,.05), 0 8px 28px rgba(20,30,25,.07);
+  --composer-bg: #FFFFFF; --composer-border: #D9DEDB; --title-ink: #141716;
+}

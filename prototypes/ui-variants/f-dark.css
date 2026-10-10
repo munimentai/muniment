@@ -1,0 +1,10 @@
+:root:root:root {
+  --paper: #08090A; --surface: #111413; --faint: #1A1E1D;
+  --ink: #ECEFED; --muted: #868E8A; --border: #1F2423;
+  --signal: #4FD1AE; --signal-soft: rgba(79,209,174,.12);
+  --oxide: #E07368; --ochre: #D7AE58; --radius-panel: 12px;
+  --shadow-overlay: 0 8px 40px rgba(0,0,0,.6); color-scheme: dark;
+  --chrome: #08090A; --side-ink: #BFC6C2; --side-muted: #6F7773; --side-faint: #15181A; --side-search: #121516;
+  --card-border: #1E2322; --card-shadow: inset 0 1px 0 rgba(255,255,255,.03), 0 0 0 1px rgba(0,0,0,.6);
+  --composer-bg: #161A19; --composer-border: #262C2A; --title-ink: #ECEFED;
+}

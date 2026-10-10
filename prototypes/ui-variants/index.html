@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Framed and Frameless</title>
+<style>
+@font-face { font-family:"Schibsted Grotesk"; src:url(/src/fonts/SchibstedGrotesk-latin.woff2) format("woff2"); font-weight:400 900; }
+@font-face { font-family:"Commit Mono"; src:url(/src/fonts/CommitMono-VF.woff2) format("woff2"); }
+:root { --bg:#F4F4F2; --card:#FFFFFF; --ink:#1B1A17; --muted:#6B675E; --line:#E2DFD8; color-scheme: light dark; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0B0C0C; --card:#141716; --ink:#ECEFED; --muted:#8E9692; --line:#252A28; } }
+:root[data-theme="dark"] { --bg:#0B0C0C; --card:#141716; --ink:#ECEFED; --muted:#8E9692; --line:#252A28; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 "Schibsted Grotesk", system-ui, sans-serif; }
+main { max-width:1400px; margin:0 auto; padding:40px 24px 80px; }
+h1 { font-size:28px; margin:0 0 6px; letter-spacing:-.01em; }
+.lede { color:var(--muted); margin:0 0 6px; max-width:780px; }
+.how { font:12.5px/1.6 "Commit Mono", ui-monospace, monospace; color:var(--muted); margin:0 0 32px; }
+section { margin-bottom:40px; }
+h2 { font-size:22px; margin:0 0 2px; }
+.sdesc { color:var(--muted); margin:0 0 14px; max-width:780px; }
+.grid { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:14px; }
+@media (max-width:1100px) { .grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+@media (max-width:600px) { .grid { grid-template-columns:1fr; } }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column; gap:8px; }
+.card header { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+h3 { margin:0; font-size:17px; }
+.open { color:var(--card); background:var(--ink); text-decoration:none; padding:4px 12px; border-radius:6px; font-size:12.5px; font-weight:600; white-space:nowrap; }
+.desc { margin:0; font-size:13.5px; color:var(--muted); min-height:3.1em; }
+.swatches { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; }
+.sw { width:14px; height:14px; border-radius:3px; border:1px solid var(--line); }
+.swatches code { font:11px "Commit Mono", monospace; color:var(--muted); margin-right:4px; }
+.shot img { width:100%; display:block; border-radius:6px; border:1px solid var(--line); }
+</style></head>
+<body><main>
+<h1>Framed and Frameless</h1>
+<p class="lede">Two styles, each in light, dark, high contrast and vibrant tones. Preferences would offer the style and the tone as two choices. Each card shows the thread and Settings docked in the sidebar.</p>
+<p class="how">Live pages: press ⌘, or click Settings. Back to threads or Esc returns.</p>
+<section><h2>Framed</h2><p class="sdesc">The sidebar sits flush on the chrome with dimmed text, so content leads. The thread is one raised card inside a 6px frame.</p><div class="grid"><article class="card">
+  <header><h3>Light</h3><a class="open" href="/variants/f-light.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">Cool gray chrome, white card, deep mint signal.</p>
+  <div class="swatches"><span class="sw" style="background:#ECEEED" title="#ECEEED"></span><code>#ECEEED</code><span class="sw" style="background:#FFFFFF" title="#FFFFFF"></span><code>#FFFFFF</code><span class="sw" style="background:#141716" title="#141716"></span><code>#141716</code><span class="sw" style="background:#1C8467" title="#1C8467"></span><code>#1C8467</code></div>
+  <a class="shot" href="/variants/f-light.html" target="_blank" rel="noopener"><img src="/variants/shots/f-light.png" alt="Framed Light thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/f-light.html" target="_blank" rel="noopener"><img src="/variants/shots/f-light-s.png" alt="Framed Light with Settings in the sidebar" loading="lazy"></a>
+</article><article class="card">
+  <header><h3>Dark</h3><a class="open" href="/variants/f-dark.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">V3 Midnight. Near-black chrome, graphite card, mint signal.</p>
+  <div class="swatches"><span class="sw" style="background:#08090A" title="#08090A"></span><code>#08090A</code><span class="sw" style="background:#111413" title="#111413"></span><code>#111413</code><span class="sw" style="background:#ECEFED" title="#ECEFED"></span><code>#ECEFED</code><span class="sw" style="background:#4FD1AE" title="#4FD1AE"></span><code>#4FD1AE</code></div>
+  <a class="shot" href="/variants/f-dark.html" target="_blank" rel="noopener"><img src="/variants/shots/f-dark.png" alt="Framed Dark thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/f-dark.html" target="_blank" rel="noopener"><img src="/variants/shots/f-dark-s.png" alt="Framed Dark with Settings in the sidebar" loading="lazy"></a>
+</article><article class="card">
+  <header><h3>High contrast</h3><a class="open" href="/variants/f-hc.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">Pure black, white card edge, white text, bright mint signal. The current row carries a white outline.</p>
+  <div class="swatches"><span class="sw" style="background:#000000" title="#000000"></span><code>#000000</code><span class="sw" style="background:#FFFFFF" title="#FFFFFF"></span><code>#FFFFFF</code><span class="sw" style="background:#D2D6D4" title="#D2D6D4"></span><code>#D2D6D4</code><span class="sw" style="background:#5CF2C8" title="#5CF2C8"></span><code>#5CF2C8</code></div>
+  <a class="shot" href="/variants/f-hc.html" target="_blank" rel="noopener"><img src="/variants/shots/f-hc.png" alt="Framed High contrast thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/f-hc.html" target="_blank" rel="noopener"><img src="/variants/shots/f-hc-s.png" alt="Framed High contrast with Settings in the sidebar" loading="lazy"></a>
+</article><article class="card">
+  <header><h3>Vibrant</h3><a class="open" href="/variants/f-vibrant.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">Deep navy chrome. Teal signal is paired with orange, which marks your turns and the current row.</p>
+  <div class="swatches"><span class="sw" style="background:#0A1A2F" title="#0A1A2F"></span><code>#0A1A2F</code><span class="sw" style="background:#102540" title="#102540"></span><code>#102540</code><span class="sw" style="background:#3DDBD9" title="#3DDBD9"></span><code>#3DDBD9</code><span class="sw" style="background:#FF9F43" title="#FF9F43"></span><code>#FF9F43</code></div>
+  <a class="shot" href="/variants/f-vibrant.html" target="_blank" rel="noopener"><img src="/variants/shots/f-vibrant.png" alt="Framed Vibrant thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/f-vibrant.html" target="_blank" rel="noopener"><img src="/variants/shots/f-vibrant-s.png" alt="Framed Vibrant with Settings in the sidebar" loading="lazy"></a>
+</article></div></section><section><h2>Frameless</h2><p class="sdesc">No frame and no cards. One-pixel seams split the title band, the sidebar panel and the thread well. Rows are dense and corners are square.</p><div class="grid"><article class="card">
+  <header><h3>Light</h3><a class="open" href="/variants/fl-light.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">Cool gray sidebar panel, near-white thread, cobalt signal.</p>
+  <div class="swatches"><span class="sw" style="background:#EDEFF2" title="#EDEFF2"></span><code>#EDEFF2</code><span class="sw" style="background:#FAFBFC" title="#FAFBFC"></span><code>#FAFBFC</code><span class="sw" style="background:#22252A" title="#22252A"></span><code>#22252A</code><span class="sw" style="background:#3366CC" title="#3366CC"></span><code>#3366CC</code></div>
+  <a class="shot" href="/variants/fl-light.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-light.png" alt="Frameless Light thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/fl-light.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-light-s.png" alt="Frameless Light with Settings in the sidebar" loading="lazy"></a>
+</article><article class="card">
+  <header><h3>Dark</h3><a class="open" href="/variants/fl-dark.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">V4 Slate. A lighter blue-gray sidebar over a deeper thread well, sky-blue signal.</p>
+  <div class="swatches"><span class="sw" style="background:#2F343E" title="#2F343E"></span><code>#2F343E</code><span class="sw" style="background:#262A31" title="#262A31"></span><code>#262A31</code><span class="sw" style="background:#DCE0E5" title="#DCE0E5"></span><code>#DCE0E5</code><span class="sw" style="background:#74ADE8" title="#74ADE8"></span><code>#74ADE8</code></div>
+  <a class="shot" href="/variants/fl-dark.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-dark.png" alt="Frameless Dark thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/fl-dark.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-dark-s.png" alt="Frameless Dark with Settings in the sidebar" loading="lazy"></a>
+</article><article class="card">
+  <header><h3>High contrast</h3><a class="open" href="/variants/fl-hc.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">Pure black with white seams, white text and bright blue signal. The current row carries a white outline.</p>
+  <div class="swatches"><span class="sw" style="background:#000000" title="#000000"></span><code>#000000</code><span class="sw" style="background:#FFFFFF" title="#FFFFFF"></span><code>#FFFFFF</code><span class="sw" style="background:#D6DAE0" title="#D6DAE0"></span><code>#D6DAE0</code><span class="sw" style="background:#6CB6FF" title="#6CB6FF"></span><code>#6CB6FF</code></div>
+  <a class="shot" href="/variants/fl-hc.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-hc.png" alt="Frameless High contrast thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/fl-hc.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-hc-s.png" alt="Frameless High contrast with Settings in the sidebar" loading="lazy"></a>
+</article><article class="card">
+  <header><h3>Vibrant</h3><a class="open" href="/variants/fl-vibrant.html" target="_blank" rel="noopener">Open live</a></header>
+  <p class="desc">Peach sidebar and title band, white thread. Teal signal is paired with coral, which marks your turns and the current row.</p>
+  <div class="swatches"><span class="sw" style="background:#FFF0EA" title="#FFF0EA"></span><code>#FFF0EA</code><span class="sw" style="background:#FFFFFF" title="#FFFFFF"></span><code>#FFFFFF</code><span class="sw" style="background:#0E9F8E" title="#0E9F8E"></span><code>#0E9F8E</code><span class="sw" style="background:#F2545B" title="#F2545B"></span><code>#F2545B</code></div>
+  <a class="shot" href="/variants/fl-vibrant.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-vibrant.png" alt="Frameless Vibrant thread view" loading="lazy"></a>
+  <a class="shot" href="/variants/fl-vibrant.html" target="_blank" rel="noopener"><img src="/variants/shots/fl-vibrant-s.png" alt="Frameless Vibrant with Settings in the sidebar" loading="lazy"></a>
+</article></div></section>
+</main></body></html>

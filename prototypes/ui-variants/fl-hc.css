@@ -1,0 +1,12 @@
+:root:root:root {
+  --paper: #000000; --surface: #000000; --faint: #1F1F1F;
+  --ink: #FFFFFF; --muted: #D6DAE0; --border: #9AA3AF;
+  --signal: #6CB6FF; --signal-soft: rgba(108,182,255,.2);
+  --oxide: #FF7B72; --ochre: #F2CC60;
+  --shadow-overlay: 0 0 0 1px #FFFFFF; color-scheme: dark;
+  --chrome: #000000; --seam: #FFFFFF; --side-bg: #0C0D10; --side-faint: #262A30; --side-border: #9AA3AF;
+  --side-ink: #FFFFFF; --side-muted: #D6DAE0; --side-search: #000000; --side-search-border: 1px solid #9AA3AF;
+  --composer-bg: #000000; --composer-border: #FFFFFF;
+}
+.user-message { border: 1px solid #9AA3AF; }
+.sidebar [aria-current="true"], html.settings-docked .settings-nav li > button[aria-current="true"] { outline: 1px solid #FFFFFF; outline-offset: -1px; }

@@ -1,0 +1,10 @@
+:root:root:root {
+  --paper: #FFE7DE; --surface: #FFFFFF; --faint: #FFF3EE;
+  --ink: #2A1A17; --muted: #7A5A52; --border: #F6D3C6;
+  --signal: #0E9F8E; --signal-soft: rgba(14,159,142,.12);
+  --oxide: #D7263D; --ochre: #C98A0B; color-scheme: light;
+  --chrome: #FFE2D6; --seam: #F2B9A5; --side-bg: #FFF0EA; --side-faint: #FFDCCF; --side-border: #F2C4B3;
+  --side-ink: #2A1A17; --side-muted: #85625A; --side-search: #FFFFFF; --side-search-border: 1px solid #F2C4B3;
+  --composer-bg: #FFFFFF; --composer-border: #F2C4B3;
+  --accent2: #F2545B; --accent2-soft: rgba(242,84,91,.12); --accent2-side: rgba(242,84,91,.14);
+}

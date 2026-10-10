@@ -1,0 +1,19 @@
+/* Frameless: no frame and no cards. One-pixel seams split the title band,
+   the sidebar panel and the thread well. Dense rows, square corners. */
+:root:root:root { --radius-panel: 6px; --radius-control: 4px; }
+.workspace { --frame-width: 1px !important; column-gap: 1px !important; row-gap: 1px !important; --titlebar-height: 35px !important; background: var(--seam) !important; }
+.titlebar { background: var(--chrome); margin: 0 -1px; padding: 0 1px; --ink: var(--title-ink, var(--ink)); }
+.sidebar[data-panel], html.settings-docked .settings-nav {
+  --surface: var(--side-bg); --faint: var(--side-faint); --border: var(--side-border); --ink: var(--side-ink); --muted: var(--side-muted);
+  background: var(--side-bg) !important; border: 0 !important; border-radius: 0 !important; color: var(--ink);
+}
+.sidebar .thread-search { background: var(--side-search) !important; border: var(--side-search-border, 0) !important; color: var(--ink); }
+/* Every content panel beside the sidebar is a flat well: the rail too, so only the seam divides them. */
+.workspace > [data-panel]:not([data-panel="sidebar"]), html.settings-docked .settings-body { border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+/* The band has no gap under it, so its controls center in the band instead of sitting on the seam. */
+.titlebar, .workspace.macos .titlebar-sidebar, .workspace.macos .titlebar-thread { align-items: center !important; }
+.sidebar .side-action, .sidebar .project-row { min-height: 26px; }
+.composer { background: var(--composer-bg) !important; border-color: var(--composer-border) !important; }
+html { background: var(--seam); }
+html.settings-docked { --frame: 1px; --gap: 1px; }
+html.settings-docked .settings-panel { background: var(--seam) !important; }

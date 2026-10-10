@@ -1,0 +1,11 @@
+:root:root:root {
+  --paper: #0A1A2F; --surface: #102540; --faint: #17304F;
+  --ink: #EEF4FA; --muted: #93A8C0; --border: #1E3A5E;
+  --signal: #3DDBD9; --signal-soft: rgba(61,219,217,.14);
+  --oxide: #FF6B6B; --ochre: #FFC14D; --radius-panel: 12px;
+  --shadow-overlay: 0 10px 40px rgba(0,8,20,.6); color-scheme: dark;
+  --chrome: #0A1A2F; --side-ink: #C7D6E6; --side-muted: #7D93AD; --side-faint: #132A47; --side-search: #0F2340;
+  --card-border: #1C3657; --card-shadow: 0 10px 40px rgba(0,8,20,.45);
+  --composer-bg: #14304F; --composer-border: #24476F; --title-ink: #EEF4FA;
+  --accent2: #FF9F43; --accent2-soft: rgba(255,159,67,.24); --accent2-side: rgba(255,159,67,.18);
+}
