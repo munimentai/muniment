@@ -737,6 +737,8 @@ pub(crate) fn model_router_set_classifier(
                 base_url: base_url
                     .map(|url| url.trim().to_owned())
                     .filter(|url| !url.is_empty()),
+                max_options: None,
+                limits: Default::default(),
             }
         }
         "pooled" => {
@@ -779,6 +781,8 @@ pub(crate) fn model_router_set_classifier(
                 base_url: url,
                 api_key: Some(key).filter(|key| !key.is_empty()),
                 model,
+                max_options: None,
+                limits: Default::default(),
             }
         }
         _ => return Err("Choose a classifier.".into()),
@@ -1133,6 +1137,8 @@ mod tests {
             api_key: "apikey_secret".into(),
             model: "jev-latest".into(),
             base_url: None,
+            max_options: None,
+            limits: Default::default(),
         });
         let json = serde_json::to_string(&view).unwrap();
         assert!(!json.contains("apikey_secret"), "{json}");

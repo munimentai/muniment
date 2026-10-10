@@ -187,6 +187,8 @@ pub(crate) async fn model_router_connect_classifier(
             .map(|key| key.trim().to_owned())
             .filter(|key| !key.is_empty()),
         model: model.trim().into(),
+        max_options: None,
+        limits: Default::default(),
     };
     let probe = classifier.clone();
     tauri::async_runtime::spawn_blocking(move || classify::check(&probe, CLASSIFIER_TIMEOUT))
@@ -242,6 +244,8 @@ fn edited(
             base_url: checked(base_url)?,
             api_key: key.or_else(|| saved_key.clone()),
             model: model.into(),
+            max_options: None,
+            limits: Default::default(),
         }),
         Classifier::Typesafe { api_key: saved_key, .. } => Ok(Classifier::Typesafe {
             api_key: key.unwrap_or_else(|| saved_key.clone()),
@@ -250,6 +254,8 @@ fn edited(
                 .filter(|url| !url.is_empty())
                 .map(checked)
                 .transpose()?,
+            max_options: None,
+            limits: Default::default(),
         }),
         _ => Err("This classifier has no saved connection to edit.".into()),
     }
@@ -385,6 +391,8 @@ mod tests {
             base_url: "http://127.0.0.1:1/v1/systemone".into(),
             api_key: None,
             model: model.into(),
+            max_options: None,
+            limits: Default::default(),
         };
         let assist = |classifier| config::Assist {
             enabled: true,
@@ -413,6 +421,8 @@ mod tests {
             api_key: "secret-test-key".into(),
             model: "jev-latest".into(),
             base_url: None,
+            max_options: None,
+            limits: Default::default(),
         };
         let entries = read(&root, &active).unwrap();
         write(&root, &entries).unwrap();
@@ -440,6 +450,8 @@ mod tests {
             base_url: "http://127.0.0.1:8000/v1/systemone".into(),
             api_key: Some("saved-key".into()),
             model: "kev-latest".into(),
+            max_options: None,
+            limits: Default::default(),
         };
         let renamed = edited(&saved, " kev-4b ", "http://127.0.0.1:8009/v1/systemone", Some(" ".into())).unwrap();
         assert_eq!(
@@ -448,14 +460,16 @@ mod tests {
                 base_url: "http://127.0.0.1:8009/v1/systemone".into(),
                 api_key: Some("saved-key".into()),
                 model: "kev-4b".into(),
+                max_options: None,
+                limits: Default::default(),
             }
         );
         // The same details compare equal, so a new name alone skips the test.
         assert_eq!(edited(&saved, "kev-latest", "http://127.0.0.1:8000/v1/systemone", None).unwrap(), saved);
-        let hosted = Classifier::Typesafe { api_key: "k".into(), model: "jev-latest".into(), base_url: None };
+        let hosted = Classifier::Typesafe { api_key: "k".into(), model: "jev-latest".into(), base_url: None, max_options: None, limits: Default::default() };
         assert_eq!(
             edited(&hosted, "jev-2", "", Some("new".into())).unwrap(),
-            Classifier::Typesafe { api_key: "new".into(), model: "jev-2".into(), base_url: None }
+            Classifier::Typesafe { api_key: "new".into(), model: "jev-2".into(), base_url: None, max_options: None, limits: Default::default() }
         );
         assert!(edited(&saved, "", "http://127.0.0.1:8000/v1/systemone", None).is_err());
         assert!(edited(&saved, "m", "http://user:pass@127.0.0.1/", None).is_err());
