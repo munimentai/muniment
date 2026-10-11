@@ -20,7 +20,6 @@ const ALLOWED = {
   },
 
   'src/App.svelte': {
-    '.lockup': 'The static brand graph on setup and sign-in.',
     '.provenance .route-segment': '§1.2 the route segment of the provenance line',
     '.receipt-record .route-value': '§1.2 the route segment, expanded into the receipt (§2.2)',
   },
@@ -31,9 +30,11 @@ const ALLOWED = {
   'src/lib/AssistantMarkdown.svelte': {
     '.assistant-markdown :global(.caret)': '§1.2 the caret on the active line',
   },
+  'src/lib/PocketFold.svelte': {
+    '.ear': "§1.2 the mark's folded ear on setup and sign-in",
+  },
   'src/lib/RunMark.svelte': {
-    '.thinking .body': "§1.2 the mark's thinking state (§1.8)",
-    '.thinking .accent': "§1.2 the trace that runs the mark's outline while thinking (§1.8)",
+    '.thinking .accent': "§1.2 the mark's folded corner while thinking (§1.8)",
   },
   // Nothing in the access popover is computation: badges and device states
   // are all on §1.2's forbidden list.

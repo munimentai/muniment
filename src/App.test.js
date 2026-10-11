@@ -43,7 +43,7 @@ const openSettings = async (section) => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
   const dialog = await screen.findByRole('dialog', { name: 'Settings' })
   if (section) await fireEvent.click(within(within(dialog).getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
-  await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument())
+  await vi.dynamicImportSettled(); await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument())
   return dialog
 }
 const rowControlRules = new Map([...rowControlStyles
@@ -170,6 +170,13 @@ async function findReadyWorkspaceComposer() {
   const composer = await findWorkspaceComposer()
   await waitFor(() => expect(screen.queryByText('Send waits for the thread. Your draft stays here.')).not.toBeInTheDocument())
   return composer
+}
+
+// File attachment sits at the top of the composer menu.
+async function addFilesFromComposerMenu() {
+  await findReadyWorkspaceComposer()
+  await fireEvent.click(screen.getByRole('button', { name: 'Extensions' }))
+  await fireEvent.click(await screen.findByRole('button', { name: 'Add files and folders' }))
 }
 
 async function stopClickCapture(voice) {
@@ -1436,8 +1443,8 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*backdrop-filter:\s*blur\(/)
     expect(settingsStyles).toMatch(/\.settings-scrim \{[^}]*background:\s*var\(--overlay-backdrop\)/)
     const nav = within(dialog).getByRole('navigation', { name: 'Settings sections' })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & routing', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
-    expect(within(nav).getByRole('button', { name: 'Models & routing' })).toHaveAttribute('aria-current', 'true')
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Models & decisions', 'Extend', 'Preferences', 'Profile & Memory', 'Storage', 'Companies', 'Account'])
+    expect(within(nav).getByRole('button', { name: 'Models & decisions' })).toHaveAttribute('aria-current', 'true')
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Preferences' }))
     expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
@@ -1673,7 +1680,10 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
     const url = within(dialog).getByLabelText('Ollama server URL')
     await fireEvent.input(url, { target: { value: 'http://localhost:11434/v1' } })
+    // A server behind a key takes it; a blank key sends none.
+    if (fails) await fireEvent.input(within(dialog).getByLabelText('API key (optional)'), { target: { value: ' sk-ollama ' } })
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Save Ollama server' }))
+    expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1', apiKey: fails ? 'sk-ollama' : null })
     expect(url).toBeDisabled()
     expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
 
@@ -2616,7 +2626,8 @@ describe('artifact rail', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
     expect(screen.getByRole('separator', { name: 'Threads' })).toHaveAttribute('aria-valuenow', '240')
     expect(appRules.get('.artifact-divider, .sidebar-divider')).toMatch(/cursor:\s*col-resize/)
-    expect(appStyles).not.toMatch(/divider[^{]*::after/)
+    expect(screen.getByRole('separator', { name: 'Threads' }).querySelector('.divider-grip [data-icon="ellipsis-vertical"]')).not.toBeNull()
+    expect(appRules.get('.artifact-divider:hover, .sidebar-divider:hover, .artifact-divider:focus-visible, .sidebar-divider:focus-visible, .artifact-divider:active, .sidebar-divider:active')).toMatch(/background-size:\s*var\(--frame-width\)/)
   })
 
 
@@ -3402,7 +3413,7 @@ describe('window chrome', () => {
     // Measured on macOS 26: AppKit tops the 14pt lights at 9pt from x = 9, and the row's default matches the frame gap.
     expect(band).toBe(36)
     expect(rowHeight).toBe(30)
-    expect(Number(appStyles.match(/--frame-width: 8px; --titlebar-band: \d+px; --titlebar-height:\s*(\d+)px/)[1])).toBe(rowHeight)
+    expect(Number(appStyles.match(/--frame-width: 4px; --titlebar-band: \d+px; --titlebar-height:\s*(\d+)px/)[1])).toBe(rowHeight)
     expect(controlHeight).toBe(24)
     expect(rowHeight - controlHeight / 2).toBe(band / 2)
     expect(main.trafficLightPosition).toEqual({ x: 9, y: band / 2 - 14 / 2 })
@@ -3410,7 +3421,7 @@ describe('window chrome', () => {
       expect(appRules.get(selector), selector).toMatch(/align-items:\s*end/)
     }
     // The clearance is the sidebar part's padding: the title row itself is a subgrid with no padding.
-    expect(appRules.get('.workspace.macos .titlebar')).toMatch(/grid-template-columns:\s*subgrid;\s*margin:\s*0;\s*padding:\s*0/)
+    expect(appRules.get('.workspace.macos .titlebar')).toMatch(/grid-template-columns:\s*subgrid;\s*column-gap:\s*var\(--frame-width\);\s*margin:\s*0;\s*padding:\s*0/)
     expect(appRules.get('.workspace.macos .titlebar-sidebar')).toMatch(/padding-left:\s*calc\(var\(--titlebar-inset\) - var\(--frame-width\)\)/)
     expect(main.visible).toBe(false)
     // Three 14pt lights from x=9 with 9pt gaps end at 69pt, and the row starts one gap later.
@@ -5450,7 +5461,7 @@ describe('local file selection', () => {
   it('shows and clears the native drop affordance, then de-duplicates dropped files', async () => {
     dialogResult = ['/private/contracts/lease.pdf']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+    await addFilesFromComposerMenu()
     await waitFor(() => expect(dragDropListener).toBeDefined())
 
     dragDropListener({ payload: { type: 'over', position: { x: 10, y: 10 } } })
@@ -5538,7 +5549,7 @@ describe('local file selection', () => {
   it('treats picker cancel as a no-op and removes a selected file', async () => {
     render(App)
     const add = async () => {
-        await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+        await addFilesFromComposerMenu()
     }
     await add()
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
@@ -5573,7 +5584,7 @@ describe('local file selection', () => {
       await fireEvent.scroll(thread)
     }
 
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+    await addFilesFromComposerMenu()
     await screen.findByRole('list', { name: 'Selected files' })
     await waitFor(() => expect(thread.scrollTop).toBe(withFiles))
 
@@ -5599,7 +5610,7 @@ describe('local file selection', () => {
     })
     dialogResult = ['/secret/location/evidence.pdf']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+    await addFilesFromComposerMenu()
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review this' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -5633,7 +5644,7 @@ describe('local file selection', () => {
     })
     dialogResult = ['/private/contracts/lease.png', '/private/notes.txt']
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+    await addFilesFromComposerMenu()
     const composer = screen.getByPlaceholderText('Ask anything')
     await fireEvent.input(composer, { target: { value: 'Review these' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -6464,10 +6475,9 @@ it('does not offer another-model retry in a completed reply', async () => {
       receipt: null, toolActivity: [], resumable: false,
     }])
     const chip = await screen.findByText('Routing')
-    const mark = screen.getByLabelText('Routing').querySelector('path')
-    expect(mark.getAttribute('d').match(/M/g)).toHaveLength(44)
-    expect(mark).toHaveAttribute('stroke-width', '0.7')
-    expect(mark).not.toHaveAttribute('stroke')
+    const mark = screen.getByLabelText('Routing')
+    expect(mark.querySelector('path.torso').getAttribute('d')).toMatch(/^M160 0 H274/)
+    expect(mark.querySelector('path.accent')).toBeInTheDocument()
 
     chatListener({ payload: {
       runId: 'run-thinking', phase: 'streaming', text: 'First token',
@@ -6884,7 +6894,7 @@ it('does not offer another-model retry in a completed reply', async () => {
 })
 
 describe('tool activity', () => {
-  it('draws no card for tool activity: the receipt tallies the calls instead', async () => {
+  it('draws no card for tool activity, and the receipt does not repeat the calls the transcript shows', async () => {
     invoke.mockImplementation(async (command) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
@@ -6907,8 +6917,7 @@ describe('tool activity', () => {
     expect(screen.queryByRole('group', { name: /tool activity/i })).not.toBeInTheDocument()
     expect(document.querySelector('.tool-row, .tool-dot')).toBeNull()
 
-    await fireEvent.click(screen.getByRole('button', { name: /^Expand receipt:/ }))
-    expect(document.querySelector('.receipt-record').textContent).toBe('Toolsbash 1, grep 4 (1 failed)')
+    expect(screen.queryByRole('button', { name: /^Expand receipt:/ })).not.toBeInTheDocument()
   })
 })
 
@@ -7112,17 +7121,24 @@ describe('provenance line', () => {
     expect(line.querySelectorAll('.route-segment')).toHaveLength(1)
   })
 
-  it('keeps routing turns behind one disclosure while totals stay visible', async () => {
+  it('keeps routing turns behind one popup while totals stay visible', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true }
     restore({ model: 'example', cost: '$0.01', turns: 2, routing: [
       { account: 'First account', selected_model: 'example', decision: 'Selected', confidence: 0.8 },
       { account: 'Second account', selected_model: 'fallback', decision: 'Fallback', fallback_causes: ['Rate limited'] },
     ] })
     await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
     expect(document.querySelector('.receipt-record')).toHaveTextContent('Cost$0.01Turns2')
-    expect(screen.getByRole('region', { name: 'Routing turn 1' })).not.toBeVisible()
-    await fireEvent.click(screen.getByText('Routing details · 2 turns'))
+    expect(screen.queryByRole('region', { name: 'Routing turn 1' })).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
     expect(screen.getByRole('region', { name: 'Routing turn 1' })).toHaveTextContent('First account')
     expect(screen.getByRole('region', { name: 'Routing turn 2' })).toHaveTextContent('Rate limited')
+    // The overlay sits on the page body like Settings, and Escape closes it.
+    const panel = screen.getByRole('dialog', { name: 'Routing details' })
+    expect(panel.closest('.routing-scrim').parentElement).toBe(document.body)
+    expect(panel).toHaveAttribute('data-panel-variant', 'overlay')
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Routing details' })).not.toBeInTheDocument()
   })
 
   it('paints nothing green when the receipt records no route', async () => {
@@ -7181,23 +7197,15 @@ describe('provenance line', () => {
     expect(marker).not.toHaveClass('expanded')
   })
 
-  it('names each recall and puts each recalled file on its own line', async () => {
+  it('leaves memory reads out of the receipt', async () => {
     restore(
       { route: 'analysis/high', model: 'glm-5.2', cost: '$0.0089', time: '6.2s' },
-      [
-        { query: 'lease', files: ['Documents/Muniment/lease.pdf', 'Documents/Muniment/notes.md'] },
-        { query: 'missing clause', files: [] },
-      ],
+      [{ query: 'lease', files: ['Documents/Muniment/lease.pdf'] }],
     )
 
     await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
 
-    const record = document.querySelector('.receipt-record')
-    expect(record.textContent).toBe('Cost$0.0089Memorylease, 2 filesDocuments/Muniment/lease.pdfDocuments/Muniment/notes.mdMemorymissing clause, 0 files')
-    expect([...record.querySelectorAll('.recall-file')].map((file) => file.textContent)).toEqual([
-      'Documents/Muniment/lease.pdf',
-      'Documents/Muniment/notes.md',
-    ])
+    expect(document.querySelector('.receipt-record').textContent).toBe('Cost$0.0089')
   })
 
   it('renders a provenance line when a reply has an empty receipt', async () => {
@@ -7277,7 +7285,7 @@ describe('active run composer queue', () => {
     expect(document.activeElement).toBe(send)
     expect(screen.getByRole('button', { name: 'Stop' })).toBe(send)
     expect(send).toHaveClass('stop')
-    expect(send).not.toHaveClass('primary')
+    expect(send).toHaveClass('primary')
   })
 
   it('shows a queue rejection and preserves the draft', async () => {
@@ -7989,7 +7997,7 @@ describe('release feature flags', () => {
     const nav = within(dialog).getByRole('navigation', {name: 'Settings sections'})
     expect(Boolean(within(nav).queryByRole('button', {name: 'Account', exact: true}))).toBe(cloud)
     expect(Boolean(within(nav).queryByRole('button', {name: 'Companies', exact: true}))).toBe(companyRecord)
-    expect(within(nav).getByRole('button', {name: 'Models & routing'})).toBeInTheDocument()
+    expect(within(nav).getByRole('button', {name: 'Models & decisions'})).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', {name: 'Close settings'}))
     if (!companyRecord) {
       await fireEvent.keyDown(window, {key: 'k', metaKey: true, ctrlKey: true})
@@ -8021,7 +8029,7 @@ describe('release feature flags', () => {
     const Settings = (await import('./lib/Settings.svelte')).default
     for (const section of ['account', 'companies']) {
       const view = render(Settings, {tauri: {invoke}, section, onclose: vi.fn()})
-      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & routing'})).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByRole('heading', {name: 'Models & decisions'})).toBeInTheDocument())
       expect(invoke).not.toHaveBeenCalledWith('auth_entitlement_snapshot')
       expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
       view.unmount()
@@ -8037,7 +8045,7 @@ it('prepares and routes extensions once across repeated busy refusals', async ()
     .mockRejectedValueOnce('Muniment is busy with another request. Try again.')
     .mockReturnValueOnce(accepted.promise)
   invoke.mockImplementation((command, args) => {
-    if (command === 'extend_command') return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }] })
+    if (command === 'extend_command') return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }], assist: { name: 'Clef Flash' } })
     if (command === 'chat_current_thread') return Promise.resolve('thread-1')
     if (command === 'chat_submit') return submit(args)
     return original(command, args)
@@ -8046,7 +8054,8 @@ it('prepares and routes extensions once across repeated busy refusals', async ()
   const composer = await findReadyWorkspaceComposer()
   await fireEvent.click(screen.getByRole('button', { name: 'Extensions', exact: true }))
   await fireEvent.click(screen.getByRole('button', { name: 'MCPs', exact: true }))
-  await fireEvent.click(screen.getByRole('switch', { name: 'Auto-select for this turn' }))
+  // Assistance in Settings turns its decision model on for each message.
+  expect(screen.getByRole('switch', { name: 'Clef Flash assists' })).toBeChecked()
   await fireEvent.input(composer, { target: { value: 'Search for the answer' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
   await waitFor(() => expect(submit).toHaveBeenCalledTimes(3))
@@ -8074,7 +8083,7 @@ it.each(['preparation', 'submission'])('keeps extension selection after a failed
   invoke.mockImplementation((command, args) => {
     if (command === 'extend_command') {
       if (args.action === 'route' && stage === 'preparation') return Promise.reject(error)
-      return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }] })
+      return Promise.resolve({ items: [{ id: 'search', kind: 'mcp', name: 'Search' }], assist: { name: 'Clef Flash' } })
     }
     if (command === 'chat_current_thread') return Promise.resolve('thread-1')
     if (command === 'chat_submit') return Promise.reject(error)
@@ -8084,7 +8093,8 @@ it.each(['preparation', 'submission'])('keeps extension selection after a failed
   const composer = await findReadyWorkspaceComposer()
   await fireEvent.click(screen.getByRole('button', { name: 'Extensions', exact: true }))
   await fireEvent.click(screen.getByRole('button', { name: 'MCPs', exact: true }))
-  await fireEvent.click(screen.getByRole('switch', { name: 'Auto-select for this turn' }))
+  // Assistance in Settings turns its decision model on for each message.
+  expect(screen.getByRole('switch', { name: 'Clef Flash assists' })).toBeChecked()
   await fireEvent.input(composer, { target: { value: 'Search for the answer' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Send', exact: true }))
   await screen.findAllByText(error.replace(' Try again.', ''))
@@ -8094,7 +8104,7 @@ it.each(['preparation', 'submission'])('keeps extension selection after a failed
   expect(invoke.mock.calls.filter(([command, args]) => command === 'extend_command' && args.action === 'route')).toHaveLength(1)
   expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit')).toHaveLength(stage === 'preparation' ? 0 : 1)
   expect(composer).toHaveValue('Search for the answer')
-  expect(screen.getByRole('switch', { name: 'Auto-select for this turn' })).toBeChecked()
+  expect(screen.getByRole('switch', { name: 'Clef Flash assists' })).toBeChecked()
 })
 
 it('inserts and colors skill commands in the message and prepares them for one turn', async () => {
@@ -8127,7 +8137,7 @@ it('attaches multiple files and folders directly with compact removable names', 
     : command === 'chat_submit' ? Promise.resolve({ runId: 'folder-run', attachments: [] }) : original(command, payload))
   dialogResult = ['/tmp/Research', '/tmp/Assets', '/tmp/brief.md', '/tmp/plan.md']
   render(App)
-  await fireEvent.click(await screen.findByRole('button', { name: 'Add files or folders' }))
+  await addFilesFromComposerMenu()
   expect(invoke).toHaveBeenCalledWith('chat_pick_attachments')
   const selected = await screen.findByRole('list', { name: 'Selected files' })
   for (const name of ['Research', 'Assets', 'brief.md', 'plan.md']) {

@@ -29,7 +29,7 @@ These are developer build options, not controls in user Settings.
 
 The flags are independent. Enabling either does not enable the other.
 Disabled sections have no visible controls, empty placeholders or working
-shortcuts. A request for a hidden Settings section opens Models & routing.
+shortcuts. A request for a hidden Settings section opens Models & decisions.
 With cloud disabled, startup enters local mode without reading a cloud session.
 A local startup failure offers a local retry, never a cloud sign-in prompt.
 Provider sign-in, model routing, allowances, MCP pairing and local tools remain
@@ -165,10 +165,10 @@ the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the first Send opens Settings
 → Models. The user supplies model access through a provider or local server.
 
-**Settings → Models & routing is one screen.** Model selection and classifier
-settings lead. Full-width account rows show allowance, with usage and weight
+**Settings → Models & decisions is one screen.** Model selection and classifier
+settings lead. Full-width account rows show allowance, with usage
 in account details. One searchable model list holds visibility and routing
-statements. A sample routing test shows the choice and fallback cause without
+statements. Each provider leads with the newest model of each family, dated from models.dev, and the models the user turned on. Older models fold under Other models and stay out of the picker until turned on. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
 and lands in the same file, or in the router's pool when the router pools
@@ -188,7 +188,7 @@ first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
-**Routing leads Settings → Models & routing.** Pi's `auth.json` holds one credential per
+**Routing leads Settings → Models & decisions.** Pi's `auth.json` holds one credential per
 provider id, so a second account of one provider cannot live there. The router
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
@@ -218,8 +218,8 @@ seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. The card shows what is left, not what is used, with the reset, the plan,
 and Codex's banked resets. The store in `muniment-router-quota.json` carries
 no token and no prompt. Allowances refresh when the settings page opens and
-every two minutes while it is visible, without overlapping probes. Manual
-refresh remains available. Codex and xAI subscriptions use Responses. Claude
+every two minutes while it is visible, without overlapping probes. The card's
+foot shows the read time with a refresh icon on the left and a red Disconnect on the right. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
 and Kimi subscriptions use Messages. Native streams preserve tool calls and
 usage. Other subscriptions remain ineligible until their transport exists.
 
@@ -269,7 +269,7 @@ same question shape stands beside them. A running classifier is the first row
 of the model chip's picker, named by the model that picks, `jev-latest picks`,
 and choosing it hands the turn to classification. The picker lists each model
 once under its provider. A model two or more accounts serve carries the
-balancer mark, and picking it balances across them with no other step.
+balancer mark, and picking it balances across them with no other step. A saved classifier connection shows its logo and edits in place. A new model, URL or key passes the connection test before it saves, and a blank key keeps the saved one. GPT-6 Luna answers through OpenAI's Decisions API, which takes an OpenAI API key. Every connected decision model except a pooled one also reaches chats, as the provider `decisions` in codemode scripts. A server that reports its decision models, as llama.cpp does, offers them as classifiers and keeps them out of the chat picker. Ollama's decision models are known by name.
 
 
 **The Home chip.** It shows `~/Documents/muniment`, lowercase, with one control
@@ -366,7 +366,7 @@ onboarding spec proves the composer, the three chips and a first Send.
     writes back to a source.
 14. **Monetization, launch and publicity are owner-only.**
 
-Settings loads on demand. Models & routing has Accounts, Models, and Routing pill tabs. Storage distinguishes the workspace from managed extensions.
+Settings loads on demand. Models & decisions has Accounts, Models, and Decisions pill tabs. Storage distinguishes the workspace from managed extensions.
 ## Workspace panels
 
 The title bar menu opens Browser, Files and Terminal in a shared tab panel.
@@ -375,9 +375,9 @@ stay inside the tab strip, clear of the maximize and panel-collapse controls.
 Browser labels show the host, path, query and fragment without the scheme or
 leading `www.`. Long browser labels fade on the right. Terminal and Files labels
 show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names.
-Terminal and Files path headers share `OverflowText.svelte`: the full path stays
-on one line, starts at its end, and scrolls horizontally without a scrollbar.
-Fades mark clipped content and clear when the content fits. The browser defaults to bundled offline desktop docs. Closing a browser tab releases its native view.
+Terminal and Files path headers share `OverflowText.svelte`: the full path stays on one line, starts at its end, and scrolls horizontally without a scrollbar.
+Fades mark clipped content and clear when the content fits. A new browser tab opens https://muniment.ai/docs/. Closing a browser tab releases its native view.
+Preferences sets the browser language. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Preferences names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
 
 **The file panel.** A read or edited file opens in the shared rail, exclusive
 with records and artifacts, with the same resize and maximize controls.
@@ -481,10 +481,10 @@ weaker than the one that built it. Four items:
    `bg_result`. They render into `settings.json` as
    `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` needs an
    Anthropic `claude-haiku` model and a Bright Data zone of type `serp`.
-2. **`npm:pi-mcp-adapter`** (MIT). One proxy tool that discovers MCP tools on
-   demand, reads `.pi/mcp.json` as the project override, and speaks stdio,
-   HTTP with SSE fallback, and Unix sockets. Through it the local harness
-   reaches the user's MCP servers and, on a paid account, the cloud graph's tools.
+2. **Pi's MCP support and codemode.** The record server's three tools reach the
+   model directly. The user's servers run through `codemode`, a script that calls
+   tools and decision models and returns only what the model needs. Extend's
+   servers join for the turn that picks them under their own names, never an id, each through scripts or in the tool list as its details set, and sign-in and tests use Pi's commands. Every enabled skill is listed by name and description and read when a task needs it, and a picked skill is named, not pasted.
 3. **The system prompt.** The desktop passes Pi its own prompt: purpose, tools, the bash
    timeout rule, and the launch facts: the model, earlier thread models, host and shell, and
    the working directory, which is the thread's project or session folder. Each message opens with its
@@ -500,7 +500,7 @@ the exact pin.
 ## Local models
 
 **The cloud-routing classifier is bundled.** It is separate from the optional
-local provider classifier configured in Models & routing. Its taxonomy is three
+local provider classifier configured in Models & decisions. Its taxonomy is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, about
 282 MB with its tokenizer, and [ADR
@@ -580,9 +580,7 @@ Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
 ### Extend
 Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect starts browser OAuth sign-in directly. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
-Search matches names, descriptions, publishers and categories. Category,
-installed and setup-required filters combine before pagination. Provider account
-requirements and unsupported setup methods remain visible.
+Search matches names, descriptions, publishers and categories. Category, installed and setup-required filters combine before pagination. Provider account requirements and unsupported setup methods remain visible.
 
 Skills and plugins use managed storage under `~/.muniment/extensions/packages`, with Open folder controls. They install from GitHub repositories, local folders or ZIP/TAR archives. A preview
 lists supported skills, MCP servers and executable plugin components. The user
@@ -595,6 +593,8 @@ The composer tools menu has MCPs, Plugins and Skills branches. File attachments 
 MCP switches and inline slash commands apply to one turn and reset after submission. Unsent text, files, and extension choices stay with each task in the open app session. Creation plans remain temporary until Send and offer Cancel creation.
 All composer panels share the same anchor. Explicit selections take priority. Disabled
 extensions stay outside the runtime MCP snapshot and skill context.
-Optional extension routing uses the configured classifier and only installed,
-enabled candidates. A timeout or low confidence adds no capability. Credentials
+Assistance on the Decisions tab picks from installed, enabled extensions with its
+own decision model or the model routing one. While it is on, the composer shows
+`<name> assists`, on for each message, and it is hidden while assistance is off.
+A timeout or low confidence adds no capability. Credentials
 stay in the system credential store or use environment variable references.

@@ -1,5 +1,6 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { LOCALE_ARCHIVE, LOCALE_MANIFEST, trimLocales } from './chromium-locales.mjs'
 const target = 'src-tauri/target/release'
 const output = process.argv[2] || join(target,'cef-app')
 for (const name of ['bootstrap.exe', 'muniment_desktop.dll', 'libcef.dll', 'chrome_elf.dll', 'icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'locales']) {
@@ -11,6 +12,8 @@ for (const entry of readdirSync(target)) {
   if (/\.(dll|pak|bin|dat|json)$/.test(entry) && entry !== 'muniment_desktop.dll') copyFileSync(join(target,entry),join(output,entry))
 }
 cpSync(join(target,'locales'),join(output,'locales'),{recursive:true})
+// A packaged build replaces the output's locales, so a repeated run trims a full copy.
+trimLocales({ directory: join(output,'locales'), archive: join(target,'bundle','locales',LOCALE_ARCHIVE), manifest: join(output,LOCALE_MANIFEST) })
 copyFileSync(join(target,'bootstrap.exe'),join(output,'muniment-desktop.exe'))
 copyFileSync(join(target,'muniment_desktop.dll'),join(output,'muniment-desktop.dll'))
 for (const name of ['muniment-runtime.exe','muniment-reader.exe']) {

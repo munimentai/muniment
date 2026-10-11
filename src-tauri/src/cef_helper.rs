@@ -1,4 +1,9 @@
+#[path = "cef_locale.rs"]
+mod cef_locale;
+
 fn main() {
+    // Read the language pack before the sandbox closes file access.
+    let mut app = cef_locale::from_args().map(cef_locale::LocaleApp::new);
     let args = cef::args::Args::new();
     #[cfg(target_os = "macos")]
     let _sandbox = {
@@ -16,7 +21,7 @@ fn main() {
     cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let code = cef::execute_process(
         Some(args.as_main_args()),
-        None::<&mut cef::App>,
+        app.as_mut(),
         std::ptr::null_mut(),
     );
     std::process::exit(code.max(0));

@@ -64,6 +64,7 @@ const expectedSuffixes = [
   [".msi.sig", "-machine.msi.sig"],
   ["-machine.msi.sig"],
   ["-nsis.exe.sig"],
+  ...["linux", "windows", "macos"].map(platform => [`${platform}-muniment-chromium-locales.tar.gz`]),
 ];
 
 // Require one of each asset for the source, remove every other asset, and

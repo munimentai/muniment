@@ -32,7 +32,9 @@ const START_ERROR: &str = "The sign-in could not start. Try again.";
 const CALLBACK_PROVIDER: &str = "openai-codex";
 const CALLBACK_PORT: u16 = 1455;
 const CALLBACK_PATH: &str = "/auth/callback";
-const MARK_SVG: &str = include_str!("../icons/muniment-graph-auth.svg");
+const MARK_SVG: &str = include_str!("../icons/muniment-mark-auth.svg");
+/// The mark a finished sign-in plays once: the elephant rears and settles.
+const SIGNED_IN_SVG: &str = include_str!("../icons/muniment-mark-signed-in.svg");
 
 struct ActiveLogin {
     child: Child,
@@ -98,14 +100,16 @@ fn provider_display_name(provider: &str) -> &str {
 /// The page the browser lands on after the provider redirects: muniment's mark
 /// and voice, on the app's paper.
 pub(crate) fn callback_page(connected: Option<&str>) -> String {
-    let (heading, body) = match connected {
+    let (mark, heading, body) = match connected {
         Some(provider) => (
+            SIGNED_IN_SVG,
             "Signed in".to_owned(),
             format!(
                 "{provider} is connected. Muniment is ready in the app, and this window can close."
             ),
         ),
         None => (
+            MARK_SVG,
             "Sign-in did not finish".to_owned(),
             "Muniment did not get a code from this page. Return to the app and try again."
                 .to_owned(),
@@ -131,7 +135,7 @@ p {{ margin: 0; color: var(--muted); font-size: 15px; line-height: 1.55; }}
 </head>
 <body>
 <main>
-{MARK_SVG}
+{mark}
 <h1>{heading}</h1>
 <p>{body}</p>
 </main>
@@ -759,10 +763,17 @@ mod tests {
         let page = callback_page(Some("OpenAI"));
         assert!(page.contains("<title>Muniment</title>"));
         assert!(page.contains("aria-label=\"muniment\""));
+        // The page draws the pocket-fold mark, its body and its ear.
+        assert!(page.contains("<path class=\"body\" d=\"M160 0 H274"));
+        assert!(page.contains("<path class=\"ear\" d=\"M294 0 L510 190"));
+        // A finished sign-in plays the mark once, and a failed one shows it still.
+        assert!(page.contains("<animate"));
+        assert!(page.contains("prefers-reduced-motion"));
         assert!(page.contains("OpenAI is connected."));
         assert!(!page.contains("Authentication successful"));
         let missing = callback_page(None);
         assert!(missing.contains("Sign-in did not finish"));
+        assert!(!missing.contains("<animate"));
         assert_eq!(
             callback_redirect("GET /auth/callback?code=ac_1&state=s HTTP/1.1"),
             Some("http://localhost:1455/auth/callback?code=ac_1&state=s".to_owned())

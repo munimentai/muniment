@@ -85,8 +85,36 @@ function usageTokens(tokens) {
   return parts.join(', ')
 }
 
+// Attached folders travel to the model as a note under the prompt, because
+// the model reads their files with its own tools. The transcript shows the
+// prompt and names each folder instead of the note.
+const FOLDER_NOTE = '\n\nAttached folders (local paths):\n'
+const FOLDER_RULE = '\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.'
+export function withFolders(prompt, folders = []) {
+  return folders.length ? `${prompt}${FOLDER_NOTE}${folders.map(path => JSON.stringify(path)).join('\n')}${FOLDER_RULE}` : prompt
+}
+export function promptFolders(text = '') {
+  const value = String(text ?? '')
+  const start = value.lastIndexOf(FOLDER_NOTE)
+  if (start < 0 || !value.endsWith(FOLDER_RULE)) return { text: value, folders: [] }
+  try {
+    const folders = value.slice(start + FOLDER_NOTE.length, value.length - FOLDER_RULE.length).split('\n').map(line => JSON.parse(line))
+    if (folders.every(path => typeof path === 'string')) return { text: value.slice(0, start), folders }
+  } catch (_) {}
+  return { text: value, folders: [] }
+}
+
+// The turns the router chose: a classifier choice, a fallback or an excluded
+// model. A turn on the model the user picked shows no details unless the
+// router fell back or set a model aside on it.
+const USER_SELECTED = 'User selected the model'
+export function routedTurns(receipt = {}) {
+  return (receipt?.routing ?? []).filter((evidence) => (recorded(evidence?.decision) && evidence.decision !== USER_SELECTED) || Number.isFinite(evidence?.confidence) || evidence?.exclusions?.length || evidence?.fallback_causes?.length)
+}
+
 // The rows under the line: everything the line does not show, in record order.
-export function receiptRows(receipt = {}, recalls = []) {
+// Memory reads stay out. The Tools tally stays out when the transcript shows the calls.
+export function receiptRows(receipt = {}, { tools: tallyTools = true } = {}) {
   const rows = []
   for (const evidence of receipt?.routing ?? []) {
     if (recorded(evidence.account)) rows.push({ label: 'Account', value: evidence.account, route: false })
@@ -103,15 +131,10 @@ export function receiptRows(receipt = {}, recalls = []) {
     rows.push({ label: 'Tokens', value: usageTokens(tokens), route: false })
   }
   if (recorded(receipt?.turns)) rows.push({ label: 'Turns', value: count(receipt.turns), route: false })
-  const tools = (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls))
+  const tools = tallyTools ? (receipt?.tools ?? []).filter((tool) => recorded(tool?.name) && recorded(tool?.calls)) : []
   if (tools.length) {
     const parts = tools.map((tool) => `${tool.name} ${count(tool.calls)}${Number(tool.failed) > 0 ? ` (${count(tool.failed)} failed)` : ''}`)
     rows.push({ label: 'Tools', value: parts.join(', '), route: false })
-  }
-  for (const recall of recalls ?? []) {
-    const files = recall?.files ?? []
-    const total = files.length
-    rows.push({ label: 'Memory', value: `${recall?.query ?? ''}, ${total} ${total === 1 ? 'file' : 'files'}`, files, route: false })
   }
   for (const capability of receipt?.capabilities ?? []) {
     if (capability?.name !== undefined && capability?.name !== null && capability?.version !== undefined && capability?.version !== null) {

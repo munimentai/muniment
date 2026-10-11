@@ -7,6 +7,8 @@
 // A price is per million input tokens, in US dollars, as the provider lists
 // it. It is a guide for picking, never a bill.
 
+import { CLASSIFIERS } from './classifier-connections.js'
+
 // Models built to classify. Each takes its own key.
 export const DEDICATED = [
   {
@@ -23,12 +25,8 @@ export const DEDICATED = [
 // Open models use an operator-hosted System One endpoint.
 export const SELF_HOSTED = [
   {
-    id: 'semif/qwen3.5-4b', kind: 'endpoint', name: 'SemIf · Qwen 3.5 4B', model: 'semif-qwen3.5-4b',
-    note: 'A self-hosted routing classifier. Requires a System One adapter. Scores come from model logits and need calibration for your routes.',
-  },
-  {
-    id: 'mapika/decider-2b', kind: 'endpoint', name: 'Decider 2B', model: 'decider-2b',
-    note: 'A self-hosted routing classifier. Requires a System One endpoint. Faster on the tested GPU, but less accurate than Jev on complex decisions.',
+    id: 'mapika/decider-4b', kind: 'endpoint', name: 'Decider 4B', model: 'Mapika/decider-4b',
+    note: 'A self-hosted routing classifier. Requires a System One endpoint.',
   },
 ]
 
@@ -68,7 +66,13 @@ export function catalog() {
 }
 
 // Runtime inventories may provide either a qualified ID or the model alone.
+// A connected decision model, such as Clef on Cloudflare, names its connection,
+// whose id selects the mark.
 export function classifierProvider(model) {
   const entry = [...DEDICATED, ...SELF_HOSTED, ...LEGACY_POOLED].find(item => item.id === model || item.model === model)
-  return (entry?.id ?? model ?? '').split('/')[0]
+  if (entry) return entry.id.split('/')[0]
+  const name = String(model ?? '').split(':')[0]
+  const connection = CLASSIFIERS.find(item => item.model === name
+    || item.variants?.some(variant => Object.values(variant.models).includes(name)))
+  return connection?.id ?? name.split('/')[0]
 }

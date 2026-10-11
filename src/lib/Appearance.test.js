@@ -54,4 +54,15 @@ describe('Appearance', () => {
     expect(stored()).toEqual({ mode: 'system', light: 'ledger', dark: 'vault' })
     expect(pressed(themes)).toEqual(['Paper', 'Vault'])
   })
+
+  it('swaps the thinking indicator preview in place, one indicator at a time', async () => {
+    render(Appearance)
+    const preview = screen.getByLabelText('Thinking indicator preview')
+    for (const name of ['Text sheen', 'Ear flap', 'Motion elephant']) {
+      await fireEvent.click(screen.getByRole('button', { name }))
+      expect(preview.querySelectorAll('.thinking')).toHaveLength(1)
+    }
+    expect(preview.querySelector('.walker')).not.toBeNull()
+    expect(localStorage.getItem('muniment.thinking-mark')).toBe('motion')
+  })
 })

@@ -19,9 +19,10 @@
   let visibility = $state({})
   let editing = $state('')
   let statement = $state('')
-  const groups = $derived(pickerGroups(inventory ? { ...inventory, hidden: [] } : null, query).filter((group) => !group.classifier).map(group => ({ ...group, models: group.models.filter(model => (!vision || model.images === true) && (!reasoning || model.thinking === true) && (!shownOnly || !hidden.has(modelKey(model.provider, model.choice))) && (!Number(minContext) || contextSize(model.context || routeFor(model)?.context) >= Number(minContext))) })).filter(group => group.models.length))
+  // Each provider leads with the newest model of each family and the models
+  // the user turned on. The rest fold under Other models, which a search opens.
+  const groups = $derived(pickerGroups(inventory, query, { all: true }).filter((group) => !group.classifier).map(group => ({ ...group, models: group.models.filter(model => (!vision || model.images === true) && (!reasoning || model.thinking === true) && (!shownOnly || model.shown) && (!Number(minContext) || contextSize(model.context || routeFor(model)?.context) >= Number(minContext))) })).filter(group => group.models.length))
   const current = $derived(currentModel(inventory))
-  const hidden = $derived(new Set(inventory?.hidden ?? []))
   function contextSize(value) { const match = String(value ?? '').replaceAll(',', '').match(/^([\d.]+)\s*([km])?/i); return match ? Number(match[1]) * ({ k: 1000, m: 1000000 }[match[2]?.toLowerCase()] ?? 1) : 0 }
   function routeFor(model) { return settings?.options?.find((option) => option.model === model.id && (model.choice === option.key || groupFamily(model.provider) === option.family)) }
   function groupFamily(provider) { return provider === 'openai-codex' ? 'openai' : provider === 'claude-bridge' ? 'anthropic' : provider }
@@ -41,8 +42,8 @@
     error = ''
     try {
       await tauri.invoke('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: !shown })
-      const next = { ...inventory, hidden: (inventory?.hidden ?? []).filter(entry => entry !== key) }
-      if (!shown) next.hidden.push(key)
+      const next = { ...inventory, hidden: (inventory?.hidden ?? []).filter(entry => entry !== key), shown: (inventory?.shown ?? []).filter(entry => entry !== key) }
+      next[shown ? 'shown' : 'hidden'].push(key)
       inventory = next
       oninventory?.(next)
       // Hiding the saved default must also update the runtime's choice.
@@ -72,7 +73,7 @@
   {#if filtersOpen}
       <div class="filter-fields" id="model-filters">
         <ChoiceField label="Minimum context" value={minContext} inline={false} options={[{value:'0',label:'Any size'},{value:'32000',label:'32K+'},{value:'128000',label:'128K+'},{value:'200000',label:'200K+'},{value:'1000000',label:'1M+'}]} onchange={value => minContext = value} />
-        <SegmentedField label="Visibility" value={shownOnly ? 'enabled' : 'all'} options={[{value:'all',label:'All models'},{value:'enabled',label:'Enabled'}]} onchange={value => shownOnly = value === 'enabled'} />
+        <SegmentedField label="Visibility" value={shownOnly ? 'enabled' : 'all'} options={[{value:'all',label:'All models'},{value:'enabled',label:'Shown'}]} onchange={value => shownOnly = value === 'enabled'} />
         <div class="capability-filter"><span>Capabilities</span><div class="capability-options">
           <Button icon="eye" variant="capability" aria-pressed={vision} onclick={() => vision = !vision}>Vision</Button>
           <Button icon="brain" variant="capability" aria-pressed={reasoning} onclick={() => reasoning = !reasoning}>Reasoning</Button>
@@ -83,19 +84,31 @@
   {#if error}<p role="alert">{error}</p>{/if}
   {#if !groups.length}<p>No models match.</p>{/if}
   {#each groups as group (group.id)}
+    {@const leading = group.models.filter((model) => model.lead || model.shown)}
+    {@const others = group.models.filter((model) => !model.lead && !model.shown)}
     <section aria-label={`${group.name} models`}>
       <h5><ProviderLogo provider={group.id.replace('router:', '')} size={16} />{group.name}</h5>
-      {#each group.models as model (model.id)}
+      {#each leading as model (model.id)}{@render row(model)}{/each}
+      {#if others.length}
+        <details class="others" open={!!query.trim() || undefined}>
+          <DisclosureSummary>{`Other models (${others.length})`}</DisclosureSummary>
+          {#each others as model (model.id)}{@render row(model)}{/each}
+        </details>
+      {/if}
+    </section>
+  {/each}
+</section>
+{#snippet row(model)}
         {@const route = routeFor(model)}
         {@const provider = route && settings?.enabled ? 'muniment-router' : model.provider}
         {@const choice = route && settings?.enabled ? route.key : model.choice}
         {@const key = modelKey(model.provider, model.choice)}
-        {@const shown = visibility[key] ?? !hidden.has(key)}
+        {@const shown = visibility[key] ?? model.shown}
         <div class="model">
           <div class="model-row">
             <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context} · {model.context} context{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
-            <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Enable ${model.label}`} onchange={shown => setShown(model, shown)} />Enabled</label>
+            <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Show ${model.label} in picker`} onchange={shown => setShown(model, shown)} />Show in picker</label>
           </div>
           {#if route}
             <details><DisclosureSummary>Routing statement</DisclosureSummary><p class="statement">{route.description}</p>
@@ -106,10 +119,7 @@
             </details>
           {/if}
         </div>
-      {/each}
-    </section>
-  {/each}
-</section>
+{/snippet}
 <style>
   .catalog { display: grid; gap: 14px; min-width: 0; }
   .filter-fields { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto auto; align-items: end; gap: 12px 16px; font-size: var(--text-13); }
@@ -131,5 +141,6 @@
   textarea { width: 100%; box-sizing: border-box; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; font: inherit; font-size: var(--text-13); }
   textarea { resize: vertical; }
   details { margin-top: 8px; font-size: var(--text-13); } summary { cursor: pointer; min-height: 24px; color: var(--muted); }
+  .others > :global(summary) { padding: 10px 0; }
   .statement { padding: 6px 0 10px; } .actions { display: flex; gap: 8px; margin-top: 8px; }
 </style>

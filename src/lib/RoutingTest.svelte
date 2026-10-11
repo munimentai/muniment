@@ -14,7 +14,7 @@
 </script>
 <section aria-labelledby="test-routing-title">
   <h4 id="test-routing-title">Test routing</h4>
-  <p>Send a sample to your classifier. No reply or tools.</p>
+  <p>Send a sample to your decision model. No reply or tools.</p>
   <label for="routing-sample">Sample request</label>
   <textarea id="routing-sample" rows="3" placeholder="Describe a task." bind:value={sample} disabled={pending}></textarea>
   <button disabled={pending || !sample.trim() || (!settings?.options?.length || !settings?.enabled)} onclick={test}>{pending ? 'Testing…' : 'Test routing'}</button>

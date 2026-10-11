@@ -1,4 +1,3 @@
-mod desktop_docs;
 use crate::cef_native;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -15,8 +14,8 @@ static NEXT_ID: AtomicI32 = AtomicI32::new(1);
 type Reply = mpsc::Sender<Result<Value, String>>;
 struct Control {
     pending: Mutex<HashMap<i32, Reply>>,
-    /// Agent control starts stopped and stays stopped until the main window
-    /// sends an explicit grant for the active view.
+    /// A stop cancels the chat's browse in progress. The next chat request
+    /// clears it, because the Browser tab exists for chats to drive.
     stopped: Mutex<bool>,
     serial: Mutex<()>,
     active: Mutex<String>,
@@ -25,7 +24,7 @@ impl Default for Control {
     fn default() -> Self {
         Self {
             pending: Mutex::default(),
-            stopped: Mutex::new(true),
+            stopped: Mutex::new(false),
             serial: Mutex::default(),
             active: Mutex::default(),
         }
@@ -57,11 +56,8 @@ fn allowed_url(value: &str) -> Result<tauri::Url, String> {
 fn origin(value: &str) -> Result<String, String> {
     Ok(allowed_url(value)?.origin().ascii_serialization())
 }
-fn docs_destination(app: &tauri::AppHandle, url: &str) -> String {
-    if url == desktop_docs::URL {
-        format!("{}/docs/", app.state::<BrowserStorage>().origin)
-    } else { url.to_owned() }
-}
+// A new browser tab opens the online desktop docs.
+const DOCS: &str = "https://muniment.ai/docs/";
 fn target(app: &tauri::AppHandle, label: &str) -> Result<cef_native::View, String> {
     cef_native::view(app, label)
 }
@@ -122,12 +118,8 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
         }
     }
     match req.action.as_str() {
-        "grant" if !agent => {
-            *control.stopped.lock().unwrap() = false;
-            Ok(json!({"allowed":true}))
-        }
         "navigate" => {
-            let next = allowed_url(&docs_destination(app, &req.value))?;
+            let next = allowed_url(&req.value)?;
             if req.view == "artifact" && next.origin().ascii_serialization() != app.state::<BrowserStorage>().origin { return Err("Artifact previews stay local.".into()); }
             webview.navigate(next).map_err(err)?;
             Ok(json!({"navigating":true}))
@@ -148,6 +140,15 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
                 cdp(app,&req.view,"Input.dispatchMouseEvent",json!({"type":"mouseReleased","x":point["x"],"y":point["y"],"button":"left","clickCount":1}))
             }
         }
+        "observe" => evaluate(app, &req.view, OBSERVE.into()),
+        "ready" => evaluate(app, &req.view, "document.readyState".into()),
+        "element-click" | "element-fill" | "element-select" => element(app, &req, agent),
+        "scroll" => {
+            let size = evaluate(app, &req.view, "({w:innerWidth,h:innerHeight})".into())?;
+            let (w, h) = (size["w"].as_f64().unwrap_or(800.0), size["h"].as_f64().unwrap_or(600.0));
+            let delta = if req.value == "up" { -0.8 * h } else { 0.8 * h };
+            cdp(app,&req.view,"Input.dispatchMouseEvent",json!({"type":"mouseWheel","x":w/2.0,"y":h/2.0,"deltaX":0,"deltaY":delta}))
+        }
         "screenshot" => cdp(app,&req.view,"Page.captureScreenshot",json!({"format":"png"})),
         "back" | "forward" if !agent => {
             let history=cdp(app,&req.view,"Page.getNavigationHistory",json!({}))?;
@@ -156,8 +157,105 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
             cdp(app,&req.view,"Page.navigateToHistoryEntry",json!({"entryId":entry["id"]}))
         }
         "reload" if !agent => cdp(app,&req.view,"Page.reload",json!({})),
-        "status" if !agent => Ok(json!({"url":url,"allowed":! *control.stopped.lock().unwrap(),"chromium":"152.0.6"})),
+        "status" if !agent => Ok(json!({"url":url,"chromium":format!("{}.{}.{}",cef::sys::CEF_VERSION_MAJOR,cef::sys::CEF_VERSION_MINOR,cef::sys::CEF_VERSION_PATCH)})),
         _ => Err("Unsupported browser action.".into()),
+    }
+}
+/// Reads the visible page as numbered elements for the `browser` tool.
+const OBSERVE: &str = include_str!("cef_browser/observe.js");
+/// Acts on an element by the number the page reader gave it. The number is the
+/// only thing a decision model chooses, so its answer never becomes a selector.
+fn element(app: &tauri::AppHandle, req: &Request, agent: bool) -> Result<Value, String> {
+    if req.selector.is_empty() || req.selector.len() > 32 || req.value.len() > 4096 {
+        return Err("Invalid element or text.".into());
+    }
+    let id = serde_json::to_string(&req.selector).unwrap();
+    let find = format!("const list=document.querySelectorAll('[data-muniment-id=\"'+CSS.escape({id})+'\"]');if(list.length!==1)return {{error:'The element is gone. Read the page again.'}};const e=list[0];e.scrollIntoView({{block:'center',inline:'center',behavior:'instant'}});");
+    let script = match req.action.as_str() {
+        "element-click" => format!("(()=>{{{find}const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,t=document.elementFromPoint(x,y);if(t&&t!==e&&!e.contains(t)&&!t.contains(e)&&!(e.labels&&[...e.labels].some(l=>l.contains(t))))return {{error:'Another element covers this one.'}};return {{x,y}}}})()"),
+        "element-fill" => {
+            let clear = if req.value.is_empty() { "document.execCommand('delete');" } else { "" };
+            format!("(()=>{{{find}if(e.type==='password')return {{error:'Enter passwords yourself.'}};e.focus();if(e.isContentEditable){{const s=getSelection(),r=document.createRange();r.selectNodeContents(e);s.removeAllRanges();s.addRange(r)}}else if(e.select)e.select();{clear}return {{}}}})()")
+        }
+        _ => {
+            let option: usize = req.value.parse().map_err(|_| "Invalid option.")?;
+            format!("(()=>{{{find}const o=e.options&&e.options[{option}-1];if(!o)return {{error:'That option is gone.'}};e.value=o.value;e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}));return {{}}}})()")
+        }
+    };
+    let found = evaluate(app, &req.view, script)?;
+    if let Some(error) = found["error"].as_str() {
+        return Err(error.into());
+    }
+    // A stop received during page inspection cancels pending input.
+    if agent && *app.state::<Arc<Control>>().stopped.lock().unwrap() {
+        return Err("Agent control stopped.".into());
+    }
+    match req.action.as_str() {
+        "element-click" => {
+            for kind in ["mousePressed", "mouseReleased"] {
+                cdp(app,&req.view,"Input.dispatchMouseEvent",json!({"type":kind,"x":found["x"],"y":found["y"],"button":"left","clickCount":1}))?;
+            }
+            Ok(json!({}))
+        }
+        "element-fill" if !req.value.is_empty() => {
+            cdp(app, &req.view, "Input.insertText", json!({"text": req.value}))
+        }
+        _ => Ok(json!({})),
+    }
+}
+/// The app the chat host drives. Only the app with a browser sets it.
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+/// The Browser tab, as the page a chat's `browser` tool drives. It acts only
+/// while that tab is open and the user lets chats use it.
+pub fn chat_browser() -> Option<Box<dyn muniment_core::browser_agent::BrowserHost>> {
+    APP.get()
+        .map(|app| Box::new(ChatBrowser(app.clone())) as Box<dyn muniment_core::browser_agent::BrowserHost>)
+}
+struct ChatBrowser(tauri::AppHandle);
+impl ChatBrowser {
+    fn run(&self, action: &str, value: &str, selector: &str) -> Result<Value, String> {
+        let req = Request { view: "browser".into(), action: action.into(), value: value.into(), selector: selector.into() };
+        operate(&self.0, req, true)
+    }
+    /// Retries while a navigation replaces the document.
+    fn read(&self, action: &str) -> Result<Value, String> {
+        let mut last = String::new();
+        for _ in 0..20 {
+            match self.run(action, "", "") {
+                Ok(value) => return Ok(value),
+                Err(error) if error == "The page could not complete this action." || error == "Browser action failed." || error.contains("timed out") => last = error,
+                Err(error) => return Err(error),
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Err(last)
+    }
+}
+impl muniment_core::browser_agent::BrowserHost for ChatBrowser {
+    fn observe(&self) -> Result<Value, String> {
+        for _ in 0..12 {
+            if self.read("ready")? == "complete" {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        self.read("observe")
+    }
+    fn act(&self, action: &Value) -> Result<Value, String> {
+        let text = |key: &str| action[key].as_str().unwrap_or("");
+        let element = text("element");
+        let (name, result) = match text("action") {
+            "navigate" => ("navigate", self.run("navigate", text("url"), "")),
+            "click" => ("click", self.run("element-click", "", element)),
+            "fill" => ("type", self.run("element-fill", text("text"), element)),
+            "select" => ("select", self.run("element-select", text("option"), element)),
+            "scroll" => ("scroll", self.run("scroll", text("direction"), "")),
+            _ => return Err("Unsupported browser action.".into()),
+        };
+        let _ = self.0.emit_to("main", "agent-action", json!({"action":name,"view":"browser","ok":result.is_ok()}));
+        // The page reacts to input before the next read.
+        std::thread::sleep(Duration::from_millis(400));
+        result
     }
 }
 #[tauri::command]
@@ -172,6 +270,24 @@ pub async fn browser_command(
     tauri::async_runtime::spawn_blocking(move || operate(&app, request, false))
         .await
         .map_err(err)?
+}
+/// Answers a chat's `browser` request from the Browser tab. A chat in the
+/// background runtime reaches the app with the request as a pending gate, and
+/// the window answers the gate with this JSON.
+#[tauri::command]
+pub async fn browser_tool(webview: tauri::Webview, request: String) -> Result<String, String> {
+    shell(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let host = chat_browser().ok_or("This app has no browser.")?;
+        *app_control().stopped.lock().unwrap() = false;
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        Ok(muniment_core::browser_agent::answer(host.as_ref(), Some(&request), &stop).to_string())
+    })
+    .await
+    .map_err(err)?
+}
+fn app_control() -> Arc<Control> {
+    APP.get().expect("The browser is set up.").state::<Arc<Control>>().inner().clone()
 }
 /// Serves the prototype agent socket. Only builds with the `browser-agent`
 /// feature carry it, and it acts only after the main window grants control.
@@ -311,9 +427,6 @@ pub async fn browser_view(
         if !label.is_empty() && label != "browser" && label != "artifact" {
             return Err("Unknown browser view.".into());
         }
-        if *control.active.lock().unwrap() != label {
-            *control.stopped.lock().unwrap() = true;
-        }
         *control.active.lock().unwrap() = label.clone();
         cef_native::hide_all(&app)?;
         if label.is_empty() {
@@ -342,7 +455,7 @@ pub async fn browser_view(
                 })
                 .transpose()?
         } else {
-            Some(allowed_url(&docs_destination(&app, homepage.as_deref().unwrap_or(desktop_docs::URL)))?.to_string())
+            Some(allowed_url(homepage.as_deref().unwrap_or(DOCS))?.to_string())
         };
         cef_native::layout(
             &app,
@@ -415,14 +528,6 @@ pub fn setup(app: &mut tauri::App, root: &std::path::Path) -> Result<(), String>
     let files = root.to_path_buf();
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
-            if request.url() == "/docs/" {
-                let mut response = tiny_http::Response::from_string(desktop_docs::html());
-                for (key, value) in [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-store"), ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")] {
-                    response.add_header(tiny_http::Header::from_bytes(key, value).unwrap());
-                }
-                let _ = request.respond(response);
-                continue;
-            }
             let body = request
                 .url()
                 .strip_prefix(&prefix)
@@ -445,6 +550,7 @@ pub fn setup(app: &mut tauri::App, root: &std::path::Path) -> Result<(), String>
         token,
     });
     app.manage(Arc::new(Control::default()));
+    let _ = APP.set(app.handle().clone());
     #[cfg(all(unix, feature = "browser-agent"))]
     serve_agent(app.handle().clone(), root)?;
     Ok(())
@@ -453,8 +559,8 @@ pub fn setup(app: &mut tauri::App, root: &std::path::Path) -> Result<(), String>
 mod tests {
     use super::*;
     #[test]
-    fn agent_control_starts_stopped() {
-        assert!(*Control::default().stopped.lock().unwrap());
+    fn chats_drive_the_browser_without_a_grant() {
+        assert!(!*Control::default().stopped.lock().unwrap());
     }
     #[test]
     fn navigation_rejects_privileged_schemes_and_credentials() {

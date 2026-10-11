@@ -4,7 +4,9 @@ mod attachment_picker;
 mod agents;
 mod attach_service;
 mod auth;
+mod browser_language;
 mod cef_browser;
+mod cef_locale;
 mod cef_native;
 #[cfg(windows)]
 mod cef_windows;
@@ -190,6 +192,7 @@ pub fn run() {
             terminal::terminal_resize,
             terminal::terminal_close,
             cef_browser::browser_command,
+            cef_browser::browser_tool,
             cef_browser::browser_view,
             cef_browser::artifact_list,
             cef_browser::artifact_from_file,
@@ -223,9 +226,12 @@ pub fn run() {
             model_router::model_router_update_account,
             model_router::model_router_remove_account,
             model_router::model_router_save_routes,
+            model_router::model_router_set_hidden,
             model_router::model_router_set_classifier,
             model_router::model_router_connect_classifier,
             model_router::model_router_select_classifier,
+            model_router::model_router_set_assist,
+            model_router::model_router_update_classifier,
             model_router::model_router_disconnect_classifier,
             model_router::model_router_test_classifier,
             model_router::model_router_test_route,
@@ -239,6 +245,8 @@ pub fn run() {
             chat::chat_file_metadata,
             chat::chat_file_content,
             chat::chat_search_files,
+            browser_language::browser_language,
+            browser_language::browser_language_set,
             local_mode::context_settings,
             local_mode::context_settings_save,
             chat::chat_resume,

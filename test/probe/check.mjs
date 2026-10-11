@@ -199,7 +199,7 @@ async function checkPaperFrame(browser, baseUrl) {
               const fail = (condition, message) => { if (!condition) failures.push(message) }
               const near = (left, right) => Math.abs(left - right) < 1
               const sliding = transition && (collapsed || parseFloat(getComputedStyle(workspace.querySelector('.thread-panel')).marginLeft) !== 0)
-              fail(frame === 8, `Frame width: ${frame}`)
+              fail(frame === 4, `Frame width: ${frame}`)
               fail(style.backgroundColor === paper, 'The workspace lacks paper.')
               fail(sliding ? boxes[0].left >= frame - 0.5 : near(boxes[0].left, frame), 'The left frame changed.')
               fail(near(boxes.at(-1).right, innerWidth - frame), 'The right frame changed.')
@@ -368,10 +368,10 @@ async function checkComposerActions(browser, baseUrl) {
             }
           })
           const context = JSON.stringify({ fixture, rail, width, layout })
-          // The actions hold file attachment, voice, and a stop button during a turn.
+          // The actions hold voice, and a stop button during a turn. File attachment sits in the composer menu.
           assert.deepEqual(layout.buttons.map(({ label }) => label), fixture === 'in-flight.html'
             ? ['Voice', 'Stop']
-            : ['Add files or folders', 'Voice'], context)
+            : ['Voice'], context)
           for (const button of layout.buttons) {
             assert.equal(button.lines, 1, context)
             assert.ok(button.width >= 24 && button.height >= 24, context)

@@ -17,6 +17,12 @@
   let filtersOpen = $state(false), formDialog = $state()
   $effect(() => { if (form && formDialog && !formDialog.open) formDialog.showModal() })
   let details = $state(null), detailsDialog
+  // A server's tools reach a chat through scripts that find them when needed,
+  // which keeps them out of every prompt, or sit in the tool list every turn.
+  const EXPOSURES = [
+    { value: 'codemode', label: 'Through scripts', note: 'Chats find these tools when a task needs them, so they add nothing to each prompt.' },
+    { value: 'direct', label: 'In the tool list', note: 'Every chat lists these tools. Use this for a small server you use often.' },
+  ]
   async function showDetails(entry) { details = entry; await tick(); detailsDialog.showModal() }
   let busy = $state(false), error = $state(''), status = $state(''), form = $state(null), preview = $state(null), selected = $state([])
   let name = $state(''), url = $state(''), source = $state(''), config = $state(''), token = $state(''), authentication = $state('none'), replaceId = $state(null)
@@ -95,7 +101,7 @@
         {#if form.source && !form.url}<p>This entry needs a local command or a URL from your provider.</p>{#if form.website}<a href={form.website} target="_blank" rel="noreferrer">View setup instructions</a>{/if}{/if}
         <label>Name<input bind:value={name} /></label><label>Server URL<input type="url" bind:value={url} placeholder="https://example.com/mcp" /></label>
         <label>Authentication<select bind:value={authentication}><option value="none">None or token</option><option value="oauth">Sign in with OAuth</option></select></label>
-        <label>Bearer token<input type="password" bind:value={token} autocomplete="off" placeholder="Optional. Stored in the system credential store." /></label>
+        <label>Bearer token<input type="password" bind:value={token} autocomplete="off" placeholder="Optional. Saved in a private file on this computer." /></label>
         <details><DisclosureSummary>Local command or advanced configuration</DisclosureSummary><p>Use a command and argument list for local servers. Use environment variable references for secrets.</p><textarea aria-label="Server configuration" bind:value={config} rows="5" placeholder={'{"command":"npx","args":["-y","server-package"]}'}></textarea></details>
         <button type="button" disabled={busy || !name.trim() || (!url.trim() && !config.trim())} onclick={saveServer}>{authentication === 'oauth' ? 'Save and sign in' : 'Save server'}</button>
       {:else}
@@ -163,6 +169,10 @@
     </dl>
     {#if detailsInstalled}
       {#if detailsInstalled.lastCheck}<p>Last connection test: {detailsInstalled.lastCheck.status}. {detailsInstalled.lastCheck.tools} tools.</p>{/if}
+      <div class="exposure">
+        <ChoiceField label="How chats reach its tools" inline={false} value={detailsInstalled.definition.exposure ?? 'codemode'} options={EXPOSURES} disabled={busy} onchange={exposure => mutate('exposure', { id: detailsInstalled.id, exposure })} />
+        <p>{EXPOSURES.find(option => option.value === (detailsInstalled.definition.exposure ?? 'codemode'))?.note}</p>
+      </div>
       <div class="detail-actions actions">
         <button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'test')}>Test connection</button>
         {#if detailsInstalled.definition.url}<button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'auth')}>Sign in</button>{/if}
@@ -179,6 +189,8 @@
 </dialog>
 
 <style>
+  .exposure { display: grid; gap: 6px; margin: 12px 0; }
+  .exposure p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .tab-count { font-size: var(--text-12); font-variant-numeric: tabular-nums; }
   .server-details { position: fixed; inset: 0; margin: auto; width: min(560px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
   .server-details::backdrop { background: var(--overlay-backdrop); }

@@ -1,6 +1,7 @@
 import { readdirSync, existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { LOCALE_ARCHIVE, LOCALE_MANIFEST, trimLocales } from './chromium-locales.mjs'
 const app = process.argv[2]
 if (!app) throw new Error('Pass the app bundle path')
 const universal = process.argv.includes('--universal')
@@ -10,7 +11,7 @@ function cefSource(arch, triple) {
   const builds = [join(target, triple, 'release/build'), join(target, 'release/build')]
   const candidates = builds.filter(existsSync).flatMap(build => readdirSync(build)
     .filter(n => n.startsWith('cef-dll-sys-')).map(n => join(build,n,`out/cef_macos_${arch}`)))
-  const source = candidates.find(p => existsSync(join(p,'include/cef_version.h')) && readFileSync(join(p,'include/cef_version.h'),'utf8').includes('152.0.6'))
+  const source = candidates.find(p => existsSync(join(p,'include/cef_version.h')) && readFileSync(join(p,'include/cef_version.h'),'utf8').includes('154.0.34'))
   if (!source) throw new Error(`The pinned CEF framework is missing for ${arch}`)
   return source
 }
@@ -32,6 +33,11 @@ run('ditto',[join(source,'Chromium Embedded Framework.framework'),join(framework
 const frameworkName = 'Chromium Embedded Framework.framework'
 const framework = join(frameworks, frameworkName)
 const bridge = join(frameworks, 'libmuniment_cef_keychain.dylib')
+trimLocales({
+  directory: join(framework, 'Resources'), macos: true,
+  archive: join(release, 'bundle', 'locales', LOCALE_ARCHIVE),
+  manifest: join(app, 'Contents/Resources', LOCALE_MANIFEST),
+})
 if (universal) {
   // Keep both architecture-specific V8 snapshots, and merge every native library.
   for (const entry of readdirSync(join(intel, frameworkName, 'Resources'))) {
@@ -43,11 +49,11 @@ if (universal) {
     .filter(name => name.endsWith('.dylib')).map(name => join('Libraries', name))]
   for (const binary of binaries) {
     run('lipo', ['-create', join(source, frameworkName, binary), join(intel, frameworkName, binary), '-output', join(framework, binary)])
-    run('lipo', [join(framework, binary), '-verify_arch', 'arm64', 'x86_64'])
+    for (const arch of ['arm64', 'x86_64']) run('lipo', [join(framework, binary), '-verify_arch', arch])
   }
   run('lipo', ['-create', ...['aarch64-apple-darwin', 'x86_64-apple-darwin']
     .map(triple => join(target, triple, 'release/libmuniment_cef_keychain.dylib')), '-output', bridge])
-  run('lipo', [bridge, '-verify_arch', 'arm64', 'x86_64'])
+  for (const arch of ['arm64', 'x86_64']) run('lipo', [bridge, '-verify_arch', arch])
 } else copyFileSync(join(release, 'libmuniment_cef_keychain.dylib'), bridge)
 run('install_name_tool', ['-change', '/System/Library/Frameworks/Security.framework/Versions/A/Security',
   '@loader_path/../libmuniment_cef_keychain.dylib', join(framework, 'Chromium Embedded Framework')])

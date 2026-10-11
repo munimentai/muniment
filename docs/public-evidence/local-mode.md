@@ -32,7 +32,7 @@ Failure captures use that window too.
 
 ## Provider access
 
-Open **Settings → Models & routing** and select **Connect account**.
+Open **Settings → Models & decisions** and select **Connect account**.
 Choose a provider and its connection method: account sign-in, API key,
 Claude Code connection or a local/custom endpoint. Model access uses the
 configured provider, not a Muniment cloud account. Credentials stay in the

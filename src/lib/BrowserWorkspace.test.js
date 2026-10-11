@@ -18,7 +18,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 describe('shared browser', () => {
   it('shows the retained native page address when reopened', async () => {
     render(BrowserWorkspace, { tauri: { invoke }, onclose: vi.fn() })
-    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Website address' })).toHaveValue('https://example.org/saved'))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Search or enter address' })).toHaveValue('https://example.org/saved'))
   })
   it('hides the native page behind settings and on close', async () => {
     const view = render(BrowserWorkspace, { tauri: { invoke }, onclose: vi.fn() })
@@ -58,11 +58,24 @@ describe('shared browser', () => {
   })
   it('navigates on Enter without manual control or page-reading buttons', async () => {
     render(BrowserWorkspace, {tauri:{invoke}})
-    const input = screen.getByRole('textbox',{name:'Website address'})
+    const input = screen.getByRole('textbox',{name:'Search or enter address'})
     await fireEvent.input(input,{target:{value:'example.com'}})
     await fireEvent.submit(input.closest('form'))
     expect(invoke).toHaveBeenCalledWith('browser_command',{request:{view:'browser',action:'navigate',value:'https://example.com'}})
     for (const name of ['Go','Allow agent control','Read page','Close']) expect(screen.queryByRole('button',{name})).toBeNull()
+  })
+  it('searches words with the chosen engine and keeps no control for chats', async () => {
+    localStorage.setItem('muniment.browser.search', 'duckduckgo')
+    render(BrowserWorkspace, {tauri:{invoke}})
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_command',{request:{view:'browser',action:'status',value:''}}))
+    const input = screen.getByRole('textbox',{name:'Search or enter address'})
+    await fireEvent.input(input,{target:{value:'grace hopper'}})
+    await fireEvent.submit(input.closest('form'))
+    expect(invoke).toHaveBeenCalledWith('browser_command',{request:{view:'browser',action:'navigate',value:'https://duckduckgo.com/?q=grace%20hopper'}})
+    await fireEvent.input(input,{target:{value:'!w ada lovelace'}})
+    await fireEvent.submit(input.closest('form'))
+    expect(invoke).toHaveBeenCalledWith('browser_command',{request:{view:'browser',action:'navigate',value:'https://en.wikipedia.org/wiki/Special:Search?search=ada%20lovelace'}})
+    for (const name of [/chats/i, /control/i]) expect(screen.queryByRole('button',{name})).toBeNull()
   })
   it('shows an empty chat artifact list without an editor', async () => {
     render(BrowserWorkspace,{tauri:{invoke},artifacts:true})

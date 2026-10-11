@@ -2,7 +2,7 @@
   import { floatingMenu } from './floating-menu.js'
   import { tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { name, expanded, disabled = false, ontoggle, onnew, onrename, onopen, icon = 'folder', label = `Project ${name}`, newLabel = `New thread in ${name}`, onactivate = ontoggle, panelOpen = undefined } = $props()
+  let { name, expanded, disabled = false, ontoggle, onnew, onrename, onopen, icon = 'folder', label = `Project ${name}`, newLabel = `New thread in ${name}`, onactivate = ontoggle, panelOpen = undefined, collapsible = true } = $props()
   let open = $state(false)
   let row = $state()
   let trigger = $state()
@@ -33,7 +33,8 @@
 <div class="project-row" bind:this={row}>
   <button class="project-title" aria-label={label} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span></button>
   <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name="square-pen" size={14} /></button>
-  <button class="project-control" class:visible={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`} aria-expanded={expanded} bind:this={trigger} onclick={ontoggle}><LucideIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} /></button>
+  <!-- A section with nothing in it has nothing to expand, so it shows no chevron. -->
+  {#if collapsible}<button class="project-control" class:visible={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`} aria-expanded={expanded} bind:this={trigger} onclick={ontoggle}><LucideIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={14} /></button>{/if}
   {#if open}
     <div class="project-menu" use:floatingMenu role="menu" tabindex="-1" aria-label={`${name} actions`} bind:this={menu} onkeydown={menuKey}>
       <button role="menuitem" {disabled} onclick={() => choose(onnew)}><LucideIcon name="square-pen" size={14} />New thread</button>

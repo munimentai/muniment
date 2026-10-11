@@ -1,8 +1,9 @@
 import { it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { BUNDLED_LOCALES } from '../scripts/chromium-locales.mjs'
 
 it.skipIf(process.platform !== 'darwin')('packages both CEF architectures, snapshots, bridge and helper loader paths', () => {
   const root = mkdtempSync(join(tmpdir(), 'muniment-cef-package-'))
@@ -18,9 +19,14 @@ it.skipIf(process.platform !== 'darwin')('packages both CEF architectures, snaps
       const release = join(target, triple, 'release')
       const source = join(release, 'build/cef-dll-sys-fixture/out', `cef_macos_${cefArch}`)
       for (const directory of ['include', `${framework}/Libraries`, `${framework}/Resources`]) mkdirSync(join(source, directory), { recursive: true })
-      writeFileSync(join(source, 'include/cef_version.h'), '#define CEF_VERSION "152.0.6"\n')
+      writeFileSync(join(source, 'include/cef_version.h'), '#define CEF_VERSION "154.0.34"\n')
       writeFileSync(join(source, 'CREDITS.html'), 'Fixture credits')
       writeFileSync(join(source, framework, 'Resources', `v8_context_snapshot.${arch}.bin`), arch)
+      for (const code of [...BUNDLED_LOCALES, 'nl']) {
+        const folder = join(source, framework, 'Resources', `${code === 'en-US' ? 'en' : code.replace('-', '_')}.lproj`)
+        mkdirSync(folder)
+        writeFileSync(join(folder, 'locale.pak'), code)
+      }
       const binary = join(release, 'fixture')
       execFileSync('clang', ['-arch', arch, '-dynamiclib', '-Wl,-headerpad_max_install_names', join(root, 'fixture.c'), '-o', binary])
       binaries.push(binary)
@@ -38,6 +44,10 @@ it.skipIf(process.platform !== 'darwin')('packages both CEF architectures, snaps
       expect(execFileSync('lipo', ['-archs', join(frameworks, file)], { encoding: 'utf8' })).toMatch(/x86_64.*arm64|arm64.*x86_64/)
     }
     for (const arch of ['arm64', 'x86_64']) expect(readFileSync(join(frameworks, framework, 'Resources', `v8_context_snapshot.${arch}.bin`), 'utf8')).toBe(arch)
+    expect(readFileSync(join(frameworks, framework, 'Resources/pt_BR.lproj/locale.pak'), 'utf8')).toBe('pt-BR')
+    expect(existsSync(join(frameworks, framework, 'Resources/nl.lproj'))).toBe(false)
+    expect(JSON.parse(readFileSync(join(app, 'Contents/Resources/chromium-locales.json'), 'utf8')).available).toEqual(['nl'])
+    expect(execFileSync('tar', ['-tzf', join(universal, 'bundle/locales/muniment-chromium-locales.tar.gz')], { encoding: 'utf8' })).toContain('nl.lproj/locale.pak')
     expect(execFileSync('otool', ['-l', join(app, 'Contents/MacOS/muniment-desktop')], { encoding: 'utf8' })).toContain('@executable_path/../Frameworks')
     for (const suffix of ['', ' (GPU)', ' (Renderer)', ' (Plugin)', ' (Alerts)']) {
       const helper = join(frameworks, `muniment CEF Helper${suffix}.app/Contents/MacOS`, `muniment CEF Helper${suffix}`)

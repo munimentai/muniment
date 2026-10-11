@@ -9,6 +9,17 @@ const categories = {
   other: { icon: 'play', done: 'Actions', active: 'Working', verb: '', present: '' },
 }
 
+// Pi names an MCP tool `mcp__<server>__<tool>`, and a server takes its
+// extension's name, so `mcp__Context7__resolve_library_id` reads
+// "MCP Context7 · resolve library id". Older runs named the server by its id.
+function mcpLabel(name) {
+  const match = /^mcp__(.+?)__(.+)$/.exec(name)
+  if (!match) return null
+  const words = value => value.replace(/[_-]+/g, ' ').trim()
+  const server = words(match[1].replace(/^extend-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}-?/, ''))
+  return `MCP${server ? ` ${server}` : ''} · ${words(match[2])}`
+}
+
 export function actionGroups(activities = [], live = false) {
   const groups = []
   for (const activity of activities) {
@@ -34,7 +45,7 @@ export function actionGroups(activities = [], live = false) {
     const verb = running ? category.present : category.verb
     const label = kind === 'web' ? (running ? 'Searching the web' : 'Searched the web') : kind === 'compact' ? (running ? 'Compacting context' : activity.status === 'failed' ? 'Context compaction did not finish' : args.reason === 'manual' ? 'Context compacted' : 'Context automatically compacted')
       : kind === 'command' && args.description ? String(args.description) : target ? `${verb} ${target}`.trim()
-      : kind === 'other' ? name.charAt(0).toUpperCase() + name.slice(1) : `${verb} ${kind === 'command' ? 'command' : 'files'}`
+      : kind === 'other' ? mcpLabel(activity.displayName || '') ?? name.charAt(0).toUpperCase() + name.slice(1) : `${verb} ${kind === 'command' ? 'command' : 'files'}`
     const action = { ...activity, queries, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: queries.length > 0 || !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
     let group = groups.at(-1)
     if (!group || group.kind !== kind) {

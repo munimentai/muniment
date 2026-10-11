@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { BUNDLED_LOCALES } from '../scripts/chromium-locales.mjs'
 
 const script = resolve('scripts/package-cef-windows.mjs')
 function fixture() {
@@ -13,6 +14,7 @@ function fixture() {
     writeFileSync(join(root, path), content)
   }
   for (const name of ['bootstrap.exe', 'muniment_desktop.dll', 'muniment-desktop.exe', 'libcef.dll', 'chrome_elf.dll', 'icudtl.dat', 'v8_context_snapshot.bin', 'resources.pak', 'locales/en-US.pak', 'muniment-runtime.exe', 'muniment-reader.exe']) put(`src-tauri/target/release/${name}`, name)
+  for (const code of [...BUNDLED_LOCALES, 'nl']) put(`src-tauri/target/release/locales/${code}.pak`, `locales/${code}.pak`)
   put('src-tauri/target/release/build/cef-dll-sys-fixture/out/cef/CREDITS.html', 'CEF credits')
   put('src-tauri/third-party/sherpa-onnx-v1.13.2/windows-x86_64/onnxruntime.dll', 'speech')
   for (const name of ['LICENSE.md', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_RUST_NOTICES.md']) put(name)
@@ -47,6 +49,10 @@ it('bundles the sandbox bootstrap, application DLL, browser data and credits wit
     }
     expect(resources['target/release/cef-app/locales/']).toBe('locales/')
     expect(readFileSync(join(f.output, 'locales/en-US.pak'), 'utf8')).toBe('locales/en-US.pak')
+    expect(existsSync(join(f.output, 'locales/nl.pak'))).toBe(false)
+    expect(resources['target/release/cef-app/chromium-locales.json']).toBe('chromium-locales.json')
+    expect(JSON.parse(readFileSync(join(f.output, 'chromium-locales.json'), 'utf8')).available).toEqual(['nl'])
+    expect(existsSync(join(f.target, 'bundle/locales/muniment-chromium-locales.tar.gz'))).toBe(true)
     expect(Object.values(resources)).not.toContain('onnxruntime.dll')
     expect(Object.values(resources)).not.toContain('muniment-runtime.exe')
   } finally { rmSync(f.root, { recursive: true, force: true }) }

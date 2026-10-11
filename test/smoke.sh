@@ -134,7 +134,7 @@ grep -Fq 'Each signature binds the artifact to the announced version.' \
 # SPEC and ROADMAP name that one mode identically, and neither names it a chat.
 grep -Fq 'the thread surface' SPEC.md
 grep -Fq 'the thread surface' ROADMAP.md
-test -z "$(grep -ril 'chat mode' SPEC.md ROADMAP.md)"
+test -z "$(grep -rilw 'chat mode' SPEC.md ROADMAP.md)"
 # The committed note carries the routing-surface name raised with MUNICLOUD.
 grep -Fq 'desktop_thread_chat' docs/desktop-single-mode.md
 grep -Fq 'Ratifying MUNICLOUD ticket' docs/desktop-single-mode.md

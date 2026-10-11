@@ -4,7 +4,7 @@
   import { listen } from '@tauri-apps/api/event'
   import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
   import LucideIcon from './LucideIcon.svelte'
-  let { selected = null, onselect, onopenchange, label = 'Workspace tools', icon = 'ellipsis' } = $props()
+  let { selected = null, onselect, onopenchange, label = 'Workspace tools', icon = 'ellipsis-vertical' } = $props()
   let expanded = $state(false)
   let element
   let trigger
@@ -57,7 +57,7 @@
   onMount(() => { const outside = e => { if (!element.contains(e.target)) close() }; document.addEventListener('pointerdown',outside); return () => document.removeEventListener('pointerdown',outside) })
 </script>
 <div class="workspace-menu" bind:this={element}>
-  <button class="trigger" type="button" aria-label={label} aria-haspopup="menu" aria-expanded={expanded} bind:this={trigger} onclick={toggle}><LucideIcon name={icon} variant="action" /></button>
+  <button class="trigger" type="button" aria-label={label} aria-haspopup="menu" aria-expanded={expanded} bind:this={trigger} onclick={toggle}><LucideIcon name={icon} variant="action" size={14} /></button>
   {#if expanded}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} onkeydown={keys}>
@@ -71,7 +71,7 @@
   :global(.titlebar-thread) .workspace-menu { order:4; }
   .workspace-menu { position:relative; flex:none; }
   button { display:flex; align-items:center; gap:10px; border:0; color:var(--ink); background:transparent; cursor:pointer; font:var(--text-13) var(--font-human); }
-  .trigger { width:28px; height:28px; justify-content:center; padding:4px; border-radius:var(--radius-control); }
+  .trigger { width:28px; height:24px; justify-content:center; padding:4px; border-radius:var(--radius-control); }
   button:hover { background:var(--faint); }
   .tools { position:absolute; right:0; top:calc(100% + 6px); z-index:120; width:220px; padding:6px;     }
   .tools button { width:100%; min-height:36px; padding:8px; text-align:left; border-radius:var(--radius-control); } span { flex:1; }

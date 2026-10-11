@@ -13,6 +13,7 @@ const names = [
   "windows-muniment_0.1.0_x64_en-US-machine.msi", "windows-muniment_0.1.0_x64_en-US-machine.msi.sig",
   "windows-muniment_0.1.0_x64-nsis.exe", "windows-muniment_0.1.0_x64-nsis.exe.sig",
   ...["", "-arm64", "-x64"].flatMap(arch => [".app.zip", ".pkg", ".dmg", ".app.tar.gz", ".app.tar.gz.sig"].map(format => `macos-muniment${arch}${format}`)),
+  ...["linux", "windows", "macos"].map(platform => `${platform}-muniment-chromium-locales.tar.gz`),
 ];
 const current = names.map((name, index) => ({ id: index + 1, name: `nightly-${sha}-${name}` }));
 

@@ -29,13 +29,14 @@ export const expectedNightlyAssets = (assets, sha) => {
     ["Windows per-user MSI", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith(".msi") && !n.endsWith("-machine.msi")],
     ["Windows machine MSI", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-machine.msi")],
     ["Windows NSIS", (n) => n.startsWith(`${prefix}windows-`) && n.endsWith("-nsis.exe")],
+    ...["linux", "windows", "macos"].map(platform => [`${platform} language packs`, (n) => n === `${prefix}${platform}-muniment-chromium-locales.tar.gz`]),
     ...macosArchitectures.flatMap(suffix => macosFormats.map(format => [
       `macOS ${suffix || 'universal'} ${format}`, n => n === `${prefix}macos-muniment${suffix}${format}`,
     ])),
   ];
   const updateBinaries = assets.filter(({ name }) => name.endsWith('.AppImage') || name.endsWith('.app.tar.gz') || name.endsWith('-nsis.exe') || name.endsWith('.msi'));
   for (const { name } of updateBinaries) specs.push([`${name} signature`, (n) => n === `${name}.sig`]);
-  if (assets.length !== 24 || specs.length !== 24) throw new Error(`nightly release must contain exactly 24 assets; found ${assets.length}`);
+  if (assets.length !== 27 || specs.length !== 27) throw new Error(`nightly release must contain exactly 27 assets; found ${assets.length}`);
   for (const [label, matches] of specs) if (assets.filter((asset) => matches(asset.name)).length !== 1) throw new Error(`expected exactly one ${label} asset`);
   return assets;
 };

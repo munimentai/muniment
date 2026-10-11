@@ -95,7 +95,7 @@ it('selects either visibility segment with pointer or keyboard without changing 
   const tauri = { invoke: vi.fn() }
   render(ModelCatalog, { tauri, inventory: { ...inventory(), hidden: ['anthropic/first'] } })
   await fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
-  const enabled = screen.getByRole('radio', { name: 'Enabled' })
+  const enabled = screen.getByRole('radio', { name: 'Shown' })
   await fireEvent.click(enabled)
   expect(enabled).toHaveAttribute('aria-checked', 'true')
   expect(switches()).toHaveLength(1)
@@ -103,4 +103,28 @@ it('selects either visibility segment with pointer or keyboard without changing 
   expect(screen.getByRole('radio', { name: 'All models' })).toHaveAttribute('aria-checked', 'true')
   expect(switches()).toHaveLength(2)
   expect(tauri.invoke).not.toHaveBeenCalled()
+})
+
+it('folds older models under Other models and moves one up when it is turned on', async () => {
+  const served = { providers: [{ id: 'anthropic', name: 'Anthropic', models: [{ id: 'claude-opus-5-5' }, { id: 'claude-opus-4-8' }, { id: 'claude-opus-4-7' }] }], hidden: [], shown: [], default_provider: 'anthropic', default_model: 'claude-opus-5-5' }
+  const tauri = { invoke: vi.fn(async () => null) }
+  const oninventory = vi.fn()
+  const view = render(ModelCatalog, { tauri, inventory: served, oninventory })
+  const others = screen.getByText('Other models (2)').closest('details')
+  expect(others).not.toHaveAttribute('open')
+  expect(others).toHaveTextContent('Claude Opus 4.8')
+  expect(others).not.toHaveTextContent('Claude Opus 5.5')
+  await fireEvent.click(screen.getByRole('switch', { name: 'Show Claude Opus 4.8 in picker' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_set_model_hidden', { provider: 'anthropic', model: 'claude-opus-4-8', hidden: false })
+  const next = oninventory.mock.calls[0][0]
+  expect(next.shown).toEqual(['anthropic/claude-opus-4-8'])
+  await view.rerender({ tauri, inventory: next, oninventory })
+  expect(screen.getByText('Other models (1)').closest('details')).not.toHaveTextContent('Claude Opus 4.8')
+})
+
+it('opens Other models while a search is typed', async () => {
+  const served = { providers: [{ id: 'anthropic', name: 'Anthropic', models: [{ id: 'claude-opus-5-5' }, { id: 'claude-opus-4-8' }] }], hidden: [], shown: [], default_provider: 'anthropic', default_model: 'claude-opus-5-5' }
+  render(ModelCatalog, { tauri: { invoke: vi.fn() }, inventory: served })
+  await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'opus' } })
+  expect(screen.getByText('Other models (1)').closest('details')).toHaveAttribute('open')
 })

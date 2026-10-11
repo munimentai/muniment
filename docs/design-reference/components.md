@@ -27,7 +27,7 @@ connection sections use 16px gaps. `SettingsTabs`, `Toggle` and `ProviderLogo` r
 Screens own layout and data. They import these controls instead of copying their
 CSS. Colors, fonts, radii and shadows come from `src/styles/tokens.css`.
 `settings-controls.css` applies the same native field and button treatment to
-all Models & routing subpages, including account cards and connection forms.
+all Models & decisions subpages, including account cards and connection forms.
 Tabs and switches keep their dedicated states. New settings controls extend this library. Native selects and custom dropdowns
 do not coexist for the same choice pattern. Capability filters use reported data.
 

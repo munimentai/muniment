@@ -1,11 +1,28 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import ContextSettings from '../activity/ContextSettings.svelte'
+  import BrowserLanguage from './BrowserLanguage.svelte'
+  import BrowserSearch from './BrowserSearch.svelte'
   import { onMount } from 'svelte'
   import { VIBRANT_THEMES, DARK_THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, LIGHT_THEMES, THEME_NAMES, THEME_STORAGE_KEY, THEME_SYSTEM, applyTheme, readStoredTheme, serializeTheme, themeScheme } from './theme-state.js'
+  import RunMark from './RunMark.svelte'
+  import { MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
   let { tauri } = $props()
+
+  // The thinking indicator, and a preview that plays one run through its stages:
+  // routing, thinking, a burst of tools, then writing.
+  let mark = $state(readStoredMark())
+  const PREVIEW = [['routing', 1800], ['thinking', 3200], ['tool:read', 1600], ['tool:grep', 1200], ['tool:bash', 1200], ['tool:edit', 2400], ['writing', 2400]]
+  let previewStage = $state(PREVIEW[0][0])
+  onMount(() => {
+    let index = 0
+    let timer
+    const next = () => { index = (index + 1) % PREVIEW.length; previewStage = PREVIEW[index][0]; timer = setTimeout(next, PREVIEW[index][1]) }
+    timer = setTimeout(next, PREVIEW[0][1])
+    return () => clearTimeout(timer)
+  })
 
   let theme = $state(readStoredTheme())
 
@@ -111,9 +128,26 @@
     </div>
   {/each}
   </div>
+
+  <div class="mark-section" role="group" aria-labelledby="mark-heading">
+  <h3 id="mark-heading" class="access-label">Thinking indicator</h3>
+  <div class="theme-options" role="group" aria-label="Thinking indicator">
+    {#each MARK_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={mark === id} onclick={() => { mark = commitMark(id) }}>{label}</button>
+    {/each}
+  </div>
+  <div class="mark-preview" aria-label="Thinking indicator preview">
+    <RunMark stage={previewStage} {mark} size={40} />
+  </div>
+  </div>
 </section>
 
 <ContextSettings {tauri} />
+
+<div class="browser-preferences">
+  <BrowserLanguage {tauri} />
+  <BrowserSearch />
+</div>
 
 <style>
   .access-label { margin: 0 0 6px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; }
@@ -126,6 +160,8 @@
   .theme-options button[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   /* The light themes under one label and the dark under another, four to a row, a swatch of each theme's paper and surface beside its name. */
   .theme-browser { margin-top: 14px; }
+  .mark-section { margin-top: 22px; }
+  .mark-preview { display: flex; align-items: center; min-height: 64px; margin-top: 10px; padding: 0 16px; max-width: 560px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .themes { margin-top: 10px; max-width: 560px; }
   .group-label { margin: 8px 0 4px; color: var(--muted); font: var(--text-12) var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
   .theme-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
@@ -164,4 +200,6 @@
   .font-pick[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
   .font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .font-note { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* Browser language and search sit side by side, and stack when the panel is narrow. */
+  .browser-preferences { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 24px; border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
 </style>

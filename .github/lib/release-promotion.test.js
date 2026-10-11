@@ -25,6 +25,7 @@ const assetNames = [
   `nightly-${sha}-windows-muniment.msi.sig`,
   `nightly-${sha}-windows-muniment-machine.msi.sig`,
   `nightly-${sha}-windows-muniment-nsis.exe.sig`,
+  ...["linux", "windows", "macos"].map(platform => `nightly-${sha}-${platform}-muniment-chromium-locales.tar.gz`),
 ];
 const assets = assetNames.map((name, id) => ({ id, name, url: `https://api.github.test/assets/${id}`, content_type: "application/octet-stream" }));
 const smoke = { name: "smoke", status: "completed", conclusion: "success" };
@@ -109,7 +110,7 @@ describe("stable release promotion", () => {
 
   it("requires exactly one of each finalized nightly artifact", () => {
     expect(expectedNightlyAssets(assets, sha)).toEqual(assets);
-    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly 24");
+    expect(() => expectedNightlyAssets(assets.slice(1), sha)).toThrow("exactly 27");
     expect(() => expectedNightlyAssets([...assets.slice(0, 12), assets[0]], sha)).toThrow();
   });
 
@@ -159,7 +160,7 @@ describe("stable release promotion", () => {
     await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
   });
 
-  it("uses the nightly tag despite stale target_commitish and copies exactly 24 assets without mutating nightly", async () => {
+  it("uses the nightly tag despite stale target_commitish and copies exactly 27 assets without mutating nightly", async () => {
     const { calls, fetchImpl } = promotionFetch();
     await promote(fetchImpl);
     const tag = calls.findIndex(({ url, options }) => url === `${forgejo}/tags` && options.method === "POST");
@@ -170,8 +171,8 @@ describe("stable release promotion", () => {
     const create = calls[createIndex];
     expect(create.url).toBe("https://api.github.com/repos/owner/repo/releases");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
-    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(24);
-    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(26);
+    expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(27);
+    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(29);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const uploads = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"));
@@ -186,7 +187,7 @@ describe("stable release promotion", () => {
     const sums = Buffer.from(uploads.find(({ url }) => url.endsWith("name=SHA256SUMS")).options.body).toString();
     const digest = (text) => createHash("sha256").update(text).digest("hex");
     const feedBody = uploads.find(({ url }) => url.endsWith("name=latest.json")).options.body;
-    expect(sums.trim().split("\n")).toHaveLength(25);
+    expect(sums.trim().split("\n")).toHaveLength(28);
     expect(sums).toContain(`${digest("asset bytes")}  muniment-0.0.1-macos.pkg\n`);
     expect(sums).toContain(`${digest(feedBody)}  latest.json\n`);
     for (const upload of uploads.filter(({ url }) => !url.endsWith("name=latest.json") && !url.endsWith("name=SHA256SUMS"))) {

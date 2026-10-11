@@ -10,9 +10,9 @@ The built desktop bundle carries the following code with no embedded license com
 - `dompurify` 3.4.15 — MPL-2.0 OR Apache-2.0
 - `diff2html` 3.4.56 — MIT
 - `svelte` 5.57.1 — MIT
-- `@tauri-apps/api` 2.11.1 — Apache-2.0 OR MIT
-- `@tauri-apps/plugin-dialog` 2.7.3 — MIT OR Apache-2.0
-- `@tauri-apps/plugin-global-shortcut` 2.3.2 — MIT OR Apache-2.0
+- `@tauri-apps/api` 2.12.1 — Apache-2.0 OR MIT
+- `@tauri-apps/plugin-dialog` 2.8.1 — MIT OR Apache-2.0
+- `@tauri-apps/plugin-global-shortcut` 2.4.0 — MIT OR Apache-2.0
 - `@tauri-apps/plugin-opener` 2.5.5 — MIT OR Apache-2.0
 
 The bundle also carries these font files:
