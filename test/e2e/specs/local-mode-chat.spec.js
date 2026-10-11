@@ -24,15 +24,12 @@ async function completeOnboarding() {
     timeout: 120000,
     timeoutMsg: 'local-mode onboarding did not show the Home path',
   })
-  await browser.waitUntil(async () => path.isAbsolute(await location.getProperty('textContent')))
-  const home = await location.getProperty('textContent')
+  await browser.waitUntil(async () => path.isAbsolute(await location.getAttribute('data-home-path') ?? ''))
+  const home = await location.getAttribute('data-home-path')
   expect(path.isAbsolute(home)).toBe(true)
   let homeExists = true
   try { await access(home) } catch { homeExists = false }
   expect(homeExists).toBe(false)
-  const composer = await $('textarea[placeholder="Ask anything"]')
-  expect(await composer.isDisplayed()).toBe(true)
-  await composer.setValue('Help me organize my notes.')
   await openFirstRunModelSettings()
 }
 
@@ -65,8 +62,8 @@ describe('installed local-mode chat', () => {
 
     const composer = await $('textarea[placeholder="Ask anything"]')
     await composer.waitForDisplayed({ timeout: 120000 })
-    expect(await composer.getValue()).toBe('Help me organize my notes.')
-    // The first Send opens Settings → Models; the composer chip's picker reopens it through Manage models.
+    await composer.setValue('Help me organize my notes.')
+    // More providers opens Settings → Model providers; the composer chip's picker reopens it through Manage models.
     let settings = await $('[role="dialog"][aria-label="Settings"]')
     if (await settings.isDisplayed()) {
       await closeSettings()

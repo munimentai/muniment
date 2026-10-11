@@ -39,7 +39,7 @@ describe('installed onboarding spec contract', () => {
   const onboardingSpec = fs.readFileSync(path.join(root, 'test/e2e/specs/onboarding.spec.js'), 'utf8')
 
   it.each([
-    ['onboarding.spec.js', ['onboarding-home-path', 'onboarding-model', 'onboarding-scan', 'onboarding-picker', 'onboarding-confirm']],
+    ['onboarding.spec.js', ['onboarding-home-path', 'onboarding-picker', 'onboarding-confirm']],
     ...['real-sign-in.spec.js', 'local-mode-chat.spec.js'].map((name) => [name, ['onboarding-home-path']]),
   ])('%s checks the one-screen onboarding controls', (name, expectedSelectors) => {
     const spec = fs.readFileSync(path.join(root, 'test/e2e/specs', name), 'utf8')
@@ -60,8 +60,8 @@ describe('installed onboarding spec contract', () => {
   })
 
   it('reports the desktop client when the model settings wait runs out', () => {
-    expect(onboardingSpec).toContain("timeoutMsg: 'model settings did not appear after the first Send'")
-    expect(onboardingSpec).toContain('throw new Error(`${waitError.message} Model settings: ${failure} ${await shellState()}`)')
+    expect(onboardingSpec).toContain("timeoutMsg: 'model settings did not appear after More providers'")
+    expect(onboardingSpec).toContain('throw new Error(`${waitError.message} First run: ${failure} ${await shellState()}`)')
     expect(onboardingSpec).toContain('return `desktop client status: ${connection}. shell: ${rendered}`')
     expect(onboardingSpec.indexOf('async function shellState()')).toBeLessThan(onboardingSpec.indexOf("describe('installed nightly model-ready onboarding'"))
   })
@@ -78,7 +78,7 @@ describe('installed production chat contract', () => {
     expect(spec).toContain("expect(assistantText).not.toBe('')")
     expect(spec).not.toContain('browser.tauri.mock')
     expect(spec).not.toContain("plugin:dialog|open")
-    expect(spec).toContain("const home = await location.getProperty('textContent')")
+    expect(spec).toContain("const home = await location.getAttribute('data-home-path')")
   })
 
   it('waits for the desktop client to connect before it submits the prompt', () => {
@@ -238,7 +238,7 @@ describe('WDIO main window selection', () => {
     const fixture = driverFixture([['main']], { main: 'main' })
     vi.stubGlobal('browser', fixture.driver)
     await config.before({}, ['test/e2e/specs/onboarding.spec.js'])
-    fixture.driver.getPageSource = vi.fn(async () => '<main><section class="onboarding">The runtime is not connected yet. Open model settings again.</section></main>')
+    fixture.driver.getPageSource = vi.fn(async () => '<main><section class="onboarding">The runtime is not connected yet. Choose a model again.</section></main>')
     fixture.driver.saveScreenshot = vi.fn(async () => {})
     await config.after(1)
     expect(fs.readFileSync(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'page-source-onboarding.html'), 'utf8'))
@@ -3277,11 +3277,11 @@ describe('Windows native command contract', { timeout: 30_000 }, () => { // A Po
 })
 
 describe('onboarding Home path assertion', () => {
-  it('accepts a matching DOM path when rendered text is empty', async () => {
+  it('accepts a matching full path when the shown text is home-relative', async () => {
     const { homePathMatches } = await import('./e2e/support/home-path.mjs')
     const location = {
-      getProperty: async () => '/tmp/isolated-home',
-      getText: async () => '',
+      getAttribute: async (name) => name === 'data-home-path' ? '/tmp/isolated-home' : null,
+      getText: async () => '~/isolated-home',
     }
 
     expect(await homePathMatches(location, '/tmp/isolated-home')).toBe(true)
@@ -3290,7 +3290,7 @@ describe('onboarding Home path assertion', () => {
   it('rejects a wrong DOM path', async () => {
     const { homePathMatches } = await import('./e2e/support/home-path.mjs')
     const location = {
-      getProperty: async () => '/tmp/wrong-home',
+      getAttribute: async (name) => name === 'data-home-path' ? '/tmp/wrong-home' : null,
       getText: async () => '/tmp/isolated-home',
     }
 
@@ -3334,8 +3334,7 @@ describe('installed local-mode chat contract', () => {
     expect(spec).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
     expect(spec).toContain("import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'")
     expect(spec).toContain('await openFirstRunModelSettings()')
-    expect(firstRun).toContain("panel.$('button=Open model settings')")
-    expect(firstRun).toContain("$('#onboarding-model-panel')")
+    expect(firstRun).toContain("$('button=More providers')")
     expect(spec).toContain("$('button=Save Ollama server')")
     expect(spec).toContain("response.$('.streaming .assistant-markdown')")
     expect(spec).not.toContain('browser.tauri.mock')
@@ -3913,16 +3912,16 @@ describe('installed model settings controls', () => {
   it('opens model settings and checks the provider controls on the installed build', () => {
     expect(onboardingSpec).toContain('await openFirstRunModelSettings()')
     const firstRun = fs.readFileSync(path.join(root, 'test/e2e/support/first-run.mjs'), 'utf8')
-    expect(firstRun).toContain("panel.$('button=Open model settings')")
-    expect(firstRun).toContain('await settings.click()')
-    expect(onboardingSpec).toContain("expect(await (await settings.$('button=Connect account')).isDisplayed()).toBe(true)")
+    expect(firstRun).toContain("$('button=More providers')")
+    expect(firstRun).toContain('await more.click()')
+    expect(onboardingSpec).toContain("expect(await (await settings.$('h4=Connect account')).isDisplayed()).toBe(true)")
     expect(onboardingSpec).toContain('await closeSettings()')
     expect(firstRun).toContain("await (await $('button=Back to threads')).click()")
   })
 
-  it('includes the model settings panel in the failure diagnostic', () => {
-    expect(onboardingSpec).toContain("const panel = await $('#onboarding-model-panel')")
-    expect(onboardingSpec).toContain('await panel.getText()')
+  it('includes the first-run screen in the failure diagnostic', () => {
+    expect(onboardingSpec).toContain("const firstRun = await $('section.onboarding')")
+    expect(onboardingSpec).toContain('await firstRun.getText()')
   })
 })
 

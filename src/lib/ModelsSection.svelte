@@ -24,7 +24,9 @@
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts', sidebarTab = null, ontab } = $props()
+  // `connect` opens a connect view at once: a catalog id opens that provider's
+  // sign-in, and an empty string opens the provider catalog.
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts', sidebarTab = null, ontab, connect = null } = $props()
 
   // svelte-ignore state_referenced_locally
   let inventory = $state(initial)
@@ -106,6 +108,8 @@
     })
     const stop = accounts.start()
     void load()
+    if (connect === '') openConnector()
+    else if (connect) chooseProvider(connect)
     return () => { unsubscribe(); stop() }
   })
 
@@ -420,7 +424,7 @@
         {#each shownProviders as entry (entry.id)}
           <section class="provider-group" aria-label={entry.name}>
             <Row title={entry.name}>
-              {#snippet icon()}<ProviderLogo provider={entry.id} size={16} />{/snippet}
+              {#snippet icon()}<ProviderLogo color provider={entry.id} size={16} />{/snippet}
               {#snippet detail()}{#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />{/if}{/snippet}
               <!-- Every provider edits and disconnects with icons at the far right. An endpoint edits its
                    address; a key or account provider opens its connect form. -->
@@ -432,7 +436,7 @@
         {#each poolOnlyFamilies as family (family)}
           <section class="provider-group" aria-label={familyName(family)}>
             <Row title={familyName(family)}>
-              {#snippet icon()}<ProviderLogo provider={familyProvider(family)} size={16} />{/snippet}
+              {#snippet icon()}<ProviderLogo color provider={familyProvider(family)} size={16} />{/snippet}
               {#snippet detail()}<ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />{/snippet}
             </Row>
           </section>
@@ -443,7 +447,7 @@
       <Group heading="Decision models" description="Connected decision models route messages and assist chats.">
         {#each router.classifier_connections as connection (connection.id)}
           <Row title={connection.name} meta={connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}>
-            {#snippet icon()}<ProviderLogo provider={connection.catalog_id} size={16} />{/snippet}
+            {#snippet icon()}<ProviderLogo color provider={connection.catalog_id} size={16} />{/snippet}
             {#if connection.connection.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
             <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another in Decisions.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
           </Row>
@@ -461,10 +465,10 @@
       {#if view === 'connect'}
         <h4>Connect account</h4>
       {:else if view === 'classifier'}
-        <ProviderLogo provider={classifierId} size={20} />
+        <ProviderLogo color provider={classifierId} size={20} />
         <h4>Connect {classifierEntry?.name}</h4>
       {:else}
-        <ProviderLogo provider={providerId} size={18} />
+        <ProviderLogo color provider={providerId} size={18} />
         <h4>{editingEndpoint ? 'Edit' : 'Connect'} {provider?.name}</h4>
       {/if}
     </header>
@@ -475,7 +479,7 @@
           <Group heading={group} level={5}>
           <ul class="provider-list">
             {#each entries as entry (entry.id)}
-              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Decision models') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Decision models' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
+              <li><button type="button" class="quiet provider-row" onclick={() => { if (group === 'Decision models') { classifierId = entry.id; view = 'classifier' } else chooseProvider(entry.id) }}><ProviderLogo color provider={entry.id} size={18} /><span>{entry.name}</span> <span class="tag">{group === 'Decision models' ? (entry.id === 'jev' ? 'Hosted API' : entry.compatible ? 'Local or hosted server · Download' : 'Adapter required · Download') : entry.methods.map((m) => methodLabel(entry, m)).join(' · ')}</span></button></li>
             {/each}
           </ul>
           </Group>

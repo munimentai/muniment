@@ -42,6 +42,7 @@
     subject = '',
     onsignout = null,
     onrecord = null,
+    connectProvider = null,
   } = $props()
 
   const sections = settingsSections()
@@ -83,7 +84,7 @@
     {#if section in EXTEND_TABS}
       <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, sidebarTab: EXTEND_TABS[section]}} />
     {:else if section in MODEL_TABS}
-      <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, sidebarTab: MODEL_TABS[section], ontab: showModelTab}} />
+      <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, sidebarTab: MODEL_TABS[section], ontab: showModelTab, connect: section === 'providers' ? connectProvider : null}} />
     {:else if section === 'appearance'}
       <SettingsSection load={Appearance} properties={{tauri}} />
     {:else if section === 'context'}

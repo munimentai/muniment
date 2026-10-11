@@ -88,7 +88,7 @@
     {@const leading = group.models.filter((model) => model.lead || model.shown)}
     {@const others = group.models.filter((model) => !model.lead && !model.shown)}
     <Group heading={group.name} label={`${group.name} models`}>
-      {#snippet lead()}<ProviderLogo provider={group.id.replace('router:', '')} size={16} />{/snippet}
+      {#snippet lead()}<ProviderLogo color provider={group.id.replace('router:', '')} size={16} />{/snippet}
       {#each leading as model (model.id)}{@render row(model)}{/each}
       {#if others.length}
         <details class="others" open={!!query.trim() || undefined}>

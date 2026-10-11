@@ -26,8 +26,8 @@ async function shellState() {
 }
 
 async function verifyInitialHome(location) {
-  await browser.waitUntil(async () => path.isAbsolute(await location.getProperty('textContent')))
-  const home = await location.getProperty('textContent')
+  await browser.waitUntil(async () => path.isAbsolute(await location.getAttribute('data-home-path') ?? ''))
+  const home = await location.getAttribute('data-home-path')
   expect(path.isAbsolute(home)).toBe(true)
   let homeExists = true
   try { await access(home) } catch { homeExists = false }
@@ -115,7 +115,6 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     })
     if (await location.isDisplayed()) {
       await verifyInitialHome(location)
-      await (await $('textarea[placeholder="Ask anything"]')).setValue('Help me organize my notes.')
       await openFirstRunModelSettings()
     }
     await localMode.waitForDisplayed({ timeout: 120000 })
@@ -152,9 +151,6 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     let home
     if (await location.isDisplayed()) {
       home = await verifyInitialHome(location)
-      const composer = await $('textarea[placeholder="Ask anything"]')
-      expect(await composer.isDisplayed()).toBe(true)
-      await composer.setValue('Help me organize my notes.')
       await openFirstRunModelSettings()
     }
 

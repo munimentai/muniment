@@ -236,12 +236,34 @@ export const historyFixtures = {
 }
 
 
+// First-run provider scans. `?scan=` picks one: mac (the default), many or none.
+const omlx = { id: 'omlx', name: 'oMLX', baseUrl: 'http://127.0.0.1:8080/v1', state: 'needs-key', modelCount: 8, defaultModel: 'Qwen3-Coder-30B-A3B-Instruct-4bit', keyFile: '~/.omlx/settings.json' }
+const providerScanFixtures = {
+  mac: {
+    servers: [omlx],
+    hints: [
+      { provider: 'anthropic', evidence: 'Claude Code is signed in' },
+      { provider: 'openai', evidence: 'Codex CLI is signed in' },
+      { provider: 'github-copilot', evidence: 'Copilot CLI is installed' },
+    ],
+  },
+  many: {
+    servers: [
+      { id: 'ollama', name: 'Ollama', baseUrl: 'http://127.0.0.1:11434/v1', state: 'ready', modelCount: 3, defaultModel: 'qwen3:8b' },
+      omlx,
+      { id: 'lmstudio', name: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', state: 'not-running', modelCount: 0 },
+    ],
+    hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in' }],
+  },
+  none: { servers: [], hints: [] },
+}
+
 export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
   const history = structuredClone(fixtureHistory)
   if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
-  const onboardingFixture = fixtureName === 'onboarding' || fixtureName === 'scan'
+  const onboardingFixture = fixtureName === 'onboarding'
   const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
   const signedOutFixture = fixtureName === 'signed-out'
@@ -311,6 +333,8 @@ export function buildProbeCommandTable(fixtureName) {
       return { configured: true, homePath: '/Documents/muniment' }
     }
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
+    if (command === 'onboarding_connect_server') return null
+    if (command === 'onboarding_provider_scan') return structuredClone(providerScanFixtures[new URLSearchParams(location.search).get('scan') ?? 'mac'] ?? providerScanFixtures.mac)
     if (command === 'onboarding_scan') return {
       findings: [
         { assistantId: 'claude-code', displayName: 'Claude Code', root: '/Users/alice/.claude', fileCount: 12, byteTotal: 1024, capped: false, warnings: [] },
@@ -464,7 +488,7 @@ export function buildProbeCommandTable(fixtureName) {
       retentionChoice = payload.choice
       return null
     }
-    if (command === 'attach_listener_status') return { started: true, failure: null, connected: false, supervisor_running: false }
+    if (command === 'attach_listener_status') return { started: true, failure: null, connected: onboardingFixture, supervisor_running: false }
     // The record panel opens on one company whose kind list runs past the
     // viewport, so the shell's scroll and title row can be checked with it open.
     if (command === 'record_companies') return { companies: [{ id: 'probe-company', name: 'Northwind', created_at: '2026-01-01T00:00:00.000Z', owner_principal_id: 'probe-owner', current: true }], current: 'probe-company' }
@@ -542,13 +566,15 @@ function fixtureRendered() {
     return document.querySelector('.workspace .empty') !== null && signIn !== undefined
   }
   if (onboardingFixture) {
-    const composer = document.querySelector('#first-message')
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
-    const scan = document.querySelector('[data-testid="onboarding-scan"]')
-    return composer && homePath?.textContent === onboardingHomePath
-      && document.querySelectorAll('.chips button').length === 3
-      && scan?.textContent === 'Claude Code: 12 files · Pi: 3 files'
-      && (!scanFixture || document.querySelector('#onboarding-scan-panel li'))
+    return homePath?.dataset.homePath === onboardingHomePath
+      && document.querySelectorAll('.connect button.option').length >= 9
+      && document.querySelector('.connect .badge')?.textContent === 'Needs key'
+  }
+  if (scanFixture) {
+    // Settings → Memory lists the assistant memory found on this computer.
+    const imports = [...document.querySelectorAll('.memory .group')].find((group) => group.querySelector('h4')?.textContent === 'Imports')
+    return imports?.querySelectorAll('.row').length === 2
   }
   if (accessFixture) {
     const sections = document.querySelector('.account-sections')
@@ -574,7 +600,14 @@ function fixtureRendered() {
 
 function advanceScanFixture() {
   if (!scanFixture || fixtureRendered()) return
-  document.querySelector('[data-testid="onboarding-scan"][aria-expanded="false"]')?.click()
+  if (!document.querySelector('.settings-layout')) {
+    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    return
+  }
+  const memory = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
+    .find((button) => button.textContent.trim() === 'Memory')
+  if (memory && memory.getAttribute('aria-current') !== 'true') return memory.click()
+  Array.from(document.querySelectorAll('.memory button')).find((button) => button.textContent.trim() === 'Look for memory')?.click()
 }
 
 // The account sections live in Settings, so the fixture opens that section.

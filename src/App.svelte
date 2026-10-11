@@ -342,6 +342,8 @@
     await refreshAgents()
   }
   let settingsSection = $state('providers')
+  // A first-run choice the providers page opens at once.
+  let settingsConnectProvider = $state(null)
   let settingsButton = $state()
   // The control that opened Settings takes focus back when it closes.
   let settingsOpener = null
@@ -365,6 +367,7 @@
 
   function closeSettings() {
     settingsOpen = false
+    settingsConnectProvider = null
     // The sidebar's Settings control remounts when Settings closes, so a detached opener hands focus to it.
     void tick().then(() => {
       const opener = settingsOpener?.isConnected ? settingsOpener : settingsButton ?? composer
@@ -400,7 +403,8 @@
   }
 
   function togglePicker() {
-    if (pickerOpen) closePicker()
+    if (!pickerOpen && needsModel()) openModelProviders()
+    else if (pickerOpen) closePicker()
     else openComposerPanel('model')
   }
 
@@ -2013,7 +2017,7 @@
     selectedFiles = [...selectedFiles, ...additions]
   }
 
-  async function openFirstRunModelSettings() {
+  async function openFirstRunModelSettings(option = null, input = {}) {
     if (retryStartup) startWorkspace()
     retryStartup = await startupReady === false
     if (retryStartup) throw firstRunError(tauri, 'startup')
@@ -2026,9 +2030,22 @@
     if (!workspaceMode() || desktopClientStatus?.connected !== true) {
       throw firstRunError(tauri, 'runtime')
     }
+    // SPEC.md: a found server connects in place. A subscription opens its
+    // sign-in in Model providers, and More providers opens the catalog.
+    if (option?.kind === 'server') {
+      try {
+        await tauri.invoke('onboarding_connect_server', { id: option.id, baseUrl: option.server.baseUrl, key: input.key ?? null, keyFromFile: !!input.keyFrom })
+      } catch (error) {
+        throw new Error(typeof error === 'string' && error ? error : `Muniment could not connect ${option.name}. Check the server and try again.`)
+      }
+      await refreshInventory()
+      onboarding = { name: 'complete', homePath: onboarding.homePath }
+      void tick().then(() => composer?.focus())
+      return
+    }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
-    // SPEC.md: the first Send opens Settings → Models when no source answers.
-    openSettings('models')
+    settingsConnectProvider = option?.catalog ?? ''
+    openSettings('providers')
   }
 
   function keydown(event) {
@@ -2050,8 +2067,20 @@
     const action = composerAction(event, draft, active)
     if (action) {
       event.preventDefault()
-      action === 'submit' ? chatController.send() : chatController.queue('steer')
+      if (action === 'submit' && needsModel()) openModelProviders()
+      else action === 'submit' ? chatController.send() : chatController.queue('steer')
     }
+  }
+
+  // With no model connected, the composer's Send and model chip open the
+  // provider catalog in Settings instead of a run that cannot start.
+  function needsModel() {
+    return auth.name === 'local' && !!inventory && !chipModel
+  }
+
+  function openModelProviders() {
+    settingsConnectProvider = ''
+    openSettings('providers', modelChip)
   }
 
   // ADR 0012: the runtime rejects a new run while its upgrade is pending. The
@@ -2072,7 +2101,9 @@
 
   function composerActionClick() {
     if (composerActionInactive()) return
-    active ? chatController.cancel() : chatController.send()
+    if (active) chatController.cancel()
+    else if (needsModel()) openModelProviders()
+    else chatController.send()
   }
 </script>
 
@@ -2127,11 +2158,11 @@
         <span class="name">muniment</span>
       {/if}
     </div>
-    <p class="meta">shell v{version}</p>
+    {#if onboarding.name === 'complete'}<p class="meta">shell v{version}</p>{/if}
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding bind:draft onready={openFirstRunModelSettings} />
+    <Onboarding {tauri} bind:onboarding onready={openFirstRunModelSettings} />
     {#if backgroundServiceNoticeVisible}
       <section class="auth-state" aria-live="polite" data-testid="runtime-notice">
         <p class="record error-record">{runtimeNotice.text}</p>
@@ -2717,7 +2748,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a

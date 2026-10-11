@@ -18,12 +18,12 @@ impl FirstRunFailure {
             Self::HomeConfirm => {
                 "Muniment could not create Home. Check folder access and try Send again."
             }
-            Self::Startup => "Muniment could not finish startup. Open model settings again.",
+            Self::Startup => "Muniment could not finish startup. Choose a model again.",
             Self::SessionStatus => {
-                "Muniment could not read session status. Open model settings again."
+                "Muniment could not read session status. Choose a model again."
             }
-            Self::LocalMode => "Muniment could not enter local mode. Open model settings again.",
-            Self::Runtime => "The runtime is not connected yet. Open model settings again.",
+            Self::LocalMode => "Muniment could not enter local mode. Choose a model again.",
+            Self::Runtime => "The runtime is not connected yet. Choose a model again.",
         }
     }
 }
@@ -51,7 +51,7 @@ mod tests {
         let cause: FirstRunFailure = serde_json::from_str(r#""runtime""#).unwrap();
         assert_eq!(
             cause.message(),
-            "The runtime is not connected yet. Open model settings again."
+            "The runtime is not connected yet. Choose a model again."
         );
     }
 }

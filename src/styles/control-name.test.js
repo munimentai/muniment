@@ -58,9 +58,9 @@ describe('control names', () => {
     expect(unnamedControls(source)).toEqual(['<input placeholder="Prompt">', '<textarea>'])
   })
 
-  it('names the first-run composer without a consent exception', () => {
-    const source = read('src/lib/Onboarding.svelte')
-    expect(source).toMatch(/<label[^>]*for="first-message">Message<\/label>/)
+  it('names the first-run key field without a consent exception', () => {
+    const source = read('src/lib/FirstRunConnect.svelte')
+    expect(source).toMatch(/<input type="password"[^>]*aria-label=/)
     expect(controls(markup(source))).toHaveLength(1)
     expect(unnamedControls(source)).toEqual([])
     expect(unnamedControls('<input type="checkbox">')).toEqual(['<input type="checkbox">'])

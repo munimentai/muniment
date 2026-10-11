@@ -753,7 +753,7 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(spec).toContain('await withWindowsPickerDiagnostics(async () => {')
     expect(spec).toContain("document.querySelector('[data-home-picker]')?.getAttribute('data-home-picker')")
     expect(spec).toContain('await homePathMatches(location, home)')
-    expect(spec).toContain("expect(await location.getProperty('textContent')).toBe(home)")
+    expect(spec).toContain("expect(await location.getAttribute('data-home-path')).toBe(home)")
     expect(spec).toContain('${folderDialogDescription(FOLDER_DIALOG_TITLE)}')
     expect(spec).not.toMatch(/mock|plugin:dialog\|open/)
   })

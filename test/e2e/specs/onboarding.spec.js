@@ -93,17 +93,14 @@ describe('installed nightly model-ready onboarding', () => {
     try { await access(home) } catch { homeExists = false }
     expect(homeExists).toBe(false)
 
-    const composer = await $('textarea[placeholder="Ask anything"]')
-    await composer.waitForDisplayed({ timeout: 120000 })
-    expect(await composer.isDisplayed()).toBe(true)
-    expect(await (await $('button=Send')).isEnabled()).toBe(true)
-    expect(await (await $('[data-testid="onboarding-model"]')).isDisplayed()).toBe(true)
-    expect(await (await $('[data-testid="onboarding-model"]')).getText()).toBe('Connect a model')
-    expect(await (await $('[data-testid="onboarding-scan"]')).isDisplayed()).toBe(true)
-    expect(await (await $('.chips')).$$('button')).toHaveLength(3)
+    // The first run asks one question: which model to connect.
+    const question = await $('h1=Connect a model')
+    await question.waitForDisplayed({ timeout: 120000 })
+    expect(await (await $('button=More providers')).isEnabled()).toBe(true)
+    expect((await $$('.connect .options button.option')).length).toBeGreaterThanOrEqual(9)
+    expect(await (await $('textarea[placeholder="Ask anything"]')).isExisting()).toBe(false)
     expect(await (await $('[data-testid="onboarding-confirm"]')).isExisting()).toBe(false)
     await mkdir(home, { recursive: true })
-    await location.click()
     // Record any system prompt before the app opens NSOpenPanel.
     await recordMacosPickerBaseline(process.env.MUNIMENT_E2E_RAW_DIR)
     await (await $('[data-testid="onboarding-picker"]')).click()
@@ -114,12 +111,11 @@ describe('installed nightly model-ready onboarding', () => {
         FOLDER_DIALOG_TITLE,
         process.env.MUNIMENT_E2E_RAW_DIR,
       )
-      // WebDriver's getElementText is unreliable for this element here.
-      // textContent provides a stable read.
+      // The Home line shows the path with ~, and data-home-path holds it in full.
       await browser.waitUntil(async () => await homePathMatches(location, home), {
         timeoutMsg: `The Home picker DOM value did not match the isolated Home. ${folderDialogDescription(FOLDER_DIALOG_TITLE)}`,
       })
-      expect(await location.getProperty('textContent')).toBe(home)
+      expect(await location.getAttribute('data-home-path')).toBe(home)
     }, () => browser.execute(() => document.querySelector('[data-home-picker]')?.getAttribute('data-home-picker')),
     process.env.MUNIMENT_E2E_RAW_DIR)
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
@@ -127,28 +123,27 @@ describe('installed nightly model-ready onboarding', () => {
       try { await access(path.join(home, directory)) } catch { exists = false }
       expect(exists).toBe(false)
     }
-    await composer.setValue('Help me organize my notes.')
-    // Include the first Send and the panel checks in the failure report.
+    // Include More providers and the Settings checks in the failure report.
     try {
       await openFirstRunModelSettings()
       const localMode = await $('[data-testid="local-mode"]')
       await localMode.waitForDisplayed({
-        timeoutMsg: 'model settings did not appear after the first Send',
+        timeoutMsg: 'model settings did not appear after More providers',
       })
     } catch (waitError) {
-      let failure = 'Muniment could not read the model settings panel.'
+      let failure = 'Muniment could not read the first-run screen.'
       try {
-        const panel = await $('#onboarding-model-panel')
-        failure = await panel.isExisting() ? await panel.getText() : 'The model settings panel is absent.'
+        const firstRun = await $('section.onboarding')
+        failure = await firstRun.isExisting() ? (await firstRun.getText()).replace(/\s+/g, ' ').slice(0, 300) : 'The first-run screen is closed.'
       } catch {}
-      throw new Error(`${waitError.message} Model settings: ${failure} ${await shellState()}`)
+      throw new Error(`${waitError.message} First run: ${failure} ${await shellState()}`)
     }
     const settings = await $('[role="dialog"][aria-label="Settings"]')
     await settings.waitForDisplayed()
-    expect(await (await settings.$('button=Connect account')).isDisplayed()).toBe(true)
+    expect(await (await settings.$('h4=Connect account')).isDisplayed()).toBe(true)
     await closeSettings()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
-    expect(await (await $('[aria-label="First-run settings"]')).isExisting()).toBe(false)
+    expect(await (await $('section[aria-label="First run"]')).isExisting()).toBe(false)
 
     await expandSidebar()
     const row = await $('header.titlebar')
@@ -167,7 +162,7 @@ describe('installed nightly model-ready onboarding', () => {
     expect(await (await $('#sidebar button[aria-label="Artifacts"]')).isDisplayed()).toBe(true)
     expect(await (await row.$('.update-slot')).getProperty('childElementCount')).toBe(0)
     expect(await row.getAttribute('data-tauri-drag-region')).not.toBeNull()
-    expect(await (await $('textarea[placeholder="Ask anything"]')).getValue()).toBe('Help me organize my notes.')
+    expect(await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()).toBe(true)
     for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
       expect(await readFile(path.join(home, directory, 'README.md'), 'utf8')).toContain(`# ${directory[0].toUpperCase()}${directory.slice(1)}`)
     }

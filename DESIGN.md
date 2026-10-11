@@ -216,7 +216,7 @@ Details open an in-app dialog with descriptions, connection details and provider
 Directory relays and example servers stay out. Popularity uses the source catalog score.
 Twelve popular entries precede the remaining catalog. Compact cards use three
 columns, two in narrower panels, and one when needed. Each card shows its
-provider logo with initials as a fallback. Pagination appears only for multiple pages.
+provider logo with initials as a fallback. Pagination appears only for multiple pages. Provider marks show their brand colors on the first run and the model Settings pages, and the composer shows the light or dark mark.
 Installed entries stay in catalog order and use the theme signal-soft surface.
 An unlabeled signal toggle controls availability, with an accessible name.
 The Show filter includes Installed. Connect starts provider authentication when available.

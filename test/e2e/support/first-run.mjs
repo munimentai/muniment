@@ -1,15 +1,10 @@
+// More providers ends the first-run list and opens the provider catalog in
+// Settings. A runner with no model reaches Settings this way.
 export async function openFirstRunModelSettings() {
-  await (await $('button=Send')).click()
-  const model = await $('[data-testid="onboarding-model"]')
-  await model.waitForDisplayed()
-  const panel = await $('#onboarding-model-panel')
-  await panel.waitForDisplayed()
-  expect(await model.getAttribute('aria-expanded')).toBe('true')
-  const settings = await panel.$('button=Open model settings')
-  await settings.waitForDisplayed()
-  expect(await (await panel.$('p=No free hosted model exists at the no-account tier.')).isDisplayed()).toBe(true)
-  await settings.waitForEnabled()
-  await settings.click()
+  const more = await $('button=More providers')
+  await more.waitForDisplayed()
+  await more.waitForEnabled()
+  await more.click()
 }
 
 // Back to threads sits at the top of the sidebar, so the sidebar opens first.

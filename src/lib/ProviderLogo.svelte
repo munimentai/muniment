@@ -26,9 +26,14 @@
     'cloudflare-workers-ai': 'cloudflare-workers', 'vercel-ai-gateway': 'vercel',
   }
 
-  let { provider, size = 16 } = $props()
+  // A provider whose own mark is one color shows its brand's colored mark
+  // where `color` asks for it: the first run and the model Settings pages.
+  const COLOR_MARKS = { anthropic: 'claude' }
+
+  let { provider, size = 16, color = false } = $props()
   const id = $derived(ALIASES[provider] ?? provider?.replace(/^custom-.*/, 'custom'))
-  const logo = $derived(logos[id] ?? null)
+  const colorId = $derived(color ? `${COLOR_MARKS[id] ?? id}-color` : null)
+  const logo = $derived(logos[colorId] ?? logos[id] ?? null)
   const image = $derived(images[`./logos/${id}.webp`] ?? images[`./logos/${id}.png`] ?? null)
 </script>
 

@@ -314,7 +314,7 @@
   {:else}
     <div class="sign-ins">
       {#each signIns as entry (entry.provider)}
-        <button type="button" class="sign-in" disabled={pending} onclick={() => startSignIn(entry)}><ProviderLogo provider={entry.family} size={16} />{entry.label}</button>
+        <button type="button" class="sign-in" disabled={pending} onclick={() => startSignIn(entry)}><ProviderLogo color provider={entry.family} size={16} />{entry.label}</button>
       {/each}
       {#if family !== 'devin'}
         <button type="button" class="sign-in" disabled={pending} onclick={() => { adding = true }}>Add a key</button>

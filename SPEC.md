@@ -153,17 +153,18 @@ checkable in the diff:
 
 ## First run
 
-The first run is one screen, and the composer is on top, ready or one line from
-ready. Nothing asks a question before the first message. Under the composer sit
-three chips in mono, each opening its own panel, and none blocks Send. After
-the first run the chips are the composer band: the model source, Home, the
-context meter and the running cost. A global shortcut opens a one-line launcher
-that starts a new thread with the line typed into it.
+The first run asks one question: which model to connect. The provider scan runs
+at launch, and its finds lead the list: ready local servers, then subscriptions
+with a sign-in hint, then servers that need a key or a start. Every subscription
+Muniment signs in to follows in full color, and More providers opens the provider
+catalog. A pick saves Home, and a found server connects in place. The composer band
+shows the model source, Home, the context meter and the running cost. A global shortcut opens a one-line launcher that starts a new thread with the line typed into it.
+
+**The provider scan.** It probes known model servers on `127.0.0.1` only, never the network, in about two seconds, and names each by its answer, not its port: Ollama, LM Studio, llama.cpp, MLX LM, oMLX, vLLM, Jan, Osaurus, LocalAI, Lemonade, KoboldCpp, Docker Model Runner, Text Generation WebUI and exo. It sends no key. A `401` reads *Needs key*, and an installed server that does not answer reads *Not running*. A key comes from the user, or for oMLX from its own settings file on request. A sign-in hint only tests that a CLI's folder or credential file exists and never reads it: Claude Code, Codex, Grok Build, Gemini, Copilot, Kimi, Devin, Muse Code and Ori.
 
 **The model chip.** The chip shows the provider's mark and the model id in use,
 the saved default when it is shown, else the first shown model. When no
-provider answers it reads `Connect a model`, and the first Send opens Settings
-→ Models. The user supplies model access through a provider or local server.
+provider answers it reads `Connect a model`, and the chip and Send open the provider catalog.
 
 **Settings → Models is one component on three pages.** Model providers, Model list
 and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
@@ -272,14 +273,13 @@ once under its provider. A model two or more accounts serve carries the
 balancer mark, and picking it balances across them with no other step. A saved classifier connection shows its logo and edits in place. A new model, URL or key passes the connection test before it saves, and a blank key keeps the saved one. GPT-6 Luna answers through OpenAI's Decisions API, which takes an OpenAI API key. Every connected decision model except a pooled one also reaches chats, as the provider `decisions` in codemode scripts. A server that reports its decision models, as llama.cpp does, offers them as classifiers and keeps them out of the chat picker. Ollama's decision models are known by name.
 
 
-**The Home chip.** It shows `~/Documents/muniment`, lowercase, with one control
-to change it. A configured Home keeps its path. The four folders are created on
-the first Send. When one Obsidian vault holds most of the files the scan found,
-the chip offers that vault's parent and says why.
+**Home.** A line under the list shows `~/Documents/muniment`, lowercase, with
+Change. A configured Home keeps its path, and a pick creates the four folders.
+When one Obsidian vault holds most of the memory files found, Change offers that
+vault's parent and says why.
 
-**The scan chip.** It reads the scan's summary, `Claude Code: 12 files · Pi: 3
-files`, or `No assistant memory found`. Its panel lists one row per assistant
-with a checkbox and a mode. *Copy* writes the files under
+**Imports.** Settings → Memory runs the memory scan on request and lists one row
+per assistant that holds files, with a checkbox and a mode. *Copy* writes the files under
 `memory/imports/<assistant>/` through the onboarding write plan with its secret
 rejection and size caps. *Use in place* records the root as a read-only source
 in `home.json`, and the memory index reads it beside `memory/`. Copy is the
@@ -315,7 +315,7 @@ The scan skips files inside repositories, such as a project `AGENTS.md`,
 `CLAUDE.md`, `CONVENTIONS.md` or `.cursor/rules`. The importers read them one
 repository at a time. The registry is data in the core crate, and its tests
 plant a credential file in every fixture root that must stay uncounted. The e2e
-onboarding spec proves the composer, the three chips and a first Send.
+onboarding spec proves the connect question, the Home picker and More providers.
 
 ## Operating constraints (LAW — the reviewer holds every diff against these)
 

@@ -28,11 +28,11 @@
   {#if !hideLabel}<span>{label}</span>{/if}
   <div class="control">
     <button data-ui-choice type="button" bind:this={trigger} {disabled} aria-label={`${label}: ${selected?.label ?? placeholder}`} aria-haspopup="menu" aria-expanded={open} onclick={show}>
-      {#if selected?.provider}<ProviderLogo provider={selected.provider} size={16} />{/if}<span>{selected?.label ?? placeholder}</span><LucideIcon name="chevron-down" size={14} variant="action" />
+      {#if selected?.provider}<ProviderLogo color provider={selected.provider} size={16} />{/if}<span>{selected?.label ?? placeholder}</span><LucideIcon name="chevron-down" size={14} variant="action" />
     </button>
     {#if open}<div class="choices" role="menu" aria-label={label}>
       {#each options as option (option.value)}<button data-ui-choice type="button" role="menuitemradio" aria-checked={option.value === value} onclick={() => { close(); onchange(option.value) }}>
-        {#if option.provider}<ProviderLogo provider={option.provider} size={16} />{/if}<span>{option.label}</span>{#if option.value === value}<LucideIcon name="check" size={14} variant="action" />{/if}
+        {#if option.provider}<ProviderLogo color provider={option.provider} size={16} />{/if}<span>{option.label}</span>{#if option.value === value}<LucideIcon name="check" size={14} variant="action" />{/if}
       </button>{/each}
     </div>{/if}
   </div>

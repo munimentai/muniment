@@ -6,6 +6,7 @@
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
+  import MemoryImports from './MemoryImports.svelte'
   import { readDevicePreference, saveDevicePreference } from './device-preferences.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
   let { tauri, agentId = null, part = 'all' } = $props()
@@ -125,6 +126,7 @@
           <Row title={label} description={help}><Toggle checked={recall[key]} {label} onchange={(on) => { recall = saveDevicePreference('muniment.memory-recall', { ...recall, [key]: on }) }} /></Row>
         {/each}
       </Group>
+      <MemoryImports {tauri} />
     {/if}
     <Group heading="Saved memories" count={facts.length}>
       {#snippet actions()}
