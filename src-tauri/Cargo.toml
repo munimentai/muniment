@@ -48,7 +48,8 @@ tauri-plugin-window-state = "=2.4.1"
 url = "2"
 # The shell reads the one state root and the runtime profile on every platform.
 muniment-runtime = { path = "runtime" }
-tauri-plugin-wdio-webdriver = { version = "1.4.0", optional = true }
+# The exact pin selects 1.5.0, the release built against Tauri 2.12 and webview2-com 0.39.
+tauri-plugin-wdio-webdriver = { version = "=1.5.0", optional = true }
 portable-pty = "0.9"
 trash = "5.2.9"
 tauri-plugin-updater = "2"

@@ -524,7 +524,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `tauri-plugin-global-shortcut` 2.4.0 — Apache-2.0 OR MIT
 - `tauri-plugin-opener` 2.5.5 — Apache-2.0 OR MIT
 - `tauri-plugin-updater` 2.13.2 — Apache-2.0 OR MIT
-- `tauri-plugin-wdio-webdriver` 1.4.0 — MIT
+- `tauri-plugin-wdio-webdriver` 1.5.0 — MIT
 - `tauri-plugin-window-state` 2.4.1 — Apache-2.0 OR MIT
 - `tauri-plugin` 2.7.1 — Apache-2.0 OR MIT
 - `tauri-runtime-wry` 2.12.1 — Apache-2.0 OR MIT
@@ -613,9 +613,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `webpki-roots` 0.26.11 — CDLA-Permissive-2.0
 - `webpki-roots` 1.0.9 — CDLA-Permissive-2.0
 - `webview2-com-macros` 0.8.1 — MIT
-- `webview2-com-sys` 0.38.2 — MIT
 - `webview2-com-sys` 0.39.1 — MIT
-- `webview2-com` 0.38.2 — MIT
 - `webview2-com` 0.39.1 — MIT
 - `weezl` 0.1.12 — MIT OR Apache-2.0
 - `winapi-i686-pc-windows-gnu` 0.4.0 — MIT/Apache-2.0

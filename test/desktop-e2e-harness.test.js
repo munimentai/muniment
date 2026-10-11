@@ -4441,3 +4441,10 @@ it('Fetches locked Rust dependencies before Windows harness contract tests.', ()
   expect(fetch).toBeGreaterThan(repo)
   expect(contracts).toBeGreaterThan(fetch)
 })
+
+it('Pins the optional WebDriver plugin to the Tauri 2.12 compatible release behind the e2e feature.', () => {
+  const manifest = fs.readFileSync(path.join(root, 'src-tauri/Cargo.toml'), 'utf8')
+  expect(manifest).toMatch(/^tauri-plugin-wdio-webdriver = \{ version = "=1\.5\.0", optional = true \}$/m)
+  expect(manifest).toMatch(/^e2e-webdriver = \["dep:tauri-plugin-wdio-webdriver"/m)
+  expect(manifest).not.toMatch(/^default = \[[^\]]*e2e-webdriver/m)
+})
