@@ -34,6 +34,7 @@ mod model_router;
 mod onboarding_diagnostics;
 mod onboarding_import;
 mod onboarding_scan;
+mod provider_scan;
 mod personal_memory;
 mod pool_login;
 mod projects;
@@ -317,6 +318,8 @@ pub fn run() {
             onboarding_import::onboarding_import_preview,
             onboarding_import::onboarding_import_extract,
             onboarding_scan::onboarding_scan,
+            provider_scan::onboarding_provider_scan,
+            provider_scan::onboarding_connect_server,
             model_install::parakeet_install_facts,
             model_install::parakeet_install_start,
             model_install::parakeet_install_status,

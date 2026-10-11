@@ -151,8 +151,8 @@ pub(crate) struct RouterModel {
 
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct ClaudeCodeStatus {
-    installed: bool,
-    logged_in: bool,
+    pub(crate) installed: bool,
+    pub(crate) logged_in: bool,
     path: Option<String>,
 }
 
@@ -1546,7 +1546,7 @@ fn claude_code_executable() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-fn claude_code_status() -> ClaudeCodeStatus {
+pub(crate) fn claude_code_status() -> ClaudeCodeStatus {
     let Some(path) = claude_code_executable() else {
         return ClaudeCodeStatus {
             installed: false,

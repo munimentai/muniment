@@ -169,6 +169,8 @@
     "allow-home-status",
     "allow-home-confirm",
     "allow-onboarding-scan",
+    "allow-onboarding-provider-scan",
+    "allow-onboarding-connect-server",
     "allow-parakeet-install-facts",
     "allow-parakeet-install-start",
     "allow-parakeet-install-status",
