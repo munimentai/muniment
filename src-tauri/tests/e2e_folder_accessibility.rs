@@ -1,5 +1,7 @@
 #[path = "../src/e2e_folder_dialog/accessibility.rs"]
 mod accessibility;
+#[path = "../src/e2e_folder_dialog/navigation.rs"]
+mod navigation;
 #[path = "../src/e2e_folder_dialog/selection.rs"]
 mod selection;
 
@@ -25,7 +27,21 @@ enum Value {
 struct Tree(
     HashMap<(usize, &'static str), Value>,
     std::cell::RefCell<Vec<(usize, String)>>,
+    std::cell::RefCell<Live>,
 );
+
+// Live attribute changes and the mutating calls the drive makes.
+#[derive(Clone, Default)]
+struct Live {
+    overlay: HashMap<(usize, &'static str), Value>,
+    on_commit: Vec<(usize, &'static str, Value)>,
+    actions: HashMap<usize, Vec<String>>,
+    writes: Vec<(usize, String)>,
+    performed: Vec<(usize, String)>,
+    fail_write: bool,
+    ignore_write: bool,
+    fail_perform: bool,
+}
 
 impl Tree {
     fn set(&mut self, element: usize, name: &'static str, value: Value) {
@@ -34,8 +50,10 @@ impl Tree {
 
     fn get(&self, element: usize, name: &str) -> Result<Value, String> {
         self.1.borrow_mut().push((element, name.into()));
-        self.0
+        let live = self.2.borrow();
+        live.overlay
             .get(&(element, name))
+            .or_else(|| self.0.get(&(element, name)))
             .cloned()
             .ok_or_else(|| format!("The test element {element} has no {name}."))
     }
@@ -2229,4 +2247,520 @@ fn final_confirmation_blocks_on_navigation_sheets_and_deadlines() {
         accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
         Err(ConfirmFailure::ElementLimit)
     );
+}
+
+impl navigation::AccessibilityActions for Tree {
+    fn action_names(&self, element: &usize) -> Result<Vec<String>, String> {
+        self.1.borrow_mut().push((*element, "AXActionNames".into()));
+        Ok(self
+            .2
+            .borrow()
+            .actions
+            .get(element)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn set_value(&self, element: &usize, value: &str) -> Result<(), String> {
+        let mut live = self.2.borrow_mut();
+        live.writes.push((*element, value.into()));
+        if live.fail_write {
+            return Err("The test rejected the write.".into());
+        }
+        if !live.ignore_write {
+            live.overlay
+                .insert((*element, "AXValue"), Value::String(value.into()));
+        }
+        Ok(())
+    }
+
+    fn perform(&self, element: &usize, action: &str) -> Result<(), String> {
+        let mut live = self.2.borrow_mut();
+        live.performed.push((*element, action.into()));
+        if live.fail_perform {
+            return Err("The test rejected the action.".into());
+        }
+        for (node, name, value) in std::mem::take(&mut live.on_commit) {
+            live.overlay.insert((node, name), value);
+        }
+        Ok(())
+    }
+}
+
+const HOME: &str = "/tmp/Home space café";
+const GO: usize = 7;
+
+// The Go to Folder sheet of navigation_tree with a Go button. Go closes the sheet
+// and returns window focus to the panel.
+fn go_to_folder_tree() -> Tree {
+    let mut tree = navigation_tree();
+    tree.set(5, "AXChildren", Value::Elements(vec![6, GO]));
+    tree.set(5, "AXDefaultButton", Value::Element(GO));
+    tree.set(GO, "AXRole", Value::String("AXButton".into()));
+    tree.set(GO, "AXIdentifier", Value::String("OKButton".into()));
+    tree.set(GO, "AXParent", Value::Element(5));
+    tree.set(GO, "AXEnabled", Value::Boolean(true));
+    tree.set(APP, "AXFrontmost", Value::Boolean(true));
+    tree.2.borrow_mut().on_commit = vec![
+        (PANEL, "AXChildren", Value::Elements(vec![OTHER])),
+        (APP, "AXFocusedWindow", Value::Element(PANEL)),
+        (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        (5, "AXIdentifier", Value::String(String::new())),
+    ];
+    tree
+}
+
+// The view-bridge layout: a focused GoToWindow window outside the panel's children,
+// owned by the host of an Open panel sheet, with the path field inside a combo box.
+fn view_bridge_tree() -> Tree {
+    let mut tree = host_sheet_tree(true);
+    tree.set(APP, "AXFocusedWindow", Value::Element(5));
+    tree.set(5, "AXRole", Value::String("AXWindow".into()));
+    tree.set(5, "AXIdentifier", Value::String("GoToWindow".into()));
+    tree.set(5, "AXParent", Value::Element(HOST));
+    tree.set(5, "AXChildren", Value::Elements(vec![8]));
+    tree.set(8, "AXRole", Value::String("AXGroup".into()));
+    tree.set(8, "AXParent", Value::Element(5));
+    tree.set(8, "AXChildren", Value::Elements(vec![9, GO]));
+    tree.set(9, "AXRole", Value::String("AXComboBox".into()));
+    tree.set(9, "AXParent", Value::Element(8));
+    tree.set(9, "AXEnabled", Value::Boolean(true));
+    tree.set(9, "AXChildren", Value::Elements(vec![6]));
+    tree.set(6, "AXRole", Value::String("AXTextField".into()));
+    tree.set(6, "AXIdentifier", Value::String("PathTextField".into()));
+    tree.set(6, "AXParent", Value::Element(9));
+    tree.set(6, "AXEnabled", Value::Boolean(true));
+    tree.set(GO, "AXRole", Value::String("AXButton".into()));
+    tree.set(GO, "AXIdentifier", Value::String("OKButton".into()));
+    tree.set(GO, "AXParent", Value::Element(8));
+    tree.set(GO, "AXEnabled", Value::Boolean(true));
+    tree.set(APP, "AXFocusedUIElement", Value::Element(6));
+    // Go destroys the sheet and returns window and keyboard focus to the panel's host.
+    tree.2.borrow_mut().on_commit = vec![
+        (APP, "AXFocusedWindow", Value::Element(HOST)),
+        (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        (5, "AXIdentifier", Value::String(String::new())),
+    ];
+    tree
+}
+
+// Run the shared navigation with a bounded deadline. Each settle advances one tick.
+fn commit(tree: &Tree) -> (Result<(), ConfirmFailure>, Vec<&'static str>) {
+    let ticks = std::cell::Cell::new(0);
+    let mut stages = Vec::new();
+    let result = navigation::enter_and_commit(
+        tree,
+        &APP,
+        &PANEL,
+        &BUTTON,
+        HOME,
+        || {
+            if ticks.get() >= 20 {
+                Err(ConfirmFailure::Deadline)
+            } else {
+                Ok(())
+            }
+        },
+        || ticks.set(ticks.get() + 1),
+        |event| {
+            assert!(event.role.as_deref() != Some(HOME));
+            assert!(event.identifier.as_deref() != Some(HOME));
+            stages.push(event.stage);
+        },
+    );
+    (result, stages)
+}
+
+fn milestones(stages: &[&'static str]) -> Vec<&'static str> {
+    stages
+        .iter()
+        .copied()
+        .filter(|stage| !matches!(*stage, "focused_window" | "sheet_control"))
+        .collect()
+}
+
+#[test]
+fn go_to_folder_enters_the_exact_path_and_commits_through_go() {
+    for focused in [5, PANEL] {
+        let tree = go_to_folder_tree();
+        tree.2
+            .borrow_mut()
+            .overlay
+            .insert((APP, "AXFocusedWindow"), Value::Element(focused));
+        let (result, stages) = commit(&tree);
+        assert_eq!(result, Ok(()));
+        let live = tree.2.borrow();
+        assert_eq!(live.writes, vec![(6, HOME.to_string())]);
+        assert_eq!(live.performed, vec![(GO, "AXPress".to_string())]);
+        assert_eq!(
+            milestones(&stages),
+            vec![
+                "sheet_found",
+                "field_found",
+                "value_set",
+                "go_committed",
+                "sheet_closed",
+                "panel_refocused",
+            ]
+        );
+        drop(live);
+        assert_eq!(
+            accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+            Ok(false)
+        );
+        // Navigation never presses the panel's own confirmation button.
+        assert!(!tree
+            .2
+            .borrow()
+            .performed
+            .iter()
+            .any(|(node, _)| *node == BUTTON));
+    }
+}
+
+#[test]
+fn go_to_folder_supports_the_view_bridge_combo_box_on_a_host_sheet() {
+    let tree = view_bridge_tree();
+    let target = navigation::go_to_folder(&tree, &APP, &PANEL, || Ok(()), |_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (target.sheet, target.field, target.commit, target.action),
+        (5, 6, GO, "AXPress")
+    );
+    let (result, _) = commit(&tree);
+    assert_eq!(result, Ok(()));
+    assert_eq!(tree.2.borrow().writes, vec![(6, HOME.to_string())]);
+    assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+
+    // An unidentified combo box is the one editable control of the sheet.
+    let mut tree = view_bridge_tree();
+    tree.set(9, "AXChildren", Value::Elements(vec![]));
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().writes, vec![(9, HOME.to_string())]);
+
+    // The sheet is a host-attached child the panel host lists, focused through its field.
+    let mut tree = view_bridge_tree();
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.set(HOST, "AXChildren", Value::Elements(vec![PANEL, 5]));
+    tree.2.borrow_mut().on_commit = vec![
+        (HOST, "AXChildren", Value::Elements(vec![PANEL])),
+        (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        (5, "AXIdentifier", Value::String(String::new())),
+    ];
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+
+    // An unlisted sheet is found from the focused field and must name the host as parent.
+    let mut tree = view_bridge_tree();
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.2.borrow_mut().on_commit = vec![
+        (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        (5, "AXIdentifier", Value::String(String::new())),
+    ];
+    assert_eq!(commit(&tree).0, Ok(()));
+    let mut tree = view_bridge_tree();
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.set(5, "AXParent", Value::Element(OTHER));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::WrongTopLevelElement));
+    assert!(tree.2.borrow().writes.is_empty());
+}
+
+#[test]
+fn go_to_folder_commits_a_buttonless_sheet_through_the_field_confirm_action() {
+    let mut tree = view_bridge_tree();
+    tree.set(8, "AXChildren", Value::Elements(vec![9]));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().writes.is_empty());
+    let mut tree = view_bridge_tree();
+    tree.set(8, "AXChildren", Value::Elements(vec![9]));
+    let confirm = vec!["AXConfirm".to_string()];
+    tree.2.borrow_mut().actions.insert(6, confirm);
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().performed, vec![(6, "AXConfirm".to_string())]);
+}
+
+#[test]
+fn a_go_to_folder_sheet_that_stays_open_reaches_the_deadline_without_confirming() {
+    let tree = go_to_folder_tree();
+    tree.2.borrow_mut().on_commit.clear();
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+    assert!(!milestones(&stages).contains(&"sheet_closed"));
+    assert!(!milestones(&stages).contains(&"panel_refocused"));
+    assert_eq!(
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+        Ok(true)
+    );
+    // A closed sheet without restored panel ownership also never completes.
+    let tree = view_bridge_tree();
+    tree.2.borrow_mut().on_commit = vec![(APP, "AXFocusedWindow", Value::Element(OTHER))];
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert!(!stages.contains(&"panel_refocused"));
+    assert_eq!(tree.2.borrow().performed.len(), 1);
+}
+
+#[test]
+fn go_to_folder_rejects_lost_focus_and_foreign_ownership_before_it_writes() {
+    // Focus outside the panel and its host never authorizes a field.
+    let mut tree = go_to_folder_tree();
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().writes.is_empty());
+    // Keyboard focus in another window.
+    let mut tree = go_to_folder_tree();
+    tree.set(11, "AXTopLevelUIElement", Value::Element(HOST));
+    tree.set(APP, "AXFocusedUIElement", Value::Element(11));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().writes.is_empty());
+    // A focused GoToWindow that neither the panel nor its host owns.
+    let mut tree = go_to_folder_tree();
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER]));
+    tree.set(5, "AXParent", Value::Element(HOST));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::WrongTopLevelElement));
+    // A field or button owned by a foreign window.
+    for node in [6, GO] {
+        let mut tree = go_to_folder_tree();
+        tree.set(node, "AXParent", Value::Element(HOST));
+        assert_eq!(commit(&tree).0, Err(ConfirmFailure::WrongTopLevelElement));
+        assert!(tree.2.borrow().writes.is_empty());
+    }
+    // A default button outside the sheet.
+    let mut tree = go_to_folder_tree();
+    tree.set(5, "AXDefaultButton", Value::Element(BUTTON));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::WrongTopLevelElement));
+    // A generic sheet or a label alone never matches.
+    let mut tree = go_to_folder_tree();
+    tree.set(5, "AXIdentifier", Value::String("search".into()));
+    tree.set(5, "AXTitle", Value::String("Go to the folder:".into()));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().writes.is_empty());
+    // Disabled controls wait without writing.
+    for node in [6, GO] {
+        let mut tree = go_to_folder_tree();
+        tree.set(node, "AXEnabled", Value::Boolean(false));
+        assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+        assert!(tree.2.borrow().writes.is_empty());
+    }
+}
+
+#[test]
+fn go_to_folder_rejects_ambiguous_controls() {
+    let mut tree = go_to_folder_tree();
+    tree.set(5, "AXChildren", Value::Elements(vec![6, 12, GO]));
+    tree.set(12, "AXRole", Value::String("AXTextField".into()));
+    tree.set(12, "AXIdentifier", Value::String("PathTextField".into()));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::AmbiguousNavigation));
+    let mut tree = view_bridge_tree();
+    tree.set(9, "AXChildren", Value::Elements(vec![]));
+    tree.set(8, "AXChildren", Value::Elements(vec![9, 12, GO]));
+    tree.set(12, "AXRole", Value::String("AXTextField".into()));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::AmbiguousNavigation));
+    let mut tree = view_bridge_tree();
+    tree.set(8, "AXChildren", Value::Elements(vec![9, GO, 12]));
+    tree.set(12, "AXRole", Value::String("AXButton".into()));
+    tree.set(12, "AXIdentifier", Value::String("GoButton".into()));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::AmbiguousNavigation));
+    // Two GoToWindow sheets on the panel.
+    let mut tree = go_to_folder_tree();
+    tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER, 5, 13]));
+    tree.set(13, "AXRole", Value::String("AXSheet".into()));
+    tree.set(13, "AXIdentifier", Value::String("GoToWindow".into()));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::AmbiguousNavigation));
+    // A path identifier on a non-editable control fails closed.
+    let mut tree = go_to_folder_tree();
+    tree.set(6, "AXRole", Value::String("AXStaticText".into()));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::WrongTopLevelElement));
+    assert!(tree.2.borrow().writes.is_empty());
+}
+
+#[test]
+fn go_to_folder_fails_on_rejected_values_and_actions_without_retrying() {
+    let tree = go_to_folder_tree();
+    tree.2.borrow_mut().fail_write = true;
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::ValueRejected));
+    assert_eq!(tree.2.borrow().writes.len(), 1);
+    assert!(tree.2.borrow().performed.is_empty());
+    let tree = go_to_folder_tree();
+    tree.2.borrow_mut().ignore_write = true;
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::ValueRejected));
+    assert!(tree.2.borrow().performed.is_empty());
+    let tree = go_to_folder_tree();
+    tree.2.borrow_mut().fail_perform = true;
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::CommitFailed));
+    assert_eq!(tree.2.borrow().performed.len(), 1);
+}
+
+#[test]
+fn go_to_folder_rechecks_focus_after_the_write_and_before_the_commit() {
+    // The sheet loses focus between the value write and the Go press.
+    let tree = go_to_folder_tree();
+    let commits = std::cell::Cell::new(0);
+    let result = navigation::enter_and_commit(
+        &tree,
+        &APP,
+        &PANEL,
+        &BUTTON,
+        HOME,
+        || Ok(()),
+        || {
+            if !tree.2.borrow().writes.is_empty() && commits.get() == 0 {
+                commits.set(1);
+                tree.2
+                    .borrow_mut()
+                    .overlay
+                    .insert((APP, "AXFocusedWindow"), Value::Element(HOST));
+            }
+        },
+        |_| {},
+    );
+    assert_eq!(result, Err(ConfirmFailure::KeyboardFocusLost));
+    assert!(tree.2.borrow().performed.is_empty());
+    // An expired deadline stops before any read or write.
+    let tree = go_to_folder_tree();
+    let result = navigation::enter_and_commit(
+        &tree,
+        &APP,
+        &PANEL,
+        &BUTTON,
+        HOME,
+        || Err(ConfirmFailure::Deadline),
+        || {},
+        |_| {},
+    );
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert!(tree.1.borrow().is_empty());
+    assert!(tree.2.borrow().writes.is_empty());
+}
+
+#[test]
+fn go_to_folder_requires_positive_sheet_focus_and_frontmost_before_it_writes() {
+    // Missing focus or frontmost attributes never authorize a write.
+    for (node, name) in [
+        (APP, "AXFocusedUIElement"),
+        (APP, "AXFrontmost"),
+        (APP, "AXFocusedWindow"),
+    ] {
+        let mut tree = go_to_folder_tree();
+        tree.0.remove(&(node, name));
+        assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+        assert!(tree.2.borrow().writes.is_empty());
+        assert!(tree.2.borrow().performed.is_empty());
+    }
+    // Another app is frontmost.
+    let mut tree = go_to_folder_tree();
+    tree.set(APP, "AXFrontmost", Value::Boolean(false));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().writes.is_empty());
+    // Keyboard focus on the panel or on its host while the sheet stays visible.
+    for focused in [BUTTON, PANEL, HOST] {
+        let mut tree = view_bridge_tree();
+        tree.set(APP, "AXFocusedUIElement", Value::Element(focused));
+        assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+        assert!(tree.2.borrow().writes.is_empty());
+    }
+    // An unlisted focused element without AXParent or AXTopLevelUIElement.
+    let mut tree = view_bridge_tree();
+    tree.set(APP, "AXFocusedUIElement", Value::Element(14));
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().writes.is_empty());
+    // An unlisted focused element that reaches the sheet through AXParent counts.
+    let mut tree = view_bridge_tree();
+    tree.set(14, "AXParent", Value::Element(8));
+    tree.set(APP, "AXFocusedUIElement", Value::Element(14));
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+}
+
+#[test]
+fn go_to_folder_rechecks_sheet_focus_and_frontmost_before_the_commit() {
+    // Focus moves to the panel, or another app comes forward, after the write.
+    for (name, value) in [
+        ("AXFocusedUIElement", Value::Element(BUTTON)),
+        ("AXFrontmost", Value::Boolean(false)),
+    ] {
+        let tree = view_bridge_tree();
+        let result = navigation::enter_and_commit(
+            &tree,
+            &APP,
+            &PANEL,
+            &BUTTON,
+            HOME,
+            || Ok(()),
+            || {
+                if !tree.2.borrow().writes.is_empty() {
+                    tree.2
+                        .borrow_mut()
+                        .overlay
+                        .insert((APP, name), value.clone());
+                }
+            },
+            |_| {},
+        );
+        assert_eq!(result, Err(ConfirmFailure::KeyboardFocusLost));
+        assert_eq!(tree.2.borrow().writes.len(), 1);
+        assert!(tree.2.borrow().performed.is_empty());
+    }
+}
+
+#[test]
+fn host_window_focus_alone_never_completes_an_unlisted_sheet() {
+    // The unlisted sheet stays open with its field focused while window focus moves to the host.
+    let mut tree = view_bridge_tree();
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.2.borrow_mut().on_commit = vec![(APP, "AXFocusedWindow", Value::Element(HOST))];
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert!(!stages.contains(&"sheet_closed"));
+    assert!(!stages.contains(&"panel_refocused"));
+    assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+    // The focused window sheet changes to the host while its field keeps focus.
+    let tree = view_bridge_tree();
+    tree.2.borrow_mut().on_commit = vec![(APP, "AXFocusedWindow", Value::Element(HOST))];
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert!(!stages.contains(&"panel_refocused"));
+    // Focus on an unrelated element while the sheet still reads as a GoToWindow.
+    let tree = view_bridge_tree();
+    tree.2.borrow_mut().on_commit = vec![
+        (APP, "AXFocusedWindow", Value::Element(HOST)),
+        (APP, "AXFocusedUIElement", Value::Element(15)),
+    ];
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert!(!stages.contains(&"panel_refocused"));
+    // A destroyed sheet with focus back in the panel completes once.
+    let tree = view_bridge_tree();
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Ok(()));
+    assert!(stages.contains(&"panel_refocused"));
+    assert_eq!(tree.2.borrow().performed.len(), 1);
+}
+
+#[test]
+fn a_live_unlisted_go_to_folder_sheet_blocks_navigation_after_focus_returns() {
+    // Window and keyboard focus return to the host or the panel while the unlisted
+    // GoToWindow stays alive. Focus alone is no closure evidence.
+    for window in [HOST, PANEL] {
+        let mut tree = view_bridge_tree();
+        tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+        tree.set(5, "AXRole", Value::String("AXSheet".into()));
+        tree.2.borrow_mut().on_commit = vec![
+            (APP, "AXFocusedWindow", Value::Element(window)),
+            (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        ];
+        let (result, stages) = commit(&tree);
+        assert_eq!(result, Err(ConfirmFailure::Deadline));
+        assert!(!milestones(&stages).contains(&"sheet_closed"));
+        assert!(!milestones(&stages).contains(&"panel_refocused"));
+        // The single commit pressed Go and nothing pressed the panel's confirmation button.
+        assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+    }
 }

@@ -1,5 +1,6 @@
 // The E2E app uses Accessibility to press its own NSOpenPanel button.
-// The drive checks focus before it sends navigation keys to the app process.
+// The drive checks focus before its one Go to Folder shortcut, then enters and
+// commits the path through the sheet's Accessibility controls.
 export async function snapshotMacosFolder() {
   return browser.execute(async () => {
     let timer

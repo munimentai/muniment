@@ -68,6 +68,9 @@ pub(super) enum ConfirmFailure {
     Deadline,
     KeyboardFocusLost,
     NavigationSheetOpen,
+    AmbiguousNavigation,
+    ValueRejected,
+    CommitFailed,
 }
 
 impl ConfirmFailure {
@@ -88,6 +91,9 @@ impl ConfirmFailure {
             Self::Deadline => "deadline",
             Self::KeyboardFocusLost => "keyboard_focus_lost",
             Self::NavigationSheetOpen => "navigation_sheet_open",
+            Self::AmbiguousNavigation => "ambiguous_navigation",
+            Self::ValueRejected => "value_rejected",
+            Self::CommitFailed => "commit_failed",
         }
     }
 }
@@ -487,7 +493,7 @@ fn is_ok_button<A: Accessibility>(ax: &A, button: &A::Element) -> bool {
 
 // Match only an identified Open panel sheet that the window lists among its children.
 // Sheet AXParent can name the application, so the window's child list proves attachment.
-fn attached_host<A: Accessibility>(
+pub(super) fn attached_host<A: Accessibility>(
     ax: &A,
     window: &A::Element,
     sheet: &A::Element,

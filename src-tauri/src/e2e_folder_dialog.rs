@@ -1,5 +1,6 @@
-// The E2E drive uses Go to Folder, then presses the panel's Accessibility button.
-// HID keyboard events reach the remote panel after the drive checks foreground ownership.
+// The E2E drive opens Go to Folder, commits the path through the sheet's Accessibility
+// controls, then presses the panel's Accessibility button. The one HID shortcut reaches
+// the remote panel only after the drive checks foreground ownership.
 use core_foundation::{
     array::CFArray,
     base::{CFType, CFTypeRef, TCFType},
@@ -24,9 +25,8 @@ use std::{
 };
 
 mod accessibility;
+mod navigation;
 mod selection;
-
-use accessibility::Accessibility;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -44,6 +44,7 @@ extern "C" {
         value: CFTypeRef,
     ) -> i32;
     fn AXUIElementPerformAction(element: CFTypeRef, action: CFStringRef) -> i32;
+    fn AXUIElementCopyActionNames(element: CFTypeRef, names: *mut CFTypeRef) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, timeout: f32) -> i32;
 }
 
@@ -228,7 +229,6 @@ fn press_confirm(
         unsafe { AXUIElementPerformAction(button.as_CFTypeRef(), action.as_concrete_TypeRef()) };
     // AX can time out after a successful press. Never retry an uncertain action.
     // The next poll still requires panel closure and the exact selected Home.
-    const AX_CANNOT_COMPLETE: i32 = -25204;
     if status != 0 && status != AX_CANNOT_COMPLETE {
         return Err(format!("The Home picker could not press its confirmation button. Accessibility returned {status}."));
     }
@@ -314,88 +314,29 @@ fn navigate(
         None,
     )?;
     record_navigation(&navigation_events, NavigationEvent::stage("key_posted"))?;
-    let field = loop {
-        ax_deadline(deadline).map_err(navigation_error)?;
-        record_navigation(
-            &navigation_events,
-            NavigationEvent::focused_window(&ax, &app),
-        )?;
-        match accessibility::go_to_folder_field(&ax, &app, &panel, || ax_deadline(deadline)) {
-            Ok(Some(field)) => break field,
-            Ok(None) | Err(accessibility::ConfirmFailure::AttributeUnavailable) => {}
-            Err(reason) => return Err(navigation_error(reason)),
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    record_navigation(&navigation_events, NavigationEvent::stage("field_found"))?;
-    let attribute = CFString::new("AXValue");
-    let value = CFString::new(home);
-    ax_deadline(deadline).map_err(navigation_error)?;
-    // SAFETY: The lookup validates field as this panel's focused Go to Folder control.
-    // Both Core Foundation strings stay alive throughout the call.
-    let status = unsafe {
-        AXUIElementSetAttributeValue(
-            field.as_CFTypeRef(),
-            attribute.as_concrete_TypeRef(),
-            value.as_CFTypeRef(),
-        )
-    };
-    if status != 0 {
-        return Err(format!(
-            "The Home picker could not enter its path. Accessibility returned {status}."
-        ));
-    }
-    record_navigation(&navigation_events, NavigationEvent::stage("value_set"))?;
-    // Let the remote field process its edit before Return commits the path.
-    std::thread::sleep(Duration::from_millis(100));
-    // Read only this drive's field. Never log editable values or use Return on the Open panel.
-    if ax.string(&field, "AXValue")?.as_str() != home
-        || accessibility::go_to_folder_field(&ax, &app, &panel, || ax_deadline(deadline))
-            .map_err(navigation_error)?
-            .as_ref()
-            != Some(&field)
-    {
-        return Err("The Home picker lost its Go to Folder field before navigation.".into());
-    }
-    post_key(
-        KeyCode::RETURN,
-        CGEventFlags::CGEventFlagNull,
-        deadline,
+    // Enter the path through AXValue and press the sheet's own Go control.
+    // Text and Return delivery to the remote panel are not reliable for the view bridge.
+    let mut record_error = None;
+    let result = navigation::enter_and_commit(
+        &ax,
         &app,
         &panel,
-        Some(&field),
-    )?;
-    record_navigation(&navigation_events, NavigationEvent::stage("return_posted"))?;
-    // One Return commits navigation. A second Return could select the default directory.
-    loop {
-        ax_deadline(deadline).map_err(navigation_error)?;
-        record_navigation(
-            &navigation_events,
-            NavigationEvent::focused_window(&ax, &app),
-        )?;
-        let open = accessibility::navigation_sheet(&ax, &app, &panel, || ax_deadline(deadline));
-        let sheet_closed = match open {
-            Ok(open) => !open,
-            Err(accessibility::ConfirmFailure::AttributeUnavailable) => false,
-            Err(reason) => return Err(navigation_error(reason)),
-        };
-        if sheet_closed {
-            record_navigation(&navigation_events, NavigationEvent::stage("sheet_closed"))?;
-        }
-        if sheet_closed
-            && accessibility::focused_panel(&ax, &app, &button, || ax_deadline(deadline))
-                .ok()
-                .as_ref()
-                == Some(&panel)
-        {
-            record_navigation(
-                &navigation_events,
-                NavigationEvent::stage("panel_refocused"),
-            )?;
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(100));
+        &button,
+        home,
+        || ax_deadline(deadline),
+        || std::thread::sleep(Duration::from_millis(100)),
+        |event| {
+            if let Err(error) = record_navigation(&navigation_events, event) {
+                if record_error.is_none() {
+                    record_error = Some(error);
+                }
+            }
+        },
+    );
+    if let Some(error) = record_error {
+        return Err(error);
     }
+    result.map_err(navigation_error)
 }
 
 struct NativeAccessibility;
@@ -440,6 +381,85 @@ impl accessibility::Accessibility for NativeAccessibility {
             .downcast::<CFBoolean>()
             .map(bool::from)
             .ok_or_else(|| format!("The Home picker needs a boolean for {name}."))
+    }
+}
+
+// AX can time out after a successful action. Never retry an uncertain action.
+const AX_CANNOT_COMPLETE: i32 = -25204;
+
+fn bound_messaging(element: &CFType) -> Result<(), String> {
+    // SAFETY: The type check rejects non-AX objects before the AX call.
+    if element.type_of() != unsafe { AXUIElementGetTypeID() } {
+        return Err("The Home picker received a non-Accessibility element.".into());
+    }
+    // SAFETY: The type check above validates element.
+    let status = unsafe { AXUIElementSetMessagingTimeout(element.as_CFTypeRef(), 1.0) };
+    if status != 0 {
+        return Err(format!(
+            "The Home picker could not bound Accessibility calls. Accessibility returned {status}."
+        ));
+    }
+    Ok(())
+}
+
+impl navigation::AccessibilityActions for NativeAccessibility {
+    fn action_names(&self, element: &CFType) -> Result<Vec<String>, String> {
+        bound_messaging(element)?;
+        let mut names = std::ptr::null();
+        // SAFETY: bound_messaging validates element, and names points to writable storage.
+        let status = unsafe { AXUIElementCopyActionNames(element.as_CFTypeRef(), &mut names) };
+        if status != 0 || names.is_null() {
+            return Err(format!(
+                "The Home picker could not read its actions. Accessibility returned {status}."
+            ));
+        }
+        // SAFETY: A successful Copy call returns an owned Core Foundation object.
+        let names = unsafe { CFType::wrap_under_create_rule(names) }
+            .downcast::<CFArray>()
+            .ok_or("The Home picker needs an action list.")?;
+        Ok(names
+            .iter()
+            // SAFETY: The array owns these Core Foundation objects.
+            .map(|name| unsafe { CFType::wrap_under_get_rule(*name) })
+            .filter_map(|name| name.downcast::<CFString>())
+            .map(|name| name.to_string())
+            .collect())
+    }
+
+    fn set_value(&self, element: &CFType, value: &str) -> Result<(), String> {
+        bound_messaging(element)?;
+        let attribute = CFString::new("AXValue");
+        let value = CFString::new(value);
+        // SAFETY: bound_messaging validates element. Both strings stay alive throughout the call.
+        let status = unsafe {
+            AXUIElementSetAttributeValue(
+                element.as_CFTypeRef(),
+                attribute.as_concrete_TypeRef(),
+                value.as_CFTypeRef(),
+            )
+        };
+        if status != 0 {
+            return Err(format!(
+                "The Home picker could not enter its path. Accessibility returned {status}."
+            ));
+        }
+        Ok(())
+    }
+
+    fn perform(&self, element: &CFType, action: &str) -> Result<(), String> {
+        bound_messaging(element)?;
+        let action = CFString::new(action);
+        // SAFETY: bound_messaging validates element, and action stays alive throughout the call.
+        let status = unsafe {
+            AXUIElementPerformAction(element.as_CFTypeRef(), action.as_concrete_TypeRef())
+        };
+        // The caller waits for sheet closure, so an uncertain completion is not an error.
+        if status != 0 && status != AX_CANNOT_COMPLETE {
+            return Err(format!(
+                "The Home picker could not commit its path. Accessibility returned {status}."
+            ));
+        }
+        Ok(())
     }
 }
 
