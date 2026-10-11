@@ -41,6 +41,18 @@ struct Live {
     fail_write: bool,
     ignore_write: bool,
     fail_perform: bool,
+    // Attribute changes applied only when a Return reaches the field owner.
+    on_return: Vec<(usize, &'static str, Value)>,
+    // Attribute changes applied when AXFocused is written.
+    on_focus: Vec<(usize, &'static str, Value)>,
+    focused: Vec<(usize, bool)>,
+    returns: Vec<i32>,
+    pids: HashMap<usize, i32>,
+    fail_focus: bool,
+    // Every Return event in order, as (pid, key_down).
+    keys: Vec<(i32, bool)>,
+    // The Return press reports an error, as a timed-out reply does.
+    fail_key_down: bool,
 }
 
 impl Tree {
@@ -2285,6 +2297,44 @@ impl navigation::AccessibilityActions for Tree {
         }
         Ok(())
     }
+
+    fn set_focused(&self, element: &usize, focused: bool) -> Result<(), String> {
+        let mut live = self.2.borrow_mut();
+        live.focused.push((*element, focused));
+        if live.fail_focus {
+            return Err("The test rejected the focus.".into());
+        }
+        for (node, name, value) in std::mem::take(&mut live.on_focus) {
+            live.overlay.insert((node, name), value);
+        }
+        Ok(())
+    }
+
+    fn pid(&self, element: &usize) -> Result<i32, String> {
+        self.1.borrow_mut().push((*element, "AXPid".into()));
+        self.2
+            .borrow()
+            .pids
+            .get(element)
+            .copied()
+            .ok_or_else(|| "The test element has no pid.".into())
+    }
+
+    fn post_return_key(&self, pid: i32, key_down: bool) -> Result<(), String> {
+        let mut live = self.2.borrow_mut();
+        live.keys.push((pid, key_down));
+        if !key_down {
+            return Ok(());
+        }
+        live.returns.push(pid);
+        if live.fail_key_down {
+            return Err("The test press reply timed out.".into());
+        }
+        for (node, name, value) in std::mem::take(&mut live.on_return) {
+            live.overlay.insert((node, name), value);
+        }
+        Ok(())
+    }
 }
 
 const HOME: &str = "/tmp/Home space café";
@@ -2763,4 +2813,246 @@ fn a_live_unlisted_go_to_folder_sheet_blocks_navigation_after_focus_returns() {
         // The single commit pressed Go and nothing pressed the panel's confirmation button.
         assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
     }
+}
+
+const APP_PID: i32 = 4100;
+const SERVICE_PID: i32 = 4200;
+
+// A buttonless view-bridge sheet with a CloseButton as its default button. The path
+// field accepts AXConfirm and belongs to the panel service process. Neither action closes
+// the sheet until a test assigns the effect to on_commit or on_return.
+fn buttonless_tree() -> Tree {
+    let mut tree = view_bridge_tree();
+    tree.set(GO, "AXIdentifier", Value::String("CloseButton".into()));
+    tree.set(5, "AXDefaultButton", Value::Element(GO));
+    tree.set(APP, "AXFrontmost", Value::Boolean(true));
+    let closed = std::mem::take(&mut tree.2.borrow_mut().on_commit);
+    let mut live = tree.2.borrow_mut();
+    live.actions.insert(6, vec!["AXConfirm".into()]);
+    live.pids.insert(6, SERVICE_PID);
+    live.pids.insert(APP, APP_PID);
+    live.on_return = closed;
+    drop(live);
+    tree
+}
+
+fn closing_effects() -> Vec<(usize, &'static str, Value)> {
+    vec![
+        (APP, "AXFocusedWindow", Value::Element(HOST)),
+        (APP, "AXFocusedUIElement", Value::Element(BUTTON)),
+        (5, "AXIdentifier", Value::String(String::new())),
+    ]
+}
+
+#[test]
+fn a_buttonless_sheet_with_a_close_button_commits_through_ax_confirm_alone() {
+    let tree = buttonless_tree();
+    {
+        let mut live = tree.2.borrow_mut();
+        live.on_commit = closing_effects();
+        live.on_return.clear();
+    }
+    let target = navigation::go_to_folder(&tree, &APP, &PANEL, || Ok(()), |_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!((target.commit, target.action), (6, "AXConfirm"));
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Ok(()));
+    let live = tree.2.borrow();
+    assert_eq!(live.writes, vec![(6, HOME.to_string())]);
+    assert_eq!(live.performed, vec![(6, "AXConfirm".to_string())]);
+    assert!(live.returns.is_empty());
+    assert!(live.focused.is_empty());
+    assert!(!live.performed.iter().any(|(node, _)| *node == GO));
+    let milestones = milestones(&stages);
+    assert!(milestones.contains(&"panel_refocused"));
+    assert!(!milestones.contains(&"return_posted"));
+}
+
+#[test]
+fn an_ignored_ax_confirm_commits_through_one_return_to_the_field_owner() {
+    let tree = buttonless_tree();
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Ok(()));
+    let live = tree.2.borrow();
+    assert_eq!(live.performed, vec![(6, "AXConfirm".to_string())]);
+    assert_eq!(live.focused, vec![(6, true)]);
+    // The Return reaches the panel service that owns the field, never the app process.
+    assert_eq!(live.returns, vec![SERVICE_PID]);
+    assert!(!live.returns.contains(&APP_PID));
+    assert_eq!(
+        milestones(&stages),
+        vec![
+            "sheet_found",
+            "field_found",
+            "value_set",
+            "go_committed",
+            "return_posted",
+            "sheet_closed",
+            "panel_refocused",
+        ]
+    );
+}
+
+#[test]
+fn a_close_button_is_never_pressed_even_as_the_default_button() {
+    // A CloseButton beside a GoButton yields to the GoButton.
+    let mut tree = buttonless_tree();
+    tree.set(8, "AXChildren", Value::Elements(vec![9, GO, 12]));
+    tree.set(12, "AXRole", Value::String("AXButton".into()));
+    tree.set(12, "AXIdentifier", Value::String("GoButton".into()));
+    tree.set(12, "AXParent", Value::Element(8));
+    tree.set(12, "AXEnabled", Value::Boolean(true));
+    tree.2.borrow_mut().on_commit = closing_effects();
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().performed, vec![(12, "AXPress".to_string())]);
+    assert!(tree.2.borrow().returns.is_empty());
+    // Without AXConfirm, a sheet whose only button is CloseButton waits for the deadline.
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().actions.clear();
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    let live = tree.2.borrow();
+    assert!(live.writes.is_empty());
+    assert!(live.performed.is_empty());
+    assert!(live.returns.is_empty());
+}
+
+#[test]
+fn a_sheet_that_closes_after_ax_confirm_suppresses_return() {
+    // The sheet closes after the settle, before the fallback would run.
+    let tree = buttonless_tree();
+    let ticks = std::cell::Cell::new(0);
+    let result = navigation::enter_and_commit(
+        &tree,
+        &APP,
+        &PANEL,
+        &BUTTON,
+        HOME,
+        || Ok(()),
+        || {
+            if !tree.2.borrow().performed.is_empty() {
+                ticks.set(ticks.get() + 1);
+                if ticks.get() == 2 {
+                    let mut live = tree.2.borrow_mut();
+                    for (node, name, value) in closing_effects() {
+                        live.overlay.insert((node, name), value);
+                    }
+                }
+            }
+        },
+        |_| {},
+    );
+    assert_eq!(result, Ok(()));
+    let live = tree.2.borrow();
+    assert!(live.returns.is_empty());
+    assert!(live.focused.is_empty());
+}
+
+#[test]
+fn the_return_fallback_withholds_delivery_on_rejected_or_lost_focus() {
+    // AXFocused is rejected.
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().fail_focus = true;
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert_eq!(tree.2.borrow().focused, vec![(6, true)]);
+    assert!(tree.2.borrow().returns.is_empty());
+    assert!(stages.contains(&"return_withheld"));
+    // The focus write moves keyboard focus away from the field.
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().on_focus = vec![(APP, "AXFocusedUIElement", Value::Element(BUTTON))];
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().returns.is_empty());
+    // Another app comes forward when the field takes focus.
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().on_focus = vec![(APP, "AXFrontmost", Value::Boolean(false))];
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().returns.is_empty());
+    // The field moves to a foreign owner when it takes focus.
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().on_focus = vec![(6, "AXParent", Value::Element(HOST))];
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::WrongTopLevelElement));
+    assert!(tree.2.borrow().returns.is_empty());
+    // The sheet loses focus before the fallback starts.
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().on_commit = vec![(APP, "AXFrontmost", Value::Boolean(false))];
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert!(tree.2.borrow().focused.is_empty());
+    assert!(tree.2.borrow().returns.is_empty());
+}
+
+#[test]
+fn the_return_fallback_requires_a_positive_field_owner_pid() {
+    for pid in [None, Some(0), Some(-1)] {
+        let tree = buttonless_tree();
+        {
+            let mut live = tree.2.borrow_mut();
+            live.pids.remove(&6);
+            if let Some(pid) = pid {
+                live.pids.insert(6, pid);
+            }
+        }
+        let (result, stages) = commit(&tree);
+        assert_eq!(result, Err(ConfirmFailure::Deadline));
+        let live = tree.2.borrow();
+        assert!(live.returns.is_empty());
+        assert!(stages.contains(&"return_withheld"));
+        // The app pid never stands in for the field owner.
+        assert!(!tree.1.borrow().contains(&(APP, "AXPid".to_string())));
+    }
+}
+
+#[test]
+fn a_sheet_that_ignores_confirm_and_return_stays_bounded_by_the_deadline() {
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().on_return.clear();
+    let (result, stages) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    let live = tree.2.borrow();
+    assert_eq!(live.performed, vec![(6, "AXConfirm".to_string())]);
+    assert_eq!(live.focused, vec![(6, true)]);
+    assert_eq!(live.returns, vec![SERVICE_PID]);
+    assert!(!milestones(&stages).contains(&"sheet_closed"));
+    assert!(!milestones(&stages).contains(&"panel_refocused"));
+    // An expired deadline before the fallback withholds Return.
+    let tree = buttonless_tree();
+    let ticks = std::cell::Cell::new(0);
+    let result = navigation::enter_and_commit(
+        &tree,
+        &APP,
+        &PANEL,
+        &BUTTON,
+        HOME,
+        || {
+            if ticks.get() >= 3 {
+                Err(ConfirmFailure::Deadline)
+            } else {
+                Ok(())
+            }
+        },
+        || ticks.set(ticks.get() + 1),
+        |_| {},
+    );
+    assert_eq!(result, Err(ConfirmFailure::Deadline));
+    assert_eq!(tree.2.borrow().performed.len(), 1);
+    assert!(tree.2.borrow().returns.is_empty());
+}
+
+#[test]
+fn a_failed_return_press_still_releases_return_once() {
+    let tree = buttonless_tree();
+    tree.2.borrow_mut().fail_key_down = true;
+    let (result, _) = commit(&tree);
+    assert_eq!(result, Err(ConfirmFailure::CommitFailed));
+    let live = tree.2.borrow();
+    // The release follows the uncertain press exactly once, and the press is not retried.
+    assert_eq!(live.keys, vec![(SERVICE_PID, true), (SERVICE_PID, false)]);
+    assert_eq!(live.performed, vec![(6, "AXConfirm".to_string())]);
+}
+
+#[test]
+fn a_successful_return_fallback_posts_one_press_and_one_release() {
+    let tree = buttonless_tree();
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().keys, vec![(SERVICE_PID, true), (SERVICE_PID, false)]);
 }

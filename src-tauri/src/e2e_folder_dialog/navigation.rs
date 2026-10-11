@@ -1,6 +1,7 @@
 // Go to Folder entry and commit for the marked Open panel.
-// The drive writes the path through AXValue and presses the sheet's own Go button,
-// so neither the path nor the commit depends on keyboard delivery to the remote panel.
+// The drive writes the path through AXValue and presses the sheet's own Go button or,
+// on a buttonless sheet, confirms the path field. When AXConfirm leaves that sheet open,
+// one Return pair goes to the process that owns the revalidated, focused path field.
 use super::accessibility::{
     attached_host, focused_panel, navigation_sheet, Accessibility, ConfirmFailure, NavigationEvent,
 };
@@ -10,6 +11,21 @@ pub(super) trait AccessibilityActions: Accessibility {
     fn action_names(&self, element: &Self::Element) -> Result<Vec<String>, String>;
     fn set_value(&self, element: &Self::Element, value: &str) -> Result<(), String>;
     fn perform(&self, element: &Self::Element, action: &str) -> Result<(), String>;
+    // Write AXFocused on the element.
+    fn set_focused(&self, element: &Self::Element, focused: bool) -> Result<(), String>;
+    // The process that owns the element, as Accessibility reports it.
+    fn pid(&self, element: &Self::Element) -> Result<i32, String>;
+    // Post one Return key event, down or up, to that process alone.
+    fn post_return_key(&self, pid: i32, key_down: bool) -> Result<(), String>;
+}
+
+// Post one Return pair. The release is attempted once even when the press reports an
+// error: a timed-out reply can still mean the press arrived, and a held Return would
+// otherwise stay down in the field owner. Neither event is retried.
+fn post_return<A: AccessibilityActions>(ax: &A, pid: i32) -> Result<(), String> {
+    let down = ax.post_return_key(pid, true);
+    let up = ax.post_return_key(pid, false);
+    down.and(up)
 }
 
 const GO_TO_WINDOW: &str = "GoToWindow";
@@ -17,6 +33,8 @@ const PATH_FIELD: &str = "PathTextField";
 // Identifiers AppKit gives the Go to Folder commit button. Labels are localized and never match.
 const COMMIT_BUTTONS: [&str; 2] = ["OKButton", "GoButton"];
 const SCAN_LIMIT: usize = 256;
+// Settle ticks an open sheet gets after AXConfirm before the one Return fallback.
+const CONFIRM_SETTLE: usize = 3;
 const TRACE_LIMIT: usize = 16;
 
 // The validated Go to Folder sheet, its editable path control and its commit control.
@@ -346,21 +364,27 @@ pub(super) fn go_to_folder<A: AccessibilityActions>(
     {
         return Ok(None);
     }
-    // The sheet's default button wins. Otherwise only an identified commit button counts.
-    // A sheet without a button commits through the field's own confirm action.
+    // Only a button identified as a commit button counts, default or not. A default button
+    // with another identifier, such as CloseButton, is never pressed. A sheet without a
+    // commit button commits through the field's own confirm action.
     check_deadline()?;
-    let button = match ax.element(&sheet, "AXDefaultButton") {
-        Ok(button) if controls.buttons.contains(&button) => Some(button),
-        Ok(_) => return Err(WrongTopLevelElement),
-        Err(_) => single(
+    let is_commit = |button: &A::Element| {
+        ax.string(button, "AXIdentifier")
+            .ok()
+            .is_some_and(|id| COMMIT_BUTTONS.contains(&id.as_str()))
+    };
+    let default = match ax.element(&sheet, "AXDefaultButton") {
+        Ok(button) if !controls.buttons.contains(&button) => return Err(WrongTopLevelElement),
+        Ok(button) if is_commit(&button) => Some(button),
+        _ => None,
+    };
+    let button = match default {
+        Some(button) => Some(button),
+        None => single(
             controls
                 .buttons
                 .iter()
-                .filter(|button| {
-                    ax.string(button, "AXIdentifier")
-                        .ok()
-                        .is_some_and(|id| COMMIT_BUTTONS.contains(&id.as_str()))
-                })
+                .filter(|button| is_commit(button))
                 .cloned()
                 .collect(),
         )?,
@@ -418,7 +442,72 @@ pub(super) fn go_to_folder<A: AccessibilityActions>(
     }))
 }
 
+// Deliver the one Return fallback for a sheet that AXConfirm left open. The sheet, field
+// ownership, focus and foreground state must still match the committed target, the field
+// must accept AXFocused and hold keyboard focus, and its owner must report a positive pid.
+// Returns false when any check withholds delivery. The caller never calls this twice.
+fn return_fallback<A: AccessibilityActions>(
+    ax: &A,
+    app: &A::Element,
+    panel: &A::Element,
+    target: &GoToFolder<A::Element>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+    record: &mut impl FnMut(NavigationEvent),
+) -> Result<bool, ConfirmFailure> {
+    use ConfirmFailure::*;
+    if !still_target(ax, app, panel, target, check_deadline, record)? {
+        return Ok(false);
+    }
+    check_deadline()?;
+    if ax.set_focused(&target.field, true).is_err()
+        || !field_focused(ax, app, &target.field, check_deadline)?
+    {
+        return Ok(false);
+    }
+    check_deadline()?;
+    let pid = match ax.pid(&target.field) {
+        Ok(pid) if pid > 0 => pid,
+        _ => return Ok(false),
+    };
+    // The focus write can move ownership or foreground state. Recheck both, then focus.
+    if !still_target(ax, app, panel, target, check_deadline, record)?
+        || !field_focused(ax, app, &target.field, check_deadline)?
+    {
+        return Ok(false);
+    }
+    check_deadline()?;
+    post_return(ax, pid).map_err(|_| CommitFailed)?;
+    Ok(true)
+}
+
+// The live Go to Folder resolution still names the committed sheet, field and control.
+fn still_target<A: AccessibilityActions>(
+    ax: &A,
+    app: &A::Element,
+    panel: &A::Element,
+    target: &GoToFolder<A::Element>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+    record: &mut impl FnMut(NavigationEvent),
+) -> Result<bool, ConfirmFailure> {
+    match go_to_folder(ax, app, panel, &mut *check_deadline, &mut *record) {
+        Ok(live) => Ok(live.as_ref() == Some(target)),
+        Err(ConfirmFailure::AttributeUnavailable) => Ok(false),
+        Err(reason) => Err(reason),
+    }
+}
+
+fn field_focused<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    field: &A::Element,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<bool, ConfirmFailure> {
+    check_deadline()?;
+    Ok(ax.element(app, "AXFocusedUIElement").ok().as_ref() == Some(field))
+}
+
 // Enter the path into the validated Go to Folder control and press its Go button once.
+// A buttonless sheet that AXConfirm leaves open gets one owner-targeted Return.
 // Success requires the sheet to close and the marked panel to own focus again.
 // The caller still gates confirmation on the panel's canonical directory.
 #[allow(clippy::too_many_arguments)]
@@ -469,6 +558,8 @@ pub(super) fn enter_and_commit<A: AccessibilityActions>(
     ax.perform(&target.commit, target.action)
         .map_err(|_| CommitFailed)?;
     record(NavigationEvent::stage("go_committed"));
+    let mut fallback = target.action == "AXConfirm";
+    let mut waited = 0;
     loop {
         check_deadline()?;
         record(NavigationEvent::focused_window(ax, app));
@@ -482,7 +573,19 @@ pub(super) fn enter_and_commit<A: AccessibilityActions>(
                 record(NavigationEvent::stage("panel_refocused"));
                 return Ok(());
             }
+        } else if fallback && waited >= CONFIRM_SETTLE {
+            // One attempt only. A withheld or ignored Return leaves the deadline in charge.
+            fallback = false;
+            let posted =
+                return_fallback(ax, app, panel, &target, &mut check_deadline, &mut record)?;
+            let stage = if posted {
+                "return_posted"
+            } else {
+                "return_withheld"
+            };
+            record(NavigationEvent::stage(stage));
         }
+        waited += 1;
         settle();
     }
 }

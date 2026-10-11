@@ -1,6 +1,7 @@
 // The E2E drive opens Go to Folder, commits the path through the sheet's Accessibility
 // controls, then presses the panel's Accessibility button. The one HID shortcut reaches
-// the remote panel only after the drive checks foreground ownership.
+// the remote panel only after the drive checks foreground ownership. A buttonless sheet
+// that ignores AXConfirm gets one Return pair posted to the process that owns its field.
 use core_foundation::{
     array::CFArray,
     base::{CFType, CFTypeRef, TCFType},
@@ -46,6 +47,13 @@ extern "C" {
     fn AXUIElementPerformAction(element: CFTypeRef, action: CFStringRef) -> i32;
     fn AXUIElementCopyActionNames(element: CFTypeRef, names: *mut CFTypeRef) -> i32;
     fn AXUIElementSetMessagingTimeout(element: CFTypeRef, timeout: f32) -> i32;
+    fn AXUIElementGetPid(element: CFTypeRef, pid: *mut i32) -> i32;
+    fn AXUIElementPostKeyboardEvent(
+        application: CFTypeRef,
+        key_char: u16,
+        virtual_key: u16,
+        key_down: u8,
+    ) -> i32;
 }
 
 fn process_trusted() -> bool {
@@ -314,8 +322,8 @@ fn navigate(
         None,
     )?;
     record_navigation(&navigation_events, NavigationEvent::stage("key_posted"))?;
-    // Enter the path through AXValue and press the sheet's own Go control.
-    // Text and Return delivery to the remote panel are not reliable for the view bridge.
+    // Enter the path through AXValue and press the sheet's own Go control or confirm its
+    // field. Session keyboard delivery to the remote view bridge is not reliable.
     let mut record_error = None;
     let result = navigation::enter_and_commit(
         &ax,
@@ -457,6 +465,66 @@ impl navigation::AccessibilityActions for NativeAccessibility {
         if status != 0 && status != AX_CANNOT_COMPLETE {
             return Err(format!(
                 "The Home picker could not commit its path. Accessibility returned {status}."
+            ));
+        }
+        Ok(())
+    }
+
+    fn set_focused(&self, element: &CFType, focused: bool) -> Result<(), String> {
+        bound_messaging(element)?;
+        let attribute = CFString::new("AXFocused");
+        let value = CFBoolean::from(focused);
+        // SAFETY: bound_messaging validates element. Both values stay alive throughout the call.
+        let status = unsafe {
+            AXUIElementSetAttributeValue(
+                element.as_CFTypeRef(),
+                attribute.as_concrete_TypeRef(),
+                value.as_CFTypeRef(),
+            )
+        };
+        if status != 0 {
+            return Err(format!(
+                "The Home picker could not focus its path field. Accessibility returned {status}."
+            ));
+        }
+        Ok(())
+    }
+
+    fn pid(&self, element: &CFType) -> Result<i32, String> {
+        bound_messaging(element)?;
+        let mut pid = 0;
+        // SAFETY: bound_messaging validates element, and pid points to writable storage.
+        let status = unsafe { AXUIElementGetPid(element.as_CFTypeRef(), &mut pid) };
+        if status != 0 {
+            return Err(format!(
+                "The Home picker could not read its path field owner. Accessibility returned {status}."
+            ));
+        }
+        Ok(pid)
+    }
+
+    fn post_return_key(&self, pid: i32, key_down: bool) -> Result<(), String> {
+        if pid <= 0 {
+            return Err("The Home picker needs a path field owner.".into());
+        }
+        // SAFETY: pid is positive, and Create returns an owned AX application element.
+        let owner = unsafe { CFType::wrap_under_create_rule(AXUIElementCreateApplication(pid)) };
+        bound_messaging(&owner)?;
+        // The remote Go to Folder field lives in the panel service, not in this app, and
+        // session routing does not reach it. Accessibility delivers the event to that
+        // process alone.
+        // SAFETY: bound_messaging validates owner, which stays alive throughout the call.
+        let status = unsafe {
+            AXUIElementPostKeyboardEvent(
+                owner.as_CFTypeRef(),
+                u16::from(b'\r'),
+                KeyCode::RETURN,
+                u8::from(key_down),
+            )
+        };
+        if status != 0 {
+            return Err(format!(
+                "The Home picker could not press Return in its path field. Accessibility returned {status}."
             ));
         }
         Ok(())
