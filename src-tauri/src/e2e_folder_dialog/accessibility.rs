@@ -67,6 +67,7 @@ pub(super) enum ConfirmFailure {
     ElementLimit,
     Deadline,
     KeyboardFocusLost,
+    NavigationSheetOpen,
 }
 
 impl ConfirmFailure {
@@ -86,6 +87,7 @@ impl ConfirmFailure {
             Self::ElementLimit => "element_limit",
             Self::Deadline => "deadline",
             Self::KeyboardFocusLost => "keyboard_focus_lost",
+            Self::NavigationSheetOpen => "navigation_sheet_open",
         }
     }
 }
@@ -124,14 +126,38 @@ fn record_candidate<A: Accessibility>(
     });
 }
 
+// The validated lookup result. Final confirmation revalidates this exact context,
+// never a panel rediscovered from whatever window owns focus at that time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConfirmTarget<E> {
+    pub(super) button: E,
+    pub(super) panel: E,
+    // The focused window the Open panel sheet is attached to, when the panel is a host sheet.
+    pub(super) host: Option<E>,
+}
+
+// The native drive keeps the full target. The button-only form serves the shared test support.
+#[allow(dead_code)]
 pub(super) fn confirm_button<A: Accessibility>(
     ax: &A,
     app: &A::Element,
     identifier: &str,
     failures: &mut Vec<ConfirmFailure>,
     candidates: &mut Vec<ConfirmCandidate>,
-    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+    check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
 ) -> Result<Option<A::Element>, ConfirmFailure> {
+    confirm_target(ax, app, identifier, failures, candidates, check_deadline)
+        .map(|target| target.map(|target| target.button))
+}
+
+pub(super) fn confirm_target<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    identifier: &str,
+    failures: &mut Vec<ConfirmFailure>,
+    candidates: &mut Vec<ConfirmCandidate>,
+    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<Option<ConfirmTarget<A::Element>>, ConfirmFailure> {
     use ConfirmFailure::*;
     let read = |_| AttributeUnavailable;
     check_deadline()?;
@@ -156,11 +182,22 @@ pub(super) fn confirm_button<A: Accessibility>(
         }
         visited.push(element.clone());
         let is_focused = focused.as_ref() == Some(&element);
+        check_deadline()?;
+        // The remote Open panel can be a sheet attached to the focused window
+        // instead of the focused window itself.
+        let mut host = None;
+        if let Some(window) = focused.as_ref().filter(|_| !is_focused) {
+            if attached_host(ax, window, &element, &mut check_deadline)? {
+                host = Some(window.clone());
+            }
+        }
         record_candidate(
             ax,
             &element,
             if is_focused {
                 "focused_window"
+            } else if host.is_some() {
+                "focused_host_sheet"
             } else {
                 "window_or_sheet"
             },
@@ -175,6 +212,14 @@ pub(super) fn confirm_button<A: Accessibility>(
             ax.string(&element, "AXIdentifier").ok().as_deref() == Some(identifier);
         identifier_found |= matches_identifier;
         check_deadline()?;
+        // The focused host of an Open panel sheet is not itself the panel.
+        // Its prompt-only identity and content scan belong to the sheet.
+        let hosts_sheet = if is_focused {
+            host_sheet(ax, &element, &mut check_deadline)?.is_some()
+        } else {
+            false
+        };
+        check_deadline()?;
         let default = ax.element(&element, "AXDefaultButton").ok();
         if let Some(button) = &default {
             record_candidate(ax, button, "default_button", candidates);
@@ -183,17 +228,21 @@ pub(super) fn confirm_button<A: Accessibility>(
         // The prompt identifies the focused panel even when its title and identifier do not propagate.
         // Never trust focus alone or a generic Open label.
         let matches_prompt = is_focused
+            && !hosts_sheet
             && default.as_ref().is_some_and(|button| {
                 ax.string(button, "AXTitle").ok().as_deref() == Some(identifier)
             });
         let matches_title = ax.string(&element, "AXTitle").ok().as_deref() == Some(identifier);
         let matches_panel = matches_identifier || matches_title || matches_prompt;
-        let child_prompt = if is_focused && !matches_panel {
+        // A host-attached sheet always proves identity through its exact prompt button.
+        let unmarked_focus = is_focused && !matches_panel && !hosts_sheet;
+        let child_prompt = if unmarked_focus || host.is_some() {
             child_confirm_button(
                 ax,
                 &element,
                 identifier,
                 role == "AXSheet",
+                host.is_some(),
                 failures,
                 candidates,
                 &mut check_deadline,
@@ -203,7 +252,7 @@ pub(super) fn confirm_button<A: Accessibility>(
         };
         if matches_panel || child_prompt.is_some() {
             // Keep child-only identity separate. It cannot authorize a different default button.
-            panels.push((element.clone(), child_prompt));
+            panels.push((element.clone(), child_prompt, host));
         }
         // AppKit exposes attached sheets as children, not necessarily as windows.
         for child in ax.elements(&element, "AXChildren").map_err(read)? {
@@ -219,7 +268,7 @@ pub(super) fn confirm_button<A: Accessibility>(
     if panels.len() > 1 {
         return Err(AmbiguousPanel);
     }
-    let Some((panel, child_identity)) = panels.first() else {
+    let Some((panel, child_identity, host)) = panels.first() else {
         return Ok(None);
     };
     check_deadline()?;
@@ -230,18 +279,30 @@ pub(super) fn confirm_button<A: Accessibility>(
             panel,
             identifier,
             ax.string(panel, "AXRole").ok().as_deref() == Some("AXSheet"),
+            host.is_some(),
             failures,
             candidates,
             &mut check_deadline,
         )?;
         check_deadline()?;
-        if button.as_ref() != Some(expected)
-            || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(panel)
-        {
+        let focused_now = ax.element(app, "AXFocusedWindow").ok();
+        let owns_focus = match (host, &focused_now) {
+            // Revalidate the attachment, not just the host's focus, before the button can act.
+            (Some(host), Some(window)) => {
+                window == host && attached_host(ax, host, panel, &mut check_deadline)?
+            }
+            (Some(_), None) => false,
+            (None, window) => window.as_ref() == Some(panel),
+        };
+        if button.as_ref() != Some(expected) || !owns_focus {
             failures.push(PromptNotFound);
             return Ok(None);
         }
-        return Ok(button);
+        return Ok(button.map(|button| ConfirmTarget {
+            button,
+            panel: panel.clone(),
+            host: host.clone(),
+        }));
     }
     match ax.element(panel, "AXDefaultButton") {
         Ok(button) => {
@@ -259,22 +320,32 @@ pub(super) fn confirm_button<A: Accessibility>(
             }
             check_deadline()?;
             if enabled_button(ax, &button, panel, false, failures, &mut check_deadline)? {
-                return Ok(Some(button));
+                return Ok(Some(ConfirmTarget {
+                    button,
+                    panel: panel.clone(),
+                    host: None,
+                }));
             }
             failures.push(ButtonDisabled);
         }
         Err(_) => failures.push(NoDefaultButton),
     }
 
-    child_confirm_button(
+    let button = child_confirm_button(
         ax,
         panel,
         identifier,
         false,
+        false,
         failures,
         candidates,
         &mut check_deadline,
-    )
+    )?;
+    Ok(button.map(|button| ConfirmTarget {
+        button,
+        panel: panel.clone(),
+        host: None,
+    }))
 }
 
 // Keyboard navigation needs the marked panel to own focus, not just a visible button.
@@ -285,30 +356,199 @@ pub(super) fn focused_panel<A: Accessibility>(
     mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
 ) -> Result<A::Element, ConfirmFailure> {
     check_deadline()?;
-    let panel = ax
+    let window = ax
         .element(app, "AXFocusedWindow")
         .map_err(|_| ConfirmFailure::AttributeUnavailable)?;
     let role = ax
-        .string(&panel, "AXRole")
+        .string(&window, "AXRole")
         .map_err(|_| ConfirmFailure::AttributeUnavailable)?;
     if !matches!(role.as_str(), "AXSheet" | "AXWindow") {
         return Err(ConfirmFailure::WrongTopLevelElement);
     }
+    // An Open panel sheet attached to the focused window owns that window's focus.
+    let sheet = host_sheet(ax, &window, &mut check_deadline)?;
+    let (panel, sheet_panel) = match &sheet {
+        Some(sheet) if is_ok_button(ax, button) => (sheet.clone(), true),
+        Some(_) => return Err(ConfirmFailure::WrongTopLevelElement),
+        None => (window.clone(), role == "AXSheet"),
+    };
     if !enabled_button(
         ax,
         button,
         &panel,
-        role == "AXSheet",
+        sheet_panel,
         &mut Vec::new(),
         &mut check_deadline,
     )? {
         return Err(ConfirmFailure::ButtonDisabled);
     }
     check_deadline()?;
-    if ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(&panel) {
+    if !panel_owns_focus(ax, app, &panel, &mut check_deadline)? {
         return Err(ConfirmFailure::WrongTopLevelElement);
     }
     Ok(panel)
+}
+
+// Revalidate the lookup's own panel, host attachment, exact prompt and button
+// immediately before the confirmation action. Any change fails closed.
+pub(super) fn confirm_owner<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    target: &ConfirmTarget<A::Element>,
+    identifier: &str,
+    mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<(), ConfirmFailure> {
+    use ConfirmFailure::*;
+    let button = &target.button;
+    let panel = &target.panel;
+    let host = &target.host;
+    check_deadline()?;
+    let window = ax
+        .element(app, "AXFocusedWindow")
+        .map_err(|_| AttributeUnavailable)?;
+    check_deadline()?;
+    match host {
+        Some(host) => {
+            // The sheet stays the one identified Open panel sheet on the same focused host.
+            if window != *host
+                || host_sheet(ax, host, &mut check_deadline)?.as_ref() != Some(panel)
+                || !is_ok_button(ax, button)
+            {
+                return Err(WrongTopLevelElement);
+            }
+        }
+        None => {
+            // A standalone panel owns focus itself and never hosts an Open panel sheet.
+            if window != *panel || host_sheet(ax, panel, &mut check_deadline)?.is_some() {
+                return Err(WrongTopLevelElement);
+            }
+        }
+    }
+    check_deadline()?;
+    // A host sheet and an unmarked focused panel prove identity only through the per-run prompt.
+    // A generic or changed label never confirms.
+    let marked_id = ax.string(panel, "AXIdentifier").ok().as_deref() == Some(identifier);
+    let marked_title = ax.string(panel, "AXTitle").ok().as_deref() == Some(identifier);
+    let marked = host.is_none() && (marked_id || marked_title);
+    if !marked && ax.string(button, "AXTitle").ok().as_deref() != Some(identifier) {
+        return Err(PromptNotFound);
+    }
+    if host.is_some() {
+        // Rescan the sheet so a second matching button added after lookup fails closed.
+        let buttons = prompt_buttons(
+            ax,
+            panel,
+            identifier,
+            true,
+            &mut Vec::new(),
+            &mut check_deadline,
+        )?;
+        if buttons.iter().any(|candidate| candidate != button) {
+            return Err(AmbiguousButton);
+        }
+        if buttons.first() != Some(button) {
+            return Err(WrongTopLevelElement);
+        }
+    }
+    check_deadline()?;
+    let sheet_panel = ax.string(panel, "AXRole").ok().as_deref() == Some("AXSheet");
+    if !enabled_button(
+        ax,
+        button,
+        panel,
+        sheet_panel,
+        &mut Vec::new(),
+        &mut check_deadline,
+    )? {
+        return Err(ButtonDisabled);
+    }
+    // A Go to Folder sheet on the panel or on its original host blocks confirmation.
+    if sheet_below(ax, panel, None, &mut check_deadline)? {
+        return Err(NavigationSheetOpen);
+    }
+    if let Some(host) = host {
+        if sheet_below(ax, host, Some(panel), &mut check_deadline)? {
+            return Err(NavigationSheetOpen);
+        }
+    }
+    check_deadline()?;
+    if ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(&window) {
+        return Err(WrongTopLevelElement);
+    }
+    Ok(())
+}
+
+const OPEN_PANEL_SHEET: &str = "open-panel";
+const OPEN_PANEL_BUTTON: &str = "OKButton";
+
+fn is_ok_button<A: Accessibility>(ax: &A, button: &A::Element) -> bool {
+    ax.string(button, "AXIdentifier").ok().as_deref() == Some(OPEN_PANEL_BUTTON)
+}
+
+// Match only an identified Open panel sheet that the window lists among its children.
+// Sheet AXParent can name the application, so the window's child list proves attachment.
+fn attached_host<A: Accessibility>(
+    ax: &A,
+    window: &A::Element,
+    sheet: &A::Element,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<bool, ConfirmFailure> {
+    check_deadline()?;
+    if window == sheet
+        || ax.string(sheet, "AXRole").ok().as_deref() != Some("AXSheet")
+        || ax.string(sheet, "AXIdentifier").ok().as_deref() != Some(OPEN_PANEL_SHEET)
+        || ax.string(window, "AXRole").ok().as_deref() != Some("AXWindow")
+    {
+        return Ok(false);
+    }
+    check_deadline()?;
+    let children = ax.elements(window, "AXChildren");
+    Ok(children.is_ok_and(|children| children.contains(sheet)))
+}
+
+// Return the single Open panel sheet attached to the focused window, if any.
+fn host_sheet<A: Accessibility>(
+    ax: &A,
+    window: &A::Element,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<Option<A::Element>, ConfirmFailure> {
+    check_deadline()?;
+    if ax.string(window, "AXRole").ok().as_deref() != Some("AXWindow") {
+        return Ok(None);
+    }
+    let Ok(children) = ax.elements(window, "AXChildren") else {
+        return Ok(None);
+    };
+    if children.len() > 256 {
+        return Err(ConfirmFailure::ElementLimit);
+    }
+    let mut sheets: Vec<A::Element> = Vec::new();
+    for child in children {
+        if !sheets.contains(&child) && attached_host(ax, window, &child, check_deadline)? {
+            sheets.push(child);
+        }
+    }
+    if sheets.len() > 1 {
+        return Err(ConfirmFailure::AmbiguousPanel);
+    }
+    Ok(sheets.pop())
+}
+
+// The panel owns window focus directly or through the focused window it is attached to.
+fn panel_owns_focus<A: Accessibility>(
+    ax: &A,
+    app: &A::Element,
+    panel: &A::Element,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<bool, ConfirmFailure> {
+    check_deadline()?;
+    let Ok(window) = ax.element(app, "AXFocusedWindow") else {
+        return Ok(false);
+    };
+    if window == *panel {
+        return Ok(true);
+    }
+    attached_host(ax, &window, panel, check_deadline)
 }
 
 // HID events follow session focus, not the app PID. Recheck ownership before each key pair.
@@ -333,8 +573,8 @@ pub(super) fn post_navigation_key<A: Accessibility>(
         if go_to_folder_field(ax, app, panel, &mut check_deadline)?.as_ref() != Some(field) {
             return Err(KeyboardFocusLost);
         }
-    } else if has_sheet(ax, panel, &mut check_deadline)?
-        || ax.element(app, "AXFocusedWindow").ok().as_ref() != Some(panel)
+    } else if navigation_sheet(ax, app, panel, &mut check_deadline)?
+        || !panel_owns_focus(ax, app, panel, &mut check_deadline)?
     {
         return Err(KeyboardFocusLost);
     }
@@ -348,17 +588,40 @@ pub(super) fn post_navigation_key<A: Accessibility>(
     Ok(())
 }
 
-pub(super) fn has_sheet<A: Accessibility>(
+// A navigation sheet can attach to the panel or, for an Open panel sheet, to its focused host.
+// The Open panel sheet itself is the panel, not an unfinished navigation sheet.
+pub(super) fn navigation_sheet<A: Accessibility>(
     ax: &A,
+    app: &A::Element,
     panel: &A::Element,
     mut check_deadline: impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<bool, ConfirmFailure> {
+    if sheet_below(ax, panel, None, &mut check_deadline)? {
+        return Ok(true);
+    }
+    check_deadline()?;
+    let Ok(window) = ax.element(app, "AXFocusedWindow") else {
+        return Ok(false);
+    };
+    if window == *panel || !attached_host(ax, &window, panel, &mut check_deadline)? {
+        return Ok(false);
+    }
+    sheet_below(ax, &window, Some(panel), &mut check_deadline)
+}
+
+fn sheet_below<A: Accessibility>(
+    ax: &A,
+    root: &A::Element,
+    skip: Option<&A::Element>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
 ) -> Result<bool, ConfirmFailure> {
     use ConfirmFailure::*;
     check_deadline()?;
     let mut pending = ax
-        .elements(panel, "AXChildren")
+        .elements(root, "AXChildren")
         .map_err(|_| AttributeUnavailable)?;
-    let mut visited = vec![panel.clone()];
+    let mut visited = vec![root.clone()];
+    visited.extend(skip.cloned());
     while let Some(element) = pending.pop() {
         check_deadline()?;
         if visited.contains(&element) {
@@ -449,8 +712,10 @@ pub(super) fn go_to_folder_field<A: Accessibility>(
         return Ok(None);
     };
     // A remote panel can retain window focus while its Go to Folder field has keyboard focus.
-    // Use the field's owner only when this drive's panel still owns window focus.
-    let sheet = if window == *panel {
+    // Use the field's owner only when this drive's panel still owns window focus,
+    // directly or as the Open panel sheet attached to the focused window.
+    let owns_focus = window == *panel || attached_host(ax, &window, panel, &mut check_deadline)?;
+    let sheet = if owns_focus {
         let Ok(field) = ax.element(app, "AXFocusedUIElement") else {
             return Ok(None);
         };
@@ -526,10 +791,51 @@ fn child_confirm_button<A: Accessibility>(
     panel: &A::Element,
     identifier: &str,
     allow_parent_chain: bool,
+    require_ok_button: bool,
     failures: &mut Vec<ConfirmFailure>,
     candidates: &mut Vec<ConfirmCandidate>,
     check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
 ) -> Result<Option<A::Element>, ConfirmFailure> {
+    use ConfirmFailure::*;
+    let mut buttons = prompt_buttons(
+        ax,
+        panel,
+        identifier,
+        require_ok_button,
+        candidates,
+        check_deadline,
+    )?;
+    if buttons.len() > 1 {
+        return Err(AmbiguousButton);
+    }
+    let Some(button) = buttons.pop() else {
+        failures.push(PromptNotFound);
+        return Ok(None);
+    };
+    check_deadline()?;
+    if !enabled_button(
+        ax,
+        &button,
+        panel,
+        allow_parent_chain,
+        failures,
+        check_deadline,
+    )? {
+        failures.push(ButtonDisabled);
+        return Ok(None);
+    }
+    Ok(Some(button))
+}
+
+// Collect every button below the panel that carries the exact per-run prompt.
+fn prompt_buttons<A: Accessibility>(
+    ax: &A,
+    panel: &A::Element,
+    identifier: &str,
+    require_ok_button: bool,
+    candidates: &mut Vec<ConfirmCandidate>,
+    check_deadline: &mut impl FnMut() -> Result<(), ConfirmFailure>,
+) -> Result<Vec<A::Element>, ConfirmFailure> {
     use ConfirmFailure::*;
     let read = |_| AttributeUnavailable;
     // Remote panels can expose the live button below an AXGroup instead of AXDefaultButton.
@@ -551,33 +857,17 @@ fn child_confirm_button<A: Accessibility>(
         if role == "AXButton" {
             record_candidate(ax, &element, "child_button", candidates);
             check_deadline()?;
-            if ax.string(&element, "AXTitle").ok().as_deref() == Some(identifier) {
+            // A host-attached sheet also needs the Open panel's own confirm button identifier.
+            if ax.string(&element, "AXTitle").ok().as_deref() == Some(identifier)
+                && (!require_ok_button || is_ok_button(ax, &element))
+            {
                 buttons.push(element);
             }
         } else if matches!(role.as_str(), "AXGroup" | "AXSplitGroup" | "AXScrollArea") {
             pending.extend(ax.elements(&element, "AXChildren").map_err(read)?);
         }
     }
-    if buttons.len() > 1 {
-        return Err(AmbiguousButton);
-    }
-    let Some(button) = buttons.pop() else {
-        failures.push(PromptNotFound);
-        return Ok(None);
-    };
-    check_deadline()?;
-    if !enabled_button(
-        ax,
-        &button,
-        panel,
-        allow_parent_chain,
-        failures,
-        check_deadline,
-    )? {
-        failures.push(ButtonDisabled);
-        return Ok(None);
-    }
-    Ok(Some(button))
+    Ok(buttons)
 }
 
 fn enabled_button<A: Accessibility>(

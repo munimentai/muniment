@@ -146,14 +146,14 @@ fn lookup_confirm(
     identifier: &str,
     deadline: Instant,
     confirm_lookups: &ConfirmLookups,
-) -> Result<CFType, String> {
+) -> Result<accessibility::ConfirmTarget<CFType>, String> {
     loop {
         if Instant::now() >= deadline {
             return Err("The Home picker drive timed out before confirmation.".into());
         }
         let mut failures = Vec::new();
         let mut candidates = Vec::new();
-        let result = accessibility::confirm_button(
+        let result = accessibility::confirm_target(
             &NativeAccessibility,
             app,
             identifier,
@@ -181,7 +181,7 @@ fn lookup_confirm(
                 candidates,
             });
         match result {
-            Ok(Some(button)) => return Ok(button),
+            Ok(Some(target)) => return Ok(target),
             Ok(None) => {}
             Err(reason) => {
                 return Err(format!(
@@ -201,16 +201,24 @@ fn press_confirm(
 ) -> Result<(), String> {
     // Run AX client calls off the AppKit thread so the app can answer them.
     let app = ax_app();
-    let button = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
+    let target = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
+    let button = target.button.clone();
     let panel = accessibility::focused_panel(&NativeAccessibility, &app, &button, || {
         ax_deadline(deadline)
     })
     .map_err(navigation_error)?;
-    if accessibility::has_sheet(&NativeAccessibility, &panel, || ax_deadline(deadline))
+    if panel != target.panel {
+        return Err("The Home picker lost its panel before confirmation.".into());
+    }
+    let ax = NativeAccessibility;
+    if accessibility::navigation_sheet(&ax, &app, &panel, || ax_deadline(deadline))
         .map_err(navigation_error)?
     {
         return Err("The Home picker still has a navigation sheet.".into());
     }
+    // Revalidate the lookup's own host, panel, prompt and button right before the press.
+    accessibility::confirm_owner(&ax, &app, &target, identifier, || ax_deadline(deadline))
+        .map_err(navigation_error)?;
     if Instant::now() >= deadline {
         return Err("The Home picker drive timed out before confirmation.".into());
     }
@@ -285,10 +293,16 @@ fn navigate(
     )?;
     let app = ax_app();
     let ax = NativeAccessibility;
-    let button = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
+    let target = lookup_confirm(&app, identifier, deadline, &confirm_lookups)?;
+    let button = target.button.clone();
     let panel = accessibility::focused_panel(&ax, &app, &button, || ax_deadline(deadline))
         .map_err(navigation_error)?;
-    if accessibility::has_sheet(&ax, &panel, || ax_deadline(deadline)).map_err(navigation_error)? {
+    if panel != target.panel {
+        return Err("The Home picker lost its panel before navigation.".into());
+    }
+    if accessibility::navigation_sheet(&ax, &app, &panel, || ax_deadline(deadline))
+        .map_err(navigation_error)?
+    {
         return Err("The Home picker already has a navigation sheet.".into());
     }
     post_key(
@@ -359,7 +373,8 @@ fn navigate(
             &navigation_events,
             NavigationEvent::focused_window(&ax, &app),
         )?;
-        let sheet_closed = match accessibility::has_sheet(&ax, &panel, || ax_deadline(deadline)) {
+        let open = accessibility::navigation_sheet(&ax, &app, &panel, || ax_deadline(deadline));
+        let sheet_closed = match open {
             Ok(open) => !open,
             Err(accessibility::ConfirmFailure::AttributeUnavailable) => false,
             Err(reason) => return Err(navigation_error(reason)),

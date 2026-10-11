@@ -391,7 +391,10 @@ fn go_to_folder_accepts_field_focus_while_the_remote_panel_keeps_window_focus() 
             Ok(Some(6))
         );
         // Window focus on the panel does not authorize confirmation while its sheet remains open.
-        assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+        assert_eq!(
+            accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+            Ok(true)
+        );
         assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
     }
 }
@@ -648,16 +651,22 @@ fn navigation_rechecks_focus_before_it_acts() {
 #[test]
 fn a_navigation_sheet_blocks_confirmation_even_after_the_field_loses_focus() {
     let mut tree = navigation_tree();
-    assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+    assert_eq!(
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+        Ok(true)
+    );
     tree.set(APP, "AXFocusedUIElement", Value::Element(BUTTON));
     assert_eq!(
         accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
         Ok(None)
     );
-    assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+    assert_eq!(
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+        Ok(true)
+    );
     tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER]));
     assert_eq!(
-        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
         Ok(false)
     );
     assert_eq!(
@@ -680,14 +689,17 @@ fn navigation_sheet_scan_bounds_cycles_elements_and_deadlines() {
         "AXChildren",
         Value::Elements(vec![OTHER, PANEL, BUTTON, 5]),
     );
-    assert_eq!(accessibility::has_sheet(&tree, &PANEL, || Ok(())), Ok(true));
+    assert_eq!(
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+        Ok(true)
+    );
     tree.set(
         OTHER,
         "AXChildren",
         Value::Elements(vec![OTHER, PANEL, BUTTON]),
     );
     assert_eq!(
-        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
         Ok(false)
     );
     tree.set(OTHER, "AXChildren", Value::Elements((7..263).collect()));
@@ -695,18 +707,18 @@ fn navigation_sheet_scan_bounds_cycles_elements_and_deadlines() {
         tree.set(node, "AXRole", Value::String("AXButton".into()));
     }
     assert_eq!(
-        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
         Err(ConfirmFailure::ElementLimit)
     );
     tree.1.borrow_mut().clear();
     assert_eq!(
-        accessibility::has_sheet(&tree, &PANEL, || Err(ConfirmFailure::Deadline)),
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Err(ConfirmFailure::Deadline)),
         Err(ConfirmFailure::Deadline)
     );
     assert!(tree.1.borrow().is_empty());
     tree.0.remove(&(PANEL, "AXChildren"));
     assert_eq!(
-        accessibility::has_sheet(&tree, &PANEL, || Ok(())),
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
         Err(ConfirmFailure::AttributeUnavailable)
     );
 }
@@ -1710,4 +1722,511 @@ fn missing_or_invalid_attributes_fail_closed() {
             assert!(tree.confirm().is_err(), "The invalid {name} must fail.");
         }
     }
+}
+
+// The focused app window hosts the Open panel as an attached open-panel sheet.
+// The sheet's OKButton reports no AXTopLevelUIElement, so ownership follows AXParent.
+fn host_sheet_tree(grouped: bool) -> Tree {
+    let mut tree = Tree::focused_remote_sheet_with_parent_chain();
+    tree.set(APP, "AXFocusedWindow", Value::Element(HOST));
+    tree.set(APP, "AXFrontmost", Value::Boolean(true));
+    tree.set(HOST, "AXChildren", Value::Elements(vec![PANEL]));
+    tree.set(BUTTON, "AXIdentifier", Value::String("OKButton".into()));
+    if !grouped {
+        tree.set(PANEL, "AXChildren", Value::Elements(vec![BUTTON]));
+        tree.set(BUTTON, "AXParent", Value::Element(PANEL));
+    }
+    tree
+}
+
+fn add_matching_button(tree: &mut Tree, node: usize, parent: usize) {
+    tree.set(node, "AXRole", Value::String("AXButton".into()));
+    tree.set(node, "AXTitle", Value::String(IDENTIFIER.into()));
+    tree.set(node, "AXIdentifier", Value::String("OKButton".into()));
+    tree.set(node, "AXEnabled", Value::Boolean(true));
+    tree.set(node, "AXParent", Value::Element(parent));
+}
+
+#[test]
+fn focused_host_sheet_confirms_its_ok_button_through_lookup_and_final_ownership() {
+    for grouped in [false, true] {
+        let tree = host_sheet_tree(grouped);
+        let mut candidates = Vec::new();
+        let mut failures = Vec::new();
+        assert_eq!(
+            confirm_button(
+                &tree,
+                &APP,
+                IDENTIFIER,
+                &mut failures,
+                &mut candidates,
+                || Ok(())
+            ),
+            Ok(Some(BUTTON))
+        );
+        let missing_top_level = ConfirmFailure::TopLevelAttributeUnavailable;
+        assert!(failures.contains(&missing_top_level));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.source == "focused_host_sheet"));
+        assert_eq!(
+            accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+            Ok(PANEL)
+        );
+        // The Open panel sheet on the host is the panel, not an unfinished navigation sheet.
+        assert_eq!(
+            accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+            Ok(false)
+        );
+        assert_eq!(posted_navigation_key(&tree, None, || Ok(())), (Ok(()), 1));
+        assert!(!tree.1.borrow().iter().any(|(_, name)| name == "AXValue"));
+    }
+}
+
+#[test]
+fn focused_host_sheet_rejects_disabled_wrong_prompt_and_unidentified_buttons() {
+    for grouped in [false, true] {
+        let mut tree = host_sheet_tree(grouped);
+        tree.set(BUTTON, "AXEnabled", Value::Boolean(false));
+        assert_eq!(tree.confirm(), Ok(None));
+        assert_eq!(
+            accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+            Err(ConfirmFailure::ButtonDisabled)
+        );
+        let mut tree = host_sheet_tree(grouped);
+        for title in ["Open", "", "muniment-e2e-home-other"] {
+            tree.set(BUTTON, "AXTitle", Value::String(title.into()));
+            assert_eq!(tree.confirm(), Ok(None));
+        }
+        let mut tree = host_sheet_tree(grouped);
+        tree.set(BUTTON, "AXIdentifier", Value::String("CancelButton".into()));
+        assert_eq!(tree.confirm(), Ok(None));
+        assert_eq!(
+            accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+            Err(ConfirmFailure::WrongTopLevelElement)
+        );
+    }
+}
+
+#[test]
+fn focused_host_sheet_requires_an_identified_attached_sheet() {
+    for (node, attribute, value) in [
+        (PANEL, "AXIdentifier", Value::String("save-panel".into())),
+        (PANEL, "AXRole", Value::String("AXWindow".into())),
+        (HOST, "AXRole", Value::String("AXSheet".into())),
+        (HOST, "AXChildren", Value::Elements(vec![])),
+        (APP, "AXFocusedWindow", Value::Element(7)),
+    ] {
+        let mut tree = host_sheet_tree(true);
+        tree.set(7, "AXRole", Value::String("AXWindow".into()));
+        tree.set(7, "AXChildren", Value::Elements(vec![]));
+        tree.set(APP, "AXWindows", Value::Elements(vec![HOST, PANEL, 7]));
+        tree.set(node, attribute, value);
+        assert!(
+            !matches!(tree.confirm(), Ok(Some(_))),
+            "The lookup accepted {node} with a changed {attribute}."
+        );
+        assert!(
+            accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())).is_err(),
+            "The final ownership accepted {node} with a changed {attribute}."
+        );
+    }
+}
+
+#[test]
+fn focused_host_sheet_rejects_foreign_ownership() {
+    for (node, attribute, owner) in [
+        (OTHER, "AXParent", HOST),
+        (OTHER, "AXParent", BUTTON),
+        (BUTTON, "AXTopLevelUIElement", HOST),
+    ] {
+        let mut tree = host_sheet_tree(true);
+        tree.set(node, attribute, Value::Element(owner));
+        assert_eq!(tree.confirm(), Err(ConfirmFailure::WrongTopLevelElement));
+        assert_eq!(
+            accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+            Err(ConfirmFailure::WrongTopLevelElement)
+        );
+    }
+    let mut tree = host_sheet_tree(true);
+    tree.0.remove(&(OTHER, "AXParent"));
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AttributeUnavailable));
+}
+
+#[test]
+fn focused_host_sheet_rejects_ambiguous_sheets_and_buttons() {
+    let mut tree = host_sheet_tree(true);
+    tree.set(OTHER, "AXChildren", Value::Elements(vec![BUTTON, 5]));
+    add_matching_button(&mut tree, 5, OTHER);
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousButton));
+    let mut tree = host_sheet_tree(true);
+    tree.set(HOST, "AXChildren", Value::Elements(vec![PANEL, 5]));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.set(5, "AXIdentifier", Value::String("open-panel".into()));
+    tree.set(5, "AXChildren", Value::Elements(vec![6]));
+    add_matching_button(&mut tree, 6, 5);
+    assert_eq!(tree.confirm(), Err(ConfirmFailure::AmbiguousPanel));
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Err(ConfirmFailure::AmbiguousPanel)
+    );
+}
+
+#[test]
+fn focused_host_sheet_blocks_on_nested_and_host_navigation_sheets() {
+    for host in [PANEL, HOST] {
+        let mut tree = host_sheet_tree(true);
+        let children = if host == PANEL {
+            vec![OTHER, 5]
+        } else {
+            vec![PANEL, 5]
+        };
+        tree.set(host, "AXChildren", Value::Elements(children));
+        tree.set(5, "AXRole", Value::String("AXSheet".into()));
+        tree.set(5, "AXIdentifier", Value::String("GoToWindow".into()));
+        tree.set(5, "AXChildren", Value::Elements(vec![]));
+        assert_eq!(
+            accessibility::navigation_sheet(&tree, &APP, &PANEL, || Ok(())),
+            Ok(true)
+        );
+        assert_eq!(
+            posted_navigation_key(&tree, None, || Ok(())),
+            (Err(ConfirmFailure::KeyboardFocusLost), 0)
+        );
+    }
+}
+
+#[test]
+fn focused_host_sheet_accepts_its_own_go_to_folder_field() {
+    let mut tree = host_sheet_tree(true);
+    tree.set(PANEL, "AXChildren", Value::Elements(vec![OTHER, 5]));
+    tree.set(5, "AXRole", Value::String("AXSheet".into()));
+    tree.set(5, "AXParent", Value::Element(PANEL));
+    tree.set(5, "AXIdentifier", Value::String("GoToWindow".into()));
+    tree.set(5, "AXChildren", Value::Elements(vec![6]));
+    tree.set(6, "AXIdentifier", Value::String("PathTextField".into()));
+    tree.set(6, "AXRole", Value::String("AXTextField".into()));
+    tree.set(6, "AXParent", Value::Element(5));
+    tree.set(6, "AXEnabled", Value::Boolean(true));
+    tree.set(APP, "AXFocusedUIElement", Value::Element(6));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Ok(Some(6))
+    );
+    assert_eq!(
+        posted_navigation_key(&tree, Some(&6), || Ok(())),
+        (Ok(()), 1)
+    );
+    // A detached sheet loses its host's window focus.
+    tree.set(HOST, "AXChildren", Value::Elements(vec![]));
+    assert_eq!(
+        accessibility::go_to_folder_field(&tree, &APP, &PANEL, || Ok(())),
+        Ok(None)
+    );
+}
+
+#[test]
+fn focused_host_sheet_rechecks_focus_and_attachment_before_confirmation() {
+    struct ChangedTree {
+        initial: Tree,
+        changed: Tree,
+        scans: std::cell::Cell<usize>,
+    }
+    impl ChangedTree {
+        fn current(&self) -> &Tree {
+            if self.scans.get() > 1 {
+                &self.changed
+            } else {
+                &self.initial
+            }
+        }
+    }
+    impl Accessibility for ChangedTree {
+        type Element = usize;
+
+        fn elements(&self, element: &usize, name: &str) -> Result<Vec<usize>, String> {
+            if *element == OTHER && name == "AXChildren" {
+                self.scans.set(self.scans.get() + 1);
+            }
+            self.current().elements(element, name)
+        }
+
+        fn element(&self, element: &usize, name: &str) -> Result<usize, String> {
+            self.current().element(element, name)
+        }
+
+        fn string(&self, element: &usize, name: &str) -> Result<String, String> {
+            self.current().string(element, name)
+        }
+
+        fn boolean(&self, element: &usize, name: &str) -> Result<bool, String> {
+            self.current().boolean(element, name)
+        }
+    }
+    for (element, name, value) in [
+        (APP, "AXFocusedWindow", Value::Element(PANEL)),
+        (APP, "AXFocusedWindow", Value::Element(7)),
+        (HOST, "AXChildren", Value::Elements(vec![])),
+        (PANEL, "AXIdentifier", Value::String("save-panel".into())),
+        (BUTTON, "AXIdentifier", Value::String("CancelButton".into())),
+        (BUTTON, "AXTitle", Value::String("Open".into())),
+    ] {
+        let initial = host_sheet_tree(true);
+        let mut changed = initial.clone();
+        changed.set(element, name, value);
+        let ax = ChangedTree {
+            initial,
+            changed,
+            scans: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            confirm_button(
+                &ax,
+                &APP,
+                IDENTIFIER,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                || Ok(())
+            ),
+            Ok(None),
+            "The confirmation accepted a changed {name}."
+        );
+    }
+}
+
+#[test]
+fn focused_host_sheet_bounds_its_scans_and_checks_the_deadline() {
+    let tree = host_sheet_tree(true);
+    assert_eq!(
+        confirm_button(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            || {
+                if tree.1.borrow().iter().any(|(_, name)| name == "AXParent") {
+                    Err(ConfirmFailure::Deadline)
+                } else {
+                    Ok(())
+                }
+            }
+        ),
+        Err(ConfirmFailure::Deadline)
+    );
+    tree.1.borrow_mut().clear();
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Err(ConfirmFailure::Deadline)),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert_eq!(
+        accessibility::navigation_sheet(&tree, &APP, &PANEL, || Err(ConfirmFailure::Deadline)),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert!(tree.1.borrow().is_empty());
+    let mut tree = host_sheet_tree(true);
+    let mut children = vec![PANEL];
+    children.extend(8..265);
+    tree.set(HOST, "AXChildren", Value::Elements(children));
+    assert_eq!(
+        accessibility::focused_panel(&tree, &APP, &BUTTON, || Ok(())),
+        Err(ConfirmFailure::ElementLimit)
+    );
+}
+
+fn host_sheet_target(tree: &Tree) -> accessibility::ConfirmTarget<usize> {
+    let target = accessibility::confirm_target(
+        tree,
+        &APP,
+        IDENTIFIER,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        || Ok(()),
+    )
+    .expect("The host sheet lookup must succeed.")
+    .expect("The host sheet lookup must find its button.");
+    assert_eq!(
+        target,
+        accessibility::ConfirmTarget {
+            button: BUTTON,
+            panel: PANEL,
+            host: Some(HOST),
+        }
+    );
+    target
+}
+
+#[test]
+fn final_confirmation_revalidates_the_lookups_host_sheet_context() {
+    for grouped in [false, true] {
+        let tree = host_sheet_tree(grouped);
+        let target = host_sheet_target(&tree);
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Ok(())
+        );
+    }
+    // Standalone and focused-sheet panels keep their own context without a host.
+    for tree in [
+        Tree::focused_remote_sheet(),
+        Tree::focused_remote_sheet_with_parent_chain(),
+    ] {
+        let target = accessibility::confirm_target(
+            &tree,
+            &APP,
+            IDENTIFIER,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            || Ok(()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(target.host, None);
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Ok(())
+        );
+    }
+}
+
+#[test]
+fn final_confirmation_rejects_changes_after_a_host_sheet_lookup() {
+    use ConfirmFailure::*;
+    for grouped in [false, true] {
+        let prompt = [
+            (BUTTON, "AXTitle", Value::String("Open".into())),
+            (BUTTON, "AXTitle", Value::String(String::new())),
+        ];
+        let owner = [
+            (BUTTON, "AXIdentifier", Value::String("Cancel".into())),
+            (PANEL, "AXIdentifier", Value::String("save".into())),
+            (PANEL, "AXRole", Value::String("AXWindow".into())),
+            (HOST, "AXChildren", Value::Elements(vec![])),
+            (APP, "AXFocusedWindow", Value::Element(PANEL)),
+            (APP, "AXFocusedWindow", Value::Element(7)),
+            (BUTTON, "AXTopLevelUIElement", Value::Element(HOST)),
+        ];
+        let disabled = [(BUTTON, "AXEnabled", Value::Boolean(false))];
+        let cases = prompt
+            .into_iter()
+            .map(|change| (change, PromptNotFound))
+            .chain(owner.into_iter().map(|change| (change, WrongTopLevelElement)))
+            .chain(disabled.into_iter().map(|change| (change, ButtonDisabled)));
+        for ((element, name, value), failure) in cases {
+            let mut tree = host_sheet_tree(grouped);
+            let target = host_sheet_target(&tree);
+            tree.set(7, "AXRole", Value::String("AXWindow".into()));
+            tree.set(7, "AXChildren", Value::Elements(vec![PANEL]));
+            tree.set(element, name, value);
+            assert_eq!(
+                accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+                Err(failure),
+                "The final confirmation accepted a changed {name}."
+            );
+        }
+        // A sheet moved to another focused window loses its original host.
+        let mut tree = host_sheet_tree(grouped);
+        let target = host_sheet_target(&tree);
+        tree.set(7, "AXRole", Value::String("AXWindow".into()));
+        tree.set(7, "AXChildren", Value::Elements(vec![PANEL]));
+        tree.set(HOST, "AXChildren", Value::Elements(vec![]));
+        tree.set(APP, "AXFocusedWindow", Value::Element(7));
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Err(WrongTopLevelElement)
+        );
+        // A detached sheet that becomes the focused window also loses its host context.
+        let mut tree = host_sheet_tree(grouped);
+        let target = host_sheet_target(&tree);
+        tree.set(HOST, "AXChildren", Value::Elements(vec![]));
+        tree.set(APP, "AXFocusedWindow", Value::Element(PANEL));
+        tree.set(PANEL, "AXIdentifier", Value::String("save-panel".into()));
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Err(WrongTopLevelElement)
+        );
+        // A second matching OKButton added to the sheet after lookup makes the button ambiguous.
+        let mut tree = host_sheet_tree(grouped);
+        let target = host_sheet_target(&tree);
+        let parent = if grouped { OTHER } else { PANEL };
+        let siblings = tree.elements(&parent, "AXChildren").unwrap();
+        tree.set(parent, "AXChildren", Value::Elements([siblings, vec![5]].concat()));
+        add_matching_button(&mut tree, 5, parent);
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Err(AmbiguousButton)
+        );
+        // A saved button outside the sheet's tree does not belong to the panel.
+        let mut tree = host_sheet_tree(grouped);
+        let target = host_sheet_target(&tree);
+        tree.set(parent, "AXChildren", Value::Elements(vec![]));
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Err(WrongTopLevelElement)
+        );
+        // A second open-panel sheet on the host makes the panel ambiguous.
+        let mut tree = host_sheet_tree(grouped);
+        let target = host_sheet_target(&tree);
+        tree.set(HOST, "AXChildren", Value::Elements(vec![PANEL, 5]));
+        tree.set(5, "AXRole", Value::String("AXSheet".into()));
+        tree.set(5, "AXIdentifier", Value::String("open-panel".into()));
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Err(AmbiguousPanel)
+        );
+    }
+}
+
+fn expired() -> Result<(), ConfirmFailure> {
+    Err(ConfirmFailure::Deadline)
+}
+
+#[test]
+fn final_confirmation_blocks_on_navigation_sheets_and_deadlines() {
+    for parent in [PANEL, HOST] {
+        let mut tree = host_sheet_tree(true);
+        let target = host_sheet_target(&tree);
+        let children = if parent == PANEL {
+            vec![OTHER, 5]
+        } else {
+            vec![PANEL, 5]
+        };
+        tree.set(parent, "AXChildren", Value::Elements(children));
+        tree.set(5, "AXRole", Value::String("AXSheet".into()));
+        tree.set(5, "AXIdentifier", Value::String("GoToWindow".into()));
+        tree.set(5, "AXChildren", Value::Elements(vec![]));
+        assert_eq!(
+            accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+            Err(ConfirmFailure::NavigationSheetOpen)
+        );
+    }
+    let tree = host_sheet_tree(true);
+    let target = host_sheet_target(&tree);
+    tree.1.borrow_mut().clear();
+    assert_eq!(
+        accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, expired),
+        Err(ConfirmFailure::Deadline)
+    );
+    assert!(tree.1.borrow().is_empty());
+    // The deadline still applies after the ownership reads begin.
+    let late = || {
+        if tree.1.borrow().iter().any(|(_, name)| name == "AXTitle") {
+            Err(ConfirmFailure::Deadline)
+        } else {
+            Ok(())
+        }
+    };
+    assert_eq!(
+        accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, late),
+        Err(ConfirmFailure::Deadline)
+    );
+    let mut tree = host_sheet_tree(true);
+    let target = host_sheet_target(&tree);
+    let mut children = vec![PANEL];
+    children.extend(8..265);
+    tree.set(HOST, "AXChildren", Value::Elements(children));
+    assert_eq!(
+        accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
+        Err(ConfirmFailure::ElementLimit)
+    );
 }

@@ -491,7 +491,7 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(native).toContain('panel.setPrompt(Some(&marker))')
     expect(native).toContain('AXUIElementCreateApplication(std::process::id() as i32)')
     const accessibility = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/accessibility.rs', import.meta.url), 'utf8')
-    expect(native).toMatch(/accessibility::confirm_button\(\s*&NativeAccessibility,\s*app,\s*identifier,\s*&mut failures,\s*&mut candidates,\s*\|\| \{/)
+    expect(native).toMatch(/accessibility::confirm_target\(\s*&NativeAccessibility,\s*app,\s*identifier,\s*&mut failures,\s*&mut candidates,\s*\|\| \{/)
     const lookup = accessibility.split('pub(super) fn confirm_button')[1]
     expect(lookup).toContain('ax.element(app, "AXFocusedWindow").ok()')
     expect(lookup.indexOf('ax.element(app, "AXFocusedWindow")')).toBeLessThan(lookup.indexOf('ax.elements(app, "AXWindows")'))
@@ -514,7 +514,7 @@ Write-Output 'The confirm and navigation checks passed.'
     const confirm = native.split('fn press_confirm')[1].split('fn ax_deadline')[0]
     const nativeLookup = native.split('fn lookup_confirm')[1].split('fn press_confirm')[0]
     expect(lookup).toMatch(/if panels.len\(\) > 1 \{\s*return Err\(AmbiguousPanel\);/)
-    expect(lookup).toMatch(/let Some\(\(panel, child_identity\)\) = panels.first\(\) else \{\s*return Ok\(None\);/)
+    expect(lookup).toMatch(/let Some\(\(panel, child_identity, host\)\) = panels.first\(\) else \{\s*return Ok\(None\);/)
     expect(lookup).toContain('failures.push(IdentifierNotFound)')
     expect(lookup).toContain('Err(_) => failures.push(NoDefaultButton)')
     expect(lookup).toContain('failures.push(ButtonDisabled)')
@@ -525,7 +525,7 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(nativeLookup).toContain('.map(|failure| failure.reason())')
     expect(nativeLookup).toContain('.push(ConfirmLookup {')
     expect(confirm).toContain('accessibility::focused_panel(')
-    expect(confirm).toContain('accessibility::has_sheet(')
+    expect(confirm).toContain('accessibility::navigation_sheet(')
     expect(native).toContain('candidates: Vec<accessibility::ConfirmCandidate>')
     expect(confirm.indexOf('if Instant::now() >= deadline')).toBeLessThan(confirm.indexOf('AXUIElementPerformAction('))
     expect(confirm).toContain('status != 0 && status != AX_CANNOT_COMPLETE')
@@ -733,5 +733,46 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(spec).toContain("expect(await location.getProperty('textContent')).toBe(home)")
     expect(spec).toContain('${folderDialogDescription(FOLDER_DIALOG_TITLE)}')
     expect(spec).not.toMatch(/mock|plugin:dialog\|open/)
+  })
+
+  it('The macOS confirm reaches an open-panel sheet only through its focused host window.', async () => {
+    const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
+    const accessibility = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/accessibility.rs', import.meta.url), 'utf8')
+    expect(accessibility).toContain('const OPEN_PANEL_SHEET: &str = "open-panel";')
+    expect(accessibility).toContain('const OPEN_PANEL_BUTTON: &str = "OKButton";')
+    const attached = accessibility.split('fn attached_host<')[1].split('fn host_sheet<')[0]
+    expect(attached).toContain('ax.string(sheet, "AXRole").ok().as_deref() != Some("AXSheet")')
+    expect(attached).toContain('ax.string(sheet, "AXIdentifier").ok().as_deref() != Some(OPEN_PANEL_SHEET)')
+    expect(attached).toContain('ax.string(window, "AXRole").ok().as_deref() != Some("AXWindow")')
+    expect(attached).toContain('children.contains(sheet)')
+    const lookup = accessibility.split('pub(super) fn confirm_button')[1].split('pub(super) fn focused_panel')[0]
+    expect(lookup).toContain('attached_host(ax, window, &element, &mut check_deadline)?')
+    expect(lookup).toContain('panels.push((element.clone(), child_prompt, host));')
+    expect(lookup).toMatch(/window == host && attached_host\(ax, host, panel, &mut check_deadline\)\?/)
+    expect(lookup).toMatch(/let matches_prompt = is_focused\s*&& !hosts_sheet/)
+    const children = accessibility.split('fn child_confirm_button')[1].split('fn enabled_button')[0]
+    expect(children).toContain('&& (!require_ok_button || is_ok_button(ax, &element))')
+    const focused = accessibility.split('pub(super) fn focused_panel')[1].split('const OPEN_PANEL_SHEET')[0]
+    expect(focused).toContain('let sheet = host_sheet(ax, &window, &mut check_deadline)?;')
+    expect(focused).toContain('Some(sheet) if is_ok_button(ax, button) => (sheet.clone(), true),')
+    expect(focused).toContain('if !panel_owns_focus(ax, app, &panel, &mut check_deadline)? {')
+    const sheets = accessibility.split('pub(super) fn navigation_sheet')[1].split('fn sheet_below')[0]
+    expect(sheets).toContain('sheet_below(ax, panel, None, &mut check_deadline)?')
+    expect(sheets).toContain('sheet_below(ax, &window, Some(panel), &mut check_deadline)')
+    const confirm = native.split('fn press_confirm')[1].split('fn ax_deadline')[0]
+    expect(confirm.indexOf('accessibility::navigation_sheet(')).toBeLessThan(confirm.indexOf('AXUIElementPerformAction('))
+    expect(confirm).toContain('CFString::new("AXPress")')
+    expect(confirm).not.toMatch(/KeyCode::RETURN|post_key\(/)
+    expect(native).not.toContain('accessibility::has_sheet(')
+    // The press uses the lookup's own validated target, revalidated right before the action.
+    expect(confirm).toContain('if panel != target.panel {')
+    expect(confirm.indexOf('accessibility::confirm_owner(&ax, &app, &target, identifier,')).toBeGreaterThan(confirm.indexOf('accessibility::navigation_sheet('))
+    expect(confirm.indexOf('accessibility::confirm_owner(')).toBeLessThan(confirm.indexOf('AXUIElementPerformAction('))
+    expect(confirm).toContain('let button = target.button.clone();')
+    const owner = accessibility.split('pub(super) fn confirm_owner<')[1].split('const OPEN_PANEL_SHEET')[0]
+    expect(owner).toContain('|| host_sheet(ax, host, &mut check_deadline)?.as_ref() != Some(panel)')
+    expect(owner).toContain('if window != *panel || host_sheet(ax, panel, &mut check_deadline)?.is_some() {')
+    expect(owner).toContain('ax.string(button, "AXTitle").ok().as_deref() != Some(identifier)')
+    expect(owner).toContain('sheet_below(ax, host, Some(panel), &mut check_deadline)?')
   })
 })
