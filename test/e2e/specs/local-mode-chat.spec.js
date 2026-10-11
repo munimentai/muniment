@@ -11,7 +11,7 @@ async function checkCandidatePackages() {
   const packages = Object.entries(readPins().packages)
   const settings = JSON.parse(await readFile(path.join(agentDirectory, 'settings.json'), 'utf8'))
   expect(settings.packages).toEqual(packages.map(([name, version]) => `npm:${name}@${version}`))
-  expect(settings.defaultTools).toEqual(['read', 'bash', 'powershell', 'edit', 'write', 'grep', 'find', 'ls'])
+  expect(settings.defaultTools).toEqual(['read', 'bash', 'powershell', 'edit', 'write', 'grep', 'find', 'ls', 'codemode'])
   for (const [name, version] of packages) {
     const manifest = JSON.parse(await readFile(path.join(agentDirectory, 'npm', 'node_modules', name, 'package.json'), 'utf8'))
     expect(manifest.version).toBe(version)
