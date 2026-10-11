@@ -1509,11 +1509,11 @@ describe('workspace composer entry', () => {
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
     const themes = within(screen.getByRole('group', { name: 'Normal color schemes' }))
-    expect(themes.getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Sage', 'Harbor', 'Clay', 'Iris'])
+    expect(themes.getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Moss', 'Harbor', 'Clay', 'Iris'])
 
     await fireEvent.click(appearance.getByRole('button', { name: label }))
-    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: label.toLowerCase(), palette: 'sage' })
-    expect(document.documentElement.dataset.theme).toBe({ System: undefined, Light: 'sage-light', Dark: 'sage-dark' }[label])
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: label.toLowerCase(), palette: 'moss' })
+    expect(document.documentElement.dataset.theme).toBe({ System: undefined, Light: 'moss-light', Dark: 'moss-dark' }[label])
     expect(appearance.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
 
     cleanup()
@@ -7674,13 +7674,15 @@ describe('signed-in access popover', () => {
     const system = appearance.getByRole('button', { name: 'System' })
     const dark = appearance.getByRole('button', { name: 'Dark' })
 
-    expect(system).toHaveAttribute('aria-pressed', 'true')
-    expect(dark).toHaveAttribute('aria-pressed', 'false')
+    // Moss dark is the default appearance.
+    expect(dark).toHaveAttribute('aria-pressed', 'true')
+    expect(system).toHaveAttribute('aria-pressed', 'false')
 
+    await fireEvent.click(system)
     await fireEvent.click(dark)
-    expect(document.documentElement.dataset.theme).toBe('sage-dark')
+    expect(document.documentElement.dataset.theme).toBe('moss-dark')
     expect(document.documentElement.dataset.scheme).toBe('dark')
-    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', palette: 'sage' })
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', palette: 'moss' })
     expect(dark).toHaveAttribute('aria-pressed', 'true')
 
     await fireEvent.click(system)

@@ -48,7 +48,7 @@ describe('code diff browser styles', () => {
     document.body.replaceChildren()
   })
 
-  for (const theme of ['sage-light', 'sage-dark']) {
+  for (const theme of ['moss-light', 'moss-dark']) {
     it(`resolves visible colors in the explicit ${theme} theme`, () => {
       document.documentElement.dataset.theme = theme
       mountDiff()

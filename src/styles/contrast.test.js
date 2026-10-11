@@ -17,7 +17,7 @@ const block = (pattern) => {
   return declarations(body)
 }
 
-const colors = ['sage', 'harbor', 'clay', 'iris']
+const colors = ['moss', 'harbor', 'clay', 'iris']
 const palettesOf = colors.flatMap((color) => [color, `${color}-vibrant`, `${color}-contrast`])
 const themes = palettesOf.flatMap((palette) => [`${palette}-light`, `${palette}-dark`])
 const themeBlock = (name) => new RegExp(`:root\\[data-theme="${name}"\\][^{]*\\{([^}]*)\\}`)
@@ -65,9 +65,9 @@ describe('§1.3 text token contrast', () => {
       expect(source).toContain(`[data-swatch][data-theme="${name}"]`)
     }
     expect(themes).toHaveLength(24)
-    expect(palettes['sage-light']).toEqual(palettes['default light'])
-    expect(palettes['sage-dark']).toEqual(palettes['default dark'])
-    expect(palettes['sage-dark'].paper).toBe('#000000')
+    expect(palettes['moss-light']).toEqual(palettes['default light'])
+    expect(palettes['moss-dark']).toEqual(palettes['default dark'])
+    expect(palettes['moss-dark'].paper).toBe('#000000')
     // Every high contrast set holds pure ink on pure paper.
     for (const color of colors) {
       expect([palettes[`${color}-contrast-light`].ink, palettes[`${color}-contrast-light`].paper]).toEqual(['#000000', '#FFFFFF'])

@@ -23,21 +23,21 @@ afterEach(() => {
 })
 
 it.each([
-  ['light', 'sage-light'],
-  ['dark', 'sage-dark'],
-  ['moss', 'sage-dark'],
+  ['light', 'moss-light'],
+  ['dark', 'moss-dark'],
+  ['moss', 'moss-dark'],
   ['iris-contrast-dark', 'iris-contrast-dark'],
   ['{"mode":"light","palette":"harbor"}', 'harbor-light'],
   ['{"mode":"dark","palette":"clay-vibrant"}', 'clay-vibrant-dark'],
   ['{"mode":"system","palette":"iris"}', 'iris-light'],
   ['{"mode":"light","light":"ledger","dark":"vault"}', 'harbor-light'],
-  ['{"mode":"dark","light":"ledger","dark":"vault"}', 'sage-dark'],
-  ['{"mode":"system","palette":"sage"}', undefined],
+  ['{"mode":"dark","light":"ledger","dark":"vault"}', 'moss-dark'],
+  ['{"mode":"system","palette":"moss"}', undefined],
   ['system', undefined],
-  [null, undefined],
-  ['', undefined],
-  ['Dark', undefined],
-  ['{"theme":"dark"}', undefined],
+  [null, 'moss-dark'],
+  ['', 'moss-dark'],
+  ['Dark', 'moss-dark'],
+  ['{"theme":"dark"}', 'moss-dark'],
 ])('applies the stored theme %j before the app mounts at launch', async (stored, expected) => {
   if (stored !== null) localStorage.setItem('muniment.theme', stored)
   document.documentElement.dataset.theme = 'stale'
@@ -59,11 +59,11 @@ it('mounts only the launcher in the launcher window', async () => {
   expect(mount).toHaveBeenCalledExactlyOnceWith(Launcher, { target: document.getElementById('app') })
 })
 
-it('uses the system theme at launch when storage is unavailable', async () => {
+it('uses Moss dark at launch when storage is unavailable', async () => {
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
-  document.documentElement.dataset.theme = 'dark'
+  document.documentElement.dataset.theme = 'stale'
   mount.mockImplementation(() => {
-    expect(document.documentElement.dataset.theme).toBeUndefined()
+    expect(document.documentElement.dataset.theme).toBe('moss-dark')
   })
 
   await import('./main.js')

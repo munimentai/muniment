@@ -8,14 +8,14 @@ default. The interface is the user's territory and the model is a visitor.
 ## Tokens
 
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
-first-class, the OS picks the default, and a user override persists per device.
+first-class, Framed Moss dark is the default, and a user override persists per device.
 Every theme carries ten core color tokens in one `:root[data-theme]`
-block. Appearance offers four colors, Sage, Harbor, Clay and Iris, in three
+block. Appearance offers four colors, Moss, Harbor, Clay and Iris, in three
 rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
 version, and Mode picks between them, so System follows the OS with the
 picked palette. Normal sets are quiet neutrals tinted by the color, with the
 color as signal. Vibrant sets tint paper and add an accent. High contrast sets
-hold pure ink on pure paper, with the color on strong hairlines and hovers. Sage light and Sage dark
+hold pure ink on pure paper, with the color on strong hairlines and hovers. Moss light and Moss dark
 are the two defaults below.
 
 | Token | Light | Dark | Use |
@@ -31,8 +31,8 @@ are the two defaults below.
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Vibrant sets pair the color with a complementary accent: Sage with raspberry, Harbor with orange, Clay with teal and Iris with amber. Sage neutrals carry a faint green cast. The one
-exception is Sage dark's black paper: its surface and faint keep the cast, so the
+Vibrant sets pair the color with a complementary accent: Moss with raspberry, Harbor with orange, Clay with teal and Iris with amber. Moss neutrals carry a faint green cast. The one
+exception is Moss dark's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 
 Type: Schibsted Grotesk for everything human, Commit Mono for everything that

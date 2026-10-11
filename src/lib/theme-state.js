@@ -7,9 +7,9 @@ export const THEME_DARK = 'dark'
 // light and a dark version. A palette is one color in one style. Mode picks
 // its light or dark version, and System follows the OS. Each version is one
 // `:root[data-theme]` block of the ten color tokens in src/styles/tokens.css.
-export const COLORS = [['sage', 'Sage'], ['harbor', 'Harbor'], ['clay', 'Clay'], ['iris', 'Iris']]
+export const COLORS = [['moss', 'Moss'], ['harbor', 'Harbor'], ['clay', 'Clay'], ['iris', 'Iris']]
 export const STYLES = [['normal', 'Normal'], ['vibrant', 'Vibrant'], ['contrast', 'High contrast']]
-export const DEFAULT_PALETTE = 'sage'
+export const DEFAULT_PALETTE = 'moss'
 
 export const paletteId = (color, style) => style === 'normal' ? color : `${color}-${style}`
 export const PALETTES = STYLES.flatMap(([style]) => COLORS.map(([color]) => paletteId(color, style)))
@@ -31,17 +31,17 @@ export function themeScheme(theme) {
 // A stored value from the earlier theme list names one theme. Each maps to
 // the palette nearest it, and the dark ones keep the dark mode.
 const EARLIER = {
-  paper: 'sage', foolscap: 'sage', vault: 'sage', moss: 'sage', graphite: 'sage',
+  paper: 'moss', foolscap: 'moss', vault: 'moss', moss: 'moss', graphite: 'moss',
   ledger: 'harbor', inkwell: 'harbor', fjord: 'harbor', nocturne: 'harbor', lagoon: 'harbor', obsidian: 'harbor',
   vellum: 'clay', parchment: 'clay', manila: 'clay', umber: 'clay', basalt: 'clay',
   linen: 'iris', plum: 'iris', nightshade: 'iris',
-  broadsheet: 'sage-contrast', carbon: 'sage-contrast',
-  daybreak: 'harbor-vibrant', afterglow: 'harbor-vibrant', canopy: 'sage-vibrant', coral: 'clay-vibrant',
+  broadsheet: 'moss-contrast', carbon: 'moss-contrast',
+  daybreak: 'harbor-vibrant', afterglow: 'harbor-vibrant', canopy: 'moss-vibrant', coral: 'clay-vibrant',
 }
 const EARLIER_DARK = new Set(['vault', 'moss', 'graphite', 'inkwell', 'fjord', 'nocturne', 'lagoon', 'obsidian', 'umber', 'basalt', 'plum', 'nightshade', 'carbon', 'afterglow', 'canopy'])
 
 const modes = new Set([THEME_SYSTEM, THEME_LIGHT, THEME_DARK])
-const defaults = () => ({ mode: THEME_SYSTEM, palette: DEFAULT_PALETTE })
+const defaults = () => ({ mode: THEME_DARK, palette: DEFAULT_PALETTE })
 
 // Missing or malformed values restore the documented OS default. A bare mode
 // keeps that mode with the default palette, and a bare theme name picks its

@@ -90,7 +90,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* §1.3 dark color tokens: Sage dark, black paper with the green cast kept on surface and faint */
+    /* §1.3 dark color tokens: Moss dark, black paper with the green cast kept on surface and faint */
     --paper: #000000;
     --surface: #0E1110;
     --faint: #161A18;
@@ -108,15 +108,15 @@
 }
 
 /*
- * The color schemes: four colors, Sage, Harbor, Clay and Iris, each in a
+ * The color schemes: four colors, Moss, Harbor, Clay and Iris, each in a
  * normal, a vibrant and a high contrast style, and each style in a light and
  * a dark version. A theme id reads color-scheme for the normal style and
  * color-style-scheme for the others. An explicit pick sets data-theme on the
  * root, which outranks the OS media block. A swatch element carries the same
- * block, so Appearance shows every theme without a second source. Sage light
- * and Sage dark are the two defaults above.
+ * block, so Appearance shows every theme without a second source. Moss light
+ * and Moss dark are the two defaults above.
  */
-:root[data-theme="sage-light"], [data-swatch][data-theme="sage-light"] {
+:root[data-theme="moss-light"], [data-swatch][data-theme="moss-light"] {
   --paper: #F6F7F6;
   --surface: #FFFFFF;
   --faint: #EDEFEE;
@@ -130,7 +130,7 @@
   --ochre: #B98A2F;
   color-scheme: light;
 }
-:root[data-theme="sage-dark"], [data-swatch][data-theme="sage-dark"] {
+:root[data-theme="moss-dark"], [data-swatch][data-theme="moss-dark"] {
   --paper: #000000;
   --surface: #0E1110;
   --faint: #161A18;
@@ -144,7 +144,7 @@
   --ochre: #CBA14E;
   color-scheme: dark;
 }
-:root[data-theme="sage-vibrant-light"], [data-swatch][data-theme="sage-vibrant-light"] {
+:root[data-theme="moss-vibrant-light"], [data-swatch][data-theme="moss-vibrant-light"] {
   --paper: #E4F4EC;
   --surface: #FFFFFF;
   --faint: #D4ECE0;
@@ -161,7 +161,7 @@
   --on-accent: #FFFFFF;
   color-scheme: light;
 }
-:root[data-theme="sage-vibrant-dark"], [data-swatch][data-theme="sage-vibrant-dark"] {
+:root[data-theme="moss-vibrant-dark"], [data-swatch][data-theme="moss-vibrant-dark"] {
   --paper: #0D2A22;
   --surface: #14362C;
   --faint: #1B4136;
@@ -178,7 +178,7 @@
   --on-accent: #0D2A22;
   color-scheme: dark;
 }
-:root[data-theme="sage-contrast-light"], [data-swatch][data-theme="sage-contrast-light"] {
+:root[data-theme="moss-contrast-light"], [data-swatch][data-theme="moss-contrast-light"] {
   --paper: #FFFFFF;
   --surface: #FFFFFF;
   --faint: #DDEFE7;
@@ -192,7 +192,7 @@
   --ochre: #6F4A00;
   color-scheme: light;
 }
-:root[data-theme="sage-contrast-dark"], [data-swatch][data-theme="sage-contrast-dark"] {
+:root[data-theme="moss-contrast-dark"], [data-swatch][data-theme="moss-contrast-dark"] {
   --paper: #000000;
   --surface: #000000;
   --faint: #0F2A22;

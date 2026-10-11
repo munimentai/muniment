@@ -20,23 +20,24 @@ describe('Appearance', () => {
     const modes = screen.getByRole('group', { name: 'Mode' })
     expect(within(modes).getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     const rows = ['Normal', 'Vibrant', 'High contrast'].map((style) => screen.getByRole('group', { name: `${style} color schemes` }))
-    for (const row of rows) expect(within(row).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Sage', 'Harbor', 'Clay', 'Iris'])
-    expect(within(rows[1]).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Sage vibrant', 'Harbor vibrant', 'Clay vibrant', 'Iris vibrant'])
-    expect([...rows[2].querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual(['sage', 'harbor', 'clay', 'iris'].flatMap((color) => [`${color}-contrast-light`, `${color}-contrast-dark`]))
+    for (const row of rows) expect(within(row).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Moss', 'Harbor', 'Clay', 'Iris'])
+    expect(within(rows[1]).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Moss vibrant', 'Harbor vibrant', 'Clay vibrant', 'Iris vibrant'])
+    expect([...rows[2].querySelectorAll('[data-swatch]')].map((swatch) => swatch.dataset.theme)).toEqual(['moss', 'harbor', 'clay', 'iris'].flatMap((color) => [`${color}-contrast-light`, `${color}-contrast-dark`]))
     // Every tile shows the tokens that differ between themes, and a vibrant tile its accent.
     for (const [index, row] of rows.entries()) {
       for (const swatch of row.querySelectorAll('[data-swatch]')) {
         expect([...swatch.querySelectorAll('i')].map((bar) => bar.classList[0])).toEqual(['swatch-ink', 'swatch-muted', 'swatch-signal', ...(index === 1 ? ['swatch-accent'] : [])])
       }
     }
-    expect(pressed(modes)).toEqual(['System'])
-    expect(rows.flatMap(pressed)).toEqual(['Sage'])
+    expect(pressed(modes)).toEqual(['Dark'])
+    expect(rows.flatMap(pressed)).toEqual(['Moss'])
   })
 
   it('keeps a palette across modes, shows its light or dark version, and follows the OS in System', async () => {
     render(Appearance)
     const modes = screen.getByRole('group', { name: 'Mode' })
     const vibrant = screen.getByRole('group', { name: 'Vibrant color schemes' })
+    await fireEvent.click(within(modes).getByRole('button', { name: 'System' }))
     await fireEvent.click(within(vibrant).getByRole('button', { name: 'Iris vibrant' }))
     expect(document.documentElement.dataset.theme).toBe('iris-vibrant-light')
     expect(document.documentElement.dataset.scheme).toBeUndefined()
@@ -47,11 +48,11 @@ describe('Appearance', () => {
     await fireEvent.click(within(modes).getByRole('button', { name: 'Light' }))
     expect(document.documentElement.dataset).toMatchObject({ theme: 'iris-vibrant-light', scheme: 'light' })
     expect(stored()).toEqual({ mode: 'light', palette: 'iris-vibrant' })
-    await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Sage' }))
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Moss' }))
     await fireEvent.click(within(modes).getByRole('button', { name: 'System' }))
     expect(document.documentElement.dataset.theme).toBeUndefined()
     expect(document.documentElement.dataset.scheme).toBeUndefined()
-    expect(stored()).toEqual({ mode: 'system', palette: 'sage' })
+    expect(stored()).toEqual({ mode: 'system', palette: 'moss' })
   })
 
   it('swaps the thinking indicator preview in place, one indicator at a time', async () => {
@@ -75,6 +76,6 @@ describe('Appearance', () => {
     expect(localStorage.getItem('muniment.frame')).toBe('frameless')
     expect(pressed(frames)).toEqual(['Frameless'])
     await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Harbor' }))
-    expect(document.documentElement.dataset).toMatchObject({ theme: 'harbor-light', frame: 'frameless' })
+    expect(document.documentElement.dataset).toMatchObject({ theme: 'harbor-dark', frame: 'frameless' })
   })
 })
