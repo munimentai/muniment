@@ -980,12 +980,17 @@ fn save_probe(
     Ok(true)
 }
 
+/// A first sign-in may download Pi, so it runs off the main thread.
 #[tauri::command]
-pub(crate) fn model_router_subscription_start(
+pub(crate) async fn model_router_subscription_start(
     app: tauri::AppHandle,
     provider: String,
 ) -> Result<(), String> {
-    crate::account_login::start_into_pool(&app, &provider)
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::account_login::start_into_pool(&app, &provider)
+    })
+    .await
+    .map_err(|_| "The sign-in could not start. Try again.".to_string())?
 }
 
 #[tauri::command]

@@ -746,6 +746,18 @@ pub(crate) fn pi_executable() -> Option<PathBuf> {
     muniment_core::sidecar::pi_install::resolve_current_for(&root, PI_SELECTED_ARTIFACT).ok()
 }
 
+/// The pinned Pi, downloaded first when no chat has fetched it yet. Pi runs
+/// every account sign-in, and a sign-in can come before the first chat. The
+/// install lock keeps this and a chat's download from racing.
+pub(crate) fn acquire_pi_executable() -> Option<PathBuf> {
+    pi_executable().or_else(|| {
+        let state = muniment_core::state_root::state_directory()?;
+        let root = state.join(muniment_core::state_root::HARNESS_DIRECTORY_NAME);
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        muniment_core::sidecar::pi_install::acquire_pi(&root, &cancelled).ok()
+    })
+}
+
 /// Every model Pi can serve from the agent directory, by provider, from the pinned executable.
 fn list_pi_models(agent: &Path) -> Vec<(String, InventoryModel)> {
     let Some(executable) = pi_executable() else {

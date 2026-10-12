@@ -453,7 +453,8 @@ fn start_with(app: &AppHandle, provider: &str, target: Target) -> Result<(), Str
             scratch
         }
     };
-    let executable = crate::local_mode::pi_executable().ok_or_else(|| START_ERROR.to_string())?;
+    let executable =
+        crate::local_mode::acquire_pi_executable().ok_or_else(|| START_ERROR.to_string())?;
     let extension = write_extension(&agent)?;
     // The port is held before Pi starts, so Pi's own callback server yields and
     // its paste prompt carries the redirect the desktop's page received. A
@@ -655,12 +656,15 @@ pub(crate) fn cancel(app: &AppHandle) {
     emit(app, json!({ "stage": "cancelled" }));
 }
 
+/// A first sign-in may download Pi, so it runs off the main thread.
 #[tauri::command]
-pub(crate) fn local_mode_account_login_start(
+pub(crate) async fn local_mode_account_login_start(
     app: AppHandle,
     provider: String,
 ) -> Result<(), String> {
-    start(&app, &provider)
+    tauri::async_runtime::spawn_blocking(move || start(&app, &provider))
+        .await
+        .map_err(|_| START_ERROR.to_string())?
 }
 
 #[tauri::command]
