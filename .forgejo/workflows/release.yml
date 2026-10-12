@@ -19,6 +19,15 @@ on:
         description: "Run every check and stop before the tag and release are created"
         type: boolean
         default: false
+      waive_e2e:
+        description: "One installed E2E job this promotion accepts as failed"
+        type: choice
+        options: [none, linux-e2e, windows-e2e, macos-e2e]
+        default: none
+      waiver_reason:
+        description: "Why the waived E2E job may fail for this release"
+        type: string
+        default: ""
 permissions:
   contents: write
   checks: read
@@ -101,6 +110,9 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
           VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # The promotion script reads the waiver from the environment, so no input reaches the shell.
+          E2E_WAIVER_JOB: ${{ inputs.waive_e2e != 'none' && inputs.waive_e2e || '' }}
+          E2E_WAIVER_REASON: ${{ inputs.waiver_reason }}
         run: |
           set -euo pipefail
           mode=()
