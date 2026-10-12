@@ -257,12 +257,25 @@ current_step=validate-environment
   status=1
   exit
 }
+# The default mode installs the nightly bundle for this SHA. The pr mode builds an
+# unsigned bundle from this checkout, after the checkout proves to be the tested source.
+source_mode=$(run_step resolve-source-mode node test/e2e/support/pr-source.mjs mode) || { first_failed_step=resolve-source-mode; status=1; exit; }
+if [[ ${source_mode:-} == pr ]]; then
+  current_step=validate-source
+  run_step verify-source-sha node test/e2e/support/pr-source.mjs verify || exit
+  run_step refuse-signing node test/e2e/support/pr-source.mjs refuse-signing || exit
+fi
 run_step install-dependencies log_command "$raw/installer.log" npm ci --no-audit --no-fund || exit
 run_step prepare-cef-tools log_command "$raw/installer.log" source scripts/prepare-cef-macos.sh || exit
 # Keep explicit failure reporting and cleanup after the sourced tool setup.
 set +e
 run_step install-rust-targets log_command "$raw/installer.log" rustup target add aarch64-apple-darwin x86_64-apple-darwin || exit
-run_step build-runtime-resources log_command "$raw/installer.log" node .github/build-macos-runtime.mjs || exit
+if [[ ${source_mode:-} == pr ]]; then
+  # The unsigned app build also builds the runtime resources the E2E build bundles.
+  MACOS_SIGNING_ENABLED=false run_step build-unsigned-bundle log_command "$raw/installer.log" node .github/build-macos-app.mjs || exit
+else
+  run_step build-runtime-resources log_command "$raw/installer.log" node .github/build-macos-runtime.mjs || exit
+fi
 run_step build-app log_command "$raw/installer.log" npm run tauri build -- --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json || exit
 app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 current_step=validate-app
@@ -277,11 +290,16 @@ export MUNIMENT_CORE_ROOT
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
 current_step=validate-source
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo 'The source SHA is invalid.' >&2; status=1; exit; }
-[[ -n ${GH_TOKEN:-} && -n ${GITHUB_REPOSITORY:-} ]] || { echo 'The release environment is unavailable.' >&2; status=1; exit; }
-release=$(run_step fetch-release gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { first_failed_step=fetch-release; status=1; exit; }
-asset_id=$(run_step identify-asset node test/e2e/support/asset-identity.mjs "$sha" macos <<<"$release") || { first_failed_step=identify-asset; status=1; exit; }
-run_step download-bundle gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$state_root/muniment.app.zip" || exit
-run_step expand-bundle log_command "$raw/installer.log" ditto -x -k "$state_root/muniment.app.zip" "$state_root/expanded" || exit
+if [[ ${source_mode:-} == pr ]]; then
+  bundle_archive=$(run_step select-bundle node test/e2e/support/pr-package.mjs select macos "$PWD/src-tauri/target/universal-apple-darwin/release/bundle/macos") || { first_failed_step=select-bundle; status=1; exit; }
+else
+  [[ -n ${GH_TOKEN:-} && -n ${GITHUB_REPOSITORY:-} ]] || { echo 'The release environment is unavailable.' >&2; status=1; exit; }
+  release=$(run_step fetch-release gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { first_failed_step=fetch-release; status=1; exit; }
+  asset_id=$(run_step identify-asset node test/e2e/support/asset-identity.mjs "$sha" macos <<<"$release") || { first_failed_step=identify-asset; status=1; exit; }
+  run_step download-bundle gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$state_root/muniment.app.zip" || exit
+  bundle_archive="$state_root/muniment.app.zip"
+fi
+run_step expand-bundle log_command "$raw/installer.log" ditto -x -k "$bundle_archive" "$state_root/expanded" || exit
 run_step stop-before-install stop_app || exit
 run_step validate-bundle-absent test ! -e "$installed_bundle" || exit
 installed=1
@@ -296,7 +314,10 @@ done
 run_step install-webdriver-app log_command "$raw/installer.log" install -m 0755 "$app_binary" "$installed_desktop" || exit
 run_step verify-webdriver-app cmp -s "$app_binary" "$installed_desktop" || exit
 # Sign only the WDIO bundle. Keep the nested Developer ID signatures and the pinned archive intact.
-run_step sign-webdriver-app log_command "$raw/installer.log" codesign --force --sign - --entitlements src-tauri/packaging/entitlements.plist "$installed_bundle" || exit
+# An unsigned bundle has no nested signatures, so the pr mode seals them locally too.
+sign_options=(--force)
+if [[ ${source_mode:-} == pr ]]; then sign_options+=(--deep); fi
+run_step sign-webdriver-app log_command "$raw/installer.log" codesign "${sign_options[@]}" --sign - --entitlements src-tauri/packaging/entitlements.plist "$installed_bundle" || exit
 run_step verify-webdriver-signature log_command "$raw/installer.log" codesign --verify --deep --strict "$installed_bundle" || exit
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
 

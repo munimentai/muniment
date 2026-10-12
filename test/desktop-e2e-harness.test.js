@@ -4448,3 +4448,154 @@ it('Pins the optional WebDriver plugin to the Tauri 2.12 compatible release behi
   expect(manifest).toMatch(/^e2e-webdriver = \["dep:tauri-plugin-wdio-webdriver"/m)
   expect(manifest).not.toMatch(/^default = \[[^\]]*e2e-webdriver/m)
 })
+
+describe('Candidate runners source mode', () => {
+  const source = (name) => fs.readFileSync(path.join(root, 'test/e2e/runner', name), 'utf8')
+  const sourceHelper = (args, env = {}) => runNode('test/e2e/support/pr-source.mjs', args, { env: { ...process.env, ...env } })
+  const gitFixture = (head) => {
+    const directory = temp()
+    const git = (...args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.test', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.test' } })
+    git('init', '-q')
+    git('commit', '-q', '--allow-empty', '-m', 'fixture')
+    return { directory, head: head ?? git('rev-parse', 'HEAD').trim() }
+  }
+
+  it.each([[undefined, 'nightly'], ['', 'nightly'], ['nightly', 'nightly'], ['pr', 'pr']])('Selects mode %j as %s.', (value, expected) => {
+    const result = sourceHelper(['mode'], { MUNIMENT_E2E_SOURCE_MODE: value ?? '' })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toBe(expected)
+  })
+
+  it.each(['PR', 'local', 'pr ', 'true'])('Rejects mode %j without echoing it as a success.', (value) => {
+    const result = sourceHelper(['mode'], { MUNIMENT_E2E_SOURCE_MODE: value })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('invalid source mode')
+  })
+
+  it('Accepts only the checkout head as the tested source.', () => {
+    const { directory, head } = gitFixture()
+    const match = runNode('test/e2e/support/pr-source.mjs', ['verify'], { cwd: directory, env: { ...process.env, MUNIMENT_E2E_SOURCE_SHA: head } })
+    expect(match.status, match.stderr).toBe(0)
+    const other = 'b'.repeat(40) === head ? 'c'.repeat(40) : 'b'.repeat(40)
+    const mismatch = runNode('test/e2e/support/pr-source.mjs', ['verify'], { cwd: directory, env: { ...process.env, MUNIMENT_E2E_SOURCE_SHA: other } })
+    expect(mismatch.status).toBe(1)
+    expect(mismatch.stderr).toContain(`source SHA ${other} does not match checkout ${head}`)
+  })
+
+  it.each(['', 'abc', 'A'.repeat(40), 'g'.repeat(40)])('Fails closed on source SHA %j.', async (sha) => {
+    const { verifySourceSha } = await import(pathToFileURL(path.join(root, 'test/e2e/support/pr-source.mjs')).href)
+    expect(() => verifySourceSha(sha, 'a'.repeat(40))).toThrow('invalid source SHA')
+  })
+
+  it('Fails closed when the checkout has no readable head.', async () => {
+    const { checkoutHead } = await import(pathToFileURL(path.join(root, 'test/e2e/support/pr-source.mjs')).href)
+    expect(() => checkoutHead(() => { throw new Error('not a repository') })).toThrow('the checkout source SHA is unavailable')
+    expect(() => checkoutHead(() => 'not a sha\n')).toThrow('the checkout source SHA is unavailable')
+    const outside = temp()
+    const result = runNode('test/e2e/support/pr-source.mjs', ['verify'], {
+      cwd: outside, env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(outside), MUNIMENT_E2E_SOURCE_SHA: 'a'.repeat(40) },
+    })
+    expect(result.status).toBe(1)
+  })
+
+  it('Refuses signing material without printing it.', () => {
+    const directory = temp()
+    const file = path.join(directory, 'dci_env')
+    const secret = 'planted-signing-secret'
+    fs.writeFileSync(file, `GH_TOKEN=x\n#muniment-signing-env:${Buffer.from(`KEY=${secret}\n`).toString('hex')}\n`)
+    const refused = sourceHelper(['refuse-signing', file])
+    expect(refused.status).toBe(1)
+    expect(`${refused.stdout}${refused.stderr}`).not.toContain(secret)
+    expect(`${refused.stdout}${refused.stderr}`).not.toContain(Buffer.from(`KEY=${secret}\n`).toString('hex'))
+    expect(fs.readFileSync(file, 'utf8')).toContain('#muniment-signing-env:')
+    fs.writeFileSync(file, 'GH_TOKEN=x\n')
+    expect(sourceHelper(['refuse-signing', file]).status).toBe(0)
+    expect(sourceHelper(['refuse-signing', path.join(directory, 'absent')]).status).toBe(0)
+    const flagged = sourceHelper(['refuse-signing', file], { MACOS_SIGNING_ENABLED: 'true' })
+    expect(flagged.status).toBe(1)
+    expect(sourceHelper(['refuse-signing', file], { MACOS_SIGNING_ENABLED: 'false' }).status).toBe(0)
+  })
+
+  it('Selects exactly one local package per platform.', () => {
+    const select = (platform, names) => {
+      const directory = temp()
+      for (const name of names) fs.writeFileSync(path.join(directory, name), 'package')
+      return { directory, result: runNode('test/e2e/support/pr-package.mjs', ['select', platform, directory]) }
+    }
+    const deb = select('linux-deb', ['muniment_1.2.3_amd64.deb', 'notes.txt'])
+    expect(deb.result.stdout).toBe(path.join(deb.directory, 'muniment_1.2.3_amd64.deb'))
+    const msi = select('windows', ['muniment_1.2.3_x64_en-US.msi', 'muniment_1.2.3_x64_en-US-machine.msi', 'machine-upgrade-base.msi'])
+    expect(msi.result.status, msi.result.stderr).toBe(0)
+    expect(msi.result.stdout).toBe(path.join(msi.directory, 'muniment_1.2.3_x64_en-US.msi'))
+    const app = select('macos', ['muniment.app.zip', 'muniment-arm64.app.zip', 'muniment.app.tar.gz'])
+    expect(app.result.stdout).toBe(path.join(app.directory, 'muniment.app.zip'))
+    for (const [platform, names] of [['linux-deb', []], ['linux-deb', ['a.deb', 'b.deb']], ['windows', ['muniment_1.2.3_x64_en-US-machine.msi']], ['macos', ['muniment-x64.app.zip']]]) {
+      const failed = select(platform, names)
+      expect(failed.result.status).toBe(1)
+      expect(failed.result.stdout).toBe('')
+      expect(failed.result.stderr).toContain(`missing or duplicate local ${platform} package: matches=`)
+    }
+    const missing = runNode('test/e2e/support/pr-package.mjs', ['select', 'windows', path.join(temp(), 'absent')])
+    expect(missing.status).toBe(1)
+    expect(missing.stderr).toContain('package directory is unavailable')
+    expect(runNode('test/e2e/support/pr-package.mjs', ['select', 'freebsd', temp()]).status).toBe(1)
+  })
+
+  it('Keeps the nightly lookup as the default and out of the pr branch on Linux.', () => {
+    const linux = source('linux.sh')
+    const modeStart = linux.indexOf('source_mode=$(')
+    const defaultBranch = linux.indexOf('if [[ $source_mode != pr ]]; then\n  # Resolve and validate identity')
+    const lookup = linux.indexOf('releases/tags/nightly')
+    expect(modeStart).toBeGreaterThan(linux.indexOf("runner_failure 'invalid source SHA'"))
+    expect(defaultBranch).toBeGreaterThan(modeStart)
+    expect(lookup).toBeGreaterThan(defaultBranch)
+    expect(linux.match(/releases\/tags\/nightly/g)).toHaveLength(1)
+    expect(linux).toContain('node test/e2e/support/pr-source.mjs verify')
+    expect(linux).toContain('node test/e2e/support/pr-source.mjs refuse-signing')
+    expect(linux).toContain('bash .github/build-linux.sh --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json')
+    expect(linux).toContain('node test/e2e/support/pr-package.mjs select linux-deb')
+    expect(linux).toContain('sudo apt-get install -y -qq "$e2e_deb"')
+    // The pr branch installs the build before the runtime and ACP probes.
+    expect(linux.indexOf('sudo apt-get install -y -qq "$e2e_deb"')).toBeLessThan(linux.indexOf('probe-installed-adapter.mjs'))
+    expect(linux).toContain('bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb"')
+    expect(linux).toContain('webdriver-release-guard.mjs absent "$release_binary"')
+  })
+
+  it('Builds and installs the checkout on Windows without a release lookup in the pr branch.', () => {
+    const windows = source('windows.ps1')
+    const pr = windows.indexOf("if ($sourceMode -eq 'pr') {")
+    const nightly = windows.indexOf('} else {\n    # Resolve all identity checks')
+    expect(pr).toBeGreaterThan(windows.indexOf('$sourceMode = (Invoke-NativeCommand'))
+    expect(nightly).toBeGreaterThan(pr)
+    const prBranch = windows.slice(pr, nightly)
+    expect(prBranch).toContain('pr-source.mjs verify')
+    expect(prBranch).toContain('pr-source.mjs refuse-signing')
+    expect(prBranch).toContain('.github/build-windows-installers.mjs')
+    expect(prBranch).toContain('pr-package.mjs select windows')
+    expect(prBranch).not.toMatch(/Invoke-WebRequest|asset-identity|releases\//)
+    expect(windows).toContain('if ($sourceMode -eq \'nightly\' -and (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY))')
+    expect(windows.slice(nightly)).toContain('asset-identity.mjs $sha windows')
+    // The shared package identity, guards and E2E build follow either branch.
+    const shared = windows.slice(nightly)
+    expect(shared.indexOf('package identity mismatch')).toBeGreaterThan(-1)
+    expect(shared).toContain('webdriver-release-guard.mjs absent')
+    expect(shared).toContain('build --no-bundle --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json')
+  })
+
+  it('Builds the macOS bundle unsigned and signs it only for local execution in the pr mode.', () => {
+    const macos = source('macos-wdio.sh')
+    expect(macos).toContain('MACOS_SIGNING_ENABLED=false run_step build-unsigned-bundle log_command "$raw/installer.log" node .github/build-macos-app.mjs')
+    expect(macos).toContain('run_step refuse-signing node test/e2e/support/pr-source.mjs refuse-signing')
+    expect(macos).toContain('pr-package.mjs select macos')
+    expect(macos).toContain('sign_options+=(--deep)')
+    expect(macos).toContain('codesign "${sign_options[@]}" --sign - --entitlements src-tauri/packaging/entitlements.plist "$installed_bundle"')
+    expect(macos.indexOf('releases/tags/nightly')).toBeGreaterThan(macos.indexOf('pr-package.mjs select macos'))
+    expect(macos).not.toMatch(/notarytool|stapler|productsign|MACOS_SIGNING_ENABLED=true/)
+  })
+
+  it.each(['linux.sh', 'windows.ps1', 'macos-wdio.sh'])('%s never publishes, signs for release or touches the update feed.', (name) => {
+    const runner = source(name)
+    expect(runner).not.toMatch(/notarytool|stapler|upload-nightly-assets|publish-ci-artifacts|latest\.json|gh release/)
+  })
+})
