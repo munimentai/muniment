@@ -62,11 +62,16 @@ jobs:
           ref: ${{ github.sha }}
       # Promotion checks the signatures in the bytes it publishes. osslsigncode
       # and archive extractors come pinned from the Ubuntu archive; rcodesign is a pinned
-      # release checked against the SHA-256 its project publishes.
+      # release checked against the SHA-256 its project publishes. The macOS disk images
+      # are LZMA (ULMO) UDIF images, which the archive's 7-Zip 23.01 cannot open, so a
+      # pinned upstream 7-Zip release, checked against the SHA-256 of its archive, takes
+      # the `7z` name for the later steps.
       - name: Install signature verifiers
         env:
           RCODESIGN_VERSION: 0.29.0
           RCODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+          SEVENZIP_VERSION: "2501"
+          SEVENZIP_SHA256: 4ca3b7c6f2f67866b92622818b58233dc70367be2f36b498eb0bdeaaa44b53f4
         run: |
           set -euo pipefail
           sudo=
@@ -81,9 +86,15 @@ jobs:
           printf '%s  %s\n' "$RCODESIGN_SHA256" "$archive" | sha256sum --check --quiet
           tar -xzf "$archive" -C "$tools" --strip-components=1
           rm -f "$archive"
+          sevenzip="$tools/7z.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$sevenzip" "https://www.7-zip.org/a/7z${SEVENZIP_VERSION}-linux-x64.tar.xz"
+          printf '%s  %s\n' "$SEVENZIP_SHA256" "$sevenzip" | sha256sum --check --quiet
+          tar -xJf "$sevenzip" -C "$tools" 7zz
+          rm -f "$sevenzip"
+          ln -s 7zz "$tools/7z"
           echo "$tools" >> "$GITHUB_PATH"
           osslsigncode --version
-          7z i >/dev/null
+          "$tools/7z" i >/dev/null
           command -v unsquashfs >/dev/null
           "$tools/rcodesign" --version
       - name: Test compressed AppImage guard
