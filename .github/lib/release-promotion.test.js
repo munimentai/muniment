@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  APPLE_TEAM_ID, assertGreenCi, expectedNightlyAssets, forgejoCheckRuns, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
+  APPLE_TEAM_ID, assertGreenCi, assertInstalledNightly, normalizeE2eWaiver, expectedNightlyAssets, forgejoCheckRuns, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
   sha256Sums, stableAssetName, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
   verifyNightlyArtifacts, WINDOWS_PUBLISHER, windowsSigningProvenance,
 } from "./release-promotion.mjs";
@@ -411,5 +411,176 @@ describe("nightly artifact verification", () => {
 
   it("writes SHA256SUMS in the sha256sum check format", () => {
     expect(sha256Sums([["a.msi", "0".repeat(64)], ["latest.json", "f".repeat(64)]])).toBe(`${"0".repeat(64)}  a.msi\n${"f".repeat(64)}  latest.json\n`);
+  });
+});
+
+describe("single E2E waiver", () => {
+  const failedRun = (extra = {}) => ({ workflow_id: "nightly.yml", commit_sha: sha, status: "failure", index_in_repo: 99, ...extra });
+  const waivedJobs = (waived, status = "failure", overrides = {}) => [...installedJobs, "verify-requested-e2e"].map((name) => task(name, {
+    status: overrides[name] ?? (name === waived ? status : name === "verify-requested-e2e" ? "skipped" : "success"),
+  }));
+  const waiverFetch = ({ runs = [failedRun()], tasks = waivedJobs("macos-e2e"), statuses = [{ context: "CI / smoke (push)", status: "success" }] } = {}) => promotionFetch({ route: (url) => {
+    if (url.startsWith(`${forgejo}/actions/runs?`)) return response({ workflow_runs: runs });
+    if (url.startsWith(`${forgejo}/actions/tasks?`)) return response({ workflow_runs: tasks });
+    if (url.startsWith(`${forgejo}/commits/${sha}/status?`)) return response({ statuses });
+    return null;
+  } });
+  const withSummary = async (test) => {
+    const directory = mkdtempSync(path.join(tmpdir(), "muniment-waiver-"));
+    const summaryFile = path.join(directory, "summary.md");
+    writeFileSync(summaryFile, "");
+    try { return await test(summaryFile); } finally { rmSync(directory, { recursive: true, force: true }); }
+  };
+  const macosWaiver = { job: "macos-e2e", reason: "macOS runner lost its display session" };
+
+  it("treats an absent or blank waiver as none", () => {
+    for (const none of [undefined, null, {}, { job: "", reason: "" }, { job: "  ", reason: " \n " }]) expect(normalizeE2eWaiver(none)).toBeNull();
+    expect(normalizeE2eWaiver({ job: " windows-e2e ", reason: " flaky VM \n" })).toEqual({ job: "windows-e2e", reason: "flaky VM" });
+  });
+
+  it.each([
+    [{ job: "build (macos)", reason: "r" }, "must be one of"],
+    [{ job: "publish", reason: "r" }, "must be one of"],
+    [{ job: "verify-requested-e2e", reason: "r" }, "must be one of"],
+    [{ job: "", reason: "r" }, "must be one of"],
+    [{ job: "linux-e2e,macos-e2e", reason: "r" }, "only one job"],
+    [{ job: "linux-e2e macos-e2e", reason: "r" }, "only one job"],
+    [{ job: ["macos-e2e"], reason: "r" }, "only one job"],
+    [{ job: "macos-e2e", reason: "" }, "requires a reason"],
+    [{ job: "macos-e2e", reason: " \n\t " }, "requires a reason"],
+    [{ job: "macos-e2e" }, "requires a reason"],
+    ["macos-e2e", "name one job"],
+  ])("rejects waiver %j before any request", async (waiver, message) => {
+    const { calls, fetchImpl } = waiverFetch();
+    const verify = vi.fn(async () => {});
+    await expect(promote(fetchImpl, verify, { e2eWaiver: waiver })).rejects.toThrow(message);
+    await expect(assertInstalledNightly(fetchImpl, "repo-token", forgejo, sha, waiver)).rejects.toThrow(message);
+    expect(calls).toHaveLength(0);
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it("promotes a failed nightly whose only failure is the waived macos-e2e and audits it privately", () => withSummary(async (summaryFile) => {
+    const { calls, fetchImpl } = waiverFetch({ statuses: [
+      { context: "CI / smoke (push)", status: "success" },
+      { context: "Nightly desktop release / macos-e2e (workflow_dispatch)", status: "failure" },
+    ] });
+    const lines = [];
+    const reason = "macOS runner lost its display session.\nInstalled checks passed on a manual rerun.";
+    await promote(fetchImpl, undefined, { e2eWaiver: { job: "macos-e2e", reason }, summaryFile, log: (line) => lines.push(line) });
+    expect(calls.some(({ url }) => url.includes("/actions/runs?") && url.includes("status=success"))).toBe(false);
+    const log = lines.join("\n");
+    expect(log).toContain("E2E waiver job: macos-e2e");
+    expect(log).toContain("| macOS runner lost its display session.\n| Installed checks passed on a manual rerun.");
+    expect(lines.find((line) => line.startsWith("::warning"))).not.toContain("\n");
+    const summary = readFileSync(summaryFile, "utf8");
+    expect(summary).toContain("`macos-e2e`");
+    expect(summary).toContain("> macOS runner lost its display session.\n> Installed checks passed on a manual rerun.");
+    const create = calls.find(({ url, options }) => url.endsWith("/releases") && options.method === "POST");
+    const body = JSON.parse(create.options.body).body;
+    expect(body).toBe(releaseBody(sha, version));
+    expect(body).not.toContain("display session");
+    expect(body).not.toContain("waive");
+  }));
+
+  it("rejects the same evidence without a waiver", async () => {
+    const { calls, fetchImpl } = waiverFetch();
+    await expect(promote(fetchImpl)).rejects.toThrow("No successful full installed nightly");
+    expect(calls.find(({ url }) => url.includes("/actions/runs?")).url).toContain("status=success");
+    expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+  });
+
+  it("keeps a failed nightly status blocking CI without a waiver or for another job", async () => {
+    const statuses = [{ context: "CI / smoke (push)", status: "success" }, { context: "Nightly desktop release / macos-e2e (workflow_dispatch)", status: "failure" }];
+    await expect(promote(waiverFetch({ statuses }).fetchImpl)).rejects.toThrow("CI is not green");
+    await expect(promote(waiverFetch({ statuses, tasks: waivedJobs("linux-e2e") }).fetchImpl, undefined, { e2eWaiver: { job: "linux-e2e", reason: "r" } })).rejects.toThrow("CI is not green");
+    await expect(promote(waiverFetch({ statuses: [...statuses, { context: "CI / security (push)", status: "failure" }] }).fetchImpl, undefined, { e2eWaiver: macosWaiver })).rejects.toThrow("CI is not green");
+  });
+
+  it.each(["linux-e2e", "windows-e2e", "macos-e2e"])("accepts each allowed waived job: %s", async (job) => {
+    for (const status of ["failure", "success"]) {
+      const { fetchImpl } = waiverFetch({ tasks: waivedJobs(job, status) });
+      await expect(assertInstalledNightly(fetchImpl, "repo-token", forgejo, sha, { job, reason: "r" })).resolves.toBeUndefined();
+    }
+  });
+
+  it.each(["skipped", "cancelled", "running", "waiting", "blocked", undefined])("rejects a waived job with status %s", async (status) => {
+    const tasks = status === undefined ? waivedJobs("macos-e2e").filter(({ name }) => name !== "macos-e2e") : waivedJobs("macos-e2e", status);
+    const { calls, fetchImpl } = waiverFetch({ tasks });
+    await expect(promote(fetchImpl, undefined, { e2eWaiver: macosWaiver })).rejects.toThrow("satisfies the macos-e2e waiver");
+    expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+  });
+
+  it.each(["failure", "cancelled", undefined])("rejects a verify-requested-e2e job with status %s", async (status) => {
+    const tasks = status === undefined ? waivedJobs("macos-e2e").filter(({ name }) => name !== "verify-requested-e2e") : waivedJobs("macos-e2e", "failure", { "verify-requested-e2e": status });
+    await expect(assertInstalledNightly(waiverFetch({ tasks }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+  });
+
+  it("accepts a successful verify-requested-e2e job", async () => {
+    const tasks = waivedJobs("macos-e2e", "failure", { "verify-requested-e2e": "success" });
+    await expect(assertInstalledNightly(waiverFetch({ tasks }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).resolves.toBeUndefined();
+  });
+
+  it.each(["linux-e2e", "windows-e2e"])("rejects a second failed E2E job %s", async (second) => {
+    const tasks = waivedJobs("macos-e2e", "failure", { [second]: "failure" });
+    await expect(promote(waiverFetch({ tasks }).fetchImpl, undefined, { e2eWaiver: macosWaiver })).rejects.toThrow("waiver");
+  });
+
+  it.each(["build (linux)", "build (windows)", "build (macos)", "publish"])("rejects a red %s even with a waiver", async (red) => {
+    for (const status of ["failure", "skipped", "cancelled"]) {
+      const tasks = waivedJobs("macos-e2e", "failure", { [red]: status });
+      await expect(assertInstalledNightly(waiverFetch({ tasks }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+    }
+    const missing = waivedJobs("macos-e2e").filter(({ name }) => name !== red);
+    await expect(assertInstalledNightly(waiverFetch({ tasks: missing }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+  });
+
+  it("considers only success or failure runs at the exact requested SHA", async () => {
+    for (const run of [failedRun({ status: "cancelled" }), failedRun({ status: "running" }), failedRun({ commit_sha: "b".repeat(40) }), failedRun({ workflow_id: "ci.yml" })]) {
+      await expect(assertInstalledNightly(waiverFetch({ runs: [run] }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+    }
+    const otherSha = waivedJobs("macos-e2e").map((entry) => ({ ...entry, head_sha: "b".repeat(40) }));
+    await expect(assertInstalledNightly(waiverFetch({ tasks: otherSha }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+    const otherRun = waivedJobs("macos-e2e").map((entry) => ({ ...entry, run_number: 100 }));
+    await expect(assertInstalledNightly(waiverFetch({ tasks: otherRun }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+    const split = [...waivedJobs("macos-e2e", "failure", { "linux-e2e": "failure" }), ...waivedJobs("macos-e2e", "failure", { "windows-e2e": "failure" }).map((entry) => ({ ...entry, run_number: 100 }))];
+    await expect(assertInstalledNightly(waiverFetch({ runs: [failedRun(), failedRun({ index_in_repo: 100 })], tasks: split }).fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+  });
+
+  it("judges waived evidence by the newest task attempt", async () => {
+    const retried = (newest, older) => waiverFetch({ tasks: [task("linux-e2e", { status: newest }), ...waivedJobs("macos-e2e", "failure", { "linux-e2e": older })] });
+    await expect(assertInstalledNightly(retried("success", "failure").fetchImpl, "repo-token", forgejo, sha, macosWaiver)).resolves.toBeUndefined();
+    await expect(assertInstalledNightly(retried("failure", "success").fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+    const waivedRetry = waiverFetch({ tasks: [task("macos-e2e", { status: "cancelled" }), ...waivedJobs("macos-e2e", "failure")] });
+    await expect(assertInstalledNightly(waivedRetry.fetchImpl, "repo-token", forgejo, sha, macosWaiver)).rejects.toThrow("waiver");
+  });
+
+  it("keeps a dry run free of mutations and records no waiver when none is given", () => withSummary(async (summaryFile) => {
+    const { calls, fetchImpl } = waiverFetch();
+    const lines = [];
+    await promote(fetchImpl, undefined, { dryRun: true, e2eWaiver: macosWaiver, summaryFile, log: (line) => lines.push(line) });
+    expect(calls.filter(({ options }) => ["POST", "PATCH", "DELETE"].includes(options.method))).toEqual([]);
+    expect(lines.some((line) => line.startsWith("dry run:"))).toBe(true);
+    expect(readFileSync(summaryFile, "utf8")).toContain("macos-e2e");
+    writeFileSync(summaryFile, "");
+    const clean = [];
+    await promote(promotionFetch().fetchImpl, undefined, { dryRun: true, summaryFile, log: (line) => clean.push(line) });
+    expect(readFileSync(summaryFile, "utf8")).toBe("");
+    expect(clean.join("\n")).not.toContain("waiver");
+  }));
+
+  it("reads the waiver from the CLI environment and validates it before any request", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "muniment-waiver-cli-"));
+    try {
+      const preload = path.join(directory, "fetch.mjs");
+      writeFileSync(preload, "globalThis.fetch = async () => { throw new Error('FETCH_CALLED'); };");
+      const run = (env, mode = []) => execFileSync(process.execPath, ["--import", preload, path.resolve(".github/lib/release-promotion.mjs"), "owner/repo", sha, version, ...mode], {
+        env: { ...process.env, GH_TOKEN: "t", REPO_TOKEN: "t", REPO_API: forgejo, E2E_WAIVER_JOB: "", E2E_WAIVER_REASON: "", ...env }, stdio: "pipe", timeout: 10000,
+      });
+      expect(() => run({ E2E_WAIVER_JOB: "macos-e2e", E2E_WAIVER_REASON: "  " })).toThrow(/requires a reason/);
+      expect(() => run({ E2E_WAIVER_JOB: "macos-e2e", E2E_WAIVER_REASON: "  " }, ["--dry-run"])).toThrow(/requires a reason/);
+      expect(() => run({ E2E_WAIVER_JOB: "smoke", E2E_WAIVER_REASON: "r" })).toThrow(/must be one of/);
+      expect(() => run({ E2E_WAIVER_JOB: "macos-e2e", E2E_WAIVER_REASON: "r" }, ["--dry-run"])).toThrow(/FETCH_CALLED/);
+      expect(() => run({})).toThrow(/FETCH_CALLED/);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });

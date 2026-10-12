@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, X509Certificate } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createUpdateFeed } from "./update-feed.mjs";
@@ -250,14 +250,53 @@ const getAllStatuses = async (fetchImpl, token, repoApi, sha) => {
   }
 };
 
+// A promotion may waive at most one installed E2E job for one invocation. The
+// waiver names the job and carries a reason that the run log and job summary
+// record; it never reaches the public release text.
+export const WAIVABLE_E2E_JOBS = ["linux-e2e", "windows-e2e", "macos-e2e"];
+export const NIGHTLY_WORKFLOW = "Nightly desktop release";
+export const normalizeE2eWaiver = (waiver) => {
+  if (waiver === undefined || waiver === null) return null;
+  if (typeof waiver !== "object" || Array.isArray(waiver)) throw new Error("the E2E waiver must name one job and a reason");
+  const { job, reason } = waiver;
+  const jobText = typeof job === "string" ? job.trim() : job;
+  const reasonText = typeof reason === "string" ? reason.trim() : reason;
+  if ((jobText === undefined || jobText === null || jobText === "") && (reasonText === undefined || reasonText === null || reasonText === "")) return null;
+  if (Array.isArray(job) || (typeof jobText === "string" && (jobText.match(/[a-z]+-e2e/g) ?? []).length > 1)) throw new Error("the E2E waiver may name only one job");
+  if (typeof jobText !== "string" || !WAIVABLE_E2E_JOBS.includes(jobText)) throw new Error(`the E2E waiver job must be one of ${WAIVABLE_E2E_JOBS.join(", ")}`);
+  if (typeof reasonText !== "string" || reasonText === "") throw new Error("the E2E waiver requires a reason");
+  return { job: jobText, reason: reasonText };
+};
+
+// Forgejo attaches each nightly job's result to the commit as a status. Only
+// the failed status of the exact waived nightly job leaves the source CI gate;
+// every other status, source CI included, stays mandatory.
+export const withoutWaivedNightlyStatus = (statuses, waiver) => {
+  const active = normalizeE2eWaiver(waiver);
+  if (!active) return statuses;
+  const context = `${NIGHTLY_WORKFLOW} / ${active.job} (workflow_dispatch)`;
+  return statuses.filter((status) => !(status.context === context && status.status === "failure"));
+};
+
+const BUILD_JOBS = ["build (linux)", "build (windows)", "build (macos)", "publish"];
+const VERIFY_JOB = "verify-requested-e2e";
+
 // A compile check or a targeted nightly cannot establish all-platform runtime
 // proof. Forgejo lists each job of a run as a task, newest attempt first.
-export async function assertInstalledNightly(fetchImpl, token, repoApi, sha) {
-  const response = await request(fetchImpl, token, `${repoApi}/actions/runs?workflow_id=nightly.yml&head_sha=${sha}&status=success&limit=50`);
+// Without a waiver only a successful run with seven successful jobs counts.
+// With a waiver a failed run also counts when the waived job reached a terminal
+// result and every other required job succeeded.
+export async function assertInstalledNightly(fetchImpl, token, repoApi, sha, waiver = null) {
+  const active = normalizeE2eWaiver(waiver);
+  const query = active
+    ? `${repoApi}/actions/runs?workflow_id=nightly.yml&head_sha=${sha}&limit=50`
+    : `${repoApi}/actions/runs?workflow_id=nightly.yml&head_sha=${sha}&status=success&limit=50`;
+  const runStatuses = active ? ["success", "failure"] : ["success"];
+  const response = await request(fetchImpl, token, query);
   const runs = new Set(((await response.json()).workflow_runs ?? [])
-    .filter((run) => run.workflow_id === "nightly.yml" && run.commit_sha === sha && run.status === "success")
+    .filter((run) => run.workflow_id === "nightly.yml" && run.commit_sha === sha && runStatuses.includes(run.status))
     .map((run) => run.index_in_repo));
-  const required = ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"];
+  const required = [...BUILD_JOBS, ...WAIVABLE_E2E_JOBS].filter((name) => name !== active?.job);
   const jobs = new Map();
   for (let page = 1; runs.size > 0 && page <= 100; page += 1) {
     const result = await request(fetchImpl, token, `${repoApi}/actions/tasks?limit=50&page=${page}`);
@@ -269,10 +308,30 @@ export async function assertInstalledNightly(fetchImpl, token, repoApi, sha) {
     if (batch.length < 50) break;
   }
   for (const run of runs) {
-    if (required.every((name) => jobs.get(`${run}/${name}`)?.status === "success")) return;
+    if (!required.every((name) => jobs.get(`${run}/${name}`)?.status === "success")) continue;
+    if (!active) return;
+    if (["success", "failure"].includes(jobs.get(`${run}/${active.job}`)?.status)
+      && ["success", "skipped"].includes(jobs.get(`${run}/${VERIFY_JOB}`)?.status)) return;
   }
-  throw new Error(`No successful full installed nightly for ${sha}`);
+  throw new Error(active
+    ? `No full installed nightly for ${sha} that satisfies the ${active.job} waiver`
+    : `No successful full installed nightly for ${sha}`);
 }
+
+// Workflow commands end at a newline, so the annotation escapes it. Each plain
+// reason line carries a prefix so no reason line can start a workflow command.
+const escapeWorkflowCommand = (text) => text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+export const auditE2eWaiver = (waiver, { log = console.log, summaryFile = process.env.GITHUB_STEP_SUMMARY, sha, version } = {}) => {
+  const active = normalizeE2eWaiver(waiver);
+  if (!active) return;
+  log(`::warning title=E2E waiver::${escapeWorkflowCommand(`${active.job} is waived for ${version} at ${sha}: ${active.reason}`)}`);
+  log(`E2E waiver job: ${active.job}`);
+  log(`E2E waiver reason:\n${active.reason.split(/\r?\n/).map((line) => `| ${line}`).join("\n")}`);
+  if (summaryFile) {
+    const quoted = active.reason.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
+    appendFileSync(summaryFile, `## E2E waiver\n\n- Release: ${version}\n- Source commit: \`${sha}\`\n- Waived job: \`${active.job}\`\n- Reason:\n\n${quoted}\n\n`);
+  }
+};
 
 // The tag starts on Forgejo, the record. Wait until the push mirror carries
 // it to GitHub, so the release attaches to the mirrored tag.
@@ -289,8 +348,9 @@ const waitForMirroredTag = async ({ fetchImpl, token, releaseApi, version, sha, 
   throw new Error(`The push mirror did not carry tag ${version} to GitHub`);
 };
 
-export async function promoteRelease({ token, repository, sha, version, repoHost, dryRun = false, fetchImpl = fetch, verify = verifyNightlyArtifacts, wait = () => new Promise((resolve) => setTimeout(resolve, 15000)), tagAttempts = 40, log = console.log }) {
+export async function promoteRelease({ token, repository, sha, version, repoHost, dryRun = false, fetchImpl = fetch, verify = verifyNightlyArtifacts, wait = () => new Promise((resolve) => setTimeout(resolve, 15000)), tagAttempts = 40, log = console.log, e2eWaiver = null, summaryFile = process.env.GITHUB_STEP_SUMMARY }) {
   validatePromotionInputs(sha, version);
+  const waiver = normalizeE2eWaiver(e2eWaiver);
   if (!token || !/^[^/]+\/[^/]+$/.test(repository)) throw new Error("token and owner/repository are required");
   if (!repoHost?.token || !/^https?:\/\/.+\/api\/v1\/repos\/[^/]+\/[^/]+$/.test(repoHost.api ?? "")) throw new Error("the Forgejo repository API and token are required");
   const releaseApi = `${API}/repos/${repository}`;
@@ -301,8 +361,9 @@ export async function promoteRelease({ token, repository, sha, version, repoHost
   const packageFile = await (await request(fetchImpl, repoHost.token, `${repoApi}/contents/package.json?ref=${sha}`)).json();
   const packageJson = JSON.parse(Buffer.from(packageFile.content, "base64").toString("utf8"));
   if (packageJson.version !== version.slice(1)) throw new Error(`package.json version ${packageJson.version ?? "missing"} does not match ${version}`);
-  assertGreenCi(forgejoCheckRuns(await getAllStatuses(fetchImpl, repoHost.token, repoApi, sha)), sha);
-  await assertInstalledNightly(fetchImpl, repoHost.token, repoApi, sha);
+  assertGreenCi(forgejoCheckRuns(withoutWaivedNightlyStatus(await getAllStatuses(fetchImpl, repoHost.token, repoApi, sha), waiver)), sha);
+  await assertInstalledNightly(fetchImpl, repoHost.token, repoApi, sha, waiver);
+  auditE2eWaiver(waiver, { log, summaryFile, sha, version });
   const nightly = await (await request(fetchImpl, token, `${releaseApi}/releases/tags/nightly`)).json();
   if (nightly.draft || !nightly.prerelease || !nightly.body?.includes(sha)) throw new Error(`nightly release is not finalized at ${sha}`);
   const assets = expectedNightlyAssets(nightly.assets, sha);
@@ -362,10 +423,13 @@ export async function promoteRelease({ token, repository, sha, version, repoHost
 }
 
 // GH_TOKEN reaches GitHub Releases. REPO_TOKEN and REPO_API reach the Forgejo
-// repository that holds the source, its CI, and the tags.
+// repository that holds the source, its CI, and the tags. E2E_WAIVER_JOB and
+// E2E_WAIVER_REASON waive one installed E2E job for this invocation only; both
+// unset or empty means no waiver. GITHUB_STEP_SUMMARY receives the waiver audit.
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [repository, sha, version, mode] = process.argv.slice(2);
   if (mode !== undefined && mode !== "--dry-run") throw new Error("usage: release-promotion.mjs OWNER/REPO SHA VERSION [--dry-run]");
-  await promoteRelease({ token: process.env.GH_TOKEN, repository, sha, version, repoHost: { api: process.env.REPO_API, token: process.env.REPO_TOKEN }, dryRun: mode === "--dry-run" });
+  await promoteRelease({ token: process.env.GH_TOKEN, repository, sha, version, repoHost: { api: process.env.REPO_API, token: process.env.REPO_TOKEN }, dryRun: mode === "--dry-run",
+    e2eWaiver: { job: process.env.E2E_WAIVER_JOB, reason: process.env.E2E_WAIVER_REASON } });
   if (mode !== "--dry-run") console.log(`promoted ${sha} to ${version}`);
 }
