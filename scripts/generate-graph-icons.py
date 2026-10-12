@@ -8,7 +8,7 @@ import struct
 import subprocess
 import tempfile
 import cairosvg
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 ICONS = ROOT / 'src-tauri' / 'icons'
@@ -35,17 +35,28 @@ FOLD_WIDTH, FOLD_HEIGHT = 526, 459
 (ICONS / 'muniment-mark-signed-in.svg').write_text(FOLD['signedIn'] + '\n')
 
 
-def png(pixels, logical):
+def png(pixels, logical, tile=False):
     # The symbol, reversed on the dark card as in the brand avatar, spans 62% of
-    # the card width and sits centered on it.
-    scale = 1024 * .617 / FOLD_WIDTH
-    left, top = (1024 - FOLD_WIDTH * scale) / 2, (1024 - FOLD_HEIGHT * scale) / 2
+    # the card width and sits centered on it. The macOS tile follows Apple's
+    # icon grid: an 824-point rounded card centered on the 1024-point canvas,
+    # with its drop shadow in the margin.
+    inset, card = (100, 824) if tile else (0, 1024)
+    scale = card * .617 / FOLD_WIDTH
+    left, top = inset + (card - FOLD_WIDTH * scale) / 2, inset + (card - FOLD_HEIGHT * scale) / 2
+    radius = 185.4 if tile else 0
     source = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{pixels}" height="{pixels}" viewBox="0 0 1024 1024">'
-              f'<rect width="1024" height="1024" fill="#141716"/>'
+              f'<rect x="{inset}" y="{inset}" width="{card}" height="{card}" rx="{radius}" fill="#141716"/>'
               f'<g transform="translate({left:.2f} {top:.2f}) scale({scale:.5f})">'
               f'<path fill="#FFFFFF" d="{FOLD_BODY}"/><path fill="#2A7264" d="{FOLD_EAR}"/></g></svg>')
     raw = cairosvg.svg2png(bytestring=source.encode(), output_width=pixels * 4, output_height=pixels * 4)
-    image = Image.open(io.BytesIO(raw)).convert('RGBA').resize((pixels, pixels), Image.Resampling.LANCZOS)
+    image = Image.open(io.BytesIO(raw)).convert('RGBA')
+    if tile:
+        unit = pixels * 4 / 1024
+        alpha = image.getchannel('A').filter(ImageFilter.GaussianBlur(10 * unit)).point(lambda value: value * 3 // 10)
+        shadow = Image.new('RGBA', image.size, (0, 0, 0, 0))
+        shadow.paste((0, 0, 0, 255), (0, round(10 * unit)), alpha)
+        image = Image.alpha_composite(shadow, image)
+    image = image.resize((pixels, pixels), Image.Resampling.LANCZOS)
     output = io.BytesIO()
     image.save(output, format='PNG')
     return output.getvalue()
@@ -73,7 +84,7 @@ with tempfile.TemporaryDirectory() as temporary:
         for scale in (1, 2):
             suffix = '@2x' if scale == 2 else ''
             name = f'icon_{logical}x{logical}{suffix}.png'
-            (iconset / name).write_bytes(png(logical * scale, logical))
+            (iconset / name).write_bytes(png(logical * scale, logical, tile=True))
     subprocess.run([ICONUTIL, '--convert', 'icns', str(iconset),
                     '--output', str(ICONS / 'icon.icns')], check=True)
 print('Generated desktop PNG, ICO, ICNS, and sign-in SVG assets.')
