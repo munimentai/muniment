@@ -2063,10 +2063,13 @@
       }
       await refreshInventory()
       onboarding = { name: 'complete', homePath: onboarding.homePath }
+      void refreshProjects()
       void tick().then(() => composer?.focus())
       return
     }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
+    // Projects first loaded before Home existed, so they load again under it.
+    void refreshProjects()
     settingsConnectProvider = option?.catalog ?? ''
     openSettings('providers')
   }
