@@ -1,7 +1,7 @@
 <script>
   // The account sections of Settings: how long threads are kept, the access the
-  // server grants this person, their devices, the programs paired with this
-  // desktop, and the shortcut that starts dictation.
+  // server grants this person, their devices and the programs paired with this
+  // desktop.
   import { onDestroy, onMount, tick } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
 

@@ -20,7 +20,7 @@
   import ClassifierEdit from './ClassifierEdit.svelte'
   import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders } from './provider-catalog.js'
+  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
@@ -428,7 +428,9 @@
               {#snippet detail()}{#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />{/if}{/snippet}
               <!-- Every provider edits and disconnects with icons at the far right. An endpoint edits its
                    address; a key or account provider opens its connect form. -->
-              <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => entry.source === 'local' || entry.source === 'custom' ? editProvider(entry) : chooseProvider(entry.id)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+              {#if entry.source === 'local' || entry.source === 'custom' || catalogProvider(catalogId(entry.id))}
+                <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => entry.source === 'local' || entry.source === 'custom' ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+              {/if}
               <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </Row>
           </section>

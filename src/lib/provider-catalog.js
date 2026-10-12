@@ -68,6 +68,11 @@ const METHOD_LABELS = {
 // is OpenAI, the bridge is Anthropic.
 const PROVIDER_ALIASES = { 'openai-codex': 'openai', 'claude-bridge': 'anthropic', antigravity: 'google', 'kimi-coding': 'kimi' }
 
+// The catalog id a connected provider edits under.
+export function catalogId(id) {
+  return PROVIDER_ALIASES[id] ?? id
+}
+
 export function catalogProvider(id) {
   return PROVIDERS.find((provider) => provider.id === id) ?? null
 }
@@ -75,7 +80,7 @@ export function catalogProvider(id) {
 export function providerName(id, inventory = null) {
   const connected = inventory?.providers?.find((provider) => provider.id === id)
   if (connected?.name) return connected.name
-  return catalogProvider(PROVIDER_ALIASES[id] ?? id)?.name ?? id
+  return catalogProvider(catalogId(id))?.name ?? id
 }
 
 export function methodLabel(provider, method) {

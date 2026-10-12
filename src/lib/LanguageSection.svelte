@@ -7,7 +7,7 @@
 </script>
 
 <div class="language-preferences">
-  <PageHead intro="Choose the language Muniment and its Browser tab use, and the engine the address bar searches." />
+  <PageHead intro="Choose the language the Browser tab uses, and the engine the address bar searches." />
   <BrowserLanguage {tauri} />
   <BrowserSearch />
 </div>
