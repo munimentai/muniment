@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createDictationController } from './dictation-controller.js'
 
-function setup({ invoke } = {}) {
+function setup({ invoke, ...options } = {}) {
   let draft = ''
   const listeners = []
   const errors = []
@@ -21,6 +21,7 @@ function setup({ invoke } = {}) {
     updateDraft: (next) => { draft = next },
     onState: (state) => states.push({ ...state }),
     onError: (message) => errors.push(message),
+    ...options,
   })
   return {
     controller,
@@ -59,6 +60,29 @@ describe('dictation controller', () => {
     await context.controller.start()
     expect(starts).toBe(2)
     context.controller.cleanup()
+  })
+
+  it('passes start options, cleans each transcript and hands the result to completion', async () => {
+    const onComplete = vi.fn()
+    const invoke = vi.fn(async (command) => ({ state: command === 'dictation_start' ? 'running' : 'stopped' }))
+    const context = setup({ invoke, onComplete, transform: (text) => text.replace('um ', ''), startOptions: () => ({ mute: true }) })
+    await context.controller.start()
+    expect(invoke).toHaveBeenCalledWith('dictation_start', { options: { mute: true } })
+    context.transcript(0, 'um hello')
+    await context.controller.stop()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(context.draft()).toBe('hello')
+    expect(onComplete).toHaveBeenCalledWith('hello')
+  })
+
+  it('does not complete a cancelled dictation', async () => {
+    const onComplete = vi.fn()
+    const context = setup({ onComplete })
+    await context.controller.start()
+    context.transcript(0, 'hello')
+    await context.controller.stop(true)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(onComplete).not.toHaveBeenCalled()
   })
 
   it('ignores transcript events from a stale capture epoch', async () => {

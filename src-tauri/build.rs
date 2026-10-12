@@ -168,6 +168,7 @@ const APP_COMMANDS: &[&str] = &[
     "dictation_start",
     "dictation_stop",
     "dictation_status",
+    "voice_input_devices",
     "runtime_state",
     "runtime_start",
     "runtime_stop",

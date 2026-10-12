@@ -30,6 +30,7 @@ pub struct CapturedPcm {
 pub struct VoiceCaptureState {
     active: Mutex<Option<ActiveCapture>>,
     runtime_failed: Arc<AtomicBool>,
+    input: Mutex<Option<String>>,
 }
 
 struct ActiveCapture {
@@ -52,7 +53,14 @@ impl VoiceCaptureState {
         Self {
             active: Mutex::new(None),
             runtime_failed: Arc::new(AtomicBool::new(false)),
+            input: Mutex::new(None),
         }
+    }
+
+    /// Names the input device the next capture opens. None, or a device that
+    /// is no longer connected, opens the system default.
+    pub fn set_input(&self, name: Option<String>) {
+        *self.input.lock().unwrap_or_else(|e| e.into_inner()) = name;
     }
 
     pub fn start(&self) -> Result<(), VoiceCaptureError> {
@@ -67,10 +75,11 @@ impl VoiceCaptureState {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let (stop_tx, stop_rx) = mpsc::sync_channel(1);
         let runtime_failed = self.runtime_failed.clone();
+        let input = self.input.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let capture_thread = thread::Builder::new()
             .name("voice-capture".into())
             .spawn(move || {
-                let result = Self::open_stream(runtime_failed).and_then(|(stream, consumer)| {
+                let result = Self::open_stream(input, runtime_failed).and_then(|(stream, consumer)| {
                     stream
                         .play()
                         .map_err(|_| VoiceCaptureError::StreamBuildFailed)?;
@@ -148,10 +157,17 @@ impl VoiceCaptureState {
     }
 
     fn open_stream(
+        input: Option<String>,
         runtime_failed: Arc<AtomicBool>,
     ) -> Result<(cpal::Stream, PcmConsumer), VoiceCaptureError> {
-        let device = cpal::default_host()
-            .default_input_device()
+        let host = cpal::default_host();
+        let device = input
+            .and_then(|name| {
+                host.input_devices()
+                    .ok()?
+                    .find(|device| device.name().is_ok_and(|candidate| candidate == name))
+            })
+            .or_else(|| host.default_input_device())
             .ok_or(VoiceCaptureError::NoInputDevice)?;
         let supported = device
             .default_input_config()
@@ -256,6 +272,17 @@ impl Drop for VoiceCaptureState {
             active.take();
         }
     }
+}
+
+/// The names of the input devices dictation can open.
+#[tauri::command]
+pub async fn voice_input_devices() -> Vec<String> {
+    let Ok(devices) = cpal::default_host().input_devices() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = devices.filter_map(|device| device.name().ok()).collect();
+    names.dedup();
+    names
 }
 
 #[cfg(test)]

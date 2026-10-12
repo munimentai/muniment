@@ -71,7 +71,7 @@ Chat can list, read, save and run agents through harness tools backed by the sam
 Daily, weekday and weekly schedules use the host time zone and the local background service.
 Due runs wait for the current reply. A missed schedule runs once when the service returns.
 An interrupted dispatch requires review instead of an automatic retry. Run results link to their thread.
-Profile has separate name, preferred name, work and instructions fields backed by `memory/profile.md`. Memory lists, edits, restores and exports saved facts. Voice holds the dictation shortcut and the Parakeet install. Settings that run ahead of the runtime, Memory's Recall, Companies' Backups and the rest of Voice, stay on the device in `device-preferences.js` until the runtime reads them.
+Profile has separate name, preferred name, work and instructions fields backed by `memory/profile.md`. Memory lists, edits, restores and exports saved facts. Voice holds the dictation shortcut and its hold, toggle or auto behavior, the microphone, the Parakeet install, start and stop tones, a macOS output mute, filler removal, custom spellings and send on stop. Each dictation reads them at its start, and Escape cancels from any app while it listens. Memory's Recall and Companies' Backups run ahead of the runtime and stay on the device in `device-preferences.js` until it reads them.
 Unrecognized profile sections remain editable. Each new reply receives the saved profile.
 Durable facts live in `memory/facts/<id>.md` with their source. Users can edit and delete them.
 The memory-save tool records the originating thread and run. It rejects credentials.

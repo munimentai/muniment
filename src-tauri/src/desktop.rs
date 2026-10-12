@@ -49,6 +49,7 @@ mod subscription_probe;
 mod test_support;
 mod thread_retention;
 mod voice_capture;
+mod voice_output;
 mod window_state;
 #[cfg(any(target_os = "windows", all(test, unix)))]
 mod windows_runtime_service;
@@ -327,6 +328,7 @@ pub fn run() {
             dictation::dictation_start,
             dictation::dictation_stop,
             dictation::dictation_status,
+            voice_capture::voice_input_devices,
             runtime_owner::runtime_state,
             runtime_owner::runtime_start,
             runtime_owner::runtime_stop,

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { handsFreeActivationDelay } from './dictation-state.js'
 import { createVoiceGesture } from './voice-gesture.js'
 
-function setup() {
+function setup(behavior = 'auto') {
   let requested = false
   let status = { state: 'idle' }
   let signedIn = true
@@ -25,6 +25,7 @@ function setup() {
     busy: () => dictationBusy,
     signedIn: () => signedIn,
     hasActiveRun: () => activeRun,
+    behavior: () => behavior,
   })
   return {
     gesture,
@@ -152,5 +153,33 @@ describe('voice gesture', () => {
     vi.advanceTimersByTime(handsFreeActivationDelay)
 
     expect(context.stop).not.toHaveBeenCalled()
+  })
+
+  it('stops a hold on release, however short the press', () => {
+    const context = setup('hold')
+    context.gesture.globalShortcut({ state: 'Pressed' })
+    context.gesture.globalShortcut({ state: 'Released' })
+    expect(context.start).toHaveBeenCalledOnce()
+    expect(context.stop).toHaveBeenCalledOnce()
+
+    context.gesture.click()
+    expect(context.start).toHaveBeenCalledTimes(2)
+    context.gesture.click()
+    expect(context.stop).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts a toggle on one press and stops it on the next, even while busy', () => {
+    const context = setup('toggle')
+    context.gesture.globalShortcut({ state: 'Pressed' })
+    context.gesture.globalShortcut({ state: 'Released' })
+    vi.advanceTimersByTime(handsFreeActivationDelay * 2)
+    expect(context.start).toHaveBeenCalledOnce()
+    expect(context.stop).not.toHaveBeenCalled()
+
+    context.setBusy(true)
+    context.gesture.globalShortcut({ state: 'Pressed' })
+    context.gesture.globalShortcut({ state: 'Released' })
+    expect(context.stop).toHaveBeenCalledOnce()
+    expect(context.start).toHaveBeenCalledOnce()
   })
 })

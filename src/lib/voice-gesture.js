@@ -8,6 +8,7 @@ export function createVoiceGesture({
   busy,
   signedIn,
   hasActiveRun,
+  behavior = () => 'auto',
   now = () => Date.now(),
 }) {
   let suppressClick = false
@@ -37,10 +38,20 @@ export function createVoiceGesture({
     releasePending = false
   }
 
+  // Auto holds to talk, or goes hands-free on a second press. Hold stops on
+  // release. Toggle starts on one press and stops on the next.
   function activate(source) {
     const activatedAt = now()
     activationStartedAt = activatedAt
     activationSource = source
+    if (behavior() !== 'auto') {
+      if (readRequested() || isDictationActive(readStatus())) {
+        void stop()
+        return true
+      }
+      void start()
+      return false
+    }
     if (handsFree) {
       void stop()
       return true
@@ -57,6 +68,11 @@ export function createVoiceGesture({
   function release(source, cancelled = false) {
     if (cancelled) {
       void stop(true)
+      return
+    }
+    if (behavior() === 'toggle') return
+    if (behavior() === 'hold') {
+      void stop()
       return
     }
     if (handsFree) return
@@ -126,12 +142,13 @@ export function createVoiceGesture({
       return
     }
     const skipRelease = activate('click')
-    if (!skipRelease) release('click')
+    if (!skipRelease && behavior() === 'auto') release('click')
   }
 
   function globalShortcut({ state }) {
     if (state === 'Pressed') {
-      if (globalHeld || !signedIn() || hasActiveRun() || (busy() && !releasePending && !handsFree)) return
+      const stopsRun = behavior() === 'toggle' && isDictationActive(readStatus())
+      if (globalHeld || !signedIn() || hasActiveRun() || (busy() && !releasePending && !handsFree && !stopsRun)) return
       globalHeld = true
       ignoreGlobalRelease = activate('global')
     } else if (state === 'Released' && globalHeld) {

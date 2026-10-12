@@ -80,6 +80,7 @@
   import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
+  import { cleanTranscript, dictationStartOptions, readVoiceSettings } from './lib/voice-settings.js'
   import { createWindowTitle } from './lib/window-title.js'
 
   const version = __APP_VERSION__
@@ -1156,6 +1157,7 @@
     fitArtifactRail()
   }
 
+  let dictationEscape = false
   const dictationController = createDictationController({
     invoke: (...args) => tauri.invoke(...args),
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
@@ -1164,6 +1166,7 @@
     blocked: () => !!active,
     onState: (state) => {
       dictation = state.status
+      holdDictationEscape(isDictationActive(state.status))
       dictationCommandPending = state.commandPending
       dictationRequested = state.requested
       dictationFinishing = state.finishing
@@ -1176,7 +1179,25 @@
     onInactive: () => voiceGesture.inactive(),
     onCancel: () => voiceGesture.cancel(),
     onFocus: () => tick().then(() => composer?.focus()),
+    onComplete: sendDictation,
+    transform: (text) => cleanTranscript(text, readVoiceSettings()),
+    startOptions: () => dictationStartOptions(readVoiceSettings()),
   })
+
+  // Send when dictation stops: the finished transcript sends as Enter would.
+  function sendDictation(transcript) {
+    if (!transcript.trim() || !readVoiceSettings().send || active || composerActionInactive()) return
+    if (needsModel()) openModelProviders()
+    else chatController.send()
+  }
+
+  // Escape cancels dictation from any app while it listens, as the Voice page says.
+  function holdDictationEscape(listening) {
+    if (listening === dictationEscape) return
+    dictationEscape = listening
+    if (listening) Promise.resolve().then(() => register('Escape', ({ state }) => { if (state === 'Pressed') stopDictation(true) })).catch(() => { dictationEscape = false })
+    else Promise.resolve().then(() => unregister('Escape')).catch(() => {})
+  }
 
   function stopSpeechInstallPolling() {
     clearTimeout(speechInstallTimer)
@@ -1407,6 +1428,7 @@
     busy: dictationBusy,
     signedIn: () => workspaceMode(),
     hasActiveRun: () => !!active,
+    behavior: () => readVoiceSettings().behavior,
   })
   const { pointerDown: voicePointerDown, pointerEnd: voicePointerEnd, keyDown: voiceKeyDown, keyUp: voiceKeyUp, click: voiceClick, globalShortcut: globalVoiceShortcut } = voiceGesture
 
@@ -1961,6 +1983,7 @@
       desktopClientUnlisten?.()
       launcherUnlisten?.()
       voiceGesture.cleanup()
+      holdDictationEscape(false)
       transcriptController.cleanup()
       stopDragDrop?.()
       voiceShortcutManager.cleanup()

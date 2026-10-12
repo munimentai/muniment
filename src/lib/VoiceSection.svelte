@@ -1,8 +1,7 @@
 <script>
   // Settings → Voice: the system-wide dictation shortcut, the microphone, the
-  // on-device speech model and how a transcript lands. The shortcut and the
-  // speech model run today. The rest is a design ahead of the runtime, and its
-  // choices stay on this device until dictation reads them.
+  // on-device speech model and how a transcript lands. Each dictation reads
+  // these choices when it starts.
   import { onDestroy, onMount } from 'svelte'
   import ChoiceField from './ui/ChoiceField.svelte'
   import Toggle from './Toggle.svelte'
@@ -12,7 +11,7 @@
   import Button from './ui/Button.svelte'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
   import { formatBytes, installStateWords } from './speech-install.js'
-  import { readDevicePreference, saveDevicePreference } from './device-preferences.js'
+  import { readVoiceSettings, saveVoiceSettings } from './voice-settings.js'
 
   let { tauri, voiceShortcut = '', voiceShortcutChanging = false, onVoiceShortcutChange = async () => true, defaultVoiceShortcut = '' } = $props()
 
@@ -47,15 +46,22 @@
     else shortcutStatus = 'That shortcut is unavailable. Your previous shortcut still works.'
   }
 
-  // Choices ahead of the runtime, kept on this device.
-  let voice = $state(readDevicePreference('muniment.voice', { behavior: 'auto', microphone: 'default', mute: true, sound: false, fillers: true, words: [], send: false }))
-  const remember = (next) => { voice = saveDevicePreference('muniment.voice', { ...voice, ...next }) }
+  let voice = $state(readVoiceSettings())
+  const remember = (next) => { voice = saveVoiceSettings({ ...voice, ...next }) }
+  // Muting the output is a macOS feature.
+  const canMute = navigator.platform.startsWith('Mac')
   const behaviors = [
     { value: 'auto', label: 'Hold, or press twice for hands-free' },
     { value: 'hold', label: 'Hold to talk' },
     { value: 'toggle', label: 'Press to start and stop' },
   ]
-  let microphones = $state([{ value: 'default', label: 'System default' }])
+  let devices = $state([])
+  // A saved microphone that is not connected stays listed, and dictation uses the default until it returns.
+  const microphones = $derived([
+    { value: 'default', label: 'System default' },
+    ...devices.map((name) => ({ value: name, label: name })),
+    ...(voice.microphone !== 'default' && !devices.includes(voice.microphone) ? [{ value: voice.microphone, label: `${voice.microphone} (not connected)` }] : []),
+  ])
   let word = $state('')
   function addWord(event) {
     event.preventDefault()
@@ -86,11 +92,7 @@
   onMount(async () => {
     try { facts = await tauri.invoke('parakeet_install_facts') } catch (_) { facts = null }
     await readInstall()
-    try {
-      const devices = await navigator.mediaDevices?.enumerateDevices?.() ?? []
-      const inputs = devices.filter((device) => device.kind === 'audioinput' && device.deviceId !== 'default' && device.label)
-      if (inputs.length) microphones = [microphones[0], ...inputs.map((device) => ({ value: device.deviceId, label: device.label }))]
-    } catch (_) {}
+    try { devices = (await tauri.invoke('voice_input_devices')) ?? [] } catch (_) { devices = [] }
   })
   onDestroy(() => clearTimeout(poll))
 </script>
@@ -113,16 +115,18 @@
     <Row title="Shortcut behavior" description="How a press starts and ends dictation.">
       <div class="choice"><ChoiceField label="Shortcut behavior" hideLabel value={voice.behavior} options={behaviors} onchange={(behavior) => remember({ behavior })} /></div>
     </Row>
-    <Row title="Cancel dictation" description="Stops without inserting the words."><kbd>Escape</kbd></Row>
+    <Row title="Cancel dictation" description="Stops without inserting the words, from any app."><kbd>Escape</kbd></Row>
   </Group>
 
   <Group heading="Microphone">
     <Row title="Input" description="The microphone dictation listens to.">
       <div class="choice"><ChoiceField label="Microphone" hideLabel value={voice.microphone} options={microphones} onchange={(microphone) => remember({ microphone })} /></div>
     </Row>
-    <Row title="Mute other audio while dictating" description="Music and calls pause while you speak.">
-      <Toggle checked={voice.mute} label="Mute other audio while dictating" onchange={(mute) => remember({ mute })} />
-    </Row>
+    {#if canMute}
+      <Row title="Mute other audio while dictating" description="This computer's sound mutes while you speak.">
+        <Toggle checked={voice.mute} label="Mute other audio while dictating" onchange={(mute) => remember({ mute })} />
+      </Row>
+    {/if}
     <Row title="Start and stop sounds" description="A short tone marks each end of a dictation.">
       <Toggle checked={voice.sound} label="Start and stop sounds" onchange={(sound) => remember({ sound })} />
     </Row>
@@ -147,13 +151,13 @@
   </Group>
 
   <Group heading="Transcription">
-    <Row title="Remove filler words" description="Drops um, uh and false starts from the transcript.">
+    <Row title="Remove filler words" description="Drops um, uh and similar fillers from the transcript.">
       <Toggle checked={voice.fillers} label="Remove filler words" onchange={(fillers) => remember({ fillers })} />
     </Row>
     <Row title="Send when dictation stops" description="The chat sends the transcript without a press of Enter.">
       <Toggle checked={voice.send} label="Send when dictation stops" onchange={(send) => remember({ send })} />
     </Row>
-    <Row title="Custom words" description="Names and terms the model should spell your way.">
+    <Row title="Custom words" description="Names and terms the transcript spells your way.">
       {#snippet detail()}
         {#if voice.words.length}
           <ul class="word-list" aria-label="Custom words">

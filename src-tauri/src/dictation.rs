@@ -8,11 +8,12 @@ use muniment_core::asr::{
     AsrLifecycleError, AsrModelSetStamp, DictationPipeline, OfflineParakeetRecognizer,
     SileroVoiceActivityDetector, VadDecisionSource, PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::model_install::parakeet_lifecycle;
 use crate::voice_capture::{CapturedPcm, VoiceCaptureError, VoiceCaptureState};
+use crate::voice_output::{self, OutputMute, Tone};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -31,6 +32,15 @@ pub enum DictationStatus {
         category: &'static str,
         message: &'static str,
     },
+}
+
+/// The Voice settings a dictation reads when it starts.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DictationOptions {
+    microphone: Option<String>,
+    mute: bool,
+    sound: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -151,6 +161,7 @@ impl DictationState {
         &self,
         app: AppHandle<R>,
         capture: Arc<VoiceCaptureState>,
+        options: DictationOptions,
     ) -> DictationStatus {
         let (generation, stop) = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -172,7 +183,17 @@ impl DictationState {
             let emit = move |event| {
                 let _ = app.emit("dictation-event", event);
             };
+            // The start tone plays before the microphone opens, so the
+            // transcript never hears it, and before the output mutes.
+            if options.sound {
+                voice_output::play(Tone::Start);
+            }
+            let muted = options.mute.then(OutputMute::engage);
             let result = runner(&root, &capture, &stop, &running, &emit);
+            drop(muted);
+            if options.sound && result.is_ok() {
+                voice_output::play(Tone::Stop);
+            }
             let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
             if state.generation != generation {
                 return;
@@ -407,8 +428,11 @@ pub fn dictation_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DictationState>,
     capture: State<'_, Arc<VoiceCaptureState>>,
+    options: Option<DictationOptions>,
 ) -> DictationStatus {
-    state.start(app, capture.inner().clone())
+    let options = options.unwrap_or_default();
+    capture.set_input(options.microphone.clone());
+    state.start(app, capture.inner().clone(), options)
 }
 
 #[tauri::command]
@@ -622,12 +646,12 @@ mod tests {
             let _ = tx.send(event.payload().to_owned());
         });
         assert_eq!(
-            dictation_start(app.handle().clone(), app.state(), app.state()),
+            dictation_start(app.handle().clone(), app.state(), app.state(), None),
             DictationStatus::Starting
         );
         wait_status(&app, DictationStatus::Running);
         assert_eq!(
-            dictation_start(app.handle().clone(), app.state(), app.state()),
+            dictation_start(app.handle().clone(), app.state(), app.state(), None),
             DictationStatus::Running
         );
         assert_eq!(
@@ -664,7 +688,7 @@ mod tests {
             discontinuities.clone(),
         );
         let app = app_with_runner(runner);
-        dictation_start(app.handle().clone(), app.state(), app.state());
+        dictation_start(app.handle().clone(), app.state(), app.state(), None);
         wait_status(&app, DictationStatus::Running);
         std::thread::sleep(Duration::from_millis(30));
         dictation_stop(app.state());
@@ -695,7 +719,7 @@ mod tests {
         app.handle().listen("dictation-event", move |event| {
             let _ = tx.send(event.payload().to_owned());
         });
-        dictation_start(app.handle().clone(), app.state(), app.state());
+        dictation_start(app.handle().clone(), app.state(), app.state(), None);
         let expected = DictationStatus::Failed {
             category: "audioFailed",
             message: "Dictation audio could not be processed.",

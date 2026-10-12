@@ -178,6 +178,7 @@
     "allow-dictation-start",
     "allow-dictation-stop",
     "allow-dictation-status",
+    "allow-voice-input-devices",
     "allow-runtime-state",
     "allow-runtime-start",
     "allow-open-login-items",

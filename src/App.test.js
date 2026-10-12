@@ -85,6 +85,7 @@ let providerScan
 let globalShortcutHandler
 let registerGlobalShortcut
 let unregisterGlobalShortcut
+let globalShortcutHandlers
 let registeredShortcuts
 let threadSummaryResult
 let olderThreadSummaryResult
@@ -306,9 +307,11 @@ beforeEach(() => {
   dialogResult = null
   globalShortcutHandler = undefined
   registeredShortcuts = new Set()
+  globalShortcutHandlers = new Map()
   registerGlobalShortcut = vi.fn(async (shortcut, handler) => {
     registeredShortcuts.add(shortcut)
-    globalShortcutHandler = handler
+    globalShortcutHandlers.set(shortcut, handler)
+    if (shortcut !== 'Escape') globalShortcutHandler = handler
   })
   unregisterGlobalShortcut = vi.fn(async (shortcut) => { registeredShortcuts.delete(shortcut) })
   invoke = vi.fn(async (command, payload) => {
@@ -4356,11 +4359,41 @@ describe('voice dictation', () => {
     await waitFor(() => expect(globalShortcutHandler).toBeTypeOf('function'))
 
     globalShortcutHandler({ state: 'Pressed' })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) })))
     await vi.advanceTimersByTimeAsync(1_000)
     globalShortcutHandler({ state: 'Released' })
 
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'dictation_stop')).toHaveLength(1))
+  })
+
+  it('starts with the Voice settings, toggles from the shortcut and cancels on a global Escape', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    localStorage.setItem('muniment.voice', JSON.stringify({ behavior: 'toggle', microphone: 'USB Mic', sound: true }))
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'dictation_start') return { state: 'running' }
+      if (command === 'dictation_stop') return { state: 'stopped' }
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(globalShortcutHandler).toBeTypeOf('function'))
+
+    globalShortcutHandler({ state: 'Pressed' })
+    globalShortcutHandler({ state: 'Released' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start', { options: { microphone: 'USB Mic', mute: false, sound: true } }))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(invoke).not.toHaveBeenCalledWith('dictation_stop')
+    await waitFor(() => expect(registeredShortcuts.has('Escape')).toBe(true))
+
+    globalShortcutHandlers.get('Escape')({ state: 'Pressed' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_stop'))
+    await waitFor(() => expect(registeredShortcuts.has('Escape')).toBe(false))
   })
 
   it('does not treat a tap after a long hold as a rapid double activation', async () => {
@@ -4505,7 +4538,7 @@ describe('voice dictation', () => {
     const signedOut = render(App)
     await screen.findByRole('button', { name: 'Sign in' })
     globalShortcutHandler({ state: 'Pressed' })
-    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) }))
     signedOut.unmount()
 
     signedIn = true
@@ -4514,7 +4547,7 @@ describe('voice dictation', () => {
     await fireEvent.input(composer, { target: { value: 'question' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     globalShortcutHandler({ state: 'Pressed' })
-    expect(invoke).not.toHaveBeenCalledWith('dictation_start')
+    expect(invoke).not.toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) }))
     resolveSubmit({ runId: 'run-1', attachments: [] })
   })
 
@@ -4729,7 +4762,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
 
     await fireEvent.pointerDown(voice, { button: 0, pointerId: 1 })
-    expect(invoke).toHaveBeenCalledWith('dictation_start')
+    expect(invoke).toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) }))
     dictationListener({ payload: { type: 'transcript', text: 'after' } })
     await fireEvent.pointerUp(voice, { button: 0, pointerId: 1 })
     await vi.advanceTimersByTimeAsync(300)
@@ -4975,7 +5008,7 @@ describe('voice dictation', () => {
     await fireEvent.input(composer, { target: { value: 'Edited transcript' } })
     await stopClickCapture(voice)
 
-    expect(invoke).toHaveBeenCalledWith('dictation_start')
+    expect(invoke).toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) }))
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
     expect(composer).toHaveValue('Edited transcript')
@@ -7323,7 +7356,7 @@ describe('composer auto-grow', () => {
     expect(composer.style.height).toBe(`${3 * row}px`)
 
     globalShortcutHandler({ state: 'Pressed' })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) })))
     dictationListener({ payload: { type: 'transcript', text: `\n${lines(4)}` } })
     await waitFor(() => expect(composer.style.height).toBe(`${7 * row}px`))
 
@@ -7354,7 +7387,7 @@ describe('composer auto-grow', () => {
     expect(composer.scrollTop).toBe(37)
 
     globalShortcutHandler({ state: 'Pressed' })
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) })))
     dictationListener({ payload: { type: 'transcript', text: `\n${lines(4)}` } })
     await waitFor(() => expect(composer.scrollTop).toBe(composer.scrollHeight))
 

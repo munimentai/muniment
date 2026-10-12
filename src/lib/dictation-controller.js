@@ -13,6 +13,9 @@ export function createDictationController({
   onInactive = () => {},
   onCancel = () => {},
   onFocus = () => {},
+  onComplete = () => {},
+  transform = (text) => text,
+  startOptions = () => undefined,
 }) {
   let status = { state: 'idle' }
   let pollTimer
@@ -67,7 +70,7 @@ export function createDictationController({
     unlisten = undefined
     const stop = await listen('dictation-event', ({ payload }) => {
       if (epoch !== captureEpoch || payload.type !== 'transcript' || cancelled || (!isDictationActive(status) && !finishing)) return
-      transcript = appendTranscript(transcript, payload.text)
+      transcript = appendTranscript(transcript, transform(payload.text))
       updateDraft(appendTranscript(draftSnapshot, transcript))
       if (finishing) waitForTranscriptQuiet(epoch)
     })
@@ -81,7 +84,9 @@ export function createDictationController({
     completionEpoch = undefined
     finishing = false
     publish()
-    if (!cancelled) Promise.resolve().then(onFocus)
+    if (cancelled) return
+    const text = transcript
+    Promise.resolve().then(onFocus).then(() => onComplete(text))
   }
 
   function waitForTranscriptQuiet(epoch) {
@@ -185,7 +190,8 @@ export function createDictationController({
     try {
       await listenForDictation(captureEpoch)
       if (destroyed || cancelled) return
-      const next = await invoke('dictation_start')
+      const options = startOptions()
+      const next = await (options ? invoke('dictation_start', { options }) : invoke('dictation_start'))
       if (destroyed) return
       applyStatus(next)
       if (!requested && isDictationActive(status)) {
