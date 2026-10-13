@@ -32,12 +32,12 @@ mod memory;
 mod memory_import;
 mod model_install;
 mod model_router;
+mod model_service;
 mod onboarding_diagnostics;
 mod onboarding_import;
 mod onboarding_scan;
 mod provider_scan;
 mod personal_memory;
-mod pool_login;
 mod projects;
 mod workspace_tools;
 mod workspace_actions;
@@ -65,7 +65,6 @@ fn restart_muniment(app: tauri::AppHandle) {
 }
 
 pub fn run() {
-    muniment_desktop_integration::provider_clients::register_provider_clients();
     subscription_probe::restore_profile();
     #[cfg(feature = "cef-smoke")]
     for arg in std::env::args() {
@@ -159,15 +158,11 @@ pub fn run() {
                 app.manage(chat::ChatState::new(runtime_activity.clone()));
             }
             runtime_owner::setup(app.handle());
-            app.manage(account_login::AccountLoginState::default());
             let parakeet_root = state.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
             )?);
             app.manage(dictation::DictationState::new(parakeet_root));
-            // The router serves Pi, so it comes up with the shell that owns Pi.
-            app.manage(model_router::RouterState::new());
-            model_router::restore(app.handle());
             Ok(())
         })
         .on_window_event(launcher::window_event)

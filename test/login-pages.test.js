@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { createServer, ServerResponse } from 'node:http'
 import { once } from 'node:events'
+import { pathToFileURL } from 'node:url'
 import { expect, it } from 'vitest'
-import { installLoginPages } from '../src-tauri/src/muniment_login.mjs'
+import { corePath } from '../scripts/muniment-core.mjs'
 import { graphSvg } from '../src/lib/graph-mark.js'
+
+// The runtime's sign-in extension lives in muniment-core beside the Pi adapter.
+const { installLoginPages } = await import(pathToFileURL(corePath('crates/core/src/engine/muniment_login.mjs')).href)
 
 it('brands callback pages without changing validation, status, or other responses', async () => {
   const original = ServerResponse.prototype.end

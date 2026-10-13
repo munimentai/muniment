@@ -759,7 +759,7 @@ mod cases {
         subscribe.send(()).unwrap();
         assert_eq!(
             received.recv_timeout(Duration::from_secs(1)).unwrap(),
-            json!({"phase": "running", "text": "forwarded"})
+            SubscriptionEvent::Chat(json!({"phase": "running", "text": "forwarded"}))
         );
         assert!(observations.recv_timeout(Duration::from_secs(1)).unwrap());
         assert_eq!(state.runtime_client_connections(), (true, true));

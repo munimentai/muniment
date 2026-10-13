@@ -23,7 +23,7 @@ use muniment_core::attach::{
 };
 use muniment_core::attach::{ApprovalCoordinator, ProtocolError};
 #[cfg(any(unix, target_os = "windows"))]
-use muniment_core::attach::{DesktopClientHolder, DesktopClientStopHandle};
+use muniment_core::attach::{DesktopClientHolder, DesktopClientStopHandle, SubscriptionEvent};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -80,6 +80,8 @@ mod migration;
 mod state;
 
 pub use commands::*;
+#[cfg(unix)]
+pub(crate) use listener::runtime_profile_endpoint;
 #[cfg(unix)]
 pub(crate) use listener::start_desktop_client;
 #[cfg(target_os = "linux")]

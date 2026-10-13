@@ -171,7 +171,7 @@ and Decision models share its state, and the Settings sidebar picks the page. Fu
 in account details. One searchable model list holds visibility and routing
 statements. Each provider leads with the newest model of each family, dated from models.dev, and the models the user turned on. Older models fold under Other models and stay out of the picker until turned on. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
-account sign-in runs Pi's own OAuth flow in an RPC process the desktop owns
+account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns
 and lands in the same file, or in the router's pool when the router pools
 its family, and a local or custom endpoint goes into Pi's `models.json`, so Pi uses each at once and nothing leaves the machine except
 to that provider. Startup and Settings supplement bundled models through xAI key or subscription discovery and OpenAI, Anthropic and Google key discovery. Unsupported sign-ins keep bundled models. Refresh models bypasses the ten-minute cache. Failed requests preserve saved models, overrides and defaults. Discoveries feed the picker, routing and classifier choices. The section
@@ -179,9 +179,9 @@ lists connected providers with their source and Disconnect. Connect account
 opens the provider catalog and searches its connection methods. A provider opens on one view with its first
 method, an account where Pi signs in, Claude Code for Anthropic through
 `pi-claude-bridge`, an API key, or a server URL, with its other methods one
-switch away. The OpenAI redirect lands on the desktop's own page on port
+switch away. The OpenAI redirect lands on the runtime's own page on port
 1455, held on both loopback addresses, in muniment's mark and voice, and the
-desktop hands Pi the code. A port another program holds stops the sign-in
+runtime hands Pi the code. A port another program holds stops the sign-in
 with its number. A
 connect adopts the provider's largest-context model that answers a probe as
 the default, and an account sign-in brings the app to the front. A local server is a
@@ -190,7 +190,7 @@ endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
 **Routing leads Settings → Decision models.** Pi's `auth.json` holds one credential per
-provider id, so a second account of one provider cannot live there. The router
+provider id, so a second account of one provider cannot live there. The router, which the runtime runs,
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
 registers as the one Pi provider `muniment-router`. It is off by default, a

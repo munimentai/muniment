@@ -8,6 +8,7 @@ mod directories;
 mod host;
 pub mod install_lock;
 mod macos_activation;
+mod sign_in_page;
 mod start_record;
 #[cfg(unix)]
 mod upgrade_watch;
