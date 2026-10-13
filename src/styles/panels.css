@@ -59,6 +59,9 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
  * Framed fills the frame with paper, sets the sidebar on it with no panel and
  * text a step quieter, and draws each content panel as a card inset by
  * --card-ring inside its box, clipped to the card and edged with a hairline.
+ * A card's box reaches up through the ring and the band's gap behind a
+ * transparent top border, so the card's top hairline lies on the seam a
+ * frameless panel shows and its content keeps the frameless position.
  */
 :root {
   --card-ring: 3px;
@@ -82,8 +85,12 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
   background: transparent; color: var(--ink);
 }
 :root[data-frame="framed"] .workspace > [data-panel]:not([data-panel="sidebar"]) {
+  --card-lift: calc(var(--card-ring) + var(--titlebar-band) - var(--titlebar-height));
+  margin-top: calc(-1 * var(--card-lift));
+  border-top: var(--card-lift) solid transparent;
   border-radius: calc(var(--radius-panel) + var(--card-ring));
-  box-shadow: inset 0 0 0 calc(var(--card-ring) + 1px) var(--border);
+  outline: 1px solid var(--border);
+  outline-offset: calc(-1 * (var(--card-ring) + 1px));
   clip-path: inset(var(--card-ring) round var(--radius-panel));
 }
 /* A scrollbar rests on its box's right edge, so a card's scrollers step inside the ring and keep their content in place. */

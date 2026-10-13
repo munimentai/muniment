@@ -215,9 +215,14 @@ async function checkPaperFrame(browser, baseUrl) {
               for (const [index, panel] of panels.entries()) {
                 const box = boxes[index]
                 const panelStyle = getComputedStyle(panel)
-                // The panels start at the 36px band the workspace grid names, not at the title row plus the frame.
-                fail(near(box.top, parseFloat(style.getPropertyValue('--titlebar-band'))), 'The top frame changed.')
                 const sidebar = panel.classList.contains('sidebar')
+                // The panels start at the 36px band the workspace grid names, not at the title row plus the frame.
+                // A framed card's box reaches up through its ring, so the card's hairline lies on the frameless seam.
+                const ring = style.getPropertyValue('--card-ring').trim()
+                const band = parseFloat(style.getPropertyValue('--titlebar-band'))
+                const lift = parseFloat(ring) + band - parseFloat(style.getPropertyValue('--titlebar-height'))
+                const card = framed && !sidebar
+                fail(near(box.top, card ? band - lift : band), 'The top frame changed.')
                 fail(near(box.bottom, innerHeight - frame), 'The bottom frame changed.')
                 if (sidebar) {
                   fail(panelStyle.backgroundColor === (framed ? 'rgba(0, 0, 0, 0)' : sidebarPanel), `The sidebar has the wrong ground: ${panelStyle.backgroundColor}.`)
@@ -225,12 +230,11 @@ async function checkPaperFrame(browser, baseUrl) {
                   continue
                 }
                 fail(panelStyle.backgroundColor === surface, `${panel.className} lacks surface.`)
-                for (const edge of ['Top', 'Right', 'Bottom', 'Left']) fail(panelStyle[`border${edge}Width`] === '0px', `${panel.className} keeps a border.`)
-                // A framed card sits inside its box: a clip inset by the ring, and a hairline drawn as an inset shadow.
-                const ring = style.getPropertyValue('--card-ring').trim()
+                for (const edge of ['Top', 'Right', 'Bottom', 'Left']) fail(panelStyle[`border${edge}Width`] === (card && edge === 'Top' ? `${lift}px` : '0px'), `${panel.className} has the wrong ${edge.toLowerCase()} border.`)
+                // A framed card sits inside its box: a clip inset by the ring, and a hairline drawn as an outline inside the ring.
                 const radius = style.getPropertyValue('--radius-panel').trim()
                 fail(panelStyle.clipPath === (framed ? `inset(${ring} round ${radius})` : 'none'), `${panel.className} has the wrong clip: ${panelStyle.clipPath}.`)
-                if (framed) fail(panelStyle.boxShadow.includes(border) && panelStyle.boxShadow.includes('inset'), `${panel.className} lacks the card hairline.`)
+                if (framed) fail(panelStyle.outlineColor === border && panelStyle.outlineWidth === '1px' && panelStyle.outlineOffset === `${-(parseFloat(ring) + 1)}px`, `${panel.className} lacks the card hairline.`)
                 for (const corner of ['TopLeft', 'TopRight', 'BottomLeft', 'BottomRight']) {
                   fail(panelStyle[`border${corner}Radius`] === (framed ? `${parseFloat(radius) + parseFloat(ring)}px` : '0px'), `${panel.className} has the wrong radius.`)
                 }
