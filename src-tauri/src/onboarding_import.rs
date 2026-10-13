@@ -19,27 +19,34 @@ pub struct ImportPreviewError {
 /// command reads only the given file: it never scans parent or home
 /// directories, calls the model, changes `home.json`, or writes under Home.
 #[tauri::command]
-pub fn onboarding_import_preview(
+pub async fn onboarding_import_preview(
     archive_path: String,
 ) -> Result<PreviewManifest, ImportPreviewError> {
-    preview_export_zip(&PathBuf::from(archive_path)).map_err(|kind| ImportPreviewError {
-        kind,
-        message: kind.message(),
-    })
+    tauri::async_runtime::spawn_blocking(move || preview_export_zip(&PathBuf::from(archive_path)))
+        .await
+        .unwrap_or(Err(PreviewErrorKind::Io))
+        .map_err(preview_error)
 }
 
 /// Revalidates the chosen archive and reads only the exact normalized member
 /// names the user approved in the preview UI. The returned data is not written
 /// to Home or sent to a model by this command.
 #[tauri::command]
-pub fn onboarding_import_extract(
+pub async fn onboarding_import_extract(
     archive_path: String,
     selected_names: Vec<String>,
 ) -> Result<Vec<ExtractedEntry>, ImportPreviewError> {
-    extract_selected_zip_entries(&PathBuf::from(archive_path), &selected_names).map_err(|kind| {
-        ImportPreviewError {
-            kind,
-            message: kind.message(),
-        }
+    tauri::async_runtime::spawn_blocking(move || {
+        extract_selected_zip_entries(&PathBuf::from(archive_path), &selected_names)
     })
+    .await
+    .unwrap_or(Err(PreviewErrorKind::Io))
+    .map_err(preview_error)
+}
+
+fn preview_error(kind: PreviewErrorKind) -> ImportPreviewError {
+    ImportPreviewError {
+        kind,
+        message: kind.message(),
+    }
 }

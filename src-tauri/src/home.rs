@@ -8,6 +8,7 @@ use muniment_core::{
     import_preview::ExtractedEntry,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -23,6 +24,14 @@ pub struct HomeStatus {
 pub struct HomeImportSuccess {
     configured: bool,
     imported_file_count: usize,
+    already_copied_count: usize,
+}
+
+/// What one import published: new files, and files a run before it copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PublishOutcome {
+    pub(crate) imported: usize,
+    pub(crate) already_copied: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -31,6 +40,7 @@ pub enum HomeImportErrorKind {
     InvalidInput,
     DestinationConflict,
     SecretRejected,
+    TooLarge,
     SaveFailed,
 }
 
@@ -46,6 +56,10 @@ pub struct HomeImportError {
 }
 
 impl HomeImportError {
+    pub(crate) fn kind(&self) -> HomeImportErrorKind {
+        self.kind
+    }
+
     fn invalid_input() -> Self {
         Self {
             kind: HomeImportErrorKind::InvalidInput,
@@ -62,6 +76,15 @@ impl HomeImportError {
             message: "An approved Home import file contains a secret.",
             relative_path: None,
             source_name,
+        }
+    }
+
+    fn too_large() -> Self {
+        Self {
+            kind: HomeImportErrorKind::TooLarge,
+            message: "The Home import is over the copy limits.",
+            relative_path: None,
+            source_name: None,
         }
     }
 
@@ -126,18 +149,22 @@ pub fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, Str
 }
 
 #[tauri::command]
-pub fn home_confirm_import(
+pub async fn home_confirm_import(
     app: AppHandle,
     home_path: String,
     approved_entries: Vec<ExtractedEntry>,
 ) -> Result<HomeImportSuccess, HomeImportError> {
     let config = config_dir(&app).map_err(|_| HomeImportError::save_failed())?;
-    confirm_import(
-        &config,
-        Path::new(&home_path),
-        &approved_entries,
-        chrono::Local::now().date_naive(),
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        confirm_import(
+            &config,
+            Path::new(&home_path),
+            &approved_entries,
+            chrono::Local::now().date_naive(),
+        )
+    })
+    .await
+    .map_err(|_| HomeImportError::save_failed())?
 }
 
 fn confirm_import(
@@ -156,18 +183,97 @@ fn confirm_import_with_hook(
     import_date: NaiveDate,
     before_confirm: impl FnOnce(),
 ) -> Result<HomeImportSuccess, HomeImportError> {
-    let plan =
-        compile_onboarding_home_write_plan(approved_entries, import_date).map_err(|error| {
-            match error {
-                OnboardingHomeWritePlanError::SecretRejected { source_name } => {
-                    HomeImportError::secret_rejected(Some(source_name))
-                }
-                _ => HomeImportError::invalid_input(),
-            }
-        })?;
-    let imported_file_count = plan.writes().len();
-
+    if approved_entries.is_empty() {
+        return Err(HomeImportError::invalid_input());
+    }
     validate_home_selection(config, home).map_err(map_home_error)?;
+    let outcome = publish_import(home, approved_entries, "export", import_date)?;
+    before_confirm();
+    confirm_home(config, home).map_err(map_home_error)?;
+
+    Ok(HomeImportSuccess {
+        configured: true,
+        imported_file_count: outcome.imported,
+        already_copied_count: outcome.already_copied,
+    })
+}
+
+/// The Home-relative path of one imported file. It depends on the source
+/// alone, so a second import of the same file finds the first copy.
+pub(crate) fn import_destination(folder: &str, entry: &ExtractedEntry) -> String {
+    let digest = format!("{:x}", Sha256::digest(entry.source_provenance.as_bytes()));
+    format!(
+        "memory/imports/{}/{}-{}.md",
+        import_slug(folder),
+        import_slug(&entry.source_name),
+        &digest[..12]
+    )
+}
+
+fn import_slug(input: &str) -> String {
+    const MAX_BYTES: usize = 48;
+    let mut slug = String::new();
+    for character in input.chars() {
+        if slug.len() == MAX_BYTES {
+            break;
+        }
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "item".to_owned()
+    } else {
+        slug.to_owned()
+    }
+}
+
+/// Copies new entries under `memory/imports/<folder>/` through the onboarding
+/// write plan, which holds the size caps and the secret check. An entry whose
+/// destination exists counts as already copied, and nothing overwrites it.
+pub(crate) fn publish_import(
+    home: &Path,
+    entries: &[ExtractedEntry],
+    folder: &str,
+    import_date: NaiveDate,
+) -> Result<PublishOutcome, HomeImportError> {
+    let mut new = Vec::new();
+    let mut destinations = Vec::new();
+    let mut already_copied = 0;
+    for entry in entries {
+        let destination = import_destination(folder, entry);
+        // A Home that cannot answer here fails below, in the scaffold or the save.
+        if std::fs::symlink_metadata(home.join(&destination)).is_ok() {
+            already_copied += 1;
+        } else {
+            new.push(entry.clone());
+            destinations.push(destination);
+        }
+    }
+    if new.is_empty() {
+        return Ok(PublishOutcome {
+            imported: 0,
+            already_copied,
+        });
+    }
+
+    let mut plan =
+        compile_onboarding_home_write_plan(&new, import_date).map_err(|error| match error {
+            OnboardingHomeWritePlanError::SecretRejected { source_name } => {
+                HomeImportError::secret_rejected(Some(source_name))
+            }
+            OnboardingHomeWritePlanError::TooManyEntries
+            | OnboardingHomeWritePlanError::DocumentBytesExceeded
+            | OnboardingHomeWritePlanError::TotalBytesExceeded => HomeImportError::too_large(),
+            _ => HomeImportError::invalid_input(),
+        })?;
+    for (write, destination) in plan.writes.iter_mut().zip(destinations) {
+        write.relative_path = destination;
+    }
+
     scaffold_home(home).map_err(map_home_error)?;
     persist_onboarding_home_write_plan(home, &plan).map_err(|error| match error {
         OnboardingHomePersistenceError::DestinationConflict { relative_path } => HomeImportError {
@@ -178,14 +284,14 @@ fn confirm_import_with_hook(
         },
         OnboardingHomePersistenceError::SecretRejected => HomeImportError::secret_rejected(None),
         OnboardingHomePersistenceError::InvalidHome => HomeImportError::invalid_input(),
+        OnboardingHomePersistenceError::TooManyEntries
+        | OnboardingHomePersistenceError::DocumentBytesExceeded
+        | OnboardingHomePersistenceError::TotalBytesExceeded => HomeImportError::too_large(),
         _ => HomeImportError::save_failed(),
     })?;
-    before_confirm();
-    confirm_home(config, home).map_err(map_home_error)?;
-
-    Ok(HomeImportSuccess {
-        configured: true,
-        imported_file_count,
+    Ok(PublishOutcome {
+        imported: plan.writes().len(),
+        already_copied,
     })
 }
 
@@ -231,6 +337,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
         let entry = entry();
         let expected = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
+        let destination = import_destination("export", &entry);
 
         let result = confirm_import(&config, &home, &[entry], date).unwrap();
 
@@ -238,49 +345,92 @@ mod tests {
             result,
             HomeImportSuccess {
                 configured: true,
-                imported_file_count: expected.writes().len(),
+                imported_file_count: 1,
+                already_copied_count: 0,
             }
         );
-        for write in expected.writes() {
-            assert_eq!(
-                fs::read(home.join(write.relative_path())).unwrap(),
-                write.bytes()
-            );
-        }
+        assert!(destination.starts_with("memory/imports/export/notes-md-"));
+        assert_eq!(
+            fs::read(home.join(&destination)).unwrap(),
+            expected.writes()[0].bytes()
+        );
         assert_eq!(configured_home(&config).unwrap(), Some(home));
     }
 
     #[test]
-    fn destination_collision_preserves_user_content_and_unconfigured_state() {
+    fn an_existing_destination_counts_as_already_copied_and_keeps_user_content() {
         let root = TempRoot::new("collision");
         let config = root.0.join("config");
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
         let entry = entry();
-        let plan = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
-        let collision = &plan.writes()[0];
+        let destination = home.join(import_destination("export", &entry));
         scaffold_home(&home).unwrap();
-        fs::create_dir_all(home.join(collision.relative_path()).parent().unwrap()).unwrap();
-        fs::write(home.join(collision.relative_path()), b"user content").unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, b"user content").unwrap();
 
-        let error = confirm_import(&config, &home, &[entry], date).unwrap_err();
+        let result = confirm_import(&config, &home, &[entry], date).unwrap();
 
         assert_eq!(
-            error,
-            HomeImportError {
-                kind: HomeImportErrorKind::DestinationConflict,
-                message: "A Home import destination already exists.",
-                relative_path: Some(collision.relative_path.clone()),
-                source_name: None,
+            result,
+            HomeImportSuccess {
+                configured: true,
+                imported_file_count: 0,
+                already_copied_count: 1,
             }
         );
+        assert_eq!(fs::read(&destination).unwrap(), b"user content");
+        assert_eq!(configured_home(&config).unwrap(), Some(home));
+    }
+
+    #[test]
+    fn a_second_import_copies_only_the_new_entry() {
+        let root = TempRoot::new("again");
+        let config = root.0.join("config");
+        let home = root.0.join("home");
+        let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let later = NaiveDate::from_ymd_opt(2026, 7, 25).unwrap();
+        confirm_import(&config, &home, &[entry()], date).unwrap();
+        let second = ExtractedEntry {
+            source_name: "more.md".into(),
+            source_provenance: "claude-export:more.md".into(),
+            ..entry()
+        };
+
+        let result = confirm_import(&config, &home, &[entry(), second], later).unwrap();
+
         assert_eq!(
-            fs::read(home.join(collision.relative_path())).unwrap(),
-            b"user content"
+            (result.imported_file_count, result.already_copied_count),
+            (1, 1)
         );
-        for write in &plan.writes()[1..] {
-            assert!(!home.join(write.relative_path()).exists());
-        }
+        let copied = fs::read_dir(home.join("memory/imports/export")).unwrap();
+        assert_eq!(copied.count(), 2);
+    }
+
+    #[test]
+    fn an_import_over_the_entry_cap_serializes_as_too_large() {
+        let root = TempRoot::new("too-large");
+        let config = root.0.join("config");
+        let home = root.0.join("home");
+        let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
+        let entries: Vec<_> = (0..129)
+            .map(|index| ExtractedEntry {
+                source_name: format!("note-{index}.md"),
+                source_provenance: format!("claude-export:note-{index}.md"),
+                ..entry()
+            })
+            .collect();
+
+        let error = confirm_import(&config, &home, &entries, date).unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "tooLarge",
+                "message": "The Home import is over the copy limits."
+            })
+        );
+        assert!(!home.join("memory/imports").exists());
         assert_eq!(configured_home(&config).unwrap(), None);
     }
 
