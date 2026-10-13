@@ -3,7 +3,7 @@
 
 // The meter turns to caution at this share of the point where compaction runs.
 export const CAUTION_SHARE = 0.85
-// The meter shows from this share of the window, and always for an unknown window.
+// The meter shows from this share of a known window. An unknown window shows nothing.
 export const SHOW_SHARE = 0.25
 
 const number = new Intl.NumberFormat('en-US')
@@ -27,7 +27,7 @@ export function contextShare(usage) {
 
 export function contextMeterShown(usage) {
   if (!usage) return false
-  return !usage.windowKnown || contextShare(usage) >= SHOW_SHARE
+  return !!usage.windowKnown && usage.tokens != null && contextShare(usage) >= SHOW_SHARE
 }
 
 export function contextPercentLabel(usage) {

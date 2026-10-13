@@ -19,11 +19,12 @@ it('labels the percent, the estimate and an unknown window', () => {
   expect(contextHoverLabel(usage({ tokens: null, percent: null }))).toBe('Context usage appears after the next reply')
 })
 
-it('shows the meter from a quarter of the window, and always for an unknown window', () => {
+it('shows the meter from a quarter of a known window, and never for an unknown one', () => {
   expect(contextMeterShown(usage({ tokens: 40000, percent: 20 }))).toBe(false)
   expect(contextMeterShown(usage({ tokens: 50000, percent: 25 }))).toBe(true)
   expect(contextMeterShown(usage({ estimated: true, tokens: 31900, percent: 15.95 }))).toBe(false)
-  expect(contextMeterShown(usage({ windowKnown: false, tokens: 2000, percent: 1 }))).toBe(true)
+  expect(contextMeterShown(usage({ windowKnown: false, tokens: 2000, percent: 1 }))).toBe(false)
+  expect(contextMeterShown(usage({ windowKnown: false, tokens: 190000, percent: 95 }))).toBe(false)
   expect(contextMeterShown(null)).toBe(false)
 })
 
