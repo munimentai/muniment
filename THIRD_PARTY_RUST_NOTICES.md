@@ -313,7 +313,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `memchr` 2.8.3 — Unlicense OR MIT
 - `memoffset` 0.9.1 — MIT
 - `mime` 0.3.17 — MIT OR Apache-2.0
-- `minisign-verify` 0.2.5 — MIT
+- `minisign-verify` 0.3.0 — MIT
 - `miniz_oxide` 0.8.9 — MIT OR Zlib OR Apache-2.0
 - `miniz_oxide` 0.9.1 — MIT OR Zlib OR Apache-2.0
 - `mio` 1.2.3 — MIT
@@ -503,7 +503,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `strum` 0.28.0 — MIT
 - `subtle` 2.6.1 — BSD-3-Clause
 - `svgtypes` 0.15.3 — Apache-2.0 OR MIT
-- `swift-rs` 1.0.8 — MIT OR Apache-2.0
+- `swift-rs` 1.0.9 — MIT OR Apache-2.0
 - `syn` 1.0.109 — MIT OR Apache-2.0
 - `syn` 2.0.119 — MIT OR Apache-2.0
 - `syn` 3.0.6 — MIT OR Apache-2.0
@@ -518,22 +518,22 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `tar` 0.4.46 — MIT OR Apache-2.0
 - `target-lexicon` 0.12.16 — Apache-2.0 WITH LLVM-exception
 - `target-lexicon` 0.13.5 — Apache-2.0 WITH LLVM-exception
-- `tauri-build` 2.7.1 — Apache-2.0 OR MIT
-- `tauri-codegen` 2.7.1 — Apache-2.0 OR MIT
-- `tauri-macros` 2.7.1 — Apache-2.0 OR MIT
-- `tauri-plugin-dialog` 2.8.1 — Apache-2.0 OR MIT
-- `tauri-plugin-fs` 2.6.0 — Apache-2.0 OR MIT
-- `tauri-plugin-global-shortcut` 2.4.0 — Apache-2.0 OR MIT
-- `tauri-plugin-opener` 2.5.5 — Apache-2.0 OR MIT
-- `tauri-plugin-updater` 2.13.2 — Apache-2.0 OR MIT
+- `tauri-build` 2.7.2 — Apache-2.0 OR MIT
+- `tauri-codegen` 2.7.2 — Apache-2.0 OR MIT
+- `tauri-macros` 2.7.2 — Apache-2.0 OR MIT
+- `tauri-plugin-dialog` 2.8.2 — Apache-2.0 OR MIT
+- `tauri-plugin-fs` 2.7.0 — Apache-2.0 OR MIT
+- `tauri-plugin-global-shortcut` 2.4.1 — Apache-2.0 OR MIT
+- `tauri-plugin-opener` 2.7.1 — Apache-2.0 OR MIT
+- `tauri-plugin-updater` 2.13.3 — Apache-2.0 OR MIT
 - `tauri-plugin-wdio-webdriver` 1.5.0 — MIT
-- `tauri-plugin-window-state` 2.4.1 — Apache-2.0 OR MIT
+- `tauri-plugin-window-state` 2.5.0 — Apache-2.0 OR MIT
 - `tauri-plugin` 2.7.1 — Apache-2.0 OR MIT
 - `tauri-runtime-wry` 2.12.1 — Apache-2.0 OR MIT
 - `tauri-runtime` 2.12.1 — Apache-2.0 OR MIT
 - `tauri-utils` 2.10.1 — Apache-2.0 OR MIT
 - `tauri-winres` 0.3.6 — MIT
-- `tauri` 2.12.1 — Apache-2.0 OR MIT
+- `tauri` 2.12.3 — Apache-2.0 OR MIT
 - `tempfile` 3.27.0 — MIT OR Apache-2.0
 - `tendril` 0.5.1 — MIT OR Apache-2.0
 - `thiserror-impl` 1.0.69 — MIT OR Apache-2.0
