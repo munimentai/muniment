@@ -3143,7 +3143,7 @@
   /* The bar holds the Threads heading's margins and 24px height. */
   .selection-bar { display:flex; align-items:center; gap:5px; height:24px; margin:10px 8px 4px; font-size:var(--text-12); }
   .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-mono); }
-  .selection-bar button { min-width:24px; height:24px; padding:0 6px; font-size:var(--text-12); }
+  .selection-bar button { min-width:24px; min-height:24px; padding:0 6px; font-size:var(--text-12); }
   .thread-row > .select-mark { flex:0 0 14px; display:inline-flex; color:var(--muted); }
   .side-action > .run-mark { flex:0 0 5px; width:5px; height:5px; margin-left:auto; border:1px solid var(--muted); border-radius:var(--radius-chip); }
   .thread-row.selected > .select-mark { color:var(--ink); }
