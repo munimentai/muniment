@@ -349,6 +349,12 @@ fn write_json_for_update_io(
     pi_models::write_json(path, root)
 }
 
+/// Every provider fact the interface reads, from the model registry.
+#[tauri::command]
+pub(crate) fn model_registry() -> registry::Registry {
+    registry::registry()
+}
+
 #[tauri::command]
 pub(crate) fn local_mode_status(app: tauri::AppHandle) -> Result<bool, String> {
     is_active(&app)
@@ -1338,6 +1344,24 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         assert!(save_context_settings(&agent, true, 0, 12000).is_err());
         assert_eq!(read_context_settings(&agent).unwrap(), saved);
         fs::remove_dir_all(agent).unwrap();
+    }
+
+    /// The interface tests and the browser probe read the registry from this
+    /// fixture. `MUNIMENT_WRITE_FIXTURES=1` rewrites it from the registry.
+    #[test]
+    fn the_registry_fixture_matches_the_registry() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/probe/fixtures/model-registry.json");
+        if std::env::var_os("MUNIMENT_WRITE_FIXTURES").is_some() {
+            let text = serde_json::to_string_pretty(&model_registry()).unwrap() + "\n";
+            fs::write(&fixture, text).unwrap();
+        }
+        let registry = serde_json::to_value(model_registry()).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+        assert_eq!(
+            saved, registry,
+            "Rewrite the fixture with MUNIMENT_WRITE_FIXTURES=1 when the registry changes."
+        );
     }
 
     #[test]

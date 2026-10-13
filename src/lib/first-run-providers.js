@@ -1,22 +1,14 @@
+import { registry } from './model-registry.js'
+
 // The first run asks one question: which model to connect. The answer list
 // comes from the provider scan: local servers it found on this machine, and
 // hints that the user already holds a subscription. Found entries lead, and
 // "More providers" always ends the list.
 
-// The subscriptions Muniment signs in to, in their default order. `catalog`
-// is the provider-catalog id that Settings → Model providers opens, and
-// `logo` is the full-color mark.
-export const SUBSCRIPTIONS = [
-  { id: 'anthropic', name: 'Claude', plan: 'Pro or Max, through Claude Code', logo: 'anthropic', catalog: 'anthropic' },
-  { id: 'openai', name: 'ChatGPT', plan: 'Plus or Pro', logo: 'openai', catalog: 'openai' },
-  { id: 'xai', name: 'Grok', plan: 'Grok Build', logo: 'xai', catalog: 'xai' },
-  { id: 'google', name: 'Google', plan: 'Antigravity', logo: 'antigravity-color', catalog: 'google' },
-  { id: 'github-copilot', name: 'GitHub Copilot', plan: 'Copilot plan', logo: 'github-copilot', catalog: 'github-copilot' },
-  { id: 'meta', name: 'Meta Muse', plan: 'Muse Code', logo: 'meta', catalog: 'meta' },
-  { id: 'kimi', name: 'Kimi', plan: 'Kimi Code', logo: 'kimi-coding', catalog: 'kimi' },
-  { id: 'devin', name: 'Devin', plan: 'Devin plan', logo: 'devin', catalog: 'devin' },
-  { id: 'openrouter', name: 'OpenRouter', plan: 'Credits', logo: 'openrouter', catalog: 'openrouter' },
-]
+// The subscriptions Muniment signs in to, in their default order, from the
+// model registry. `catalog` is the provider-catalog id that Settings → Model
+// providers opens, and `logo` is the full-color mark.
+export const SUBSCRIPTIONS = registry.subscriptions
 
 // A local server is ready, needs a key, or is installed and not serving.
 const SERVER_RANK = { ready: 0, 'needs-key': 2, 'not-running': 3 }

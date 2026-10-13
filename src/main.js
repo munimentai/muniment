@@ -8,6 +8,7 @@ import './styles/code-diff.css'
 import { applyTheme, readStoredTheme } from './lib/theme-state.js'
 import { applyType, readStoredType } from './lib/type-state.js'
 import { applyFrame, readStoredFrame } from './lib/frame-state.js'
+import { loadModelRegistry } from './lib/model-registry.js'
 
 applyTheme(document.documentElement, readStoredTheme())
 // In System a palette other than the default shows its light or dark version, so an OS switch reapplies it.
@@ -21,6 +22,8 @@ window.__munimentSubscriptionTerminal = async options => {
   const { Terminal } = await import('@xterm/xterm')
   return new Terminal(options)
 }
+// The main window reads its provider lists from the model registry before it mounts.
+if (!query.has('workspace-menu') && !query.has('launcher')) await loadModelRegistry()
 // Each window loads only its own root component, so the launcher and the
 // workspace popup never load the main window's code.
 const { default: Root } = await (query.has('workspace-menu')
