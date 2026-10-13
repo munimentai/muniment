@@ -8216,3 +8216,23 @@ it('attaches multiple files and folders directly with compact removable names', 
     prompt: expect.stringContaining('"/tmp/Research"\n"/tmp/Assets"'), files: [{ path: '/tmp/brief.md' }],
   }))
 })
+
+describe('the open thread under a catalog', () => {
+  it('returns to the open thread from its row while Agents or Artifacts covers it', async () => {
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toBeInTheDocument())
+    const workspace = () => document.querySelector('section.workspace')
+    for (const name of ['Agents', 'Artifacts']) {
+      await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name, exact: true }))
+      await waitFor(() => expect(workspace()).toHaveClass('agents-open'))
+      invoke.mockClear()
+      const row = document.querySelector('.thread-row[aria-current="true"]')
+      expect(row.tagName).toBe('BUTTON')
+      await fireEvent.click(row)
+      await waitFor(() => expect(workspace()).not.toHaveClass('agents-open'))
+      expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
+      expect(document.querySelector('.thread-row[aria-current="true"]').tagName).toBe('DIV')
+    }
+  })
+})
