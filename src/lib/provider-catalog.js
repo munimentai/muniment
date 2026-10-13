@@ -153,13 +153,15 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
         group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
       }
     }
-    if (inventory.router_classifier || inventory.router_models?.length) {
+    // Automatic routes each message through a decision model, so it is offered
+    // only once one is connected. Pooled models balance accounts without it.
+    if (inventory.router_classifier) {
       groups.unshift({
         id: router.id,
         name: router.name,
         source: 'router',
-        classifier: inventory.router_classifier || 'Automatic',
-        models: [{ id: 'auto', context: '', label: inventory.router_classifier ? `${modelLabel(inventory.router_classifier)} picks` : 'Automatic', provider: router.id, choice: 'auto', accounts: 0, off: false }],
+        classifier: inventory.router_classifier,
+        models: [{ id: 'auto', context: '', label: `${modelLabel(inventory.router_classifier)} picks`, provider: router.id, choice: 'auto', accounts: 0, off: false }],
       })
     }
   }

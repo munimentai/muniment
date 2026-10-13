@@ -234,7 +234,7 @@ accounts at most. Every other status is the request, and it comes straight back
 without spending a second account. The ledger in `muniment-router-usage.json`
 counts turns, tokens and failures per account for thirty days, names the last
 refusal, and carries no prompt and no reply. Settings shows a summary per
-provider, the turns each account has in flight, and that thirty-day bar.
+provider, the turns each account has in flight, and that thirty-day bar. A key never balances with its family's subscriptions. With its overflow switch on, it takes a turn only once every subscription is cooling or at its limit.
 
 **Every active model is in the running.** The options the classifier chooses
 between are the pool itself: each model an enabled account serves, keyed
@@ -242,7 +242,7 @@ between are the pool itself: each model an enabled account serves, keyed
 describes for its family, using its discovered catalog when available. An
 account that names models serves those. The router serves `auto` and every option by name and nothing else, so a model it
 does not list is not found rather than found and then unservable. Connect an
-account and its models enter the running with no other step.
+account and its models enter the running with no other step. The picker offers `auto` as Automatic only once a decision model is connected, and a pooled model balances its accounts without one.
 
 **A model is chosen by its statement, not its name.** The catalog carries one
 statement per model: the work it wins, then the cost or weakness that should
