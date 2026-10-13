@@ -1,5 +1,6 @@
 <script>
   import { accountCache } from './lib/account-cache.js'
+  import { migrateRecall } from './lib/memory-recall.js'
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { settingsGroups, settingsPage } from './lib/settings-sections.js'
@@ -105,7 +106,7 @@
   }
 
   const tauri = window.__TAURI__?.core
-  onMount(() => tauri ? accountCache(tauri).start() : undefined)
+  onMount(() => { void migrateRecall(tauri); return tauri ? accountCache(tauri).start() : undefined })
   let auth = $state(bootState)
   let localEntryError = $state('')
   let accountStatus = $state('')

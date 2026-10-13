@@ -279,6 +279,7 @@ export function buildProbeCommandTable(fixtureName) {
     ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
     : []
   let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
+  let recallSettings = null
   let savedFacts = []
   let deletedFacts = []
   const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
@@ -387,6 +388,8 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'memory_profile_read') return profileMemory
     if (command === 'memory_profile_save') { profileMemory = payload.content; return null }
+    if (command === 'memory_recall_settings') return recallSettings && { ...recallSettings }
+    if (command === 'memory_recall_settings_save') { recallSettings = { ...payload.settings }; return { ...recallSettings } }
     if (command === 'memory_facts') return structuredClone(savedFacts)
     if (command === 'memory_fact_save') {
       const fact = { ...payload.fact, id: payload.fact.id || crypto.randomUUID() }

@@ -7,13 +7,28 @@
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
   import MemoryImports from './MemoryImports.svelte'
-  import { readDevicePreference, saveDevicePreference } from './device-preferences.js'
+  import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
   let { tauri, agentId = null, part = 'all' } = $props()
   const showProfile = $derived(!agentId && part !== 'memory')
   const showMemory = $derived(part !== 'profile')
-  // Recall is a design ahead of the runtime: these choices stay on this device until recall reads them.
-  let recall = $state(readDevicePreference('muniment.memory-recall', { learn: true, use: true, ask: true }))
+  // New chats read these choices from the profile.
+  let recall = $state({ ...RECALL_DEFAULTS })
+  let recallLoaded = $state(false)
+  let recallSaving = $state(false)
+  async function changeRecall(key, on) {
+    const previous = recall
+    const next = { ...recall, [key]: on }
+    recall = next
+    recallSaving = true
+    try {
+      recall = await saveRecall(tauri, next)
+      status = 'Recall saved. New replies use it.'
+    } catch (e) {
+      recall = previous
+      status = String(e)
+    } finally { recallSaving = false }
+  }
   const RECALL = [
     ['learn', 'Save facts from chats', 'A chat proposes a memory when it states something lasting about you or your work.'],
     ['ask', 'Ask before saving', 'Proposed memories wait for your approval in the chat.'],
@@ -38,6 +53,9 @@
   let loaded = $state(false)
   const shown = $derived(facts.filter(f => `${f.title} ${f.content} ${f.source}`.toLowerCase().includes(filter.toLowerCase())))
   onMount(async () => {
+    if (part === 'memory' && !agentId) {
+      loadRecall(tauri).then((value) => { recall = value; recallLoaded = true }).catch((e) => { status = String(e) })
+    }
     try {
       const [text, rows] = await Promise.all([agentId ? Promise.resolve('') : memory.invoke('memory_profile_read'), memory.invoke('memory_facts')])
       profile = parseProfile(text)
@@ -123,7 +141,7 @@
     {#if part === 'memory'}
       <Group heading="Recall">
         {#each RECALL as [key, label, help] (key)}
-          <Row title={label} description={help}><Toggle checked={recall[key]} {label} onchange={(on) => { recall = saveDevicePreference('muniment.memory-recall', { ...recall, [key]: on }) }} /></Row>
+          <Row title={label} description={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
         {/each}
       </Group>
       <MemoryImports {tauri} />
