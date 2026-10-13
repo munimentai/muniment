@@ -341,6 +341,7 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
     if (command === 'local_mode_store_endpoint') return 'custom-endpoint'
+    if (command === 'model_registry') return (await fetch('./fixtures/model-registry.json')).json()
     if (command === 'local_mode_claude_code_status') return { installed: true, logged_in: true, path: '/usr/local/bin/claude' }
     if (command === 'context_settings') return { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }
     if (command === 'context_settings_save') return payload

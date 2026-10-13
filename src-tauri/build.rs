@@ -62,6 +62,7 @@ const APP_COMMANDS: &[&str] = &[
     "local_mode_store_endpoint",
     "local_mode_claude_code_status",
     "local_mode_connect_claude_code",
+    "model_registry",
     "model_router_settings",
     "model_router_set_enabled",
     "model_router_add_account",

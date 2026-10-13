@@ -1,8 +1,7 @@
-use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -10,23 +9,24 @@ use uuid::Uuid;
 
 use muniment_core::local_mode::LOCAL_MODE_MARKER;
 use muniment_core::model_router::config::ROUTER_PROVIDER;
+use muniment_core::models::pi_models::{
+    self, decision_models, read_record as read_models_record, saved_endpoint_key,
+    store_endpoint as store_endpoint_provider, valid_identifier,
+    write_record as write_models_record,
+};
+use muniment_core::models::registry::{
+    self, CLAUDE_BRIDGE_PROVIDER, LM_STUDIO_PROVIDER, OLLAMA_PROVIDER, STATUS_PROVIDERS,
+};
 use muniment_core::pi_settings::merge_pi_settings;
 use muniment_core::sidecar::pi_install::PI_SELECTED_ARTIFACT;
 use muniment_core::state_root::agent_directory;
 
-const PROVIDERS: [&str; 4] = ["anthropic", "google", "openai", "ollama"];
-const OLLAMA_PROVIDER: &str = "ollama";
-const OLLAMA_MODEL: &str = "llama3.2:latest";
-const AUTH_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
-const AUTH_LOCK_RETRY: Duration = Duration::from_millis(20);
-const READ_SETTINGS_ERROR: &str =
-    "Muniment cannot read provider settings. Check folder access, then retry.";
-const SAVE_SETTINGS_ERROR: &str =
-    "Muniment cannot save provider settings. Check folder access, then retry.";
+const READ_SETTINGS_ERROR: &str = pi_models::READ_ERROR;
+const SAVE_SETTINGS_ERROR: &str = pi_models::SAVE_ERROR;
 const SETTINGS_DIRECTORY_ERROR: &str =
     "The settings folder is invalid. Check its location, then retry.";
 
-pub(crate) struct PiAuthLock(PathBuf);
+pub(crate) type PiAuthLock = pi_models::FileLock;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ProviderStatus {
@@ -34,62 +34,6 @@ pub(crate) struct ProviderStatus {
     configured: bool,
 }
 
-/// Pi's built-in providers that take an API key in `auth.json`, by Pi id and display name.
-const KEY_PROVIDERS: &[(&str, &str)] = &[
-    ("anthropic", "Anthropic"),
-    ("openai", "OpenAI"),
-    ("google", "Google"),
-    ("xai", "xAI"),
-    ("openrouter", "OpenRouter"),
-    ("deepseek", "DeepSeek"),
-    ("mistral", "Mistral"),
-    ("groq", "Groq"),
-    ("cerebras", "Cerebras"),
-    ("nvidia", "NVIDIA NIM"),
-    ("amazon-bedrock", "Amazon Bedrock"),
-    ("azure-openai-responses", "Azure OpenAI"),
-    ("vercel-ai-gateway", "Vercel Gateway"),
-    ("cloudflare-ai-gateway", "Cloudflare Gateway"),
-    ("cloudflare-workers-ai", "Cloudflare Workers"),
-    ("zai", "ZAI Coding Plan"),
-    ("opencode", "OpenCode Zen"),
-    ("opencode-go", "OpenCode Go"),
-    ("huggingface", "Hugging Face"),
-    ("fireworks", "Fireworks"),
-    ("together", "Together"),
-    ("baseten", "Baseten"),
-    ("kimi-coding", "Kimi For Coding"),
-    ("minimax", "MiniMax"),
-    ("qwen-token-plan", "Qwen Token Plan"),
-    ("radius", "Radius"),
-    ("xiaomi", "Xiaomi"),
-    ("moonshotai", "Moonshot AI"),
-    ("zai-coding-cn", "ZAI Coding China"),
-    ("xiaomi-token-plan-sgp", "Xiaomi Token Plan Singapore"),
-    ("qwen-token-plan-individual", "Qwen Token Plan Individual"),
-    ("moonshotai-cn", "Moonshot AI China"),
-    ("xiaomi-token-plan-cn", "Xiaomi Token Plan China"),
-    ("xiaomi-token-plan-ams", "Xiaomi Token Plan Amsterdam"),
-    ("typesafe", "TypeSafe"),
-    ("qwen-token-plan-cn", "Qwen Token Plan China"),
-    ("google-vertex", "Google Vertex AI"),
-    ("ant-ling", "Ant Ling"),
-    ("minimax-cn", "MiniMax China"),
-];
-/// Providers Pi signs into with an account, by Pi id and display name.
-const ACCOUNT_PROVIDERS: &[(&str, &str)] = &[
-    ("openai-codex", "OpenAI"),
-    ("xai", "xAI"),
-    ("openrouter", "OpenRouter"),
-    ("github-copilot", "GitHub Copilot"),
-    ("anthropic", "Anthropic"),
-];
-/// The pi-claude-bridge provider: Anthropic through the Claude Code sign-in.
-const CLAUDE_BRIDGE_PROVIDER: &str = "claude-bridge";
-const LM_STUDIO_PROVIDER: &str = "lmstudio";
-const CUSTOM_PROVIDER_PREFIX: &str = "custom-";
-/// The desktop's own record beside Pi's files: the models turned off and on, endpoint names, the Claude Code connection.
-const MODELS_RECORD_FILE: &str = "muniment-models.json";
 const CLAUDE_BRIDGE_CONFIG_FILE: &str = "claude-bridge.json";
 const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(30);
 /// One adoption probe, and how many candidates a connect tries before it settles.
@@ -156,33 +100,8 @@ pub(crate) struct ClaudeCodeStatus {
     path: Option<String>,
 }
 
-impl Drop for PiAuthLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.0);
-    }
-}
-
-fn pi_auth_lock_path(auth_file: &Path) -> PathBuf {
-    let mut name = OsString::from(auth_file.as_os_str());
-    name.push(".lock");
-    PathBuf::from(name)
-}
-
 pub(crate) fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
-    let lock_path = pi_auth_lock_path(auth_file);
-    let deadline = Instant::now() + AUTH_LOCK_TIMEOUT;
-    loop {
-        match fs::create_dir(&lock_path) {
-            Ok(()) => return Ok(PiAuthLock(lock_path)),
-            Err(error)
-                if error.kind() == std::io::ErrorKind::AlreadyExists
-                    && Instant::now() < deadline =>
-            {
-                std::thread::sleep(AUTH_LOCK_RETRY);
-            }
-            Err(_) => return Err(SAVE_SETTINGS_ERROR.into()),
-        }
-    }
+    pi_models::lock(auth_file).map_err(|_| SAVE_SETTINGS_ERROR.into())
 }
 
 fn config_directory<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -230,7 +149,7 @@ fn pi_auth_file(agent: &Path) -> PathBuf {
 }
 
 pub(crate) fn pi_models_file(agent: &Path) -> PathBuf {
-    agent.join("models.json")
+    pi_models::models_file(agent)
 }
 
 fn pi_settings_file(models_file: &Path) -> PathBuf {
@@ -264,7 +183,7 @@ fn read_json_store(
 fn provider_status(auth_file: &Path, models_file: &Path) -> Result<Vec<ProviderStatus>, String> {
     let auth = read_json_store(auth_file)?;
     let models = read_json_store(models_file)?;
-    Ok(PROVIDERS
+    Ok(STATUS_PROVIDERS
         .iter()
         .map(|provider| {
             let configured = if *provider == OLLAMA_PROVIDER {
@@ -287,22 +206,10 @@ fn provider_status(auth_file: &Path, models_file: &Path) -> Result<Vec<ProviderS
         .collect())
 }
 
-fn key_provider_name(provider: &str) -> Option<&'static str> {
-    KEY_PROVIDERS
-        .iter()
-        .find(|(id, _)| *id == provider)
-        .map(|(_, name)| *name)
-}
-
 /// The settings a provider needs beside its key, which Pi reads from the
-/// credential's `env`. Cloudflare names the account, and its gateway the
-/// gateway too.
+/// credential's `env`.
 pub(crate) fn provider_key_settings(provider: &str) -> &'static [&'static str] {
-    match provider {
-        "cloudflare-workers-ai" => &["CLOUDFLARE_ACCOUNT_ID"],
-        "cloudflare-ai-gateway" => &["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"],
-        _ => &[],
-    }
+    registry::key_settings(provider)
 }
 
 fn store_provider_key(
@@ -311,7 +218,7 @@ fn store_provider_key(
     key: &str,
     env: &std::collections::BTreeMap<String, String>,
 ) -> Result<(), String> {
-    if key_provider_name(provider).is_none()
+    if registry::key_provider_name(provider).is_none()
         || key.is_empty()
         || key.len() > 16 * 1024
         || key.trim() != key
@@ -384,16 +291,6 @@ fn store_provider_key(
     result.map_err(|_| SAVE_SETTINGS_ERROR.into())
 }
 
-/// The key an endpoint provider already holds, never a stand-in. Settings never
-/// reads a key back to show it, so an edit with a blank key keeps this one.
-pub(crate) fn saved_endpoint_key(models_file: &Path, provider: &str) -> Option<String> {
-    let root: serde_json::Value = serde_json::from_slice(&fs::read(models_file).ok()?).ok()?;
-    root["providers"][provider]["apiKey"]
-        .as_str()
-        .filter(|key| !matches!(*key, "ollama" | "local") && !key.is_empty())
-        .map(str::to_owned)
-}
-
 /// The key saved with an endpoint, only for a URL on that endpoint, so a
 /// decision model on the server receives the key its chat models use and no
 /// other host does.
@@ -406,89 +303,24 @@ pub(crate) fn endpoint_key_for(models_file: &Path, provider: &str, url: &str) ->
         .flatten()
 }
 
-/// Saves an Ollama server. A server on another host may sit behind a key, which
-/// discovery sends and Pi sends with every turn. With no key, Pi sends a stand-in.
+/// Saves an Ollama server and makes its default model Pi's default.
 fn store_local_provider(models_file: &Path, base_url: &str, key: &str) -> Result<(), String> {
-    if base_url.is_empty() || base_url.len() > 16 * 1024 || base_url.trim() != base_url {
-        return Err("Enter a valid Ollama server URL.".into());
-    }
-    if key.len() > 16 * 1024 || key.trim() != key {
-        return Err("Enter a valid API key.".into());
-    }
-    let saved = if key.is_empty() { saved_endpoint_key(models_file, OLLAMA_PROVIDER) } else { None };
-    let key = saved.as_deref().unwrap_or(key);
-    let parsed = url::Url::parse(base_url).map_err(|_| "Enter a valid Ollama server URL.")?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err("Enter a valid Ollama server URL.".into());
-    }
-
-    let parent = models_file
+    let agent = models_file
         .parent()
         .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
-    fs::create_dir_all(parent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let settings_file = pi_settings_file(models_file);
-    let _models_lock =
-        lock_pi_auth_file(models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let settings_lock = muniment_core::pi_settings::lock_settings(&settings_file)
-        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let mut models = read_json_for_update(models_file)?;
-    let mut settings = read_json_for_update(&settings_file)?;
-    let providers = models
-        .entry("providers")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
-    // The server names its own models; the pinned id stands in when it does not answer.
-    let discovered = muniment_core::endpoint_models::discover_endpoint_models(
-        base_url,
-        Some(key),
-        DISCOVERY_TIMEOUT,
-    );
-    let decisions = discovered
-        .as_ref()
-        .map(|models| models.decisions.clone())
-        .unwrap_or_default();
-    let model_ids = discovered
-        .map(|models| models.chat)
-        .unwrap_or_else(|| vec![OLLAMA_MODEL.to_owned()]);
-    if model_ids.is_empty() {
-        return Err("The server has no chat models. Add a chat model, then try again.".into());
-    }
-    let default_model = if model_ids.iter().any(|id| id == OLLAMA_MODEL) {
-        OLLAMA_MODEL.to_owned()
-    } else {
-        model_ids[0].clone()
-    };
-    providers.insert(
-        OLLAMA_PROVIDER.to_owned(),
-        serde_json::json!({
-            "baseUrl": base_url,
-            "api": "openai-completions",
-            "apiKey": if key.is_empty() { OLLAMA_PROVIDER } else { key },
-            "compat": {
-                "supportsDeveloperRole": false,
-                "supportsReasoningEffort": false
-            },
-            "models": model_ids.iter().map(|id| serde_json::json!({ "id": id })).collect::<Vec<_>>()
-        }),
-    );
-    settings.insert("defaultProvider".to_owned(), OLLAMA_PROVIDER.into());
-    settings.insert("defaultModel".to_owned(), default_model.into());
-    merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
-
-    // Write the route first. A later models write failure cannot fall back to a cloud model.
-    settings_lock
-        .check()
-        .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    write_json_for_update(&settings_file, &settings)?;
-    write_json_for_update(models_file, &models)?;
-    store_decision_models(parent, OLLAMA_PROVIDER, &decisions)
+    pi_models::store_ollama(agent, base_url, key, |model| {
+        let settings_file = pi_settings_file(models_file);
+        let settings_lock = muniment_core::pi_settings::lock_settings(&settings_file)
+            .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+        let mut settings = read_json_for_update(&settings_file)?;
+        settings.insert("defaultProvider".to_owned(), OLLAMA_PROVIDER.into());
+        settings.insert("defaultModel".to_owned(), model.into());
+        merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
+        settings_lock
+            .check()
+            .map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
+        write_json_for_update(&settings_file, &settings)
+    })
 }
 
 pub(crate) fn read_json_for_update(
@@ -500,11 +332,7 @@ pub(crate) fn read_json_for_update(
 fn read_json_for_update_io(
     path: &Path,
 ) -> std::io::Result<serde_json::Map<String, serde_json::Value>> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(std::io::Error::other),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
-        Err(error) => Err(error),
-    }
+    pi_models::read_json(path)
 }
 
 pub(crate) fn write_json_for_update(
@@ -518,27 +346,13 @@ fn write_json_for_update_io(
     path: &Path,
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> std::io::Result<()> {
-    let bytes = serde_json::to_vec_pretty(root)?;
-    let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
-    let result = (|| {
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        // ReplaceFileW opens the replacement without sharing access.
-        drop(file);
-        muniment_core::atomic_file::replace(&temporary, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    pi_models::write_json(path, root)
+}
+
+/// Every provider fact the interface reads, from the model registry.
+#[tauri::command]
+pub(crate) fn model_registry() -> registry::Registry {
+    registry::registry()
 }
 
 #[tauri::command]
@@ -594,63 +408,8 @@ pub(crate) fn local_mode_store_local_provider(
     store_local_provider(&pi_models_file(&agent), &base_url, key.trim())
 }
 
-fn models_record_file(agent: &Path) -> PathBuf {
-    agent.join(MODELS_RECORD_FILE)
-}
-
 fn claude_bridge_config_file(agent: &Path) -> PathBuf {
     agent.join(CLAUDE_BRIDGE_CONFIG_FILE)
-}
-
-fn read_models_record(agent: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    match fs::read(models_record_file(agent)) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| READ_SETTINGS_ERROR.to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
-        Err(_) => Err(READ_SETTINGS_ERROR.into()),
-    }
-}
-
-fn write_models_record(
-    agent: &Path,
-    record: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), String> {
-    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    write_json_for_update(&models_record_file(agent), record)
-}
-
-/// The record key that keeps each endpoint's decision models by provider.
-const DECISION_MODELS: &str = "decisionModels";
-
-fn decision_models(record: &serde_json::Map<String, serde_json::Value>, provider: &str) -> Vec<String> {
-    record
-        .get(DECISION_MODELS)
-        .and_then(|providers| providers.get(provider))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .collect()
-}
-
-fn store_decision_models(agent: &Path, provider: &str, ids: &[String]) -> Result<(), String> {
-    let mut record = read_models_record(agent)?;
-    if decision_models(&record, provider) == ids {
-        return Ok(());
-    }
-    let providers = record
-        .entry(DECISION_MODELS)
-        .or_insert_with(|| serde_json::json!({}));
-    if !providers.is_object() {
-        *providers = serde_json::json!({});
-    }
-    let providers = providers.as_object_mut().expect("an object");
-    if ids.is_empty() {
-        providers.remove(provider);
-    } else {
-        providers.insert(provider.to_owned(), serde_json::json!(ids));
-    }
-    write_models_record(agent, &record)
 }
 
 fn record_strings(record: &serde_json::Map<String, serde_json::Value>, key: &str) -> Vec<String> {
@@ -679,25 +438,7 @@ fn provider_display_name(
     {
         return name.to_owned();
     }
-    if provider == OLLAMA_PROVIDER {
-        return "Ollama".into();
-    }
-    if provider == LM_STUDIO_PROVIDER {
-        return "LM Studio".into();
-    }
-    if provider == CLAUDE_BRIDGE_PROVIDER {
-        return "Anthropic".into();
-    }
-    if provider == ROUTER_PROVIDER {
-        return "Model router".into();
-    }
-    key_provider_name(provider)
-        .or_else(|| {
-            ACCOUNT_PROVIDERS
-                .iter()
-                .find(|(id, _)| *id == provider)
-                .map(|(_, name)| *name)
-        })
+    registry::display_name(provider)
         .map(str::to_owned)
         .unwrap_or_else(|| provider.to_owned())
 }
@@ -924,108 +665,23 @@ fn refresh_provider_models(
         }
     }
     provider_models::save(agent, &cache).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let models_file = pi_models_file(agent);
-    let _lock = lock_pi_auth_file(&models_file)?;
-    let mut root = read_json_for_update(&models_file)?;
-    let mut changed = false;
-    for (provider, models) in discovered {
-        if !models.is_empty() {
-            changed |= provider_models::merge_models(&mut root, &provider, &models);
+    pi_models::merge_discovered(agent, &discovered, |root| {
+        let (Some(endpoint), Ok(config)) = (
+            muniment_core::model_router::server::read_endpoint(agent),
+            muniment_core::model_router::config::load(agent),
+        ) else {
+            return false;
+        };
+        if !config.enabled {
+            return false;
         }
-    }
-    if let (Some(endpoint), Ok(config)) = (
-        muniment_core::model_router::server::read_endpoint(agent),
-        muniment_core::model_router::config::load(agent),
-    ) {
-        if config.enabled {
-            let before = root
-                .get("providers")
-                .and_then(|p| p.get(ROUTER_PROVIDER))
-                .cloned();
-            muniment_core::model_router::pi_provider::register(&mut root, &endpoint, &config);
-            changed |=
-                before.as_ref() != root.get("providers").and_then(|p| p.get(ROUTER_PROVIDER));
-        }
-    }
-    if changed {
-        write_json_for_update(&models_file, &root)?;
-    }
-    Ok(changed)
-}
-
-/// Rewrites each endpoint's model list from what its server serves now, and
-/// answers whether any list changed.
-fn refresh_endpoint_models(agent: &Path) -> Result<bool, String> {
-    let models_file = pi_models_file(agent);
-    if !models_file.is_file() {
-        return Ok(false);
-    }
-    let _lock = lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let mut root = read_json_for_update(&models_file)?;
-    let mut changed = false;
-    let mut decisions = Vec::new();
-    if let Some(providers) = root
-        .get_mut("providers")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        for (id, entry) in providers
-            .iter_mut()
-            .filter(|(id, _)| {
-                id.as_str() != ROUTER_PROVIDER
-                    && !KEY_PROVIDERS.iter().any(|(known, _)| known == id)
-            })
-            .filter_map(|(id, value)| value.as_object_mut().map(|entry| (id, entry)))
-        {
-            let Some(base_url) = entry.get("baseUrl").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            // The stand-in keys Pi sends to a server with no key are not keys.
-            let key = entry
-                .get("apiKey")
-                .and_then(serde_json::Value::as_str)
-                .filter(|key| !matches!(*key, "ollama" | "local"));
-            let Some(found) = muniment_core::endpoint_models::discover_endpoint_models(
-                base_url,
-                key,
-                DISCOVERY_TIMEOUT,
-            ) else {
-                continue;
-            };
-            decisions.push((id.clone(), found.decisions));
-            let discovered = found.chat;
-            let current: Vec<&str> = entry
-                .get("models")
-                .and_then(serde_json::Value::as_array)
-                .map(|list| {
-                    list.iter()
-                        .filter_map(|model| model.get("id").and_then(serde_json::Value::as_str))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if current != discovered.iter().map(String::as_str).collect::<Vec<_>>() {
-                entry.insert(
-                    "models".into(),
-                    discovered
-                        .iter()
-                        .map(|id| serde_json::json!({ "id": id }))
-                        .collect::<Vec<_>>()
-                        .into(),
-                );
-                changed = true;
-            }
-        }
-    }
-    if changed {
-        write_json_for_update(&models_file, &root)?;
-    }
-    for (provider, ids) in decisions {
-        let before = decision_models(&read_models_record(agent)?, &provider);
-        if before != ids {
-            store_decision_models(agent, &provider, &ids)?;
-            changed = true;
-        }
-    }
-    Ok(changed)
+        let before = root
+            .get("providers")
+            .and_then(|p| p.get(ROUTER_PROVIDER))
+            .cloned();
+        muniment_core::model_router::pi_provider::register(root, &endpoint, &config);
+        before.as_ref() != root.get("providers").and_then(|p| p.get(ROUTER_PROVIDER))
+    })
 }
 
 fn provider_inventory(
@@ -1182,13 +838,6 @@ fn router_classifier(agent: &Path) -> Option<String> {
     }
     let model = config.classifier.model();
     (!model.is_empty()).then(|| model.to_owned())
-}
-
-fn valid_identifier(value: &str, limit: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= limit
-        && value.trim() == value
-        && !value.contains(char::is_control)
 }
 
 fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), String> {
@@ -1430,119 +1079,6 @@ fn disconnect_provider(agent: &Path, provider: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn endpoint_url(base_url: &str, message: &str) -> Result<url::Url, String> {
-    if base_url.is_empty() || base_url.len() > 16 * 1024 || base_url.trim() != base_url {
-        return Err(message.into());
-    }
-    let parsed = url::Url::parse(base_url).map_err(|_| message.to_owned())?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.host().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(message.into());
-    }
-    Ok(parsed)
-}
-
-fn custom_provider_id(name: &str) -> String {
-    let slug: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    format!(
-        "{CUSTOM_PROVIDER_PREFIX}{}",
-        if slug.is_empty() {
-            "endpoint".to_owned()
-        } else {
-            slug
-        }
-    )
-}
-
-/// An OpenAI-compatible endpoint: LM Studio or a named custom server such as a LiteLLM proxy.
-fn store_endpoint_provider(
-    agent: &Path,
-    kind: &str,
-    name: &str,
-    base_url: &str,
-    key: &str,
-    models: &[String],
-) -> Result<String, String> {
-    const MESSAGE: &str = "Enter a valid server URL.";
-    endpoint_url(base_url, MESSAGE)?;
-    if key.len() > 16 * 1024 || key.trim() != key {
-        return Err("Enter a valid API key.".into());
-    }
-    let provider = match kind {
-        "lmstudio" => LM_STUDIO_PROVIDER.to_owned(),
-        "custom" if valid_identifier(name, 80) => custom_provider_id(name),
-        _ => return Err("Name the endpoint.".into()),
-    };
-    let models_file = pi_models_file(agent);
-    let saved = if key.is_empty() { saved_endpoint_key(&models_file, &provider) } else { None };
-    let key = saved.as_deref().unwrap_or(key);
-    let mut models: Vec<String> = models
-        .iter()
-        .filter(|model| valid_identifier(model, 512))
-        .cloned()
-        .collect();
-    let mut decisions = None;
-    if models.is_empty() {
-        let found = muniment_core::endpoint_models::discover_endpoint_models(
-            base_url,
-            Some(key),
-            DISCOVERY_TIMEOUT,
-        )
-        .unwrap_or_default();
-        models = found.chat;
-        decisions = Some(found.decisions);
-    }
-    if models.is_empty() {
-        return Err("The server named no models. Start it, or list its models here.".into());
-    }
-    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let _models_lock =
-        lock_pi_auth_file(&models_file).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let mut root = read_json_for_update(&models_file)?;
-    let providers = root
-        .entry("providers")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
-    providers.insert(
-        provider.clone(),
-        serde_json::json!({
-            "baseUrl": base_url,
-            "api": "openai-completions",
-            "apiKey": if key.is_empty() { "local" } else { key },
-            "models": models.iter().map(|id| serde_json::json!({ "id": id })).collect::<Vec<_>>()
-        }),
-    );
-    write_json_for_update(&models_file, &root)?;
-    if kind == "custom" {
-        let mut record = read_models_record(agent)?;
-        let names = record
-            .entry("names")
-            .or_insert_with(|| serde_json::json!({}))
-            .as_object_mut()
-            .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
-        names.insert(provider.clone(), name.into());
-        write_models_record(agent, &record)?;
-    }
-    if let Some(ids) = decisions {
-        store_decision_models(agent, &provider, &ids)?;
-    }
-    Ok(provider)
-}
-
 fn claude_code_executable() -> Option<PathBuf> {
     let home = muniment_core::state_root::home_directory_value().map(PathBuf::from);
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -1611,7 +1147,7 @@ pub(crate) async fn local_mode_provider_inventory(
         // page waits for the slower one, not both. A changed endpoint list
         // relists once, so the inventory reads what the server serves now.
         let discovery_agent = agent.clone();
-        let discovery = std::thread::spawn(move || refresh_endpoint_models(&discovery_agent));
+        let discovery = std::thread::spawn(move || pi_models::refresh_endpoints(&discovery_agent));
         let mut models = list_pi_models(&agent);
         let provider_changed =
             refresh_provider_models(&agent, &models, force.unwrap_or(false)).unwrap_or(false);
@@ -1751,6 +1287,7 @@ pub(crate) fn local_mode_connect_claude_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muniment_core::models::pi_models::{store_decision_models, RECORD_FILE as MODELS_RECORD_FILE};
 
     #[test]
     fn a_connected_provider_adopts_its_largest_context_model_first_listed_on_a_tie() {
@@ -1807,6 +1344,24 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         assert!(save_context_settings(&agent, true, 0, 12000).is_err());
         assert_eq!(read_context_settings(&agent).unwrap(), saved);
         fs::remove_dir_all(agent).unwrap();
+    }
+
+    /// The interface tests and the browser probe read the registry from this
+    /// fixture. `MUNIMENT_WRITE_FIXTURES=1` rewrites it from the registry.
+    #[test]
+    fn the_registry_fixture_matches_the_registry() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/probe/fixtures/model-registry.json");
+        if std::env::var_os("MUNIMENT_WRITE_FIXTURES").is_some() {
+            let text = serde_json::to_string_pretty(&model_registry()).unwrap() + "\n";
+            fs::write(&fixture, text).unwrap();
+        }
+        let registry = serde_json::to_value(model_registry()).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&fixture).unwrap()).unwrap();
+        assert_eq!(
+            saved, registry,
+            "Rewrite the fixture with MUNIMENT_WRITE_FIXTURES=1 when the registry changes."
+        );
     }
 
     #[test]
@@ -2178,7 +1733,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
     fn every_key_provider_stores_a_key_and_an_unknown_one_does_not() {
         let agent = temporary_directory();
         let auth_file = agent.join("auth.json");
-        for (provider, _) in KEY_PROVIDERS {
+        for (provider, _) in registry::key_providers() {
             let env = provider_key_settings(provider)
                 .iter()
                 .map(|name| (name.to_string(), "abc123".to_string()))
@@ -2190,7 +1745,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         assert!(store_provider_key(&auth_file, "cloudflare-workers-ai", "k", &Default::default()).is_err());
         let auth: serde_json::Value =
             serde_json::from_slice(&fs::read(&auth_file).unwrap()).unwrap();
-        assert_eq!(auth.as_object().unwrap().len(), KEY_PROVIDERS.len());
+        assert_eq!(auth.as_object().unwrap().len(), registry::key_providers().count());
         assert_eq!(auth["cloudflare-workers-ai"]["env"]["CLOUDFLARE_ACCOUNT_ID"], "abc123");
         assert!(auth["openai"].get("env").is_none());
         fs::remove_dir_all(agent).unwrap();
@@ -2361,7 +1916,7 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let directory = temporary_directory();
         let auth_file = directory.join("auth.json");
         fs::write(&auth_file, "{}").unwrap();
-        let lock_path = pi_auth_lock_path(&auth_file);
+        let lock_path = pi_models::lock_path(&auth_file);
         fs::create_dir(&lock_path).unwrap();
         let (finished_tx, finished_rx) = std::sync::mpsc::channel();
         let writer_file = auth_file.clone();

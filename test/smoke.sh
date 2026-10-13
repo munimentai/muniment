@@ -100,7 +100,7 @@ grep -Fq '0013-desktop-e2e-harness.md' README.md
 test -z "$(grep -RilE \
   --exclude='*.test.js' \
   'llama-server|RESIDENT_MODEL|required_model_acquisition_status|dictation_polish|dictation_transform|onboarding_triage' \
-  src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
+  src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/models/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
 grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
   docs/decisions/0017-resident-model-artifact-pin.md
 grep -Fq 'The desktop sends no classification metadata.' SPEC.md
@@ -111,7 +111,7 @@ grep -Fq 'The desktop sends no classification metadata.' SPEC.md
 test -z "$(grep -RilE \
   --exclude='chat_grant.rs' \
   'routing_?label|routing_?tier|task_?tier|signals_?version|keyword-code-v1' \
-  src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
+  src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/models/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
 grep -Fq 'fn the_grant_request_carries_no_client_classification' \
   src-tauri/integration/src/chat_grant.rs
 grep -Fq 'fn the_receipt_request_carries_only_the_run_id' \

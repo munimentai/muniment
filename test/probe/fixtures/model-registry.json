@@ -1,0 +1,846 @@
+{
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "popular": true,
+      "methods": [
+        "claude-code",
+        "key"
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "popular": true,
+      "methods": [
+        "account",
+        "key"
+      ],
+      "account": {
+        "provider": "openai-codex",
+        "label": "ChatGPT Plus or Pro account"
+      }
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "popular": true,
+      "methods": [
+        "account",
+        "key"
+      ],
+      "account": {
+        "provider": "xai",
+        "label": "Grok Build account"
+      }
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "popular": true,
+      "methods": [
+        "account",
+        "key"
+      ],
+      "account": {
+        "provider": "antigravity",
+        "label": "Antigravity account"
+      }
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "popular": true,
+      "methods": [
+        "account",
+        "key"
+      ],
+      "account": {
+        "provider": "openrouter",
+        "label": "OpenRouter account"
+      }
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "popular": true,
+      "methods": [
+        "ollama"
+      ],
+      "baseUrl": "http://localhost:11434/v1"
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "popular": true,
+      "methods": [
+        "endpoint"
+      ],
+      "baseUrl": "http://localhost:1234/v1"
+    },
+    {
+      "id": "custom",
+      "name": "Custom OpenAI-compatible endpoint",
+      "popular": true,
+      "methods": [
+        "endpoint"
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "methods": [
+        "account"
+      ],
+      "account": {
+        "provider": "github-copilot",
+        "label": "GitHub Copilot account"
+      }
+    },
+    {
+      "id": "meta",
+      "name": "Meta Muse",
+      "popular": true,
+      "methods": [
+        "account"
+      ],
+      "account": {
+        "provider": "meta",
+        "label": "Muse Code account"
+      }
+    },
+    {
+      "id": "devin",
+      "name": "Devin",
+      "popular": true,
+      "methods": [
+        "account"
+      ],
+      "account": {
+        "provider": "devin",
+        "label": "Devin account"
+      }
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "popular": true,
+      "keyProvider": "kimi-coding",
+      "methods": [
+        "account",
+        "key"
+      ],
+      "account": {
+        "provider": "kimi",
+        "label": "Kimi Code account"
+      },
+      "keyName": "Kimi For Coding"
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA NIM",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "amazon-bedrock",
+      "name": "Amazon Bedrock",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "azure-openai-responses",
+      "name": "Azure OpenAI",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "zai",
+      "name": "ZAI Coding Plan",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode Zen",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "fireworks",
+      "name": "Fireworks",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "together",
+      "name": "Together",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "baseten",
+      "name": "Baseten",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "popular": true,
+      "methods": [
+        "endpoint"
+      ],
+      "baseUrl": "http://localhost:8000/v1"
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "qwen-token-plan",
+      "name": "Qwen Token Plan",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "radius",
+      "name": "Radius",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "xiaomi",
+      "name": "Xiaomi",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "moonshotai",
+      "name": "Moonshot AI",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "zai-coding-cn",
+      "name": "ZAI Coding China",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "xiaomi-token-plan-sgp",
+      "name": "Xiaomi Token Plan Singapore",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "qwen-token-plan-individual",
+      "name": "Qwen Token Plan Individual",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "moonshotai-cn",
+      "name": "Moonshot AI China",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "xiaomi-token-plan-cn",
+      "name": "Xiaomi Token Plan China",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "cloudflare-ai-gateway",
+      "name": "Cloudflare AI Gateway",
+      "methods": [
+        "key"
+      ],
+      "keyName": "Cloudflare Gateway",
+      "keySettings": [
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_GATEWAY_ID"
+      ]
+    },
+    {
+      "id": "xiaomi-token-plan-ams",
+      "name": "Xiaomi Token Plan Amsterdam",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "typesafe",
+      "name": "TypeSafe",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "qwen-token-plan-cn",
+      "name": "Qwen Token Plan China",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "google-vertex",
+      "name": "Google Vertex AI",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "ant-ling",
+      "name": "Ant Ling",
+      "methods": [
+        "key"
+      ]
+    },
+    {
+      "id": "cloudflare-workers-ai",
+      "name": "Cloudflare Workers AI",
+      "methods": [
+        "key"
+      ],
+      "keyName": "Cloudflare Workers",
+      "keySettings": [
+        "CLOUDFLARE_ACCOUNT_ID"
+      ]
+    },
+    {
+      "id": "vercel-ai-gateway",
+      "name": "Vercel AI Gateway",
+      "methods": [
+        "key"
+      ],
+      "keyName": "Vercel Gateway"
+    },
+    {
+      "id": "minimax-cn",
+      "name": "MiniMax China",
+      "methods": [
+        "key"
+      ]
+    }
+  ],
+  "methodLabels": {
+    "claude-code": "Claude Code sign-in",
+    "account": "Account",
+    "key": "API key",
+    "ollama": "Ollama server",
+    "endpoint": "Server URL"
+  },
+  "aliases": {
+    "openai-codex": "openai",
+    "claude-bridge": "anthropic",
+    "antigravity": "google",
+    "kimi-coding": "kimi"
+  },
+  "sourceTags": {
+    "key": "Key",
+    "account": "Account",
+    "local": "Local",
+    "custom": "Custom",
+    "claude-code": "Claude Code",
+    "router": "Router"
+  },
+  "families": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "provider": "openai"
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "provider": "anthropic"
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "provider": "google"
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "provider": "xai"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "provider": "kimi"
+    },
+    {
+      "id": "meta",
+      "name": "Meta"
+    },
+    {
+      "id": "devin",
+      "name": "Devin",
+      "provider": "devin"
+    }
+  ],
+  "subscriptions": [
+    {
+      "id": "anthropic",
+      "name": "Claude",
+      "plan": "Pro or Max, through Claude Code",
+      "logo": "anthropic",
+      "catalog": "anthropic"
+    },
+    {
+      "id": "openai",
+      "name": "ChatGPT",
+      "plan": "Plus or Pro",
+      "logo": "openai",
+      "catalog": "openai"
+    },
+    {
+      "id": "xai",
+      "name": "Grok",
+      "plan": "Grok Build",
+      "logo": "xai",
+      "catalog": "xai"
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "plan": "Antigravity",
+      "logo": "antigravity-color",
+      "catalog": "google"
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "plan": "Copilot plan",
+      "logo": "github-copilot",
+      "catalog": "github-copilot"
+    },
+    {
+      "id": "meta",
+      "name": "Meta Muse",
+      "plan": "Muse Code",
+      "logo": "meta",
+      "catalog": "meta"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "plan": "Kimi Code",
+      "logo": "kimi-coding",
+      "catalog": "kimi"
+    },
+    {
+      "id": "devin",
+      "name": "Devin",
+      "plan": "Devin plan",
+      "logo": "devin",
+      "catalog": "devin"
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "plan": "Credits",
+      "logo": "openrouter",
+      "catalog": "openrouter"
+    }
+  ],
+  "classifiers": {
+    "entries": [
+      {
+        "id": "jev",
+        "name": "Jev",
+        "model": "jev-latest",
+        "note": "Hosted decision model. Choose where your routing requests go.",
+        "methods": [
+          "typesafe",
+          "openrouter",
+          "cloudflare",
+          "server"
+        ]
+      },
+      {
+        "id": "clef",
+        "name": "Clef",
+        "model": "clef-flash",
+        "note": "Cloudflare's decision models. Clef Flash is the fast, inexpensive one. Clef is the larger, more accurate one.",
+        "methods": [
+          "cloudflare",
+          "ollama",
+          "openrouter"
+        ],
+        "variants": [
+          {
+            "id": "clef-flash",
+            "name": "Clef Flash",
+            "models": {
+              "cloudflare": "@cf/cloudflare/clef-flash",
+              "ollama": "clef-flash",
+              "openrouter": "cloudflare/clef-flash"
+            }
+          },
+          {
+            "id": "clef",
+            "name": "Clef",
+            "models": {
+              "cloudflare": "@cf/cloudflare/clef",
+              "ollama": "clef",
+              "openrouter": "cloudflare/clef"
+            }
+          }
+        ]
+      },
+      {
+        "id": "luna",
+        "name": "GPT-6 Luna",
+        "model": "gpt-6-luna",
+        "note": "OpenAI's decision model. It needs an OpenAI API key, because a ChatGPT sign-in does not reach the Decisions API.",
+        "methods": [
+          "openai"
+        ]
+      },
+      {
+        "id": "kev",
+        "name": "Kev",
+        "repo": "https://github.com/jaredpalmer/kev",
+        "model": "kev-latest",
+        "note": "Local decision models in several sizes. The server downloads the checkpoint and base model on first use.",
+        "compatible": true,
+        "methods": [
+          "server",
+          "download"
+        ]
+      },
+      {
+        "id": "nimble",
+        "name": "Nimble",
+        "repo": "https://github.com/bespokelabsai/nimble",
+        "model": "nimble",
+        "note": "A 9B decision model. Ollama serves it, or run its own System One server.",
+        "compatible": true,
+        "methods": [
+          "ollama",
+          "server",
+          "download"
+        ]
+      },
+      {
+        "id": "von",
+        "name": "Von",
+        "repo": "https://github.com/wfzyx/von",
+        "model": "von-1.3.0",
+        "note": "A small English decision model that runs on a CPU.",
+        "compatible": true,
+        "methods": [
+          "server",
+          "download"
+        ]
+      },
+      {
+        "id": "laya",
+        "name": "Laya",
+        "repo": "https://github.com/NandhaKishorM/laya",
+        "model": "english",
+        "note": "Very fast on a CPU, and less accurate at picking a model. The server downloads weights on first use.",
+        "compatible": true,
+        "methods": [
+          "server",
+          "download"
+        ]
+      },
+      {
+        "id": "decider",
+        "name": "Decider 4B",
+        "repo": "https://github.com/Mapika/decider",
+        "model": "Mapika/decider-4b",
+        "note": "Runs on CPU, Apple Silicon or CUDA. The 4B weights need about 8 GB in bfloat16.",
+        "compatible": true,
+        "methods": [
+          "server",
+          "download"
+        ]
+      }
+    ],
+    "methods": {
+      "typesafe": {
+        "name": "TypeSafe API",
+        "url": "https://api.typesafe.ai/v1/systemone",
+        "model": "jev-latest",
+        "key": true
+      },
+      "openrouter": {
+        "name": "OpenRouter API",
+        "url": "https://openrouter.ai/api/v1/systemone",
+        "model": "typesafe/jev-1.13",
+        "key": true
+      },
+      "openai": {
+        "name": "OpenAI API",
+        "url": "https://api.openai.com/v1/decisions",
+        "model": "gpt-6-luna",
+        "key": true
+      },
+      "cloudflare": {
+        "name": "Cloudflare Workers AI",
+        "model": "typesafe/jev",
+        "key": true,
+        "guide": "https://developers.cloudflare.com/ai/models/typesafe/jev/"
+      },
+      "ollama": {
+        "name": "Ollama server",
+        "ollama": true
+      },
+      "server": {
+        "name": "Connect a server",
+        "url": "http://127.0.0.1:8000/v1/systemone"
+      },
+      "download": {
+        "name": "Download and run locally"
+      }
+    },
+    "localSetup": {
+      "laya": "pip install \"laya[serve]\"\nLAYA_MODELS=english laya-serve",
+      "kev": "git clone https://github.com/jaredpalmer/kev.git\ncd kev\nuv sync --extra serve\nuv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009",
+      "decider": "git clone https://github.com/Mapika/decider.git\ncd decider\npip install -e \".[serve]\"\nscripts/serve.sh Mapika/decider-4b 8000",
+      "von": "pip install von-sdk\nvon serve --host 127.0.0.1 --port 8000"
+    },
+    "ollamaDecisions": {
+      "clef-flash": [
+        "clef",
+        "Clef Flash"
+      ],
+      "clef": [
+        "clef",
+        "Clef"
+      ],
+      "nimble": [
+        "nimble",
+        "Nimble"
+      ],
+      "laya": [
+        "laya",
+        "Laya"
+      ],
+      "tev1": [
+        "tev1",
+        "Tev1"
+      ]
+    }
+  },
+  "localServers": [
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "ports": [
+        11434
+      ],
+      "api": "/v1",
+      "paths": [
+        "/"
+      ]
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "ports": [
+        1234
+      ],
+      "api": "/v1",
+      "paths": [
+        "/lmstudio-greeting"
+      ]
+    },
+    {
+      "id": "llamacpp",
+      "name": "llama.cpp",
+      "ports": [
+        9931,
+        8080
+      ],
+      "api": "/v1",
+      "paths": [
+        "/health"
+      ]
+    },
+    {
+      "id": "mlx-lm",
+      "name": "MLX LM",
+      "ports": [
+        8080
+      ],
+      "api": "/v1",
+      "paths": [
+        "/health"
+      ]
+    },
+    {
+      "id": "omlx",
+      "name": "oMLX",
+      "ports": [
+        8000
+      ],
+      "api": "/v1",
+      "paths": [
+        "/health"
+      ]
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "ports": [
+        8000
+      ],
+      "api": "/v1",
+      "paths": [
+        "/version"
+      ]
+    },
+    {
+      "id": "jan",
+      "name": "Jan",
+      "ports": [
+        1337
+      ],
+      "api": "/v1",
+      "paths": []
+    },
+    {
+      "id": "osaurus",
+      "name": "Osaurus",
+      "ports": [
+        1337
+      ],
+      "api": "/v1",
+      "paths": [
+        "/"
+      ]
+    },
+    {
+      "id": "localai",
+      "name": "LocalAI",
+      "ports": [
+        8080
+      ],
+      "api": "/v1",
+      "paths": [
+        "/.well-known/localai.json"
+      ]
+    },
+    {
+      "id": "lemonade",
+      "name": "Lemonade",
+      "ports": [
+        13305
+      ],
+      "api": "/v1",
+      "paths": [
+        "/live"
+      ]
+    },
+    {
+      "id": "koboldcpp",
+      "name": "KoboldCpp",
+      "ports": [
+        5001
+      ],
+      "api": "/v1",
+      "paths": []
+    },
+    {
+      "id": "docker-model-runner",
+      "name": "Docker Model Runner",
+      "ports": [
+        12434
+      ],
+      "api": "/engines/v1",
+      "paths": [
+        "/"
+      ]
+    },
+    {
+      "id": "textgen",
+      "name": "Text Generation WebUI",
+      "ports": [
+        5000
+      ],
+      "api": "/v1",
+      "paths": [
+        "/v1/internal/health"
+      ]
+    },
+    {
+      "id": "exo",
+      "name": "exo",
+      "ports": [
+        52415
+      ],
+      "api": "/v1",
+      "paths": []
+    }
+  ]
+}

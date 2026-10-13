@@ -1,72 +1,21 @@
 import { modelLabel } from './model-label.js'
 import { leadingModels, newestFirst } from './model-recency.js'
 import { isDecisionModel } from './classifier-connections.js'
+import { registry } from './model-registry.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
 // method each one offers, and the helpers the section and the picker share.
-// `account` names the Pi provider that signs in with an account and the label
-// the method shows. Anthropic's account is the Claude Code sign-in through the
+// The model registry supplies the providers and their names. `account` names
+// the Pi provider that signs in with an account and the label the method
+// shows. Anthropic's account is the Claude Code sign-in through the
 // pi-claude-bridge package, so it carries no Pi OAuth provider here.
 
-export const PROVIDERS = [
-  { id: 'anthropic', name: 'Anthropic', popular: true, methods: ['claude-code', 'key'] },
-  { id: 'openai', name: 'OpenAI', popular: true, methods: ['account', 'key'], account: { provider: 'openai-codex', label: 'ChatGPT Plus or Pro account' } },
-  { id: 'xai', name: 'xAI', popular: true, methods: ['account', 'key'], account: { provider: 'xai', label: 'Grok Build account' } },
-  { id: 'google', name: 'Google', popular: true, methods: ['account', 'key'], account: { provider: 'antigravity', label: 'Antigravity account' } },
-  { id: 'openrouter', name: 'OpenRouter', popular: true, methods: ['account', 'key'], account: { provider: 'openrouter', label: 'OpenRouter account' } },
-  { id: 'ollama', name: 'Ollama', popular: true, methods: ['ollama'], baseUrl: 'http://localhost:11434/v1' },
-  { id: 'lmstudio', name: 'LM Studio', popular: true, methods: ['endpoint'], baseUrl: 'http://localhost:1234/v1' },
-  { id: 'custom', name: 'Custom OpenAI-compatible endpoint', popular: true, methods: ['endpoint'] },
-  { id: 'github-copilot', name: 'GitHub Copilot', methods: ['account'], account: { provider: 'github-copilot', label: 'GitHub Copilot account' } },
-  { id: 'meta', name: 'Meta Muse', popular: true, methods: ['account'], account: { provider: 'meta', label: 'Muse Code account' } },
-  { id: 'devin', name: 'Devin', popular: true, methods: ['account'], account: { provider: 'devin', label: 'Devin account' } },
-  { id: 'kimi', name: 'Kimi', popular: true, keyProvider: 'kimi-coding', methods: ['account', 'key'], account: { provider: 'kimi', label: 'Kimi Code account' } },
-  { id: 'deepseek', name: 'DeepSeek', methods: ['key'] },
-  { id: 'mistral', name: 'Mistral', methods: ['key'] },
-  { id: 'groq', name: 'Groq', methods: ['key'] },
-  { id: 'cerebras', name: 'Cerebras', methods: ['key'] },
-  { id: 'nvidia', name: 'NVIDIA NIM', methods: ['key'] },
-  { id: 'amazon-bedrock', name: 'Amazon Bedrock', methods: ['key'] },
-  { id: 'azure-openai-responses', name: 'Azure OpenAI', methods: ['key'] },
-  { id: 'zai', name: 'ZAI Coding Plan', methods: ['key'] },
-  { id: 'opencode', name: 'OpenCode Zen', methods: ['key'] },
-  { id: 'opencode-go', name: 'OpenCode Go', methods: ['key'] },
-  { id: 'huggingface', name: 'Hugging Face', methods: ['key'] },
-  { id: 'fireworks', name: 'Fireworks', methods: ['key'] },
-  { id: 'together', name: 'Together', methods: ['key'] },
-  { id: 'baseten', name: 'Baseten', methods: ['key'] },
-  { id: 'vllm', name: 'vLLM', popular: true, methods: ['endpoint'], baseUrl: 'http://localhost:8000/v1' },
-  { id: 'minimax', name: 'MiniMax', methods: ['key'] },
-  { id: 'qwen-token-plan', name: 'Qwen Token Plan', methods: ['key'] },
-  { id: 'radius', name: 'Radius', methods: ['key'] },
-  { id: 'xiaomi', name: 'Xiaomi', methods: ['key'] },
-  { id: 'moonshotai', name: 'Moonshot AI', methods: ['key'] },
-  { id: 'zai-coding-cn', name: 'ZAI Coding China', methods: ['key'] },
-  { id: 'xiaomi-token-plan-sgp', name: 'Xiaomi Token Plan Singapore', methods: ['key'] },
-  { id: 'qwen-token-plan-individual', name: 'Qwen Token Plan Individual', methods: ['key'] },
-  { id: 'moonshotai-cn', name: 'Moonshot AI China', methods: ['key'] },
-  { id: 'xiaomi-token-plan-cn', name: 'Xiaomi Token Plan China', methods: ['key'] },
-  { id: 'cloudflare-ai-gateway', name: 'Cloudflare AI Gateway', methods: ['key'] },
-  { id: 'xiaomi-token-plan-ams', name: 'Xiaomi Token Plan Amsterdam', methods: ['key'] },
-  { id: 'typesafe', name: 'TypeSafe', methods: ['key'] },
-  { id: 'qwen-token-plan-cn', name: 'Qwen Token Plan China', methods: ['key'] },
-  { id: 'google-vertex', name: 'Google Vertex AI', methods: ['key'] },
-  { id: 'ant-ling', name: 'Ant Ling', methods: ['key'] },
-  { id: 'cloudflare-workers-ai', name: 'Cloudflare Workers AI', methods: ['key'] },
-  { id: 'vercel-ai-gateway', name: 'Vercel AI Gateway', methods: ['key'] },
-  { id: 'minimax-cn', name: 'MiniMax China', methods: ['key'] },
-]
+export const PROVIDERS = registry.providers
 
-const METHOD_LABELS = {
-  'claude-code': 'Claude Code sign-in',
-  account: 'Account',
-  key: 'API key',
-  ollama: 'Ollama server',
-  endpoint: 'Server URL',
-}
+const METHOD_LABELS = registry.methodLabels
 
 // Pi ids that reach the shell under another provider's name: the Codex account
 // is OpenAI, the bridge is Anthropic.
-const PROVIDER_ALIASES = { 'openai-codex': 'openai', 'claude-bridge': 'anthropic', antigravity: 'google', 'kimi-coding': 'kimi' }
+const PROVIDER_ALIASES = registry.aliases
 
 // The catalog id a connected provider edits under.
 export function catalogId(id) {
@@ -117,7 +66,7 @@ export function connectableProviders(inventory) {
   return PROVIDERS.filter((provider) => provider.popular && !connected.has(provider.id))
 }
 
-export const SOURCE_TAGS = { key: 'Key', account: 'Account', local: 'Local', custom: 'Custom', 'claude-code': 'Claude Code', router: 'Router' }
+export const SOURCE_TAGS = registry.sourceTags
 
 export function sourceTag(source) {
   return SOURCE_TAGS[source] ?? source
@@ -129,8 +78,8 @@ export function modelKey(provider, model) {
 
 // The router's families under the catalog provider each one is, and the name
 // a family group takes when no provider of its own is connected.
-const FAMILY_CATALOG = { openai: 'openai', anthropic: 'anthropic', google: 'google', xai: 'xai', kimi: 'kimi', devin: 'devin' }
-const FAMILY_NAMES = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', xai: 'xAI', kimi: 'Kimi', devin: 'Devin', meta: 'Meta' }
+const FAMILY_CATALOG = registry.familyProviders
+const FAMILY_NAMES = registry.familyNames
 
 // The router family a connected provider pools into, none for a provider the
 // router does not pool, and the catalog provider a family shows as.
