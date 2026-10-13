@@ -140,10 +140,17 @@ describe('the model router in the picker', () => {
     expect(pickerGroups({ ...routed, hidden: ['muniment-router/kimi/kimi-k3'] }).map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
   })
 
-  it('offers no Automatic row until a decision model is connected', () => {
+  it('offers no Automatic row until a decision model is connected, and links the router heading to its settings', () => {
     const balanced = { ...routed, router_classifier: null }
-    expect(pickerGroups(balanced).map((group) => group.id)).toEqual(['openai-codex', 'router:kimi'])
-    expect(pickerGroups(balanced).flatMap((group) => group.models).some((model) => model.id === 'auto')).toBe(false)
+    const groups = pickerGroups(balanced)
+    expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'openai-codex', 'router:kimi'])
+    expect(groups[0]).toMatchObject({ manage: true, models: [] })
+    expect(groups.flatMap((group) => group.models).some((model) => model.id === 'auto')).toBe(false)
+    // A connected decision model that is not the current choice still links to its settings.
+    expect(pickerGroups(routed)[0].manage).toBe(true)
+    expect(pickerGroups({ ...routed, default_provider: 'muniment-router', default_model: 'auto' })[0].manage).toBe(false)
+    // A search hides the empty heading.
+    expect(pickerGroups(balanced, 'gpt').map((group) => group.id)).toEqual(['openai-codex'])
   })
 
   it('keeps the saved default when a row still saves it, and names the row in use', () => {
@@ -164,8 +171,8 @@ it('deduplicates repeated model rows returned by discovery', () => {
 it('groups several pooled models under one provider without a direct connection', () => {
   const inventory = { providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], hidden: [], router_models: [{ id: 'openai/a', family: 'openai', model: 'a', accounts: 2 }, { id: 'openai/b', family: 'openai', model: 'b', accounts: 2 }] }
   const groups = pickerGroups(inventory)
-  expect(groups.map((group) => group.id)).toEqual(['router:openai'])
-  expect(groups[0].models.map((model) => model.id)).toEqual(['a', 'b'])
+  expect(groups.map((group) => group.id)).toEqual(['muniment-router', 'router:openai'])
+  expect(groups[1].models.map((model) => model.id)).toEqual(['a', 'b'])
 })
 
 describe('current model availability', () => {

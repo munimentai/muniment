@@ -2623,7 +2623,7 @@
         {#if hasSubscriptions && capacityOpen}<Capacity {tauri} onmanage={openModelSettings} onclose={() => capacityOpen = false} />{/if}
         {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
-          <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
+          <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
         {/if}
         {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

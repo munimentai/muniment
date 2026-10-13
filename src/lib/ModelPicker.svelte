@@ -10,7 +10,7 @@
   import { pickerGroups, providerName } from './provider-catalog.js'
   import { compactsOnSwitch, windowLabel, windowTokens } from './context-usage.js'
 
-  let { inventory, current, contextUsage = null, onchoose, onmanage, onclose } = $props()
+  let { inventory, current, contextUsage = null, onchoose, onmanage, onrouting, onclose } = $props()
   let query = $state('')
   let search = $state()
   const groups = $derived(pickerGroups(inventory, query))
@@ -43,6 +43,7 @@
       {@const providerId = group.classifier ? classifierProvider(group.classifier) : group.id.replace(/^router:/, '')}
       {@const name = group.classifier ? 'Model router' : (providerName(providerId) === providerId ? group.name : providerName(providerId))}
       <section class="picker-group" aria-label={name}>
+        {#if group.manage}<button type="button" class="quiet group-manage" aria-label="Manage model routing" onclick={onrouting}>Manage</button>{/if}
         <h4>{#if group.classifier}<LucideIcon name="route" variant="action" size={16} />{:else}<ProviderLogo provider={providerId} size={16} />{/if}{name}</h4>
         <ul>
           {#each group.models as model (model.id)}
@@ -75,6 +76,10 @@
   .picker-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .picker-list { flex: 1; min-height: 0; padding: 6px; overflow-y: auto; }
   .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  /* Routing is off or has no decision model: the heading links to Decision models. */
+  .picker-group { position: relative; }
+  .group-manage { position: absolute; top: 0; right: 8px; padding: 2px 6px; border: 0; border-radius: var(--radius-control); background: none; color: var(--ink); font: var(--text-12) var(--font-human); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .group-manage:hover { background: var(--faint); }
   .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .classifier { color: var(--ink); font-weight: 600; }
   .balanced { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); }

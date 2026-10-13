@@ -153,15 +153,19 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
         group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
       }
     }
-    // Automatic routes each message through a decision model, so it is offered
-    // only once one is connected. Pooled models balance accounts without it.
-    if (inventory.router_classifier) {
+    // Automatic routes each message through a decision model, so its row
+    // appears only once one is connected. Until routing is on, the Model router
+    // heading carries a Manage link to Decision models. Pooled models balance
+    // their accounts either way.
+    if (inventory.router_classifier || inventory.router_models?.length) {
+      const routing = !!inventory.router_classifier && inventory.default_provider === router.id && inventory.default_model === 'auto'
       groups.unshift({
         id: router.id,
         name: router.name,
         source: 'router',
-        classifier: inventory.router_classifier,
-        models: [{ id: 'auto', context: '', label: `${modelLabel(inventory.router_classifier)} picks`, provider: router.id, choice: 'auto', accounts: 0, off: false }],
+        classifier: inventory.router_classifier || 'Automatic',
+        manage: !routing,
+        models: inventory.router_classifier ? [{ id: 'auto', context: '', label: `${modelLabel(inventory.router_classifier)} picks`, provider: router.id, choice: 'auto', accounts: 0, off: false }] : [],
       })
     }
   }
@@ -185,7 +189,8 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
         .filter((model) => (all || model.shown) && (!needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || group.name.toLowerCase().includes(needle)))
         .map(({ off, lead, shown, ...model }) => all ? { ...model, lead, shown } : model),
     }))
-    .filter((group) => group.models.length > 0)
+    // The router heading stays in the picker for its Manage link while routing is off.
+    .filter((group) => group.models.length > 0 || (group.manage && !needle && !all))
 }
 
 // The router models the picker hides, as the router's sorted `family/model`
