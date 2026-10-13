@@ -40,3 +40,14 @@ it downloads the installer.
 The next nightly `windows-e2e` run must confirm that the lookup reaches the
 installer step. Check the runner transcript and `installer.log` in the run
 artifact for installer output after the lookup.
+
+## Current-source mode
+
+The Linux, Windows and macOS candidate runners read `MUNIMENT_E2E_SOURCE_MODE`.
+An unset or `nightly` value keeps the release lookup, package identity validation and release WebDriver-absence guards.
+The value `pr` builds an unsigned package from the checkout and installs it, then runs the same specs, fixtures, probes and cleanup.
+Any other value stops the runner.
+The `pr` mode requires `MUNIMENT_E2E_SOURCE_SHA` to equal the checkout head, refuses signing credentials, and never reads the nightly release.
+It builds with `--features e2e-webdriver` and the E2E configuration, so the installed payload carries the WebDriver marker and the production absence guards do not apply to it.
+The macOS `pr` mode seals the installed bundle with an ad-hoc local signature, because the unsigned build has no nested signatures.
+`pr-package.mjs` selects exactly one local package and fails when none or several match.

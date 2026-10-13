@@ -117,3 +117,9 @@ it('exports the core root before Windows isolates the profile', () => {
   expect(runner).toContain(resolution)
   expect(runner.indexOf(resolution)).toBeLessThan(runner.indexOf('$env:APPDATA = Join-Path $stateRoot "Degraded\\Roaming"'))
 })
+
+it.each(['linux.sh', 'macos-wdio.sh', 'windows.ps1'])('%s resolves the core pins after either source mode installs the package', runner => {
+  const source = fs.readFileSync(path.join('test/e2e/runner', runner), 'utf8')
+  expect(source.match(/muniment-core\.mjs/g)).toHaveLength(1)
+  expect(source.indexOf('muniment-core.mjs')).toBeGreaterThan(source.indexOf('pr-source.mjs mode'))
+})

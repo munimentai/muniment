@@ -7,7 +7,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   APPLE_TEAM_ID, assertGreenCi, assertInstalledNightly, normalizeE2eWaiver, expectedNightlyAssets, forgejoCheckRuns, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
-  sha256Sums, stableAssetName, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
+  sha256Sums, stableAssetName, verifiedStableCopies, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
   verifyNightlyArtifacts, WINDOWS_PUBLISHER, windowsSigningProvenance,
 } from "./release-promotion.mjs";
 import { signUpdaterBytes } from "./updater-signature.mjs";
@@ -16,18 +16,33 @@ const sha = "a".repeat(40);
 const version = "v0.0.1";
 const assetNames = [
   `nightly-${sha}-linux-muniment.deb`,
-  `nightly-${sha}-linux-muniment.AppImage`,
-  `nightly-${sha}-windows-muniment.msi`,
-  `nightly-${sha}-windows-muniment-machine.msi`,
-  `nightly-${sha}-windows-muniment-nsis.exe`,
+  `nightly-${sha}-linux-muniment_0.0.1_amd64.AppImage`,
+  `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi`,
+  `nightly-${sha}-windows-muniment_0.0.1_x64_en-US-machine.msi`,
+  `nightly-${sha}-windows-muniment_0.0.1_x64-nsis.exe`,
   ...['', '-arm64', '-x64'].flatMap(arch => ['.app.zip', '.app.tar.gz', '.app.tar.gz.sig', '.pkg', '.dmg'].map(format => `nightly-${sha}-macos-muniment${arch}${format}`)),
-  `nightly-${sha}-linux-muniment.AppImage.sig`,
-  `nightly-${sha}-windows-muniment.msi.sig`,
-  `nightly-${sha}-windows-muniment-machine.msi.sig`,
-  `nightly-${sha}-windows-muniment-nsis.exe.sig`,
+  `nightly-${sha}-linux-muniment_0.0.1_amd64.AppImage.sig`,
+  `nightly-${sha}-windows-muniment_0.0.1_x64_en-US.msi.sig`,
+  `nightly-${sha}-windows-muniment_0.0.1_x64_en-US-machine.msi.sig`,
+  `nightly-${sha}-windows-muniment_0.0.1_x64-nsis.exe.sig`,
   ...["linux", "windows", "macos"].map(platform => `nightly-${sha}-${platform}-muniment-chromium-locales.tar.gz`),
 ];
-const assets = assetNames.map((name, id) => ({ id, name, url: `https://api.github.test/assets/${id}`, content_type: "application/octet-stream" }));
+const sourceContentType = (name) => name.endsWith(".dmg") ? "application/x-apple-diskimage" : name.endsWith(".deb") ? "application/vnd.debian.binary-package" : name.endsWith(".msi") ? "application/x-msi" : "application/octet-stream";
+const assets = assetNames.map((name, id) => ({ id, name, url: `https://api.github.test/assets/${id}`, content_type: sourceContentType(name) }));
+// Every non-signature source carries its own bytes so a copy cannot pass as another asset.
+const payloadOf = (name) => name.endsWith(".sig") ? Buffer.from("signature fixture").toString("base64") : `payload of ${name}`;
+const copyPairs = [
+  ["muniment-0.0.1-macos.dmg", "muniment-macos.dmg"],
+  ["muniment-0.0.1-macos-arm64.dmg", "muniment-macos-arm64.dmg"],
+  ["muniment-0.0.1-macos-x64.dmg", "muniment-macos-x64.dmg"],
+  ["muniment-0.0.1-macos.pkg", "muniment-macos.pkg"],
+  ["muniment-0.0.1-windows_x64_en-US.msi", "muniment-windows_x64_en-US.msi"],
+  ["muniment-0.0.1-windows_x64_en-US-machine.msi", "muniment-windows_x64_en-US-machine.msi"],
+  ["muniment-0.0.1-windows_x64-nsis.exe", "muniment-windows_x64-nsis.exe"],
+  ["muniment-0.0.1-linux_amd64.AppImage", "muniment-linux_amd64.AppImage"],
+  ["muniment-0.0.1-linux.deb", "muniment-linux.deb"],
+];
+const uploadName = (call) => new URL(call.url).searchParams.get("name");
 const smoke = { name: "smoke", status: "completed", conclusion: "success" };
 const forgejo = "http://forgejo.test/api/v1/repos/factory/muniment";
 const installedJobs = ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"];
@@ -61,7 +76,7 @@ const promotionFetch = (overrides = {}) => {
       body: `Automated desktop build from ${sha}.\n\n${windowsSigningProvenance(sha)}${overrides.macosSigned !== false ? `\n\n${macosSigningProvenance(sha)}` : "\n\nmacOS artifacts are unsigned pending Apple enrollment Y5DUNHQA74."}`, assets,
     });
     if (url.endsWith("/releases") && method === "POST") return response({ id: 42 });
-    if (url.startsWith("https://api.github.test/assets/")) return response(assets[Number(url.split("/").at(-1))]?.name.endsWith(".sig") ? Buffer.from("signature fixture").toString("base64") : "asset bytes");
+    if (url.startsWith("https://api.github.test/assets/")) return response(payloadOf(assets[Number(url.split("/").at(-1))].name));
     if (url.startsWith("https://uploads.github.com/")) return response({});
     if (url.endsWith("/releases/42") && ["PATCH", "DELETE"].includes(method)) return response({});
     if (url.includes(`/git/refs/tags/${version}`) && method === "DELETE") return response({});
@@ -172,7 +187,7 @@ describe("stable release promotion", () => {
     expect(create.url).toBe("https://api.github.com/repos/owner/repo/releases");
     expect(JSON.parse(create.options.body)).toMatchObject({ tag_name: version, target_commitish: sha, draft: true, prerelease: false });
     expect(calls.filter(({ url }) => url.startsWith("https://api.github.test/assets/"))).toHaveLength(27);
-    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(29);
+    expect(calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"))).toHaveLength(38);
     expect(calls.some(({ url }) => url.endsWith("/git/ref/tags/nightly"))).toBe(false);
     expect(calls.some(({ url, options }) => url.includes("/releases/1") && options.method)).toBe(false);
     const uploads = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"));
@@ -188,14 +203,58 @@ describe("stable release promotion", () => {
     const digest = (text) => createHash("sha256").update(text).digest("hex");
     const feedBody = uploads.find(({ url }) => url.endsWith("name=latest.json")).options.body;
     expect(sums.trim().split("\n")).toHaveLength(28);
-    expect(sums).toContain(`${digest("asset bytes")}  muniment-0.0.1-macos.pkg\n`);
+    expect(sums).toContain(`${digest("payload of nightly-" + sha + "-macos-muniment.pkg")}  muniment-0.0.1-macos.pkg\n`);
+    expect(sums).not.toMatch(/ muniment-(?!0\.0\.1-)/);
     expect(sums).toContain(`${digest(feedBody)}  latest.json\n`);
-    for (const upload of uploads.filter(({ url }) => !url.endsWith("name=latest.json") && !url.endsWith("name=SHA256SUMS"))) {
-      const name = new URL(upload.url).searchParams.get("name");
-      expect(Buffer.from(upload.options.body).toString()).toBe(name.endsWith(".sig") ? Buffer.from("signature fixture").toString("base64") : "asset bytes");
+    const copyNames = copyPairs.map(([, alias]) => alias);
+    for (const upload of uploads.filter((candidate) => !["latest.json", "SHA256SUMS", ...copyNames].includes(uploadName(candidate)))) {
+      const nightlyName = assetNames.find((candidate) => stableAssetName(candidate, sha, version) === uploadName(upload));
+      expect(Buffer.from(upload.options.body).toString()).toBe(payloadOf(nightlyName));
     }
     const publish = calls.find(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");
     expect(JSON.parse(publish.options.body)).toEqual({ draft: false, prerelease: false });
+  });
+
+  it("uploads nine version-less copies after metadata and before the draft is published", async () => {
+    const { calls, fetchImpl } = promotionFetch();
+    await promote(fetchImpl);
+    const uploads = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/"));
+    expect(uploads).toHaveLength(38);
+    const names = uploads.map(uploadName);
+    expect(new Set(names).size).toBe(38);
+    const copyNames = copyPairs.map(([, alias]) => alias);
+    expect(names.slice(-9)).toEqual(copyNames);
+    expect(names.slice(0, 29).filter((name) => !name.startsWith("muniment-0.0.1-"))).toEqual(["latest.json", "SHA256SUMS"]);
+    expect(names.indexOf("SHA256SUMS")).toBe(28);
+    const publishIndex = calls.findIndex(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH");
+    expect(publishIndex).toBeGreaterThan(calls.indexOf(uploads.at(-1)));
+    for (const [source, alias] of copyPairs) {
+      const versioned = uploads.find((upload) => uploadName(upload) === source);
+      const copy = uploads.find((upload) => uploadName(upload) === alias);
+      expect(Buffer.from(copy.options.body).equals(Buffer.from(versioned.options.body))).toBe(true);
+      expect(copy.options.headers["Content-Type"]).toBe(versioned.options.headers["Content-Type"]);
+    }
+    const copyType = (alias) => uploads.find((upload) => uploadName(upload) === alias).options.headers["Content-Type"];
+    expect(copyType("muniment-macos.dmg")).toBe("application/x-apple-diskimage");
+    expect(copyType("muniment-linux.deb")).toBe("application/vnd.debian.binary-package");
+    expect(copyType("muniment-windows_x64_en-US.msi")).toBe("application/x-msi");
+    const sums = Buffer.from(uploads.find((upload) => uploadName(upload) === "SHA256SUMS").options.body).toString();
+    for (const [source, alias] of copyPairs) {
+      const copyBytes = uploads.find((upload) => uploadName(upload) === alias).options.body;
+      expect(sums).toContain(`${createHash("sha256").update(copyBytes).digest("hex")}  ${source}\n`);
+      expect(sums).not.toContain(alias);
+    }
+    const feed = JSON.parse(uploads.find((upload) => uploadName(upload) === "latest.json").options.body);
+    for (const platform of Object.values(feed.platforms)) expect(platform.url).toContain("/releases/download/v0.0.1/muniment-0.0.1-");
+    expect(JSON.stringify(feed)).not.toMatch(/download\/v0\.0\.1\/muniment-(?!0\.0\.1-)/);
+  });
+
+  it("does not alias native-architecture packages, app archives, signatures or language packs", async () => {
+    const { calls, fetchImpl } = promotionFetch();
+    await promote(fetchImpl);
+    const aliases = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/")).map(uploadName).filter((name) => !name.startsWith("muniment-0.0.1-") && name !== "latest.json" && name !== "SHA256SUMS");
+    expect(aliases).toHaveLength(9);
+    for (const name of aliases) expect(name).not.toMatch(/\.sig$|\.app\.|chromium-locales|-arm64\.pkg|-x64\.pkg/);
   });
 
   it("verifies every downloaded asset before creating a release, whatever the release text claims", async () => {
@@ -282,6 +341,73 @@ describe("stable release promotion", () => {
     expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "DELETE")).toBe(true);
     expect(calls.some(({ url, options }) => url === `${forgejo}/tags/${version}` && options.method === "DELETE")).toBe(true);
     expect(calls.some(({ url, options }) => url.includes(`/git/refs/tags/${version}`) && options.method === "DELETE")).toBe(true);
+  });
+
+  it.each(copyPairs.map(([source]) => source))("rejects a changed source %s before any upload or release", async (source) => {
+    const { calls, fetchImpl } = promotionFetch();
+    const nightlyName = assetNames.find((candidate) => stableAssetName(candidate, sha, version) === source);
+    const tamper = async ({ files }) => writeFileSync(files.get(nightlyName), "tampered bytes");
+    await expect(promote(fetchImpl, tamper)).rejects.toThrow(`${source} does not match its SHA256SUMS entry`);
+    expect(calls.some(({ url }) => url.startsWith("https://uploads.github.com/"))).toBe(false);
+    expect(calls.some(({ options }) => options.method === "POST")).toBe(false);
+  });
+
+  it("rejects a missing copy source or checksum entry for the whole batch", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "muniment-copies-"));
+    try {
+      const sources = new Map(copyPairs.map(([source]) => {
+        const file = path.join(directory, source);
+        writeFileSync(file, `payload of ${source}`);
+        return [source, { file, contentType: "application/octet-stream" }];
+      }));
+      const sums = sha256Sums(copyPairs.map(([source]) => [source, createHash("sha256").update(`payload of ${source}`).digest("hex")]));
+      expect(verifiedStableCopies({ version, sources, sums }).map(({ name }) => name)).toEqual(copyPairs.map(([, alias]) => alias));
+      const withoutSource = new Map(sources);
+      withoutSource.delete("muniment-0.0.1-linux.deb");
+      expect(() => verifiedStableCopies({ version, sources: withoutSource, sums })).toThrow("muniment-linux.deb has no versioned source");
+      expect(() => verifiedStableCopies({ version, sources, sums: sums.split("\n").filter((line) => !line.endsWith("-linux.deb")).join("\n") })).toThrow("muniment-0.0.1-linux.deb has no SHA256SUMS entry");
+      expect(() => verifiedStableCopies({ version, sources, sums: sums.replace(/^./, "0") })).toThrow("does not match its SHA256SUMS entry");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("uploads no copy when the uploaded checksums no longer match a late candidate", async () => {
+    let files;
+    const lateName = `nightly-${sha}-linux-muniment.deb`;
+    const { calls, fetchImpl } = promotionFetch({ route: (url, method) => {
+      if (url.startsWith("https://uploads.github.com/") && new URL(url).searchParams.get("name") === "SHA256SUMS") writeFileSync(files.get(lateName), "changed after checksums");
+      return null;
+    } });
+    await expect(promote(fetchImpl, async (input) => { files = input.files; })).rejects.toThrow("muniment-0.0.1-linux.deb does not match its SHA256SUMS entry");
+    const names = calls.filter(({ url }) => url.startsWith("https://uploads.github.com/")).map(uploadName);
+    expect(names).toHaveLength(29);
+    expect(names.some((name) => copyPairs.some(([, alias]) => alias === name))).toBe(false);
+    expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH")).toBe(false);
+    expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "DELETE")).toBe(true);
+    expect(calls.some(({ url, options }) => url === `${forgejo}/tags/${version}` && options.method === "DELETE")).toBe(true);
+  });
+
+  it("cleans up the draft release and tag when a copy upload fails", async () => {
+    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.startsWith("https://uploads.github.com/") && new URL(url).searchParams.get("name") === "muniment-macos.pkg" ? response("copy failed", 500) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow("500");
+    expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "PATCH")).toBe(false);
+    expect(calls.some(({ url, options }) => url.endsWith("/releases/42") && options.method === "DELETE")).toBe(true);
+    expect(calls.some(({ url, options }) => url === `${forgejo}/tags/${version}` && options.method === "DELETE")).toBe(true);
+    expect(calls.some(({ url, options }) => url.includes(`/git/refs/tags/${version}`) && options.method === "DELETE")).toBe(true);
+  });
+
+  it("reports all nine copies in a dry run without any remote mutation", async () => {
+    const { calls, fetchImpl } = promotionFetch();
+    const lines = [];
+    await promote(fetchImpl, undefined, { dryRun: true, log: (line) => lines.push(line) });
+    for (const [source, alias] of copyPairs) expect(lines).toContain(`dry run: ${source} -> ${alias}`);
+    expect(calls.filter(({ options }) => ["POST", "PATCH", "DELETE"].includes(options.method))).toEqual([]);
+  });
+
+  it("fails a dry run when a copy source changed", async () => {
+    const { calls, fetchImpl } = promotionFetch();
+    const lateName = `nightly-${sha}-linux-muniment.deb`;
+    await expect(promote(fetchImpl, async ({ files }) => writeFileSync(files.get(lateName), "changed"), { dryRun: true })).rejects.toThrow("does not match its SHA256SUMS entry");
+    expect(calls.filter(({ options }) => ["POST", "PATCH", "DELETE"].includes(options.method))).toEqual([]);
   });
 });
 

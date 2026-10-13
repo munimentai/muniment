@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { expandSidebar, openFirstRunModelSettings } from './e2e/support/first-run.mjs'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -45,5 +46,21 @@ describe('The installed app exposes first-run controls.', () => {
     } })
 
     await expect(expandSidebar()).rejects.toThrow('The sidebar did not expand.')
+  })
+})
+
+describe('Candidate source modes share the same specs.', () => {
+  const runnerText = (name) => readFileSync(`test/e2e/runner/${name}`, 'utf8')
+
+  it.each([
+    ['linux.sh', ['local-mode-chat', 'real-sign-in']],
+    ['macos-wdio.sh', ['local-mode-chat', 'real-sign-in']],
+    ['windows.ps1', ['local-mode-chat', 'real-sign-in']],
+  ])('%s runs its specs outside the source mode branches', (name, specs) => {
+    const runner = runnerText(name)
+    const sequence = runner.slice(runner.lastIndexOf('# Run the installed chat specs first.') >= 0 ? runner.lastIndexOf('# Run the installed chat specs first.') : runner.indexOf('MUNIMENT_E2E_HOME_PATH'))
+    for (const spec of specs) expect(sequence).toContain(`${spec}.spec.js`)
+    expect(sequence).not.toMatch(/source_mode|\$sourceMode/)
+    expect(sequence).not.toMatch(/skip|--exclude/i)
   })
 })

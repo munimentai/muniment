@@ -48,6 +48,38 @@ export const stableAssetName = (name, sha, version) => {
   return `muniment-${version.slice(1)}-${match[1]}${match[2].replace(/^_[0-9]+\.[0-9]+\.[0-9]+/, "")}`;
 };
 
+// The version-less download names. Each entry is the versioned name without
+// its release version; no other asset gets a version-less copy.
+export const STABLE_COPY_SUFFIXES = [
+  "macos.dmg", "macos-arm64.dmg", "macos-x64.dmg", "macos.pkg",
+  "windows_x64_en-US.msi", "windows_x64_en-US-machine.msi", "windows_x64-nsis.exe",
+  "linux_amd64.AppImage", "linux.deb",
+];
+
+// Pair every version-less name with its versioned source. `sources` maps a
+// versioned name to its file and content type; `sums` is the SHA256SUMS text.
+// Every copy is checked against the versioned checksum before any is returned,
+// so one bad candidate rejects the whole batch.
+export const verifiedStableCopies = ({ version, sources, sums }) => {
+  validatePromotionInputs("0".repeat(40), version);
+  const checksums = new Map();
+  for (const line of sums.split("\n")) {
+    const match = line.match(/^([0-9a-f]{64}) {2}(.+)$/);
+    if (match) checksums.set(match[2], match[1]);
+  }
+  return STABLE_COPY_SUFFIXES.map((suffix) => {
+    const source = `muniment-${version.slice(1)}-${suffix}`;
+    const name = `muniment-${suffix}`;
+    const entry = sources.get(source);
+    if (!entry) throw new Error(`${name} has no versioned source ${source}`);
+    const expected = checksums.get(source);
+    if (!expected) throw new Error(`${source} has no SHA256SUMS entry`);
+    const bytes = readFileSync(entry.file);
+    if (sha256(bytes) !== expected) throw new Error(`${source} does not match its SHA256SUMS entry`);
+    return { source, name, bytes, contentType: entry.contentType };
+  });
+};
+
 export const releaseBody = (sha, version) => `A free desktop app for your models, tools, and files. No Muniment account required.
 
 ## Features
@@ -385,7 +417,16 @@ export async function promoteRelease({ token, repository, sha, version, repoHost
       digests.set(asset.name, digest);
     }
     await verify({ files, workDir });
+    const copySources = new Map();
+    const versionedSums = [];
+    for (const asset of assets) {
+      const name = stableAssetName(asset.name, sha, version);
+      copySources.set(name, { file: files.get(asset.name), contentType: asset.content_type || "application/octet-stream" });
+      versionedSums.push([name, digests.get(asset.name)]);
+    }
+    const plannedCopies = verifiedStableCopies({ version, sources: copySources, sums: sha256Sums(versionedSums) });
     if (dryRun) {
+      for (const { source, name } of plannedCopies) log(`dry run: ${source} -> ${name}`);
       log(`dry run: ${sha} passes every check for ${version}; no tag or release was created`);
       return;
     }
@@ -408,7 +449,11 @@ export async function promoteRelease({ token, repository, sha, version, repoHost
     const feed = JSON.stringify(createUpdateFeed({ repository, version, assets: stableAssets, signatures }));
     await upload("latest.json", "application/json", feed);
     sums.push(["latest.json", sha256(feed)]);
-    await upload("SHA256SUMS", "text/plain", sha256Sums(sums.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
+    const sumsText = sha256Sums(sums.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+    await upload("SHA256SUMS", "text/plain", sumsText);
+    // Validate the whole batch against the uploaded checksums before the first copy.
+    const copies = verifiedStableCopies({ version, sources: copySources, sums: sumsText });
+    for (const { name, contentType, bytes } of copies) await upload(name, contentType, bytes);
     await request(fetchImpl, token, `${releaseApi}/releases/${created.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft: false, prerelease: false }) });
   } catch (error) {
     if (created) await request(fetchImpl, token, `${releaseApi}/releases/${created.id}`, { method: "DELETE" }).catch(() => {});

@@ -266,11 +266,20 @@ trap finalize EXIT INT TERM
 
 sha=${MUNIMENT_E2E_SOURCE_SHA:-}
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || { runner_failure 'invalid source SHA'; exit; }
+# The default mode installs the nightly package for this SHA. The pr mode builds
+# and installs an unsigned package from this checkout, after the checkout proves
+# to be the tested source.
+source_mode=$(run_setup node test/e2e/support/pr-source.mjs mode) || { status=1; exit; }
+if [[ $source_mode == pr ]]; then
+  run_setup node test/e2e/support/pr-source.mjs verify || { status=1; exit; }
+  run_setup node test/e2e/support/pr-source.mjs refuse-signing || { status=1; exit; }
+fi
 required_environment=(
-  'GH_TOKEN:RELEASE_TOKEN'
   'MUNIMENT_E2E_USERNAME:DESKTOP_E2E_USERNAME'
   'MUNIMENT_E2E_PASSWORD:DESKTOP_E2E_PASSWORD'
 )
+# The pr mode reads no release, so it needs no release token.
+if [[ $source_mode != pr ]]; then required_environment=('GH_TOKEN:RELEASE_TOKEN' "${required_environment[@]}"); fi
 for requirement in "${required_environment[@]}"; do
   variable=${requirement%%:*}
   repository_secret=${requirement#*:}
@@ -280,32 +289,53 @@ for requirement in "${required_environment[@]}"; do
 done
 (( status == 0 )) || exit
 run_setup base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
-# Resolve and validate identity before package installation. Missing/duplicate
-# assets and a release pointing elsewhere fail shut.
-release=$(run_setup gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
-asset_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" <<<"$release") || { status=1; exit; }
-run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$deb" || { status=1; exit; }
-[[ $(dpkg-deb -f "$deb" Package) == muniment ]] || { runner_failure 'package identity mismatch'; exit; }
+release=
+if [[ $source_mode != pr ]]; then
+  # Resolve and validate identity before package installation. Missing/duplicate
+  # assets and a release pointing elsewhere fail shut.
+  release=$(run_setup gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly") || { status=1; exit; }
+  asset_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" <<<"$release") || { status=1; exit; }
+  run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >"$deb" || { status=1; exit; }
+  [[ $(dpkg-deb -f "$deb" Package) == muniment ]] || { runner_failure 'package identity mismatch'; exit; }
+fi
 
 run_setup sudo apt-get update -qq >>"$installer_log" 2>&1 || { status=1; exit; }
-installed=1
-run_setup sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+if [[ $source_mode == pr ]]; then
+  run_setup sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev >>"$installer_log" 2>&1 || { status=1; exit; }
+else
+  installed=1
+  run_setup sudo apt-get install -y -qq webkit2gtk-driver xvfb xdotool xdg-desktop-portal xdg-desktop-portal-gtk fuse3 libglib2.0-bin libasound2-dev "$deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+fi
 [[ -c /dev/fuse && -r /dev/fuse && -w /dev/fuse ]] || { runner_failure 'FUSE device is unavailable to the runner user'; exit; }
 run_setup npm ci --no-audit --no-fund >>"$installer_log" 2>&1 || { status=1; exit; }
-appimage="$state_root/muniment.AppImage"
-appimage_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" linux-appimage <<<"$release") || { status=1; exit; }
-run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${appimage_id}" >"$appimage" || { status=1; exit; }
-run_setup chmod 755 "$appimage" || { status=1; exit; }
-run_setup dbus-run-session -- xvfb-run -a node test/e2e/support/linux-installed-smoke.mjs "$appimage" "$raw" >>"$installer_log" 2>&1 || { status=1; exit; }
-release_binary=$(command -v muniment-desktop || command -v muniment) || { runner_failure 'installed application binary is unavailable'; exit; }
-run_setup node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
+if [[ $source_mode != pr ]]; then
+  appimage="$state_root/muniment.AppImage"
+  appimage_id=$(run_setup node test/e2e/support/asset-identity.mjs "$sha" linux-appimage <<<"$release") || { status=1; exit; }
+  run_setup gh api -H 'Accept: application/octet-stream' "repos/${GITHUB_REPOSITORY}/releases/assets/${appimage_id}" >"$appimage" || { status=1; exit; }
+  run_setup chmod 755 "$appimage" || { status=1; exit; }
+  run_setup dbus-run-session -- xvfb-run -a node test/e2e/support/linux-installed-smoke.mjs "$appimage" "$raw" >>"$installer_log" 2>&1 || { status=1; exit; }
+  release_binary=$(command -v muniment-desktop || command -v muniment) || { runner_failure 'installed application binary is unavailable'; exit; }
+  run_setup node test/e2e/support/webdriver-release-guard.mjs absent "$release_binary" || { status=1; exit; }
+else
+  # A stale bundle must not satisfy the single-package selection below.
+  run_setup rm -rf -- "$PWD/src-tauri/target/release/bundle/deb" || { status=1; exit; }
+fi
 # Build both bundle resources declared in tauri.linux.conf.json before the Tauri bundle.
 run_setup bash .github/build-linux.sh --bundles deb --features e2e-webdriver --config src-tauri/tauri.e2e.conf.json >>"$installer_log" 2>&1 || { status=1; exit; }
 e2e_app_binary="$PWD/src-tauri/target/release/muniment-desktop"
 [[ -x $e2e_app_binary ]] || { runner_failure 'E2E application binary is unavailable'; exit; }
-e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
+if [[ $source_mode == pr ]]; then
+  e2e_deb=$(run_setup node test/e2e/support/pr-package.mjs select linux-deb "$PWD/src-tauri/target/release/bundle/deb") || { status=1; exit; }
+else
+  e2e_deb=$(find "$PWD/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
+fi
 [[ -n $e2e_deb ]] || { runner_failure 'E2E DEB is unavailable'; exit; }
 run_setup bash test/e2e/support/webdriver-artifact-guard.sh present "$e2e_deb" || { status=1; exit; }
+if [[ $source_mode == pr ]]; then
+  # The current tree's desktop, runtime and bundled resources install from this package.
+  installed=1
+  run_setup sudo apt-get install -y -qq "$e2e_deb" >>"$installer_log" 2>&1 || { status=1; exit; }
+fi
 [[ -x /usr/lib/muniment/muniment-acp ]] || { runner_failure 'installed ACP adapter is unavailable or not executable'; exit; }
 node test/e2e/support/probe-installed-adapter.mjs /usr/lib/muniment/muniment-acp || { runner_failure 'installed ACP adapter initialize probe failed'; exit; }
 [[ -x /usr/lib/muniment/muniment-runtime ]] || { runner_failure 'installed runtime is unavailable or not executable'; exit; }

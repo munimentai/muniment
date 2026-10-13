@@ -28,6 +28,7 @@ export function githubReleases(token, fetchImpl = fetch) {
       },
       repos: {
         getCommit: ({ owner, repo, ref }) => json(`${repoApi({ owner, repo })}/commits/${ref}`),
+        listReleases: ({ owner, repo, per_page = 100, page = 1 }) => json(`${repoApi({ owner, repo })}/releases?per_page=${per_page}&page=${page}`),
         getReleaseByTag: ({ owner, repo, tag }) => json(`${repoApi({ owner, repo })}/releases/tags/${encodeURIComponent(tag)}`),
         createRelease: ({ owner, repo, ...body }) => json(`${repoApi({ owner, repo })}/releases`, send("POST", body)),
         updateRelease: ({ owner, repo, release_id, ...body }) => json(`${repoApi({ owner, repo })}/releases/${release_id}`, send("PATCH", body)),

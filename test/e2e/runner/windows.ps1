@@ -585,22 +585,40 @@ try {
 
   $sha = $env:MUNIMENT_E2E_SOURCE_SHA
   if ($sha -notmatch '^[0-9a-f]{40}$') { throw "invalid source SHA" }
-  if (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY -or -not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD) {
+  # The default mode installs the nightly package for this SHA. The pr mode builds
+  # an unsigned package from this checkout, after the checkout proves to be the tested source.
+  $sourceMode = (Invoke-NativeCommand "node" "test/e2e/support/pr-source.mjs mode" $installerLog "Source mode validation failed").Trim()
+  if ($sourceMode -ne 'nightly' -and $sourceMode -ne 'pr') { throw "invalid source mode" }
+  if (-not $env:MUNIMENT_E2E_USERNAME -or -not $env:MUNIMENT_E2E_PASSWORD) {
+    throw "required injected environment is unavailable"
+  }
+  if ($sourceMode -eq 'nightly' -and (-not $env:GH_TOKEN -or -not $env:GITHUB_REPOSITORY)) {
     throw "required injected environment is unavailable"
   }
 
-  # Resolve all identity checks before mutating installer or per-user state.
-  try {
-    $release = (Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/vnd.github+json"; Authorization = "Bearer $($env:GH_TOKEN)" } `
-      -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly").Content
-  } catch {
-    throw "nightly release lookup failed: $($_.Exception.Message)"
+  if ($sourceMode -eq 'pr') {
+    Invoke-NativeCommand "node" "test/e2e/support/pr-source.mjs verify" $installerLog "Source SHA validation failed"
+    Invoke-NativeCommand "node" "test/e2e/support/pr-source.mjs refuse-signing" $installerLog "PR mode signing refusal failed"
+    # A stale package must not satisfy the single-package selection below.
+    $msiDirectory = Join-Path $repoRoot "src-tauri/target/release/bundle/msi"
+    if (Test-Path -LiteralPath $msiDirectory) { Remove-Item -LiteralPath $msiDirectory -Recurse -Force }
+    Invoke-NativeCommand "node" ".github/build-windows-installers.mjs" $installerLog "Unsigned installer build failed"
+    $localMsi = (Invoke-NativeCommand "node" "test/e2e/support/pr-package.mjs select windows `"$msiDirectory`"" $installerLog "Local MSI selection failed").Trim()
+    Copy-Item -LiteralPath $localMsi -Destination $msi -Force -ErrorAction Stop
+  } else {
+    # Resolve all identity checks before mutating installer or per-user state.
+    try {
+      $release = (Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/vnd.github+json"; Authorization = "Bearer $($env:GH_TOKEN)" } `
+        -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/tags/nightly").Content
+    } catch {
+      throw "nightly release lookup failed: $($_.Exception.Message)"
+    }
+    Add-Content -LiteralPath $installerLog -Value $release -NoNewline
+    $assetId = Invoke-NativeCommand "node" "test/e2e/support/asset-identity.mjs $sha windows" $installerLog "Windows artifact identity validation failed" $release
+    if ($assetId -notmatch '^[1-9][0-9]*$') { throw "Windows artifact identity validation failed" }
+    Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/octet-stream"; Authorization = "Bearer $($env:GH_TOKEN)" } `
+      -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/assets/$assetId" -OutFile $msi
   }
-  Add-Content -LiteralPath $installerLog -Value $release -NoNewline
-  $assetId = Invoke-NativeCommand "node" "test/e2e/support/asset-identity.mjs $sha windows" $installerLog "Windows artifact identity validation failed" $release
-  if ($assetId -notmatch '^[1-9][0-9]*$') { throw "Windows artifact identity validation failed" }
-  Invoke-WebRequest -UseBasicParsing -Headers @{ Accept = "application/octet-stream"; Authorization = "Bearer $($env:GH_TOKEN)" } `
-    -Uri "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/releases/assets/$assetId" -OutFile $msi
 
   $installer = New-Object -ComObject WindowsInstaller.Installer
   $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @([string]$msi, [int]0))
