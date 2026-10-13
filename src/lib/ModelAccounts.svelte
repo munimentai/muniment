@@ -1,13 +1,13 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import AllowanceMeter from './AllowanceMeter.svelte'
-  // One provider's accounts in the router's pool: each a named card with what
-  // the subscription has left and what the account has served, the sign-ins
-  // the pool can take for this provider, and a key form. Every command
-  // answers with the whole router settings, and the parent redraws from them.
+  // One provider's accounts in the router's pool. A subscription is a card with
+  // what it has left and what it has served, and it holds its own Disconnect. A
+  // key is a one-line card with edit and disconnect icons. The sign-ins the
+  // pool takes and a key form follow. Every command answers with the whole
+  // router settings, and the parent redraws from them.
   import { onDestroy, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  import ProviderLogo from './ProviderLogo.svelte'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings } = $props()
 
@@ -33,13 +33,14 @@
   let label = $state('')
   let key = $state('')
   let baseUrl = $state('')
-  let accountModels = $state('')
   let signIn = $state(null)
   let signInAnswer = $state('')
   let unlisten = null
   onDestroy(() => stopListening())
 
   const accounts = $derived((settings?.accounts ?? []).filter((account) => account.family === family))
+  const subscriptions = $derived(accounts.filter((account) => account.source !== 'key'))
+  const keys = $derived(accounts.filter((account) => account.source === 'key'))
   const signIns = $derived((settings?.subscriptions ?? []).filter((entry) => entry.family === family))
   const familyRow = $derived((settings?.families ?? []).find((entry) => entry.id === family) ?? null)
   const busiest = $derived(Math.max(1, ...(settings?.accounts ?? []).flatMap((account) => account.days.map((day) => day[1]))))
@@ -156,10 +157,10 @@
     try { await tauri.invoke('local_mode_account_login_cancel') } catch (_) {}
   }
 
+  // A key serves every model its provider lists.
   function addAccount() {
-    const models = accountModels.split(/[\n,]/).map((model) => model.trim()).filter(Boolean)
-    void run('model_router_add_account', { family, label, key, baseUrl: baseUrl.trim() || null, models }, `${label} is in the ${familyRow?.name ?? family} pool.`)
-      .then(() => { if (!formError) { label = ''; key = ''; baseUrl = ''; accountModels = ''; adding = false } })
+    void run('model_router_add_account', { family, label, key, baseUrl: baseUrl.trim() || null, models: [] }, `${label} is in the ${familyRow?.name ?? family} pool.`)
+      .then(() => { if (!formError) { label = ''; key = ''; baseUrl = ''; adding = false } })
   }
 
   function refreshQuota(account) {
@@ -200,48 +201,41 @@
 <div class="accounts" aria-label={`${familyRow?.name ?? family} accounts`}>
   {#if status}<p class="support" role="status">{status}</p>{/if}
   {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-  {#if accounts.length}
+  {#snippet routingNote(account)}
+    {#if !account.enabled || account.servable === false || cooling(account) || account.weight === 0}
+      <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}
+        <!-- Every account routes. One switched off or set to no share before the card dropped those controls gets one way back. -->
+        {#if !account.enabled || account.weight === 0}<button type="button" class="quiet small" disabled={pending} onclick={() => run('model_router_update_account', { id: account.id, enabled: true, weight: 1 })}>Turn on</button>{/if}
+      </p>
+    {/if}
+  {/snippet}
+  {#if subscriptions.length}
     <ul class="cards">
-      {#each accounts as account (account.id)}
+      {#each subscriptions as account (account.id)}
         <li class="card" class:cooling={cooling(account)}>
           <header>
-            {#if editingId === account.id}
-              <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
-                <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
-                <button disabled={pending || !nameDraft.trim()}>Save</button>
-                <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
-              </form>
-            {:else}
-              <span class="card-label">{account.label}<button type="button" class="rename quiet" aria-label={`Rename ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="pencil" /></button></span>
-            {/if}
-            <span class="tag">{account.source === 'key' ? 'API key' : account.plan || 'Subscription'}</span>
+            <span class="card-label">{account.label}</span>
+            <span class="tag">{account.plan || 'Subscription'}</span>
           </header>
-          {#if !account.enabled || account.servable === false || cooling(account) || account.weight === 0}
-            <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}
-              <!-- Every account routes. One switched off or set to no share before the card dropped those controls gets one way back. -->
-              {#if !account.enabled || account.weight === 0}<button type="button" class="quiet small" disabled={pending} onclick={() => run('model_router_update_account', { id: account.id, enabled: true, weight: 1 })}>Turn on</button>{/if}
-            </p>
+          {@render routingNote(account)}
+          {#if !account.allowance_readable}
+            <p class="record">Allowance unavailable.</p>
+          {:else if account.windows.length === 0}
+            <p class="record">{account.quota_observed_ms ? 'No allowance reported.' : 'Allowance pending.'}</p>
           {/if}
-          {#if account.source !== 'key'}
-            {#if !account.allowance_readable}
-              <p class="record">Allowance unavailable.</p>
-            {:else if account.windows.length === 0}
-              <p class="record">{account.quota_observed_ms ? 'No allowance reported.' : 'Allowance pending.'}</p>
-            {/if}
-            {#each account.windows as window (window.label + window.scope)}
-              <div class="window">
-                <div class="window-head">
-                  <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope} · {window.scope}{/if}</span>
-                  <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms} · resets {until(window.resets_at_ms)}{/if}</span>
-                </div>
-                <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />
+          {#each account.windows as window (window.label + window.scope)}
+            <div class="window">
+              <div class="window-head">
+                <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope} · {window.scope}{/if}</span>
+                <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms} · resets {until(window.resets_at_ms)}{/if}</span>
               </div>
-            {/each}
-            {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
-          {/if}
+              <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />
+            </div>
+          {/each}
+          {#if account.banked_resets}<p class="record">{account.banked_resets} banked {account.banked_resets === 1 ? 'reset' : 'resets'}</p>{/if}
           <details class="account-details"><DisclosureSummary>Usage and settings</DisclosureSummary>
-          {#if account.source === 'key' || (account.email && account.email !== account.label) || account.models.length}
-          <p class="record tier">{[account.source === 'key' ? account.base_url ?? familyRow?.base_url : null, account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</p>
+          {#if (account.email && account.email !== account.label) || account.models.length}
+          <p class="record tier">{[account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</p>
           {/if}
           <div class="bars" aria-label={`${account.label} turns per day`}>
             {#each account.days as [day, requests] (day)}
@@ -260,11 +254,35 @@
           </details>
           <!-- The allowance reads itself every two minutes. The refresh icon reads it now. -->
           <footer>
-            {#if account.source !== 'key' && account.allowance_readable}
+            {#if account.allowance_readable}
               <span class="refreshed">{account.quota_observed_ms ? `Updated ${when(account.quota_observed_ms)}` : 'Not read yet'}<button type="button" class="quiet small refresh" aria-label={`Refresh ${account.label} allowance`} disabled={pending} onclick={() => refreshQuota(account)}><LucideIcon name="refresh-cw" size={14} variant="action" /></button></span>
             {/if}
             <button type="button" class="quiet small disconnect" aria-label={`Disconnect ${account.label}`} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={14} variant="action" />Disconnect</button>
           </footer>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  {#if keys.length}
+    <ul class="keys">
+      {#each keys as account (account.id)}
+        <li class="key-card" class:cooling={cooling(account)}>
+          <LucideIcon name="key-round" size={16} />
+          {#if editingId === account.id}
+            <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
+              <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
+              <button disabled={pending || !nameDraft.trim()}>Save</button>
+              <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
+            </form>
+          {:else}
+            <span class="key-text">
+              <span class="card-label">{account.label}<span class="tag">API key</span></span>
+              {@render routingNote(account)}
+            </span>
+            <button type="button" class="quiet icon-action" aria-label={`Edit ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -303,9 +321,6 @@
       <input id={`router-key-${family}`} type="password" autocomplete="off" bind:value={key} disabled={pending}>
       <label for={`router-base-${family}`}>Server URL (optional)</label>
       <input id={`router-base-${family}`} type="url" placeholder={familyRow?.base_url ?? ''} bind:value={baseUrl} disabled={pending}>
-      <label for={`router-models-${family}`}>Models (optional)</label>
-      <textarea id={`router-models-${family}`} rows="2" bind:value={accountModels} disabled={pending}></textarea>
-      <p class="support">One per line. Leave blank for all models.</p>
       <div class="actions">
         <button type="submit" disabled={pending || !label.trim() || !key.trim()}>Add key</button>
         <button type="button" class="quiet" onclick={() => { adding = false; formError = '' }}>Cancel</button>
@@ -314,10 +329,10 @@
   {:else}
     <div class="sign-ins">
       {#each signIns as entry (entry.provider)}
-        <button type="button" class="sign-in" disabled={pending} onclick={() => startSignIn(entry)}><ProviderLogo color provider={entry.family} size={16} />{entry.label}</button>
+        <button type="button" class="sign-in" disabled={pending} aria-label={`Subscription: ${entry.label}`} onclick={() => startSignIn(entry)}><LucideIcon name="credit-card" size={14} />{signIns.length === 1 ? 'Subscription' : entry.label}</button>
       {/each}
       {#if family !== 'devin'}
-        <button type="button" class="sign-in" disabled={pending} onclick={() => { adding = true }}>Add a key</button>
+        <button type="button" class="sign-in" disabled={pending} onclick={() => { adding = true }}><LucideIcon name="key-round" size={14} />Add a key</button>
       {/if}
     </div>
   {/if}
@@ -348,10 +363,15 @@
   .card header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
   .card-label { flex: 1 1 160px; min-width: 0; font-size: var(--text-13); font-weight: 600; }
   .card-label { display: flex; align-items: center; gap: 4px; }
-  .rename { opacity: 0; padding: 4px; }
-  .card header:hover .rename, .rename:focus-visible { opacity: 1; }
-  .name-edit { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
-  @media (hover: none) { .rename { opacity: 1; } }
+  .name-edit { display: flex; flex: 1; flex-wrap: wrap; gap: 4px; min-width: 0; }
+  /* A key is one line: its name, then edit and disconnect icons at the right. */
+  .keys { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .key-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .key-card.cooling { border-color: var(--muted); }
+  .key-text { display: grid; flex: 1; gap: 2px; min-width: 0; }
+  .key-card .card-label { gap: 8px; }
+  .key-card .support { font-size: var(--text-12); }
+  .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
   .tier { margin: 0; overflow-wrap: anywhere; }
   .window { display: grid; min-width: 0; gap: 4px; }
   .window-head { display: grid; gap: 2px; }

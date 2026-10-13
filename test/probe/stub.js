@@ -238,6 +238,25 @@ export const historyFixtures = {
 
 // First-run provider scans. `?scan=` picks one: mac (the default), many or none.
 const omlx = { id: 'omlx', name: 'oMLX', baseUrl: 'http://127.0.0.1:8080/v1', state: 'needs-key', modelCount: 8, defaultModel: 'Qwen3-Coder-30B-A3B-Instruct-4bit', keyFile: '~/.omlx/settings.json' }
+// ?accounts: an Anthropic pool with two subscriptions and a key, to show the account cards.
+function probeAccounts() {
+  const hour = 3600 * 1000
+  const base = { family: 'anthropic', enabled: true, servable: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }
+  const windows = (left) => [
+    { label: '5-hour', scope: '', remaining_percent: left, resets_at_ms: Date.now() + 3 * hour, limit_reached: false },
+    { label: 'Weekly', scope: '', remaining_percent: 98, resets_at_ms: Date.now() + 160 * hour, limit_reached: false },
+  ]
+  return {
+    families: [{ id: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com/v1' }],
+    subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }],
+    accounts: [
+      { ...base, id: 'team', label: 'team', source: 'subscription', windows: windows(89) },
+      { ...base, id: 'personal', label: 'personal', source: 'subscription', windows: windows(100) },
+      { ...base, id: 'work', label: 'Work', source: 'key', allowance_readable: false, windows: [] },
+    ],
+  }
+}
+
 const providerScanFixtures = {
   mac: {
     servers: [omlx],
@@ -332,6 +351,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'local_mode_leave') return null
     if (command === 'local_mode_provider_inventory') return {
       providers: [
+        ...(new URLSearchParams(location.search).has('accounts') ? [{ id: 'anthropic', name: 'Anthropic', source: 'key', base_url: null, models: [] }] : []),
         { id: 'google', name: 'Google', source: 'key', base_url: null, models: [{ id: 'gemini-3-pro', context: '1M', max_out: '64K', thinking: true, images: true }] },
         { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }, { id: 'qwen3:8b', context: '40K', max_out: '8K', thinking: true, images: false }] },
       ],
@@ -401,7 +421,7 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'model_router_settings' || command === 'model_router_refresh_quota') return {
       enabled: false, running: false, is_default: false, base_url: null,
-      accounts: [], subscriptions: [], families: [], options: [], routes: [],
+      ...(new URLSearchParams(location.search).has('accounts') ? probeAccounts() : { accounts: [], subscriptions: [], families: [] }), options: [], routes: [],
       fallback: null, min_confidence: 0.6, served_models: [],
       classifier: { kind: 'none', configured: false, model: '' },
     }

@@ -148,3 +148,46 @@ it('shows accounts without waiting for model discovery', async () => {
   render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
   expect(await screen.findByText('Instant account')).toBeInTheDocument()
 })
+
+it('draws subscriptions as cards with no edit control and keys as one-line cards with edit and disconnect', async () => {
+  const base = { family: 'anthropic', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [], allowance_readable: true, requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }
+  const settings = { ...routing(), families: [{ id: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com/v1' }], subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }], accounts: [{ ...base, id: 'sub', label: 'eng', source: 'subscription' }, { ...base, id: 'key', label: 'Work', source: 'key' }] }
+  const tauri = { invoke: vi.fn(async () => settings) }
+  render(ModelAccounts, { tauri, family: 'anthropic', settings })
+  const card = screen.getByText('eng').closest('li')
+  expect(card).toHaveClass('card')
+  expect(within(card).queryByRole('button', { name: /Edit|Rename/ })).toBeNull()
+  expect(within(card).getByRole('button', { name: 'Disconnect eng' })).toBeInTheDocument()
+  const key = screen.getByText('Work').closest('li')
+  expect(key).toHaveClass('key-card')
+  expect(within(key).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Edit Work', 'Disconnect Work'])
+  expect(within(key).queryByText('Usage and settings')).toBeNull()
+  const subscription = screen.getByRole('button', { name: 'Subscription: Claude Pro or Max' })
+  expect(subscription).toHaveTextContent(/^Subscription$/)
+  expect(subscription.querySelector('[data-icon="credit-card"]')).not.toBeNull()
+  const add = screen.getByRole('button', { name: 'Add a key' })
+  expect(add.querySelector('[data-icon="key-round"]')).not.toBeNull()
+  await fireEvent.click(add)
+  expect(screen.queryByLabelText(/Models/)).toBeNull()
+  await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Second' } })
+  await fireEvent.input(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Add key' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_add_account', { family: 'anthropic', label: 'Second', key: 'sk-test', baseUrl: null, models: [] }))
+})
+
+it('keeps provider icons only on a provider with no pooled account', async () => {
+  const providers = { providers: [
+    { id: 'anthropic', name: 'Anthropic', source: 'key', models: [] },
+    { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [] },
+  ], hidden: [] }
+  const account = { id: 'sub', family: 'anthropic', label: 'eng', source: 'subscription', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [], allowance_readable: false, requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }
+  const settings = { ...routing(), accounts: [account] }
+  const tauri = { invoke: vi.fn(async (command) => command === 'model_router_settings' || command === 'model_router_refresh_quota' ? settings : providers) }
+  render(Settings, { tauri, inventory: providers, section: 'models', onclose: vi.fn() })
+  await screen.findByText('eng')
+  expect(screen.queryByRole('button', { name: 'Disconnect Anthropic' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Edit Anthropic' })).toBeNull()
+  const ollama = within(screen.getByRole('region', { name: 'Ollama' })).getByTestId('provider-connection')
+  expect(within(ollama).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Edit Ollama', 'Disconnect Ollama'])
+  expect(within(screen.getByRole('region', { name: 'Anthropic' })).queryByTestId('provider-connection')).toBeNull()
+})

@@ -420,27 +420,36 @@
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if shownProviders.length || poolOnlyFamilies.length}
-      <Group label="Connected providers">
+      <!-- Each provider is a heading over its own cards. A pooled subscription is a card and a pooled
+           key a one-line card, each with its own controls. The provider's own connection, when it
+           has no pooled account, is a one-line card with edit and disconnect icons at the far right. -->
+      <Group label="Connected providers" plain>
         {#each shownProviders as entry (entry.id)}
+          {@const pooled = !!entry.family && !!router?.accounts?.some((account) => account.family === entry.family)}
+          {@const endpoint = entry.source === 'local' || entry.source === 'custom'}
           <section class="provider-group" aria-label={entry.name}>
             <Row title={entry.name}>
               {#snippet icon()}<ProviderLogo color provider={entry.id} size={16} />{/snippet}
-              {#snippet detail()}{#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />{/if}{/snippet}
-              <!-- Every provider edits and disconnects with icons at the far right. An endpoint edits its
-                   address; a key or account provider opens its connect form. -->
-              {#if entry.source === 'local' || entry.source === 'custom' || catalogProvider(catalogId(entry.id))}
-                <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => entry.source === 'local' || entry.source === 'custom' ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
-              {/if}
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </Row>
+            {#if !pooled}
+              <div class="line-card" data-testid="provider-connection">
+                <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
+                <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
+                {#if endpoint || catalogProvider(catalogId(entry.id))}
+                  <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+                {/if}
+                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+              </div>
+            {/if}
+            {#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />{/if}
           </section>
         {/each}
         {#each poolOnlyFamilies as family (family)}
           <section class="provider-group" aria-label={familyName(family)}>
             <Row title={familyName(family)}>
               {#snippet icon()}<ProviderLogo color provider={familyProvider(family)} size={16} />{/snippet}
-              {#snippet detail()}<ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />{/snippet}
             </Row>
+            <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />
           </section>
         {/each}
       </Group>
@@ -585,6 +594,12 @@
   .models.connecting { gap: 16px; }
   .connection-field { display: grid; gap: 6px; padding: 12px 0; }
   .provider-group { min-width: 0; }
+  .provider-group { display: grid; gap: 8px; padding-bottom: 12px; }
+  .provider-group + .provider-group { padding-top: 4px; border-top: 1px solid var(--border); }
+  /* One line: the connection's kind or address, then edit and disconnect icons at the far right. */
+  .line-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .line-label { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-13); }
+  .line-label.mono { font: var(--text-12) var(--font-mono); }
   /* A row's actions sit at its far right as icons. Disconnect reads as critical. */
   .classifier-edit { padding: 10px 0; }
   .action-label { white-space: nowrap; }
