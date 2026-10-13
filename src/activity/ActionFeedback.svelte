@@ -23,12 +23,13 @@
           {#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}
         </button>
       {:else if !action.hasDetails}
-        <div class="plain-action"><LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>{#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}</div>
+        <div class="plain-action"><LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>{#if action.counts}<span class="counts">{action.counts}</span>{/if}{#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}</div>
       {:else}
       <details>
         <summary>
           <LucideIcon name={action.icon} />
           <span class="action-label" class:active-sheen={action.running}>{action.label}</span>
+          {#if action.counts}<span class="counts">{action.counts}</span>{/if}
           {#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}
           <span class="chevron"><LucideIcon name="chevron-right" /></span>
         </summary>
@@ -86,6 +87,7 @@
   .file-action:hover { color: var(--ink); }
   .action-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .chevron { flex: none; display: inline-flex; }
+  .counts { flex: none; font: var(--text-12) var(--font-mono); }
   .tools-used { width: max-content; max-width: 100%; }
   .tool-groups { padding-left: 14px; }
   details[open] > summary > .chevron { transform: rotate(90deg); }

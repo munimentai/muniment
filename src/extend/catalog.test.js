@@ -30,8 +30,10 @@ it('sorts by source popularity and resolves unique inline commands for this prom
   const sorted = sortCatalog(catalog)
   expect(sorted[0].popularity).toBe(Math.max(...catalog.map(item => item.popularity)))
   const choices = commandChoices([{id:'one',kind:'plugin',name:'Review'}, {id:'two',kind:'plugin',name:'Review'}])
-  expect(choices.map(item => item.command)).toEqual(['review','review-2'])
+  expect(choices.map(item => item.command)).toEqual(['compact','review','review-2'])
   expect(selectedCommands('/review-2 Check this', choices)).toEqual(['two'])
+  expect(selectedCommands('/compact', choices)).toEqual([])
+  expect(commandChoices([{id:'three',kind:'plugin',name:'Compact'}]).map(item => item.command)).toEqual(['compact','compact-2'])
   expect(selectedCommands('Check this', choices)).toEqual([])
 })
 

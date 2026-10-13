@@ -1,3 +1,5 @@
+import { compactionCounts } from '../lib/context-usage.js'
+
 const categories = {
   compact: { icon: 'list-collapse', done: 'Context automatically compacted', active: 'Compacting context', verb: 'Context compacted', present: 'Compacting context' },
   read: { icon: 'book-open', done: 'Read files', active: 'Reading files', verb: 'Read', present: 'Reading' },
@@ -46,7 +48,7 @@ export function actionGroups(activities = [], live = false) {
     const label = kind === 'web' ? (running ? 'Searching the web' : 'Searched the web') : kind === 'compact' ? (running ? 'Compacting context' : activity.status === 'failed' ? 'Context compaction did not finish' : args.reason === 'manual' ? 'Context compacted' : 'Context automatically compacted')
       : kind === 'command' && args.description ? String(args.description) : target ? `${verb} ${target}`.trim()
       : kind === 'other' ? mcpLabel(activity.displayName || '') ?? name.charAt(0).toUpperCase() + name.slice(1) : `${verb} ${kind === 'command' ? 'command' : 'files'}`
-    const action = { ...activity, queries, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: queries.length > 0 || !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
+    const action = { ...activity, counts: kind === 'compact' && activity.status !== 'failed' ? compactionCounts(activity.output) : '', queries, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: queries.length > 0 || !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
     let group = groups.at(-1)
     if (!group || group.kind !== kind) {
       group = { kind, id: activity.effectId, ...category, actions: [] }

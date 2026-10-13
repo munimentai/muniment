@@ -897,6 +897,33 @@ describe('workspace composer entry', () => {
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
   })
 
+  it('shows the context meter and compacts from /compact without sending a message', async () => {
+    const usage = { tokens: 170000, contextWindow: 200000, percent: 85, estimated: false, windowKnown: true, provider: 'anthropic', model: 'claude-sonnet', autoCompact: true, compactAt: 183616, compacting: false }
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') return chatEventsStatus(true)
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'chat_select_thread') return undefined
+      if (command === 'thread_context_usage') return usage
+      if (command === 'thread_compact') return { tokensBefore: 170000, estimatedTokensAfter: 31900 }
+      throw new Error(`unexpected command: ${command} ${JSON.stringify(payload)}`)
+    })
+    render(App)
+    const composer = await findWorkspaceComposer()
+    const meter = await screen.findByRole('button', { name: 'Context, 170,000 of 200,000 tokens' })
+    expect(meter).toHaveAttribute('data-level', 'caution')
+    expect(screen.getByText('Context is almost full and compacts on its own.')).toBeInTheDocument()
+
+    await fireEvent.input(composer, { target: { value: '/compact keep the schema decisions' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_compact', { threadId: 'thread-1', instructions: 'keep the schema decisions' }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
   it.each([['chat', 0], ['request', 0], ['chat', 300], ['request', 300]])('restores a local reply when the %s socket reconnects first with %s tools', async (firstSocket, toolCount) => {
     localModeStatus = true
     let requestConnected = true

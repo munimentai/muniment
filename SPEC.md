@@ -389,9 +389,9 @@ through a hover pencil and inline form. Grok allowance uses its credits window.
 
 The composer highlights URLs and attached file references. Typing `@` searches
 file names under the selected Files folder or the active workspace; selecting a result attaches it. Search excludes hidden
-files, generated folders and symbolic links. Settings → Context controls automatic
-context compaction and its token limits. Compaction preserves the conversation
-and reports start, completion, cancellation or failure in the action feed.
+files, generated folders and symbolic links. The composer's context meter opens Compact now, `/compact` runs it with an optional summary focus, and Settings → Context controls automatic
+compaction and its token limits. Compaction preserves the conversation, runs in the runtime,
+and reports start, completion with token counts, cancellation or failure in the action feed.
 Web search returns sources without opening a browser unless configured to do so.
 
 ## The company record behind its flag
