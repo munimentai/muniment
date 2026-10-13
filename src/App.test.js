@@ -5200,9 +5200,11 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     await within(card).findByText('641 MB')
-    expect(card).toHaveTextContent('Download641 MB')
+    expect(card).toHaveTextContent('Dictation runs on this device after a one-time 641 MB download.')
+    expect(card.textContent.match(/download/gi)).toHaveLength(1)
+    expect(within(card).queryByRole('status')).not.toBeInTheDocument()
     expect(card).toHaveTextContent('Sourcenvidia/parakeet-tdt-0.6b-v3')
     expect(card).toHaveTextContent('Speech model licenseCC BY 4.0')
     expect(card).toHaveTextContent('Voice activity model licenseMIT')
@@ -5217,14 +5219,14 @@ describe('voice dictation', () => {
     expect(card).toHaveTextContent('128 MB / 641 MB')
     // The card leaves once the model is on disk, and the hint carries the next step.
     expect(await screen.findByText('Installed. Press Voice again to dictate.')).toHaveAttribute('role', 'status')
-    expect(screen.queryByRole('region', { name: 'Speech model install' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('parakeet_install_start')
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
   })
 
   it.each([
-    ['its close control', async (card) => { await fireEvent.click(within(card).getByRole('button', { name: 'Close speech model install' })) }],
+    ['its close control', async (card) => { await fireEvent.click(within(card).getByRole('button', { name: 'Close voice dictation' })) }],
     ['Escape', async () => { await fireEvent.keyDown(document, { key: 'Escape' }) }],
     ['outside click', async () => { await fireEvent.pointerDown(screen.getByRole('button', {name:'Projects',exact:true})) }],
     ['another composer panel', async () => { window.dispatchEvent(new CustomEvent('muniment:composer-panel',{detail:'capacity'})); await tick() }],
@@ -5246,15 +5248,15 @@ describe('voice dictation', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
-    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     await within(card).findByText('641 MB')
 
     await close(card)
-    expect(screen.queryByRole('region', { name: 'Speech model install' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
-    expect(await screen.findByRole('region', { name: 'Speech model install' })).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: 'Voice dictation' })).toBeInTheDocument()
   })
 
   it.each([
@@ -5280,7 +5282,7 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     await within(card).findByText('source')
     if (installState === 'failed') await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
     expect(within(card).getByRole('status')).toHaveTextContent(words)
@@ -5315,7 +5317,7 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     const cancel = await within(card).findByRole('button', { name: 'Cancel install' })
     await waitFor(() => expect(statusCalls).toBe(2))
     await fireEvent.click(cancel)
@@ -5358,7 +5360,7 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     const cancel = await within(card).findByRole('button', { name: 'Cancel install' })
     await fireEvent.click(cancel)
 
@@ -5396,7 +5398,7 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Speech model install' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     await fireEvent.click(await within(card).findByRole('button', { name: 'Cancel install' }))
 
     expect(await within(card).findByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')

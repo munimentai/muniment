@@ -2650,18 +2650,15 @@
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <section data-composer-panel data-panel="speech" data-panel-variant="overlay" class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
             <header class="speech-install-head">
-              <strong id="speech-install-title">Speech model install</strong>
-              <PopupClose label="Close speech model install" onclick={dismissSpeechInstall} />
+              <strong id="speech-install-title">Voice dictation</strong>
+              <PopupClose label="Close voice dictation" onclick={dismissSpeechInstall} />
             </header>
             {#if speechInstallFacts}
-              <p class="speech-install-lead">Dictation runs on this device. Voice needs one download.</p>
-              <dl>
-                <div><dt>Download</dt><dd>{formatBytes(speechInstallFacts.totalDownloadBytes)}</dd></div>
-                <div><dt>Free disk required</dt><dd>{formatBytes(speechInstallFacts.requiredFreeBytes)}</dd></div>
-              </dl>
+              <p class="speech-install-lead">Dictation runs on this device after a one-time <strong>{formatBytes(speechInstallFacts.totalDownloadBytes)}</strong> download.</p>
               <details class="speech-install-details">
                 <summary>Details</summary>
                 <dl>
+                  <div><dt>Free disk required</dt><dd>{formatBytes(speechInstallFacts.requiredFreeBytes)}</dd></div>
                   <div><dt>Source</dt><dd>{speechInstallFacts.sourceRepository}</dd></div>
                   <div><dt>Speech model license</dt><dd>{speechInstallFacts.speechModelLicense}</dd></div>
                   <div><dt>Voice activity model license</dt><dd>{speechInstallFacts.voiceActivityModelLicense}</dd></div>
@@ -2677,7 +2674,8 @@
                   <span>{formatBytes(speechInstallStatus.completedBytes)} / {formatBytes(speechInstallStatus.totalBytes)}</span>
                 </div>
               {/if}
-              {#if speechInstallStatus}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
+              <!-- The Install control states a missing model, so only a later state earns a line. -->
+              {#if speechInstallStatus && speechInstallStatus.state !== 'notInstalled'}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
               {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
                 <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
               {:else if speechInstallStatus?.state === 'installing'}
