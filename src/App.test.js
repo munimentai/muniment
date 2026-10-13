@@ -3091,6 +3091,50 @@ describe('thread name', () => {
     expect(within(screen.getByLabelText('Delete Budget notes?')).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete'])
   })
 
+  it('starts a selection from the row menu, toggles rows with plain clicks and names them in the confirm', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+      { threadId: 'thread-3', title: 'Archive review', updatedAt: '' },
+    ]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    const vendor = await screen.findByRole('button', { name: 'Vendor audit' })
+    expect(screen.getByRole('button', { name: 'Filter threads' })).toBeInTheDocument()
+    await fireEvent.contextMenu(vendor)
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Select' }))
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    // The selection takes the Threads heading's row, and each row shows its check box.
+    expect(screen.queryByRole('button', { name: 'Filter threads' })).not.toBeInTheDocument()
+    expect(document.querySelectorAll('.thread-row .select-mark')).toHaveLength(3)
+
+    // A plain click now adds or drops a row instead of opening its thread.
+    await fireEvent.click(screen.getByRole('button', { name: 'Archive review' }))
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command, args]) => command === 'chat_select_thread' && args?.threadId === 'thread-3')).toHaveLength(0)
+    await fireEvent.click(vendor)
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    await fireEvent.click(vendor)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete…' }))
+    const confirm = screen.getByLabelText('Delete 2 threads?')
+    expect(within(confirm).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['Vendor audit', 'Archive review'])
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0)
+    expect(document.querySelectorAll('.thread-row .select-mark')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Filter threads' })).toBeInTheDocument()
+  })
+
   it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },

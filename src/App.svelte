@@ -1044,8 +1044,9 @@
 
   // A Shift click takes the range from the last picked row, a Command or
   // Control click adds or drops one row, and a plain click opens the thread.
+  // While rows are selected, a plain click adds or drops its row instead.
   function threadRowClick(event, threadId) {
-    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+    if (event.shiftKey || event.metaKey || event.ctrlKey || selectedThreadIds.size) {
       event.preventDefault()
       selectThread(threadId, event.shiftKey)
       return
@@ -1060,9 +1061,10 @@
     void chatController.openThread(threadId)
   }
 
-  // The open thread's row is not a button, so a modifier click alone selects it.
+  // The open thread's row is not a button, so a modifier click, or any click
+  // while rows are selected, selects it.
   function currentRowClick(event, threadId) {
-    if (!(event.shiftKey || event.metaKey || event.ctrlKey)) return
+    if (!(event.shiftKey || event.metaKey || event.ctrlKey || selectedThreadIds.size)) return
     event.preventDefault()
     event.currentTarget.focus()
     selectThread(threadId, event.shiftKey)
@@ -1087,9 +1089,12 @@
     selectionAnchor = null
   }
 
-  // The rows one delete covers: the selection when the row is part of it, else the row alone.
+  // The rows one delete covers: the selection in sidebar order when the row is part of it, else the row alone.
   function deletionTargets(threadId) {
-    return selectedThreadIds.has(threadId) && selectedThreadIds.size > 1 ? [...selectedThreadIds] : [threadId]
+    if (!(selectedThreadIds.has(threadId) && selectedThreadIds.size > 1)) return [threadId]
+    const order = shortcutThreads.map(item => item.threadId)
+    const place = (id) => order.includes(id) ? order.indexOf(id) : order.length
+    return [...selectedThreadIds].sort((left, right) => place(left) - place(right))
   }
 
   // The control's name, and the confirm group's spoken question.
@@ -2220,6 +2225,10 @@
             </ul>
 {/snippet}
 
+{#snippet rowMark(selected)}
+  {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} /></span>{:else}<span></span>{/if}
+{/snippet}
+
 {#snippet sidebarThread(summary)}
                 {@const title = summary.title || 'New thread'}
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
@@ -2236,9 +2245,9 @@
                     </form>
                   {:else if current && !(agentsOpen || artifactsOpen || projectsOpen)}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
-                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -2322,6 +2331,7 @@
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                     <div class="thread-menu" use:floatingMenu role="menu" tabindex="-1" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
                       <button type="button" role="menuitem" onclick={() => { if (threadMenu.fromTitle) { closeThreadMenu(); editThreadTitle(currentThreadTitle) } else renameSidebarThread(summary) }}>Rename</button>
+                      {#if !threadMenu.fromTitle && !selectedThreadIds.has(summary.threadId)}<button type="button" role="menuitem" onclick={() => { const id = summary.threadId; closeThreadMenu(); selectThread(id, false); focusThreadRow(id) }}>Select</button>{/if}
                       <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'pinned')}>{threadOrganization[summary.threadId]?.pinned ? 'Unpin' : 'Pin'}</button>
                       <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
                       <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
@@ -2347,7 +2357,6 @@
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
             </div>
-            {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={!!active || threadSwitching} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Clear</button></div>{/if}
             <div class="side-scroll" use:panelScroll>
             <section class="sidebar-collection" aria-label="Agents group">
               <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} disabled={!!active || threadSwitching} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
@@ -2388,7 +2397,9 @@
               </div>{/if}
               {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
             </section>
-            <ThreadFilter status={includeArchived ? 'all' : archivedThreads ? 'archived' : 'active'} sort={threadSort} onchange={(status, sort) => { archivedThreads = status === 'archived'; includeArchived = status === 'all'; threadSort = sort; filterThreads() }} />
+            <!-- The selection takes the Threads heading's row, so no row moves under the pointer. -->
+            {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={!!active || threadSwitching} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
+            {:else}<ThreadFilter status={includeArchived ? 'all' : archivedThreads ? 'archived' : 'active'} sort={threadSort} onchange={(status, sort) => { archivedThreads = status === 'archived'; includeArchived = status === 'all'; threadSort = sort; filterThreads() }} />{/if}
             {#each threadGroups.filter((group) => group.name === 'Pinned') as group}
               <h3 class="side-group">Pinned</h3>
               <ul class="thread-list" aria-label="Pinned threads">{#each group.threads as summary (summary.threadId)}{@render sidebarThread(summary)}{/each}</ul>
@@ -2870,7 +2881,11 @@
 
   {#if deletingThreadId}
     <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
-      <p>{deletingThreadIds.length > 1 ? 'The selected threads and their messages will be deleted.' : 'This thread and its messages will be deleted.'}</p>
+      {#if deletingThreadIds.length > 1}
+        {@const titles = deletingThreadIds.map(id => threadSummaries.find(t => t.threadId === id)?.title || 'New thread')}
+        <p>These threads and their messages will be deleted:</p>
+        <ul class="delete-titles">{#each titles.slice(0, 5) as title, index (index)}<li>{title}</li>{/each}{#if titles.length > 5}<li>{titles.length - 5} more</li>{/if}</ul>
+      {:else}<p>This thread and its messages will be deleted.</p>{/if}
     </ConfirmDialog>
   {/if}
 {#if pairingRequests[0]}
@@ -3090,9 +3105,13 @@
   .side-toggle:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .side-toggle:hover:not(:disabled) :global(.side-icon) { color: var(--ink); }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-color: transparent; background: transparent; text-align: left; }
-  .selection-bar { display:flex; align-items:center; gap:5px; padding:6px 10px; font-size:var(--text-12); }
-  .selection-bar span { flex:1; color:var(--muted); }
-  .selection-bar button { min-width:24px; min-height:24px; padding:3px 6px; font-size:var(--text-12); }
+  /* The bar holds the Threads heading's margins and 24px height. */
+  .selection-bar { display:flex; align-items:center; gap:5px; height:24px; margin:10px 8px 4px; font-size:var(--text-12); }
+  .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-mono); }
+  .selection-bar button { min-width:24px; height:24px; padding:0 6px; font-size:var(--text-12); }
+  .thread-row > .select-mark { flex:0 0 14px; display:inline-flex; color:var(--muted); }
+  .thread-row.selected > .select-mark { color:var(--ink); }
+  .delete-titles { margin:4px 0 0; padding-left:18px; }
   .thread-list { padding: 0; list-style: none; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
   .thread-record { position: relative; }

@@ -184,6 +184,8 @@
     <path d="M12 19V5" />
   {:else if name === 'square'}
     <rect width="18" height="18" x="3" y="3" rx="2" />
+  {:else if name === 'square-check'}
+    <rect width="18" height="18" x="3" y="3" rx="2" /><path d="m9 12 2 2 4-4" />
   {:else if name === 'clock'}
     <circle cx="12" cy="12" r="10" />
     <path d="M12 6v6l4 2" />
