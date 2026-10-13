@@ -12,8 +12,13 @@ describe('voice settings', () => {
 
   it('names a chosen microphone, and mutes only on macOS', () => {
     const settings = { microphone: 'USB Mic', mute: true, sound: true }
-    expect(dictationStartOptions(settings, 'MacIntel')).toEqual({ microphone: 'USB Mic', mute: true, sound: true })
-    expect(dictationStartOptions({ ...settings, microphone: 'default' }, 'Win32')).toEqual({ microphone: null, mute: false, sound: true })
+    expect(dictationStartOptions(settings, 'MacIntel')).toEqual({ microphone: 'USB Mic', mute: true, sound: true, words: [] })
+    expect(dictationStartOptions({ ...settings, microphone: 'default' }, 'Win32')).toEqual({ microphone: null, mute: false, sound: true, words: [] })
+  })
+
+  it('passes trimmed custom words to recognition', () => {
+    expect(dictationStartOptions({ words: [' Muniment ', '', '  ', 3, 'Zylaxis'] }, 'MacIntel').words).toEqual(['Muniment', 'Zylaxis'])
+    expect(dictationStartOptions({ words: 'Muniment' }, 'MacIntel').words).toEqual([])
   })
 
   it('drops filler words and keeps the sentence shape', () => {

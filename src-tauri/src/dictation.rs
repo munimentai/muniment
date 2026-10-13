@@ -6,7 +6,8 @@ use std::time::Duration;
 use muniment_core::asr::utterance::{Utterance, UtteranceConfig};
 use muniment_core::asr::{
     AsrLifecycleError, AsrModelSetStamp, DictationPipeline, OfflineParakeetRecognizer,
-    SileroVoiceActivityDetector, VadDecisionSource, PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
+    ParakeetDecoding, ParakeetHotwords, SileroVoiceActivityDetector, VadDecisionSource,
+    PARAKEET_MODEL_MANIFEST, VAD_SAMPLE_RATE,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -41,6 +42,8 @@ pub struct DictationOptions {
     microphone: Option<String>,
     mute: bool,
     sound: bool,
+    /// Custom words that bias recognition toward their spelling.
+    words: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -58,7 +61,14 @@ struct DictationFailure {
 
 type Emit = dyn Fn(DictationEvent) + Send + Sync;
 type Running = dyn Fn() + Send + Sync;
-type Runner = dyn Fn(&Path, &VoiceCaptureState, &AtomicBool, &Running, &Emit) -> Result<(), DictationFailure>
+type Runner = dyn Fn(
+        &Path,
+        &VoiceCaptureState,
+        &[String],
+        &AtomicBool,
+        &Running,
+        &Emit,
+    ) -> Result<(), DictationFailure>
     + Send
     + Sync;
 
@@ -85,15 +95,19 @@ impl ModelStamp for AsrModelSetStamp {
     }
 }
 
-/// The loaded recognizer of the last session and the model files it read.
+/// The loaded recognizer of the last session, the model files it read and
+/// the decoding mode the session asked for.
 struct LoadedRecognizer<R, S> {
     directory: PathBuf,
     stamp: S,
+    decoding: ParakeetDecoding,
     recognizer: Arc<R>,
 }
 
 /// Keeps one recognizer across dictation sessions. A session reuses it only
-/// while the verified current revision has the same directory and file stamps.
+/// while the verified current revision has the same directory and file stamps
+/// and the session asks for the same decoding mode. Any other session drops the
+/// loaded recognizer before it loads the next, so one encoder is resident.
 struct RecognizerCache<R, S = AsrModelSetStamp>(Mutex<Option<LoadedRecognizer<R, S>>>);
 
 impl<R, S> Default for RecognizerCache<R, S> {
@@ -106,6 +120,7 @@ impl<R, S: ModelStamp> RecognizerCache<R, S> {
     fn get<E>(
         &self,
         current: Result<(PathBuf, S), E>,
+        decoding: ParakeetDecoding,
         load: impl FnOnce() -> Result<R, E>,
     ) -> Result<Arc<R>, E> {
         let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -117,10 +132,11 @@ impl<R, S: ModelStamp> RecognizerCache<R, S> {
                 return Err(error);
             }
         };
-        if let Some(loaded) = slot
-            .as_ref()
-            .filter(|loaded| loaded.directory == directory && loaded.stamp.matches(&stamp))
-        {
+        if let Some(loaded) = slot.as_ref().filter(|loaded| {
+            loaded.directory == directory
+                && loaded.stamp.matches(&stamp)
+                && loaded.decoding == decoding
+        }) {
             return Ok(Arc::clone(&loaded.recognizer));
         }
         *slot = None;
@@ -128,9 +144,25 @@ impl<R, S: ModelStamp> RecognizerCache<R, S> {
         *slot = Some(LoadedRecognizer {
             directory,
             stamp,
+            decoding,
             recognizer: Arc::clone(&recognizer),
         });
         Ok(recognizer)
+    }
+}
+
+/// Loads a recognizer for `decoding`. A failed Hotwords load falls back to
+/// Greedy, so custom words never stop dictation.
+fn load_with_fallback<R, E>(
+    decoding: ParakeetDecoding,
+    load: impl Fn(ParakeetDecoding) -> Result<R, E>,
+) -> Result<R, E> {
+    match load(decoding) {
+        Err(_) if decoding == ParakeetDecoding::Hotwords => {
+            eprintln!("Custom words are unavailable. Dictation uses plain recognition.");
+            load(ParakeetDecoding::Greedy)
+        }
+        result => result,
     }
 }
 
@@ -139,8 +171,8 @@ impl DictationState {
         let recognizers = Arc::new(RecognizerCache::default());
         Self::with_runner(
             root,
-            Arc::new(move |root, capture, stop, running, emit| {
-                run_native(root, &recognizers, capture, stop, running, emit)
+            Arc::new(move |root, capture, words, stop, running, emit| {
+                run_native(root, &recognizers, capture, words, stop, running, emit)
             }),
         )
     }
@@ -189,7 +221,7 @@ impl DictationState {
                 voice_output::play(Tone::Start);
             }
             let muted = options.mute.then(OutputMute::engage);
-            let result = runner(&root, &capture, &stop, &running, &emit);
+            let result = runner(&root, &capture, &options.words, &stop, &running, &emit);
             drop(muted);
             if options.sound && result.is_ok() {
                 voice_output::play(Tone::Stop);
@@ -262,10 +294,17 @@ fn run_native(
     root: &Path,
     recognizers: &RecognizerCache<OfflineParakeetRecognizer>,
     capture: &VoiceCaptureState,
+    words: &[String],
     stop: &AtomicBool,
     running: &Running,
     emit: &Emit,
 ) -> Result<(), DictationFailure> {
+    let hotwords = ParakeetHotwords::new(words);
+    let decoding = if hotwords.is_empty() {
+        ParakeetDecoding::Greedy
+    } else {
+        ParakeetDecoding::Hotwords
+    };
     let lifecycle = parakeet_lifecycle(root);
     // Verification reuses the recorded digest of each unchanged file, so a
     // session start hashes the model only after its files change.
@@ -276,9 +315,11 @@ fn run_native(
         .as_ref()
         .map(|(directory, _)| directory.clone())
         .map_err(|error| *error);
-    let recognizer = recognizers.get(current, || {
-        OfflineParakeetRecognizer::from_verified_current(&lifecycle)
-            .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))
+    let recognizer = recognizers.get(current, decoding, || {
+        load_with_fallback(decoding, |decoding| {
+            OfflineParakeetRecognizer::from_verified_current_with_decoding(&lifecycle, decoding)
+        })
+        .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))
     })?;
     let installed = installed?;
     let vad_artifact = PARAKEET_MODEL_MANIFEST
@@ -290,7 +331,11 @@ fn run_native(
             .map_err(|_| failure("modelUnavailable", "The speech model could not be loaded."))?;
     let pipeline = DictationPipeline::new(vad, config())
         .map_err(|_| failure("pipelineUnavailable", "Dictation could not be started."))?;
-    run_coordinator(capture, pipeline, recognizer.as_ref(), stop, running, emit)
+    let decoder = BiasedDecoder {
+        recognizer: recognizer.as_ref(),
+        hotwords,
+    };
+    run_coordinator(capture, pipeline, &decoder, stop, running, emit)
 }
 
 trait CaptureSource {
@@ -319,9 +364,18 @@ trait TranscriptDecoder {
     fn decode(&self, samples: &[f32]) -> Result<String, ()>;
 }
 
-impl TranscriptDecoder for OfflineParakeetRecognizer {
+/// Decodes each utterance biased toward the session's custom words. A Greedy
+/// recognizer ignores them.
+struct BiasedDecoder<'a> {
+    recognizer: &'a OfflineParakeetRecognizer,
+    hotwords: ParakeetHotwords,
+}
+
+impl TranscriptDecoder for BiasedDecoder<'_> {
     fn decode(&self, samples: &[f32]) -> Result<String, ()> {
-        self.decode(VAD_SAMPLE_RATE, samples).map_err(|_| ())
+        self.recognizer
+            .decode_with_hotwords(VAD_SAMPLE_RATE, samples, &self.hotwords)
+            .map_err(|_| ())
     }
 }
 
@@ -472,23 +526,108 @@ mod tests {
             Ok::<u32, ()>(loads.get())
         };
         let current = |stamp| Ok((PathBuf::from("rev"), TestStamp(stamp)));
+        let greedy = ParakeetDecoding::Greedy;
 
-        assert_eq!(*cache.get(current(Some(1)), load).unwrap(), 1);
-        assert_eq!(*cache.get(current(Some(1)), load).unwrap(), 1);
-        assert_eq!(*cache.get(current(Some(2)), load).unwrap(), 2);
+        assert_eq!(*cache.get(current(Some(1)), greedy, load).unwrap(), 1);
+        assert_eq!(*cache.get(current(Some(1)), greedy, load).unwrap(), 1);
+        assert_eq!(*cache.get(current(Some(2)), greedy, load).unwrap(), 2);
         assert_eq!(
             *cache
-                .get(Ok((PathBuf::from("other"), TestStamp(Some(2)))), load)
+                .get(
+                    Ok((PathBuf::from("other"), TestStamp(Some(2)))),
+                    greedy,
+                    load
+                )
                 .unwrap(),
             3
         );
-        assert_eq!(*cache.get(current(None), load).unwrap(), 4);
-        assert_eq!(*cache.get(current(None), load).unwrap(), 5);
-        assert!(cache.get(Err(()), load).is_err());
+        assert_eq!(*cache.get(current(None), greedy, load).unwrap(), 4);
+        assert_eq!(*cache.get(current(None), greedy, load).unwrap(), 5);
+        assert!(cache.get(Err(()), greedy, load).is_err());
         assert!(cache.0.lock().unwrap().is_none());
-        assert!(cache.get(current(Some(3)), || Err(())).is_err());
+        assert!(cache.get(current(Some(3)), greedy, || Err(())).is_err());
         assert!(cache.0.lock().unwrap().is_none());
-        assert_eq!(*cache.get(current(Some(3)), load).unwrap(), 6);
+        assert_eq!(*cache.get(current(Some(3)), greedy, load).unwrap(), 6);
+    }
+
+    #[test]
+    fn a_decoding_change_drops_the_loaded_recognizer_before_the_reload() {
+        let cache = RecognizerCache::<u32, TestStamp>::default();
+        let loads = std::cell::Cell::new(0);
+        let current = || Ok::<_, ()>((PathBuf::from("rev"), TestStamp(Some(1))));
+        let mut previous = std::sync::Weak::new();
+        for (decoding, expected) in [
+            (ParakeetDecoding::Greedy, 1),
+            (ParakeetDecoding::Hotwords, 2),
+            (ParakeetDecoding::Hotwords, 2),
+            (ParakeetDecoding::Greedy, 3),
+        ] {
+            let recognizer = cache
+                .get(current(), decoding, || {
+                    // The cache holds the only other handle, so the previous
+                    // recognizer is gone once the cache drops it.
+                    assert!(previous.upgrade().is_none());
+                    loads.set(loads.get() + 1);
+                    Ok(loads.get())
+                })
+                .unwrap();
+            assert_eq!(*recognizer, expected);
+            previous = Arc::downgrade(&recognizer);
+        }
+        assert_eq!(loads.get(), 3);
+    }
+
+    #[test]
+    fn a_failed_hotwords_load_falls_back_to_greedy() {
+        let attempts = Mutex::new(Vec::new());
+        let load = |fail_hotwords: bool| {
+            let attempts = &attempts;
+            move |decoding| {
+                attempts.lock().unwrap().push(decoding);
+                if fail_hotwords && decoding == ParakeetDecoding::Hotwords {
+                    Err("native")
+                } else {
+                    Ok(decoding)
+                }
+            }
+        };
+        assert_eq!(
+            load_with_fallback(ParakeetDecoding::Hotwords, load(true)),
+            Ok(ParakeetDecoding::Greedy)
+        );
+        assert_eq!(
+            load_with_fallback(ParakeetDecoding::Hotwords, load(false)),
+            Ok(ParakeetDecoding::Hotwords)
+        );
+        assert_eq!(
+            load_with_fallback(ParakeetDecoding::Greedy, load(true)),
+            Ok(ParakeetDecoding::Greedy)
+        );
+        assert_eq!(
+            load_with_fallback(ParakeetDecoding::Greedy, |_| Err::<(), _>("native")),
+            Err("native")
+        );
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            vec![
+                ParakeetDecoding::Hotwords,
+                ParakeetDecoding::Greedy,
+                ParakeetDecoding::Hotwords,
+                ParakeetDecoding::Greedy,
+            ]
+        );
+    }
+
+    #[test]
+    fn options_carry_custom_words_and_default_to_none() {
+        let options: DictationOptions = serde_json::from_str(
+            r#"{"microphone":null,"mute":true,"sound":false,"words":["Muniment","Zylaxis"]}"#,
+        )
+        .unwrap();
+        assert_eq!(options.words, ["Muniment", "Zylaxis"]);
+        assert!(options.mute);
+        let options: DictationOptions = serde_json::from_str(r#"{"mute":false}"#).unwrap();
+        assert!(options.words.is_empty());
     }
     use muniment_core::asr::utterance::VoiceActivity;
     use muniment_core::asr::{VadError, VAD_FRAME_SIZE};
@@ -574,7 +713,7 @@ mod tests {
     ) -> Arc<Runner> {
         let capture = Arc::new(capture);
         Arc::new(
-            move |_: &Path, _: &VoiceCaptureState, stop, running, emit| {
+            move |_: &Path, _: &VoiceCaptureState, _: &[String], stop, running, emit| {
                 let pipeline = DictationPipeline::new(
                     FakeVad {
                         decisions: decisions.clone(),
@@ -666,6 +805,36 @@ mod tests {
         wait_status(&app, DictationStatus::Stopped);
         assert_eq!(lengths.lock().unwrap().len(), 2);
         assert_eq!(dictation_stop(app.state()), DictationStatus::Stopped);
+    }
+
+    #[test]
+    fn start_passes_custom_words_to_the_runner() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        let app = app_with_runner(Arc::new(
+            move |_: &Path, _: &VoiceCaptureState, words: &[String], _, _, _| {
+                recorded.lock().unwrap().push(words.to_vec());
+                Ok(())
+            },
+        ));
+        let options: DictationOptions = serde_json::from_str(r#"{"words":["Zylaxis"]}"#).unwrap();
+        dictation_start(
+            app.handle().clone(),
+            app.state(),
+            app.state(),
+            Some(options),
+        );
+        wait_status(&app, DictationStatus::Stopped);
+        dictation_start(app.handle().clone(), app.state(), app.state(), None);
+        wait_status(&app, DictationStatus::Stopped);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while seen.lock().unwrap().len() < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![vec!["Zylaxis".to_owned()], Vec::new()]
+        );
     }
 
     #[test]
