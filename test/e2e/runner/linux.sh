@@ -162,7 +162,7 @@ emit_artifacts() {
     ! tar -tzf "$archive" >/dev/null ||
     ! {
       printf '%s\n' '=== DESKTOP-CI ARTIFACTS BEGIN ==='
-      base64 -w 0 "$archive"
+      base64 <"$archive" | tr -d '\n'
       printf '\n%s\n' '=== DESKTOP-CI ARTIFACTS END ==='
     } >"$envelope"; then
     rm -f -- "$archive" "$envelope"
@@ -252,7 +252,8 @@ finalize() {
   else
     emit_minimal_artifacts publication-failed || cleanup_status=1
   fi
-  rm -f -- "$cleanup_status_ledger" "$redaction_report"
+  # The remove-cleanup-log step writes its own result line, which recreates the log.
+  rm -f -- "$cleanup_log" "$cleanup_status_ledger" "$redaction_report"
   if (( status != 0 || cleanup_status != 0 || redaction_status != 0 )); then exit 1; fi
 }
 
@@ -288,7 +289,7 @@ for requirement in "${required_environment[@]}"; do
   fi
 done
 (( status == 0 )) || exit
-run_setup base64 --decode test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
+run_setup base64 --decode <test/e2e/fixtures/image-token.png.base64 >"$image_fixture" || { status=1; exit; }
 release=
 if [[ $source_mode != pr ]]; then
   # Resolve and validate identity before package installation. Missing/duplicate
