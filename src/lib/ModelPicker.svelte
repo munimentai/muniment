@@ -8,8 +8,9 @@
   import LucideIcon from './LucideIcon.svelte'
   import { classifierProvider } from './classifier-catalog.js'
   import { pickerGroups, providerName } from './provider-catalog.js'
+  import { compactsOnSwitch, windowLabel, windowTokens } from './context-usage.js'
 
-  let { inventory, current, onchoose, onmanage, onclose } = $props()
+  let { inventory, current, contextUsage = null, onchoose, onmanage, onclose } = $props()
   let query = $state('')
   let search = $state()
   const groups = $derived(pickerGroups(inventory, query))
@@ -46,9 +47,13 @@
         <ul>
           {#each group.models as model (model.id)}
             {@const inUse = current?.provider === model.provider && current?.model === model.choice}
+            {@const window = model.contextWindow ?? windowTokens(model.context)}
+            {@const compacts = !inUse && compactsOnSwitch(contextUsage, window)}
             <li>
               <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={inUse} onclick={() => onchoose(model.provider, model.choice)}>
                 <span class="model-label">{#if model.id === 'auto' && group.classifier}<ProviderLogo provider={providerId} size={16} />{/if}<span class="model-id" class:classifier={model.id === 'auto' && group.classifier}>{model.label ?? model.id}</span></span>
+                {#if compacts}<span class="will-compact"><LucideIcon name="combine" variant="action" size={12} />will compact</span>{/if}
+                {#if window}<span class="window" class:pushed={!compacts}>{windowLabel(window)}</span>{/if}
                 {#if model.accounts > 1}<span class="balanced" aria-label={`Balanced across ${model.accounts} accounts`}><LucideIcon name="scale" variant="action" size={14} /><span class="tag">{model.accounts}</span></span>{/if}
                 {#if inUse}<LucideIcon name="check" variant="action" size={14} />{/if}
               </button>
@@ -74,6 +79,10 @@
   .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .classifier { color: var(--ink); font-weight: 600; }
   .balanced { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); }
+  .window { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .window.pushed, .will-compact { margin-left: auto; }
+  .window + .balanced { margin-left: 0; }
+  .will-compact { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--ochre); font: var(--text-12) var(--font-human); }
   .picker-group ul { margin: 0; padding: 0; list-style: none; }
   .picker-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 8px; text-align: left; font-size: var(--text-13); }
   .picker-row[aria-pressed="true"] { color: var(--ink); background: var(--faint); }

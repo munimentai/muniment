@@ -91,6 +91,8 @@ pub(crate) struct RouterModel {
     family: String,
     model: String,
     accounts: u32,
+    /// The model's context window in tokens, when the router knows it.
+    context_window: Option<u64>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -818,11 +820,15 @@ fn router_models(agent: &Path) -> Vec<RouterModel> {
                         && account.serves(&option.model)
                 })
                 .count() as u32;
+            let context_window = muniment_core::model_router::policy::model(&config, &option)
+                .map(|model| model.context)
+                .filter(|context| *context > 0);
             RouterModel {
                 id: option.key,
                 family: option.family,
                 model: option.model,
                 accounts,
+                context_window,
             }
         })
         .collect()

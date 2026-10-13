@@ -5,7 +5,9 @@
 </script>
 
 <svg class="lucide" class:side-icon={variant === 'side'} class:action-icon={variant === 'action'} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" data-icon={name}>
-  {#if name === 'house'}
+  {#if name === 'combine'}
+    <path d="M10 18H5a3 3 0 0 1-3-3v-1" /><path d="M14 2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2" /><path d="M20 2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2" /><path d="m7 21 3-3-3-3" /><rect x="14" y="14" width="8" height="8" rx="2" /><rect x="2" y="2" width="8" height="8" rx="2" />
+  {:else if name === 'house'}
     <path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1ZM9 21v-8h6v8" />
   {:else if name === 'file-plus'}
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M12 12v6M9 15h6" />

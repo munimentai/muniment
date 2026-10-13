@@ -298,10 +298,10 @@ export function buildProbeCommandTable(fixtureName) {
   // `?context=caution`, `unknown` or `estimated` shows that meter state.
   let probeContext = new URLSearchParams(location.search).get('context') || 'normal'
   const contextUsage = () => ({
-    normal: { tokens: 46210, contextWindow: 200000, percent: 23.1, estimated: false, windowKnown: true },
+    normal: { tokens: 92400, contextWindow: 200000, percent: 46.2, estimated: false, windowKnown: true },
     caution: { tokens: 170000, contextWindow: 200000, percent: 85, estimated: false, windowKnown: true },
     unknown: { tokens: 21480, contextWindow: 128000, percent: 16.8, estimated: false, windowKnown: false },
-    estimated: { tokens: 31900, contextWindow: 200000, percent: 15.95, estimated: true, windowKnown: true },
+    estimated: { tokens: 61900, contextWindow: 200000, percent: 30.95, estimated: true, windowKnown: true },
   })[probeContext] ?? null
 
   async function invoke(command, payload) {
@@ -333,7 +333,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'local_mode_provider_inventory') return {
       providers: [
         { id: 'google', name: 'Google', source: 'key', base_url: null, models: [{ id: 'gemini-3-pro', context: '1M', max_out: '64K', thinking: true, images: true }] },
-        { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] },
+        { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }, { id: 'qwen3:8b', context: '40K', max_out: '8K', thinking: true, images: false }] },
       ],
       default_provider: 'ollama',
       default_model: 'llama3.2:3b',

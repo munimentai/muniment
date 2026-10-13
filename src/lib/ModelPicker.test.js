@@ -19,3 +19,18 @@ it('shows provider logos and names without connection labels', () => {
   expect(container.querySelector('.balanced [data-icon=scale]')).not.toBeNull()
   expect(container.textContent).not.toContain('Claude Code')
 })
+it('shows each window and marks a model the conversation compacts on', () => {
+  const usage = { tokens: 46210, contextWindow: 200000, percent: 23.1, estimated: false, windowKnown: true, autoCompact: true, compactAt: 183616 }
+  const {container} = render(ModelPicker, {inventory:{providers:[
+    {id:'anthropic',name:'Anthropic',source:'key',models:[{id:'claude-sonnet',context:'200K'}]},
+    {id:'ollama',name:'Ollama',source:'local',models:[{id:'qwen3:8b',context:'40K'}]},
+  ]},contextUsage:usage,current:{provider:'anthropic',model:'claude-sonnet'},onchoose:vi.fn(),onmanage:vi.fn(),onclose:vi.fn()})
+  const rows = [...container.querySelectorAll('.picker-row')]
+  const claude = rows.find(row => row.dataset.model === 'claude-sonnet')
+  const qwen = rows.find(row => row.dataset.model === 'qwen3:8b')
+  expect(claude.querySelector('.window')).toHaveTextContent('200K')
+  expect(claude.querySelector('.will-compact')).toBeNull()
+  expect(qwen.querySelector('.window')).toHaveTextContent('40K')
+  expect(qwen.querySelector('.will-compact')).toHaveTextContent('will compact')
+  expect(qwen.querySelector('.will-compact [data-icon=combine]')).not.toBeNull()
+})

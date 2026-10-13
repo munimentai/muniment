@@ -39,7 +39,7 @@
   import Capacity from './lib/Capacity.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
-  import { compactCommand, contextHint } from './lib/context-usage.js'
+  import { compactCommand, contextMeterShown } from './lib/context-usage.js'
   import { currentModel, currentModelAvailable, modelChipLabel, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
@@ -2616,7 +2616,7 @@
         {#if hasSubscriptions && capacityOpen}<Capacity {tauri} onmanage={openModelSettings} onclose={() => capacityOpen = false} />{/if}
         {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
-          <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
+          <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
         {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -2686,7 +2686,7 @@
             {#if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
             <ComposerReferences commands={extensionCommandNames} text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? 'file-mentions' : undefined} aria-activedescendant={mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || compacting || contextHint(contextUsage) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? 'file-mentions' : undefined} aria-activedescendant={mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
           </div>
           {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
@@ -2705,7 +2705,7 @@
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
             {/if}
-            {#if contextUsage}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
+            {#if compacting || contextOpen || contextMeterShown(contextUsage)}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
             {:else if isDictationActive(dictation)}
@@ -2713,10 +2713,6 @@
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
               </span>
-            {:else if compacting}
-              <span id="composer-hint" role="status">Send waits for compaction. Your draft stays here.</span>
-            {:else if !active && contextHint(contextUsage)}
-              <span id="composer-hint" class="context-hint" data-level="caution">{contextHint(contextUsage)}</span>
             {:else}
               {#if composerHint}<span id="composer-hint">{composerHint}</span>{/if}
             {/if}
@@ -3128,7 +3124,6 @@
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
   .capacity-trigger { color: var(--muted); }
-  .context-hint { color: var(--ochre); }
   .collection-children { padding-left: 16px; }
 
   .workspace.sidebar-resizing .thread-panel { transition: none; }

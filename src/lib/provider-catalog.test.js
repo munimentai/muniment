@@ -136,7 +136,7 @@ describe('the model router in the picker', () => {
     const kimi = pickerGroups(routed).find((group) => group.id === 'router:kimi')
     expect(kimi.name).toBe('Kimi')
     expect(kimi.source).toBe('router')
-    expect(kimi.models).toEqual([{ id: 'kimi-k3', context: '', label: 'Kimi K3', provider: 'muniment-router', choice: 'kimi/kimi-k3', accounts: 1 }])
+    expect(kimi.models).toEqual([{ id: 'kimi-k3', context: '', contextWindow: null, label: 'Kimi K3', provider: 'muniment-router', choice: 'kimi/kimi-k3', accounts: 1 }])
     expect(pickerGroups({ ...routed, hidden: ['muniment-router/kimi/kimi-k3'] }).map((group) => group.id)).toEqual(['muniment-router', 'openai-codex'])
   })
 

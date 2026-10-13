@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { compactCommand, compactionCounts, contextHint, contextHoverLabel, contextLevel, contextPercentLabel } from './context-usage.js'
+import { compactCommand, compactionCounts, compactsOnSwitch, contextHoverLabel, contextLevel, contextMeterShown, contextPercentLabel, windowLabel, windowTokens } from './context-usage.js'
 
 const usage = (fields = {}) => ({ tokens: 46210, contextWindow: 200000, percent: 23.1, estimated: false, windowKnown: true, provider: 'anthropic', model: 'claude-sonnet', autoCompact: true, compactAt: 183616, compacting: false, ...fields })
 
@@ -15,14 +15,28 @@ it('labels the percent, the estimate and an unknown window', () => {
   expect(contextPercentLabel(usage({ estimated: true, tokens: 31900, percent: 15.95 }))).toBe('~16%')
   expect(contextPercentLabel(usage({ windowKnown: false }))).toBe('?')
   expect(contextHoverLabel(usage())).toBe('46,210 of 200,000 tokens')
-  expect(contextHoverLabel(usage({ estimated: true, tokens: 31900 }))).toBe('About 31,900 tokens. Exact after the next reply')
+  expect(contextHoverLabel(usage({ estimated: true, tokens: 31900 }))).toBe('About 31,900 tokens')
   expect(contextHoverLabel(usage({ tokens: null, percent: null }))).toBe('Context usage appears after the next reply')
 })
 
-it('hints near the compaction point by the automatic setting', () => {
-  expect(contextHint(usage())).toBe('')
-  expect(contextHint(usage({ tokens: 170000, percent: 85 }))).toBe('Context is almost full and compacts on its own.')
-  expect(contextHint(usage({ tokens: 170000, percent: 85, autoCompact: false }))).toBe('Context is almost full. Compact now to keep replies running.')
+it('shows the meter from a quarter of the window, and always for an unknown window', () => {
+  expect(contextMeterShown(usage({ tokens: 40000, percent: 20 }))).toBe(false)
+  expect(contextMeterShown(usage({ tokens: 50000, percent: 25 }))).toBe(true)
+  expect(contextMeterShown(usage({ estimated: true, tokens: 31900, percent: 15.95 }))).toBe(false)
+  expect(contextMeterShown(usage({ windowKnown: false, tokens: 2000, percent: 1 }))).toBe(true)
+  expect(contextMeterShown(null)).toBe(false)
+})
+
+it('reads and labels windows and tells when a switch compacts', () => {
+  expect(windowTokens('128K')).toBe(128000)
+  expect(windowTokens('1.05M')).toBe(1050000)
+  expect(windowTokens('')).toBeNull()
+  expect(windowLabel(200000)).toBe('200K')
+  expect(windowLabel(1000000)).toBe('1M')
+  expect(windowLabel(1050000)).toBe('1.05M')
+  expect(compactsOnSwitch(usage(), 40000)).toBe(true)
+  expect(compactsOnSwitch(usage(), 128000)).toBe(false)
+  expect(compactsOnSwitch(usage({ tokens: null }), 40000)).toBe(false)
 })
 
 it('reads /compact with an optional focus and nothing else', () => {

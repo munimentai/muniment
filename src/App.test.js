@@ -915,7 +915,7 @@ describe('workspace composer entry', () => {
     const composer = await findWorkspaceComposer()
     const meter = await screen.findByRole('button', { name: 'Context, 170,000 of 200,000 tokens' })
     expect(meter).toHaveAttribute('data-level', 'caution')
-    expect(screen.getByText('Context is almost full and compacts on its own.')).toBeInTheDocument()
+    expect(screen.queryByText(/Context is almost full/)).not.toBeInTheDocument()
 
     await fireEvent.input(composer, { target: { value: '/compact keep the schema decisions' } })
     await fireEvent.keyDown(composer, { key: 'Enter' })

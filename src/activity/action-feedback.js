@@ -1,7 +1,7 @@
 import { compactionCounts } from '../lib/context-usage.js'
 
 const categories = {
-  compact: { icon: 'list-collapse', done: 'Context automatically compacted', active: 'Compacting context', verb: 'Context compacted', present: 'Compacting context' },
+  compact: { icon: 'combine', done: 'Context automatically compacted', active: 'Compacting context', verb: 'Context compacted', present: 'Compacting context' },
   read: { icon: 'book-open', done: 'Read files', active: 'Reading files', verb: 'Read', present: 'Reading' },
   search: { icon: 'search', done: 'Searched files', active: 'Searching files', verb: 'Searched', present: 'Searching' },
   list: { icon: 'folder', done: 'Listed files', active: 'Listing files', verb: 'Listed files in', present: 'Listing files in' },

@@ -29,7 +29,8 @@ it('keeps MCP switches local to one turn and resets after submission', async () 
 it('inserts a slash command into the draft without chips or persisted selection', async () => {
   const invoke=vi.fn(async command=>command==='chat_current_thread'?'chat':({items:[{id:'review',kind:'skill',skills:[{name:'review',description:'Review code',path:'SKILL.md'}]}]}))
   const {component}=render(ComposerExtensions,{tauri:{invoke},threadId:'chat',draft:'\\review',onmanage:vi.fn()})
-  await screen.findByRole('button',{name:/\/review.*skill.*Review code/})
+  await screen.findByRole('button',{name:/\/review.*Review code/})
+  expect(screen.getByRole('button',{name:/\/review/})).not.toHaveTextContent('skill')
   const event={key:'Enter',preventDefault:vi.fn()}
   expect(component.handleKey(event)).toBe(true)
   expect(event.preventDefault).toHaveBeenCalledOnce()

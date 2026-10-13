@@ -108,7 +108,7 @@
     </div>
   {:else if command !== null && shown.length && !active}
     <section data-composer-panel data-panel="extend" data-panel-variant="overlay" class="commands" aria-label="Slash commands">
-      {#each shown as item, index}<button type="button" class="choice" class:highlighted={index === highlighted % shown.length} onclick={() => choose(item)}><span>/{item.command}</span><small>{item.kind} · {item.description || item.name}</small></button>{/each}
+      {#each shown as item, index}<button type="button" class="choice" class:highlighted={index === highlighted % shown.length} onclick={() => choose(item)}><span>/{item.command}</span><small>{item.description || item.name}</small></button>{/each}
     </section>
   {/if}
   {#if busy}<span role="status">Selecting extensions…</span>{/if}

@@ -7,14 +7,14 @@ afterEach(cleanup)
 
 const usage = (fields = {}) => ({ tokens: 46210, contextWindow: 200000, percent: 23.1, estimated: false, windowKnown: true, provider: 'anthropic', model: 'claude-sonnet', autoCompact: true, compactAt: 183616, compacting: false, ...fields })
 
-it('shows the count, the compaction point and compacts with a focus', async () => {
+it('shows the count, the compaction point and compacts', async () => {
   const oncompact = vi.fn()
   render(ContextPanel, { usage: usage(), oncompact, onsettings: vi.fn(), onclose: vi.fn() })
   expect(screen.getByText('46,210')).toBeInTheDocument()
   expect(screen.getByText('Compacts automatically at 183,616 tokens.')).toBeInTheDocument()
-  await fireEvent.input(screen.getByLabelText('Focus the summary (optional)'), { target: { value: ' keep the API decisions ' } })
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
   await fireEvent.click(screen.getByRole('button', { name: 'Compact now' }))
-  expect(oncompact).toHaveBeenCalledWith('keep the API decisions')
+  expect(oncompact).toHaveBeenCalledWith(null)
 })
 
 it('waits for a reply in flight and names an unknown window', async () => {

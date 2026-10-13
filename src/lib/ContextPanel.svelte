@@ -2,16 +2,15 @@
   import PopupClose from './PopupClose.svelte'
   import { contextLevel, contextShare, formatTokens } from './context-usage.js'
   // The Context panel over the composer: how full the conversation is, where
-  // compaction runs, and Compact now with an optional focus for the summary.
+  // compaction runs, the model and its window, and Compact now.
   let { usage, active = false, compacting = false, error = '', oncompact, onsettings, onclose } = $props()
-  let focus = $state('')
   const level = $derived(contextLevel(usage))
   const share = $derived(contextShare(usage))
   const tick = $derived(usage?.compactAt && usage?.contextWindow ? Math.min(usage.compactAt / usage.contextWindow, 1) : null)
   const disabled = $derived(active || compacting)
   function submit(event) {
     event.preventDefault()
-    if (!disabled) oncompact(focus.trim() || null)
+    if (!disabled) oncompact(null)
   }
 </script>
 <div data-panel="context" data-panel-variant="overlay" data-composer-panel class="context" role="dialog" aria-label="Conversation context">
@@ -36,7 +35,6 @@
     </dl>
   {/if}
   <form onsubmit={submit}>
-    <label><span>Focus the summary (optional)</span><input bind:value={focus} placeholder="Keep the API decisions" disabled={disabled} /></label>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     {#if active}<p class="caption" role="status">Compact after this reply finishes.</p>{/if}
     <footer>
@@ -62,9 +60,7 @@
   dl div { display: flex; justify-content: space-between; gap: 12px; }
   dt { color: var(--muted); }
   dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; text-align: right; }
-  label { display: grid; gap: 4px; margin: 10px 0; color: var(--muted); }
-  input { height: 30px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
-  input:focus { outline: none; border-color: var(--muted); }
+  footer { margin-top: 12px; }
   button { min-height: 24px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
   button:disabled { color: var(--muted); cursor: default; }
   .primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }

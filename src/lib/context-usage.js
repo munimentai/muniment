@@ -3,6 +3,8 @@
 
 // The meter turns to caution at this share of the point where compaction runs.
 export const CAUTION_SHARE = 0.85
+// The meter shows from this share of the window, and always for an unknown window.
+export const SHOW_SHARE = 0.25
 
 const number = new Intl.NumberFormat('en-US')
 export const formatTokens = (value) => number.format(Math.round(value))
@@ -23,6 +25,11 @@ export function contextShare(usage) {
   return 0
 }
 
+export function contextMeterShown(usage) {
+  if (!usage) return false
+  return !usage.windowKnown || contextShare(usage) >= SHOW_SHARE
+}
+
 export function contextPercentLabel(usage) {
   if (!usage) return ''
   if (!usage.windowKnown) return '?'
@@ -31,15 +38,32 @@ export function contextPercentLabel(usage) {
 
 export function contextHoverLabel(usage) {
   if (!usage || usage.tokens == null) return 'Context usage appears after the next reply'
-  if (usage.estimated) return `About ${formatTokens(usage.tokens)} tokens. Exact after the next reply`
+  if (usage.estimated) return `About ${formatTokens(usage.tokens)} tokens`
   if (!usage.windowKnown || !usage.contextWindow) return `${formatTokens(usage.tokens)} tokens. The model reports no window`
   return `${formatTokens(usage.tokens)} of ${formatTokens(usage.contextWindow)} tokens`
 }
 
-// The band hint near the compaction point.
-export function contextHint(usage) {
-  if (contextLevel(usage) !== 'caution') return ''
-  return usage.autoCompact ? 'Context is almost full and compacts on its own.' : 'Context is almost full. Compact now to keep replies running.'
+// A window string such as `128K` or `1.05M` from Pi's model list, in tokens.
+export function windowTokens(text) {
+  const match = /^([\d.]+)\s*([KM]?)$/i.exec(String(text ?? '').trim())
+  if (!match) return null
+  const value = Number(match[1]) * ({ k: 1000, m: 1000000 }[match[2].toLowerCase()] ?? 1)
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null
+}
+
+// A window in tokens as the picker shows it: `200K`, `1M`, `1.05M`.
+export function windowLabel(tokens) {
+  if (!tokens) return ''
+  if (tokens >= 1000000) return `${Number((tokens / 1000000).toFixed(2))}M`
+  return `${Math.round(tokens / 1000)}K`
+}
+
+// Whether the current conversation compacts before its next reply on a model
+// with this window, given the reserve the current compaction point implies.
+export function compactsOnSwitch(usage, window) {
+  if (!usage || usage.tokens == null || !window) return false
+  const reserve = usage.contextWindow && usage.compactAt ? usage.contextWindow - usage.compactAt : 16384
+  return usage.tokens > window - reserve
 }
 
 // `/compact` alone or with text that focuses the summary. Anything else is a message.

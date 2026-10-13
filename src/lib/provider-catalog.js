@@ -150,7 +150,7 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
           existing.choice = entry.id
         }
       } else {
-        group.models.push({ id: entry.model, context: '', label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
+        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
       }
     }
     if (inventory.router_classifier || inventory.router_models?.length) {
