@@ -14,12 +14,14 @@ export function saveVoiceSettings(settings) {
   return saveDevicePreference(VOICE_SETTINGS_KEY, settings)
 }
 
-// The options dictation_start takes. Muting is a macOS feature.
+// The options dictation_start takes. Muting is a macOS feature. Custom words
+// bias recognition, and cleanTranscript still fixes their casing.
 export function dictationStartOptions(settings, platform = navigator.platform) {
   return {
     microphone: settings.microphone && settings.microphone !== 'default' ? settings.microphone : null,
     mute: !!settings.mute && platform.startsWith('Mac'),
     sound: !!settings.sound,
+    words: Array.isArray(settings.words) ? settings.words.filter((word) => typeof word === 'string').map((word) => word.trim()).filter(Boolean) : [],
   }
 }
 
