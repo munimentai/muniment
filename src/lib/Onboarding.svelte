@@ -139,7 +139,7 @@
         <button class="primary" onclick={saveHome} disabled={busy || picking}>Save Home</button>
       </div>
     {:else}
-      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} busy={busy || modelOpening || onboarding.name === 'loading'} picking={picking} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} onchangehome={chooseHome} />
+      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} busy={busy || modelOpening || onboarding.name === 'loading'} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} />
       {#if modelError}<p class="error" role="alert">{modelError}</p>{/if}
     {/if}
     {#if onboarding.error}<p class="error" role="alert">{onboarding.error}</p>{/if}

@@ -273,10 +273,10 @@ once under its provider. A model two or more accounts serve carries the
 balancer mark, and picking it balances across them with no other step. A saved classifier connection shows its logo and edits in place. A new model, URL or key passes the connection test before it saves, and a blank key keeps the saved one. GPT-6 Luna answers through OpenAI's Decisions API, which takes an OpenAI API key. Every connected decision model except a pooled one also reaches chats, as the provider `decisions` in codemode scripts. A server that reports its decision models, as llama.cpp does, offers them as classifiers and keeps them out of the chat picker. Ollama's decision models are known by name.
 
 
-**Home.** A line under the list shows `~/Documents/muniment`, lowercase, with
-Change. A configured Home keeps its path, and a pick creates the four folders.
-When one Obsidian vault holds most of the memory files found, Change offers that
-vault's parent and says why.
+**Home.** A line under the list shows `~/Documents/muniment`, lowercase, with no
+control. A configured Home keeps its path, and a pick creates the four folders.
+Settings → Storage → `Change workspace folder…` changes Home later. When one Obsidian
+vault holds most of the memory files found, that picker offers the vault's parent and says why.
 
 **Imports.** Settings → Memory runs the memory scan on request and lists one row
 per assistant that holds files. Import copies that assistant's files under

@@ -2,7 +2,7 @@ import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
-import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
 
 const FOLDER_DIALOG_WAIT_SECONDS = 30
 const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -100,29 +100,6 @@ describe('installed nightly model-ready onboarding', () => {
     expect((await $$('.connect .options button.option')).length).toBeGreaterThanOrEqual(9)
     expect(await (await $('textarea[placeholder="Ask anything"]')).isExisting()).toBe(false)
     expect(await (await $('[data-testid="onboarding-confirm"]')).isExisting()).toBe(false)
-    await mkdir(home, { recursive: true })
-    // Record any system prompt before the app opens NSOpenPanel.
-    await recordMacosPickerBaseline(process.env.MUNIMENT_E2E_RAW_DIR)
-    await (await $('[data-testid="onboarding-picker"]')).click()
-    await withWindowsPickerDiagnostics(async () => {
-      await chooseFolder(
-        home,
-        FOLDER_DIALOG_WAIT_SECONDS,
-        FOLDER_DIALOG_TITLE,
-        process.env.MUNIMENT_E2E_RAW_DIR,
-      )
-      // The Home line shows the path with ~, and data-home-path holds it in full.
-      await browser.waitUntil(async () => await homePathMatches(location, home), {
-        timeoutMsg: `The Home picker DOM value did not match the isolated Home. ${folderDialogDescription(FOLDER_DIALOG_TITLE)}`,
-      })
-      expect(await location.getAttribute('data-home-path')).toBe(home)
-    }, () => browser.execute(() => document.querySelector('[data-home-picker]')?.getAttribute('data-home-picker')),
-    process.env.MUNIMENT_E2E_RAW_DIR)
-    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
-      let exists = true
-      try { await access(path.join(home, directory)) } catch { exists = false }
-      expect(exists).toBe(false)
-    }
     // Include More providers and the Settings checks in the failure report.
     try {
       await openFirstRunModelSettings()
@@ -141,7 +118,47 @@ describe('installed nightly model-ready onboarding', () => {
     const settings = await $('[role="dialog"][aria-label="Settings"]')
     await settings.waitForDisplayed()
     expect(await (await settings.$('h4=Connect account')).isDisplayed()).toBe(true)
-    await closeSettings()
+
+    // The first run shows Home with no control. Settings → Storage changes it,
+    // and Home settings closes Settings.
+    await expandSidebar()
+    const storage = await (await $('#sidebar')).$('button.side-action=Storage')
+    await storage.waitForDisplayed()
+    await storage.click()
+    const change = await $('button=Change workspace folder…')
+    await change.waitForDisplayed()
+    await change.click()
+    const homeSettings = await $('section[aria-label="Home settings"]')
+    await homeSettings.waitForDisplayed()
+    await mkdir(home, { recursive: true })
+    // Record any system prompt before the app opens NSOpenPanel.
+    await recordMacosPickerBaseline(process.env.MUNIMENT_E2E_RAW_DIR)
+    await (await $('[data-testid="onboarding-picker"]')).click()
+    await withWindowsPickerDiagnostics(async () => {
+      await chooseFolder(
+        home,
+        FOLDER_DIALOG_WAIT_SECONDS,
+        FOLDER_DIALOG_TITLE,
+        process.env.MUNIMENT_E2E_RAW_DIR,
+      )
+      // Home settings show the path, and data-home-path holds it in full.
+      let location
+      await browser.waitUntil(async () => {
+        location = await $('[data-testid="onboarding-home-path"]')
+        return await homePathMatches(location, home)
+      }, {
+        timeoutMsg: `The Home picker DOM value did not match the isolated Home. ${folderDialogDescription(FOLDER_DIALOG_TITLE)}`,
+      })
+      expect(await location.getAttribute('data-home-path')).toBe(home)
+    }, () => browser.execute(() => document.querySelector('[data-home-picker]')?.getAttribute('data-home-picker')),
+    process.env.MUNIMENT_E2E_RAW_DIR)
+    for (const directory of ['memory', 'agents', 'projects', 'sessions']) {
+      let exists = true
+      try { await access(path.join(home, directory)) } catch { exists = false }
+      expect(exists).toBe(false)
+    }
+    await (await $('button=Save Home')).click()
+    await homeSettings.waitForDisplayed({ reverse: true, timeout: 10000 })
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
     expect(await (await $('section[aria-label="First run"]')).isExisting()).toBe(false)
 

@@ -3924,7 +3924,8 @@ describe('installed model settings controls', () => {
     expect(firstRun).toContain("$('button=More providers')")
     expect(firstRun).toContain('await more.click()')
     expect(onboardingSpec).toContain("expect(await (await settings.$('h4=Connect account')).isDisplayed()).toBe(true)")
-    expect(onboardingSpec).toContain('await closeSettings()')
+    expect(onboardingSpec).toContain("$('button=Change workspace folder…')")
+    expect(onboardingSpec).toContain("await (await $('button=Save Home')).click()")
     expect(firstRun).toContain("await (await $('button=Back to threads')).click()")
   })
 

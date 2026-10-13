@@ -4151,7 +4151,7 @@ describe('Home onboarding', () => {
     const moreButton = await more()
     await fireEvent.click(moreButton)
     expect(moreButton).toBeDisabled()
-    expect(screen.getByTestId('onboarding-picker')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Explore without connecting' })).toBeDisabled()
     startup.reject(new Error('marker unavailable'))
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not finish startup. Choose a model again.')
     expect(invoke).toHaveBeenCalledWith('onboarding_model_settings_error', { cause: 'startup' })
@@ -4184,10 +4184,29 @@ describe('Home onboarding', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_enter')).toHaveLength(1)
   })
 
-  it('changes Home without writes and leaves the path intact after picker cancellation', async () => {
-    firstRun()
+  // Home changes in Home settings, which Settings → Storage opens.
+  async function homeSettings() {
+    await openSettings('Storage')
+    await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
+    return screen.findByRole('region', { name: 'Home settings' })
+  }
+
+  it('shows the first-run Home line as information with no control', async () => {
+    homeStatus = { configured: false, homePath: '/Users/alex/Documents/muniment' }
     render(App)
     const path = await screen.findByTestId('onboarding-home-path')
+    await waitFor(() => expect(path).toHaveTextContent('~/Documents/muniment'))
+    const line = path.closest('p')
+    expect(line).toHaveTextContent('Your files go to ~/Documents/muniment.')
+    expect(within(line).queryByRole('button')).not.toBeInTheDocument()
+    expect(within(line).queryByRole('link')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('onboarding-picker')).not.toBeInTheDocument()
+  })
+
+  it('changes Home without writes and leaves the path intact after picker cancellation', async () => {
+    render(App)
+    await homeSettings()
+    const path = screen.getByTestId('onboarding-home-path')
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     expect(path).toHaveAttribute('data-home-path', '/Documents/Muniment')
     dialogResult = '/Other/Muniment'
@@ -4195,7 +4214,7 @@ describe('Home onboarding', () => {
     await waitFor(() => expect(path).toHaveAttribute('data-home-path', '/Other/Muniment'))
     expect(path).toHaveTextContent('/Other/Muniment')
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
   })
 
@@ -4208,13 +4227,12 @@ describe('Home onboarding', () => {
   })
 
   it.each([null, '', [], '/Other/Muniment'])('The Home picker records the resolved value (%s).', async (picked) => {
-    firstRun()
     render(App)
-    const section = await screen.findByRole('region', { name: 'First run' })
+    const section = await homeSettings()
     expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'not-started' })
     const dialog = deferred()
     dialogResult = dialog.promise
-    await fireEvent.click(await screen.findByTestId('onboarding-picker'))
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
     expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'pending' })
     expect(screen.getByTestId('onboarding-picker')).toBeDisabled()
     dialog.resolve(picked)
@@ -4224,12 +4242,11 @@ describe('Home onboarding', () => {
   })
 
   it.each([new Error('The dialog command failed.'), 'The dialog command failed.'])('The Home picker records a rejection and resets on retry.', async (error) => {
-    firstRun()
     render(App)
-    const section = await screen.findByRole('region', { name: 'First run' })
+    const section = await homeSettings()
     const dialog = deferred()
     dialogResult = dialog.promise
-    await fireEvent.click(await screen.findByTestId('onboarding-picker'))
+    await fireEvent.click(screen.getByTestId('onboarding-picker'))
     dialog.reject(error)
     await waitFor(() => expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'rejected', error: 'The dialog command failed.' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Muniment could not open the folder picker.')
@@ -4243,34 +4260,17 @@ describe('Home onboarding', () => {
     await waitFor(() => expect(JSON.parse(section.getAttribute('data-home-picker'))).toEqual({ status: 'resolved', value: '/Other/Muniment' }))
   })
 
-  it('ignores a stale default after the user chooses Home', async () => {
-    const status = deferred()
-    homeStatus = status.promise
-    dialogResult = '/Other/Muniment'
-    render(App)
-    await fireEvent.click(await screen.findByTestId('onboarding-picker'))
-    status.resolve({ configured: false, homePath: '/Documents/Muniment' })
-    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveAttribute('data-home-path', '/Other/Muniment'))
-    await fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
-  })
-
-  it('recovers from a Home load failure through the picker', async () => {
+  it('confirms no Home after a Home load failure', async () => {
     homeStatus = Promise.reject('unavailable')
-    dialogResult = '/Other/Muniment'
     render(App)
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not read Home.')
     await fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
     expect(screen.getByRole('alert')).toHaveTextContent('Home is unavailable. Retry or choose a folder.')
-    await fireEvent.click(screen.getByTestId('onboarding-picker'))
-    await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveAttribute('data-home-path', '/Other/Muniment'))
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
+    expect(firstRunScreen()).toBeInTheDocument()
   })
 
-  it('keeps the first run after a scaffold failure and retries the new folder', async () => {
+  it('keeps the first run after a scaffold failure and retries the folder', async () => {
     firstRun()
     const original = invoke.getMockImplementation()
     let fail = true
@@ -4279,12 +4279,29 @@ describe('Home onboarding', () => {
     await fireEvent.click(await more())
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not create Home.')
     expect(firstRunScreen()).toBeInTheDocument()
+    fail = false
+    await fireEvent.click(await more())
+    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
+    expect(invoke.mock.calls.filter(([command, payload]) => command === 'home_confirm' && payload?.homePath === '/Documents/Muniment')).toHaveLength(2)
+  })
+
+  it('keeps Home settings after a save failure and saves the new folder', async () => {
+    const original = invoke.getMockImplementation()
+    let fail = true
+    invoke.mockImplementation((command, payload) => command === 'home_confirm' && fail ? Promise.reject('read-only') : original(command, payload))
+    render(App)
+    const section = await homeSettings()
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not save Home.')
+    expect(section).toBeInTheDocument()
     dialogResult = '/Other/Muniment'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     fail = false
     await waitFor(() => expect(screen.getByTestId('onboarding-home-path')).toHaveAttribute('data-home-path', '/Other/Muniment'))
-    await fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Muniment' })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
   })
 
   it('ignores a second choice while Home saves', async () => {
