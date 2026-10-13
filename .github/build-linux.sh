@@ -22,7 +22,7 @@ fetch_tool() {
   local destination="$3"
   local temporary="$destination.download"
 
-  if [ -f "$destination" ] && printf '%s  %s\n' "$sha256" "$destination" | sha256sum --check --quiet 2>/dev/null; then
+  if [ -f "$destination" ] && printf '%s  %s\n' "$sha256" "$destination" | sha256sum --check --quiet - 2>/dev/null; then
     return 0
   fi
   local headers='Accept: application/octet-stream'
@@ -36,7 +36,7 @@ fetch_tool() {
   curl --fail --location --retry 3 --retry-delay 2 --retry-all-errors \
     --header @- \
     --output "$temporary" "$url" <<< "$headers"
-  printf '%s  %s\n' "$sha256" "$temporary" | sha256sum --check --quiet
+  printf '%s  %s\n' "$sha256" "$temporary" | sha256sum --check --quiet -
   chmod +x "$temporary"
   mv "$temporary" "$destination"
 }
