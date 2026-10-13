@@ -279,14 +279,14 @@ When one Obsidian vault holds most of the memory files found, Change offers that
 vault's parent and says why.
 
 **Imports.** Settings → Memory runs the memory scan on request and lists one row
-per assistant that holds files, with a checkbox and a mode. *Copy* writes the files under
+per assistant that holds files. Import copies that assistant's files under
 `memory/imports/<assistant>/` through the onboarding write plan with its secret
-rejection and size caps. *Use in place* records the root as a read-only source
-in `home.json`, and the memory index reads it beside `memory/`. Copy is the
-default under 128 files, in place for vaults and for any store over the copy
-caps. Muniment never writes into an in-place source. An export ZIP from ChatGPT
-or claude.ai is a second source in the same panel. Imported text is untrusted
-data under [ADR 0018](docs/decisions/0018-untrusted-content-boundary.md).
+rejection and size caps: 128 files, 256 KB in all and 64 KB per file. A store
+over the caps shows no Import. A file with a secret, a file that is not text and
+a file over 64 KB are left out, each named. A second import copies only new or
+changed files. An export ZIP from ChatGPT or claude.ai copies under
+`memory/imports/export/` from the same panel. The panel never shows imported
+text, which is untrusted data under [ADR 0018](docs/decisions/0018-untrusted-content-boundary.md).
 
 The scan reads names, never file bodies. It walks only the user-level roots
 below, honors each root's environment override, stops at a depth of six, a two

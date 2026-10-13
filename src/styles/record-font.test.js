@@ -7,6 +7,7 @@ const RECORD_SELECTORS = new Map([
   ['src/App.svelte', ['.record', '.tool-card', '.provenance', '.receipt-record']],
   ['src/lib/Onboarding.svelte', ['.path, .error']],
   ['src/lib/FirstRunConnect.svelte', ['.mono', '.badge']],
+  ['src/lib/MemoryImports.svelte', ['.root', '.mono']],
 ])
 
 const styles = (source) => [...source.matchAll(/<style(?:\s[^>]*)?>([\s\S]*?)<\/style>/g)]

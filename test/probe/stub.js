@@ -342,6 +342,27 @@ export function buildProbeCommandTable(fixtureName) {
       ],
       errors: [],
     }
+    if (command === 'memory_import_assistant') return {
+      importedFileCount: 9,
+      alreadyCopiedCount: 2,
+      leftOut: [{ sourceName: 'rules/keys.md', reason: 'secret' }],
+      destination: `memory/imports/${payload.assistantId}`,
+    }
+    if (command === 'plugin:dialog|open' && scanFixture) return '/Users/alice/Downloads/claude-export.zip'
+    if (command === 'onboarding_import_preview') return {
+      entries: [
+        { name: 'memory.md', kind: 'markdown', byteSize: 2048, excerpt: '', excerptTruncated: false },
+        { name: 'conversations.json', kind: 'json', byteSize: 4096, excerpt: '', excerptTruncated: false },
+      ],
+      totalByteSize: 6144,
+    }
+    if (command === 'onboarding_import_extract') return payload.selectedNames.map((name) => ({
+      sourceName: name,
+      kind: name.endsWith('.json') ? 'json' : 'markdown',
+      text: 'Preview text.\n',
+      sourceProvenance: `assistant-export-zip:v1:probe:${name}`,
+    }))
+    if (command === 'home_confirm_import') return { configured: true, importedFileCount: payload.approvedEntries.length, alreadyCopiedCount: 0 }
     if (command === 'auth_status') {
       if (signedOutFixture) return { signed_in: false, subject: null }
       return { signed_in: true, subject: 'probe-user' }
