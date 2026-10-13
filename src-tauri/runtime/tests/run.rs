@@ -20,7 +20,8 @@ use muniment_core::run_start::ActiveRun;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::validate_pi_session;
 use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
-use muniment_runtime::{
+use muniment_runtime::desktop_host;
+use muniment_runtime_core::{
     accept_prompt, drive_prompt, open_profile_storage, run_prompt, thread_page, RuntimeAttachState,
     RuntimeChatEventTarget,
 };
@@ -56,9 +57,13 @@ fn attach_dispatch_rejects_resume_for_another_workspace() {
     .unwrap();
     drop(storage);
 
-    let state =
-        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
-    let mut service = muniment_runtime::compose_attach_service(
+    let state = RuntimeAttachState::open(
+        desktop_host(),
+        &temporary_profile.profile,
+        &temporary_profile.config,
+    )
+    .unwrap();
+    let mut service = muniment_runtime_core::compose_attach_service(
         state.boundaries(),
         state.companion_registry(),
         &temporary_profile.profile,
@@ -115,6 +120,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
     let second_run_id = "018f0000-0000-7000-8000-000000000022";
 
     let (first, first_launch) = accept_prompt(
+        &desktop_host(),
         &profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
@@ -138,6 +144,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
     clear_active_run(&active, first_run_id);
 
     let (second, second_launch) = accept_prompt(
+        &desktop_host(),
         &profile,
         Arc::clone(&storage),
         runtime,
@@ -250,6 +257,7 @@ fn four_model_switches_with_artifacts(pre_repair: bool) {
         }
         let run_id = format!("018f0000-0000-7000-8000-00000000003{index}");
         let (accepted, launch) = accept_prompt(
+            &desktop_host(),
             profile,
             Arc::clone(&storage),
             Arc::clone(&runtime),
@@ -405,6 +413,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
     let storage = open_profile_storage(&profile).unwrap();
 
     let error = run_prompt(
+        &desktop_host(),
         &profile,
         Arc::clone(&storage),
         Arc::new(Mutex::new(None)),
@@ -454,6 +463,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
 
     let unknown_run_id = "018f0000-0000-7000-8000-000000000002";
     let error = run_prompt(
+        &desktop_host(),
         &profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
@@ -489,6 +499,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     std::thread::scope(|scope| {
         let run = scope.spawn(|| {
             run_prompt(
+                &desktop_host(),
                 &profile,
                 Arc::clone(&storage),
                 Arc::clone(&runtime),
@@ -536,6 +547,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     fs::write(&attachment_path, attachment_bytes).unwrap();
     let second_active = Arc::new(Mutex::new(None));
     let (accepted, launch) = accept_prompt(
+        &desktop_host(),
         &profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
@@ -722,10 +734,10 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     let (base_url, server) =
         spawn_server_sequence(vec![(200, session_body()), (201, grant_body())]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    let state = RuntimeAttachState::open(&profile, &config).unwrap();
+    let state = RuntimeAttachState::open(desktop_host(), &profile, &config).unwrap();
     let mut subscription_service = state.attach_service().unwrap();
     let events = subscription_service.subscribe_chat_events().unwrap();
-    let mut service = muniment_runtime::compose_attach_service(
+    let mut service = muniment_runtime_core::compose_attach_service(
         state.boundaries().with_pi_artifact(descriptor),
         state.companion_registry(),
         &profile,

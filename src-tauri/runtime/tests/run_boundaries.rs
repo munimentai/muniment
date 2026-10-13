@@ -17,10 +17,9 @@ use muniment_core::run_start::{
     prepare_desktop_run, RunStartBoundaries, RunStartError, RunStartRequest,
 };
 use muniment_core::session_thread::SessionThread;
-use muniment_desktop_integration::auth::{
-    EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
-};
-use muniment_runtime::{open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState};
+use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_runtime::desktop_host;
+use muniment_runtime_core::{open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState};
 
 mod common;
 use common::{credentials, stage_pi_stub, TemporaryProfile};
@@ -82,10 +81,10 @@ fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
             temporary_profile.profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
-        Arc::new(EntitlementSnapshotTracker::new()),
+        desktop_host(),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
-        muniment_runtime::open_companion_registry(&temporary_profile.profile).unwrap(),
+        muniment_runtime_core::open_companion_registry(&temporary_profile.profile).unwrap(),
     );
 
     let (result, launch) = prepare_desktop_run(
@@ -159,10 +158,11 @@ fn local_mode_run(configured: bool) {
     let prompt_capture = profile.root.join("prompt.txt");
     std::env::set_var("PI_RESUME_STUB_PROMPTS", &prompt_capture);
     std::env::set_var("PI_RESUME_STUB_TOOL_EVENTS", "1");
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let launch_boundaries = state.boundaries().with_pi_artifact(descriptor);
     let boundaries = state.boundaries();
-    let mut service = muniment_runtime::compose_attach_service(
+    let mut service = muniment_runtime_core::compose_attach_service(
         launch_boundaries,
         state.companion_registry(),
         &profile.profile,
@@ -364,8 +364,9 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
     let profile = TemporaryProfile::new("attach-submit", true);
     let descriptor = stage_pi_stub(&profile.root);
     std::env::set_var("PI_RESUME_STUB_PROMPT_DELAY_MS", "500");
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
-    let mut service = muniment_runtime::compose_attach_service(
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
+    let mut service = muniment_runtime_core::compose_attach_service(
         state.boundaries().with_pi_artifact(descriptor),
         state.companion_registry(),
         &profile.profile,
@@ -481,8 +482,9 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
 
     let profile = TemporaryProfile::new("attach-explicit-thread", true);
     let descriptor = stage_pi_stub(&profile.root);
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
-    let mut service = muniment_runtime::compose_attach_service(
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
+    let mut service = muniment_runtime_core::compose_attach_service(
         state.boundaries().with_pi_artifact(descriptor),
         state.companion_registry(),
         &profile.profile,
@@ -604,10 +606,10 @@ fn runtime_boundaries_prepare_a_desktop_run() {
             profile.join("memory"),
         )),
         activity,
-        Arc::new(EntitlementSnapshotTracker::new()),
+        desktop_host(),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
-        muniment_runtime::open_companion_registry(&profile).unwrap(),
+        muniment_runtime_core::open_companion_registry(&profile).unwrap(),
     );
     assert!(matches!(
         boundaries.prepare_run(
@@ -682,7 +684,8 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
 
     let profile = TemporaryProfile::new("run-chat-events", true);
     let descriptor = stage_pi_stub(&profile.root);
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let boundaries = state.boundaries().with_pi_artifact(descriptor);
     let mut subscription_service = state.attach_service().unwrap();
     let events = subscription_service.subscribe_chat_events().unwrap();
@@ -739,11 +742,12 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
 
     let profile = TemporaryProfile::new("attach-submit-chat-events", true);
     let descriptor = stage_pi_stub(&profile.root);
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let boundaries = state.boundaries();
     let mut subscription_service = state.attach_service().unwrap();
     let events = subscription_service.subscribe_chat_events().unwrap();
-    let mut service = muniment_runtime::compose_attach_service(
+    let mut service = muniment_runtime_core::compose_attach_service(
         state.boundaries().with_pi_artifact(descriptor),
         state.companion_registry(),
         &profile.profile,

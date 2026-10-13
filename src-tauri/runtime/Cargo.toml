@@ -7,3 +7,4 @@ edition = "2021"
 muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.12.6", features = ["client"] }
 muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.12.6", features = ["keyring", "tls"] }
 muniment-desktop-integration = { path = "../integration", features = ["keyring"] }
+muniment-runtime-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.12.6" }

@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::SidecarStatus;
-use muniment_runtime::{
-    accept_prompt, drive_prompt, open_profile_storage, session_status, RuntimeChatEventTarget,
+use muniment_runtime::{desktop_host, session_status};
+use muniment_runtime_core::{
+    accept_prompt, drive_prompt, open_profile_storage, RuntimeChatEventTarget,
 };
 
 mod common;
@@ -75,6 +76,7 @@ fn run_starting_pi() {
     let mut grant = fixture_grant();
     grant.model = Some("muniment-stub-chat".into());
     let (_, launch) = accept_prompt(
+        &desktop_host(),
         &profile.profile,
         Arc::clone(&storage),
         Arc::clone(&runtime),
@@ -142,6 +144,7 @@ fn run_starting_pi() {
 
     // A second request can claim the slot without waiting for the failed Pi child.
     let (_, next) = accept_prompt(
+        &desktop_host(),
         &profile.profile,
         Arc::clone(&storage),
         runtime,

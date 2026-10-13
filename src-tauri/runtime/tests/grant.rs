@@ -1,7 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use muniment_desktop_integration::chat_grant::FetchGrantError;
-use muniment_runtime::{configure_run, ConfigureRunError};
+use muniment_runtime::DesktopChatGrants;
+use muniment_runtime_core::{configure_run, ConfigureRunError};
 
 mod common;
 use common::{credentials, grant_body, spawn_server};
@@ -16,7 +17,7 @@ fn configure_run_checks_the_requested_workspace() {
     let (base_url, server) = spawn_server(201, valid_grant.clone());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
 
-    let grant = configure_run(access_token, Some("local")).unwrap();
+    let grant = configure_run(&DesktopChatGrants, access_token, Some("local")).unwrap();
     assert_eq!(grant.workspace, "local");
     assert_eq!(grant.gateway_url, "https://gateway.example.com");
     assert_eq!(grant.model.as_deref(), Some("muniment-stub-chat"));
@@ -27,7 +28,7 @@ fn configure_run_checks_the_requested_workspace() {
     let (base_url, server) = spawn_server(201, valid_grant.clone());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     assert_eq!(
-        configure_run(access_token, Some("/other")).unwrap_err(),
+        configure_run(&DesktopChatGrants, access_token, Some("/other")).unwrap_err(),
         ConfigureRunError::Unauthorized
     );
     server.join().unwrap();
@@ -35,7 +36,9 @@ fn configure_run_checks_the_requested_workspace() {
     let (base_url, server) = spawn_server(201, valid_grant.clone());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     assert_eq!(
-        configure_run(access_token, None).unwrap().workspace,
+        configure_run(&DesktopChatGrants, access_token, None)
+            .unwrap()
+            .workspace,
         "local"
     );
     server.join().unwrap();
@@ -50,13 +53,13 @@ fn configure_run_checks_the_requested_workspace() {
         let (base_url, server) = spawn_server(201, invalid_grant);
         std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
         assert_eq!(
-            configure_run(access_token, Some("local")).unwrap_err(),
+            configure_run(&DesktopChatGrants, access_token, Some("local")).unwrap_err(),
             ConfigureRunError::Grant(FetchGrantError::InvalidResponse)
         );
         server.join().unwrap();
     }
     assert_eq!(
-        configure_run("stale-access-token", None).unwrap_err(),
+        configure_run(&DesktopChatGrants, "stale-access-token", None).unwrap_err(),
         ConfigureRunError::Grant(FetchGrantError::Unauthorized)
     );
     let (base_url, server) = common::spawn_server_with(201, valid_grant, || {
@@ -64,7 +67,7 @@ fn configure_run_checks_the_requested_workspace() {
     });
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     assert_eq!(
-        configure_run(access_token, None).unwrap_err(),
+        configure_run(&DesktopChatGrants, access_token, None).unwrap_err(),
         ConfigureRunError::Grant(FetchGrantError::Unauthorized)
     );
     server.join().unwrap();
@@ -98,7 +101,8 @@ fn near_expiry_session_refreshes_before_grant_issuance() {
         let (base, server) =
             common::spawn_server_sequence(vec![(200, response), (201, grant_body())]);
         std::env::set_var("MUNIMENT_API_BASE_URL", base);
-        let grant = configure_run(&credentials.tokens.access_token, None).unwrap();
+        let grant =
+            configure_run(&DesktopChatGrants, &credentials.tokens.access_token, None).unwrap();
         assert!(!grant.needs_renewal());
         assert_eq!(
             grant.native_access_token.as_deref(),

@@ -10,8 +10,8 @@ Phase two adds cloud availability with paid accounts. Cloud development does
 not block the desktop release. The company record and graph remain a separate,
 hidden feature while the desktop harness earns adoption.
 
-This repo contains the Tauri v2 shell, Rust runtime, Pi sidecar and on-device voice stack.
-The shared core, model router and runtime pins come from one `munimentai/muniment-core` release tag.
+This repo contains the Tauri v2 shell, the runtime binary with its host and service registration, the Pi sidecar and the on-device voice stack.
+The shared core, the platform-neutral runtime, model router and runtime pins come from one `munimentai/muniment-core` release tag.
 `muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control ([ADR 0030](docs/decisions/0030-public-core-boundary.md)).
 Existing company data and cloud credentials remain on disk when those features are hidden.
 The release license is FSL-1.1-Apache-2.0. Each version converts to Apache 2.0 two years after its release. Third-party notices ship with the app.

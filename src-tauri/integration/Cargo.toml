@@ -28,8 +28,6 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
 [dev-dependencies]
 quircs = "0.10"
-# The runtime journal tests build missing-table fixtures with the remove-journal-tables example.
-rusqlite = { version = "0.32", features = ["bundled"] }
 resvg = { version = "0.45", default-features = false }
 syn = { version = "2", features = ["full", "visit"] }
 

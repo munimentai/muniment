@@ -59,7 +59,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         use muniment_runtime::{
-            adopt_state_directory, record_windows_failed_activation,
+            adopt_state_directory, desktop_host, record_windows_failed_activation,
             run_recorded_windows_activation, run_windows_attach_activation, windows_local_app_data,
             SystemWindowsAttachFactory,
         };
@@ -86,8 +86,11 @@ fn main() {
             env!("CARGO_PKG_VERSION"),
             state_directory.display(),
         );
-        let factory =
-            SystemWindowsAttachFactory::new(&state_directory, std::time::Duration::from_secs(2));
+        let factory = SystemWindowsAttachFactory::new(
+            desktop_host(),
+            &state_directory,
+            std::time::Duration::from_secs(2),
+        );
         let diagnostics = MainWindowsDiagnosticSink {
             local_app_data: &local_app_data,
         };
@@ -267,8 +270,9 @@ fn macos_activation() -> MacosActivationExit {
 fn macos_activation() -> MacosActivationExit {
     use muniment_core::attach::TerminationSignalWait;
     use muniment_runtime::{
-        config_directory, profile_directory, run_windows_attach_activation_with_upgrade_watch,
-        MacosUpgradeWatchTestControl, SystemMacosAttachFactory, WindowsActivationExit,
+        config_directory, desktop_host, profile_directory,
+        run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
+        SystemMacosAttachFactory, WindowsActivationExit,
     };
 
     let termination_signal = match TerminationSignalWait::new() {
@@ -306,9 +310,10 @@ fn macos_activation() -> MacosActivationExit {
         std::fs::canonicalize(&config_directory)
             .unwrap_or_else(|_| config_directory.clone())
             .display(),
-        muniment_runtime::macos_attach_socket_path(&profile_directory).display()
+        muniment_runtime_core::macos_attach_socket_path(&profile_directory).display()
     );
-    let factory = SystemMacosAttachFactory::new(profile_directory, config_directory);
+    let factory =
+        SystemMacosAttachFactory::new(desktop_host(), profile_directory, config_directory);
     let (stop_tx, stop_rx) = std::sync::mpsc::channel();
     if std::env::var_os(MACOS_TEST_EXIT_ENV).is_some() {
         let _ = stop_tx.send(());

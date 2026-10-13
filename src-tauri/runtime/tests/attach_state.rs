@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use muniment_core::attach::ApprovalRequest;
 use muniment_core::run_start::{RunAttachBoundaries, RunStartBoundaries};
-use muniment_runtime::RuntimeAttachState;
+use muniment_runtime::desktop_host;
+use muniment_runtime_core::RuntimeAttachState;
 
 mod common;
 use common::TemporaryProfile;
@@ -15,7 +16,8 @@ use common::TemporaryProfile;
 fn boundaries_share_workspace_approval_and_journal() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-state", true);
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let first = state.boundaries();
     let second = state.boundaries();
     let credentials = common::credentials();
@@ -58,7 +60,8 @@ fn boundaries_share_workspace_approval_and_journal() {
 fn listener_inputs_share_the_approval_coordinator() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-state-approvals", true);
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let claimed = state.attach_listener_inputs().approvals;
     let requested = state.attach_listener_inputs().approvals;
     let decisions = requested.clone();
