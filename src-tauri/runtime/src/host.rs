@@ -20,7 +20,8 @@ const READER_NAME: &str = if cfg!(windows) {
 };
 
 /// The desktop's cloud account and grants, the platform keychain, the
-/// installed desktop executable and the reader sidecar beside this binary.
+/// installed desktop executable, the reader sidecar beside this binary, and
+/// this binary's package version, which the runtime announces on attach.
 pub fn desktop_host() -> RuntimeHost {
     let runtime_executable = std::env::current_exe().ok();
     RuntimeHost {
@@ -29,6 +30,7 @@ pub fn desktop_host() -> RuntimeHost {
         credentials: Arc::new(KeyringCredentialStore),
         expected_desktop_executable: crate::installed_desktop_executable(),
         reader_executable: runtime_executable.as_deref().and_then(reader_beside),
+        runtime_version: env!("CARGO_PKG_VERSION"),
     }
 }
 
@@ -62,6 +64,11 @@ impl ChatGrantService for DesktopChatGrants {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_runtime_announces_this_binary_version() {
+        assert_eq!(desktop_host().runtime_version, env!("CARGO_PKG_VERSION"));
+    }
 
     #[test]
     fn the_reader_sits_beside_the_runtime() {

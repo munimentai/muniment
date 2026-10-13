@@ -69,8 +69,7 @@ use tauri::{Emitter, Manager};
 #[cfg(all(any(target_os = "linux", target_os = "macos"), test))]
 use uuid::Uuid;
 
-/// Matches the `muniment-runtime-core` version in muniment-core's `crates/runtime/Cargo.toml`,
-/// which the runtime announces on attach.
+/// Matches the `muniment-runtime` version in `src-tauri/runtime/Cargo.toml`.
 /// Raise this constant when a new run needs a newer runtime.
 #[cfg(any(unix, target_os = "windows"))]
 pub(crate) const MINIMUM_COMPATIBLE_RUNTIME_VERSION: &str = "0.0.1";

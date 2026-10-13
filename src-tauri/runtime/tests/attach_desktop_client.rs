@@ -90,6 +90,7 @@ fn shipped_desktop_client_completes_the_session() {
             run_attach_listener(
                 &profile.root,
                 AttachListenerInputs {
+                    runtime_version: env!("CARGO_PKG_VERSION"),
                     companion_registry: &registry,
                     approval,
                     approvals: ApprovalCoordinator::default(),
@@ -158,6 +159,7 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
             run_attach_listener(
                 &profile.root,
                 AttachListenerInputs {
+                    runtime_version: env!("CARGO_PKG_VERSION"),
                     companion_registry: &registry,
                     approval,
                     approvals: ApprovalCoordinator::default(),
@@ -584,6 +586,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             run_attach_listener(
                 &profile.root,
                 AttachListenerInputs {
+                    runtime_version: env!("CARGO_PKG_VERSION"),
                     companion_registry: &registry,
                     approval,
                     approvals,
