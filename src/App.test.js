@@ -8360,3 +8360,152 @@ describe('catalog headers and the sidebar', () => {
     }
   })
 })
+
+describe('a run on another thread', () => {
+  const running = { runId: 'run-sky', phase: 'streaming', text: 'Blue light scatters', prompt: 'Why is the sky blue?', receipt: null, toolActivity: [] }
+  const settled = { runId: 'run-old', phase: 'complete', text: 'Earlier answer', prompt: 'Earlier question', receipt: {}, toolActivity: [] }
+
+  // Blue Sky Explanation streams a reply. Other thread holds one settled reply.
+  async function renderRunning() {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Blue Sky Explanation', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Other thread', updatedAt: '' },
+    ]
+    const pages = { 'thread-1': [running], 'thread-2': [settled] }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_thread_open') return pages[payload.threadId] ?? []
+      if (command === 'chat_select_thread' || command === 'chat_delete_thread') return undefined
+      if (command === 'chat_submit') return { runId: 'run-next', attachments: [] }
+      return fallback(command, payload)
+    })
+    render(App)
+    await screen.findByText('Blue light scatters')
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+    return pages
+  }
+
+  const row = (title) => [...document.querySelectorAll('.thread-record .thread-row')].find((item) => item.querySelector('.thread-row-title').textContent === title)
+
+  async function leaveForOtherThread() {
+    const other = screen.getByRole('button', { name: /^Other thread/ })
+    expect(other).not.toHaveAttribute('aria-disabled')
+    await fireEvent.click(other)
+    await screen.findByText('Earlier answer')
+  }
+
+  it('opens another thread mid-run and marks the running row, which stays clickable', async () => {
+    await renderRunning()
+    expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled()
+
+    await leaveForOtherThread()
+
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-2' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_cancel', expect.anything())
+    // The left transcript leaves at once, so no turn shows twice.
+    expect(screen.queryByText('Blue light scatters')).not.toBeInTheDocument()
+    expect(screen.getAllByText(/question|sky blue/, { selector: '.user-turn p' }).map((node) => node.textContent)).toEqual(['Earlier question'])
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+    const runningRow = screen.getByRole('button', { name: /^Blue Sky Explanation/ })
+    expect(runningRow).toHaveAttribute('data-running', 'true')
+    expect(runningRow).toHaveAccessibleName(expect.stringContaining('Running'))
+    expect(runningRow.querySelector('.run-mark')).toBeInTheDocument()
+    expect(runningRow).not.toHaveAttribute('aria-disabled')
+    expect(appRules.get('.thread-row > span.run-mark')).toMatch(/var\(--muted\)/)
+    expect(appRules.get('.thread-row > span.run-mark')).not.toMatch(/signal|animation/)
+    expect(row('Other thread')).not.toHaveAttribute('data-running')
+  })
+
+  it('holds Send behind one line that names the running thread and opens it', async () => {
+    await renderRunning()
+    await leaveForOtherThread()
+    const composer = await findWorkspaceComposer()
+
+    const line = screen.getByText(/is still running\./)
+    expect(line).toHaveTextContent('Blue Sky Explanation is still running. Open')
+    expect(line).toHaveAttribute('role', 'status')
+    expect(composer).toBeEnabled()
+    await fireEvent.input(composer, { target: { value: 'A second question' } })
+    expect(composer).toHaveValue('A second question')
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).toHaveAttribute('aria-disabled', 'true')
+    await fireEvent.click(send)
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+
+    await fireEvent.click(within(line).getByRole('button', { name: 'Open' }))
+
+    expect(await screen.findByText('Blue light scatters')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    expect(screen.queryByText(/is still running\./)).not.toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').at(-1)).toEqual(['chat_thread_open', { threadId: 'thread-1', limit: 100 }])
+  })
+
+  it('rejoins the live run from its row without duplicating the transcript', async () => {
+    const pages = await renderRunning()
+    await leaveForOtherThread()
+    chatListener({ payload: { runId: 'run-sky', threadId: 'thread-1', type: 'text-delta', text: ' everywhere' } })
+    pages['thread-1'] = [{ ...running, text: 'Blue light scatters everywhere' }]
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Blue Sky Explanation/ }))
+
+    expect(await screen.findByText('Blue light scatters everywhere')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    expect(screen.getAllByText('Why is the sky blue?', { selector: '.user-turn p' })).toHaveLength(1)
+    expect(row('Blue Sky Explanation')).not.toHaveAttribute('data-running')
+    chatListener({ payload: { runId: 'run-sky', threadId: 'thread-1', type: 'text-delta', text: ' in the air' } })
+    expect(await screen.findByText('Blue light scatters everywhere in the air')).toBeInTheDocument()
+  })
+
+  it('clears the mark and the line when the run settles, refreshes the list and releases Send', async () => {
+    await renderRunning()
+    await leaveForOtherThread()
+    const composer = await findWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'A second question' } })
+    const summaryReads = () => invoke.mock.calls.filter(([command]) => command === 'chat_current_thread').length
+    const reads = summaryReads()
+
+    chatListener({ payload: { runId: 'run-sky', threadId: 'thread-1', type: 'completed', receipt: {} } })
+
+    await waitFor(() => expect(screen.queryByText(/is still running\./)).not.toBeInTheDocument())
+    expect(row('Blue Sky Explanation')).not.toHaveAttribute('data-running')
+    await waitFor(() => expect(summaryReads()).toBeGreaterThan(reads))
+    expect(screen.queryByText('Blue light scatters')).not.toBeInTheDocument()
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).not.toHaveAttribute('aria-disabled')
+    await fireEvent.click(send)
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A second question', files: [] })
+  })
+
+  it('blocks delete, rename and archive for the running thread only', async () => {
+    await renderRunning()
+
+    // The thread the user watches run keeps its guard.
+    await fireEvent.contextMenu(row('Blue Sky Explanation'))
+    expect(screen.getByRole('menuitem', { name: 'Delete Blue Sky Explanation' })).toBeDisabled()
+    await fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    await fireEvent.contextMenu(row('Other thread'))
+    expect(screen.getByRole('menuitem', { name: 'Delete Other thread' })).toBeEnabled()
+    await fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+
+    await leaveForOtherThread()
+    await fireEvent.contextMenu(row('Blue Sky Explanation'))
+    expect(screen.getByRole('menuitem', { name: 'Delete Blue Sky Explanation' })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: 'Pin' })).toBeEnabled()
+    await fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    await fireEvent.keyDown(row('Blue Sky Explanation'), { key: 'Delete' })
+    expect(screen.queryByLabelText('Delete Blue Sky Explanation?')).not.toBeInTheDocument()
+
+    await fireEvent.contextMenu(row('Other thread'))
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeEnabled()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Other thread' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
+    expect(row('Blue Sky Explanation')).toHaveAttribute('data-running', 'true')
+  })
+})

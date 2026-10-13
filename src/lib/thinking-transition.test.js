@@ -21,6 +21,12 @@ describe('thinkingSettle', () => {
     expect(thinkingSettle().duration).toBe(180)
   })
 
+  it('finishes immediately when the mark leaves with its thread before the run settles', () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })))
+
+    expect(thinkingSettle(null, { instant: true }).duration).toBe(0)
+  })
+
   it('interpolates opacity, position, and scale', () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })))
     const { css } = thinkingSettle()

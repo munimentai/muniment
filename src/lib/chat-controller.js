@@ -6,6 +6,13 @@ const signaledThreadCap = 256
 const signaledRunCap = 256
 const liveTextCap = 256
 const desktopBusy = 'Muniment is busy with another request. Try again.'
+// The runtime admits one active run per profile and answers a second submit
+// with this reason before it records anything (attach_boundaries.rs).
+const replyInProgress = 'A reply is already in progress.'
+const replyInProgressRetryMs = 2_000
+const runElsewhere = 'Another reply is still running. Send again when it ends.'
+const terminalTypes = { completed: 'complete', cancelled: 'cancelled', failed: 'failed' }
+const eventSettles = (event) => settledPhases.has(event.phase ?? terminalTypes[event.type])
 const submissionSources = ['local-mode', 'auth', 'thread', 'submit']
 
 function submissionFailure(error) {
@@ -56,6 +63,7 @@ export function createChatController({
   onSubmitted = () => {},
   onSubmission = () => {},
   onSignInLink = () => {},
+  onBackgroundRun = () => {},
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -71,6 +79,9 @@ export function createChatController({
   let historyLoadFailed = false
   let destroyed = false
   let switchingThread = false
+  // The run the window left on another thread, as { threadId, runId }. The
+  // runtime keeps driving it (ADR 0012), and its settling event clears it.
+  let background = null
   let switchBlocked = false
   // How many calls replace the transcript with freshly read pages right now: a
   // thread open, an in-place re-read, or both at once. handleEvent buffers every
@@ -193,7 +204,7 @@ export function createChatController({
     // A queued snapshot cannot reopen a terminal run restored from the journal.
     // Interrupted runs can resume, so they do not use this guard.
     if (['complete', 'cancelled', 'failed'].includes(run.phase)) {
-      const phase = event.phase ?? { completed: 'complete', cancelled: 'cancelled', failed: 'failed' }[event.type]
+      const phase = event.phase ?? terminalTypes[event.type]
       if (phase !== run.phase) return run
     }
     const whole = wholeEvent(run, event)
@@ -205,6 +216,27 @@ export function createChatController({
 
   const applyLiveEvents = (run, events) => events.reduce(applyLiveEvent, run)
   const active = () => readActive()
+  // A submission waiting for its run id, a resume, or a recovery owns the
+  // transcript tail, so the window stays on its thread until it ends.
+  const holdsThread = () => {
+    const run = active()
+    return !!run && (run.id === 'pending' || run.phase === 'resuming' || run.phase === 'recovering')
+  }
+  const publishBackground = (next) => {
+    background = next
+    if (!destroyed) onBackgroundRun(next)
+  }
+
+  // The window leaves its active run for another thread. A run whose settling
+  // event already arrived ends here, and any other run stays in the background.
+  function leaveRun(run, threadId, held = []) {
+    if (!run) return
+    if (held.some(eventSettles)) {
+      void refreshThreads()
+      return
+    }
+    publishBackground({ threadId: threadId ?? null, runId: run.id })
+  }
   const publishMessages = (next) => {
     if (!destroyed) onMessages(next)
   }
@@ -310,6 +342,14 @@ export function createChatController({
       return
     }
     const signaled = signalThread(payload.threadId)
+    if (background && payload.runId === background.runId) {
+      if (eventSettles(payload)) {
+        publishBackground(null)
+        if (!signaled) void refreshThreads()
+      } else if (!background.threadId && payload.threadId) {
+        publishBackground({ ...background, threadId: payload.threadId })
+      }
+    }
     // A thread load replaces the whole transcript, so no published run describes
     // this event yet. openThread and refreshOpenThread drain the buffer onto the
     // loaded pages.
@@ -390,6 +430,8 @@ export function createChatController({
         onHistoryError('')
         return
       }
+      // A reload keeps the run the user watches on screen.
+      if (active()) return
       const newest = summaries[0].threadId
       if (openThreadId && openThreadId !== newest) {
         // Retention can prune the open thread, and a sign-in under another
@@ -434,7 +476,7 @@ export function createChatController({
   }
 
   async function openThread(threadId, select = false, restoreSelection = false) {
-    if (active() || switchingThread) return
+    if (switchingThread || holdsThread()) return
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
@@ -477,6 +519,9 @@ export function createChatController({
       const rejoined = recorded && applyLiveEvents(recorded, buffered.get(recorded.id) ?? [])
       if (recorded) buffered.delete(recorded.id)
       const settled = !!rejoined && settledPhases.has(rejoined.phase)
+      const leaving = threadId !== previousThreadId ? active() : null
+      if (leaving) leaveRun(leaving, previousThreadId, buffered.get(leaving.id))
+      else if (background && (threadId === background.threadId || rejoined?.id === background.runId)) publishBackground(null)
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(threadId)
@@ -513,6 +558,9 @@ export function createChatController({
             }
           }
         }
+        // The transcript stays on the run the user left, so it takes the
+        // events that landed while the other thread loaded.
+        drainVisibleRun()
         onHistoryError(historyReadError(error), {
           label: 'Restore history',
           run: () => openThread(threadId, select || switchBlocked, restoreSelection),
@@ -665,16 +713,21 @@ export function createChatController({
 
   async function newThread(prompt) {
     const fromLauncher = typeof prompt === 'string'
-    if (destroyed || active() || switchingThread || switchBlocked || (fromLauncher && blocked())) return false
+    if (destroyed || switchingThread || switchBlocked || holdsThread() || (fromLauncher && (active() || background || blocked()))) return false
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
+    const previousThreadId = readThreadId()
     try {
       const projectId = fromLauncher ? null : readProject()
       const agentId = fromLauncher ? null : readAgent()
       const context = { ...(projectId ? { projectId } : {}), ...(agentId ? { agentId } : {}) }
       const createdThread = await invoke('chat_new_thread', ...(Object.keys(context).length ? [context] : []))
       if (destroyed) return false
+      // Events kept applying to the open run while the thread was created, so
+      // a run still active here is one the runtime still drives.
+      leaveRun(active(), previousThreadId)
+      onActive(null)
       onHistoryStart()
       onAnnounce(null)
       onThreadSelected(typeof createdThread === 'string' && createdThread ? createdThread : null)
@@ -729,11 +782,13 @@ export function createChatController({
   }
 
   async function deleteThread(threadId) {
-    if (!threadId || active() || switchingThread || switchBlocked) return false
+    if (!threadId || switchingThread || switchBlocked || holdsThread()) return false
     // The thread on screen counts as open: the shell shows the newest thread's
     // transcript before a selection is recorded, and the sidebar marks it the same way.
     const shownThreadId = readThreadId() ?? (freshThread ? null : readThreadSummaries()[0]?.threadId ?? null)
     const deletingCurrent = threadId === shownThreadId
+    // A thread whose run still goes stays until that run settles.
+    if ((deletingCurrent && active()) || threadId === background?.threadId) return false
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
@@ -771,14 +826,15 @@ export function createChatController({
 
   async function send() {
     const prompt = readDraft().trim()
-    if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
+    if (!prompt || active() || background || switchingThread || switchBlocked || blocked()) return
     const selected = readFiles()
     const folders = selected.filter(file => file.isDirectory).map(file => file.path)
     return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
   }
 
   async function submitWhenAvailable(payload) {
-    const deadline = Date.now() + 30_000
+    const started = Date.now()
+    const deadline = started + 30_000
     for (;;) {
       try {
         onSubmission({ invoke: 'pending', error: 'none', source: 'none' })
@@ -792,8 +848,11 @@ export function createChatController({
             : ['Authorization failed. Sign in again.', 'The runtime refused the request as unauthorized. Enter local mode or sign in, then retry.'].includes(message) ? 'unauthorized' : 'rejected'
         onSubmission({ invoke: 'rejected', error: kind, source })
         // DesktopBusy means the holder sent no request. History can hold that connection during a send.
+        // A settled run frees the runtime's run slot just after its last event,
+        // so a reply in progress gets a short retry too.
         // Never retry a transport failure because the runtime might already own the run.
-        if (message !== desktopBusy || Date.now() >= deadline || destroyed) throw error
+        const retryable = message === desktopBusy || (message === replyInProgress && Date.now() < started + replyInProgressRetryMs)
+        if (!retryable || Date.now() >= deadline || destroyed) throw error
         await new Promise(resolve => setTimeout(resolve, 100))
         if (destroyed) throw error
       }
@@ -834,6 +893,18 @@ export function createChatController({
       return true
     } catch (error) {
       if (destroyed) return
+      const { message: reason } = submissionFailure(error)
+      if (reason === replyInProgress) {
+        // The runtime recorded nothing, so the turn leaves the transcript and
+        // the prompt waits in the composer.
+        publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
+        if (submissionId !== submissionSequence) return false
+        if (preserveDraft && !readDraft().trim()) onDraft(prompt)
+        onAnnounce(null)
+        onActive(null)
+        onSubmitError(runElsewhere)
+        return false
+      }
       if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {
         // A lost acknowledgment does not prove that the runtime rejected the run.
         const restoring = { ...pending, id: `recovering-${submissionId}`, phase: 'recovering' }
@@ -868,7 +939,7 @@ export function createChatController({
   }
 
   async function resume(run) {
-    if (active() || blocked() || !run.resumable || run.phase !== 'interrupted') return
+    if (active() || background || blocked() || !run.resumable || run.phase !== 'interrupted') return
     const resuming = { ...run, phase: 'resuming', resumeError: '' }
     onActive(resuming)
     onAnnounce(resuming)
@@ -901,9 +972,11 @@ export function createChatController({
     const run = active()
     if (!message || !run || run.id === 'pending' || blocked()) return
     onQueueError('')
+    const threadId = readThreadId()
     try {
       await invoke('chat_queue', { runId: run.id, delivery, message })
-      if (destroyed) return
+      // The message joins the run's own transcript, not one the user opened since.
+      if (destroyed || readThreadId() !== threadId) return
       publishMessages([...messages(), { role: 'user', text: message }])
       onFollow()
       if (readDraft().trim() === message) onDraft('')

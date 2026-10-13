@@ -575,7 +575,7 @@ to three words. A failed request keeps a short prompt fallback. Manual names
 win over generated names. Action feedback groups reads, searches, commands
 and edits with expandable, bounded, credential-filtered details. Saved runs
 retain those details. Cancel sign-in returns to local mode and rejects a late
-browser result. Partial replies remain visible with their interruption cause.
+browser result. Partial replies remain visible with their interruption cause. A reply keeps running in the runtime while the user opens another thread, a new thread, an agent, an artifact or a project. Its sidebar row carries a quiet running mark and reopens the live reply. Send in any other thread waits, with one line that names and opens the running thread, until that reply settles. The running thread cannot be renamed, archived or deleted. Other threads stay deletable.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
 ### Extend
