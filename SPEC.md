@@ -168,7 +168,7 @@ provider answers it reads `Connect a model`, and the chip and Send open the prov
 
 **Settings → Models is one component on three pages.** Model providers, Model list
 and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
-in account details. One searchable model list holds visibility and routing
+in account details. One searchable model list holds visibility and, once a decision model is connected, routing
 statements. Each provider leads with the newest model of each family, dated from models.dev, and the models the user turned on. Older models fold under Other models and stay out of the picker until turned on. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns

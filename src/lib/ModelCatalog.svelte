@@ -107,11 +107,12 @@
         {@const shown = visibility[key] ?? model.shown}
         <div class="model">
           <div class="model-row">
-            <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context} · {model.context} context{/if}</span></div>
+            <div class="identity"><span class="model-id">{model.label}</span><span class="meta">{route ? `${model.accounts || 1} ${model.accounts > 1 ? 'accounts' : 'account'}` : 'Direct'}{#if model.context}{` · ${model.context} context`}{/if}</span></div>
             {#if current?.provider === provider && current?.model === choice}<span class="meta">Selected</span>{:else}<button disabled={pending || !shown} onclick={() => run('local_mode_set_default_model', { provider, model: choice })}>Use</button>{/if}
             <label class="show"><Toggle checked={shown} disabled={pending || key in visibility} aria-label={`Show ${model.label} in picker`} onchange={shown => setShown(model, shown)} />Show in picker</label>
           </div>
-          {#if route}
+          <!-- A statement guides the decision model, so it shows once one is connected. -->
+          {#if route && inventory?.router_classifier}
             <details><DisclosureSummary>Routing statement</DisclosureSummary><p class="statement">{route.description}</p>
               {#if editing === route.key}
                 <label for="model-statement">When should this model answer?</label><textarea id="model-statement" rows="3" bind:value={statement}></textarea>

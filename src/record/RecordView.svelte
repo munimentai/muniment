@@ -50,7 +50,7 @@
         <h4>Identities</h4>
         <ul class="record-list mono">
           {#each detail.identities as identity (identity.kind + identity.value)}
-            <li>{identity.kind}: {identity.value}{#if identity.source} · Source: {identity.source}{/if}</li>
+            <li>{identity.kind}: {identity.value}{#if identity.source}{` · Source: ${identity.source}`}{/if}</li>
           {/each}
         </ul>
       </section>
@@ -77,7 +77,7 @@
       <h4>History</h4>
       <ol class="record-list mono">
         {#each detail.events ?? [] as event (event.id)}
-          <li>{when(event.at)} · {stateLabel(event.verb)} · {event.actor_label || 'Unknown actor'}{event.on_behalf_of ? ` for ${event.on_behalf_of_label || 'Unknown owner'}` : ''}{#if event.source} · Source: {event.source}{/if}</li>
+          <li>{when(event.at)} · {stateLabel(event.verb)} · {event.actor_label || 'Unknown actor'}{event.on_behalf_of ? ` for ${event.on_behalf_of_label || 'Unknown owner'}` : ''}{#if event.source}{` · Source: ${event.source}`}{/if}</li>
         {/each}
       </ol>
     </section>

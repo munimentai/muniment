@@ -128,3 +128,14 @@ it('opens Other models while a search is typed', async () => {
   await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'opus' } })
   expect(screen.getByText('Other models (1)').closest('details')).toHaveAttribute('open')
 })
+
+it('shows a routing statement only once a decision model is connected, and spaces the context', () => {
+  const routed = (classifier) => ({ providers: [{ id: 'anthropic', models: [{ id: 'first', context: '200k' }] }], hidden: [], default_provider: 'anthropic', default_model: 'first', router_classifier: classifier })
+  const settings = { enabled: false, options: [{ key: 'fast', model: 'first', family: 'anthropic', description: 'Short answers' }] }
+  const view = render(ModelCatalog, { tauri: { invoke: vi.fn() }, inventory: routed(null), settings })
+  expect(screen.queryByText('Routing statement')).toBeNull()
+  expect(screen.getByText(/1 account · 200k context/)).toBeInTheDocument()
+  view.unmount()
+  render(ModelCatalog, { tauri: { invoke: vi.fn() }, inventory: routed('Fast router'), settings })
+  expect(screen.getByText('Routing statement')).toBeInTheDocument()
+})

@@ -38,7 +38,7 @@
             <strong>Queries:</strong>
             <ul class="search-queries">{#each action.queries as query}<li>{query}</li>{/each}</ul>
           {:else}
-          <p>{action.state}{#if action.startedAt && (action.finishedAt || action.running)} · {actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}{/if}</p>
+          <p>{action.state}{#if action.startedAt && (action.finishedAt || action.running)}{` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}`}{/if}</p>
           {#if action.input}<strong>{group.kind === 'command' ? 'Command' : 'Input'}</strong><pre>{action.detailInput}</pre>{/if}
           {#if action.output}<strong>Output</strong><pre>{action.output}</pre>
           {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
