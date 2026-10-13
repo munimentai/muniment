@@ -111,7 +111,7 @@ it('refreshes allowances on load and every two minutes, then stops when closed',
 it('keeps a space on both sides of the dot in an allowance line', () => {
   render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'anthropic', settings: { ...routing(), accounts: [{ id: 'a', family: 'anthropic', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: 'Fable', remaining_percent: 99, resets_at_ms: Date.now() + 3_600_000, limit_reached: false }] }] } })
   const window = screen.getByText('99%').closest('.window')
-  expect(window).toHaveTextContent('Weekly · Fable')
+  expect(window).toHaveTextContent('Weekly Fable')
   expect(window).toHaveTextContent(/99% left · resets /)
 })
 

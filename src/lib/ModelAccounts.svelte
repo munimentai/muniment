@@ -1,6 +1,7 @@
 <script>
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import AllowanceMeter from './AllowanceMeter.svelte'
+  import { allowanceLabel } from './allowance-label.js'
   // One provider's accounts in the router's pool. A subscription is a card with
   // what it has left and what it has served, and it holds its own Disconnect. A
   // key is a one-line card with edit and disconnect icons. The sign-ins the
@@ -227,7 +228,7 @@
           {#each account.windows as window (window.label + window.scope)}
             <div class="window">
               <div class="window-head">
-                <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope}{` · ${window.scope}`}{/if}</span>
+                <span class="record">{allowanceLabel(window)}</span>
                 <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms}{` · resets ${until(window.resets_at_ms)}`}{/if}</span>
               </div>
               <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />

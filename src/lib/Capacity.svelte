@@ -4,8 +4,10 @@
   import ProviderLogo from './ProviderLogo.svelte'
   import { familyName } from './provider-catalog.js'
   import AllowanceMeter from './AllowanceMeter.svelte'
+  import { allowanceLabel } from './allowance-label.js'
   let { tauri, onmanage, onclose } = $props()
   let settings = $state(null)
+  const resetTime = (ms) => { const at = new Date(ms); return `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` }
   let error = $state('')
   $effect(() => {
     let disposed = false
@@ -34,9 +36,9 @@
         {#if account.exclusion_reason}<p>{account.exclusion_reason}</p>{/if}
         {#each account.windows ?? [] as window}
           <div class="allowance">
-            <div class="amount"><span>{window.label}{window.scope ? ` · ${window.scope}` : ''}</span><strong>{Math.round(window.remaining_percent)}% remaining</strong></div>
+            <div class="amount"><span>{allowanceLabel(window)}</span><strong>{Math.round(window.remaining_percent)}% left</strong></div>
             <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />
-            {#if window.resets_at_ms}<p>Resets {new Date(window.resets_at_ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>{/if}
+            {#if window.resets_at_ms}<p>Resets {resetTime(window.resets_at_ms)}</p>{/if}
           </div>
         {:else}<p>{account.source === 'key' ? 'Usage billed by API' : 'Allowance unavailable'}</p>{/each}
       </article>
