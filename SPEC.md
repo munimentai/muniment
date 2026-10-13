@@ -50,7 +50,7 @@ New avatars combine shapes, colors, eyes, mouths, glasses, cheeks and face posit
 Avatars render locally in the sidebar, catalog and profile. Rename preserves the seed; Change avatar replaces it.
 The Agents control follows New thread and exposes a plus button on hover or keyboard focus.
 It opens a card catalog. New agent opens a dedicated creation chat that offers the catalog starters, with the chosen one marked.
-An empty catalog opens the creation chat. Each agent or artifact has a goal, a specified output, and one dedicated chat. Artifacts opens saved artifact chats or a creation chat with suggestions. Creation chats stay outside ordinary thread lists.
+An empty catalog opens the creation chat. Each agent or artifact has a goal, a specified output, and one dedicated chat. Artifacts opens saved artifact chats or a creation chat with suggestions. The preview opens when a creation chat first saves its artifact. Creation chats stay outside ordinary thread lists.
 Each agent has one persisted primary conversation. Interactive messages and routine runs reuse it.
 Routine history stays in the agent profile with time, status, errors, and conversation links.
 Agent facts live under agents/<id>/memory/facts. Agent recall reads its own memory.

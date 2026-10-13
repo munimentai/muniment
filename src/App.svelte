@@ -282,6 +282,17 @@
     const artifactId=item.resultId || item.id
     if (artifactId && item.kind !== 'agent') {requestedArtifact=artifactId;showBrowser('artifacts')}
   }
+  // The first time a creation chat saves its artifact, the preview opens beside it.
+  async function revealSavedArtifact() {
+    const threadId = currentThreadId
+    const before = creations.find(item => item.threadId === threadId)
+    if (!threadId || (before && before.kind !== 'artifact')) return
+    await refreshCreations()
+    const plan = creations.find(item => item.threadId === threadId)
+    if (threadId !== currentThreadId || plan?.kind !== 'artifact' || !plan.resultId || plan.resultId === before?.resultId) return
+    requestedArtifact = plan.resultId
+    showBrowser('artifacts')
+  }
   async function showArtifacts() {
     await refreshCreations()
     artifactsOpen=true;projectsOpen=false; agentsOpen=false;agentProfileOpen=false;closeRail()
@@ -793,7 +804,7 @@
     readThreadSummaries: () => threadSummaries,
     blocked: () => dictationBusy() || runtimeUpgradePending() || modelChoicePending || compacting || !!retryReview?.chooseModel,
     onMessages: (next) => { messages = next },
-    onActive: (next) => { active = next },
+    onActive: (next) => { const finished = !!active && !next; active = next; if (finished) void revealSavedArtifact() },
     onAnnounce: (next) => { announcedRun = next },
     onDraft: (next) => { draft = next },
     onFiles: (next) => { selectedFiles = next },

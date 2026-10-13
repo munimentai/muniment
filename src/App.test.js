@@ -7943,6 +7943,37 @@ describe('dedicated creation chats', () => {
   })
 })
 
+it('opens the preview the first time a creation chat saves its artifact', async () => {
+  const original=invoke.getMockImplementation()
+  const id='01900000-0000-7000-8000-000000000099'
+  let plans=[]
+  let artifacts=[]
+  invoke.mockImplementation((command,payload)=>{
+    if(command==='creation_list') return Promise.resolve(plans)
+    if(command==='artifact_list') return Promise.resolve(artifacts)
+    if(command==='chat_new_thread') return Promise.resolve(id)
+    if(command==='creation_save') {plans=[payload.creation]; return Promise.resolve(payload.creation)}
+    if(command==='chat_submit') return Promise.resolve({runId:'run-artifact',attachments:[]})
+    if(command==='browser_view') return Promise.resolve()
+    return original(command,payload)
+  })
+  const originalBridge=window.__TAURI__.core.invoke
+  vi.spyOn(window.__TAURI__.core,'invoke').mockImplementation((command,...args)=>command==='artifact_list'?invoke(command,...args):originalBridge(command,...args))
+  render(App)
+  const create = await screen.findByRole('button',{name:'New artifact',exact:true})
+  await waitFor(() => expect(create).toBeEnabled())
+  await fireEvent.click(create)
+  await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain('Expected output:'))
+  await fireEvent.click(screen.getByRole('button',{name:'Send'}))
+  await screen.findByRole('button',{name:'Stop'})
+  expect(screen.queryByRole('region',{name:'Artifacts'})).toBeNull()
+  plans=[{...plans[0],resultId:'loan-comparison'}]
+  artifacts=[{id:'loan-comparison',name:'Loan Comparison',threadId:id}]
+  chatListener({payload:{runId:'run-artifact',phase:'complete',text:'Saved Loan Comparison.',receipt:{}}})
+  const preview = await screen.findByRole('region',{name:'Artifacts'})
+  await waitFor(()=>expect(within(preview).getByRole('combobox',{name:'Session artifacts'})).toHaveValue('loan-comparison'))
+})
+
 it('gives an unlinked artifact one dedicated chat instead of using the current chat', async () => {
   const original=invoke.getMockImplementation()
   let plans=[]
