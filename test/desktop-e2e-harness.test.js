@@ -2489,6 +2489,11 @@ describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', (
     return { result, destination }
   }
   const extract = (output) => extractInto(output).result
+  // tar -P keeps the leading ../ in GNU tar and bsdtar alike.
+  const traversalArchive = () => {
+    const source = temp(); fs.mkdirSync(path.join(source, 'inner')); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
+    return execFileSync('tar', ['-czPf', '-', '-C', path.join(source, 'inner'), '../file']).toString('base64')
+  }
   const diagnostics = (destination) => Object.fromEntries(
     fs.readFileSync(path.join(destination, 'envelope-diagnostics.txt'), 'utf8').trim().split('\n').map((line) => line.split(/=(.*)/s).slice(0, 2)),
   )
@@ -2496,9 +2501,7 @@ describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', (
   it.each(['', 'junk', `${markers('junk')}${markers('junk')}`, `=== DESKTOP-CI ARTIFACTS END ===\n=== DESKTOP-CI ARTIFACTS BEGIN ===\njunk\n`])('rejects malformed or ambiguous markers/base64', (value) => expect(extract(value).status).not.toBe(0))
   it('rejects link members', () => expect(extract(markers(archive((dir) => fs.symlinkSync('/tmp', path.join(dir, 'link'))))).status).not.toBe(0))
   it('rejects traversal members', () => {
-    const source = temp(); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
-    const encoded = execFileSync('tar', ['-czf', '-', '--transform=s,^,../,', '-C', source, 'file']).toString('base64')
-    expect(extract(markers(encoded)).status).not.toBe(0)
+    expect(extract(markers(traversalArchive())).status).not.toBe(0)
   })
 
   it('Carries a terminating Windows error through the driver envelope into JUnit.', () => {
@@ -2558,9 +2561,7 @@ describe.skipIf(process.platform === 'win32')('desktop-ci payload extraction', (
   })
 
   it('rejects a driver-form archive with a traversal member', () => {
-    const source = temp(); fs.writeFileSync(path.join(source, 'file'), 'unsafe')
-    const encoded = execFileSync('tar', ['-czf', '-', '--transform=s,^,../,', '-C', source, 'file']).toString('base64')
-    expect(extract(driverMarkers(encoded)).status).not.toBe(0)
+    expect(extract(driverMarkers(traversalArchive())).status).not.toBe(0)
   })
 
   it('rejects a corrupt driver-form payload', () => {
@@ -2673,6 +2674,14 @@ describe.skipIf(process.platform === 'win32')('cleanup failure accounting', () =
     })
     const entries = fs.readFileSync(ledger, 'utf8').trim().split('\n')
     const statuses = Object.fromEntries(fs.readFileSync(statusLedger, 'utf8').trim().split('\n').map((entry) => entry.split('\t')))
+    // Test mode records each removal without running it, so remove the run's
+    // /tmp paths here. BSD mktemp keeps the X's before a suffix, so a path left
+    // behind fails the next run's mktemp on macOS.
+    for (const [label, command = ''] of entries.map((entry) => entry.split('\t', 2))) {
+      if (!/^remove-(?:state|raw|safe|package-file|auth-url)$/.test(label)) continue
+      const target = command.trim().split(' ').at(-1)
+      if (target.startsWith('/tmp/')) fs.rmSync(target, { recursive: true, force: true })
+    }
     return { result, entries, statuses, artifacts, invoked: entries.map((entry) => entry.split('\t')[0]) }
   }
   const commands = (entries) => Object.fromEntries(entries.map((entry) => entry.split('\t', 2)))
