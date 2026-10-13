@@ -99,6 +99,8 @@ const APP_COMMANDS: &[&str] = &[
     "chat_current_thread",
     "chat_thread_summaries",
     "chat_thread_open",
+    "thread_context_usage",
+    "thread_compact",
     "chat_select_thread",
     "chat_rename_thread",
     "chat_delete_thread",

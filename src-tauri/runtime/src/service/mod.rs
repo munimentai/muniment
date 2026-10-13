@@ -12,8 +12,9 @@ mod workspace;
 pub use company::{create_company, delete_company, list_companies, rename_company, select_company};
 pub use record::RecordRegistry;
 pub use run::{
-    accept_prompt, answer_permission, cancel_run, configure_run, drive_prompt, queue_run_message,
-    resume_run, run_prompt, ConfigureRunError, PromptAcceptance, PromptLaunch,
+    accept_compaction, accept_prompt, answer_permission, cancel_run, configure_run,
+    drive_compaction, drive_prompt, queue_run_message, resume_run, run_prompt, ConfigureRunError,
+    PromptAcceptance, PromptLaunch,
 };
 pub use session::{
     ensure_native_session, entitlement_snapshot, list_devices, pairing_status,

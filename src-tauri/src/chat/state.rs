@@ -6,8 +6,6 @@ use super::run_preparation::{
     prepare_new_run_with_session_thread_after_validation, validate_grant,
 };
 use super::*;
-use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
-use std::path::Path;
 
 pub(crate) struct TauriChatEventSink<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
@@ -73,14 +71,6 @@ impl<R: tauri::Runtime> PiLaunchBoundaries for TauriChatEventSink<R> {
             access_token,
             run_id,
         )
-    }
-
-    fn prepare_pi_settings(
-        &self,
-        artifact: PiArtifactDescriptor,
-        executable: &Path,
-    ) -> Result<(), PiLaunchError> {
-        muniment_desktop_integration::pi_settings::prepare_pi_settings(artifact, executable)
     }
 
     fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {

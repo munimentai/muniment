@@ -665,6 +665,259 @@ pub async fn chat_thread_open(
     )
 }
 
+/// How often a context command asks the runtime again while it reads.
+const CONTEXT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+/// The bound on one usage read, which can start the agent runtime.
+const CONTEXT_READ_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+/// The bound on one manual compaction, which waits for a model's summary.
+const COMPACTION_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// One thread's context window, as the meter shows it.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadContextUsage {
+    tokens: Option<u64>,
+    context_window: Option<u64>,
+    percent: Option<f64>,
+    estimated: bool,
+    window_known: bool,
+    provider: Option<String>,
+    model: Option<String>,
+    auto_compact: bool,
+    compact_at: Option<u64>,
+    compacting: bool,
+}
+
+/// The token counts of one finished manual compaction.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadCompaction {
+    tokens_before: u64,
+    estimated_tokens_after: Option<u64>,
+}
+
+fn context_response_error() -> String {
+    "The background service returned an invalid context reading. Restart Muniment.".into()
+}
+
+/// Maps a finished `thread.context_usage` answer. A thread with no saved
+/// conversation reports no tokens and the automatic compaction setting.
+fn context_usage_view(
+    snapshot: &serde_json::Value,
+    auto_compact: impl FnOnce() -> Result<bool, String>,
+) -> Result<ThreadContextUsage, String> {
+    let compacting = snapshot["compacting"]
+        .as_bool()
+        .ok_or_else(context_response_error)?;
+    let usage = &snapshot["usage"];
+    if usage.is_null() {
+        if let Some(error) = snapshot["error"].as_str() {
+            return Err(error.to_owned());
+        }
+        return Ok(ThreadContextUsage {
+            tokens: None,
+            context_window: None,
+            percent: None,
+            estimated: false,
+            window_known: false,
+            provider: None,
+            model: None,
+            auto_compact: auto_compact()?,
+            compact_at: None,
+            compacting,
+        });
+    }
+    let flag = |name: &str| usage[name].as_bool().ok_or_else(context_response_error);
+    let text = |name: &str| usage[name].as_str().map(str::to_owned);
+    Ok(ThreadContextUsage {
+        tokens: usage["tokens"].as_u64(),
+        context_window: usage["context_window"].as_u64(),
+        percent: usage["percent"].as_f64(),
+        estimated: flag("estimated")?,
+        window_known: flag("window_known")?,
+        provider: text("provider"),
+        model: text("model"),
+        auto_compact: flag("auto_compact")?,
+        compact_at: usage["compact_at"].as_u64(),
+        compacting,
+    })
+}
+
+/// Reads the outcome of the compaction `run_id` names from a
+/// `thread.context_usage` answer. `None` means it still runs.
+fn compaction_outcome(
+    snapshot: &serde_json::Value,
+    run_id: &str,
+) -> Option<Result<ThreadCompaction, String>> {
+    let compaction = &snapshot["compaction"];
+    if compaction["run_id"].as_str() != Some(run_id) {
+        return Some(Err(context_response_error()));
+    }
+    match compaction["state"].as_str() {
+        Some("running") => None,
+        Some("completed") => Some(
+            compaction["tokens_before"]
+                .as_u64()
+                .map(|tokens_before| ThreadCompaction {
+                    tokens_before,
+                    estimated_tokens_after: compaction["estimated_tokens_after"].as_u64(),
+                })
+                .ok_or_else(context_response_error),
+        ),
+        Some("failed") => Some(Err(compaction["error"]
+            .as_str()
+            .unwrap_or("Context compaction did not finish. Try again.")
+            .to_owned())),
+        _ => Some(Err(context_response_error())),
+    }
+}
+
+/// Asks the runtime until `settle` answers or the bound passes. The client
+/// lock is free between asks, so other requests proceed.
+fn poll_runtime<T>(
+    bound: std::time::Duration,
+    late: &str,
+    mut ask: impl FnMut() -> Result<serde_json::Value, String>,
+    mut settle: impl FnMut(&serde_json::Value) -> Option<Result<T, String>>,
+) -> Result<T, String> {
+    let deadline = std::time::Instant::now() + bound;
+    loop {
+        if let Some(result) = settle(&ask()?) {
+            return result;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(late.to_owned());
+        }
+        std::thread::sleep(CONTEXT_POLL);
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+async fn context_client(
+    app_handle: &tauri::AppHandle,
+) -> Result<muniment_core::attach::DesktopClientHolder, String> {
+    let waiting_app = app_handle.clone();
+    let session = tauri::async_runtime::spawn_blocking(move || {
+        waiting_app
+            .state::<AttachCompanionState>()
+            .desktop_client_session_within(HISTORY_CONNECT_WAIT)
+    })
+    .await
+    .map_err(|_| auth::background_service_error())?;
+    match session {
+        DesktopClientSession::Connected(client) => Ok(client),
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
+    }
+}
+
+/// Runs one compaction settings request and answers the settings in the
+/// shape the Settings page reads.
+#[cfg(any(unix, target_os = "windows"))]
+pub(crate) async fn context_settings_request(
+    app_handle: tauri::AppHandle,
+    request: impl FnOnce(
+            &muniment_core::attach::DesktopClientHolder,
+        ) -> Result<
+            serde_json::Value,
+            (ClientError, Option<muniment_core::attach::ProtocolError>),
+        > + Send
+        + 'static,
+) -> Result<serde_json::Value, String> {
+    let client = context_client(&app_handle).await?;
+    let answer = tauri::async_runtime::spawn_blocking(move || request(&client))
+        .await
+        .map_err(|_| auth::background_service_error())?
+        .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))?;
+    context_settings_view(&answer)
+}
+
+fn context_settings_view(answer: &serde_json::Value) -> Result<serde_json::Value, String> {
+    match (
+        answer["enabled"].as_bool(),
+        answer["reserve_tokens"].as_u64(),
+        answer["keep_recent_tokens"].as_u64(),
+    ) {
+        (Some(enabled), Some(reserve_tokens), Some(keep_recent_tokens)) => Ok(serde_json::json!({
+            "enabled": enabled,
+            "reserveTokens": reserve_tokens,
+            "keepRecentTokens": keep_recent_tokens,
+        })),
+        _ => Err(context_response_error()),
+    }
+}
+
+/// Reads how much of its context window a thread fills. The runtime reads
+/// the agent engine, and the command waits until that read ends.
+#[cfg(any(unix, target_os = "windows"))]
+#[tauri::command]
+pub async fn thread_context_usage(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+) -> Result<ThreadContextUsage, String> {
+    let client = context_client(&app_handle).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let snapshot = poll_runtime(
+            CONTEXT_READ_WAIT,
+            "The context usage did not arrive in time. Try again.",
+            || {
+                client
+                    .thread_context_usage(&thread_id)
+                    .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))
+            },
+            |snapshot| (snapshot["reading"] == false).then(|| Ok(snapshot.clone())),
+        )?;
+        context_usage_view(&snapshot, || {
+            client
+                .context_settings()
+                .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))?
+                ["enabled"]
+                .as_bool()
+                .ok_or_else(context_response_error)
+        })
+    })
+    .await
+    .map_err(|_| auth::background_service_error())?
+}
+
+/// Compacts a thread's conversation now, with optional instructions for the
+/// summary. The runtime refuses while a reply runs in that thread.
+#[cfg(any(unix, target_os = "windows"))]
+#[tauri::command]
+pub async fn thread_compact(
+    app_handle: tauri::AppHandle,
+    thread_id: String,
+    instructions: Option<String>,
+) -> Result<ThreadCompaction, String> {
+    let client = context_client(&app_handle).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let instructions = instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        let started = client
+            .compact_thread(&thread_id, instructions)
+            .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))?;
+        let run_id = started["run_id"]
+            .as_str()
+            .ok_or_else(context_response_error)?
+            .to_owned();
+        poll_runtime(
+            COMPACTION_WAIT,
+            "Context compaction is still running. Its result appears in the thread when it ends.",
+            || {
+                client
+                    .thread_context_usage(&thread_id)
+                    .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))
+            },
+            |snapshot| compaction_outcome(snapshot, &run_id),
+        )
+    })
+    .await
+    .map_err(|_| auth::background_service_error())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2314,5 +2567,108 @@ mod tests {
         }
 
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn context_settings_keep_the_settings_page_shape() {
+        assert_eq!(
+            context_settings_view(&serde_json::json!({
+                "enabled": false, "reserve_tokens": 8192, "keep_recent_tokens": 12000
+            }))
+            .unwrap(),
+            serde_json::json!({"enabled": false, "reserveTokens": 8192, "keepRecentTokens": 12000})
+        );
+        assert!(context_settings_view(&serde_json::json!({"enabled": true})).is_err());
+    }
+
+    #[test]
+    fn a_context_answer_maps_to_the_meter_shape() {
+        let snapshot = serde_json::json!({
+            "usage": {
+                "tokens": 31900, "context_window": 200000, "percent": 15.95,
+                "estimated": true, "window_known": true, "provider": "local",
+                "model": "model", "auto_compact": true, "compact_at": 183616
+            },
+            "reading": false, "error": null, "compacting": false, "compaction": null
+        });
+        assert_eq!(
+            serde_json::to_value(
+                context_usage_view(&snapshot, || panic!("usage names the setting")).unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({
+                "tokens": 31900, "contextWindow": 200000, "percent": 15.95,
+                "estimated": true, "windowKnown": true, "provider": "local",
+                "model": "model", "autoCompact": true, "compactAt": 183616,
+                "compacting": false
+            })
+        );
+        let empty = serde_json::json!({
+            "usage": null, "reading": false, "error": null, "compacting": false, "compaction": null
+        });
+        assert_eq!(
+            serde_json::to_value(context_usage_view(&empty, || Ok(false)).unwrap()).unwrap(),
+            serde_json::json!({
+                "tokens": null, "contextWindow": null, "percent": null,
+                "estimated": false, "windowKnown": false, "provider": null,
+                "model": null, "autoCompact": false, "compactAt": null,
+                "compacting": false
+            })
+        );
+        let failed = serde_json::json!({
+            "usage": null, "reading": false, "error": "The agent runtime is not installed.",
+            "compacting": false, "compaction": null
+        });
+        assert_eq!(
+            context_usage_view(&failed, || Ok(true)).unwrap_err(),
+            "The agent runtime is not installed."
+        );
+    }
+
+    #[test]
+    fn a_compaction_waits_for_its_run_and_reports_its_counts_or_reason() {
+        let answer = |state: &str, run_id: &str| {
+            serde_json::json!({"compaction": {
+                "run_id": run_id, "state": state, "tokens_before": 152400,
+                "estimated_tokens_after": 31900, "error": "Nothing to compact"
+            }})
+        };
+        assert_eq!(compaction_outcome(&answer("running", "run-1"), "run-1"), None);
+        assert_eq!(
+            compaction_outcome(&answer("completed", "run-1"), "run-1"),
+            Some(Ok(ThreadCompaction {
+                tokens_before: 152400,
+                estimated_tokens_after: Some(31900),
+            }))
+        );
+        assert_eq!(
+            compaction_outcome(&answer("failed", "run-1"), "run-1"),
+            Some(Err("Nothing to compact".into()))
+        );
+        assert!(compaction_outcome(&answer("completed", "run-2"), "run-1")
+            .unwrap()
+            .is_err());
+        let mut answers = vec![answer("completed", "run-1"), answer("running", "run-1")];
+        assert_eq!(
+            poll_runtime(
+                std::time::Duration::from_secs(5),
+                "late",
+                || Ok(answers.pop().unwrap()),
+                |snapshot| compaction_outcome(snapshot, "run-1"),
+            )
+            .unwrap()
+            .tokens_before,
+            152400
+        );
+        assert_eq!(
+            poll_runtime(
+                std::time::Duration::ZERO,
+                "late",
+                || Ok(answer("running", "run-1")),
+                |snapshot| compaction_outcome(snapshot, "run-1"),
+            )
+            .unwrap_err(),
+            "late"
+        );
     }
 }

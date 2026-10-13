@@ -36,6 +36,9 @@ use muniment_core::attach::{
 use muniment_core::cas::ContentHash;
 use muniment_core::chat_resume::{clear_active_run, install_active_run};
 use muniment_core::chat_view::{chat_attachments, ChatAttachment, SelectedFile};
+use muniment_core::engine::ThreadContexts;
+#[cfg(any(unix, target_os = "windows"))]
+use muniment_core::engine::{AgentEngine, CompactionSettings, PiRpcEngine, ThreadContextSnapshot};
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::journal::thread_mutation::{
@@ -97,6 +100,7 @@ pub struct RuntimeAttachBoundaries {
     chat_events: RuntimeChatEventBroadcast,
     pi_artifact: Option<PiArtifactDescriptor>,
     records: Arc<service::RecordRegistry>,
+    contexts: ThreadContexts,
 }
 
 impl RuntimeAttachBoundaries {
@@ -171,6 +175,7 @@ impl RuntimeAttachBoundaries {
             chat_events,
             pi_artifact: None,
             records,
+            contexts: ThreadContexts::new(),
         }
     }
 
@@ -192,6 +197,15 @@ impl RuntimeAttachBoundaries {
 
     fn local_mode(&self) -> bool {
         muniment_core::local_mode::is_local_mode(&self.config_directory)
+    }
+
+    /// The engine adapter for this profile's conversations and settings.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn engine(&self) -> PiRpcEngine {
+        let profile = muniment_core::chat_profile::ChatProfile::new(&self.profile_directory);
+        PiRpcEngine::new(Some(profile.pi_session_root())).with_agent_directory(
+            muniment_core::state_root::agent_directory(&self.profile_directory),
+        )
     }
 
     /// Returns the approval state shared with the attach listener. Local mode
@@ -500,6 +514,8 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         let chat_events = self.chat_events.clone();
         let pi_artifact = self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT);
         let earlier_models = earlier_thread_models(&storage, &thread_id, &launch.run_id);
+        let contexts = self.contexts.clone();
+        let context_thread = thread_id.clone();
         std::thread::spawn(move || {
             // The runtime's storage handle keeps this journal's coordination
             // live and validated, so this open skips the full validation scan
@@ -550,6 +566,7 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
             );
             memory_runtime.close_session(&launch.run_id);
             clear_active_run(&active, &launch.run_id);
+            contexts.invalidate(&context_thread);
         });
     }
 }
@@ -665,7 +682,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             self.pi_artifact,
         )
         .map_err(run_service_error)?;
-        std::thread::spawn(move || service::drive_prompt(launch));
+        let contexts = self.contexts.clone();
+        let context_thread = accepted.thread_id.clone();
+        std::thread::spawn(move || {
+            service::drive_prompt(launch);
+            contexts.invalidate(&context_thread);
+        });
         Ok(AttachPromptAccepted {
             run_id: accepted.run_id,
             thread_id: accepted.thread_id,
@@ -771,6 +793,158 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         )
         .map_err(RunStartError::InvalidRequest)
     }
+
+    fn thread_context_usage(
+        &self,
+        workspace: &str,
+        thread_id: &str,
+    ) -> Result<ThreadContextSnapshot, ProtocolError> {
+        let tokens = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?;
+        let local = self.local_mode();
+        let workspace = if local || workspace.is_empty() {
+            ChatGrant::local().workspace
+        } else {
+            workspace.to_owned()
+        };
+        let app = RuntimeChatEventSink::new(
+            &self.profile_directory,
+            self.chat_events.clone(),
+            Arc::clone(&self.memory_runtime),
+            thread_id.to_owned(),
+            workspace.clone(),
+        )
+        .with_pi_artifact(self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT));
+        let storage = Arc::clone(&self.storage);
+        let runtime = Arc::clone(&self.runtime);
+        let active = Arc::clone(&self.active);
+        let thread = thread_id.to_owned();
+        Ok(self.contexts.read(thread_id, move || {
+            muniment_core::pi_execution::thread_context_usage(
+                &app,
+                &storage,
+                &runtime,
+                &active,
+                &thread,
+                tokens.subject.as_deref(),
+                || {
+                    if local {
+                        return Ok(ChatGrant::local());
+                    }
+                    service::configure_run(&tokens.access_token, Some(&workspace))
+                        .map_err(|_| "Chat configuration is temporarily unavailable.".to_string())
+                },
+            )
+        }))
+    }
+
+    fn compact_thread(
+        &self,
+        workspace: &str,
+        thread_id: &str,
+        instructions: Option<&str>,
+    ) -> Result<String, ProtocolError> {
+        if self.contexts.compacting(thread_id) {
+            return Err(ProtocolError::invalid_request_with_reason(
+                "This thread is already compacting.",
+            ));
+        }
+        let active_thread = self
+            .active
+            .lock()
+            .map_err(|_| ProtocolError::persistence_failed())?
+            .as_ref()
+            .map(|run| run.id.clone());
+        if let Some(run_id) = active_thread {
+            let replying = self.run_thread_id(&run_id).ok().as_deref() == Some(thread_id);
+            return Err(ProtocolError::invalid_request_with_reason(if replying {
+                "This thread is replying. Compact it after the reply finishes."
+            } else {
+                "A reply is already in progress."
+            }));
+        }
+        let tokens = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?;
+        let session_root = muniment_core::chat_profile::ChatProfile::new(&self.profile_directory)
+            .pi_session_root();
+        match muniment_core::pi_execution::thread_session(
+            &self.storage,
+            thread_id,
+            tokens.subject.as_deref(),
+            &session_root,
+        ) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(ProtocolError::invalid_request_with_reason(
+                    "This thread has no conversation to compact yet.",
+                ))
+            }
+            Err(error) => return Err(ProtocolError::invalid_request_with_reason(error)),
+        }
+        let run_id = new_run_id();
+        let grant = self
+            .configure_run(
+                &run_id,
+                "",
+                &tokens,
+                (!workspace.is_empty()).then_some(workspace),
+            )
+            .map_err(|error| error.protocol_error())?;
+        self.contexts
+            .begin_compaction(thread_id, &run_id)
+            .map_err(ProtocolError::invalid_request_with_reason)?;
+        let launch = service::accept_compaction(
+            &self.profile_directory,
+            Arc::clone(&self.storage),
+            Arc::clone(&self.runtime),
+            &self.runtime_activity,
+            &self.config_directory,
+            run_id.clone(),
+            thread_id.to_owned(),
+            instructions.map(str::to_owned),
+            &self.session_thread,
+            tokens.access_token,
+            tokens.subject,
+            grant,
+            Arc::clone(&self.active),
+            RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
+            self.pi_artifact,
+        )
+        .map_err(|error| {
+            self.contexts
+                .finish_compaction(thread_id, &run_id, Err(error.clone()));
+            ProtocolError::invalid_request_with_reason(error)
+        })?;
+        let contexts = self.contexts.clone();
+        let thread = thread_id.to_owned();
+        let started = run_id.clone();
+        std::thread::spawn(move || {
+            let result = service::drive_compaction(launch);
+            contexts.finish_compaction(&thread, &started, result);
+        });
+        Ok(run_id)
+    }
+
+    fn context_settings(&self) -> Result<CompactionSettings, ProtocolError> {
+        self.engine()
+            .compaction_settings()
+            .map_err(ProtocolError::persistence_failed_with_reason)
+    }
+
+    fn save_context_settings(
+        &self,
+        settings: CompactionSettings,
+    ) -> Result<CompactionSettings, ProtocolError> {
+        settings
+            .validate()
+            .map_err(ProtocolError::invalid_request_with_reason)?;
+        self.engine()
+            .save_compaction_settings(settings)
+            .map_err(ProtocolError::persistence_failed_with_reason)
+    }
+
     fn session_status(
         &self,
     ) -> Result<muniment_desktop_integration::auth::AuthStatus, ProtocolError> {
