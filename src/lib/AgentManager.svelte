@@ -9,6 +9,8 @@
   import CatalogActions from './CatalogActions.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import StarterRow from './StarterRow.svelte'
+  import { creationStarters } from './creation-prompts.js'
   let {tauri, projects=[], onclose, onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
   let archived = $state(false)
   let listing=$state({agents:[],state:{runs:{},threads:{}}}), error=$state(''), loading=$state(true)
@@ -26,6 +28,17 @@
     </PageHead>
     {#if error}<p role="alert">{error}</p>{/if}
     {#if loading}<p role="status">Loading agents…</p>{/if}
+    {#if !archived && !loading}
+      {@const some = (agents ?? listing.agents).some(agent=>!isArchived('agent',agent)) || pending.some(plan=>!isArchived('creation',plan))}
+      <StarterRow heading="Give an agent a job" kind="agent" items={creationStarters.agent} compact={some} oncreate={(item)=>oncreate?.({goal:item.goal,output:item.output})} />
+      {#if !some}
+        <ul class="benefits">
+          <li><LucideIcon name="brain" />Keeps its own instructions and memory</li>
+          <li><LucideIcon name="clock" />Runs on a schedule you set</li>
+          <li><LucideIcon name="messages-square" />Works in a chat of its own</li>
+        </ul>
+      {/if}
+    {/if}
     <CardGrid>
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (agent.id)}
         <CatalogCard onclick={()=>onselect(agent)}>
@@ -40,10 +53,12 @@
         </CatalogCard>
       {/each}
     </CardGrid>
-    {#if !loading && !error && !(agents ?? listing.agents).some(agent=>isArchived('agent',agent)===archived) && !pending.some(plan=>isArchived('creation',plan)===archived)}<p>{archived ? 'No archived agents.' : 'No agents yet. New agent starts one in a chat.'}</p>{/if}
+    {#if !loading && !error && !(agents ?? listing.agents).some(agent=>isArchived('agent',agent)===archived) && !pending.some(plan=>isArchived('creation',plan)===archived)}{#if archived}<p>No archived agents.</p>{/if}{/if}
   </PanelPage>
 </section>
 <style>
   .panel { grid-area: thread; display: flex; flex-direction: column; overflow: hidden; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
+  .benefits { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: var(--text-13); }
+  .benefits li { display: inline-flex; align-items: center; gap: 8px; }
 </style>

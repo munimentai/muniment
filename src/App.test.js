@@ -7889,6 +7889,28 @@ describe('account display names', () => {
 
 
 describe('dedicated creation chats', () => {
+  it.each([['Artifacts','Tracker','Build a tracker for a list I keep'],['Agents','Weekly report','Compile a weekly recap of my work']])('starts %s from a starter tile with its goal filled in', async (section, tile, goal) => {
+    const original=invoke.getMockImplementation()
+    invoke.mockImplementation((command,payload)=>{
+      if(command==='creation_list') return Promise.resolve([])
+      if(command==='artifact_list') return Promise.resolve([])
+      if(command==='agent_list') return Promise.resolve({agents:[],state:{threads:{},runs:{}}})
+      if(command==='chat_new_thread') return Promise.resolve('01900000-0000-7000-8000-000000000099')
+      return original(command,payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name: section, exact: true }))
+    const panel = await screen.findByRole('region', { name: section })
+    // An empty catalog shows each starter with its sentence and the benefit lines.
+    expect((await within(panel).findByRole('region', { name: section === 'Artifacts' ? 'Make something new' : 'Give an agent a job' })).querySelectorAll('button.starter')).toHaveLength(5)
+    expect(panel.querySelector('.benefits')).not.toBeNull()
+    await fireEvent.click(within(panel).getByRole('button', { name: new RegExp(`^${tile}`) }))
+    await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain(`Goal: ${goal}.`))
+    expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
+    expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
+  })
+
   it.each(['Artifacts','Agents'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
     const original=invoke.getMockImplementation()
     const id='01900000-0000-7000-8000-000000000077'
