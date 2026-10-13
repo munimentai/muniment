@@ -351,9 +351,8 @@
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .error { overflow-wrap: anywhere; }
   /* One card per account: its allowance as bars of what is left, then what it has served. */
-  .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
-  @container (max-width: 520px) { .cards { grid-template-columns: 1fr; } }
-  .card { display: grid; min-width: 0; gap: 6px; align-content: start; padding: 10px; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); overflow-wrap: anywhere; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .card { display: grid; min-width: 0; gap: 6px; align-content: start; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); overflow-wrap: anywhere; }
   .card .support { font-size: var(--text-12); line-height: 1.4; }
   .card p.record { margin: 0; }
   .account-details { margin-top: 2px; border-top: 1px solid var(--border); padding-top: 6px; }
@@ -366,7 +365,7 @@
   .name-edit { display: flex; flex: 1; flex-wrap: wrap; gap: 4px; min-width: 0; }
   /* A key is one line: its name, then edit and disconnect icons at the right. */
   .keys { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-  .key-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .key-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .key-card.cooling { border-color: var(--muted); }
   .key-text { display: grid; flex: 1; gap: 2px; min-width: 0; }
   .key-card .card-label { gap: 8px; }

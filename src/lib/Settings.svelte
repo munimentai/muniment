@@ -80,7 +80,7 @@
 <div data-panel="settings" class="settings-layout" role="dialog" aria-label="Settings" bind:this={panel}>
   <!-- The sidebar already names the page, so its heading is for assistive tech only. -->
   <h3 id="settings-section-title" class="visually-hidden">{sectionLabel}</h3>
-  <PanelPage measure>
+  <PanelPage>
     {#if section in EXTEND_TABS}
       <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, sidebarTab: EXTEND_TABS[section]}} />
     {:else if section in MODEL_TABS}

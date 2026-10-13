@@ -224,7 +224,8 @@
   .extend { container-type: inline-size; }
   button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
-  .catalog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  /* The catalog fills the page width and wraps to as many columns as fit. */
+  .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; }
   .catalog-card.connected { background: var(--signal-soft); border-color: var(--signal); }
   .catalog-card.connected strong { color: var(--signal); }
   .catalog-card { min-width: 0; gap: 5px; align-content: start; }
@@ -233,6 +234,4 @@
   .publisher { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-12); }
   .category { font-size: var(--text-provenance); min-height: 2.8em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .catalog-card .actions { justify-content: space-between; gap: 8px; margin-top: 5px; }
-  @container (max-width: 680px) { .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @container (max-width: 390px) { .catalog-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

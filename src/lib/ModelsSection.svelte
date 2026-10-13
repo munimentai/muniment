@@ -597,7 +597,7 @@
   .provider-group { display: grid; gap: 8px; padding-bottom: 12px; }
   .provider-group + .provider-group { padding-top: 4px; border-top: 1px solid var(--border); }
   /* One line: the connection's kind or address, then edit and disconnect icons at the far right. */
-  .line-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; background: var(--faint); border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .line-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .line-label { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-13); }
   .line-label.mono { font: var(--text-12) var(--font-mono); }
   /* A row's actions sit at its far right as icons. Disconnect reads as critical. */
