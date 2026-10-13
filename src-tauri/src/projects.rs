@@ -63,15 +63,55 @@ pub(crate) fn prepare_thread(
     let thread = client
         .create_thread()
         .map_err(crate::auth::desktop_client_error)?;
-    let workspace = match project_id {
-        Some(project) => projects::assign(&profile, &thread, project)
-            .and_then(|_| projects::workspace(&profile, &thread)),
-        None => projects::workspace(&profile, &thread),
-    };
-    if let Err(error) = workspace {
+    if let Err(error) = ready_new_thread_folder(&profile, &thread, project_id) {
         let _ = client.delete_thread(&thread);
         return Err(error);
     }
     state.session_thread.select(thread.clone(), subject);
     Ok(thread)
+}
+
+/// Readies a new thread's folder. A project thread checks its project folder
+/// now. A plain thread gets its session folder at its first run, so a thread
+/// left without a message leaves no empty session folder.
+fn ready_new_thread_folder(
+    profile: &std::path::Path,
+    thread: &str,
+    project_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(project) = project_id else {
+        return Ok(());
+    };
+    projects::assign(profile, thread, project)?;
+    projects::workspace(profile, thread).map(drop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ready_new_thread_folder;
+
+    #[test]
+    fn a_new_plain_thread_creates_no_session_folder() {
+        let root =
+            std::env::temp_dir().join(format!("muniment-new-thread-{}", uuid::Uuid::new_v4()));
+        let (profile, home) = (root.join("profile"), root.join("home"));
+        std::fs::create_dir_all(&profile).unwrap();
+        muniment_core::home::confirm_home(&profile, &home).unwrap();
+        let thread = "01900000-0000-7000-8000-000000000001";
+
+        ready_new_thread_folder(&profile, thread, None).unwrap();
+        let folders = std::fs::read_dir(home.join("sessions"))
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path().is_dir())
+            .count();
+        assert_eq!(folders, 0);
+
+        let project = muniment_core::projects::create(&profile, "Research").unwrap();
+        ready_new_thread_folder(&profile, thread, Some(&project)).unwrap();
+        assert_eq!(
+            muniment_core::projects::thread_folder(&profile, thread).unwrap(),
+            Some(muniment_core::projects::folder(&profile, &project).unwrap())
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
