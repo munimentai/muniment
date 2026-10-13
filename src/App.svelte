@@ -2368,7 +2368,7 @@
             {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={!!active || threadSwitching} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span></button><CatalogActions name={item.name || item.goal} disabled={!!active || threadSwitching} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
-            <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
+            <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
             <section class="project-section" aria-label="Projects">
               <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={!!active || threadSwitching || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
               {#if projectForm}

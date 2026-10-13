@@ -88,7 +88,7 @@
 
 <div class="record-table">
   <form class="record-search" role="search" onsubmit={submitSearch}>
-    <input type="search" class="record-search-input" aria-label="Search {kind?.name ?? ''}" placeholder="Search" bind:value={searchDraft}>
+    <input type="search" autocomplete="off" class="record-search-input" aria-label="Search {kind?.name ?? ''}" placeholder="Search" bind:value={searchDraft}>
     <span class="record-count">{page ? `${page.total} ${page.total === 1 ? 'record' : 'records'}` : ''}</span>
   </form>
   {#if page && page.rows.length === 0 && !loading}

@@ -136,7 +136,7 @@
     <div class="type-font" role="group" aria-label="{label} font">
       <details class="font-picker">
       <DisclosureSummary><span>{label}</span><span class="font-current">{type[register] || SHIPPED_FONTS[register]}</span></DisclosureSummary>
-      <input type="search" class="font-search" aria-label="Search {label.toLowerCase()} fonts" placeholder="Search installed fonts" bind:value={query[register]}>
+      <input type="search" autocomplete="off" class="font-search" aria-label="Search {label.toLowerCase()} fonts" placeholder="Search installed fonts" bind:value={query[register]}>
       <div class="font-list">
         <button type="button" class="font-pick" aria-pressed={type[register] === null} onclick={() => chooseFont(register, null)}><span class="font-name">{SHIPPED_FONTS[register]}</span><span class="font-note">Default</span></button>
         {#each filterFonts(fonts, query[register]) as name (name)}

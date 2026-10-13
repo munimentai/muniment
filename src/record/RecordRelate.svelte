@@ -142,7 +142,7 @@
         </label>
       {/if}
       <div class="record-relate-search" role="search">
-        <input type="search" class="record-relate-input" aria-label="Search {targetKind}" placeholder="Search {targetKind.replaceAll('_', ' ')}" bind:value={search} onkeydown={(event) => { if (event.key === 'Enter') submitSearch(event) }}>
+        <input type="search" autocomplete="off" class="record-relate-input" aria-label="Search {targetKind}" placeholder="Search {targetKind.replaceAll('_', ' ')}" bind:value={search} onkeydown={(event) => { if (event.key === 'Enter') submitSearch(event) }}>
         <button type="button" class="record-discard" onclick={findCandidates}>Find</button>
       </div>
     </div>

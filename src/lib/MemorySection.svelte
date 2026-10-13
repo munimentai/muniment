@@ -148,7 +148,7 @@
     {/if}
     <Group heading="Saved memories" count={facts.length}>
       {#snippet actions()}
-        {#if facts.length}<input class="search" type="search" aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
+        {#if facts.length}<input class="search" type="search" autocomplete="off" aria-label="Search memories" placeholder="Search memories" bind:value={filter} />{/if}
         <button class="disclosure" aria-expanded={showDeleted} onclick={() => { showDeleted = !showDeleted; if (showDeleted) void refreshDeleted() }}>Deleted memories</button>
       {/snippet}
       {#each shown as fact (fact.id)}
