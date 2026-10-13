@@ -637,7 +637,7 @@ function fixtureRendered() {
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
     return homePath?.dataset.homePath === onboardingHomePath
       && document.querySelectorAll('.connect button.option').length >= 9
-      && document.querySelector('.connect .badge')?.textContent === 'Needs key'
+      && document.querySelector('.connect .action[data-tone="ochre"]')?.textContent.trim() === 'Add key'
   }
   if (scanFixture) {
     // Settings → Memory lists the assistant memory found on this computer.
