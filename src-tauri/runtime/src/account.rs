@@ -1,22 +1,107 @@
-//! Native session service operations.
+//! The desktop's cloud account: native sign-in, the keychain session,
+//! devices and phone pairing.
 
 #[cfg(test)]
 mod pairing_tests;
 
 pub use muniment_core::attach::EntitlementSnapshotResult;
-use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry};
 use muniment_desktop_integration::auth::{
     api_base_url, create_pairing_challenge, ensure_native_session as ensure_core_native_session,
     list_native_devices, native_status, read_pairing, revoke_pairing, run_native_sign_in_while,
-    sign_out_native_session, AuthStatus, BrowserOpener, EntitlementSnapshotTracker,
-    FreshNativeSession, FreshNativeSessionError, KeyringNativeCredentialStore, NativeDeviceList,
-    NativeDeviceListError, NativeSignInError, NativeTokenError, PairId, PairingChallengeView,
-    PairingError, PairingRevokeView, PairingStatusView, UreqAuthorizationTransport,
-    UreqNativeDeviceListTransport, UreqPairingTransport, UreqRegistrationTransport,
-    UreqRevocationTransport, UreqTokenTransport, PAIR_FILE_NAME,
+    sign_out_native_session, AuthStatus, BrowserOpenError, BrowserOpener,
+    EntitlementSnapshotTracker, FreshNativeSession, FreshNativeSessionError,
+    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeSignInError,
+    NativeTokenError, PairId, PairingChallengeView, PairingError, PairingRevokeView,
+    PairingStatusView, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
+    UreqPairingTransport, UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
+    PAIR_FILE_NAME,
 };
+use muniment_runtime_core::host::{AccountService, AccountSession, LinkOpener};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// The account the desktop runtime serves: the keychain session and the
+/// cloud's native endpoints. It tracks the entitlement snapshot version
+/// across reads.
+#[derive(Default)]
+pub struct DesktopAccount {
+    tracker: EntitlementSnapshotTracker,
+}
+
+impl AccountService for DesktopAccount {
+    fn session(
+        &self,
+        runtime_activity: &RuntimeActivityRegistry,
+    ) -> Result<AccountSession, String> {
+        let session = ensure_native_session(runtime_activity).map_err(|error| error.to_string())?;
+        let entitlement_snapshot = session.entitlement_snapshot.clone();
+        Ok(AccountSession {
+            tokens: session
+                .into_credentials()
+                .map(|credentials| credentials.tokens),
+            entitlement_snapshot,
+        })
+    }
+
+    fn session_status(&self) -> Result<AuthStatus, ProtocolError> {
+        session_status().map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn entitlement_snapshot(
+        &self,
+        runtime_activity: &RuntimeActivityRegistry,
+    ) -> Result<EntitlementSnapshotResult, ProtocolError> {
+        entitlement_snapshot(&self.tracker, runtime_activity)
+            .map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn sign_in(
+        &self,
+        active: &dyn Fn() -> bool,
+        open_link: &LinkOpener,
+        runtime_activity: &RuntimeActivityRegistry,
+    ) -> Result<AuthStatus, ProtocolError> {
+        let browser = |url: &str| open_link(url).map_err(|_| BrowserOpenError);
+        sign_in(active, &browser, &self.tracker, runtime_activity).map_err(sign_in_protocol_error)
+    }
+
+    fn sign_out(
+        &self,
+        runtime_activity: &RuntimeActivityRegistry,
+    ) -> Result<AuthStatus, ProtocolError> {
+        sign_out(&self.tracker, runtime_activity).map_err(|_| ProtocolError::persistence_failed())
+    }
+
+    fn list_devices(&self, access_token: &str) -> Result<NativeDeviceList, ProtocolError> {
+        list_devices(access_token).map_err(device_list_protocol_error)
+    }
+
+    fn pairing_status(
+        &self,
+        access_token: &str,
+        profile_directory: &Path,
+    ) -> Result<PairingStatusView, ProtocolError> {
+        pairing_status(access_token, profile_directory).map_err(pairing_protocol_error)
+    }
+
+    fn create_pairing_challenge(
+        &self,
+        access_token: &str,
+    ) -> Result<PairingChallengeView, ProtocolError> {
+        request_pairing_challenge(access_token).map_err(pairing_protocol_error)
+    }
+
+    fn revoke_pairing(
+        &self,
+        access_token: &str,
+        pair_id: PairId,
+        profile_directory: &Path,
+    ) -> Result<PairingRevokeView, ProtocolError> {
+        revoke_pairing_pair(access_token, pair_id, profile_directory)
+            .map_err(pairing_protocol_error)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntitlementSnapshotError {
@@ -199,4 +284,60 @@ pub fn revoke_pairing_pair(
         pair_id,
         &pair_store(profile_directory),
     )
+}
+
+fn sign_in_protocol_error(error: NativeSignInError) -> ProtocolError {
+    match error {
+        NativeSignInError::Authorization(_) => {
+            ProtocolError::authorization_failed(error.to_string())
+        }
+        _ => ProtocolError::persistence_failed_with_reason(error.to_string()),
+    }
+}
+
+fn device_list_protocol_error(error: NativeDeviceListError) -> ProtocolError {
+    match error {
+        NativeDeviceListError::CredentialsMissing
+        | NativeDeviceListError::HttpStatus(401 | 403) => ProtocolError::unauthorized(),
+        NativeDeviceListError::Config(_)
+        | NativeDeviceListError::Transport(_)
+        | NativeDeviceListError::HttpStatus(_)
+        | NativeDeviceListError::MalformedResponse(_) => ProtocolError::persistence_failed(),
+    }
+}
+
+fn pairing_protocol_error(error: PairingError) -> ProtocolError {
+    match error {
+        PairingError::CredentialsMissing | PairingError::HttpStatus(401 | 403) => {
+            ProtocolError::unauthorized()
+        }
+        PairingError::HttpStatus(409 | 429) => {
+            ProtocolError::persistence_failed_with_reason(error.to_string())
+        }
+        PairingError::Config(_)
+        | PairingError::Transport(_)
+        | PairingError::HttpStatus(_)
+        | PairingError::MalformedResponse(_) => ProtocolError::persistence_failed(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sign_in_authorization_failure_keeps_its_code_in_the_rpc() {
+        let error = sign_in_protocol_error(NativeSignInError::Authorization(
+            "HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD"
+                .into(),
+        ));
+        assert_eq!(
+            error.code(),
+            muniment_core::attach::ErrorCode::AuthorizationFailed
+        );
+        assert_eq!(error.details(), Some(&muniment_core::attach::ErrorDetails::RequestReason {
+            reason: "native authorization failed: HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD".into(),
+        }));
+        assert!(!error.retryable());
+    }
 }

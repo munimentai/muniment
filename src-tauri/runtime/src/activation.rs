@@ -1,14 +1,13 @@
 //! Runtime attach service activation.
 
-use crate::retention_schedule::{start_retention_schedule, RetentionScheduleCommand};
 use crate::upgrade_watch::UpgradeWatch;
-use crate::{
-    migration::run_migration_takeover_with_activation, run_bound_attach_listener,
-    AttachListenerError, MigrationTakeoverError, RuntimeAttachState,
-};
 use muniment_core::attach::evaluate_quiesce;
 use muniment_core::attach::linux::{AttachFilesystem, AttachTransport, InstanceLockError};
 use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_runtime_core::{
+    run_bound_attach_listener, run_migration_takeover_with_activation, start_retention_schedule,
+    AttachListenerError, MigrationTakeoverError, RetentionScheduleCommand, RuntimeAttachState,
+};
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -258,7 +257,7 @@ fn run_runtime_activation_inner(
 ) -> Result<RuntimeActivationExit, RuntimeActivationError> {
     let runtime_directory = runtime_directory.as_ref();
     let state = Arc::new(
-        RuntimeAttachState::open(profile_directory, config_directory)
+        RuntimeAttachState::open(crate::desktop_host(), profile_directory, config_directory)
             .map_err(|_| RuntimeActivationError::State)?,
     );
     let filesystem = AttachFilesystem::from_runtime_directory(runtime_directory.as_os_str())

@@ -7,7 +7,8 @@ use muniment_core::run_start::RunAttachBoundaries;
 use muniment_desktop_integration::auth::{
     EntitlementSnapshotTracker, KeyringNativeCredentialStore, NativeCredentialStore,
 };
-use muniment_runtime::{sign_out, RuntimeAttachState};
+use muniment_runtime::{desktop_host, sign_out};
+use muniment_runtime_core::RuntimeAttachState;
 
 mod common;
 use common::{credentials, spawn_server, spawn_server_with, TemporaryProfile};
@@ -64,8 +65,12 @@ fn boundary_sign_out_clears_the_workspace_when_revocation_is_rejected() {
     let _guard = TEST_LOCK.lock().unwrap();
     let store = save_session();
     let temporary_profile = TemporaryProfile::new("sign-out", false);
-    let state =
-        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
+    let state = RuntimeAttachState::open(
+        desktop_host(),
+        &temporary_profile.profile,
+        &temporary_profile.config,
+    )
+    .unwrap();
     let boundaries = state.boundaries();
     boundaries
         .signed_workspace_approval()

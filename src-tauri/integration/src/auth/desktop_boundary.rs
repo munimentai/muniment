@@ -149,7 +149,7 @@ impl<'ast> Visit<'ast> for DesktopBoundary {
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         if let syn::UseTree::Path(path) = &item.tree {
             assert!(
-                path.ident != "muniment_runtime",
+                path.ident != "muniment_runtime" && path.ident != "muniment_runtime_core",
                 "The desktop must name runtime lifecycle helpers without an import alias."
             );
         }
@@ -172,7 +172,7 @@ impl<'ast> Visit<'ast> for DesktopBoundary {
             .collect();
         if segments
             .first()
-            .is_some_and(|name| name == "muniment_runtime")
+            .is_some_and(|name| name == "muniment_runtime" || name == "muniment_runtime_core")
         {
             assert!(
                 matches!(
@@ -229,9 +229,11 @@ fn boundary_checks_production_and_inactive_platform_code() {
     for source in [
         "#[cfg(target_os = \"macos\")] fn example() { keyring::Entry::new(\"service\", \"user\"); }",
         "use muniment_desktop_integration::auth::KeyringNativeCredentialStore as Store;",
-        "fn example() { muniment_runtime::service::session::session_status(); }",
+        "fn example() { muniment_runtime::session_status(); }",
+        "fn example() { muniment_runtime_core::service::thread_page(); }",
         "impl PiLaunchBoundaries for Shell {}",
-        "use muniment_runtime::service::session::session_status as status;",
+        "use muniment_runtime::session_status as status;",
+        "use muniment_runtime_core::profile_directory;",
         "include!(\"credential_store.rs\");",
     ] {
         let file = syn::parse_file(source).unwrap();

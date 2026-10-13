@@ -6,11 +6,15 @@ use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use muniment_runtime::{
-    run_windows_attach_activation, run_windows_attach_activation_with_retention_schedule,
+    desktop_host, run_windows_attach_activation,
+    run_windows_attach_activation_with_retention_schedule,
     run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
-    RuntimeAttachState, WindowsActivationExit, WindowsAttachAcceptBoundary,
-    WindowsAttachAcceptOutcome, WindowsAttachBindFailure, WindowsAttachFactory,
-    WindowsAttachStopSignal, WindowsDiagnosticEvent, WindowsDiagnosticSink,
+    WindowsActivationExit, WindowsAttachBindFailure, WindowsAttachFactory, WindowsDiagnosticEvent,
+    WindowsDiagnosticSink,
+};
+use muniment_runtime_core::{
+    RuntimeAttachState, WindowsAttachAcceptBoundary, WindowsAttachAcceptOutcome,
+    WindowsAttachStopSignal,
 };
 
 struct FakeFactory {
@@ -318,7 +322,7 @@ fn repeated_accept_failures_exit_failed_and_record_the_failure() {
     );
     assert_eq!(
         observed_acceptor.calls.get(),
-        muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
+        muniment_runtime_core::MAX_CONSECUTIVE_FAILED_ACCEPTS
     );
     assert_eq!(
         *diagnostics.events.borrow(),
@@ -345,7 +349,7 @@ fn a_failed_accept_reaches_the_record_and_stderr() {
             stderr
                 .matches("attach accept failed: CreateInstance win32=5 (0x00000005)")
                 .count(),
-            muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
+            muniment_runtime_core::MAX_CONSECUTIVE_FAILED_ACCEPTS
         );
         return;
     }
@@ -372,7 +376,7 @@ fn a_failed_accept_reaches_the_record_and_stderr() {
     );
     assert_eq!(
         observed_acceptor.calls.get(),
-        muniment_runtime::MAX_CONSECUTIVE_FAILED_ACCEPTS
+        muniment_runtime_core::MAX_CONSECUTIVE_FAILED_ACCEPTS
     );
     let log_directory =
         muniment_runtime::windows_log_directory_from_local_app_data(&directory).unwrap();
@@ -387,7 +391,7 @@ fn a_failed_accept_reaches_the_record_and_stderr() {
 fn a_bound_acceptor_runs_retention_until_the_activation_ends() {
     let directory = temporary_state_directory("retention");
     std::fs::create_dir_all(&directory).unwrap();
-    let state = Arc::new(RuntimeAttachState::open(&directory, &directory).unwrap());
+    let state = Arc::new(RuntimeAttachState::open(desktop_host(), &directory, &directory).unwrap());
     let mut acceptor = fake_acceptor(WindowsAttachAcceptOutcome::Failed, false);
     acceptor.retention_state = Some(state);
     let factory = FakeFactory {

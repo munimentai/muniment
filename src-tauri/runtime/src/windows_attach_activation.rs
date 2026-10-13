@@ -14,13 +14,16 @@ use std::sync::mpsc::TryRecvError;
 #[cfg(unix)]
 use std::sync::Arc;
 
-use crate::retention_schedule::{start_retention_schedule, RetentionScheduleCommand};
+#[cfg(target_os = "windows")]
+use muniment_runtime_core::RuntimeHost;
+use muniment_runtime_core::{
+    run_windows_attach_accept_loop, start_retention_schedule, RetentionScheduleCommand,
+    WindowsAttachAcceptBoundary, WindowsAttachAcceptLoopExit, WindowsAttachStopSignal,
+};
+
 #[cfg(unix)]
 use crate::upgrade_watch::UpgradeWatch;
-use crate::{
-    run_windows_attach_accept_loop, WindowsActivationExit, WindowsAttachAcceptBoundary,
-    WindowsAttachAcceptLoopExit, WindowsAttachStopSignal, WindowsDiagnosticEvent,
-};
+use crate::{WindowsActivationExit, WindowsDiagnosticEvent};
 
 const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 #[cfg(unix)]
@@ -198,15 +201,21 @@ pub fn run_windows_attach_activation_with_retention_schedule(
 /// Production factory for the Windows attach acceptor.
 #[cfg(target_os = "windows")]
 pub struct SystemWindowsAttachFactory {
+    host: RuntimeHost,
     state_directory: PathBuf,
     bounded_wait: Duration,
 }
 
 #[cfg(target_os = "windows")]
 impl SystemWindowsAttachFactory {
-    /// Creates a factory for one state directory and bounded lock wait.
-    pub fn new(state_directory: impl AsRef<Path>, bounded_wait: Duration) -> Self {
+    /// Creates a factory for one host, state directory and bounded lock wait.
+    pub fn new(
+        host: RuntimeHost,
+        state_directory: impl AsRef<Path>,
+        bounded_wait: Duration,
+    ) -> Self {
         Self {
+            host,
             state_directory: state_directory.as_ref().to_owned(),
             bounded_wait,
         }
@@ -215,21 +224,22 @@ impl SystemWindowsAttachFactory {
 
 #[cfg(target_os = "windows")]
 impl WindowsAttachFactory for SystemWindowsAttachFactory {
-    type Acceptor = crate::WindowsAttachAcceptor;
+    type Acceptor = muniment_runtime_core::WindowsAttachAcceptor;
 
     fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
         use muniment_core::attach::{WindowsAttachBindError, WindowsAttachInstanceLockError};
 
-        crate::WindowsAttachAcceptor::bind(&self.state_directory, self.bounded_wait).map_err(
-            |error| match error {
-                WindowsAttachBindError::InstanceLock(WindowsAttachInstanceLockError::Contended) => {
-                    WindowsAttachBindFailure::Contended
-                }
-                WindowsAttachBindError::InstanceLock(
-                    WindowsAttachInstanceLockError::Unavailable,
-                )
-                | WindowsAttachBindError::Pipe(_) => WindowsAttachBindFailure::Unavailable,
-            },
+        muniment_runtime_core::WindowsAttachAcceptor::bind(
+            self.host.clone(),
+            &self.state_directory,
+            self.bounded_wait,
         )
+        .map_err(|error| match error {
+            WindowsAttachBindError::InstanceLock(WindowsAttachInstanceLockError::Contended) => {
+                WindowsAttachBindFailure::Contended
+            }
+            WindowsAttachBindError::InstanceLock(WindowsAttachInstanceLockError::Unavailable)
+            | WindowsAttachBindError::Pipe(_) => WindowsAttachBindFailure::Unavailable,
+        })
     }
 }

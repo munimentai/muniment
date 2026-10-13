@@ -25,8 +25,9 @@ use muniment_core::run_start::{ActiveRun, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
 use muniment_desktop_integration::auth::AuthStatus;
 use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
-use muniment_runtime::{open_profile_storage, RuntimeAttachState};
-use muniment_runtime::{run_attach_listener, AttachListenerInputs};
+use muniment_runtime::desktop_host;
+use muniment_runtime_core::{open_profile_storage, RuntimeAttachState};
+use muniment_runtime_core::{run_attach_listener, AttachListenerInputs};
 
 mod common;
 use common::{credentials, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
@@ -89,6 +90,7 @@ fn shipped_desktop_client_completes_the_session() {
             run_attach_listener(
                 &profile.root,
                 AttachListenerInputs {
+                    runtime_version: env!("CARGO_PKG_VERSION"),
                     companion_registry: &registry,
                     approval,
                     approvals: ApprovalCoordinator::default(),
@@ -157,6 +159,7 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
             run_attach_listener(
                 &profile.root,
                 AttachListenerInputs {
+                    runtime_version: env!("CARGO_PKG_VERSION"),
                     companion_registry: &registry,
                     approval,
                     approvals: ApprovalCoordinator::default(),
@@ -200,7 +203,9 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     let profile = TemporaryProfile::new("attach-desktop-submit-no-workspace", true);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
     let descriptor = stage_pi_stub(&profile.root);
-    let state = Arc::new(RuntimeAttachState::open(&profile.profile, &profile.config).unwrap());
+    let state = Arc::new(
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap(),
+    );
     let approval = state.signed_workspace_approval();
     assert!(approval.approval().is_none());
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
@@ -229,7 +234,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
                 inputs,
                 None,
                 move || {
-                    muniment_runtime::compose_attach_service(
+                    muniment_runtime_core::compose_attach_service(
                         service_state.boundaries().with_pi_artifact(descriptor),
                         service_state.companion_registry(),
                         &profile_directory,
@@ -342,7 +347,9 @@ fn desktop_client_selects_only_an_owned_thread() {
         .unwrap();
     drop(storage);
 
-    let state = Arc::new(RuntimeAttachState::open(&profile.profile, &profile.config).unwrap());
+    let state = Arc::new(
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap(),
+    );
     state
         .signed_workspace_approval()
         .record("workspace-a".into());
@@ -481,7 +488,9 @@ fn desktop_client_recheck_applies_the_recorded_retention() {
             .unwrap();
     }
 
-    let state = Arc::new(RuntimeAttachState::open(&profile.profile, &profile.config).unwrap());
+    let state = Arc::new(
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap(),
+    );
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
     let endpoint = filesystem.endpoint_path().to_owned();
     drop(filesystem);
@@ -577,6 +586,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             run_attach_listener(
                 &profile.root,
                 AttachListenerInputs {
+                    runtime_version: env!("CARGO_PKG_VERSION"),
                     companion_registry: &registry,
                     approval,
                     approvals,

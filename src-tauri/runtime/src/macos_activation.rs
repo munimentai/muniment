@@ -1,8 +1,17 @@
 use std::io;
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
+
+#[cfg(any(target_os = "macos", test))]
+use muniment_runtime_core::MacosAttachBindFailure;
+#[cfg(target_os = "macos")]
+use muniment_runtime_core::{MacosAttachAcceptor, RuntimeHost};
 
 use crate::start_record::{self, Start, StartDecision};
 use crate::APPLICATION_IDENTIFIER;
+#[cfg(target_os = "macos")]
+use crate::{WindowsAttachBindFailure, WindowsAttachFactory};
 
 const RECORD_NAME: &str = "macos-starts";
 pub const MACOS_RUNTIME_LOG_MAX_BYTES: u64 =
@@ -199,6 +208,75 @@ mod macos_os_log {
     }
 }
 
+/// Names the diagnostic event for one attach bind failure.
+#[cfg(any(target_os = "macos", test))]
+fn bind_failure_event(failure: MacosAttachBindFailure) -> MacosDiagnosticEvent {
+    match failure {
+        MacosAttachBindFailure::Contended => MacosDiagnosticEvent::InstanceLockWait,
+        MacosAttachBindFailure::Unavailable => MacosDiagnosticEvent::SocketBindFailed,
+        MacosAttachBindFailure::SocketPathTooLong => MacosDiagnosticEvent::SocketPathTooLong,
+        MacosAttachBindFailure::DesktopExecutableCheckFailed => {
+            MacosDiagnosticEvent::DesktopExecutableCheckFailed
+        }
+        MacosAttachBindFailure::StateOpenFailed => MacosDiagnosticEvent::StateOpenFailed,
+    }
+}
+
+/// Production factory for the macOS attach acceptor.
+#[cfg(target_os = "macos")]
+pub struct SystemMacosAttachFactory {
+    host: RuntimeHost,
+    profile_directory: PathBuf,
+    config_directory: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl SystemMacosAttachFactory {
+    /// Creates a factory for one host, profile and config directory.
+    pub fn new(
+        host: RuntimeHost,
+        profile_directory: impl AsRef<Path>,
+        config_directory: impl AsRef<Path>,
+    ) -> Self {
+        Self {
+            host,
+            profile_directory: profile_directory.as_ref().to_owned(),
+            config_directory: config_directory.as_ref().to_owned(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl WindowsAttachFactory for SystemMacosAttachFactory {
+    type Acceptor = MacosAttachAcceptor;
+
+    fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
+        MacosAttachAcceptor::bind(
+            self.host.clone(),
+            &self.profile_directory,
+            &self.config_directory,
+        )
+        .map_err(|error| {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: attach bind failed reason={error:?}"
+            );
+            let event = bind_failure_event(error);
+            if let Ok(directory) = crate::effective_user_macos_log_directory() {
+                let _ = write_macos_diagnostic(directory, event);
+            } else {
+                emit_macos_unified_log(event);
+            }
+            match error {
+                MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
+                MacosAttachBindFailure::Unavailable
+                | MacosAttachBindFailure::SocketPathTooLong
+                | MacosAttachBindFailure::DesktopExecutableCheckFailed
+                | MacosAttachBindFailure::StateOpenFailed => WindowsAttachBindFailure::Unavailable,
+            }
+        })
+    }
+}
+
 pub type MacosStartDecision = StartDecision;
 pub type MacosStart = Start;
 
@@ -248,6 +326,34 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn names_each_activation_failure_step() {
+        for (failure, event) in [
+            (
+                MacosAttachBindFailure::DesktopExecutableCheckFailed,
+                MacosDiagnosticEvent::DesktopExecutableCheckFailed,
+            ),
+            (
+                MacosAttachBindFailure::Unavailable,
+                MacosDiagnosticEvent::SocketBindFailed,
+            ),
+            (
+                MacosAttachBindFailure::SocketPathTooLong,
+                MacosDiagnosticEvent::SocketPathTooLong,
+            ),
+            (
+                MacosAttachBindFailure::StateOpenFailed,
+                MacosDiagnosticEvent::StateOpenFailed,
+            ),
+            (
+                MacosAttachBindFailure::Contended,
+                MacosDiagnosticEvent::InstanceLockWait,
+            ),
+        ] {
+            assert_eq!(bind_failure_event(failure), event);
+        }
     }
 
     #[test]

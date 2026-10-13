@@ -25,11 +25,10 @@ use muniment_core::run_preparation::{
 };
 use muniment_core::run_start::{ActiveRun, RunAttachBoundaries, RunStartBoundaries};
 use muniment_core::session_thread::SessionThread;
-use muniment_desktop_integration::auth::{
-    BrowserOpenError, EntitlementSnapshotTracker, KeyringNativeCredentialStore,
-    NativeCredentialStore,
-};
-use muniment_runtime::{
+use muniment_desktop_integration::auth::{KeyringNativeCredentialStore, NativeCredentialStore};
+use muniment_runtime::desktop_host;
+use muniment_runtime_core::host::LinkOpenError;
+use muniment_runtime_core::{
     open_companion_registry, open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState,
 };
 
@@ -357,7 +356,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
     std::env::remove_var("MUNIMENT_PI_ROOT");
     let (base_url, attempt, server) = spawn_sign_in_server();
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
-    let opener = Arc::new(move |_: &str| -> Result<(), BrowserOpenError> {
+    let opener = Arc::new(move |_: &str| -> Result<(), LinkOpenError> {
         let callback = attempt.lock().unwrap().clone().unwrap();
         thread::spawn(move || send_callback(callback));
         Ok(())
@@ -376,16 +375,17 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
                 let config = profile.config.clone();
                 let data = profile.profile.clone();
                 listener = Some(scope.spawn(move || {
-                    let state = Arc::new(RuntimeAttachState::open(&data, &config).unwrap());
+                    let state =
+                        Arc::new(RuntimeAttachState::open(desktop_host(), &data, &config).unwrap());
                     let service_state = state.clone();
                     let mut inputs = state.attach_listener_inputs();
                     inputs.expected_desktop_executable = Some(std::env::current_exe().unwrap());
-                    muniment_runtime::run_attach_listener(
+                    muniment_runtime_core::run_attach_listener(
                         &root,
                         inputs,
                         None,
                         move || {
-                            muniment_runtime::compose_attach_service(
+                            muniment_runtime_core::compose_attach_service(
                                 service_state
                                     .boundaries()
                                     .with_browser_opener(opener.clone())
@@ -495,7 +495,8 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
 #[test]
 fn sign_in_cannot_override_a_return_to_local_mode() {
     let profile = TemporaryProfile::new("sign-in-marker", false);
-    let state = RuntimeAttachState::open(&profile.profile, &profile.config).unwrap();
+    let state =
+        RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let marker = profile
         .config
         .join(muniment_core::local_mode::LOCAL_MODE_MARKER);
@@ -518,7 +519,12 @@ fn runtime_boundaries_serve_sign_in_and_refuse_a_concurrent_attempt() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-sign-in", false);
     let state = Arc::new(
-        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap(),
+        RuntimeAttachState::open(
+            desktop_host(),
+            &temporary_profile.profile,
+            &temporary_profile.config,
+        )
+        .unwrap(),
     );
     let (base_url, attempt, server) = spawn_sign_in_server();
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
@@ -527,7 +533,7 @@ fn runtime_boundaries_serve_sign_in_and_refuse_a_concurrent_attempt() {
     let continue_rx = Mutex::new(continue_rx);
     let first_state = Arc::clone(&state);
     let first = thread::spawn(move || {
-        let opener = Arc::new(move |url: &str| -> Result<(), BrowserOpenError> {
+        let opener = Arc::new(move |url: &str| -> Result<(), LinkOpenError> {
             assert_eq!(url, "https://login.muniment.test/continue");
             opened_tx.send(()).unwrap();
             continue_rx.lock().unwrap().recv().unwrap();
@@ -567,8 +573,12 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-session", false);
-    let state =
-        RuntimeAttachState::open(&temporary_profile.profile, &temporary_profile.config).unwrap();
+    let state = RuntimeAttachState::open(
+        desktop_host(),
+        &temporary_profile.profile,
+        &temporary_profile.config,
+    )
+    .unwrap();
     let credential_store = KeyringNativeCredentialStore::new();
     credential_store.clear_session().unwrap();
     credential_store.save_credentials(&credentials()).unwrap();
@@ -651,7 +661,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
             profile.join("memory"),
         )),
         runtime_activity,
-        Arc::new(EntitlementSnapshotTracker::new()),
+        desktop_host(),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
         open_companion_registry(&profile).unwrap(),
@@ -1003,7 +1013,7 @@ fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
             profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
-        Arc::new(EntitlementSnapshotTracker::new()),
+        desktop_host(),
         SignedWorkspaceApproval::default(),
         Arc::new(SessionThread::default()),
         open_companion_registry(&profile).unwrap(),
@@ -1158,7 +1168,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
             profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
-        Arc::new(EntitlementSnapshotTracker::new()),
+        desktop_host(),
         approval.clone(),
         Arc::clone(&session_thread),
         open_companion_registry(&profile).unwrap(),
@@ -1174,7 +1184,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
             profile.join("memory"),
         )),
         RuntimeActivityRegistry::new(),
-        Arc::new(EntitlementSnapshotTracker::new()),
+        desktop_host(),
         approval,
         Arc::clone(&session_thread),
         open_companion_registry(&profile).unwrap(),

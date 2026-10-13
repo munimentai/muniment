@@ -5,11 +5,11 @@ use muniment_core::attach::linux::AttachFilesystem;
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance};
 use muniment_core::retention_record::{write_retention_choice, RetentionChoice};
 use muniment_runtime::{
-    open_profile_storage, run_runtime_activation_with_desktop_executable,
-    run_runtime_activation_with_retention_trigger, run_runtime_activation_with_upgrade_watch,
-    RetentionScheduleTestControl, RuntimeActivationError, RuntimeActivationExit,
-    UpgradeWatchTestControl,
+    run_runtime_activation_with_desktop_executable, run_runtime_activation_with_retention_trigger,
+    run_runtime_activation_with_upgrade_watch, RetentionScheduleTestControl,
+    RuntimeActivationError, RuntimeActivationExit, UpgradeWatchTestControl,
 };
+use muniment_runtime_core::open_profile_storage;
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

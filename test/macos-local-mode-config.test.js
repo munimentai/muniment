@@ -30,7 +30,7 @@ ${script}
 describe('macOS local mode config', () => {
   it('keeps the desktop, the runtime and the harness on one state root', () => {
     const desktop = fs.readFileSync('src-tauri/src/local_mode.rs', 'utf8')
-    const runtime = fs.readFileSync('src-tauri/runtime/src/directories.rs', 'utf8')
+    const runtime = fs.readFileSync(corePath('crates/runtime/src/directories.rs'), 'utf8')
     const core = fs.readFileSync(corePath('crates/core/src/state_root.rs'), 'utf8')
     const resolver = desktop.slice(desktop.indexOf('fn config_directory'), desktop.indexOf('pub(crate) fn is_active'))
     expect(resolver).toContain('muniment_runtime::profile_directory()')
