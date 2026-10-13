@@ -845,6 +845,11 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         thread_id: &str,
         instructions: Option<&str>,
     ) -> Result<String, ProtocolError> {
+        if self.contexts.compacting(thread_id) {
+            return Err(ProtocolError::invalid_request_with_reason(
+                "This thread is already compacting.",
+            ));
+        }
         let active_thread = self
             .active
             .lock()
