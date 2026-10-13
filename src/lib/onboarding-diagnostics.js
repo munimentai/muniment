@@ -1,5 +1,5 @@
 export const firstRunErrors = {
-  homeUnavailable: 'Home is unavailable. Retry or choose a folder.',
+  homeUnavailable: 'Home is unavailable. Quit and reopen Muniment.',
   homeConfirm: 'Muniment could not create Home. Check folder access and try Send again.',
   startup: 'Muniment could not finish startup. Choose a model again.',
   sessionStatus: 'Muniment could not read session status. Choose a model again.',

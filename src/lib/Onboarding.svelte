@@ -26,7 +26,7 @@
       const status = await tauri.invoke('home_status')
       if (request === homeRequest) onboarding = onboardingStatusState(status)
     } catch (_) {
-      if (request === homeRequest) onboarding = { name: 'load-error', homePath: '', error: 'Muniment could not read Home. Retry or choose a folder.' }
+      if (request === homeRequest) onboarding = { name: 'load-error', homePath: '', error: 'Muniment could not read Home. Quit and reopen Muniment.' }
     }
   }
 

@@ -4266,7 +4266,7 @@ describe('Home onboarding', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not read Home.')
     await fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    expect(screen.getByRole('alert')).toHaveTextContent('Home is unavailable. Retry or choose a folder.')
+    expect(screen.getByRole('alert')).toHaveTextContent('Home is unavailable. Quit and reopen Muniment.')
     expect(firstRunScreen()).toBeInTheDocument()
   })
 

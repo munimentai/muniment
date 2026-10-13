@@ -14,7 +14,7 @@ pub enum FirstRunFailure {
 impl FirstRunFailure {
     fn message(&self) -> &'static str {
         match self {
-            Self::HomeUnavailable => "Home is unavailable. Retry or choose a folder.",
+            Self::HomeUnavailable => "Home is unavailable. Quit and reopen Muniment.",
             Self::HomeConfirm => {
                 "Muniment could not create Home. Check folder access and try Send again."
             }

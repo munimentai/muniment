@@ -77,7 +77,7 @@
   </div>
 
   <p class="home">
-    {#if home}{'Your files go to '}{/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Choose a folder for your files.')}</span>{#if home}.{/if}
+    {#if home}{'Your files go to '}{/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Home is unavailable.')}</span>{#if home}.{/if}
   </p>
 </section>
 
