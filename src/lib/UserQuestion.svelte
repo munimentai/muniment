@@ -40,7 +40,9 @@
         dialog.style.left = `${rect.left}px`
         dialog.style.width = `${rect.width}px`
         dialog.style.bottom = `${window.innerHeight - rect.top + 8}px`
-        dialog.style.maxHeight = `${Math.max(0, rect.top - 24)}px`
+        // Stop below the title bar so the card never covers the window controls.
+        const top = document.querySelector('.titlebar')?.getBoundingClientRect().bottom ?? 16
+        dialog.style.maxHeight = `${Math.max(0, rect.top - top - 16)}px`
       }
       frame = requestAnimationFrame(position)
     }

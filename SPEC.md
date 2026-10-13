@@ -44,12 +44,12 @@ Create makes the folder. Rename moves the folder and preserves its files and thr
 A project thread runs in its folder. Generated files stay there unless the user names another path.
 Threads without a project use `sessions/<thread-name>-<short-id>/`. Project folders use `<project-name>-<short-id>`. Search and previews use the same folder.
 Saved artifacts have an editable HTML export in `artifacts/<artifact-name>-<short-id>/index.html`. Full identifiers remain the lookup keys; readable folder names use underscores, a bounded portable name, and eight identifier characters, with case-insensitive collision checks. Files follows the active catalog, project, agent, artifact, or thread and remembers browsing state per context. Internal folders are hidden by default. Workspace tools stay open across navigation. Browser keeps its page; Terminal uses a retained shell per context, started in that context’s folder. Switching contexts never changes or stops a retained shell. Closing the Terminal tab ends its shells.
-Agent definitions live in `agents/<agent-name>-<short-id>/agent.md`, with name, job title, description, avatar, project and schedule.
-The description supplies persistent instructions. Original SVG avatars use a stable, versioned seed. Faces are mostly neutral or happy; frown and kiss mouths each have a 1-in-500 chance.
+Agent definitions live in `agents/<agent-name>-<short-id>/agent.md`, with name, job title, instructions, avatar, project and schedule.
+The profile shows the instructions under Instructions, and a card shows the schedule. Original SVG avatars use a stable, versioned seed. Faces are mostly neutral or happy; frown and kiss mouths each have a 1-in-500 chance.
 New avatars combine shapes, colors, eyes, mouths, glasses, cheeks and face positions. Saved versions keep their appearance.
 Avatars render locally in the sidebar, catalog and profile. Rename preserves the seed; Change avatar replaces it.
 The Agents control follows New thread and exposes a plus button on hover or keyboard focus.
-It opens a card catalog. New agent opens a dedicated creation chat with suggested goals and outputs.
+It opens a card catalog. New agent opens a dedicated creation chat that offers the catalog starters, with the chosen one marked.
 An empty catalog opens the creation chat. Each agent or artifact has a goal, a specified output, and one dedicated chat. Artifacts opens saved artifact chats or a creation chat with suggestions. Creation chats stay outside ordinary thread lists.
 Each agent has one persisted primary conversation. Interactive messages and routine runs reuse it.
 Routine history stays in the agent profile with time, status, errors, and conversation links.

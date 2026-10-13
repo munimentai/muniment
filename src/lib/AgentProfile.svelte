@@ -7,6 +7,7 @@
   import MemorySection from './MemorySection.svelte'
   import { newAvatar } from './agent-avatar.js'
   import { exportTemplate, exportGrokSetup, templateSummary } from './agent-templates.js'
+  import { runStatusLabel, scheduleLabel } from './agent-labels.js'
   let { agent, tauri, projects = [], run, history = [], earlierConversations = [], onclose, onchange, ondelete, onopen } = $props()
   let editing = $state(null)
   let value = $state('')
@@ -18,7 +19,8 @@
   let panel
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const scheduleText = $derived(!agent.schedule?.enabled ? 'Not scheduled' : `${agent.schedule.cadence === 'weekly' ? days[agent.schedule.weekday] : agent.schedule.cadence === 'weekdays' ? 'Weekdays' : 'Every day'} · ${agent.schedule.time}`)
+  const scheduleText = $derived(scheduleLabel(agent.schedule) || 'Not scheduled')
+  let instructionsOpen = $state(false)
   async function edit(field) {
     editing = field
     value = agent[field] ?? ''
@@ -31,7 +33,7 @@
     const field = editing
     editing = null
     await tick()
-    panel?.querySelector(`[aria-label="Edit ${field === 'projectId' ? 'project' : field === 'instructions' ? 'description' : field === 'label' ? 'job title' : field}"]`)?.focus()
+    panel?.querySelector(`[aria-label="Edit ${field === 'projectId' ? 'project' : field === 'instructions' ? 'instructions' : field === 'label' ? 'job title' : field}"]`)?.focus()
   }
   async function action(work) {
     busy = true; error = ''
@@ -65,14 +67,14 @@
   <header data-panel-header><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
   <div class="body" use:panelScroll>
     <div class="avatar"><AgentAvatar {agent} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={changeAvatar}><LucideIcon name="refresh-cw" size={14} /></button></div>
-    {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Description'], ['projectId', 'Project'], ['schedule', 'Schedule']] as [field, label]}
+    {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Instructions'], ['projectId', 'Project'], ['schedule', 'Schedule']] as [field, label]}
       <section class="field">
-        <div class="field-heading"><h3>{label}</h3>{#if editing !== field}<button class="edit quiet" disabled={busy} aria-label={`Edit ${field === 'projectId' ? 'project' : field === 'instructions' ? 'description' : field === 'label' ? 'job title' : field}`} onclick={() => edit(field)}><LucideIcon name="pencil" size={14} /></button>{/if}</div>
+        <div class="field-heading"><h3>{label}</h3>{#if editing !== field}<button class="edit quiet" disabled={busy} aria-label={`Edit ${field === 'projectId' ? 'project' : field === 'instructions' ? 'instructions' : field === 'label' ? 'job title' : field}`} onclick={() => edit(field)}><LucideIcon name="pencil" size={14} /></button>{/if}</div>
         {#if editing === field}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <form aria-label={`Edit ${label}`} onsubmit={event => { event.preventDefault(); void save() }} onkeydown={event => { if (event.key === 'Escape' && !busy) { event.stopPropagation(); void endEdit() } }}>
             {#if field === 'name' || field === 'label'}<input aria-label={label} bind:value maxlength={field === 'name' ? 100 : 120} required={field === 'name'} disabled={busy} />
-            {:else if field === 'instructions'}<textarea aria-label="Description" rows="8" bind:value required disabled={busy}></textarea>
+            {:else if field === 'instructions'}<textarea aria-label="Instructions" rows="12" bind:value required disabled={busy}></textarea>
             {:else if field === 'projectId'}<select aria-label="Project" bind:value disabled={busy}><option value="">No project</option>{#each projects as [id, name]}<option value={id}>{name}</option>{/each}</select><small>New work uses this project. Existing files stay in their current folder.</small>
             {:else}
               <label class="check"><Toggle bind:checked={schedule.enabled} disabled={busy} />Run on a schedule</label>
@@ -86,11 +88,12 @@
             <div class="actions"><button disabled={busy || (['name','instructions'].includes(field) && !value.trim())}>Save</button><button type="button" disabled={busy} onclick={endEdit}>Cancel</button></div>
           </form>
         {:else}
-          <p class:name={field === 'name'}>{field === 'projectId' ? projects.find(([id]) => id === agent.projectId)?.[1] || 'No project' : field === 'schedule' ? scheduleText : agent[field] || 'Not set'}</p>
+          {#if field === 'instructions' && (agent.instructions || '').length > 400}<p class:clamped={!instructionsOpen}>{agent.instructions}</p><button class="more" aria-expanded={instructionsOpen} onclick={() => { instructionsOpen = !instructionsOpen }}>{instructionsOpen ? 'Show less' : 'Show all'}</button>
+          {:else}<p class:name={field === 'name'}>{field === 'projectId' ? projects.find(([id]) => id === agent.projectId)?.[1] || 'No project' : field === 'schedule' ? scheduleText : agent[field] || 'Not set'}</p>{/if}
         {/if}
       </section>
     {/each}
-    {#if run?.status}<section class="field"><h3>Latest run</h3><p>{run.status}</p>{#if run.error}<p>{run.error}</p>{/if}{#if run.threadId}<button onclick={() => action(() => onopen(run.threadId))}>Open conversation</button>{/if}</section>{/if}
+    {#if run?.status}<section class="field"><h3>Latest run</h3><p>{runStatusLabel(run.status)}</p>{#if run.error}<p>{run.error}</p>{/if}{#if run.threadId}<button onclick={() => action(() => onopen(run.threadId))}>Open conversation</button>{/if}</section>{/if}
     <details class="template" bind:open={memoryOpen}><summary>Memory</summary>{#if memoryOpen}{#key agent.id}<MemorySection {tauri} agentId={agent.id} />{/key}{/if}</details>
     <details class="template"><summary>Routine history ({history.length})</summary>
       {#each [...history].reverse() as item (item.runId)}<section class="field"><p>{item.lastRun ? new Date(item.lastRun * 1000).toLocaleString() : 'Run'} · {item.status}</p>{#if item.error}<p>{item.error}</p>{/if}<button onclick={() => action(() => onopen(item.threadId))}>Open conversation</button></section>{:else}<p>No routine runs yet.</p>{/each}
@@ -122,6 +125,8 @@
   h3 { margin: 0 0 4px; color: var(--muted); font-size: var(--text-12); font-weight: 500; }
   p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-13); line-height: 1.5; }
   p.name { font-size: var(--text-15); font-weight: 600; }
+  p.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
+  .more { margin-top: 6px; }
   .edit { opacity: 0; }
   .field:hover .edit, .field:focus-within .edit { opacity: 1; }
   form, label { display: grid; gap: 8px; font-size: var(--text-12); }

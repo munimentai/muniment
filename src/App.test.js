@@ -3370,9 +3370,10 @@ describe('thread name', () => {
     expect(appRules.get('input.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
     expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
-    // The row title fades at its end and the time keeps its width, so the time always shows.
+    // A row title that overflows fades at its end, one that fits shows whole, and the time keeps its width.
     expect(appRules.get('.thread-row-title')).toMatch(/flex:\s*1 1 auto/)
-    expect(appRules.get('.thread-row-title')).toMatch(/mask-image:\s*linear-gradient\(to right, currentColor calc\(100% - 28px\), transparent\)/)
+    expect(appRules.get('.thread-row-title')).not.toMatch(/mask-image/)
+    expect(appRules.get('.thread-row-title[data-overflow="true"]')).toMatch(/mask-image:\s*linear-gradient\(to right, currentColor calc\(100% - 28px\), transparent\)/)
     expect(appRules.get('.thread-row time')).toMatch(/flex:\s*none/)
   })
 
@@ -7934,7 +7935,7 @@ describe('dedicated creation chats', () => {
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     expect(document.querySelector(`[data-thread-id="${id}"]`)).toBeNull()
     if(section==='Artifacts') await fireEvent.click(screen.getByRole('button',{name:'Calculator'}))
-    else await fireEvent.click(screen.getByRole('button',{name:'Research assistant'}))
+    else await fireEvent.click(screen.getByRole('button',{name:'Research desk'}))
     await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain(section==='Artifacts'?'calculator':'Research topics'))
     await fireEvent.click(screen.getByRole('button', {name:'Cancel creation'}))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')

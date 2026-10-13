@@ -11,6 +11,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import StarterRow from './StarterRow.svelte'
   import { creationStarters } from './creation-prompts.js'
+  import { scheduleLabel } from './agent-labels.js'
   let {tauri, projects=[], onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
   let archived = $state(false)
   let listing=$state({agents:[],state:{runs:{},threads:{}}}), error=$state(''), loading=$state(true)
@@ -42,7 +43,7 @@
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (agent.id)}
         <CatalogCard onclick={()=>onselect(agent)}>
           {#snippet menu()}<CatalogActions name={agent.name} {archived} onaction={(action,name)=>onaction('agent',agent,action,name)}/>{/snippet}
-          <AgentAvatar {agent} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{projects.find(([id])=>id===agent.projectId)?.[1] || 'No project'}</small>
+          <AgentAvatar {agent} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{[projects.find(([id])=>id===agent.projectId)?.[1], scheduleLabel(agent.schedule)].filter(Boolean).join(' · ') || 'Runs when you ask'}</small>
         </CatalogCard>
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}

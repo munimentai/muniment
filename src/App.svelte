@@ -27,7 +27,8 @@
   import ProjectCatalog from './lib/ProjectCatalog.svelte'
   import CatalogActions from './lib/CatalogActions.svelte'
   import ArtifactCatalog from './lib/ArtifactCatalog.svelte'
-  import {creationOptions, creationDefaults, creationPrompt} from './lib/creation-prompts.js'
+  import {creationStarters, creationDefaults, creationPrompt} from './lib/creation-prompts.js'
+  import { overflowLabels } from './lib/overflow-labels.js'
   import AgentManager from './lib/AgentManager.svelte'
   import WorkspacePanel from './lib/WorkspacePanel.svelte'
   import WorkspaceMenu from './lib/WorkspaceMenu.svelte'
@@ -554,6 +555,8 @@
     if (command) void compactThread(command.instructions, true)
     else chatController.send()
   }
+  // A catalog covers the thread, so the title bar names the catalog.
+  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? 'Projects' : '')
   let currentThreadTitle = $derived(profileAgent?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   let threadSwitching = $state(false)
@@ -2276,13 +2279,15 @@
     {/if}
     {#if workspaceMode() && desktopClientStatus}
       <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen} class:tools-open={!!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
-        <header class="titlebar" data-tauri-drag-region>
+        <header class="titlebar" data-tauri-drag-region use:overflowLabels={'.agent-chat-title span'}>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
               <LucideIcon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} />
             </button>
           </div>
           <div class="titlebar-thread" data-tauri-drag-region>
+            {#if catalogTitle}<span class="catalog-title" data-tauri-drag-region>{catalogTitle}</span>
+            {:else}
             {#if profileAgent}<button class="quiet agent-chat-title" aria-label={`Open profile for ${profileAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={profileAgent} size={20} /><span>{profileAgent.name}</span></button>{/if}
             {#if !profileAgent}
             {#if editingThreadTitle}
@@ -2291,6 +2296,7 @@
               <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
             {/if}
             <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
+            {/if}
             {/if}
 
             <span class="title-spacer" data-tauri-drag-region></span>
@@ -2310,7 +2316,7 @@
                       <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
-        <aside data-panel="sidebar" id="sidebar" class="sidebar">
+        <aside data-panel="sidebar" id="sidebar" class="sidebar" use:overflowLabels={'.side-action span, .thread-row-title, .project-title span'}>
           {#if !sidebarCollapsed && settingsOpen}
             <!-- Settings lists its sections in this same sidebar, in its rows and spacing. -->
             <div class="side-top">
@@ -2430,7 +2436,7 @@
           {#if messages.length === 0 && !currentCreation}<p class="empty">{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : profileAgent ? `Chat with ${profileAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}</p>{/if}
           {#if currentCreation}
             <section class="creation-goal" aria-label="Creation goal"><strong>{currentCreation.kind === 'agent' ? 'Agent' : 'Artifact'}</strong><p>Goal: {currentCreation.goal}</p><p>Output: {currentCreation.output}</p>{#if pendingCreation}<button type="button" onclick={cancelCreation}>Cancel creation</button>{/if}</section>
-            {#if !messages.length}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationOptions[currentCreation.kind] as option}<button onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
+            {#if !messages.length && pendingCreation && creationStarters[currentCreation.kind].concat(creationDefaults(currentCreation.kind)).some(option=>option.goal===currentCreation.goal)}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationStarters[currentCreation.kind] as option (option.id)}<button aria-pressed={option.goal===currentCreation.goal} onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
           {/if}
           {#each messages as message (messageKeys.get(message))}
             {#if message.role === 'user'}
@@ -2986,11 +2992,12 @@
   .workspace { --frame-width: 4px; --titlebar-band: 36px; --titlebar-height: 30px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); row-gap: calc(var(--titlebar-band) - var(--titlebar-height)); column-gap: var(--frame-width); background: var(--paper); }
   /* The sidebar column is the element's --sidebar-column: the kept width, or zero collapsed, and the 180ms slide carries both. */
   .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
-  .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; }
+  .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; } .creation-suggestions button[aria-pressed="true"] { border-color:var(--ink); }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
-  .agent-chat-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 180px; }
-  .agent-chat-title span { overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+  .agent-chat-title span { overflow: hidden; white-space: nowrap; }
+  .agent-chat-title span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .workspace.agent-profile-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--agent-panel-width); grid-template-areas: "title title title" "side thread rail"; }
   .workspace.tools-open { grid-template-columns:minmax(0,var(--sidebar-column)) minmax(320px,1fr) var(--workspace-panel-width); grid-template-areas:"title title title" "side thread rail"; }
   @media (max-width:950px) { .workspace.tools-open { grid-template-columns:0 minmax(280px,1fr) var(--workspace-panel-width); } .workspace.tools-open .sidebar { display:none; } }
@@ -3039,6 +3046,7 @@
   /* A hairline edge keeps the chip legible over the control's --faint hover. */
   .titlebar kbd { margin-left: 2px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .update-slot { flex: 0 0 auto; }
+  .catalog-title { padding: 0 7px; font-family: var(--font-heading); font-weight: 600; line-height: 24px; white-space: nowrap; }
   .thread-title-heading { display: flex; min-width: 24px; max-width: 100%; margin: 0; font: inherit; font-family: var(--font-heading); }
   /* The rename field keeps the title control's register while it shows. */
   /* Editing is the rename control's active state: the composer's muted hairline, no ring. */
@@ -3092,14 +3100,16 @@
   /* The time always shows: the title takes the rest of the row and fades at its end. */
   .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
-  .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .thread-row-title[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .title-thread-actions { flex: none; }
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   /* A narrow sidebar shortens the first control, never its start. */
   /* Sidebar labels overrun the way thread titles do: one line, faded over the last 28px. */
-  .side-action span { flex: 1; min-width: 0; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .side-action span { flex: 1; min-width: 0; white-space: nowrap; }
+  .side-action span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .side-action kbd { flex: none; }
   .side-heading:first-child { margin-top: 6px; }
   .side-heading { margin: 14px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); font-weight: var(--weight-regular); }
