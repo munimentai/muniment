@@ -6,7 +6,7 @@
   // The first run's one question. Every option is a one-line button, found
   // ones first. More providers and Explore without connecting end the list. A
   // server that needs a step opens that step in place.
-  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, picking = false, onconnect, onmore, onexplore, onrescan, onchangehome } = $props()
+  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, onconnect, onmore, onexplore, onrescan } = $props()
   let open = $state(null)
   let key = $state('')
   const options = $derived(connectOptions(scan))
@@ -38,7 +38,7 @@
     {@const server = option.kind === 'server' ? option.server : null}
     {@const state = server ? SERVER_STATES[server.state] : null}
     <li class:expanded={open === option.id}>
-      <button type="button" class="option" disabled={busy || picking} aria-expanded={server && server.state !== 'ready' ? open === option.id : undefined} onclick={() => choose(option)}>
+      <button type="button" class="option" disabled={busy} aria-expanded={server && server.state !== 'ready' ? open === option.id : undefined} onclick={() => choose(option)}>
         <ProviderLogo color provider={option.logo} size={20} />
         <strong>{option.name}</strong>
         <span class="action" data-tone={state?.tone}>{state ? state.action : option.hint ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
@@ -72,13 +72,12 @@
   <ul class="options">{#each others as option (option.id)}{@render card(option)}{/each}</ul>
 
   <div class="ends">
-    <button type="button" class="more" disabled={busy || picking} onclick={onmore}><LucideIcon name="plus" size={14} /><span>More providers</span></button>
-    <button type="button" class="more" disabled={busy || picking} onclick={onexplore}><span>Explore without connecting</span><LucideIcon name="arrow-right" size={14} /></button>
+    <button type="button" class="more" disabled={busy} onclick={onmore}><LucideIcon name="plus" size={14} /><span>More providers</span></button>
+    <button type="button" class="more" disabled={busy} onclick={onexplore}><span>Explore without connecting</span><LucideIcon name="arrow-right" size={14} /></button>
   </div>
 
   <p class="home">
     {#if home}{'Your files go to '}{/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Choose a folder for your files.')}</span>{#if home}.{/if}
-    <button type="button" class="link" data-testid="onboarding-picker" disabled={busy && !homeLoading || picking} onclick={onchangehome}>{home ? 'Change' : 'Choose folder'}</button>
   </p>
 </section>
 
