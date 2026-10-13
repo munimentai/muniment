@@ -38,16 +38,8 @@ export function connectOptions(scan) {
     .map(({ option }) => option)
 }
 
-// The line under a server's name: where it answers and what it holds.
-export function serverDetail(server) {
-  const address = server.baseUrl?.replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '')
-  if (server.state === 'not-running') return 'Installed'
-  const models = server.modelCount === 1 ? '1 model' : `${server.modelCount} models`
-  return [address, server.modelCount ? models : null].filter(Boolean).join(' · ')
-}
-
 export const SERVER_STATES = {
-  ready: { label: 'Ready', action: 'Connect', tone: 'signal' },
-  'needs-key': { label: 'Needs key', action: 'Add key', tone: 'ochre' },
-  'not-running': { label: 'Not running', action: 'Start', tone: 'muted' },
+  ready: { action: 'Connect', tone: 'signal' },
+  'needs-key': { action: 'Add key', tone: 'ochre' },
+  'not-running': { action: 'Start', tone: 'muted' },
 }

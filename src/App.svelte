@@ -2102,7 +2102,14 @@
       throw firstRunError(tauri, 'runtime')
     }
     // SPEC.md: a found server connects in place. A subscription opens its
-    // sign-in in Model providers, and More providers opens the catalog.
+    // sign-in in Model providers, More providers opens the catalog, and
+    // explore opens the composer with no model.
+    if (option?.kind === 'explore') {
+      onboarding = { name: 'complete', homePath: onboarding.homePath }
+      void refreshProjects()
+      void tick().then(() => composer?.focus())
+      return
+    }
     if (option?.kind === 'server') {
       try {
         await tauri.invoke('onboarding_connect_server', { id: option.id, baseUrl: option.server.baseUrl, key: input.key ?? null, keyFromFile: !!input.keyFrom })
@@ -2225,7 +2232,7 @@
 <main class:onboarding-active={tauri && onboarding.name !== 'complete'}>
   {#if !workspaceMode() || onboarding.name !== 'complete'}
     <div class="lockup">
-      <PocketFold size={96} />
+      <PocketFold size={onboarding.name === 'complete' ? 96 : 76} />
       {#if onboarding.name === 'complete' && (auth.name === 'signed-out' || auth.name === 'signing-in')}
         <h1 class="name">muniment</h1>
       {:else}
@@ -2887,6 +2894,11 @@
     display: grid;
     justify-items: center;
     gap: 14px;
+  }
+
+  /* On the first run the symbol's art is as wide as the wordmark. */
+  main.onboarding-active .lockup {
+    gap: 6px;
   }
 
   .name {

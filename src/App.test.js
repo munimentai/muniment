@@ -3969,12 +3969,11 @@ describe('Home onboarding', () => {
     render(App)
     expect(await screen.findByText('Found on this computer')).toBeInTheDocument()
     expect(optionNames().slice(0, 3)).toEqual(['Ollama', 'ChatGPT', 'oMLX'])
-    expect(option('Ollama')).toHaveTextContent('127.0.0.1:11434 · 3 models')
-    expect(option('Ollama')).toHaveTextContent('Ready')
-    expect(option('oMLX')).toHaveTextContent('Needs key')
-    expect(option('ChatGPT')).toHaveTextContent('Codex CLI is signed in')
-    expect(option('ChatGPT')).toHaveTextContent('Connect')
-    expect(option('Grok')).toHaveTextContent('Sign in')
+    // Each card is one line: the name and its action.
+    expect(option('Ollama')).toHaveTextContent(/^Ollama\s*Connect$/)
+    expect(option('oMLX')).toHaveTextContent(/^oMLX\s*Add key$/)
+    expect(option('ChatGPT')).toHaveTextContent(/^ChatGPT\s*Connect$/)
+    expect(option('Grok')).toHaveTextContent(/^Grok\s*Sign in$/)
   })
 
   it('connects a ready server in place after it saves Home', async () => {
@@ -4035,7 +4034,7 @@ describe('Home onboarding', () => {
     expect(screen.getByText('Open LM Studio and start its local server.')).toBeInTheDocument()
     providerScan = { servers: [{ ...ollama, id: 'lmstudio', name: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1' }], hints: [] }
     await fireEvent.click(screen.getByRole('button', { name: 'Look again' }))
-    await waitFor(() => expect(option('LM Studio')).toHaveTextContent('Ready'))
+    await waitFor(() => expect(option('LM Studio')).toHaveTextContent('Connect'))
     expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_provider_scan')).toHaveLength(2)
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
@@ -4047,12 +4046,24 @@ describe('Home onboarding', () => {
     invoke.mockImplementation((command, payload) => command === 'local_mode_claude_code_status' ? Promise.resolve({ installed: true, logged_in: true, path: '/usr/local/bin/claude' }) : original(command, payload))
     render(App)
     await more()
-    await waitFor(() => expect(option('Claude')).toHaveTextContent('Claude Code is signed in'))
+    await waitFor(() => expect(option('Claude')).toHaveTextContent('Connect'))
     await fireEvent.click(option('Claude'))
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     expect(await within(dialog).findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
     expect(firstRunScreen()).not.toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
+  })
+
+  it('opens the composer with no model from Explore without connecting', async () => {
+    firstRun()
+    render(App)
+    await more()
+    await fireEvent.click(screen.getByRole('button', { name: 'Explore without connecting' }))
+    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
 

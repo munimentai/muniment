@@ -41,9 +41,9 @@ describe('onboarding layout', () => {
     expect(source).toContain('{#if modelError}<p class="error" role="alert">{modelError}</p>{/if}')
   })
 
-  it('wraps long names and paths inside a card without a nested scroller', () => {
+  it('keeps a long name inside its one-line card without a nested scroller', () => {
     expect(connectRules.get('li')).not.toMatch(/overflow-y\s*:/)
-    expect(connectRules.get('small')).toMatch(/overflow-wrap:\s*anywhere/)
-    expect(connectRules.get('.text')).toMatch(/min-width:\s*0/)
+    expect(connectRules.get('strong')).toMatch(/min-width:\s*0/)
+    expect(connectRules.get('strong')).toMatch(/text-overflow:\s*ellipsis/)
   })
 })

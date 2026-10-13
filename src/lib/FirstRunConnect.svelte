@@ -1,12 +1,12 @@
 <script>
   import ProviderLogo from './ProviderLogo.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  import { SERVER_STATES, connectOptions, serverDetail } from './first-run-providers.js'
+  import { SERVER_STATES, connectOptions } from './first-run-providers.js'
 
-  // The first run's one question. Every option is a button, found ones first,
-  // and More providers ends the list. A server that needs a step opens that
-  // step in place.
-  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, picking = false, onconnect, onmore, onrescan, onchangehome } = $props()
+  // The first run's one question. Every option is a one-line button, found
+  // ones first. More providers and Explore without connecting end the list. A
+  // server that needs a step opens that step in place.
+  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, picking = false, onconnect, onmore, onexplore, onrescan, onchangehome } = $props()
   let open = $state(null)
   let key = $state('')
   const options = $derived(connectOptions(scan))
@@ -39,18 +39,9 @@
     {@const state = server ? SERVER_STATES[server.state] : null}
     <li class:expanded={open === option.id}>
       <button type="button" class="option" disabled={busy || picking} aria-expanded={server && server.state !== 'ready' ? open === option.id : undefined} onclick={() => choose(option)}>
-        <ProviderLogo color provider={option.logo} size={28} />
-        <span class="text">
-          <strong>{option.name}</strong>
-          {#if server}
-            <small class="mono">{serverDetail(server)}</small>
-          {:else}
-            <small>{option.plan}</small>
-          {/if}
-          {#if option.hint}<small class="hint">{option.hint.evidence}</small>{/if}
-        </span>
-        {#if state}<span class="badge" data-tone={state.tone}>{state.label}</span>{/if}
-        <span class="action">{state ? state.action : option.hint ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
+        <ProviderLogo color provider={option.logo} size={20} />
+        <strong>{option.name}</strong>
+        <span class="action" data-tone={state?.tone}>{state ? state.action : option.hint ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
       </button>
       {#if open === option.id && server?.state === 'needs-key'}
         <div class="step">
@@ -80,38 +71,35 @@
   {/if}
   <ul class="options">{#each others as option (option.id)}{@render card(option)}{/each}</ul>
 
-  <button type="button" class="more" disabled={busy || picking} onclick={onmore}><LucideIcon name="plus" size={14} /><span>More providers</span></button>
+  <div class="ends">
+    <button type="button" class="more" disabled={busy || picking} onclick={onmore}><LucideIcon name="plus" size={14} /><span>More providers</span></button>
+    <button type="button" class="more" disabled={busy || picking} onclick={onexplore}><span>Explore without connecting</span><LucideIcon name="arrow-right" size={14} /></button>
+  </div>
 
   <p class="home">
-    {#if home}Your files go to {/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Choose a folder for your files.')}</span>{#if home}.{/if}
+    {#if home}{'Your files go to '}{/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Choose a folder for your files.')}</span>{#if home}.{/if}
     <button type="button" class="link" data-testid="onboarding-picker" disabled={busy && !homeLoading || picking} onclick={onchangehome}>{home ? 'Change' : 'Choose folder'}</button>
   </p>
 </section>
 
 <style>
-  .connect { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; width: min(720px, 100%); margin: 0 auto; padding: 0 2px 32px; box-sizing: border-box; scrollbar-width: thin; }
+  .connect { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; width: min(840px, 100%); margin: 0 auto; padding: 0 2px 32px; box-sizing: border-box; scrollbar-width: thin; }
   h1 { margin: 0; font: 600 var(--text-22) var(--font-heading); color: var(--ink); }
   .lede { margin: 6px 0 20px; color: var(--muted); font-size: var(--text-15); }
   h2 { margin: 20px 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; font-weight: 400; }
   .state { margin: 0 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .options { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .options { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(260px, calc((100% - 16px) / 3)), 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
   li { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   li.expanded { grid-column: 1 / -1; }
-  .option { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-areas: "logo text badge" "logo text action"; align-items: center; column-gap: 12px; row-gap: 2px; width: 100%; min-height: 64px; padding: 12px 14px; border: 0; border-radius: var(--radius-panel); background: none; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
+  .option { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; width: 100%; min-height: 44px; padding: 8px 12px; border: 0; border-radius: var(--radius-panel); background: none; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .option:hover:not(:disabled) { background: var(--faint); }
   .option:disabled, .more:disabled { cursor: default; }
-  .option > :global(.logo) { grid-area: logo; }
-  .text { grid-area: text; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  strong { font-size: var(--text-15); font-weight: 600; }
-  small { color: var(--muted); font-size: var(--text-12); overflow-wrap: anywhere; }
+  strong { min-width: 0; overflow: hidden; font-size: var(--text-15); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
   .mono { font-family: var(--font-mono); }
-  .hint { color: var(--ink); }
-  .badge { grid-area: badge; justify-self: end; padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); }
-  .badge[data-tone="muted"] { color: var(--muted); }
-  .action { grid-area: action; justify-self: end; display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: var(--text-12); }
+  .action { justify-self: end; display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: var(--text-12); white-space: nowrap; }
   .option:hover .action { color: var(--ink); }
-  .option:not(:has(.badge)) .action { grid-row: 1 / span 2; }
-  .step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 14px 14px 54px; }
+  .action[data-tone="ochre"] { color: var(--ochre); }
+  .step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 12px 12px 42px; }
   .step p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .step .or { margin-top: 4px; }
   form { display: flex; gap: 8px; width: 100%; }
@@ -120,7 +108,8 @@
   .step button:hover:not(:disabled), .more:hover { background: var(--faint); }
   .step button:disabled { color: var(--muted); cursor: default; }
   .step .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-  .more { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin-top: 12px; min-height: 44px; border-style: dashed; border-radius: var(--radius-panel); background: none; color: var(--muted); }
+  .ends { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
+  .more { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border-style: dashed; border-radius: var(--radius-panel); background: none; color: var(--muted); }
   .more:hover { color: var(--ink); }
   .home { margin: 24px 0 0; color: var(--muted); font-size: var(--text-12); }
   .link { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }

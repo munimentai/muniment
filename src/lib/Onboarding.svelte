@@ -45,7 +45,7 @@
   }
 
   // A choice saves Home, leaves the first run and connects the option. No
-  // option opens the full provider list.
+  // option opens the full provider list, and explore opens the app without one.
   async function connect(option, input = {}) {
     if (busy || picking || modelOpening) return
     if (!onboarding.homePath) {
@@ -139,7 +139,7 @@
         <button class="primary" onclick={saveHome} disabled={busy || picking}>Save Home</button>
       </div>
     {:else}
-      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} busy={busy || modelOpening || onboarding.name === 'loading'} picking={picking} onconnect={connect} onmore={() => connect(null)} onrescan={loadProviderScan} onchangehome={chooseHome} />
+      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} busy={busy || modelOpening || onboarding.name === 'loading'} picking={picking} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} onchangehome={chooseHome} />
       {#if modelError}<p class="error" role="alert">{modelError}</p>{/if}
     {/if}
     {#if onboarding.error}<p class="error" role="alert">{onboarding.error}</p>{/if}
@@ -147,7 +147,7 @@
 {/if}
 
 <style>
-  .onboarding { display: flex; flex-direction: column; width: min(760px, 100%); min-height: 0; max-height: calc(100% - 24px); align-self: start; margin-top: 24px; padding: 2px; box-sizing: border-box; }
+  .onboarding { display: flex; flex-direction: column; width: min(880px, 100%); min-height: 0; max-height: calc(100% - 24px); align-self: start; margin-top: 24px; padding: 2px; box-sizing: border-box; }
   .actions { display: flex; align-items: center; justify-content: flex-start; gap: 12px; }
   .actions .primary { margin-left: auto; }
   h1 { font-size: var(--text-22); }

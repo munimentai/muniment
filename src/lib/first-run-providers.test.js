@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SUBSCRIPTIONS, connectOptions, serverDetail } from './first-run-providers.js'
+import { SUBSCRIPTIONS, connectOptions } from './first-run-providers.js'
 
 const server = (id, state, extra = {}) => ({ id, name: id, baseUrl: `http://127.0.0.1:1/v1`, state, modelCount: 2, ...extra })
 
@@ -19,11 +19,5 @@ describe('first-run connect options', () => {
     expect(options.slice(0, 5).map((option) => option.id)).toEqual(['ollama', 'anthropic', 'openai', 'omlx', 'lmstudio'])
     expect(options.find((option) => option.id === 'openai').hint.evidence).toBe('Codex CLI is signed in')
     expect(options.slice(5).map((option) => option.id)).toEqual(SUBSCRIPTIONS.map((entry) => entry.id).filter((id) => !['anthropic', 'openai'].includes(id)))
-  })
-
-  it('describes a server by its loopback address and model count', () => {
-    expect(serverDetail(server('omlx', 'needs-key', { baseUrl: 'http://127.0.0.1:8080/v1', modelCount: 8 }))).toBe('127.0.0.1:8080 · 8 models')
-    expect(serverDetail(server('ollama', 'ready', { baseUrl: 'http://127.0.0.1:11434/v1', modelCount: 1 }))).toBe('127.0.0.1:11434 · 1 model')
-    expect(serverDetail(server('lmstudio', 'not-running'))).toBe('Installed')
   })
 })
