@@ -3158,6 +3158,10 @@ describe('thread name', () => {
     expect([...document.querySelectorAll('.thread-row.selected .thread-row-title')].map((title) => title.textContent)).toEqual(['Lease renewal', 'Vendor audit', 'Archive review'])
     // The open thread's row shows its check box in place of its dot.
     expect(open.firstElementChild).toHaveClass('select-mark')
+    // Escape in the composer ends the selection, since a row click leaves focus there.
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Escape' })
+    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0)
+    expect(open.querySelector('.select-mark')).toBeNull()
   })
 
   it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {

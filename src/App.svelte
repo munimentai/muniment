@@ -1964,6 +1964,12 @@
     }
     const shortcuts = (event) => {
       if (deletingThreadId || event.defaultPrevented) return
+      // A row click leaves focus where it was, so Escape ends a selection from anywhere outside a menu or dialog.
+      if (event.key === 'Escape' && selectedThreadIds.size && !event.target?.closest?.('[role="menu"], [role="dialog"]')) {
+        event.preventDefault()
+        clearThreadSelection()
+        return
+      }
       const sidebarTarget = event.target?.closest?.('#sidebar, .thread-menu')
       const editing = event.target?.closest?.('input,textarea,[contenteditable="true"]')
       if (sidebarTarget && !editing && !switchLocked) {
