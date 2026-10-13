@@ -398,7 +398,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     step = 'profile'
     reason = 'The disposable profile could not be created.'
     root = fs.realpathSync(fs.mkdtempSync(disposableProfilePrefix(platform)))
-    env = isolatedEnvironment(root)
+    env = isolatedEnvironment(root, process.env, platform)
     step = 'profile/attach-socket-path'
     reason = 'The macOS attach socket path must be shorter than 104 bytes. Use a shorter disposable profile path.'
     assertAttachSocketPath(platform, env.MUNIMENT_STATE_DIR)
