@@ -227,8 +227,8 @@
           {#each account.windows as window (window.label + window.scope)}
             <div class="window">
               <div class="window-head">
-                <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope} · {window.scope}{/if}</span>
-                <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms} · resets {until(window.resets_at_ms)}{/if}</span>
+                <span class="record">{window.label.replace(/ window$/i, '')}{#if window.scope}{` · ${window.scope}`}{/if}</span>
+                <span class="record"><strong>{Math.round(window.remaining_percent)}%</strong> left{#if window.resets_at_ms}{` · resets ${until(window.resets_at_ms)}`}{/if}</span>
               </div>
               <AllowanceMeter remaining={window.remaining_percent} limited={window.limit_reached} />
             </div>

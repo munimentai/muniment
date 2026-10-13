@@ -108,6 +108,13 @@ it('refreshes allowances on load and every two minutes, then stops when closed',
   expect(calls()).toBe(initial + 1)
 })
 
+it('keeps a space on both sides of the dot in an allowance line', () => {
+  render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'anthropic', settings: { ...routing(), accounts: [{ id: 'a', family: 'anthropic', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: 'Fable', remaining_percent: 99, resets_at_ms: Date.now() + 3_600_000, limit_reached: false }] }] } })
+  const window = screen.getByText('99%').closest('.window')
+  expect(window).toHaveTextContent('Weekly · Fable')
+  expect(window).toHaveTextContent(/99% left · resets /)
+})
+
 it('shows allowances and manual refresh for routable subscriptions', async () => {
   render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'openai', settings: { ...routing(), accounts: [{ id: 'a', family: 'openai', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: '', remaining_percent: 70, resets_at_ms: null, limit_reached: false }], requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }] } })
   expect(screen.getByText('70%')).toBeInTheDocument()
