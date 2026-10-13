@@ -17,6 +17,7 @@
   import ProviderIcon from './ProviderIcon.svelte'
   // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row.
   let { tauri, oncreate, sidebarTab = null } = $props()
+  const intros = { mcp: 'MCP servers connect your models to apps and services.', skill: 'Skills give your models instructions and scripts for one kind of task.', plugin: 'Plugins package skills, MCP servers and code into one install.' }
   // svelte-ignore state_referenced_locally
   let state = $state({ items: [], threads: {} }), tab = $state(sidebarTab ?? 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let filtersOpen = $state(false), formDialog = $state()
@@ -87,7 +88,7 @@
   function update(item) { form = {}; source = item.source; replaceId = item.id; preview = null; error = '' }
 </script>
 <section class="extend" aria-label="Extend">
-  <PageHead intro="Add tools and instructions to your local workspace.">
+  <PageHead intro={intros[tab] ?? intros.mcp}>
     {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
   </PageHead>
   {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin}]} onchange={showTab} />{/if}
@@ -152,7 +153,7 @@
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
-        {#if entry.publisher}<p class="publisher">{entry.publisher}</p>{/if}
+        {#if entry.publisher && entry.publisher.toLowerCase() !== entry.name.toLowerCase()}<p class="publisher">{entry.publisher}</p>{/if}
         <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
         <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
