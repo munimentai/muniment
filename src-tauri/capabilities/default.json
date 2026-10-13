@@ -118,6 +118,8 @@
     "allow-chat-current-thread",
     "allow-chat-thread-summaries",
     "allow-chat-thread-open",
+    "allow-thread-context-usage",
+    "allow-thread-compact",
     "allow-chat-select-thread",
     "allow-chat-rename-thread",
     "allow-chat-delete-thread",

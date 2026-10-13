@@ -4,13 +4,14 @@ use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
 };
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::chat_coordinate::coordinate;
+use muniment_core::chat_coordinate::{coordinate, coordinate_compaction};
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::chat_resume::{
     clear_active_run, install_active_run, install_resume_run, resumable_context,
     run_resume as drive_resume, ResumeLaunch,
 };
 use muniment_core::chat_view::{chat_attachments, ChatAttachment};
+use muniment_core::engine::CompactionOutcome;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
@@ -65,6 +66,8 @@ pub struct PromptLaunch {
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
+    /// `Some` makes the run a manual compaction with these instructions.
+    compaction: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,9 +110,94 @@ pub fn accept_prompt(
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
-    let profile_directory = profile_directory.as_ref();
+    accept_run(
+        profile_directory.as_ref(),
+        storage,
+        runtime,
+        runtime_activity,
+        config_directory.as_ref(),
+        run_id,
+        prompt,
+        None,
+        thread_id,
+        session_thread,
+        continue_existing,
+        access_token,
+        subject,
+        files,
+        grant,
+        active,
+        events,
+        pi_artifact,
+    )
+}
+
+/// Accepts one manual compaction of a thread as a run in that thread. The
+/// run carries no prompt, so nothing is stored for one.
+#[allow(clippy::too_many_arguments)]
+pub fn accept_compaction(
+    profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: &RuntimeActivityRegistry,
+    config_directory: impl AsRef<Path>,
+    run_id: String,
+    thread_id: String,
+    instructions: Option<String>,
+    session_thread: &SessionThread,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    events: RuntimeChatEventTarget,
+    pi_artifact: Option<PiArtifactDescriptor>,
+) -> Result<PromptLaunch, String> {
+    accept_run(
+        profile_directory.as_ref(),
+        storage,
+        runtime,
+        runtime_activity,
+        config_directory.as_ref(),
+        run_id,
+        String::new(),
+        Some(instructions),
+        Some(thread_id),
+        session_thread,
+        false,
+        access_token,
+        subject,
+        Vec::new(),
+        grant,
+        active,
+        events,
+        pi_artifact,
+    )
+    .map(|(_, launch)| launch)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accept_run(
+    profile_directory: &Path,
+    storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: &RuntimeActivityRegistry,
+    config_directory: &Path,
+    run_id: String,
+    prompt: String,
+    compaction: Option<Option<String>>,
+    thread_id: Option<String>,
+    session_thread: &SessionThread,
+    continue_existing: bool,
+    access_token: String,
+    subject: Option<String>,
+    files: Vec<OpenSelectedFile>,
+    grant: ChatGrant,
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    events: RuntimeChatEventTarget,
+    pi_artifact: Option<PiArtifactDescriptor>,
+) -> Result<(PromptAcceptance, PromptLaunch), String> {
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        config_directory.as_ref().to_path_buf(),
+        config_directory.to_path_buf(),
         profile_directory.join("memory"),
     ));
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -166,11 +254,13 @@ pub fn accept_prompt(
             "muniment-runtime",
             env!("CARGO_PKG_VERSION"),
             || {
-                notice = super::prompt_storage::store_prompt_or_notice(
-                    &run_id,
-                    &prompt,
-                    subject.as_deref(),
-                );
+                if compaction.is_none() {
+                    notice = super::prompt_storage::store_prompt_or_notice(
+                        &run_id,
+                        &prompt,
+                        subject.as_deref(),
+                    );
+                }
                 Ok(notice.clone())
             },
         )
@@ -285,6 +375,7 @@ pub fn accept_prompt(
         events,
         pi_artifact,
         prepared,
+        compaction,
     };
     Ok((acceptance, launch))
 }
@@ -319,6 +410,41 @@ pub fn drive_prompt(launch: PromptLaunch) {
     );
     launch.memory_runtime.close_session(&launch.run_id);
     clear_active_run(&launch.active, &launch.run_id);
+}
+
+/// Drives an accepted compaction to its end and answers its token counts.
+pub fn drive_compaction(launch: PromptLaunch) -> Result<CompactionOutcome, String> {
+    let (outcome, result) = std::sync::mpsc::channel();
+    coordinate_compaction(
+        RuntimeChatEventSink::with_target(
+            &launch.profile_directory,
+            launch.events,
+            launch.memory_runtime.clone(),
+            launch.thread_id,
+            launch.grant.workspace.clone(),
+        )
+        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT)),
+        launch.storage,
+        launch.runtime,
+        launch.runtime_activity,
+        launch.memory_runtime.clone(),
+        launch.run_id.clone(),
+        launch.compaction.flatten(),
+        launch.access_token,
+        launch.subject,
+        launch.grant,
+        launch.cancelled,
+        launch.transport,
+        launch.adapter,
+        launch.permission_answers,
+        Some(launch.prepared),
+        outcome,
+    );
+    launch.memory_runtime.close_session(&launch.run_id);
+    clear_active_run(&launch.active, &launch.run_id);
+    result
+        .recv()
+        .unwrap_or_else(|_| Err("Context compaction did not finish. Try again.".into()))
 }
 
 /// Runs one prompt to completion through the dormant runtime service boundaries.
