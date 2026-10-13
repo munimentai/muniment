@@ -9,12 +9,12 @@
   const filled = $derived(contextShare(usage) * CIRCUMFERENCE)
   const label = $derived(compacting ? 'Compacting context' : `Context, ${contextHoverLabel(usage)}`)
 </script>
-<button type="button" class="quiet context-trigger" data-level={level} class:compacting aria-haspopup="dialog" aria-expanded={open} aria-label={label} data-tooltip={compacting ? 'Compacting context' : contextHoverLabel(usage)} {onclick}>
+<button type="button" class="context-trigger" data-level={level} class:compacting aria-haspopup="dialog" aria-expanded={open} aria-label={label} data-tooltip={compacting ? 'Compacting context' : contextHoverLabel(usage)} {onclick}>
   <svg class="ring" viewBox="0 0 16 16" aria-hidden="true">
     <circle class="track" cx="8" cy="8" r="6" />
     <circle class="fill" cx="8" cy="8" r="6" stroke-dasharray={`${filled} ${CIRCUMFERENCE}`} />
   </svg>
-  {#if !compacting}<span class="percent">{contextPercentLabel(usage)}</span>{/if}
+  {#if !compacting}<span>{contextPercentLabel(usage)}</span>{/if}
 </button>
 <style>
   .context-trigger { position: relative; flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; cursor: pointer; }

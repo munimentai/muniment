@@ -49,11 +49,11 @@
   header { margin-bottom: 10px; }
   .count { margin: 0 0 6px; color: var(--ink); font: var(--text-13) var(--font-mono); }
   .count small { margin-left: 1ch; color: var(--muted); font-size: var(--text-12); }
-  .bar { position: relative; height: 6px; margin: 0 0 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--faint); }
-  .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--muted); }
+  .bar { position: relative; height: 6px; margin: 0 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
+  .bar i { position: absolute; inset: 0 auto 0 0; border-radius: var(--radius-chip); background: var(--muted); }
   .bar[data-level="caution"] i { background: var(--ochre); }
   .bar b { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ink); }
-  p { margin: 6px 0; color: var(--muted); }
+  p, .caption { margin: 6px 0; color: var(--muted); }
   .caution { color: var(--ochre); }
   .error { color: var(--ink); font-family: var(--font-mono); }
   dl { display: grid; gap: 4px; margin: 10px 0; }
