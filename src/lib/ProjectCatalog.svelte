@@ -7,7 +7,7 @@
   import Button from './ui/Button.svelte'
   import CatalogActions from './CatalogActions.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { selected = $bindable(null), projects = [], threads = [], assignments = {}, busy = false, error = '', loading = false, oncreate, onthread, onnewthread, onrename, onopen, onclose } = $props()
+  let { selected = $bindable(null), projects = [], threads = [], assignments = {}, busy = false, error = '', loading = false, oncreate, onthread, onnewthread, onrename, onopen } = $props()
   let creating = $state(false)
   let name = $state('')
   let search = $state('')
@@ -26,8 +26,7 @@
       {#snippet lead()}{#if project}<button type="button" class="back" aria-label="Back to projects" onclick={() => selected = null}><LucideIcon name="arrow-left" /></button>{/if}{/snippet}
       {#snippet actions()}
         {#if project}<Button icon="square-pen" disabled={busy} onclick={() => onnewthread(selected)}>New thread</Button>
-        {:else}<Button icon="square-pen" disabled={busy} onclick={() => creating = true}>New project</Button>{/if}
-        <button type="button" aria-label="Close projects" onclick={onclose}><LucideIcon name="x" /></button>
+        {:else}<Button icon="plus" disabled={busy} onclick={() => creating = true}>New project</Button>{/if}
       {/snippet}
     </PageHead>
     {#if error}<p role="alert">{error}</p>{/if}
@@ -44,7 +43,7 @@
       </CardGrid>
       {#if !projectThreads.length}<p>{loading ? 'Loading threads…' : 'No threads yet. Start a new thread in this project.'}</p>{/if}
     {:else}
-      <SearchToolbar label="Search projects" placeholder="Search projects" bind:value={search} />
+      {#if projects.length}<SearchToolbar label="Search projects" placeholder="Search projects" bind:value={search} />{/if}
       <CardGrid>
         {#each matches as [id, title] (id)}
           {@const count = threads.filter(thread => assignments[thread.threadId] === id).length}

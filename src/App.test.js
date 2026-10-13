@@ -2935,7 +2935,7 @@ describe('thread name', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByRole('button', { name: 'Project Agreements' })
     expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
-    if (catalogOpen) await fireEvent.click(screen.getByRole('button', { name: 'Close projects' }))
+    if (catalogOpen) await fireEvent.keyDown(document, { key: 'Escape' })
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Agreements' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Open folder' }))
     expect(invoke).toHaveBeenCalledWith('project_open', { projectId: 'created' })
