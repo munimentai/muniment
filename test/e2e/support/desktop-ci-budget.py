@@ -40,7 +40,16 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
                     escalated = signum == signal.SIGKILL
                     os.kill(child.pid, signal.SIGALRM if escalated else signum)
             else:
-                os.killpg(child.pid, signum)
+                try:
+                    os.killpg(child.pid, signum)
+                except PermissionError as error:
+                    # macOS refuses to signal a group while its last members exit. Linux reports no such state.
+                    if sys.platform != "darwin":
+                        raise
+                    try:
+                        child.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        raise error from None
         except ProcessLookupError:
             pass
 
