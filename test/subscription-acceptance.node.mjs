@@ -392,11 +392,13 @@ test('the disposable environment does not inherit factory authority or provider 
     const env = isolatedEnvironment(root, { PATH: '/bin', GH_TOKEN: 'secret', GITHUB_TOKEN: 'secret',
       CODEX_HOME: '/shared', PI_CODING_AGENT_DIR: '/shared', HOME: '/shared', CLAUDE_CODE_OAUTH_TOKEN: 'secret',
       HTTPS_PROXY: 'https://untrusted', NODE_OPTIONS: '--require=/shared/module' }, 'linux')
+    // The environment derives paths from the canonical root. The macOS temporary directory is a symlink.
+    const real = fs.realpathSync(root)
     assert.equal(env.PATH, '/bin')
     for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'CODEX_HOME', 'CLAUDE_CODE_OAUTH_TOKEN', 'HTTPS_PROXY', 'NODE_OPTIONS']) assert.equal(env[name], undefined)
-    assert.equal(env.MUNIMENT_STATE_DIR, path.join(root, 'state'))
-    assert.equal(env.PI_CODING_AGENT_DIR, path.join(root, 'state', 'agent'))
-    assert.equal(env.HOME, path.join(root, 'home'))
+    assert.equal(env.MUNIMENT_STATE_DIR, path.join(real, 'state'))
+    assert.equal(env.PI_CODING_AGENT_DIR, path.join(real, 'state', 'agent'))
+    assert.equal(env.HOME, path.join(real, 'home'))
     assert.deepEqual(tree(env.MUNIMENT_STATE_DIR), {})
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
@@ -412,18 +414,19 @@ for (const platform of ['windows', 'macos-arm64', 'macos-x64']) {
     const before = { ...source }
     try {
       const env = isolatedEnvironment(root, source, platform)
+      const real = fs.realpathSync(root)
       if (platform === 'windows') {
         // Shell known folders expand the registry value through USERPROFILE, not LOCALAPPDATA.
         const registryPath = '%USERPROFILE%\\AppData\\Local'.replace('%USERPROFILE%', env.USERPROFILE)
         assert.equal(registryPath, source.LocalAppData)
         assert.equal(env.LOCALAPPDATA, source.LocalAppData)
         assert.equal(env.APPDATA, source.AppData)
-        assert.equal(env.HOME, path.join(root, 'home'))
+        assert.equal(env.HOME, path.join(real, 'home'))
       } else {
         assert.equal(env.HOME, source.HOME)
       }
-      assert.equal(env.MUNIMENT_STATE_DIR, path.join(root, 'state'))
-      assert.equal(env.PI_CODING_AGENT_DIR, path.join(root, 'state', 'agent'))
+      assert.equal(env.MUNIMENT_STATE_DIR, path.join(real, 'state'))
+      assert.equal(env.PI_CODING_AGENT_DIR, path.join(real, 'state', 'agent'))
       for (const name of ['GH_TOKEN', 'CODEX_HOME', 'NODE_OPTIONS', 'HTTPS_PROXY', 'MUNIMENT_NATIVE_DISPOSABLE_USER']) {
         assert.equal(env[name], undefined)
       }
