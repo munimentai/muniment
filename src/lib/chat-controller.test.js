@@ -20,6 +20,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   let files = []
   let openThreadId = threadId
   let threadSummaries = summaries
+  let background = null
   let listener
   const errors = []
   const onHistoryError = vi.fn()
@@ -65,6 +66,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onFollow,
     onSignInLink,
     onSubmission,
+    onBackgroundRun: (next) => { background = next },
   })
   return {
     controller,
@@ -93,6 +95,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     files: () => files,
     setMessages: (next) => { messages = next },
     setThreadId: (next) => { openThreadId = next },
+    background: () => background,
   }
 }
 
@@ -987,11 +990,11 @@ describe('chat controller', () => {
     expect(context.messages()).toEqual([])
   })
 
-  it('blocks a fresh thread during a run or thread switch', async () => {
+  it('blocks a fresh thread while a submission waits for its run id or a thread switch runs', async () => {
     const history = deferred()
     const invoke = vi.fn((command) => command === 'chat_thread_open' ? history.promise : Promise.resolve())
     const context = setup(invoke)
-    context.setActive({ id: 'run-1' })
+    context.setActive({ id: 'pending', phase: 'thinking' })
 
     await context.controller.newThread()
     expect(invoke).not.toHaveBeenCalled()
@@ -1887,10 +1890,14 @@ describe('chat controller', () => {
     })
   })
 
-  it('does not select a thread while a run is active', async () => {
+  it.each([
+    ['a submission waits for its run id', { id: 'pending', phase: 'thinking' }],
+    ['a resume waits', { id: 'run-1', phase: 'resuming' }],
+    ['a lost acknowledgment recovers', { id: 'recovering-1', phase: 'recovering' }],
+  ])('does not select a thread while %s', async (_, run) => {
     const invoke = vi.fn()
     const context = setup(invoke)
-    context.setActive({ id: 'run-1', phase: 'streaming' })
+    context.setActive(run)
 
     await context.controller.openThread('thread-2')
 
@@ -2961,5 +2968,248 @@ describe('text deltas', () => {
     const published = context.onMessages.mock.calls.length
     context.event({ ...delta(0, 'x'), runId: 'run-other' })
     expect(context.onMessages).toHaveBeenCalledTimes(published)
+  })
+})
+
+describe('background runs', () => {
+  const streaming = (runId, text, prompt = 'Explain the sky') => ({ runId, phase: 'streaming', text, prompt, receipt: null, toolActivity: [] })
+  const complete = (runId, text, prompt) => ({ runId, phase: 'complete', text, prompt, receipt: {}, toolActivity: [] })
+
+  // Thread one streams run-1. Thread two holds one settled reply.
+  function runningSetup() {
+    const threads = {
+      'thread-1': [streaming('run-1', 'Blue light scatters')],
+      'thread-2': [complete('run-0', 'Earlier answer', 'Earlier question')],
+    }
+    const opens = {}
+    let context
+    const invoke = vi.fn((command, payload) => {
+      if (command === 'chat_thread_open') return opens[payload.threadId]?.promise ?? Promise.resolve({ entries: threads[payload.threadId] ?? [], nextCursor: null })
+      if (command === 'chat_thread_summaries') return Promise.resolve({ summaries: [{ threadId: 'thread-1' }, { threadId: 'thread-2' }], nextCursor: null })
+      if (command === 'chat_current_thread') return Promise.resolve(null)
+      if (command === 'chat_new_thread') return Promise.resolve('thread-3')
+      return Promise.resolve()
+    })
+    context = setup(invoke, { threadId: 'thread-1', summaries: [{ threadId: 'thread-1' }, { threadId: 'thread-2' }] })
+    context.onThreadSelected.mockImplementation((next) => context.setThreadId(next))
+    return { ...context, invoke, threads, opens }
+  }
+
+  async function startRunning() {
+    const context = runningSetup()
+    await context.start()
+    await context.controller.openThread('thread-1')
+    expect(context.active()).toMatchObject({ id: 'run-1', phase: 'streaming' })
+    context.invoke.mockClear()
+    return context
+  }
+
+  const runIds = (messages) => messages.filter((message) => message.run).map((message) => message.run.id)
+
+  it('opens another thread while a run streams and keeps that run in the background', async () => {
+    const context = await startRunning()
+
+    await expect(context.controller.openThread('thread-2')).resolves.toBe(true)
+
+    expect(context.invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'thread-2' })
+    expect(context.invoke).not.toHaveBeenCalledWith('chat_cancel', expect.anything())
+    expect(runIds(context.messages())).toEqual(['run-0'])
+    expect(context.active()).toBeNull()
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+  })
+
+  it('opens a fresh thread while a run streams and keeps that run in the background', async () => {
+    const context = await startRunning()
+
+    await expect(context.controller.newThread()).resolves.toBe(true)
+
+    expect(context.messages()).toEqual([])
+    expect(context.active()).toBeNull()
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+  })
+
+  it('drops background events from the open transcript and forgets the run when it settles', async () => {
+    const context = await startRunning()
+    await context.controller.openThread('thread-2')
+    const shown = context.messages()
+    context.invoke.mockClear()
+
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'text-delta', text: ' everywhere' })
+    expect(context.messages()).toBe(shown)
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+    expect(context.invoke).not.toHaveBeenCalled()
+
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+
+    expect(context.background()).toBeNull()
+    expect(context.messages()).toBe(shown)
+    expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(context.invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 }))
+  })
+
+  it.each(['failed', 'cancelled', 'interrupted'])('forgets the background run when it ends %s', async (phase) => {
+    const context = await startRunning()
+    await context.controller.openThread('thread-2')
+
+    context.event({ runId: 'run-1', threadId: 'thread-1', phase, text: 'Blue light scatters' })
+
+    expect(context.background()).toBeNull()
+  })
+
+  it('forgets the run at once when its settlement lands while the other thread loads', async () => {
+    const context = await startRunning()
+    const pages = deferred()
+    context.opens['thread-2'] = pages
+
+    const opening = context.controller.openThread('thread-2')
+    await vi.waitFor(() => expect(context.invoke).toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'thread-2' })))
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    pages.resolve({ entries: context.threads['thread-2'], nextCursor: null })
+    await opening
+
+    expect(context.background()).toBeNull()
+    expect(context.active()).toBeNull()
+    await vi.waitFor(() => expect(context.invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20 }))
+  })
+
+  it('blocks a send, a resume and a launcher prompt while a run goes on another thread', async () => {
+    const context = await startRunning()
+    await context.controller.openThread('thread-2')
+    context.setDraft('Second question')
+
+    await context.controller.send()
+    await context.controller.resume({ id: 'run-0', phase: 'interrupted', resumable: true })
+    await expect(context.controller.sendNewThread('From the launcher')).resolves.toBe(false)
+
+    expect(context.invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(context.invoke).not.toHaveBeenCalledWith('chat_resume', expect.anything())
+    expect(context.draft()).toBe('Second question')
+
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    context.invoke.mockImplementation((command) => command === 'chat_submit' ? Promise.resolve({ runId: 'run-2', attachments: [] }) : Promise.resolve({ summaries: [], nextCursor: null }))
+    await context.controller.send()
+
+    expect(context.invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Second question', files: [] })
+  })
+
+  it('rejoins the live run on return without duplicating it or losing streamed text', async () => {
+    const context = await startRunning()
+    await context.controller.openThread('thread-2')
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'text-delta', text: ' everywhere' })
+    // The runtime recorded the text the window missed.
+    context.threads['thread-1'] = [streaming('run-1', 'Blue light scatters everywhere')]
+    const pages = deferred()
+    context.opens['thread-1'] = pages
+
+    const opening = context.controller.openThread('thread-1')
+    await vi.waitFor(() => expect(context.invoke).toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'thread-1' })))
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'text-delta', text: ' in the air' })
+    pages.resolve({ entries: context.threads['thread-1'], nextCursor: null })
+    await opening
+
+    expect(context.background()).toBeNull()
+    expect(runIds(context.messages())).toEqual(['run-1'])
+    expect(context.messages().filter((message) => message.role === 'user')).toHaveLength(1)
+    expect(context.active()).toMatchObject({ id: 'run-1', phase: 'streaming', text: 'Blue light scatters everywhere in the air' })
+    expect(context.invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  })
+
+  it('keeps one run on the right thread across repeated switches', async () => {
+    const context = await startRunning()
+
+    for (let round = 0; round < 3; round += 1) {
+      await context.controller.openThread('thread-2')
+      expect(context.active()).toBeNull()
+      expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+      expect(runIds(context.messages())).toEqual(['run-0'])
+
+      await context.controller.openThread('thread-1')
+      expect(context.background()).toBeNull()
+      expect(context.active()).toMatchObject({ id: 'run-1', phase: 'streaming' })
+      expect(runIds(context.messages())).toEqual(['run-1'])
+    }
+
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    expect(context.active()).toBeNull()
+    expect(context.messages().at(-1).run).toMatchObject({ id: 'run-1', phase: 'complete' })
+  })
+
+  it('deletes another thread during a run but never the running thread', async () => {
+    const context = await startRunning()
+
+    await expect(context.controller.deleteThread('thread-1')).resolves.toBe(false)
+    await expect(context.controller.deleteThread('thread-2')).resolves.toBe(true)
+    expect(context.invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toEqual([
+      ['chat_delete_thread', { threadId: 'thread-2' }],
+    ])
+    expect(context.active()).toMatchObject({ id: 'run-1' })
+
+    await context.controller.openThread('thread-4')
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+    context.invoke.mockClear()
+
+    await expect(context.controller.deleteThread('thread-1')).resolves.toBe(false)
+    expect(context.invoke).not.toHaveBeenCalledWith('chat_delete_thread', expect.anything())
+
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    await expect(context.controller.deleteThread('thread-1')).resolves.toBe(true)
+  })
+
+  it('keeps a queued message off a thread the user opened since', async () => {
+    const context = await startRunning()
+    const queued = deferred()
+    context.invoke.mockImplementation((command, payload) => command === 'chat_queue' ? queued.promise : Promise.resolve({ entries: context.threads[payload?.threadId] ?? [], nextCursor: null }))
+    context.setDraft('Then summarize it')
+
+    const queueing = context.controller.queue('steer')
+    await context.controller.openThread('thread-2')
+    queued.resolve()
+    await queueing
+
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Earlier question', 'Earlier answer'])
+  })
+
+  it('takes back a turn the runtime refuses while another reply runs, and keeps the draft', async () => {
+    vi.useFakeTimers()
+    try {
+      const refusal = { source: 'submit', message: 'A reply is already in progress.' }
+      const invoke = vi.fn((command) => command === 'chat_submit' ? Promise.reject(refusal) : Promise.resolve())
+      const context = setup(invoke, { threadId: 'thread-2' })
+      const earlier = [{ role: 'user', text: 'Earlier question' }]
+      context.setMessages(earlier)
+      context.setDraft('Second question')
+
+      const sending = context.controller.send()
+      await vi.advanceTimersByTimeAsync(2_500)
+
+      await expect(sending).resolves.toBe(false)
+      expect(invoke.mock.calls.filter(([command]) => command === 'chat_submit').length).toBeGreaterThan(1)
+      expect(context.messages()).toEqual(earlier)
+      expect(context.active()).toBeNull()
+      expect(context.draft()).toBe('Second question')
+      expect(context.errors).toEqual(['Another reply is still running. Send again when it ends.'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends once the runtime frees the run slot just after a settlement', async () => {
+    vi.useFakeTimers()
+    try {
+      const invoke = vi.fn()
+        .mockRejectedValueOnce({ source: 'submit', message: 'A reply is already in progress.' })
+        .mockResolvedValueOnce({ runId: 'run-2', attachments: [] })
+      const context = setup(invoke, { threadId: 'thread-2' })
+      context.setDraft('Second question')
+
+      const sending = context.controller.send()
+      await vi.advanceTimersByTimeAsync(200)
+
+      await expect(sending).resolves.toBe(true)
+      expect(context.active()).toMatchObject({ id: 'run-2' })
+      expect(context.errors).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -24,7 +24,7 @@
   const CURL_MS = 700
   const STRIDE_MS = 1200
   const ease = (t) => t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2
-  let { stage = 'routing', mark = null, size = 20 } = $props()
+  let { stage = 'routing', mark = null, size = 20, settled = true } = $props()
   let chosen = $state(readStoredMark())
   const style = $derived(parseMark(mark ?? chosen))
   let shown = $state(stageWord(stage))
@@ -124,7 +124,7 @@
   })
 </script>
 
-<span class="thinking" out:thinkingSettle|global>{#if style === 'text'}<span class="stage-sheen">{shown}</span>{:else}<svg width={size} height={size} viewBox="-20 -20 566 499" aria-label={shown}><g class="walker" class:ear-only={style === 'ear'} class:still={style === 'still'} bind:this={walker}><path class="body leg hind" bind:this={hind} d={HIND} /><path class="body leg fore" bind:this={fore} d={FORE} /><g bind:this={rearing}><path class="body trunk" bind:this={trunk} d={TRUNK} /><path class="body torso" d={TORSO} /><path class="accent" d={EAR} aria-hidden="true" /></g></g></svg><span>{shown}</span>{/if}</span>
+<span class="thinking" out:thinkingSettle|global={{ instant: !settled }}>{#if style === 'text'}<span class="stage-sheen">{shown}</span>{:else}<svg width={size} height={size} viewBox="-20 -20 566 499" aria-label={shown}><g class="walker" class:ear-only={style === 'ear'} class:still={style === 'still'} bind:this={walker}><path class="body leg hind" bind:this={hind} d={HIND} /><path class="body leg fore" bind:this={fore} d={FORE} /><g bind:this={rearing}><path class="body trunk" bind:this={trunk} d={TRUNK} /><path class="body torso" d={TORSO} /><path class="accent" d={EAR} aria-hidden="true" /></g></g></svg><span>{shown}</span>{/if}</span>
 
 <style>
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }

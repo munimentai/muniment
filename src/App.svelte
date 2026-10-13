@@ -56,7 +56,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import PocketFold from './lib/PocketFold.svelte'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, settledPhases } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
@@ -185,8 +185,17 @@
   let catalogArchive = $state(readCatalogArchive())
   function catalogKey(kind, item) { return `${kind === 'creation' ? item.kind : kind}:${item.id || item.threadId}` }
   function catalogArchived(kind, item) { return catalogArchive[catalogKey(kind,item)] === true }
+  // An agent or artifact whose thread holds the running reply keeps its actions until that reply settles.
+  function catalogHoldsRun(kind, item) {
+    if (switchLocked) return true
+    if (!runningThreadId) return false
+    const threadIds = kind === 'agent'
+      ? [...Object.keys(agentListing.state.threads).filter(id => agentListing.state.threads[id] === item.id), ...creations.filter(plan => plan.resultId === item.id).map(plan => plan.threadId)]
+      : [item.threadId, ...creations.filter(plan => plan.threadId === item.threadId).map(plan => plan.threadId)]
+    return threadIds.includes(runningThreadId)
+  }
   async function catalogAction(kind, item, action, name) {
-    if (active || threadSwitching) throw new Error('Finish the current reply before changing this item.')
+    if (threadSwitching || catalogHoldsRun(kind, item)) throw new Error('Finish the current reply before changing this item.')
     const plans = kind === 'agent' ? creations.filter(plan=>plan.resultId===item.id) : creations.filter(plan=>plan.threadId===item.threadId)
     if (action === 'archive' || action === 'restore') {
       if (kind === 'agent' && action === 'archive' && item.schedule?.enabled) {
@@ -236,7 +245,7 @@
     if (values[1].status === 'fulfilled' && Array.isArray(values[1].value)) artifactItems = values[1].value
   }
   async function startCreation(kind, chosen = creationDefaults(kind)) {
-    if (active || threadSwitching) return
+    if (switchLocked) return
     if (!await newSidebarThread(selectedProject) || !currentThreadId) return
     pendingCreation = { threadId: currentThreadId, kind, goal: chosen.goal, output: chosen.output, resultId: null }
     draft = creationPrompt(kind, pendingCreation)
@@ -259,7 +268,7 @@
     composer?.focus()
   }
   async function openCreation(item) {
-    if (active || threadSwitching) return
+    if (switchLocked) return
     if (!item.threadId) {
       if (!await newSidebarThread(selectedProject) || !currentThreadId) return
       try {
@@ -314,7 +323,7 @@
     catch (_) { /* The manager presents errors and retry state. */ }
   }
   async function openAgent(agent) {
-    if (active || threadSwitching || agentOpening) return
+    if (switchLocked || agentOpening) return
     agentOpening = true
     try {
       const mapping = agentListing.state.threads
@@ -352,7 +361,7 @@
   }
 
   async function createExtensionDraft(kind) {
-    if (active || threadSwitching) return
+    if (switchLocked) return
     if (!await newSidebarThread(selectedProject)) return
     closeSettings()
     draft = `Help me create a ${kind}. Ask about its purpose, then save it in managed extension storage.`
@@ -449,6 +458,12 @@
   let messages = $state.raw([])
   const messageKeys = $derived(transcriptKeys(messages))
   let active = $state(null)
+  // The run the window left on another thread, as { threadId, runId }. The runtime
+  // keeps driving it, and the controller clears it when an event settles it.
+  let backgroundRun = $state(null)
+  // A submission waiting for its run id, a resume or a recovery keeps the window on its thread.
+  const runLocked = $derived(!!active && (active.id === 'pending' || active.phase === 'resuming' || active.phase === 'recovering'))
+  const switchLocked = $derived(runLocked || threadSwitching)
   // The transcript is not a live region. Only the run the user is waiting on is
   // announced, and only when its phase changes. Restored history announces the
   // run the desktop rejoins and nothing else.
@@ -498,6 +513,8 @@
   let currentThreadTitle = $derived(profileAgent?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   let threadSwitching = $state(false)
+  const runningThreadId = $derived(backgroundRun?.threadId ?? (active ? currentThreadId : null))
+  const backgroundRunTitle = $derived(threadSummaries.find(item => item.threadId === backgroundRun?.threadId)?.title || 'Another thread')
   let editingThreadTitle = $state(false)
   let threadTitleDraft = $state('')
   let threadTitleInput = $state()
@@ -747,6 +764,7 @@
     onSend: () => { retryReview = null },
     onSubmission: (detail) => window.dispatchEvent(new CustomEvent('muniment-chat-submit', { detail })),
     onSignInLink: (link) => { if (auth.name === 'signing-in') auth = { ...auth, link } },
+    onBackgroundRun: (next) => { backgroundRun = next },
   })
 
   async function loadOlderThreads() {
@@ -800,7 +818,7 @@
   }
 
   async function newProjectThread(projectId) {
-    if (active || threadSwitching || projectBusy) return
+    if (switchLocked || projectBusy) return
     expandedProjects = new Set([...expandedProjects, projectId])
     await newSidebarThread(projectId)
   }
@@ -828,7 +846,7 @@
 
   async function newSidebarThread(projectId = null) {
     artifactsOpen = false
-    if (active || threadSwitching || projectBusy) return
+    if (switchLocked || projectBusy) return
     selectedProject = projectId
     projectsOpen = false
     agentsOpen = false
@@ -977,6 +995,10 @@
     void chatController.openThread(threadId)
   }
 
+  function openRunningThread() {
+    if (backgroundRun?.threadId) threadRowClick({}, backgroundRun.threadId)
+  }
+
   // The open thread's row is not a button, so a modifier click alone selects it.
   function currentRowClick(event, threadId) {
     if (!(event.shiftKey || event.metaKey || event.ctrlKey)) return
@@ -1016,7 +1038,13 @@
     return form === 'name' ? `Delete ${rowTitle}` : `Delete ${rowTitle}?`
   }
 
+  // The running reply's thread stays until that reply settles.
+  function deletionHoldsRun(threadId) {
+    return !!runningThreadId && deletionTargets(threadId).includes(runningThreadId)
+  }
+
   function askToDeleteThread(threadId) {
+    if (deletionHoldsRun(threadId)) return
     deleteFromTitle = !!threadMenu?.fromTitle
     closeThreadMenu()
     deletingThreadIds = deletionTargets(threadId)
@@ -1025,7 +1053,7 @@
 
   function threadRowKeydown(event, threadId) {
     if (event.key === 'Delete' || event.key === 'Backspace') {
-      if (active || threadSwitching) return
+      if (threadSwitching || deletionHoldsRun(threadId)) return
       event.preventDefault()
       askToDeleteThread(threadId)
     } else if (event.key === 'Escape' && selectedThreadIds.size) {
@@ -1830,7 +1858,7 @@
       if (deletingThreadId || event.defaultPrevented) return
       const sidebarTarget = event.target?.closest?.('#sidebar, .thread-menu')
       const editing = event.target?.closest?.('input,textarea,[contenteditable="true"]')
-      if (sidebarTarget && !editing && !active && !threadSwitching) {
+      if (sidebarTarget && !editing && !switchLocked) {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
           event.preventDefault()
           selectedThreadIds = new Set(shortcutThreads.map(t => t.threadId).filter(Boolean))
@@ -1854,7 +1882,7 @@
       const rowPosition = threadRowShortcutPosition(event)
       if (workspaceMode() && onboarding.name === 'complete' && rowPosition !== null) {
         event.preventDefault()
-        if (sidebarCollapsed || active || threadSwitching) return
+        if (sidebarCollapsed || switchLocked) return
         const threadId = shortcutThreads[rowPosition - 1]?.threadId
         if (!threadId || threadId === currentThreadId) return
         projectsOpen = false; agentsOpen = false; artifactsOpen = false
@@ -2048,7 +2076,7 @@
   }
 
   function sendDisabled() {
-    return runtimeUpgradePending() || !draft.trim() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || !draft.trim() || !!backgroundRun || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   // The band's one action control: an up arrow that sends while the draft has
@@ -2095,7 +2123,8 @@
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
                     <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
-                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={active ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}><span></span><div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                    {@const running = summary.threadId === backgroundRun?.threadId}
+                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}><span class:run-mark={running} aria-hidden={running ? 'true' : undefined}></span><div class="thread-row-title">{rowTitle}</div>{#if running}<span class="visually-hidden">Running</span>{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -2159,13 +2188,13 @@
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
-              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
+              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread || !!active} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
             {/if}
             <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
             {/if}
 
             <span class="title-spacer" data-tauri-drag-region></span>
-            <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || !!active || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
+            <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || !!active || !!backgroundRun || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
             {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
             <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
           </div>
@@ -2173,45 +2202,46 @@
                   {#if threadMenu}
                     {@const summary = threadSummaries.find((item) => item.threadId === threadMenu.threadId) || { threadId: threadMenu.threadId, title: currentThreadTitle }}
                     {@const rowTitle = summary.title || 'New thread'}
+                    {@const running = summary.threadId === runningThreadId}
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                     <div class="thread-menu" use:floatingMenu role="menu" tabindex="-1" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
-                      <button type="button" role="menuitem" onclick={() => { if (threadMenu.fromTitle) { closeThreadMenu(); editThreadTitle(currentThreadTitle) } else renameSidebarThread(summary) }}>Rename</button>
+                      <button type="button" role="menuitem" disabled={running} onclick={() => { if (threadMenu.fromTitle) { closeThreadMenu(); editThreadTitle(currentThreadTitle) } else renameSidebarThread(summary) }}>Rename</button>
                       <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'pinned')}>{threadOrganization[summary.threadId]?.pinned ? 'Unpin' : 'Pin'}</button>
-                      <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
-                      <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={!!active || threadSwitching} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
+                      <button type="button" role="menuitem" disabled={running} onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
+                      <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={threadSwitching || runLocked || deletionHoldsRun(summary.threadId)} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
         <aside data-panel="sidebar" id="sidebar" class="sidebar">
           {#if !sidebarCollapsed}
             <div class="side-top">
-              <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={!!active || threadSwitching} onclick={() => newSidebarThread()}>
+              <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={switchLocked} onclick={() => newSidebarThread()}>
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
             </div>
-            {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={!!active || threadSwitching} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Clear</button></div>{/if}
+            {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Clear</button></div>{/if}
             <div class="side-scroll" use:panelScroll>
             <section class="sidebar-collection" aria-label="Agents group">
-              <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} disabled={!!active || threadSwitching} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
+              <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
               {#if agentsExpanded}<div class="collection-children">
             {#if agentListing.agents.length}
               <div class="agent-roster" aria-label="Saved agents">
                 {#each agentListing.agents.filter(agent=>!catalogArchived('agent',agent)) as agent (agent.id)}
-                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={selectedAgent === agent.id ? "true" : undefined} disabled={!!active || threadSwitching} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span></button><CatalogActions name={agent.name} disabled={!!active || threadSwitching} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/></div>
+                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={selectedAgent === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span></button><CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/></div>
                 {/each}
               </div>
             {/if}
-            {#if creations.some(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))}<div class="agent-roster" aria-label="Agents in progress">{#each creations.filter(item=>item.kind==='agent'&&!catalogArchived('creation',item)&&!agentListing.agents.some(agent=>agent.id===item.resultId)) as item (item.threadId)}<div class="catalog-sidebar-row"><button class="side-action" disabled={!!active || threadSwitching} onclick={()=>openCreation(item)}><LucideIcon name="bot"/><span>{creationTitle(item, threadSummaries)}</span></button><CatalogActions name={creationTitle(item, threadSummaries)} disabled={!!active || threadSwitching} onaction={(action,name)=>catalogAction('creation',item,action,name)}/></div>{/each}</div>{/if}
+            {#if creations.some(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))}<div class="agent-roster" aria-label="Agents in progress">{#each creations.filter(item=>item.kind==='agent'&&!catalogArchived('creation',item)&&!agentListing.agents.some(agent=>agent.id===item.resultId)) as item (item.threadId)}<div class="catalog-sidebar-row"><button class="side-action" disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="bot"/><span>{creationTitle(item, threadSummaries)}</span></button><CatalogActions name={creationTitle(item, threadSummaries)} disabled={catalogHoldsRun('creation', item)} onaction={(action,name)=>catalogAction('creation',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
             <section class="sidebar-collection" aria-label="Artifacts group">
-              <ProjectRow name="Artifacts" panelOpen={artifactsOpen} label="Artifacts" icon="file" newLabel="New artifact" expanded={artifactsExpanded} disabled={!!active || threadSwitching} ontoggle={() => artifactsExpanded = !artifactsExpanded} onactivate={showArtifacts} onnew={() => startCreation('artifact')} />
+              <ProjectRow name="Artifacts" panelOpen={artifactsOpen} label="Artifacts" icon="file" newLabel="New artifact" expanded={artifactsExpanded} disabled={switchLocked} ontoggle={() => artifactsExpanded = !artifactsExpanded} onactivate={showArtifacts} onnew={() => startCreation('artifact')} />
               {#if artifactsExpanded}<div class="collection-children">
-            {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={!!active || threadSwitching} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span></button><CatalogActions name={item.name || item.goal} disabled={!!active || threadSwitching} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
+            {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span></button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
             <section class="project-section" aria-label="Projects">
-              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={!!active || threadSwitching || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
+              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
               {#if projectForm}
                 <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveProject() }}>
                   <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
@@ -2221,7 +2251,7 @@
               {/if}
               {#if projectsExpanded && projectRows.length}<div class="collection-children">
               {#each projectRows as [projectId, name] (projectId)}
-                <ProjectRow {name} expanded={expandedProjects.has(projectId)} disabled={!!active || threadSwitching || projectBusy}
+                <ProjectRow {name} expanded={expandedProjects.has(projectId)} disabled={switchLocked || projectBusy}
                   ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)}
                   onrename={() => { projectForm = projectId; projectName = name }} onopen={() => openProjectFolder(projectId)} />
                 {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
@@ -2254,7 +2284,7 @@
             {#if auth.name === 'signed-in'}
               <AccessPanel {tauri} subject={auth.subject} onSignOut={() => run('sign-out')} />
             {:else}
-              <button class="side-action" disabled={!!active || localEntryPending} onclick={signIn}><LucideIcon name="log-in" size={18} /><span>Sign in to cloud</span></button>
+              <button class="side-action" disabled={!!active || !!backgroundRun || localEntryPending} onclick={signIn}><LucideIcon name="log-in" size={18} /><span>Sign in to cloud</span></button>
             {/if}
             {/if}
           </div>
@@ -2348,7 +2378,7 @@
               {/each}
               {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry prepares the message for review.</span> <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button></div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
-              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
+              {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
                 {@const gate = message.run.pendingPermission}
                 {@const answerState = permissionState(message.run)}
@@ -2407,7 +2437,7 @@
               {/if}
               {#if ['thinking', 'streaming', 'acquiring-pi', 'pending-permission', 'recovering', 'resuming'].includes(message.run.phase)}
                 <div class="receipt-line live-receipt">
-                  <RunMark stage={message.run.stage} />
+                  <RunMark stage={message.run.stage} settled={settledPhases.has(message.run.phase)} />
                   <div class="response-meta">
                     <ExecutionTime startedAt={message.run.startedAt} />
                     <span class="copy-slot" aria-hidden="true"></span>
@@ -2560,6 +2590,9 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          {#if backgroundRun && !active}
+            <p class="run-status run-elsewhere" role="status">{backgroundRunTitle} is still running. {#if backgroundRun.threadId}<button type="button" disabled={switchLocked} onclick={openRunningThread}>Open</button>{/if}</p>
+          {/if}
           {#if runtimeUpgradePending()}
             <section class="update-notice" aria-live="polite">
               <p class="record error-record">A Muniment update is finishing.</p>
@@ -2685,7 +2718,7 @@
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} agents={agentListing.agents} isArchived={catalogArchived} onaction={catalogAction} projects={projectRows} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={()=>startCreation('agent')} onclose={() => { agentsOpen = false }} onselect={openAgent} onopen={openCreation} onchange={(next) => { agentListing = next }} />
   {/key}{/if}
-  {#if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={!!active || threadSwitching || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} onclose={() => projectsOpen = false} />{/if}
+  {#if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} onclose={() => projectsOpen = false} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={()=>startCreation('artifact')} onclose={()=>artifactsOpen=false}/>{/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
              copy confirmation into the run-phase region above would overwrite whatever
@@ -2710,7 +2743,7 @@
   {#if settingsOpen}
     {#await loadSettings() then module}
     {@const Settings = module.default}
-    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} />
+    <Settings {tauri} bind:section={settingsSection} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} />
     {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
   {/if}
 {#if pairingRequests[0]}
@@ -2962,6 +2995,8 @@
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
   .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+  /* A thread whose reply still runs in the background: a quiet muted ring in the dot's place. */
+  .thread-row > span.run-mark { width: 5px; height: 5px; border: 1px solid var(--muted); border-radius: var(--radius-chip); }
   .quiet { background: transparent; border-color: transparent; }
   /* Each divider covers its panel gap with a few pixels of grab on either side. A three-dot grip marks the gap. On hover, focus or drag, the gap fills with the hairline border color, which fades out at both ends. */
   .agent-divider { grid-area: rail; }
@@ -3080,6 +3115,8 @@
      A 15px support line would compete with the draft text. */
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
+  .run-elsewhere { margin: 0 0 8px; overflow-wrap: anywhere; }
+  .run-elsewhere button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
   .attachments li { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(260px, 100%); height: 28px; padding: 0 0 0 6px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
