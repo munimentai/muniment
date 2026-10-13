@@ -26,6 +26,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 sha2 = "0.10"
 base64 = "0.22"
+cap-fs-ext = "4.0.3"
+cap-std = "4.0.3"
 flate2 = "1"
 tar = "0.4"
 ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }

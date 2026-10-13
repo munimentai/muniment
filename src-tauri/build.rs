@@ -159,6 +159,7 @@ const APP_COMMANDS: &[&str] = &[
     "onboarding_import_preview",
     "onboarding_import_extract",
     "onboarding_scan",
+    "memory_import_assistant",
     "onboarding_provider_scan",
     "onboarding_connect_server",
     "parakeet_install_facts",
