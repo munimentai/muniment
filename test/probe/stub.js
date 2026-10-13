@@ -295,8 +295,26 @@ export function buildProbeCommandTable(fixtureName) {
     ? { revision: 1, lastEvent: 'exited', visible: true, busy: false }
     : { revision: 0, lastEvent: 'connected', visible: false, busy: false }
 
+  // `?context=caution`, `unknown` or `estimated` shows that meter state.
+  let probeContext = new URLSearchParams(location.search).get('context') || 'normal'
+  const contextUsage = () => ({
+    normal: { tokens: 46210, contextWindow: 200000, percent: 23.1, estimated: false, windowKnown: true },
+    caution: { tokens: 170000, contextWindow: 200000, percent: 85, estimated: false, windowKnown: true },
+    unknown: { tokens: 21480, contextWindow: 128000, percent: 16.8, estimated: false, windowKnown: false },
+    estimated: { tokens: 31900, contextWindow: 200000, percent: 15.95, estimated: true, windowKnown: true },
+  })[probeContext] ?? null
+
   async function invoke(command, payload) {
     if (command === 'app_update_prepare') return null
+    if (command === 'thread_context_usage') {
+      const usage = contextUsage()
+      return usage && { ...usage, provider: probeContext === 'unknown' ? 'ollama' : 'anthropic', model: probeContext === 'unknown' ? 'qwen3:8b' : 'claude-sonnet', autoCompact: true, compactAt: usage.contextWindow - 16384, compacting: false }
+    }
+    if (command === 'thread_compact') {
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      probeContext = 'estimated'
+      return { tokensBefore: 152400, estimatedTokensAfter: 31900 }
+    }
     if (command === 'launcher_register') return null
     if (command === 'artifact_list' || command === 'creation_list') return []
     if (command === 'extend_command' && payload?.action === 'read') return { items: [] }

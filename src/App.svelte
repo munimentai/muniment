@@ -37,6 +37,9 @@
   import ModelPicker from './lib/ModelPicker.svelte'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
   import Capacity from './lib/Capacity.svelte'
+  import ContextMeter from './lib/ContextMeter.svelte'
+  import ContextPanel from './lib/ContextPanel.svelte'
+  import { compactCommand, contextHint } from './lib/context-usage.js'
   import { currentModel, currentModelAvailable, modelChipLabel, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
@@ -139,10 +142,12 @@
   let inventoryRequestVersion = 0
   let pickerOpen = $state(false)
   let capacityOpen = $state(false)
+  let contextOpen = $state(false)
   $effect(() => {
     const panel = event => {
       pickerOpen = event.detail === 'model'
       capacityOpen = event.detail === 'capacity'
+      contextOpen = event.detail === 'context'
       if (event.detail !== 'speech') speechInstallDismissed = true
       if (event.detail !== 'mentions') mention = null
     }
@@ -507,6 +512,48 @@
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
   let currentThreadId = $state(null)
+  // The runtime reports how full the current thread's context is. The meter
+  // reads it again when the thread changes, a reply ends or a compaction ends.
+  let contextUsage = $state(null)
+  let compacting = $state(false)
+  let compactError = $state('')
+  let contextRequest = 0
+  const replyRunning = $derived(!!active)
+  async function refreshContextUsage() {
+    const request = ++contextRequest
+    const threadId = currentThreadId
+    if (!threadId) { contextUsage = null; return }
+    try {
+      const next = await tauri.invoke('thread_context_usage', { threadId })
+      if (request === contextRequest) contextUsage = next
+    } catch (_) { if (request === contextRequest) contextUsage = null }
+  }
+  $effect(() => { void currentThreadId; if (!replyRunning) void refreshContextUsage() })
+  async function compactThread(instructions, fromDraft = false) {
+    if (compacting || active) return
+    if (!currentThreadId) { submitError = 'Start a conversation before you compact it.'; return }
+    compacting = true
+    compactError = ''
+    submitError = ''
+    try {
+      await tauri.invoke('thread_compact', { threadId: currentThreadId, instructions })
+      if (fromDraft) draft = ''
+      openComposerPanel(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (contextOpen) compactError = message
+      else submitError = message
+    } finally {
+      compacting = false
+      void refreshContextUsage()
+    }
+  }
+  // `/compact` runs here and sends no message to the model.
+  function sendOrRun() {
+    const command = compactCommand(draft)
+    if (command) void compactThread(command.instructions, true)
+    else chatController.send()
+  }
   let currentThreadTitle = $derived(profileAgent?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   let threadSwitching = $state(false)
@@ -741,7 +788,7 @@
     readFiles: () => selectedFiles,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
-    blocked: () => dictationBusy() || runtimeUpgradePending() || modelChoicePending || !!retryReview?.chooseModel,
+    blocked: () => dictationBusy() || runtimeUpgradePending() || modelChoicePending || compacting || !!retryReview?.chooseModel,
     onMessages: (next) => { messages = next },
     onActive: (next) => { active = next },
     onAnnounce: (next) => { announcedRun = next },
@@ -1928,7 +1975,7 @@
         settingsShortcutPressed()
         return
       }
-      if (event.key === 'Escape' && (pickerOpen || capacityOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
+      if (event.key === 'Escape' && (pickerOpen || capacityOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
       if (event.key === 'Escape' && projectsOpen) { projectsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && artifactsOpen) { artifactsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && browserPanel) { browserPanel = null; event.preventDefault() }
@@ -2095,7 +2142,7 @@
     if (action) {
       event.preventDefault()
       if (action === 'submit' && needsModel()) openModelProviders()
-      else action === 'submit' ? chatController.send() : chatController.queue('steer')
+      else action === 'submit' ? sendOrRun() : chatController.queue('steer')
     }
   }
 
@@ -2130,7 +2177,7 @@
     if (composerActionInactive()) return
     if (active) chatController.cancel()
     else if (needsModel()) openModelProviders()
-    else chatController.send()
+    else sendOrRun()
   }
 </script>
 
@@ -2567,6 +2614,7 @@
           </section>
         {/if}
         {#if hasSubscriptions && capacityOpen}<Capacity {tauri} onmanage={openModelSettings} onclose={() => capacityOpen = false} />{/if}
+        {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
           <ModelPicker {inventory} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onclose={closePicker} />
         {/if}
@@ -2638,7 +2686,7 @@
             {#if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
             <ComposerReferences commands={extensionCommandNames} text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? 'file-mentions' : undefined} aria-activedescendant={mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? 'file-mentions' : undefined} aria-activedescendant={mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || compacting || contextHint(contextUsage) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
           </div>
           {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
@@ -2657,6 +2705,7 @@
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
             {/if}
+            {#if contextUsage}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
             {:else if isDictationActive(dictation)}
@@ -2664,6 +2713,10 @@
                 <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
                 {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
               </span>
+            {:else if compacting}
+              <span id="composer-hint" role="status">Send waits for compaction. Your draft stays here.</span>
+            {:else if !active && contextHint(contextUsage)}
+              <span id="composer-hint" class="context-hint" data-level="caution">{contextHint(contextUsage)}</span>
             {:else}
               {#if composerHint}<span id="composer-hint">{composerHint}</span>{/if}
             {/if}
@@ -3075,6 +3128,7 @@
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
   .capacity-trigger { color: var(--muted); }
+  .context-hint { color: var(--ochre); }
   .collection-children { padding-left: 16px; }
 
   .workspace.sidebar-resizing .thread-panel { transition: none; }
