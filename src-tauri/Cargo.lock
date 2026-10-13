@@ -3242,7 +3242,7 @@ dependencies = [
 [[package]]
 name = "muniment-atomic-file"
 version = "0.0.1"
-source = "git+https://github.com/munimentai/muniment-core?tag=v1.12.6#f65d49077ef4d7f9a654a7f1502bbf7647fa20fd"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -3250,7 +3250,7 @@ dependencies = [
 [[package]]
 name = "muniment-attach"
 version = "0.0.1"
-source = "git+https://github.com/munimentai/muniment-core?tag=v1.12.6#f65d49077ef4d7f9a654a7f1502bbf7647fa20fd"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
 dependencies = [
  "getrandom 0.3.4",
  "serde",
@@ -3270,7 +3270,7 @@ dependencies = [
 [[package]]
 name = "muniment-code-diff"
 version = "0.0.1"
-source = "git+https://github.com/munimentai/muniment-core?tag=v1.12.6#f65d49077ef4d7f9a654a7f1502bbf7647fa20fd"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
 dependencies = [
  "serde",
  "serde_json",
@@ -3279,7 +3279,7 @@ dependencies = [
 [[package]]
 name = "muniment-core"
 version = "0.0.1"
-source = "git+https://github.com/munimentai/muniment-core?tag=v1.12.6#f65d49077ef4d7f9a654a7f1502bbf7647fa20fd"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
 dependencies = [
  "base64 0.22.1",
  "cap-fs-ext",
@@ -3298,6 +3298,7 @@ dependencies = [
  "muniment-atomic-file",
  "muniment-attach",
  "muniment-code-diff",
+ "muniment-models",
  "muniment-pins",
  "muniment-router",
  "quick-xml 0.41.0",
@@ -3382,7 +3383,6 @@ dependencies = [
  "qrcode",
  "quircs",
  "resvg",
- "rusqlite",
  "security-framework 3.7.0",
  "serde",
  "serde_json",
@@ -3396,9 +3396,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "muniment-models"
+version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
+dependencies = [
+ "muniment-atomic-file",
+ "muniment-pins",
+ "rustls",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 1.1.6+spec-1.1.0",
+ "ureq 2.12.1",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "muniment-pins"
 version = "0.0.1"
-source = "git+https://github.com/munimentai/muniment-core?tag=v1.12.6#f65d49077ef4d7f9a654a7f1502bbf7647fa20fd"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
 dependencies = [
  "serde",
  "toml 1.1.6+spec-1.1.0",
@@ -3407,12 +3425,13 @@ dependencies = [
 [[package]]
 name = "muniment-router"
 version = "0.0.1"
-source = "git+https://github.com/munimentai/muniment-core?tag=v1.12.6#f65d49077ef4d7f9a654a7f1502bbf7647fa20fd"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
 dependencies = [
  "base64 0.22.1",
  "chrono",
  "getrandom 0.3.4",
  "muniment-atomic-file",
+ "muniment-models",
  "muniment-pins",
  "rusqlite",
  "rustls",
@@ -3433,6 +3452,19 @@ dependencies = [
  "muniment-attach",
  "muniment-core",
  "muniment-desktop-integration",
+ "muniment-runtime-core",
+]
+
+[[package]]
+name = "muniment-runtime-core"
+version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.13.0#cee5da39b24e2ca22ce15d0fede33cb58b678282"
+dependencies = [
+ "muniment-attach",
+ "muniment-core",
+ "serde",
+ "url",
+ "uuid",
 ]
 
 [[package]]

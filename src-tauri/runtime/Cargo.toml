@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.12.6", features = ["client"] }
-muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.12.6", features = ["keyring", "tls"] }
+muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.13.0", features = ["client"] }
+muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.13.0", features = ["keyring", "tls"] }
 muniment-desktop-integration = { path = "../integration", features = ["keyring"] }
-muniment-runtime-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.12.6" }
+muniment-runtime-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.13.0" }

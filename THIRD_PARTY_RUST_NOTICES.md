@@ -323,8 +323,10 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `muniment-attach` 0.0.1 — FSL-1.1-ALv2
 - `muniment-code-diff` 0.0.1 — FSL-1.1-ALv2
 - `muniment-core` 0.0.1 — FSL-1.1-ALv2
+- `muniment-models` 0.0.1 — FSL-1.1-ALv2
 - `muniment-pins` 0.0.1 — FSL-1.1-ALv2
 - `muniment-router` 0.0.1 — FSL-1.1-ALv2
+- `muniment-runtime-core` 0.0.1 — FSL-1.1-ALv2
 - `ndk-context` 0.1.1 — MIT OR Apache-2.0
 - `ndk-sys` 0.6.0+11769913 — MIT OR Apache-2.0
 - `ndk` 0.9.0 — MIT OR Apache-2.0
