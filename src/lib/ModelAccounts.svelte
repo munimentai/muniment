@@ -8,6 +8,7 @@
   // router settings, and the parent redraws from them.
   import { onDestroy, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import Toggle from './Toggle.svelte'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings } = $props()
 
@@ -280,6 +281,10 @@
               <span class="card-label">{account.label}<span class="tag">API key</span></span>
               {@render routingNote(account)}
             </span>
+            <!-- A key never balances with subscriptions. With overflow on, it serves only once every subscription is cooling or at its limit. -->
+            {#if subscriptions.length}
+              <span class="overflow">Use when subscriptions run out<Toggle checked={!!account.overflow} disabled={pending} aria-label={`Use ${account.label} when subscriptions run out`} onchange={(value) => run('model_router_update_account', { id: account.id, overflow: value }, value ? `${account.label} serves when subscriptions run out.` : `${account.label} no longer serves when subscriptions run out.`)} /></span>
+            {/if}
             <button type="button" class="quiet icon-action" aria-label={`Edit ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
             <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={16} variant="action" /></button>
           {/if}
@@ -365,9 +370,10 @@
   .name-edit { display: flex; flex: 1; flex-wrap: wrap; gap: 4px; min-width: 0; }
   /* A key is one line: its name, then edit and disconnect icons at the right. */
   .keys { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-  .key-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .key-card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .key-card.cooling { border-color: var(--muted); }
-  .key-text { display: grid; flex: 1; gap: 2px; min-width: 0; }
+  .key-text { display: grid; flex: 1 1 160px; gap: 2px; min-width: 0; }
+  .overflow { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--text-12); }
   .key-card .card-label { gap: 8px; }
   .key-card .support { font-size: var(--text-12); }
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }

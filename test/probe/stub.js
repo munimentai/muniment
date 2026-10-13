@@ -252,7 +252,7 @@ function probeAccounts() {
     accounts: [
       { ...base, id: 'team', label: 'team', source: 'subscription', windows: windows(89) },
       { ...base, id: 'personal', label: 'personal', source: 'subscription', windows: windows(100) },
-      { ...base, id: 'work', label: 'Work', source: 'key', allowance_readable: false, windows: [] },
+      { ...base, id: 'work', label: 'Work', source: 'key', overflow: false, allowance_readable: false, windows: [] },
     ],
   }
 }

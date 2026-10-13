@@ -59,6 +59,7 @@ pub(crate) async fn model_router_update_account(
     enabled: Option<bool>,
     weight: Option<u32>,
     models: Option<Vec<String>>,
+    overflow: Option<bool>,
 ) -> Result<Value, String> {
     model_service::request(
         &app,
@@ -69,6 +70,7 @@ pub(crate) async fn model_router_update_account(
             ("enabled", json!(enabled)),
             ("weight", json!(weight)),
             ("models", json!(models)),
+            ("overflow", json!(overflow)),
         ]),
     )
     .await

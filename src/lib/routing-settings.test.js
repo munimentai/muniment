@@ -191,3 +191,18 @@ it('keeps provider icons only on a provider with no pooled account', async () =>
   expect(within(ollama).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Edit Ollama', 'Disconnect Ollama'])
   expect(within(screen.getByRole('region', { name: 'Anthropic' })).queryByTestId('provider-connection')).toBeNull()
 })
+
+it('offers a key as overflow only beside a subscription and saves the choice', async () => {
+  const base = { family: 'anthropic', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [], allowance_readable: false, requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }
+  const key = { ...base, id: 'key', label: 'Work', source: 'key', overflow: false }
+  const withSubscription = { ...routing(), accounts: [{ ...base, id: 'sub', label: 'eng', source: 'subscription' }, key] }
+  const tauri = { invoke: vi.fn(async () => withSubscription) }
+  const view = render(ModelAccounts, { tauri, family: 'anthropic', settings: withSubscription })
+  const toggle = screen.getByRole('switch', { name: 'Use Work when subscriptions run out' })
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  await fireEvent.click(toggle)
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_update_account', { id: 'key', overflow: true }))
+  view.unmount()
+  render(ModelAccounts, { tauri, family: 'anthropic', settings: { ...routing(), accounts: [key] } })
+  expect(screen.queryByRole('switch')).toBeNull()
+})
