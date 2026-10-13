@@ -3559,7 +3559,9 @@ describe('sidebar collapse', () => {
     await fireEvent.click(manager)
     const dialog = await screen.findByRole('region', { name: 'Agents', exact: true })
     await within(dialog).findByRole('button', { name: /^Scout/ })
-    await fireEvent.click(within(dialog).getByRole('button', { name: 'Close agents' }))
+    // The catalog has no close button. The open thread's row returns to the thread.
+    await fireEvent.click(document.querySelector('.thread-row[aria-current="true"]'))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull())
     await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
     const scout = screen.getByRole('button', { name: 'Scout', exact: true })
     expect(scout.closest('.agent-roster')).not.toBeNull()
@@ -8255,6 +8257,28 @@ describe('the open thread under a catalog', () => {
       await waitFor(() => expect(workspace()).not.toHaveClass('agents-open'))
       expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.anything())
       expect(document.querySelector('.thread-row[aria-current="true"]').tagName).toBe('DIV')
+    }
+  })
+})
+
+describe('catalog headers and the sidebar', () => {
+  it('marks the open catalog in the sidebar, offers Show archived only with archived items, and has no close button', async () => {
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    const sidebar = document.querySelector('#sidebar')
+    for (const name of ['Agents', 'Artifacts']) {
+      const row = within(sidebar).getByRole('button', { name, exact: true })
+      await fireEvent.click(row)
+      const panel = await screen.findByRole('region', { name, exact: true })
+      expect(row).toHaveAttribute('aria-current', 'true')
+      expect(row.closest('.project-row')).toHaveClass('current')
+      expect(within(panel).queryByRole('button', { name: 'Show archived' })).toBeNull()
+      expect(within(panel).queryByRole('button', { name: `Close ${name.toLowerCase()}` })).toBeNull()
+      const create = within(panel).getByRole('button', { name: name === 'Agents' ? 'New agent' : 'New artifact', exact: true })
+      expect(create.querySelector('[data-icon="plus"]')).not.toBeNull()
+      await fireEvent.keyDown(document, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('region', { name, exact: true })).toBeNull())
+      expect(row).not.toHaveAttribute('aria-current')
     }
   })
 })

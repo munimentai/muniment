@@ -11,7 +11,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import StarterRow from './StarterRow.svelte'
   import { creationStarters } from './creation-prompts.js'
-  let {tauri, projects=[], onclose, onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
+  let {tauri, projects=[], onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
   let archived = $state(false)
   let listing=$state({agents:[],state:{runs:{},threads:{}}}), error=$state(''), loading=$state(true)
   onMount(()=>{let alive=true;tauri.invoke('agent_list').then(value=>{if(alive){listing=value;onchange(value)}}).catch(e=>error=String(e)).finally(()=>loading=false);return()=>{alive=false}})
@@ -21,9 +21,8 @@
   <PanelPage>
     <PageHead intro="Each agent keeps its own instructions and memory, and works in its own chat.">
       {#snippet actions()}
-        <Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>
-        <Button onclick={()=>oncreate?.()}>New agent</Button>
-        <button type="button" aria-label="Close agents" onclick={onclose}><LucideIcon name="x" /></button>
+        {#if archived || (agents ?? listing.agents).some(agent=>isArchived('agent',agent)) || pending.some(plan=>isArchived('creation',plan))}<Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>{/if}
+        <Button icon="plus" onclick={()=>oncreate?.()}>New agent</Button>
       {/snippet}
     </PageHead>
     {#if error}<p role="alert">{error}</p>{/if}

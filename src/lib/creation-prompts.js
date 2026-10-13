@@ -20,11 +20,11 @@ export function creationPrompt(kind, plan) {
 // a dedicated creation chat with its goal and output filled in.
 export const creationStarters = {
   artifact: [
-    {id:'report',name:'Report',sentence:'Explains a topic with sections, sources and charts.',goal:'Explain a topic with an interactive report',output:'A self-contained HTML report with clear sources and useful controls'},
-    {id:'dashboard',name:'Dashboard',sentence:'Charts and numbers from the data you give it.',goal:'Build a dashboard for the data I provide',output:'An HTML dashboard with readable charts, filters, and a summary'},
-    {id:'calculator',name:'Calculator',sentence:'Labeled inputs and a clear answer for a decision.',goal:'Build a calculator for a decision or task',output:'An interactive HTML calculator with labeled inputs and clear results'},
-    {id:'tracker',name:'Tracker',sentence:'A list you add to, filter and check off.',goal:'Build a tracker for a list I keep',output:'An interactive HTML tracker that adds, edits, filters and checks off items'},
-    {id:'explainer',name:'Explainer',sentence:'Walks through a topic one step at a time.',goal:'Teach a topic step by step',output:'An interactive HTML explainer that walks through a topic in numbered steps'},
+    {id:'report',icon:'file-text',name:'Report',sentence:'Explains a topic with sections, sources and charts.',goal:'Explain a topic with an interactive report',output:'A self-contained HTML report with clear sources and useful controls'},
+    {id:'dashboard',icon:'layout-dashboard',name:'Dashboard',sentence:'Charts and numbers from the data you give it.',goal:'Build a dashboard for the data I provide',output:'An HTML dashboard with readable charts, filters, and a summary'},
+    {id:'calculator',icon:'calculator',name:'Calculator',sentence:'Labeled inputs and a clear answer for a decision.',goal:'Build a calculator for a decision or task',output:'An interactive HTML calculator with labeled inputs and clear results'},
+    {id:'tracker',icon:'list-checks',name:'Tracker',sentence:'A list you add to, filter and check off.',goal:'Build a tracker for a list I keep',output:'An interactive HTML tracker that adds, edits, filters and checks off items'},
+    {id:'explainer',icon:'book-open',name:'Explainer',sentence:'Walks through a topic one step at a time.',goal:'Teach a topic step by step',output:'An interactive HTML explainer that walks through a topic in numbered steps'},
   ],
   agent: [
     {id:'morning-briefing',name:'Morning briefing',sentence:'Summarizes what changed in your work before you start.',badge:'Weekdays',goal:'Create an agent that writes me a morning briefing',output:'A saved agent that runs on weekday mornings and summarizes what changed in my projects and threads'},

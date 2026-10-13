@@ -8,7 +8,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import StarterRow from './StarterRow.svelte'
   import { creationStarters } from './creation-prompts.js'
-  let {items=[],onopen,oncreate,onclose,isArchived=()=>false,onaction=()=>{}}=$props()
+  let {items=[],onopen,oncreate,isArchived=()=>false,onaction=()=>{}}=$props()
   let archived = $state(false)
   const shown = $derived(items.filter(item=>isArchived('artifact',item)===archived))
 </script>
@@ -17,9 +17,8 @@
   <PanelPage>
     <PageHead intro="Pages and apps your chats build, each kept with the chat that made it.">
       {#snippet actions()}
-        <Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>
-        <Button onclick={()=>oncreate?.()}>New artifact</Button>
-        <button type="button" aria-label="Close artifacts" onclick={onclose}><LucideIcon name="x" /></button>
+        {#if archived || items.some(item=>isArchived('artifact',item))}<Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>{/if}
+        <Button icon="plus" onclick={()=>oncreate?.()}>New artifact</Button>
       {/snippet}
     </PageHead>
     {#if !archived}

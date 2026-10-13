@@ -1,5 +1,6 @@
 <script>
   import AgentAvatar from './AgentAvatar.svelte'
+  import LucideIcon from './LucideIcon.svelte'
   // The row of starters at the top of the Artifacts and Agents catalogs. Each
   // tile opens a creation chat with its goal filled in. An empty catalog shows
   // the full tiles with a sentence each; a full one shows them as one compact
@@ -18,19 +19,7 @@
             {#if kind === 'agent'}
               <AgentAvatar agent={{ id: item.id, avatar: { style: 'muniment-v2', seed: `starter-${item.id}` } }} size={compact ? 28 : 40} />
             {:else}
-              <svg viewBox="0 0 80 52" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                {#if item.id === 'report'}
-                  <path d="M10 10h34M10 18h40M10 26h28" /><path d="M54 40V30M62 40V22M70 40V34" /><path d="M10 40h30" />
-                {:else if item.id === 'dashboard'}
-                  <rect x="8" y="8" width="28" height="16" rx="2" /><rect x="44" y="8" width="28" height="16" rx="2" /><path d="M10 44l12-10 10 6 14-12 12 8 12-8" />
-                {:else if item.id === 'calculator'}
-                  <rect x="22" y="6" width="36" height="10" rx="2" /><path d="M26 26h4M38 26h4M50 26h4M26 35h4M38 35h4M50 35h4M26 44h4M38 44h4M50 44h4" />
-                {:else if item.id === 'tracker'}
-                  <rect x="10" y="9" width="8" height="8" rx="2" /><path d="M24 13h44" /><rect x="10" y="22" width="8" height="8" rx="2" /><path d="M12 26l2 2 3-4M24 26h36" /><rect x="10" y="35" width="8" height="8" rx="2" /><path d="M24 39h40" />
-                {:else}
-                  <circle cx="16" cy="13" r="5" /><path d="M28 13h38" /><circle cx="16" cy="27" r="5" /><path d="M28 27h30" /><circle cx="16" cy="41" r="5" /><path d="M28 41h34" />
-                {/if}
-              </svg>
+              <LucideIcon name={item.icon} size={compact ? 20 : 28} />
             {/if}
           </span>
           <span class="name">{item.name}{#if item.badge}<small class="badge">{item.badge}</small>{/if}</span>
@@ -53,9 +42,7 @@
   .starter:focus-visible { border-color: var(--ink); outline: 0; }
   .compact .starter { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 8px 10px; }
   .thumb { display: flex; align-items: center; justify-content: center; height: 64px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); }
-  .thumb svg { width: 80px; height: 52px; }
   .compact .thumb { width: 36px; height: 28px; border: 0; }
-  .compact .thumb svg { width: 36px; height: 24px; }
   .starter:hover .thumb { color: var(--ink); }
   .name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
   .badge { padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); font-weight: 400; }

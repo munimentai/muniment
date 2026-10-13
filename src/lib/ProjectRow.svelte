@@ -30,8 +30,9 @@
   }
 </script>
 
-<div class="project-row" bind:this={row}>
-  <button class="project-title" aria-label={label} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span></button>
+<!-- An open catalog marks its row the way the open thread marks its own. -->
+<div class="project-row" class:current={panelOpen === true} bind:this={row}>
+  <button class="project-title" aria-label={label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span></button>
   <!-- A project folder starts a thread with the pencil. The Agents, Artifacts and Projects rows create with the plus. -->
   <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name={icon === 'folder' ? 'square-pen' : 'plus'} size={14} /></button>
   <!-- A section with nothing in it has nothing to expand, so it shows no chevron. -->
@@ -46,7 +47,8 @@
 </div>
 
 <style>
-  .project-row { display: flex; align-items: center; position: relative; }
+  .project-row { display: flex; align-items: center; position: relative; border-radius: var(--radius-control); }
+  .project-row.current { background: var(--faint); }
   .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 6px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
   .project-title span { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .project-title :global(.lucide) { flex: none; width: 18px; height: 18px; }
