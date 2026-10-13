@@ -162,6 +162,8 @@
     "allow-memory-fact-delete",
     "allow-memory-deleted-facts",
     "allow-memory-fact-restore",
+    "allow-memory-recall-settings",
+    "allow-memory-recall-settings-save",
     "allow-project-list",
     "allow-project-create",
     "allow-project-rename",

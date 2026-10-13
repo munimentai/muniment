@@ -309,6 +309,8 @@ pub fn run() {
             personal_memory::memory_fact_delete,
             personal_memory::memory_deleted_facts,
             personal_memory::memory_fact_restore,
+            personal_memory::memory_recall_settings,
+            personal_memory::memory_recall_settings_save,
             projects::project_list,
             projects::project_create,
             projects::project_rename,

@@ -81,6 +81,7 @@ let dragDropUnlisten
 let dragDropRegistrationError
 let homeStatus
 let scanReport
+let recallSettings
 let providerScan
 let globalShortcutHandler
 let registerGlobalShortcut
@@ -282,6 +283,7 @@ beforeEach(() => {
   olderThreadSummaryResult = null
   homeStatus = { configured: true, homePath: '/Documents/Muniment' }
   scanReport = { findings: [], errors: [] }
+  recallSettings = null
   providerScan = { servers: [], hints: [] }
   localModeStatus = false
   runtimeState = { revision: 0, lastEvent: 'connected', visible: false, busy: false }
@@ -319,6 +321,8 @@ beforeEach(() => {
     if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
     if (command === 'onboarding_scan') return
+    if (command === 'memory_recall_settings') return recallSettings
+    if (command === 'memory_recall_settings_save') { recallSettings = payload.settings; return payload.settings }
     if (command === 'onboarding_provider_scan') return
     if (command === 'onboarding_connect_server') return
     if (command === 'home_confirm') return { configured: true, homePath: payload.homePath }
@@ -4276,6 +4280,42 @@ describe('Home onboarding', () => {
     expect(within(imports).getByText('The count may be incomplete.')).toBeInTheDocument()
     expect(within(imports).queryByText('Codex CLI')).not.toBeInTheDocument()
     expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_scan')).toHaveLength(1)
+  })
+
+  it('saves recall choices on the Memory page to the profile', async () => {
+    render(App)
+    const dialog = await openSettings('Memory')
+    const recall = await within(dialog).findByRole('region', { name: 'Recall' })
+    const ask = within(recall).getByRole('switch', { name: 'Ask before saving' })
+    await waitFor(() => expect(ask).toBeEnabled())
+    expect(ask).toHaveAttribute('aria-checked', 'false')
+    expect(within(recall).getByRole('switch', { name: 'Save facts from chats' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(recall).getByRole('switch', { name: 'Use memories in replies' })).toHaveAttribute('aria-checked', 'true')
+    await fireEvent.click(ask)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_recall_settings_save', { settings: { learn: true, use: true, ask: true } }))
+    await waitFor(() => expect(ask).toHaveAttribute('aria-checked', 'true'))
+    await waitFor(() => expect(ask).toBeEnabled())
+    await fireEvent.click(within(recall).getByRole('switch', { name: 'Save facts from chats' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_recall_settings_save', { settings: { learn: false, use: true, ask: true } }))
+    await waitFor(() => expect(ask).toBeDisabled())
+  })
+
+  it('keeps the recall choice when the profile cannot save it', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'memory_recall_settings_save' ? Promise.reject('Memory settings cannot be saved.') : original(command, payload))
+    render(App)
+    const dialog = await openSettings('Memory')
+    const recall = await within(dialog).findByRole('region', { name: 'Recall' })
+    const use = within(recall).getByRole('switch', { name: 'Use memories in replies' })
+    await waitFor(() => expect(use).toBeEnabled())
+    await fireEvent.click(use)
+    expect(await within(dialog).findByText('Memory settings cannot be saved.')).toBeInTheDocument()
+    expect(use).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('grants the recall commands to the window', () => {
+    const capabilities = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'))
+    expect(capabilities.permissions).toEqual(expect.arrayContaining(['allow-memory-recall-settings', 'allow-memory-recall-settings-save']))
   })
 
   it('saves a changed Home from the existing settings control', async () => {

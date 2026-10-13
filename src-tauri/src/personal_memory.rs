@@ -1,4 +1,4 @@
-use muniment_core::memory_files::{self, Fact};
+use muniment_core::memory_files::{self, Fact, RecallSettings};
 fn profile() -> Result<std::path::PathBuf, String> {
     muniment_runtime::profile_directory().map_err(|_| "Memory is unavailable.".into())
 }
@@ -30,4 +30,13 @@ pub fn memory_deleted_facts() -> Result<Vec<Fact>, String> {
 #[tauri::command]
 pub fn memory_fact_restore(id: String) -> Result<(), String> {
     memory_files::fact_restore(&profile()?, &id)
+}
+#[tauri::command]
+pub fn memory_recall_settings() -> Result<Option<RecallSettings>, String> {
+    memory_files::recall_settings_stored(&profile()?)
+}
+#[tauri::command]
+pub fn memory_recall_settings_save(settings: RecallSettings) -> Result<RecallSettings, String> {
+    memory_files::recall_settings_save(&profile()?, settings)?;
+    Ok(settings)
 }

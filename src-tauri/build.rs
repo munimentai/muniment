@@ -149,6 +149,8 @@ const APP_COMMANDS: &[&str] = &[
     "memory_fact_delete",
     "memory_deleted_facts",
     "memory_fact_restore",
+    "memory_recall_settings",
+    "memory_recall_settings_save",
     "project_list",
     "project_create",
     "project_rename",
