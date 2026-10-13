@@ -111,7 +111,7 @@ pub(crate) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn runtime_profile_endpoint() -> Option<PathBuf> {
+pub(crate) fn runtime_profile_endpoint() -> Option<PathBuf> {
     let Ok(filesystem) = AttachFilesystem::from_environment() else {
         eprintln!("desktop client filesystem lookup failed");
         return None;
@@ -120,7 +120,7 @@ pub(super) fn runtime_profile_endpoint() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn runtime_profile_endpoint() -> Option<PathBuf> {
+pub(crate) fn runtime_profile_endpoint() -> Option<PathBuf> {
     muniment_runtime::profile_directory()
         .ok()
         .map(|profile| profile.join("muniment/attach-v1.sock"))
@@ -166,13 +166,26 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                         move |connected| {
                             observe_chat_event_subscription(&event_status_app, connected);
                         },
-                        move |event| {
-                            let _ = event_app.emit("chat-event", event);
-                        },
+                        move |event| deliver_subscription_event(&event_app, event),
                     );
                 })
             },
         );
+}
+
+/// Hands one event of the chat-event subscription to the window: a chat event
+/// as `chat-event`, and a provider sign-in step as `local-mode-login`.
+#[cfg(any(unix, target_os = "windows"))]
+fn deliver_subscription_event<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    event: SubscriptionEvent,
+) {
+    match event {
+        SubscriptionEvent::Chat(event) => {
+            let _ = app.emit("chat-event", event);
+        }
+        SubscriptionEvent::ModelsLogin(step) => crate::account_login::deliver_step(app, step),
+    }
 }
 
 #[cfg(unix)]
@@ -222,9 +235,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                         move |connected| {
                             observe_chat_event_subscription(&event_status_app, connected);
                         },
-                        move |event| {
-                            let _ = event_app.emit("chat-event", event);
-                        },
+                        move |event| deliver_subscription_event(&event_app, event),
                     );
                 })
             },
@@ -271,7 +282,7 @@ pub(super) fn serve_chat_events_at(
     retry_interval: Duration,
     stop: ChatEventStopHandle,
     mut observe: impl FnMut(bool),
-    mut deliver: impl FnMut(Value),
+    mut deliver: impl FnMut(SubscriptionEvent),
 ) {
     #[cfg(target_os = "linux")]
     let mut diagnostic = muniment_core::attach::LinuxConnectDiagnostic::default();
@@ -290,7 +301,7 @@ pub(super) fn serve_chat_events_at(
             {
                 observe(true);
                 loop {
-                    match client.read_chat_event() {
+                    match client.read_subscription_event() {
                         Ok(event) => deliver(event),
                         Err(error) => {
                             eprintln!("muniment-desktop: session closed endpoint={endpoint:?} route=chat-events reason={error:?}");
@@ -317,7 +328,7 @@ pub(super) fn serve_chat_events_at(
                 })
             {
                 observe(true);
-                while let Ok(event) = client.read_chat_event() {
+                while let Ok(event) = client.read_subscription_event() {
                     deliver(event);
                 }
                 observe(false);

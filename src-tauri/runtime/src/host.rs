@@ -11,6 +11,7 @@ use muniment_runtime_core::host::{ChatGrantService, KeyringCredentialStore};
 use muniment_runtime_core::RuntimeHost;
 
 use crate::account::DesktopAccount;
+use crate::sign_in_page::sign_in_page;
 
 /// The reader sidecar's file name beside the runtime.
 const READER_NAME: &str = if cfg!(windows) {
@@ -20,8 +21,9 @@ const READER_NAME: &str = if cfg!(windows) {
 };
 
 /// The desktop's cloud account and grants, the platform keychain, the
-/// installed desktop executable, the reader sidecar beside this binary, and
-/// this binary's package version, which the runtime announces on attach.
+/// installed desktop executable, the reader sidecar beside this binary, this
+/// binary's package version, which the runtime announces on attach, the
+/// desktop's provider OAuth clients and Muniment's sign-in page.
 pub fn desktop_host() -> RuntimeHost {
     let runtime_executable = std::env::current_exe().ok();
     RuntimeHost {
@@ -31,6 +33,8 @@ pub fn desktop_host() -> RuntimeHost {
         expected_desktop_executable: crate::installed_desktop_executable(),
         reader_executable: runtime_executable.as_deref().and_then(reader_beside),
         runtime_version: env!("CARGO_PKG_VERSION"),
+        provider_clients: muniment_desktop_integration::provider_clients::provider_clients(),
+        sign_in_page: Arc::new(sign_in_page),
     }
 }
 
