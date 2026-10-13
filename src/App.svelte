@@ -2879,10 +2879,12 @@
     justify-items: center;
   }
 
+  /* The block from the mark to the Home line is centered, and the connect list
+     scrolls when the window is shorter than the block. */
   main.onboarding-active {
     height: 100vh;
     min-height: 0;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, auto);
     grid-template-columns: minmax(0, 1fr);
     align-content: center;
     box-sizing: border-box;

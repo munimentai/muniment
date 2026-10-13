@@ -83,7 +83,7 @@
 </section>
 
 <style>
-  .connect { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; width: min(840px, 100%); margin: 0 auto; padding: 0 2px 32px; box-sizing: border-box; scrollbar-width: thin; }
+  .connect { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; width: min(840px, 100%); margin: 0 auto; padding: 0 2px 2px; box-sizing: border-box; scrollbar-width: thin; }
   h1 { margin: 0; font: 600 var(--text-22) var(--font-heading); color: var(--ink); }
   .lede { margin: 6px 0 20px; color: var(--muted); font-size: var(--text-15); }
   h2 { margin: 20px 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); text-transform: uppercase; letter-spacing: .04em; font-weight: 400; }
