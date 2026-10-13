@@ -3,7 +3,8 @@
   // The composer band's context control: a ring and a percent in mono. It
   // opens the Context panel.
   let { usage, open = false, compacting = false, onclick } = $props()
-  const CIRCUMFERENCE = 2 * Math.PI * 6
+  // The ring circumference for a radius of 6.
+  const CIRCUMFERENCE = 37.699
   const level = $derived(contextLevel(usage))
   const filled = $derived(contextShare(usage) * CIRCUMFERENCE)
   const label = $derived(compacting ? 'Compacting context' : `Context, ${contextHoverLabel(usage)}`)
