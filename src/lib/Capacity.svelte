@@ -7,7 +7,12 @@
   import { allowanceLabel } from './allowance-label.js'
   let { tauri, onmanage, onclose } = $props()
   let settings = $state(null)
-  const resetTime = (ms) => { const at = new Date(ms); return `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` }
+  // A reset later today needs only its time.
+  const resetTime = (ms) => {
+    const at = new Date(ms)
+    const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+  }
   let error = $state('')
   $effect(() => {
     let disposed = false

@@ -2,7 +2,7 @@
   import { floatingMenu } from './floating-menu.js'
   import { tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { name, expanded, disabled = false, ontoggle, onnew, onrename, onopen, icon = 'folder', label = `Project ${name}`, newLabel = `New thread in ${name}`, onactivate = ontoggle, panelOpen = undefined, collapsible = true } = $props()
+  let { name, expanded, disabled = false, ontoggle, onnew, onrename, onopen, icon = 'folder', label = `Project ${name}`, newLabel = `New thread in ${name}`, onactivate = ontoggle, panelOpen = undefined, collapsible = true, running = false } = $props()
   let open = $state(false)
   let row = $state()
   let trigger = $state()
@@ -32,7 +32,7 @@
 
 <!-- An open catalog marks its row the way the open thread marks its own. -->
 <div class="project-row" class:current={panelOpen === true} bind:this={row}>
-  <button class="project-title" aria-label={label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span></button>
+  <button class="project-title" aria-label={running ? `${label}, running` : label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span>{#if running}<i class="run-mark" aria-hidden="true"></i>{/if}</button>
   <!-- A project folder starts a thread with the pencil. The Agents, Artifacts and Projects rows create with the plus. -->
   <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name={icon === 'folder' ? 'square-pen' : 'plus'} size={14} /></button>
   <!-- A section with nothing in it has nothing to expand, so it shows no chevron. -->
@@ -53,6 +53,8 @@
   .project-title span { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
   .project-title span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .project-title :global(.lucide) { flex: none; width: 18px; height: 18px; }
+  /* A collapsed group carries the running mark of the chat it hides. */
+  .run-mark { flex: 0 0 5px; width: 5px; height: 5px; border: 1px solid var(--muted); border-radius: var(--radius-chip); }
   .project-title:hover { background: var(--faint); }
   .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 4px; border-radius: var(--radius-control); opacity: 0; border: 0; background: transparent; color: var(--muted); }
   .project-row:hover .project-control, .project-row:focus-within .project-control, .project-control.visible { opacity: 1; }

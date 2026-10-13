@@ -587,7 +587,9 @@
   let freshThread = $state(false)
   let threadSwitching = $state(false)
   const runningThreadId = $derived(backgroundRun?.threadId ?? (active ? currentThreadId : null))
-  const backgroundRunTitle = $derived(threadSummaries.find(item => item.threadId === backgroundRun?.threadId)?.title || 'Another thread')
+  // A running agent or artifact chat marks its own sidebar row, or its collapsed group.
+  const backgroundRunAgent = $derived(agentListing.state.threads?.[backgroundRun?.threadId] ?? null)
+  const backgroundRunArtifact = $derived(artifactChats.find(item => item.threadId && item.threadId === backgroundRun?.threadId)?.threadId ?? null)
   let editingThreadTitle = $state(false)
   let threadTitleDraft = $state('')
   let threadTitleInput = $state()
@@ -1079,10 +1081,6 @@
     void chatController.openThread(threadId)
   }
 
-  function openRunningThread() {
-    if (backgroundRun?.threadId) threadRowClick({}, backgroundRun.threadId)
-  }
-
   // The open thread's row is not a button, so a modifier click, or any click
   // while rows are selected, selects it.
   function currentRowClick(event, threadId) {
@@ -1095,8 +1093,9 @@
   function selectThread(threadId, range) {
     const next = new Set(selectedThreadIds)
     const ids = shortcutThreads.map(item => item.threadId).filter(Boolean)
-    if (range && selectionAnchor && ids.includes(selectionAnchor)) {
-      const [from, to] = [ids.indexOf(selectionAnchor), ids.indexOf(threadId)].sort((a, b) => a - b)
+    const anchor = selectionAnchor ?? (selectedThreadIds.size ? null : currentThreadId)
+    if (range && anchor && ids.includes(anchor)) {
+      const [from, to] = [ids.indexOf(anchor), ids.indexOf(threadId)].sort((a, b) => a - b)
       for (const id of ids.slice(from, to + 1)) next.add(id)
     } else {
       if (next.has(threadId)) next.delete(threadId)
@@ -2254,7 +2253,7 @@
 {/snippet}
 
 {#snippet rowMark(selected, running = false)}
-  {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} /></span>{:else}<span class:run-mark={running} aria-hidden={running ? 'true' : undefined}></span>{/if}
+  {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} variant="action" /></span>{:else}<span class:run-mark={running} aria-hidden={running ? 'true' : undefined}></span>{/if}
 {/snippet}
 
 {#snippet sidebarThread(summary)}
@@ -2389,12 +2388,12 @@
             </div>
             <div class="side-scroll" use:panelScroll>
             <section class="sidebar-collection" aria-label="Agents group">
-              <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
+              <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} running={!agentsExpanded && !!backgroundRunAgent} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
               {#if agentsExpanded}<div class="collection-children">
             {#if agentListing.agents.length}
               <div class="agent-roster" aria-label="Saved agents">
                 {#each agentListing.agents.filter(agent=>!catalogArchived('agent',agent)) as agent (agent.id)}
-                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={selectedAgent === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span></button><CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/></div>
+                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={selectedAgent === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span>{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button><CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/></div>
                 {/each}
               </div>
             {/if}
@@ -2402,9 +2401,9 @@
               </div>{/if}
             </section>
             <section class="sidebar-collection" aria-label="Artifacts group">
-              <ProjectRow name="Artifacts" panelOpen={artifactsOpen} label="Artifacts" icon="file" newLabel="New artifact" expanded={artifactsExpanded} disabled={switchLocked} ontoggle={() => artifactsExpanded = !artifactsExpanded} onactivate={showArtifacts} onnew={() => startCreation('artifact')} />
+              <ProjectRow name="Artifacts" panelOpen={artifactsOpen} label="Artifacts" icon="file" newLabel="New artifact" expanded={artifactsExpanded} running={!artifactsExpanded && !!backgroundRunArtifact} disabled={switchLocked} ontoggle={() => artifactsExpanded = !artifactsExpanded} onactivate={showArtifacts} onnew={() => startCreation('artifact')} />
               {#if artifactsExpanded}<div class="collection-children">
-            {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span></button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
+            {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span>{#if item.threadId && item.threadId === backgroundRunArtifact}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
@@ -2695,7 +2694,7 @@
               <PopupClose label="Close voice dictation" onclick={dismissSpeechInstall} />
             </header>
             {#if speechInstallFacts}
-              <p class="speech-install-lead">Dictation runs on this device after a one-time <strong>{formatBytes(speechInstallFacts.totalDownloadBytes)}</strong> download.</p>
+              <p class="speech-install-lead">Dictation runs on this device after a one-time <strong class="nowrap">{formatBytes(speechInstallFacts.totalDownloadBytes)}</strong> download.</p>
               <details class="speech-install-details">
                 <summary>Details</summary>
                 <dl>
@@ -2759,9 +2758,6 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
-          {#if backgroundRun && !active}
-            <p class="run-status run-elsewhere" role="status">{backgroundRunTitle} is still running. {#if backgroundRun.threadId}<button type="button" disabled={switchLocked} onclick={openRunningThread}>Open</button>{/if}</p>
-          {/if}
           {#if runtimeUpgradePending()}
             <section class="update-notice" aria-live="polite">
               <p class="record error-record">A Muniment update is finishing.</p>
@@ -3143,6 +3139,7 @@
   .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-mono); }
   .selection-bar button { min-width:24px; height:24px; padding:0 6px; font-size:var(--text-12); }
   .thread-row > .select-mark { flex:0 0 14px; display:inline-flex; color:var(--muted); }
+  .side-action > .run-mark { flex:0 0 5px; width:5px; height:5px; margin-left:auto; border:1px solid var(--muted); border-radius:var(--radius-chip); }
   .thread-row.selected > .select-mark { color:var(--ink); }
   .delete-titles { margin:4px 0 0; padding-left:18px; }
   .thread-list { padding: 0; list-style: none; }
@@ -3191,7 +3188,7 @@
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
-  .active-thread > span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+  .active-thread > span:not(.select-mark) { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   /* A thread whose reply still runs in the background: a quiet muted ring in the dot's place. */
   .thread-row > span.run-mark { width: 5px; height: 5px; border: 1px solid var(--muted); border-radius: var(--radius-chip); }
   .quiet { background: transparent; border-color: transparent; }
@@ -3315,8 +3312,6 @@
      A 15px support line would compete with the draft text. */
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
-  .run-elsewhere { margin: 0 0 8px; overflow-wrap: anywhere; }
-  .run-elsewhere button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
   .attachments li { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(260px, 100%); height: 28px; padding: 0 0 0 6px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -3360,6 +3355,7 @@
   .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .speech-install-popover { width: min(340px, 100%); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .speech-install-lead { margin: 7px 0 0; color: var(--ink); font: var(--text-13) var(--font-human); }
+  .speech-install-lead .nowrap { white-space: nowrap; }
   .speech-install-details { margin-top: 7px; color: var(--muted); }
   .speech-install-details summary { cursor: pointer; }
   .speech-install-popover strong { font-weight: 600; }

@@ -3135,6 +3135,31 @@ describe('thread name', () => {
     expect(screen.getByRole('button', { name: 'Filter threads' })).toBeInTheDocument()
   })
 
+  it('ranges a first Shift click from the open thread and hides the open dot while selecting', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+      { threadId: 'thread-3', title: 'Archive review', updatedAt: '' },
+    ]
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    const open = document.querySelector('.thread-row[aria-current="true"]')
+    expect(open.querySelector('.select-mark')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Archive review' }), { shiftKey: true })
+    expect([...document.querySelectorAll('.thread-row.selected .thread-row-title')].map((title) => title.textContent)).toEqual(['Lease renewal', 'Vendor audit', 'Archive review'])
+    // The open thread's row shows its check box in place of its dot.
+    expect(open.firstElementChild).toHaveClass('select-mark')
+  })
+
   it('deletes a selection that holds the open thread and lands on a fresh thread', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
@@ -8395,6 +8420,23 @@ describe('a run on another thread', () => {
     await screen.findByText('Earlier answer')
   }
 
+  it('names a running agent chat by its agent and marks the agent row', async () => {
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'agent_list'
+      ? { agents: [{ id: 'agent-1', name: 'Morning Brief', instructions: 'Brief.', projectId: null, schedule: null }], state: { runs: {}, threads: { 'thread-1': 'agent-1' } } }
+      : fallback(command, payload))
+    await renderRunning()
+    await leaveForOtherThread()
+    expect(screen.queryByText(/still running/)).not.toBeInTheDocument()
+    // The collapsed Agents group carries the mark, and the agent's row carries it once the group opens.
+    expect(screen.getByRole('button', { name: 'Agents, running' }).querySelector('.run-mark')).not.toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
+    expect(screen.getByRole('button', { name: 'Agents' })).toBeInTheDocument()
+    const agentRow = screen.getByRole('button', { name: /^Morning Brief/ })
+    expect(agentRow).toHaveTextContent('Running')
+    expect(agentRow.querySelector('.run-mark')).not.toBeNull()
+  })
+
   it('opens another thread mid-run and marks the running row, which stays clickable', async () => {
     await renderRunning()
     expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled()
@@ -8417,14 +8459,12 @@ describe('a run on another thread', () => {
     expect(row('Other thread')).not.toHaveAttribute('data-running')
   })
 
-  it('holds Send behind one line that names the running thread and opens it', async () => {
+  it('holds Send quietly while another thread runs, with no notice in the composer', async () => {
     await renderRunning()
     await leaveForOtherThread()
     const composer = await findWorkspaceComposer()
 
-    const line = screen.getByText(/is still running\./)
-    expect(line).toHaveTextContent('Blue Sky Explanation is still running. Open')
-    expect(line).toHaveAttribute('role', 'status')
+    expect(screen.queryByText(/is still running/)).not.toBeInTheDocument()
     expect(composer).toBeEnabled()
     await fireEvent.input(composer, { target: { value: 'A second question' } })
     expect(composer).toHaveValue('A second question')
@@ -8434,11 +8474,10 @@ describe('a run on another thread', () => {
     await fireEvent.keyDown(composer, { key: 'Enter' })
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
 
-    await fireEvent.click(within(line).getByRole('button', { name: 'Open' }))
+    await fireEvent.click(screen.getByRole('button', { name: /^Blue Sky Explanation/ }))
 
     expect(await screen.findByText('Blue light scatters')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
-    expect(screen.queryByText(/is still running\./)).not.toBeInTheDocument()
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').at(-1)).toEqual(['chat_thread_open', { threadId: 'thread-1', limit: 100 }])
   })
 
@@ -8468,8 +8507,7 @@ describe('a run on another thread', () => {
 
     chatListener({ payload: { runId: 'run-sky', threadId: 'thread-1', type: 'completed', receipt: {} } })
 
-    await waitFor(() => expect(screen.queryByText(/is still running\./)).not.toBeInTheDocument())
-    expect(row('Blue Sky Explanation')).not.toHaveAttribute('data-running')
+    await waitFor(() => expect(row('Blue Sky Explanation')).not.toHaveAttribute('data-running'))
     await waitFor(() => expect(summaryReads()).toBeGreaterThan(reads))
     expect(screen.queryByText('Blue light scatters')).not.toBeInTheDocument()
     const send = screen.getByRole('button', { name: 'Send' })
