@@ -3210,6 +3210,7 @@
   /* Settings covers the thread and rail. The title band, the sidebar, its divider and the announcement region stay. */
   .workspace.settings-open > :global(:not(.titlebar, .sidebar, .sidebar-divider, .visually-hidden, .settings-layout, [role="alert"])) { visibility: hidden; }
   .workspace.settings-open .titlebar-thread { visibility: hidden; }
+  .workspace.settings-open .update-slot { visibility: visible; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }

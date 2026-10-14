@@ -27,7 +27,7 @@
 {#if version}
   <div class="update">
     <button type="button" class:installing disabled={busy || installing} aria-label={installing ? 'Installing update' : `Install update ${version} and restart`} aria-describedby={busy ? 'update-busy-reason' : undefined} onclick={install}>
-      <span>{installing ? 'Installing' : 'Update'}</span><LucideIcon name="arrow-down" variant="action" size={16} />
+      <span>{installing ? 'Installing' : 'Update'}</span><LucideIcon name="arrow-down" variant="action" size={14} />
     </button>
     {#if busy}<span id="update-busy-reason" hidden>Finish the current action before updating.</span>{/if}
     {#if error}<p role="alert">{error}</p>{/if}
@@ -35,9 +35,9 @@
 {/if}
 <style>
   .update { position: relative; display: flex; }
-  button { display: inline-flex; align-items: center; justify-content: center; gap: 0; height: 28px; min-width: 28px; padding: 6px; border: 0; border-radius: var(--radius-pill); background: var(--signal-soft); color: var(--signal); font: var(--text-12) var(--font-mono); cursor: pointer; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 0; height: 24px; min-width: 24px; padding: 0 5px; border: 0; border-radius: var(--radius-pill); background: var(--signal-soft); color: var(--signal); font: var(--text-12) var(--font-mono); cursor: pointer; }
   span { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
-  button:hover span, button:focus-visible span, .installing span { max-width: 90px; opacity: 1; margin-right: 6px; }
+  button:hover span, button:focus-visible span, .installing span { max-width: 90px; opacity: 1; margin: 0 4px 0 2px; }
   button:disabled { cursor: default; opacity: .6; }
   p { position: absolute; right: 0; top: 100%; width: 260px; padding: 12px; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-panel); z-index: 20; }
   @media (prefers-reduced-motion: reduce) { span { transition: none; } }

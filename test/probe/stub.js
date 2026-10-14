@@ -324,7 +324,8 @@ export function buildProbeCommandTable(fixtureName) {
   })[probeContext] ?? null
 
   async function invoke(command, payload) {
-    if (command === 'app_update_prepare') return null
+    // `?update=0.3.0` offers that version as a ready update.
+    if (command === 'app_update_prepare') return new URLSearchParams(location.search).get('update')
     if (command === 'thread_context_usage') {
       const usage = contextUsage()
       return usage && { ...usage, provider: probeContext === 'unknown' ? 'ollama' : 'anthropic', model: probeContext === 'unknown' ? 'qwen3:8b' : 'claude-sonnet', autoCompact: true, compactAt: usage.contextWindow - 16384, compacting: false }
