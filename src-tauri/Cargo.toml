@@ -18,6 +18,17 @@ e2e-webdriver = ["dep:tauri-plugin-wdio-webdriver", "dep:core-foundation", "core
 members = [".", "integration", "cli", "acp", "runtime"]
 resolver = "2"
 
+# Local core checkout for development; remove before release.
+[patch."https://github.com/munimentai/muniment-core"]
+muniment-atomic-file = { path = "../../muniment-core/crates/atomic-file" }
+muniment-attach = { path = "../../muniment-core/crates/attach" }
+muniment-code-diff = { path = "../../muniment-core/crates/code-diff" }
+muniment-core = { path = "../../muniment-core/crates/core" }
+muniment-models = { path = "../../muniment-core/crates/models" }
+muniment-pins = { path = "../../muniment-core/crates/pins" }
+muniment-router = { path = "../../muniment-core/crates/router" }
+muniment-runtime-core = { path = "../../muniment-core/crates/runtime" }
+
 [build-dependencies]
 sha2 = "0.10"
 cc = "1"
