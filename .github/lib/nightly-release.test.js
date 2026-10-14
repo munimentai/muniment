@@ -115,4 +115,66 @@ describe("GitHub Releases client", () => {
     await expect(github.rest.repos.getReleaseByTag({ owner, repo, tag: "nightly" })).rejects.toMatchObject({ status: 404 });
     expect(() => githubReleases("")).toThrow("token");
   });
+
+  const retrying = (responses, calls = []) => {
+    const wait = vi.fn(async () => {});
+    const github = githubReleases("fixture-token", async (url, options) => {
+      calls.push({ url, method: options.method });
+      const next = responses.shift();
+      if (next instanceof Error) throw next;
+      return new Response("body" in next ? next.body : "{}", { status: next.status });
+    }, { wait, log: () => {} });
+    return { github, wait, calls };
+  };
+
+  it("retries a read after a network error, a 5xx, or a 429", async () => {
+    const { github, wait, calls } = retrying([new TypeError("fetch failed"), { status: 500 }, { status: 429 }, { status: 200, body: '{"id":5}' }]);
+    await expect(github.rest.repos.getReleaseByTag({ owner, repo, tag: "nightly" })).resolves.toEqual({ data: { id: 5 } });
+    expect(calls).toHaveLength(4);
+    expect(wait.mock.calls.map(([ms]) => ms)).toEqual([2000, 5000, 10000]);
+  });
+
+  it("stops after three retries and reports the last status", async () => {
+    const { github, calls } = retrying([{ status: 502 }, { status: 502 }, { status: 503 }, { status: 500, body: "boom" }]);
+    await expect(github.rest.repos.getReleaseByTag({ owner, repo, tag: "nightly" })).rejects.toMatchObject({ status: 500, message: expect.stringContaining("500 boom") });
+    expect(calls).toHaveLength(4);
+    const offline = retrying([1, 2, 3, 4].map(() => new TypeError("fetch failed")));
+    await expect(offline.github.rest.repos.getReleaseByTag({ owner, repo, tag: "nightly" })).rejects.toThrow("fetch failed");
+  });
+
+  it("does not retry a 4xx other than 429", async () => {
+    const { github, calls } = retrying([{ status: 403 }, { status: 200 }]);
+    await expect(github.rest.repos.updateRelease({ owner, repo, release_id: 5, body: "x" })).rejects.toMatchObject({ status: 403 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not repeat a release create", async () => {
+    const { github, calls } = retrying([{ status: 500 }, { status: 201 }]);
+    await expect(github.rest.repos.createRelease({ owner, repo, tag_name: "nightly" })).rejects.toMatchObject({ status: 500 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("treats a 404 on a repeated delete as done", async () => {
+    const { github, calls } = retrying([{ status: 500 }, { status: 404 }]);
+    await expect(github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: 3 })).resolves.toEqual({ data: undefined });
+    expect(calls).toHaveLength(2);
+    const once = retrying([{ status: 404 }]);
+    await expect(once.github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: 3 })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("removes a partial asset before it repeats an upload", async () => {
+    const { github, calls } = retrying([
+      { status: 502 },
+      { status: 200, body: JSON.stringify([{ id: 8, name: "other" }, { id: 9, name: "a b.sig" }]) },
+      { status: 204, body: null },
+      { status: 201, body: '{"id":10}' },
+    ]);
+    await expect(github.rest.repos.uploadReleaseAsset({ owner, repo, release_id: 5, name: "a b.sig", data: Buffer.from("sig") })).resolves.toEqual({ data: { id: 10 } });
+    expect(calls).toEqual([
+      { url: "https://uploads.github.com/repos/munimentai/muniment/releases/5/assets?name=a%20b.sig", method: "POST" },
+      { url: "https://api.github.com/repos/munimentai/muniment/releases/5/assets?per_page=100&page=1", method: "GET" },
+      { url: "https://api.github.com/repos/munimentai/muniment/releases/assets/9", method: "DELETE" },
+      { url: "https://uploads.github.com/repos/munimentai/muniment/releases/5/assets?name=a%20b.sig", method: "POST" },
+    ]);
+  });
 });
