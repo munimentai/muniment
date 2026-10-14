@@ -18,6 +18,7 @@
   const CompaniesSection = () => import('./CompaniesSection.svelte')
   const ContextSettings = () => import('../activity/ContextSettings.svelte')
   const LanguageSection = () => import('./LanguageSection.svelte')
+  const SearchSection = () => import('./SearchSection.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
 
   let {
@@ -93,6 +94,8 @@
       <SettingsSection load={ContextSettings} properties={{tauri}} />
     {:else if section === 'voice'}
       <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
+    {:else if section === 'search'}
+      <SettingsSection load={SearchSection} properties={{tauri}} />
     {:else if section === 'language'}
       <SettingsSection load={LanguageSection} properties={{tauri}} />
     {:else if section === 'profile' || section === 'memory'}
