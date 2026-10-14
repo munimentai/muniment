@@ -393,9 +393,10 @@
     composer?.focus()
   }
 
-  function closeSettings() {
+  function closeSettings(restoreFocus = true) {
     settingsOpen = false
     settingsConnectProvider = null
+    if (!restoreFocus) return
     // The sidebar's Settings control remounts when Settings closes, so a detached opener hands focus to it.
     void tick().then(() => {
       const opener = settingsOpener?.isConnected ? settingsOpener : settingsButton ?? composer
@@ -2356,7 +2357,7 @@
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || !!active || !!backgroundRun || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
             {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
-            <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
+            <WorkspaceMenu selected={settingsOpen ? null : browserPanel} onselect={mode => { if (settingsOpen) closeSettings(false); showBrowser(mode) }} onopenchange={value => toolsMenuOpen = value} />
           </div>
         </header>
                   {#if threadMenu}
@@ -3210,7 +3211,7 @@
   /* Settings covers the thread and rail. The title band, the sidebar, its divider and the announcement region stay. */
   .workspace.settings-open > :global(:not(.titlebar, .sidebar, .sidebar-divider, .visually-hidden, .settings-layout, [role="alert"])) { visibility: hidden; }
   .workspace.settings-open .titlebar-thread { visibility: hidden; }
-  .workspace.settings-open .update-slot { visibility: visible; }
+  .workspace.settings-open .update-slot, .workspace.settings-open .titlebar-thread :global(.workspace-menu) { visibility: visible; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
   .artifact-rail h2 { margin: 3px 0 0; font-size: var(--text-17); }
