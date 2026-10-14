@@ -124,7 +124,7 @@
     {#each order as item, index (item.id + (item.key ? '-key' : ''))}
       <div class="order-row" class:dragged={dragging === index} bind:this={rows[index]}>
       <Row title={item.name} meta={item.key ?? ''} description={item.note}>
-        {#snippet lead()}<button type="button" class="grip" aria-label={`Reorder ${item.name}, position ${index + 1} of ${order.length}`} aria-keyshortcuts="ArrowUp ArrowDown" onpointerdown={event => grab(event, index)} onkeydown={event => gripKey(event, index)}><LucideIcon name="grip-horizontal" size={16} variant="action" /></button><span class="position">{index + 1}</span>{@render mark(item.id)}{/snippet}
+        {#snippet lead()}<button type="button" class="grip" aria-label={`Reorder ${item.name}, position ${index + 1} of ${order.length}`} aria-keyshortcuts="ArrowUp ArrowDown" onpointerdown={event => grab(event, index)} onkeydown={event => gripKey(event, index)}><LucideIcon name="grip-vertical" size={16} variant="action" /></button><span class="position">{index + 1}</span>{@render mark(item.id)}{/snippet}
         {#if item.key}
           <Button icon="square-pen" iconOnly aria-label={`Edit ${item.name} key`} />
           <Button icon="unplug" iconOnly aria-label={`Remove ${item.name}`} onclick={() => { order = order.filter(entry => entry !== item) }} />
