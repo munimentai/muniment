@@ -175,7 +175,7 @@
   .search-preferences { display: grid; gap: var(--page-gap); }
   .grip { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: grab; touch-action: none; }
   .grip:hover, .grip:focus-visible { background: var(--faint); color: var(--ink); }
-  .order-row.dragged { position: relative; z-index: 1; background: var(--surface); box-shadow: 0 0 0 1px var(--border); border-radius: var(--radius-control); }
+  .order-row.dragged { position: relative; z-index: 1; margin: 0 -8px; padding: 0 8px; background: var(--faint); border-radius: var(--radius-control); }
   :global(html.search-order-dragging), :global(html.search-order-dragging *) { cursor: grabbing !important; user-select: none; }
   .position { width: 16px; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: right; }
   .search-preferences :global(.row-lead) { gap: 10px; }
