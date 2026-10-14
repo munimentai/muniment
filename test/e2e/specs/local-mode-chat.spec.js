@@ -60,8 +60,8 @@ describe('installed local-mode chat', () => {
     await localMode.waitForDisplayed({ timeout: 120000 })
     await expandSidebar()
 
-    // Onboarding leaves Settings open on its model page, and open Settings hides the composer.
-    // More providers opens Settings → Model providers; the composer chip's picker reopens it through Manage models.
+    // Onboarding leaves Settings open on its provider catalog, and open Settings hides the composer.
+    // With no model connected, the composer's model chip reopens Settings on that catalog.
     let settings = await $('[role="dialog"][aria-label="Settings"]')
     if (await settings.isDisplayed()) {
       await closeSettings()
@@ -79,11 +79,12 @@ describe('installed local-mode chat', () => {
       const modelChip = await localMode.$('.model-chip')
       await modelChip.waitForDisplayed()
       await modelChip.click()
-      await (await $('button=Model providers')).click()
       settings = await $('[role="dialog"][aria-label="Settings"]')
       await settings.waitForDisplayed()
     }
-    await (await settings.$('button=Connect account')).click()
+    await (await settings.$('h4=Connect account')).waitForDisplayed({
+      timeoutMsg: 'the model chip did not open the provider catalog',
+    })
     await (await settings.$('button*=Ollama')).click()
     const baseUrlInput = await $('#provider-base-url')
     await baseUrlInput.waitForDisplayed()

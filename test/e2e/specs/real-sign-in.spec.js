@@ -113,7 +113,8 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
       timeout: 120000,
       timeoutMsg: 'the local desktop did not appear without a Muniment account',
     })
-    if (await location.isDisplayed()) {
+    const firstRun = await location.isDisplayed()
+    if (firstRun) {
       await verifyInitialHome(location)
       await openFirstRunModelSettings()
     }
@@ -127,7 +128,8 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     const sections = await $('nav[aria-label="Settings sections"]')
     expect(await (await sections.$('button=Account')).isExisting()).toBe(false)
     expect(await (await $('button=Sign in for cloud features')).isExisting()).toBe(false)
-    await (await settings.$('button=Connect account')).waitForDisplayed()
+    // More providers opens the provider catalog. The sidebar's Settings opens the Model providers list.
+    await (await settings.$(firstRun ? 'h4=Connect account' : 'button=Connect account')).waitForDisplayed()
     await closeSettings()
     expect(await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()).toBe(true)
   })
@@ -171,7 +173,10 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     if (inLocalMode) {
       // The cloud sign-in sits in the Settings menu at the foot of the sidebar.
       await expandSidebar()
-      await (await $('button=Settings')).click()
+      // More providers leaves Settings open, and open Settings replaces the sidebar's Settings control.
+      if (!(await (await $('[role="dialog"][aria-label="Settings"]')).isDisplayed())) {
+        await (await $('button=Settings')).click()
+      }
       // Settings opens on Models; the cloud sign-in is the Account section's one action.
       const sections = await $('nav[aria-label="Settings sections"]')
       await sections.waitForDisplayed()
