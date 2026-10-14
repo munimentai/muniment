@@ -43,6 +43,7 @@ mod workspace_tools;
 mod workspace_actions;
 mod creations;
 mod terminal;
+mod web_search;
 mod record;
 mod runtime_owner;
 mod subscription_probe;
@@ -236,6 +237,11 @@ pub fn run() {
             model_router::model_router_test_route,
             model_router::model_router_subscription_start,
             model_router::model_router_refresh_quota,
+            web_search::web_search_settings,
+            web_search::web_search_save_order,
+            web_search::web_search_save_engines,
+            web_search::web_search_set_key,
+            web_search::web_search_remove_key,
             account_login::local_mode_account_login_start,
             account_login::local_mode_account_login_answer,
             account_login::local_mode_account_login_cancel,

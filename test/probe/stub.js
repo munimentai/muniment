@@ -277,6 +277,62 @@ const providerScanFixtures = {
   none: { servers: [], hints: [] },
 }
 
+// The runtime's web search settings in memory, shaped like the
+// `search_` model actions answer them. A key keeps only its last four
+// characters.
+const SEARCH_ENGINES = ['brave', 'bing', 'duckduckgo', 'yahoo', 'wikipedia']
+const SEARCH_BASE_URL = new Set(['exa', 'brave', 'tavily', 'firecrawl', 'gemini', 'degoog'])
+const SEARCH_PROVIDERS = [
+  'exa', 'brave', 'tavily', 'firecrawl', 'perplexity', 'serper', 'serpapi', 'kagi', 'jina', 'parallel', 'you', 'openai',
+  'gemini', 'tinyfish', 'search1api', 'searchinfinity', 'querit', 'serpdive', 'bocha', 'ollama', 'anysearch', 'xcrawl',
+  'xai', 'mistral', 'brightdata', 'serpbase', 'serply', 'valyu', 'baizhi', 'zai', 'keenable', 'ceramic', 'degoog',
+].map((id) => ({ id, base_url: SEARCH_BASE_URL.has(id), extra: id === 'brightdata' ? ['brightdataSerpZone', 'brightdataUnlockerZone'] : [] }))
+
+function probeSearch() {
+  let order = [{ id: 'muniment', enabled: true }, { id: 'tavily', enabled: true }, { id: 'exa', enabled: true }]
+  let engines = [...SEARCH_ENGINES]
+  const keys = new Map([['tavily', { last4: '3f2a' }]])
+  const serves = (id) => id === 'muniment' || id === 'exa' || keys.has(id)
+  const view = () => ({
+    order: order.map(({ id, enabled }) => ({ id, enabled, has_key: keys.has(id) })),
+    engines: SEARCH_ENGINES.map((id) => ({ id, enabled: engines.includes(id) })),
+    keys: [...keys].map(([provider, key]) => ({ provider, has_key: true, ...key })),
+    providers: structuredClone(SEARCH_PROVIDERS),
+    running: true,
+  })
+  return {
+    web_search_settings: () => view(),
+    web_search_save_order: ({ order: next }) => {
+      const unknown = next.find(({ id }) => !serves(id))
+      if (unknown) throw new Error(`${unknown.id} has no key, so it cannot join the order.`)
+      order = next.map(({ id, enabled }) => ({ id, enabled }))
+      return view()
+    },
+    web_search_save_engines: ({ engines: next }) => {
+      if (!next.length) throw new Error('Turn on at least one engine, or turn off Muniment search in the order.')
+      engines = SEARCH_ENGINES.filter((id) => next.includes(id))
+      return view()
+    },
+    web_search_set_key: ({ provider, apiKey, baseUrl, extra }) => {
+      if (!SEARCH_PROVIDERS.some(({ id }) => id === provider)) throw new Error(`${provider} is not a search provider that takes a key.`)
+      const key = String(apiKey ?? '').trim()
+      if (!key) throw new Error('The key is empty.')
+      keys.set(provider, {
+        ...(key.length > 8 ? { last4: key.slice(-4) } : {}),
+        ...(baseUrl ? { base_url: baseUrl } : {}),
+        ...(extra && Object.values(extra).some(Boolean) ? { extra: Object.fromEntries(Object.entries(extra).filter(([, value]) => value)) } : {}),
+      })
+      if (!order.some(({ id }) => id === provider)) order.push({ id: provider, enabled: true })
+      return view()
+    },
+    web_search_remove_key: ({ provider }) => {
+      if (!keys.delete(provider)) throw new Error(`${provider} has no key.`)
+      order = order.filter(({ id }) => serves(id))
+      return view()
+    },
+  }
+}
+
 export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
@@ -305,6 +361,7 @@ export function buildProbeCommandTable(fixtureName) {
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
   const projectThreads = { 'probe-thread': 'project-lease', 'probe-archive': 'project-lease', 'probe-notes': 'project-research' }
+  const searchSettings = probeSearch()
   const eventListeners = []
   const invokedCommands = []
   const unknownCommands = []
@@ -426,6 +483,7 @@ export function buildProbeCommandTable(fixtureName) {
       fallback: null, min_confidence: 0.6, served_models: [],
       classifier: { kind: 'none', configured: false, model: '' },
     }
+    if (Object.hasOwn(searchSettings, command)) return searchSettings[command](payload ?? {})
     if (command === 'memory_profile_read') return profileMemory
     if (command === 'memory_profile_save') { profileMemory = payload.content; return null }
     if (command === 'memory_recall_settings') return recallSettings && { ...recallSettings }
