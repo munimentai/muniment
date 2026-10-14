@@ -62,6 +62,8 @@
       if (event.target?.closest?.('dialog[open]')) return
       const activeDialog = event.target?.closest?.('[role="dialog"]')
       if (activeDialog && activeDialog !== panel) return
+      // The workspace panel beside Settings keeps Escape for its terminal and browser.
+      if (event.target?.closest?.('[data-panel="workspace"]')) return
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()

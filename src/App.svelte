@@ -393,10 +393,9 @@
     composer?.focus()
   }
 
-  function closeSettings(restoreFocus = true) {
+  function closeSettings() {
     settingsOpen = false
     settingsConnectProvider = null
-    if (!restoreFocus) return
     // The sidebar's Settings control remounts when Settings closes, so a detached opener hands focus to it.
     void tick().then(() => {
       const opener = settingsOpener?.isConnected ? settingsOpener : settingsButton ?? composer
@@ -2357,7 +2356,7 @@
             <span class="title-spacer" data-tauri-drag-region></span>
             <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || !!active || !!backgroundRun || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
             {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
-            <WorkspaceMenu selected={settingsOpen ? null : browserPanel} onselect={mode => { if (settingsOpen) closeSettings(false); showBrowser(mode) }} onopenchange={value => toolsMenuOpen = value} />
+            <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
           </div>
         </header>
                   {#if threadMenu}
@@ -2886,8 +2885,8 @@
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; void refreshAgents() }}
         onopen={(id) => chatController.openThread(id, true)} />{/key}
     {/if}
-  {#if browserPanel}<div class="artifact-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
-  <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={settingsOpen || !!deletingThreadId} />
+  {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
+  <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} agents={agentListing.agents} isArchived={catalogArchived} onaction={catalogAction} projects={projectRows} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>startCreation('agent', chosen)} onselect={openAgent} onopen={openCreation} onchange={(next) => { agentListing = next }} />
   {/key}{/if}
@@ -3209,7 +3208,9 @@
   .artifact-divider { grid-area: rail; }
   .sidebar-divider { grid-area: thread; }
   /* Settings covers the thread and rail. The title band, the sidebar, its divider and the announcement region stay. */
-  .workspace.settings-open > :global(:not(.titlebar, .sidebar, .sidebar-divider, .visually-hidden, .settings-layout, [role="alert"])) { visibility: hidden; }
+  .workspace.settings-open > :global(:not(.titlebar, .sidebar, .sidebar-divider, .visually-hidden, .settings-layout, .workspace-panel, .workspace-divider, [role="alert"])) { visibility: hidden; }
+  /* Settings gives the rail column to an open workspace panel. */
+  .workspace.settings-open.tools-open :global(.settings-layout) { grid-column: 2; }
   .workspace.settings-open .titlebar-thread { visibility: hidden; }
   .workspace.settings-open .update-slot, .workspace.settings-open .titlebar-thread :global(.workspace-menu) { visibility: visible; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
