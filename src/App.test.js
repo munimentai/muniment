@@ -1484,7 +1484,7 @@ describe('workspace composer entry', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
     expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
