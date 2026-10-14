@@ -5,7 +5,9 @@
   import { SEARCH_ENGINES, readSearchEngine, saveSearchEngine } from './browser-settings.js'
   let engine = $state(readSearchEngine())
   let error = $state('')
-  const options = SEARCH_ENGINES.map(({ id, name }) => ({ value: id, label: name }))
+  // Each engine shows its real mark from the provider logos.
+  const LOGOS = { google: 'google', brave: 'search-brave', duckduckgo: 'search-duckduckgo', bing: 'search-bing', startpage: 'search-startpage' }
+  const options = SEARCH_ENGINES.map(({ id, name }) => ({ value: id, label: name, provider: LOGOS[id] }))
   function choose(value) {
     try { engine = saveSearchEngine(value); error = '' }
     catch (failure) { error = String(failure?.message ?? failure) }

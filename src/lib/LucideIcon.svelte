@@ -179,6 +179,8 @@
     <path d="m6 6 12 12" />
   {:else if name === 'arrow-down'}
     <path d="M12 5v14m-7-7 7 7 7-7" />
+  {:else if name === 'grip-horizontal'}
+    <circle cx="12" cy="9" r="1" /><circle cx="19" cy="9" r="1" /><circle cx="5" cy="9" r="1" /><circle cx="12" cy="15" r="1" /><circle cx="19" cy="15" r="1" /><circle cx="5" cy="15" r="1" />
   {:else if name === 'arrow-up'}
     <path d="m5 12 7-7 7 7" />
     <path d="M12 19V5" />

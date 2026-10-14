@@ -30,6 +30,9 @@
   // where `color` asks for it: the first run and the model Settings pages.
   const COLOR_MARKS = { anthropic: 'claude' }
 
+  // Simple Icons marks ship without a fill, so they take the text color.
+  const UNFILLED = new Set(['search-wikipedia', 'search-startpage'])
+
   let { provider, size = 16, color = false } = $props()
   const id = $derived(ALIASES[provider] ?? provider?.replace(/^custom-.*/, 'custom'))
   const colorId = $derived(color ? `${COLOR_MARKS[id] ?? id}-color` : null)
@@ -38,7 +41,7 @@
 </script>
 
 {#if logo?.any}
-  <span class="logo" style:width="{size}px" style:height="{size}px" aria-hidden="true">{@html logo.any}</span>
+  <span class="logo" class:unfilled={UNFILLED.has(id)} style:width="{size}px" style:height="{size}px" aria-hidden="true">{@html logo.any}</span>
 {:else if logo}
   <span class="logo light" style:width="{size}px" style:height="{size}px" aria-hidden="true">{@html logo.light ?? logo.dark}</span>
   <span class="logo dark" style:width="{size}px" style:height="{size}px" aria-hidden="true">{@html logo.dark ?? logo.light}</span>
@@ -53,6 +56,8 @@
   .logo :global(svg) { width: 100%; height: 100%; }
   .logo img { width: 100%; height: 100%; object-fit: contain; }
   .fallback { color: var(--muted); }
+  .unfilled { color: var(--ink); }
+  .unfilled :global(svg) { fill: currentColor; }
   .dark { display: none; }
   @media (prefers-color-scheme: dark) {
     :global(:root:not([data-scheme="light"])) .light { display: none; }

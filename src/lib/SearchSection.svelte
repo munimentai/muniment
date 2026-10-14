@@ -11,12 +11,11 @@
   import PageHead from './ui/PageHead.svelte'
   import Row from './ui/Row.svelte'
   import PocketFold from './PocketFold.svelte'
+  import LucideIcon from './LucideIcon.svelte'
 
   // Providers whose mark the model settings already ship keep that file.
   const SHARED_LOGOS = { mistral: 'mistral', ollama: 'ollama', openai: 'openai', xai: 'xai', kimi: 'kimi-coding', zai: 'zai' }
   const logo = id => SHARED_LOGOS[id] ?? `search-${id}`
-  // Simple Icons marks ship without a fill, so they take the text color.
-  const UNFILLED = new Set(['wikipedia', 'startpage'])
 
   const ENGINES = [
     { id: 'brave', name: 'Brave', note: 'Web results.' },
@@ -56,10 +55,51 @@
   const searching = $derived(order.some(item => item.enabled))
 
   function move(index, step) {
+    const target = index + step
+    if (target < 0 || target >= order.length) return
     const next = [...order]
     const [item] = next.splice(index, 1)
-    next.splice(index + step, 0, item)
+    next.splice(target, 0, item)
     order = next
+  }
+
+  // The grip drags a search to a new place. The row follows the pointer's
+  // midpoint crossings, and the arrow keys move it one place on the grip.
+  let rows = $state([])
+  let dragging = $state(null)
+  function grab(event, index) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    dragging = index
+    document.documentElement.classList.add('search-order-dragging')
+    // The row moves in the list while it drags, so the window follows the pointer.
+    window.addEventListener('pointermove', drag)
+    window.addEventListener('pointerup', drop, { once: true })
+    window.addEventListener('pointercancel', drop, { once: true })
+  }
+  function drag(event) {
+    if (dragging === null) return
+    const over = rows.findIndex(row => { const box = row?.getBoundingClientRect(); return box && event.clientY >= box.top && event.clientY < box.bottom })
+    if (over === -1 || over === dragging) return
+    const box = rows[over].getBoundingClientRect()
+    const past = over > dragging ? event.clientY > box.top + box.height / 2 : event.clientY < box.top + box.height / 2
+    if (!past) return
+    move(dragging, over - dragging)
+    dragging = over
+  }
+  function drop() {
+    window.removeEventListener('pointermove', drag)
+    window.removeEventListener('pointerup', drop)
+    window.removeEventListener('pointercancel', drop)
+    dragging = null
+    document.documentElement.classList.remove('search-order-dragging')
+  }
+  function gripKey(event, index) {
+    const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
+    if (!step) return
+    event.preventDefault()
+    move(index, step)
+    queueMicrotask(() => rows[index + step]?.querySelector('.grip')?.focus())
   }
   function save(provider) {
     if (!draftKey.trim()) return
@@ -73,7 +113,7 @@
   {#if id === 'muniment'}
     <span class="muniment-mark" style:width={`${size}px`} style:height={`${size}px`}><PocketFold {size} /></span>
   {:else}
-    <span class="provider-mark" class:unfilled={UNFILLED.has(id)}><ProviderLogo provider={logo(id)} {size} /></span>
+    <ProviderLogo provider={logo(id)} {size} />
   {/if}
 {/snippet}
 
@@ -82,16 +122,16 @@
 
   <Group heading="Search order" description="Agents try each search that is on, top to bottom, and move to the next one when it fails or runs out of quota.">
     {#each order as item, index (item.id + (item.key ? '-key' : ''))}
+      <div class="order-row" class:dragged={dragging === index} bind:this={rows[index]}>
       <Row title={item.name} meta={item.key ?? ''} description={item.note}>
-        {#snippet lead()}<span class="position">{index + 1}</span>{@render mark(item.id)}{/snippet}
-        <Button icon="arrow-up" iconOnly aria-label={`Move ${item.name} up`} disabled={index === 0} onclick={() => move(index, -1)} />
-        <Button icon="arrow-down" iconOnly aria-label={`Move ${item.name} down`} disabled={index === order.length - 1} onclick={() => move(index, 1)} />
+        {#snippet lead()}<button type="button" class="grip" aria-label={`Reorder ${item.name}, position ${index + 1} of ${order.length}`} aria-keyshortcuts="ArrowUp ArrowDown" onpointerdown={event => grab(event, index)} onkeydown={event => gripKey(event, index)}><LucideIcon name="grip-horizontal" size={16} variant="action" /></button><span class="position">{index + 1}</span>{@render mark(item.id)}{/snippet}
         {#if item.key}
           <Button icon="square-pen" iconOnly aria-label={`Edit ${item.name} key`} />
           <Button icon="unplug" iconOnly aria-label={`Remove ${item.name}`} onclick={() => { order = order.filter(entry => entry !== item) }} />
         {/if}
         <Toggle checked={item.enabled} label={`Use ${item.name}`} onchange={value => { item.enabled = value }} />
       </Row>
+      </div>
     {/each}
     {#if !searching}<p role="alert">Every search is off, so agents cannot search the web.</p>{/if}
   </Group>
@@ -125,7 +165,7 @@
       <DisclosureSummary>More providers ({MORE.length})</DisclosureSummary>
       <ul>{#each MORE as [id, name] (id)}<li><span class="more-name">{@render mark(id, 16)}{name}</span><Button icon="key-round">Add key</Button></li>{/each}</ul>
     </details>
-    <p>OpenAI, xAI and Kimi search with your signed-in model account, so they need no key here.</p>
+    <p>OpenAI and xAI search with the account you connected in Model providers, so they need no key here.</p>
   </Group>
 
   <BrowserSearch />
@@ -133,11 +173,13 @@
 
 <style>
   .search-preferences { display: grid; gap: var(--page-gap); }
+  .grip { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: grab; touch-action: none; }
+  .grip:hover, .grip:focus-visible { background: var(--faint); color: var(--ink); }
+  .order-row.dragged { position: relative; z-index: 1; background: var(--surface); box-shadow: 0 0 0 1px var(--border); border-radius: var(--radius-control); }
+  :global(html.search-order-dragging), :global(html.search-order-dragging *) { cursor: grabbing !important; user-select: none; }
   .position { width: 16px; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: right; }
   .search-preferences :global(.row-lead) { gap: 10px; }
   .muniment-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; }
-  .provider-mark { display: inline-flex; color: var(--ink); }
-  .unfilled :global(svg) { fill: currentColor; }
   .key-form { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
   .key-form input { flex: 1 1 200px; min-width: 0; }
   .more { padding: 10px 0; }
