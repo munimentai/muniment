@@ -164,7 +164,7 @@ describe('installed nightly model-ready onboarding', () => {
 
     await expandSidebar()
     const row = await $('header.titlebar')
-    expect((await row.getSize()).height).toBe(30)
+    expect((await row.getSize()).height).toBe(35)
     const newThread = await $('#sidebar .side-top > button:first-child')
     expect(await newThread.getAttribute('aria-label')).toBe('New thread')
     expect(await newThread.isDisplayed()).toBe(true)

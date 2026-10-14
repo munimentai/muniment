@@ -60,15 +60,16 @@ describe('installed local-mode chat', () => {
     await localMode.waitForDisplayed({ timeout: 120000 })
     await expandSidebar()
 
-    const composer = await $('textarea[placeholder="Ask anything"]')
-    await composer.waitForDisplayed({ timeout: 120000 })
-    await composer.setValue('Help me organize my notes.')
+    // Onboarding leaves Settings open on its model page, and open Settings hides the composer.
     // More providers opens Settings → Model providers; the composer chip's picker reopens it through Manage models.
     let settings = await $('[role="dialog"][aria-label="Settings"]')
     if (await settings.isDisplayed()) {
       await closeSettings()
       await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
     }
+    const composer = await $('textarea[placeholder="Ask anything"]')
+    await composer.waitForDisplayed({ timeout: 120000 })
+    await composer.setValue('Help me organize my notes.')
     const emptyChat = await localMode.$('.thread .empty')
     await browser.waitUntil(async () => await emptyChat.getText() === 'Connect a model in the composer to start chatting.', {
       timeout: 30000,
