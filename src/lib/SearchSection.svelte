@@ -10,7 +10,7 @@
   import Group from './ui/Group.svelte'
   import PageHead from './ui/PageHead.svelte'
   import Row from './ui/Row.svelte'
-  import { MILLED_RING_PATH } from './mark.js'
+  import PocketFold from './PocketFold.svelte'
 
   // Providers whose mark the model settings already ship keep that file.
   const SHARED_LOGOS = { mistral: 'mistral', ollama: 'ollama', openai: 'openai', xai: 'xai', kimi: 'kimi-coding', zai: 'zai' }
@@ -71,7 +71,7 @@
 
 {#snippet mark(id, size = 20)}
   {#if id === 'muniment'}
-    <svg class="muniment-mark" width={size} height={size} viewBox="0 0 48 48" aria-hidden="true"><path d={MILLED_RING_PATH} /></svg>
+    <span class="muniment-mark" style:width={`${size}px`} style:height={`${size}px`}><PocketFold {size} /></span>
   {:else}
     <span class="provider-mark" class:unfilled={UNFILLED.has(id)}><ProviderLogo provider={logo(id)} {size} /></span>
   {/if}
@@ -135,10 +135,9 @@
   .search-preferences { display: grid; gap: var(--page-gap); }
   .position { width: 16px; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: right; }
   .search-preferences :global(.row-lead) { gap: 10px; }
-  .muniment-mark { flex: none; }
+  .muniment-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; }
   .provider-mark { display: inline-flex; color: var(--ink); }
   .unfilled :global(svg) { fill: currentColor; }
-  .muniment-mark path { fill: none; stroke: var(--signal); stroke-width: 5; stroke-linecap: round; }
   .key-form { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
   .key-form input { flex: 1 1 200px; min-width: 0; }
   .more { padding: 10px 0; }
