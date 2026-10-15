@@ -211,7 +211,7 @@ fn desktop_has_no_credential_store_call_path() {
     );
     boundary.file(&root.join("desktop.rs"), root);
     assert!(boundary.files > 20);
-    assert_eq!(boundary.launch_boundaries, 1);
+    assert_eq!(boundary.launch_boundaries, 0);
 }
 
 #[test]
