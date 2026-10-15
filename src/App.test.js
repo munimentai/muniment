@@ -8670,6 +8670,25 @@ describe('runtimes', () => {
     expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
   })
 
+  it('starts a new thread on this computer when the picked machine revoked this device', async () => {
+    const fallback = invoke.getMockImplementation()
+    let list = { ...listFor(buildBox.id), runtimes: [thisComputer, { ...buildBox, status: 'revoked', active: true }] }
+    threadSummaryResult = []
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return list
+      if (command === 'runtime_select') {
+        list = { ...listFor(payload.id), runtimes: [{ ...thisComputer, active: true }, { ...buildBox, status: 'revoked' }] }
+        return list
+      }
+      if (command === 'chat_new_thread') return null
+      return fallback(command, payload)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('runtime_select', { id: 'local' }))
+    expect(await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' })).toBeInTheDocument()
+  })
+
   it('holds sending in a thread whose machine revoked this device and names the next step', async () => {
     const fallback = invoke.getMockImplementation()
     const revoked = { ...listFor('local'), runtimes: [thisComputer, { ...buildBox, status: 'revoked' }] }

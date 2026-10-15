@@ -294,6 +294,14 @@
     if (remoteSelected(runtimeList)) await selectRuntime(runtimeList.runtimes.find((runtime) => runtime.local))
   }
 
+  // A new thread starts on a machine that answers: one picked earlier that is
+  // now offline or revoked this device gives way to this computer.
+  $effect(() => {
+    if (!freshThread || !remoteSelected(runtimeList) || active) return
+    const picked = runtimeList.runtimes.find((runtime) => runtime.id === runtimeList.selected)
+    if (picked && statusHint(picked)) void onThisComputer()
+  })
+
   async function openCreation(item) {
     if (remoteSelected(runtimeList)) await onThisComputer()
     if (switchLocked) return
