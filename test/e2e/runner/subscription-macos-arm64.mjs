@@ -27,7 +27,7 @@ export async function hostedArm64({ sourceSha, output, leases, models, repositor
     }
     if (check('/usr/bin/uname', ['-m']) !== 'arm64') throw new Error(reason)
     reason = 'Use the disposable runner console login with an active native GUI session.'
-    // GitHub creates a fresh VM for each job. Never use a shared factory login here.
+    // GitHub creates a fresh VM for each job. Never use a shared CI login here.
     if (!Number.isSafeInteger(uid) || uid <= 0 || check('/usr/bin/stat', ['-f', '%u', '/dev/console']) !== String(uid)) {
       throw new Error(reason)
     }

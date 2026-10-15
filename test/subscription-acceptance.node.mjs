@@ -363,8 +363,8 @@ for (const [name, leases] of [
   ['absent subscriptions', []], ['expired lease', [{ ...lease, expires_ms: Date.now() }]],
   ['string expiry', [{ ...lease, expires_ms: String(lease.expires_ms) }]],
   ['unbounded expiry', [{ ...lease, expires_ms: Infinity }]],
-  ['refresh token', [{ ...lease, refresh: 'factory-owned' }]],
-  ['gh credential', [{ ...lease, gh_token: 'factory-owned' }]],
+  ['refresh token', [{ ...lease, refresh: 'issuer-owned' }]],
+  ['gh credential', [{ ...lease, gh_token: 'issuer-owned' }]],
   ['duplicate lease', [lease, lease]], ['missing account ID', [{ ...lease, account_id: '' }]],
   ['header injection', [{ ...lease, access: 'value\nother-header' }]],
   ['unsupported subscription', [{ ...lease, provider: 'google' }]],
@@ -386,7 +386,7 @@ test('the importer rejects fewer than four distinct models and local providers',
   assert.throws(() => subscriptionAccounts(models.map(model => ({ ...model, refresh: 'private' })), [lease]))
 })
 
-test('the disposable environment does not inherit factory authority or provider homes', () => {
+test('the disposable environment does not inherit CI authority or provider homes', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-test-'))
   try {
     const env = isolatedEnvironment(root, { PATH: '/bin', GH_TOKEN: 'secret', GITHUB_TOKEN: 'secret',
@@ -409,8 +409,8 @@ for (const platform of ['windows', 'macos-arm64', 'macos-x64']) {
     const source = { MUNIMENT_NATIVE_DISPOSABLE_USER: '1', HOME: '/Users/disposable',
       UserProfile: 'C:\\Users\\disposable', AppData: 'C:\\Users\\disposable\\AppData\\Roaming',
       LocalAppData: 'C:\\Users\\disposable\\AppData\\Local', GH_TOKEN: 'private',
-      CODEX_HOME: '/factory/codex', PI_CODING_AGENT_DIR: '/factory/agent',
-      NODE_OPTIONS: '--require=/factory/module', HTTPS_PROXY: 'https://private' }
+      CODEX_HOME: '/ci/codex', PI_CODING_AGENT_DIR: '/ci/agent',
+      NODE_OPTIONS: '--require=/ci/module', HTTPS_PROXY: 'https://private' }
     const before = { ...source }
     try {
       const env = isolatedEnvironment(root, source, platform)

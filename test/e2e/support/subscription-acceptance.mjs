@@ -89,21 +89,21 @@ export function checkIdentity(candidate, sourceSha, platform, bytes) {
   return candidate.asset.slice(prefix.length)
 }
 
-// Accept access-only leases. The factory keeps refresh tokens and refresh ownership.
+// Accept access-only leases. The lease issuer keeps refresh tokens and refresh ownership.
 export function subscriptionAccounts(models, leases, now = Date.now()) {
   if (!Array.isArray(models) || models.length !== 4 || new Set(models.map(m => m.id)).size !== 4 ||
       models.some(m => !m || Object.keys(m).some(key => !['family', 'id'].includes(key)) ||
         !Object.hasOwn(providers, m.family) || !validModel(m.id))) {
     throw new Error('Select four distinct supported subscription models.')
   }
-  if (!Array.isArray(leases) || !leases.length) throw new Error('Provide fresh factory subscription access leases.')
+  if (!Array.isArray(leases) || !leases.length) throw new Error('Provide fresh subscription access leases.')
   const families = [...new Set(models.map(model => model.family))]
   if (families.some(family => !leases.some(lease => lease?.provider === providers[family])) ||
       new Set(leases.map(lease => lease?.access)).size !== leases.length ||
       new Set(leases.filter(lease => lease?.account_id).map(lease => `${lease.provider}/${lease.account_id}`)).size !==
         leases.filter(lease => lease?.account_id).length ||
       leases.some(lease => !lease || !families.some(family => providers[family] === lease.provider))) {
-    throw new Error('Provide distinct factory access leases for each selected subscription provider.')
+    throw new Error('Provide distinct access leases for each selected subscription provider.')
   }
   return leases.map((lease, index) => {
     const family = families.find(family => providers[family] === lease.provider)
@@ -112,7 +112,7 @@ export function subscriptionAccounts(models, leases, now = Date.now()) {
         !Number.isSafeInteger(lease.expires_ms) || lease.expires_ms < now + 20 * 60_000 ||
         (lease.account_id !== undefined && (typeof lease.account_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(lease.account_id))) ||
         ((lease.provider === 'openai-codex' || leases.filter(item => item.provider === lease.provider).length > 1) && !lease.account_id)) {
-      throw new Error('Provide access-only subscription leases valid for at least 20 minutes. Keep refresh tokens at the factory.')
+      throw new Error('Provide access-only subscription leases valid for at least 20 minutes. Keep refresh tokens with the lease issuer.')
     }
     return { id: `probe-${index}`, family, label: `Test subscription ${index + 1}`,
       credential: { type: 'subscription', ...lease }, models: models.filter(model => model.family === family).map(model => model.id), enabled: true, weight: 1 }

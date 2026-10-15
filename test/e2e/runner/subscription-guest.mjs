@@ -132,7 +132,7 @@ export async function guest({ sourceSha, platform, output, leases, models, encod
     throw new Error('Provide a supported native platform, output directory, and the exact candidate source SHA.')
   }
   fs.rmSync(path.join(artifacts, `${platform}-subscription.log`), { force: true })
-  writeBlocked(artifacts, sourceSha, platform, 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.')
+  writeBlocked(artifacts, sourceSha, platform, 'Provide the pinned signed package, a native GUI runner, and fresh subscription access leases.')
   let step = 'guest/leases'
   let cleanupSandbox
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-'))

@@ -24,7 +24,7 @@ function execute(command, args, env, timeout = 180_000) {
   return result.stdout.toString('utf8').trim()
 }
 
-// Do not inherit factory tokens, provider homes, Pi settings, proxies, or gh credentials.
+// Do not inherit CI tokens, provider homes, Pi settings, proxies, or gh credentials.
 export function isolatedEnvironment(root, source = process.env, platform = nativePlatform()) {
   const env = {}
   // Native services use the disposable login, not a synthetic OS profile.
@@ -324,7 +324,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
   const proofFile = path.join(output, 'release-acceptance.json')
   const evidenceFile = path.join(output, `${platform}-subscription.json`)
   // Write a blocked result first so a killed runner cannot leave stale passing evidence.
-  let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
+  let reason = 'Provide the pinned signed package, a native GUI runner, and fresh subscription access leases.'
   fs.rmSync(path.join(output, `${platform}-subscription.log`), { force: true })
   if (platform === 'windows') {
     for (const name of ['windows-subscription-msi.log', 'windows-subscription-relaunch.json']) {
@@ -375,7 +375,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     if (process.env.MUNIMENT_NATIVE_DISPOSABLE_USER !== '1') {
       throw new Error('Use a disposable native GUI login. Set MUNIMENT_NATIVE_DISPOSABLE_USER=1 only for that login.')
     }
-    reason = 'Provide the candidate manifest, signed package, signature, installed app, and factory subscription lease file.'
+    reason = 'Provide the candidate manifest, signed package, signature, installed app, and subscription lease file.'
     if (![candidateFile, packageFile, signatureFile, executable, leasesFile].every(file => file && fs.existsSync(file))) throw new Error(reason)
     // Load the redaction context before any parser or native tool can fail.
     redact = subscriptionRedactor({ leases: fs.readFileSync(leasesFile, 'utf8') })
@@ -388,10 +388,10 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     const publicKey = fs.readFileSync(publicKeyFile || updaterPublicKeyFile, 'utf8')
     const comment = verifyUpdaterSignature(bytes, fs.readFileSync(signatureFile, 'utf8'), publicKey)
     if (!comment.split('\t').includes(`file:${packageName}`)) throw new Error('The signed package name does not match the candidate.')
-    reason = 'Provide four distinct models and access-only factory subscription leases valid for at least 20 minutes.'
+    reason = 'Provide four distinct models and access-only subscription leases valid for at least 20 minutes.'
     const leaseStat = fs.statSync(leasesFile)
     if (!leaseStat.isFile() || (process.platform !== 'win32' && (leaseStat.mode & 0o077) !== 0)) {
-      throw new Error('Keep the factory lease file readable only by its owner.')
+      throw new Error('Keep the lease file readable only by its owner.')
     }
     step = 'leases'
     const accounts = subscriptionAccounts(candidate.models, json(leasesFile))
@@ -569,7 +569,7 @@ export async function run({ candidateFile, packageFile, signatureFile, executabl
     if (error instanceof ScreenshotError) reason = error.reason
     if (app && !(error instanceof ScreenshotError)) {
       failureKind = probeFailure(env)
-      if (failureKind === 'auth') reason = 'Subscription authentication blocked the probe. Renew the factory access lease.'
+      if (failureKind === 'auth') reason = 'Subscription authentication blocked the probe. Renew the access lease.'
       else if (failureKind === 'quota') reason = 'Subscription quota blocked the probe. Retry after capacity returns.'
     }
     reportBlocked(`step=${step}\nerror=${error.message}\napp: ${processStatus(app)}\nruntime: ${platform === 'linux' ? linuxRuntimeStatus(env) : processStatus(runtime)}\n${profileLogs(env, redact)}\n${probeProgress(env, step, phase)}`)

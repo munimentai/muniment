@@ -109,7 +109,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
     : 'The native desktop-ci runner for this platform is unavailable.'
   const missingLeases = 'Provide the SUBSCRIPTION_LEASES secret with access-only leases.'
   const missingModels = 'Provide the SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
-  let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
+  let reason = 'Provide the pinned signed package, a native GUI runner, and fresh subscription access leases.'
   const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
   let status = 1
   fs.rmSync(path.join(output, `${platform}-subscription.log`), { force: true })
