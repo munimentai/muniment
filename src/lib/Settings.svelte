@@ -20,6 +20,8 @@
   const LanguageSection = () => import('./LanguageSection.svelte')
   const SearchSection = () => import('./SearchSection.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
+  const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
+  import { LOCAL_PAGES } from '../runtimes/runtimes.js'
 
   let {
     tauri,
@@ -44,9 +46,12 @@
     onsignout = null,
     onrecord = null,
     connectProvider = null,
+    // The selected paired runtime, or null while this computer's runtime is selected.
+    remoteRuntime = null,
+    runtimeSwitchDisabled = false,
   } = $props()
 
-  const sections = settingsSections()
+  const sections = $derived(settingsSections({ remote: !!remoteRuntime }))
   $effect(() => {
     if (settingsPage(section) !== section) section = settingsPage(section)
     else if (!sections.some(([id]) => id === section)) section = 'providers'
@@ -84,6 +89,9 @@
   <!-- The sidebar already names the page, so its heading is for assistive tech only. -->
   <h3 id="settings-section-title" class="visually-hidden">{sectionLabel}</h3>
   <PanelPage>
+    {#if remoteRuntime && LOCAL_PAGES.includes(section)}
+      <p class="support" role="note">These settings belong to this computer. {remoteRuntime.name} keeps its own.</p>
+    {/if}
     {#if section in EXTEND_TABS}
       <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, sidebarTab: EXTEND_TABS[section]}} />
     {:else if section in MODEL_TABS}
@@ -113,9 +121,11 @@
         </Row>
         {#if storageError}<p role="alert">{storageError}</p>{/if}
       </Group>
+    {:else if section === 'runtimes'}
+      <SettingsSection load={RuntimesSection} properties={{tauri, listen, switchDisabled: runtimeSwitchDisabled}} />
     {:else if featureFlags.companyRecord && section === 'companies'}
       <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange, onrecord}} />
-    {:else if featureFlags.cloud && section === 'account'}
+    {:else if featureFlags.cloud && section === 'account' && !remoteRuntime}
       {#if local}
         <PageHead intro="Local mode runs on this device with your own providers. A free account adds the mobile relay." />
         <Group heading="Account">

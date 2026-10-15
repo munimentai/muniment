@@ -123,6 +123,10 @@ There is no custom tap. Acceptance belongs to the Homebrew maintainers.
 **muniment-site.** `docs/public-evidence/` is lifted verbatim into the public
 docs, and a change to what an outside user sees updates it, law 12.
 
+**Other runtimes.** The app keeps its own runtime and attaches to one selected runtime at a time: this computer, another desktop, or a `muniment-server` host or container. Settings → Runtimes pairs one from its one-time `muniment://pair` link, pasted or read over SSH from `<command> pair --json`, with no account, and keeps its device credential in an owner-only file under `~/.muniment/runtimes/`.
+An SSH runtime attaches through `ssh -N -L` to a loopback port, which opens with the attach and closes when the app leaves the runtime or quits. Threads, models, memory, search and context come from the selected runtime, and a thread stays on the runtime that holds it. The cloud account, phone pairing, extensions and Storage stay with this computer, so Account hides and those pages say so.
+Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Update asks an older runtime, where this device holds `runtime.admin`, to install the app's version, and Update all asks every such runtime.
+
 **Updates.** The in-app updater reads the public stable release feed, sends
 nothing that identifies the user or machine, and verifies signatures bound to
 the announced version. It shows one install control after download and waits

@@ -122,14 +122,14 @@ composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
-New thread leads the sidebar, followed by Agents and title search, with no static Threads heading.
+New thread leads the sidebar, followed by Agents and title search, with no static Threads heading. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use, and a paired runtime hides Agents, Artifacts and Projects.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
 Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
-then Models, Extend, Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory) and Workspace (Storage). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
+then Models, Extend, Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory) and Workspace (Storage, Runtimes). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,

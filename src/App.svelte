@@ -4,6 +4,8 @@
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { settingsGroups, settingsPage } from './lib/settings-sections.js'
+  import RuntimeSwitcher from './runtimes/RuntimeSwitcher.svelte'
+  import { activeRuntime, remoteSelected } from './runtimes/runtimes.js'
   import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
@@ -378,6 +380,11 @@
     await refreshAgents()
   }
   let settingsSection = $state('providers')
+  // The runtimes the app can attach to. While a paired runtime is selected,
+  // threads, models and settings come from it, and this computer's agents,
+  // artifacts and projects step aside.
+  let runtimeList = $state(null)
+  const remoteRuntime = $derived(remoteSelected(runtimeList) ? activeRuntime(runtimeList) : null)
   // A first-run choice the providers page opens at once.
   let settingsConnectProvider = $state(null)
   let settingsButton = $state()
@@ -400,6 +407,46 @@
     await tick()
     composer?.focus()
   }
+
+  function applyRuntimes(next) {
+    if (!next?.runtimes) return
+    const previous = runtimeList?.selected
+    runtimeList = next
+    if (previous && previous !== next.selected) void runtimeSwitched()
+  }
+
+  // A switch shows the newly selected runtime's threads and models. Its first
+  // send starts a thread there.
+  async function runtimeSwitched() {
+    selectTask(null)
+    messages = []
+    threadSummaries = []
+    agentsOpen = false
+    artifactsOpen = false
+    projectsOpen = false
+    selectedAgent = null
+    await refreshInventory()
+    await chatController.loadHistory()
+  }
+
+  async function selectRuntime(runtime) {
+    try {
+      applyRuntimes(await tauri.invoke('runtime_select', { id: runtime.id }))
+    } catch (error) {
+      submitError = String(error?.message ?? error)
+    }
+  }
+
+  onMount(() => {
+    if (!tauri) return
+    let alive = true
+    let stop
+    Promise.resolve(tauri.invoke('runtime_list')).then(applyRuntimes).catch(() => {})
+    Promise.resolve(window.__TAURI__?.event?.listen('runtimes-changed', ({ payload }) => applyRuntimes(payload)))
+      .then((unlisten) => { if (alive) stop = unlisten; else unlisten?.() })
+      .catch(() => {})
+    return () => { alive = false; stop?.() }
+  })
 
   function closeSettings() {
     settingsOpen = false
@@ -2418,7 +2465,7 @@
               <button class="side-action settings-back" aria-keyshortcuts="Escape" onclick={closeSettings}><LucideIcon name="arrow-left" /><span>Back to threads</span></button>
             </div>
             <nav class="side-scroll" aria-label="Settings sections" use:panelScroll>
-              {#each settingsGroups() as [group, pages] (group)}
+              {#each settingsGroups({ remote: !!remoteRuntime }) as [group, pages] (group)}
                 <h2 class="side-heading">{group}</h2>
                 {#each pages as [id, label, icon] (id)}
                   <button class="side-action" aria-current={settingsSection === id ? 'true' : undefined} onclick={() => { settingsSection = id }}>{#if icon === 'mcp'}<span class="side-mark"><McpIcon /></span>{:else}<LucideIcon name={icon} />{/if}<span>{label}</span></button>
@@ -2430,8 +2477,10 @@
               <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={switchLocked} onclick={() => newSidebarThread()}>
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
+              <RuntimeSwitcher list={runtimeList} disabled={switchLocked || !!active || !!backgroundRun} onselect={selectRuntime} onmanage={() => openSettings('runtimes')} />
             </div>
             <div class="side-scroll" use:panelScroll>
+            {#if !remoteRuntime}
             <section class="sidebar-collection" aria-label="Agents group">
               <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} running={!agentsExpanded && !!backgroundRunAgent} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
               {#if agentsExpanded}<div class="collection-children">
@@ -2451,7 +2500,9 @@
             {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span>{#if item.threadId && item.threadId === backgroundRunArtifact}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
+            {/if}
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
+            {#if !remoteRuntime}
             <section class="project-section" aria-label="Projects">
               <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
               {#if projectForm}
@@ -2471,6 +2522,7 @@
               </div>{/if}
               {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
             </section>
+            {/if}
             <!-- The selection takes the Threads heading's row, so no row moves under the pointer. -->
             {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
             {:else}<ThreadFilter status={includeArchived ? 'all' : archivedThreads ? 'archived' : 'active'} sort={threadSort} onchange={(status, sort) => { archivedThreads = status === 'archived'; includeArchived = status === 'all'; threadSort = sort; filterThreads() }} />{/if}
@@ -2951,7 +3003,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a

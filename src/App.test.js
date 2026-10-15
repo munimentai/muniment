@@ -1484,7 +1484,7 @@ describe('workspace composer entry', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Runtimes', 'Companies'])
     expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
@@ -5565,7 +5565,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(6)
+    expect(eventUnlisten).toHaveBeenCalledTimes(7)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
@@ -8609,5 +8609,45 @@ describe('a run on another thread', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' }))
     expect(invoke).not.toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
     expect(row('Blue Sky Explanation')).toHaveAttribute('data-running', 'true')
+  })
+})
+
+describe('runtimes', () => {
+  const thisComputer = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
+  const buildBox = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
+  const listFor = (selected) => ({ appVersion: '0.2.0', deviceName: 'Laptop', selected, runtimes: [thisComputer, buildBox].map((runtime) => ({ ...runtime, active: runtime.id === selected })) })
+
+  it('switches to a paired runtime, shows its threads and hides what stays on this computer', async () => {
+    const fallback = invoke.getMockImplementation()
+    let list = listFor('local')
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return list
+      if (command === 'runtime_select') {
+        list = listFor(payload.id)
+        threadSummaryResult = [{ threadId: 'remote-1', title: 'Remote work', updatedAt: '' }]
+        return list
+      }
+      return fallback(command, payload)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    expect(screen.getByRole('region', { name: 'Agents group' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Projects' })).toBeInTheDocument()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Runtime: This computer. Switch runtime' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: /Build box/ }))
+    expect(invoke).toHaveBeenCalledWith('runtime_select', { id: buildBox.id })
+    expect(await screen.findByText('Remote work')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Runtime: Build box. Switch runtime' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Agents group' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Projects' })).toBeNull()
+
+    // The cloud account belongs to this computer, so Settings hides Account and notes the local pages.
+    await openSettings('Storage')
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+    const pages = within(nav).getAllByRole('button').map((button) => button.textContent)
+    expect(pages).not.toContain('Account')
+    expect(pages).toContain('Runtimes')
+    expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
   })
 })
