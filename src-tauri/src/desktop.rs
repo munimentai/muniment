@@ -246,6 +246,7 @@ pub fn run() {
             chat_threads::chat_current_thread,
             chat_threads::chat_thread_summaries,
             chat_threads::chat_thread_open,
+            chat_threads::chat_run_detail,
             chat_threads::thread_context_usage,
             chat_threads::thread_compact,
             chat_threads::chat_select_thread,

@@ -84,6 +84,7 @@ export const historyFixtures = {
         { effectId: 'probe-compare', displayName: 'read', status: 'running', input: JSON.stringify({ path: '/leases/ridgeway.md' }), startedAt: new Date().toISOString() },
         { effectId: 'probe-search', displayName: 'grep', status: 'completed', input: JSON.stringify({ pattern: 'renewal', path: '/leases' }), output: '3 matching files' },
         { effectId: 'probe-command', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'wc -l /leases/*.md', description: 'Count lease lines' }), output: '147 total' },
+        { effectId: 'probe-log', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'cat /leases/audit.log', description: 'Read the audit log' }), output: 'audit entry 1\naudit entry 2\n', outputBytes: 48_213, outputTruncated: true },
       ],
       resumable: false,
     },
@@ -228,7 +229,7 @@ export const historyFixtures = {
       toolActivity: [],
       appliedDiffs: [
         { effectId: 'probe-applied-effect', codeDiffId: 'fixture-modified' },
-        { effectId: 'probe-unavailable-effect', codeDiffId: 'fixture-unavailable', diff: null },
+        { effectId: 'probe-unavailable-effect', codeDiffId: 'fixture-unavailable' },
       ],
       resumable: false,
     },
@@ -333,10 +334,24 @@ function probeSearch() {
   }
 }
 
+// The per-file counts a chat event carries in place of an applied diff.
+function diffSummary(diff) {
+  return {
+    files: diff.files.map((file) => {
+      const lines = file.hunks.flatMap((hunk) => hunk.lines)
+      return { oldPath: file.oldPath, newPath: file.newPath, status: file.status, binary: file.binary,
+        additions: lines.filter((line) => line.kind === 'addition').length, deletions: lines.filter((line) => line.kind === 'deletion').length }
+    }),
+    truncated: diff.truncated,
+  }
+}
+
 export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
   const history = structuredClone(fixtureHistory)
+  // The bodies the stub answers through chat_run_detail.
+  const runDetails = { appliedDiff: null }
   if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
   const onboardingFixture = fixtureName === 'onboarding'
   const scanFixture = fixtureName === 'scan'
@@ -593,6 +608,15 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'chat_answer_permission') return null
     if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
+    // Chat events leave out tool output bodies and applied diffs. These come from the run's record.
+    if (command === 'chat_run_detail') {
+      if (payload.kind === 'code_diff' && payload.effectId === 'probe-applied-effect' && runDetails.appliedDiff) return { kind: 'code_diff', diff: structuredClone(runDetails.appliedDiff) }
+      if (payload.kind === 'tool_output' && payload.effectId === 'probe-log') {
+        const text = Array.from({ length: 2_000 }, (_, index) => `audit entry ${index + 1}`).join('\n')
+        return { kind: 'tool_output', text, bytes: text.length, truncated: false }
+      }
+      throw 'Conversation history is unavailable.'
+    }
     if (command === 'auth_entitlement_snapshot') {
       return {
         snapshot_version: 2,
@@ -668,6 +692,7 @@ export function buildProbeCommandTable(fixtureName) {
   return {
     invoke,
     history,
+    runDetails,
     onboardingFixture,
     scanFixture,
     accessFixture,
@@ -690,6 +715,7 @@ const probeTable = buildProbeCommandTable(fixtureName)
 let callbackId = 0
 const {
   history,
+  runDetails,
   onboardingFixture,
   scanFixture,
   accessFixture,
@@ -814,7 +840,10 @@ window.__PROBE__ = {
       if (!response.ok) throw new Error(`Could not load the code diff fixture: ${response.status}`)
       const diff = await response.json()
       if (fixtureName === 'code-diff') history[0].pendingPermission.diff = diff
-      else history[0].appliedDiffs[0].diff = diff
+      else {
+        runDetails.appliedDiff = diff
+        history[0].appliedDiffs[0].summary = diffSummary(diff)
+      }
     }
     const response = await fetch('/dist/index.html')
     if (!response.ok) throw new Error(`Could not load the built bundle: ${response.status}`)

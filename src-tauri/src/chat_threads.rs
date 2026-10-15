@@ -387,6 +387,41 @@ pub async fn chat_thread_open(
     chat_thread_open_command(&attach_state, &thread_id, limit, cursor.as_deref())
 }
 
+#[cfg(any(unix, target_os = "windows"))]
+fn chat_run_detail_command(
+    attach_state: &AttachCompanionState,
+    run_id: &str,
+    effect_id: &str,
+    kind: &str,
+) -> Result<serde_json::Value, String> {
+    match attach_state.desktop_client_session() {
+        DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
+        DesktopClientSession::Connected(client) => client
+            .run_detail(run_id, effect_id, kind)
+            .map_err(desktop_thread_history_error),
+    }
+}
+
+/// Reads one tool output or one applied diff that chat events leave out.
+#[cfg(any(unix, target_os = "windows"))]
+#[tauri::command]
+pub async fn chat_run_detail(
+    app_handle: tauri::AppHandle,
+    auth_state: tauri::State<'_, auth::AuthState>,
+    attach_state: tauri::State<'_, AttachCompanionState>,
+    run_id: String,
+    effect_id: String,
+    kind: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    require_runtime(&attach_state.desktop_client_session())?;
+    // An account that cannot name its subject gets that error before the runtime call.
+    chat_subject(&app_handle, &auth_state)?;
+    chat_run_detail_command(&attach_state, &run_id, &effect_id, &kind)
+}
+
 /// How often a context command asks the runtime again while it reads.
 const CONTEXT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 /// The bound on one usage read, which can start the agent runtime.

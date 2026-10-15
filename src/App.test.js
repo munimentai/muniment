@@ -5885,17 +5885,26 @@ describe('history hydration', () => {
     expect(messages[0].run.toolActivity).toEqual([])
   })
 
-  it('renders each applied diff and the unavailable sentence', async () => {
-    invoke.mockImplementation(async (command) => {
+  it('reads each applied diff when its card opens and shows the unavailable sentence', async () => {
+    let failRead = true
+    invoke.mockImplementation(async (command, payload) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
     if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{
         runId: 'run-1', phase: 'complete', text: 'Done', receipt: null, toolActivity: [],
         appliedDiffs: [
-          { effectId: 'effect-1', codeDiffId: 'fixture-modified', diff: modifiedCodeDiff },
-          { effectId: 'effect-2', codeDiffId: 'missing', diff: null },
+          { effectId: 'effect-1', codeDiffId: 'fixture-modified', summary: { files: [{ oldPath: 'src/welcome.js', newPath: 'src/welcome.js', status: 'modified', binary: false, additions: 2, deletions: 1 }], truncated: false } },
+          { effectId: 'effect-2', codeDiffId: 'missing' },
         ],
       }]
+      if (command === 'chat_run_detail') {
+        expect(payload).toEqual({ runId: 'run-1', effectId: 'effect-1', kind: 'code_diff' })
+        if (failRead) {
+          failRead = false
+          throw 'The run detail is unavailable.'
+        }
+        return { kind: 'code_diff', diff: modifiedCodeDiff }
+      }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
       if (command === 'chat_select_thread') return undefined
@@ -5905,8 +5914,15 @@ describe('history hydration', () => {
 
     const headings = await screen.findAllByText('Applied file changes')
     expect(headings).toHaveLength(2)
-    expect(await screen.findByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
     expect(screen.getByText('The changes were applied, but their record is no longer stored.')).toBeInTheDocument()
+    const card = headings[0].closest('details')
+    expect(card).toHaveTextContent('welcome.js +2 −1')
+    expect(invoke.mock.calls.some(([command]) => command === 'chat_run_detail')).toBe(false)
+
+    await fireEvent.click(card.querySelector('summary'))
+    await fireEvent.click(await within(card).findByRole('button', { name: 'Load changes' }))
+    expect(await screen.findByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_run_detail')).toHaveLength(2)
   })
 })
 

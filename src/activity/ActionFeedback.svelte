@@ -1,8 +1,14 @@
 <script>
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import { actionGroups, actionDuration } from './action-feedback.js'
+  import { actionGroups, actionDuration, outputLimitNote } from './action-feedback.js'
 
-  let { activities = [], live = false, onopenfile } = $props()
+  let { activities = [], live = false, onopenfile, loadoutput } = $props()
+  // The whole output of a truncated action, read when its detail first opens.
+  let outputs = $state({})
+  function readOutput(action, retry = false) {
+    if (!loadoutput || !action.outputTruncated || (outputs[action.effectId] && !retry)) return
+    outputs[action.effectId] = loadoutput(action.effectId)
+  }
   const groups = $derived(actionGroups(activities, live))
   const total = $derived(groups.reduce((sum, group) => sum + group.actions.length, 0))
   const running = $derived(groups.some((group) => group.running))
@@ -25,7 +31,7 @@
       {:else if !action.hasDetails}
         <div class="plain-action"><LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>{#if action.counts}<span class="counts">{action.counts}</span>{/if}{#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}</div>
       {:else}
-      <details>
+      <details ontoggle={(event) => { if (event.currentTarget.open) readOutput(action) }}>
         <summary>
           <LucideIcon name={action.icon} />
           <span class="action-label" class:active-sheen={action.running}>{action.label}</span>
@@ -40,7 +46,16 @@
           {:else}
           <p>{action.state}{#if action.startedAt && (action.finishedAt || action.running)}{` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}`}{/if}</p>
           {#if action.input}<strong>{group.kind === 'command' ? 'Command' : 'Input'}</strong><pre>{action.detailInput}</pre>{/if}
-          {#if action.output}<strong>Output</strong><pre>{action.output}</pre>
+          {#if action.output}<strong>Output</strong>
+            {#if outputs[action.effectId]}
+              {#await outputs[action.effectId]}
+                <pre>{action.output}</pre><p>Loading the full output.</p>
+              {:then detail}
+                <pre>{detail.text}</pre>{#if detail.truncated}<p>{outputLimitNote(detail)}</p>{/if}
+              {:catch}
+                <pre>{action.output}</pre><p role="alert">The full output could not be loaded. <button type="button" onclick={() => readOutput(action, true)}>Load full output</button></p>
+              {/await}
+            {:else}<pre>{action.output}</pre>{/if}
           {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
           {/if}
         </div>
@@ -97,6 +112,7 @@
   .search-queries li { margin: 4px 0; overflow-wrap: anywhere; }
   .action-detail p { margin: 0 0 8px; }
   .action-detail strong { font-weight: 500; }
+  .action-detail button { min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
   pre { font-family: var(--font-mono); font-size: var(--text-13); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; margin: 8px 0 12px; }
   .active-sheen { background: linear-gradient(100deg, var(--muted) 35%, var(--ink) 50%, var(--muted) 65%); background-size: 250% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: action-sheen 2.4s linear infinite; }
   @keyframes action-sheen { from { background-position: 140% 0; } to { background-position: -40% 0; } }

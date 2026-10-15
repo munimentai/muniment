@@ -2,7 +2,8 @@ export const fileName = (path) => String(path).split(/[\\/]/).pop()
 
 // A run's applied diffs and its edit tools reduce to counted entries once per
 // array. A streamed text delta replaces the run and keeps both arrays, so the
-// counts come from these caches and no hunk is walked or input parsed again.
+// counts come from these caches and no input is parsed again. An applied diff
+// arrives as its summary: per-file counts without the hunks.
 const diffEntryCache = new WeakMap()
 const editEntryCache = new WeakMap()
 
@@ -10,13 +11,12 @@ function diffEntries(appliedDiffs) {
   let entries = diffEntryCache.get(appliedDiffs)
   if (entries) return entries
   entries = appliedDiffs.map((applied) => ({
-    id: applied.effectId || applied.codeDiffId || applied.diff?.id,
-    files: (applied.diff?.files ?? []).flatMap((file) => {
+    id: applied.effectId || applied.codeDiffId,
+    files: (applied.summary?.files ?? []).flatMap((file) => {
       const path = file.newPath || file.oldPath
       if (!path) return []
-      const lines = (file.hunks ?? []).flatMap((hunk) => hunk.lines)
-      return [{ path, additions: lines.filter((l) => l.kind === 'addition').length, deletions: lines.filter((l) => l.kind === 'deletion').length,
-        incomplete: file.binary || applied.diff.truncated, deleted: file.status === 'deleted' }]
+      return [{ path, additions: file.additions ?? 0, deletions: file.deletions ?? 0,
+        incomplete: file.binary || applied.summary.truncated, deleted: file.status === 'deleted' }]
     }),
   }))
   diffEntryCache.set(appliedDiffs, entries)
@@ -40,6 +40,18 @@ function editEntries(toolActivity) {
   })
   editEntryCache.set(toolActivity, entries)
   return entries
+}
+
+// Names one applied change by its summary: the file, or the file count, and
+// the line counts when every file has them.
+export function appliedDiffLabel(summary) {
+  const files = summary?.files ?? []
+  const noun = (n, one, many) => `${n} ${n === 1 ? one : many}`
+  const name = files.length === 1 ? fileName(files[0].newPath || files[0].oldPath) : noun(files.length, 'file', 'files')
+  if (summary?.truncated || files.some((file) => file.binary)) return name
+  const additions = files.reduce((n, file) => n + (file.additions ?? 0), 0)
+  const deletions = files.reduce((n, file) => n + (file.deletions ?? 0), 0)
+  return `${name} +${additions} −${deletions}`
 }
 
 // Counts describe recorded applied changes, never a proposed or failed edit.

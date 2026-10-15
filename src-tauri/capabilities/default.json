@@ -125,6 +125,7 @@
     "allow-chat-current-thread",
     "allow-chat-thread-summaries",
     "allow-chat-thread-open",
+    "allow-chat-run-detail",
     "allow-thread-context-usage",
     "allow-thread-compact",
     "allow-chat-select-thread",

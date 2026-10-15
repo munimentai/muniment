@@ -240,6 +240,8 @@ pub(super) fn serve_chat_events_at(
     let mut diagnostic = muniment_core::attach::LinuxConnectDiagnostic::default();
     #[cfg(target_os = "macos")]
     let mut diagnostic = muniment_core::attach::MacosConnectDiagnostic::default();
+    // Each reconnect resumes after the newest chat event already delivered.
+    let mut cursor = None;
     loop {
         #[cfg(target_os = "linux")]
         {
@@ -247,7 +249,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events()?;
+                    client.subscribe_chat_events_after(cursor)?;
                     Ok(client)
                 })
             {
@@ -261,6 +263,7 @@ pub(super) fn serve_chat_events_at(
                         }
                     }
                 }
+                cursor = client.chat_cursor().or(cursor);
                 observe(false);
             }
             stop.inner
@@ -275,7 +278,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events()?;
+                    client.subscribe_chat_events_after(cursor)?;
                     Ok(client)
                 })
             {
@@ -283,6 +286,7 @@ pub(super) fn serve_chat_events_at(
                 while let Ok(event) = client.read_subscription_event() {
                     deliver(event);
                 }
+                cursor = client.chat_cursor().or(cursor);
                 observe(false);
             }
             stop.inner

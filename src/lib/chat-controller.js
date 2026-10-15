@@ -117,8 +117,10 @@ export function createChatController({
   // The runtime streams text as deltas: the appended text and textStart, its
   // UTF-16 offset in the run's text. A delta extends only the text that the
   // last live event of its run left, so this map holds that text by run id.
-  // A run restored from pages has no entry, and it waits for the next whole
-  // state, which the runtime sends at least once a second.
+  // The runtime sends a whole state only when the run state changes, so a run
+  // restored from pages starts its entry from the page text. Every event that
+  // landed while the pages loaded waits in the buffer, and the journal holds a
+  // delta before the runtime sends it, so the buffered deltas extend that text.
   const liveText = new Map()
   // The run-index map finds a streamed run without a scan. A lookup checks the
   // index against the transcript and rebuilds the map when the layout changed.
@@ -217,6 +219,12 @@ export function createChatController({
   }
 
   const applyLiveEvents = (run, events) => events.reduce(applyLiveEvent, run)
+  // Rejoins the unsettled run a page load restored, with the events that
+  // landed while the pages loaded.
+  function rejoinRun(run) {
+    rememberLiveText(run)
+    return applyLiveEvents(run, buffered.get(run.id) ?? [])
+  }
   const active = () => readActive()
   // A submission waiting for its run id, a resume, or a recovery owns the
   // transcript tail, so the window stays on its thread until it ends.
@@ -518,7 +526,7 @@ export function createChatController({
       // handleEvent buffered every event that landed during the load, so the
       // pages loaded over a growing buffer. The recorded state is stale by
       // exactly those events, and only this site can apply them.
-      const rejoined = recorded && applyLiveEvents(recorded, buffered.get(recorded.id) ?? [])
+      const rejoined = recorded && rejoinRun(recorded)
       if (recorded) buffered.delete(recorded.id)
       const settled = !!rejoined && settledPhases.has(rejoined.phase)
       const leaving = threadId !== previousThreadId ? active() : null
@@ -638,7 +646,7 @@ export function createChatController({
       const recorded = unsettledRun(published)
       // handleEvent buffered every event that landed during the re-read, and the
       // pages are stale by exactly those events. Only this site can apply them.
-      const rejoined = recorded && applyLiveEvents(recorded, buffered.get(recorded.id) ?? [])
+      const rejoined = recorded && rejoinRun(recorded)
       if (recorded) buffered.delete(recorded.id)
       const settled = !!rejoined && settledPhases.has(rejoined.phase)
       const republished = rejoined

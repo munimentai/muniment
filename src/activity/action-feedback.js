@@ -1,4 +1,5 @@
 import { compactionCounts } from '../lib/context-usage.js'
+import { formatByteSize } from '../lib/chat-state.js'
 
 const categories = {
   compact: { icon: 'combine', done: 'Context automatically compacted', active: 'Compacting context', verb: 'Context compacted', present: 'Compacting context' },
@@ -65,6 +66,13 @@ export function actionDuration(start, end) {
   const seconds = Math.max(0, Math.floor((new Date(end) - new Date(start)) / 1000))
   if (!Number.isFinite(seconds)) return ''
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+// A chat event carries the start of a long tool output. The detail reads the
+// rest from the run's record, which answers a capped start of a very long one.
+export function outputLimitNote(detail) {
+  const shown = new TextEncoder().encode(detail?.text ?? '').length
+  return `Showing the first ${formatByteSize(shown)} of ${formatByteSize(detail?.bytes)}.`
 }
 
 export function actionInput(input) {

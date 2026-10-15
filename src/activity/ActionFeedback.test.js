@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup, render, fireEvent } from '@testing-library/svelte'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import ActionFeedback from './ActionFeedback.svelte'
 
 afterEach(cleanup)
@@ -47,4 +47,35 @@ it('shows only the queries for web search details', () => {
   expect(view.queryByText('Long provider output')).not.toBeInTheDocument()
   expect(view.container.textContent).not.toContain('Num Results')
   expect(view.container.textContent).not.toContain('Completed')
+})
+
+it('reads the whole output of a truncated action when its detail opens', async () => {
+  const reads = []
+  let answer
+  const loadoutput = (effectId) => {
+    reads.push(effectId)
+    return new Promise((resolve, reject) => { answer = { resolve, reject } })
+  }
+  const activities = [
+    { effectId: 'log', displayName: 'bash', status: 'completed', input: '{"command":"cat build.log"}', output: 'first lines', outputBytes: 400_000, outputTruncated: true },
+    { effectId: 'short', displayName: 'bash', status: 'completed', input: '{"command":"pwd"}', output: '/work', outputBytes: 5 },
+  ]
+  const view = render(ActionFeedback, { activities, loadoutput })
+  await fireEvent.click(view.getByText('2 tools used').closest('summary'))
+  await fireEvent.click(view.getByText('Ran commands').closest('summary'))
+  await fireEvent.click(view.getByText('Ran pwd').closest('summary'))
+  const action = view.getByText('Ran cat build.log').closest('details')
+  await fireEvent.click(action.querySelector('summary'))
+  await vi.waitFor(() => expect(reads).toEqual(['log']))
+  expect(view.getByText('first lines')).toBeInTheDocument()
+  expect(view.getByText('Loading the full output.')).toBeInTheDocument()
+
+  answer.reject(new Error('unavailable'))
+  const retry = await view.findByRole('button', { name: 'Load full output' })
+  expect(view.getByRole('alert')).toHaveTextContent('The full output could not be loaded.')
+  await fireEvent.click(retry)
+  expect(reads).toEqual(['log', 'log'])
+  answer.resolve({ kind: 'tool_output', text: 'all of the build log', bytes: 400_000, truncated: true })
+  expect(await view.findByText('all of the build log')).toBeInTheDocument()
+  expect(view.getByText('Showing the first 20 B of 391 KB.')).toBeInTheDocument()
 })

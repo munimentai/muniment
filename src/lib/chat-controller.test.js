@@ -2920,7 +2920,7 @@ describe('text deltas', () => {
     expect(context.messages()[1].run.text).toBe('Hello world')
   })
 
-  it('waits for a whole state before it extends a run restored from pages', async () => {
+  it('extends a run restored from pages with the next delta', async () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'chat_thread_open') return { entries: [{ runId: 'run-1', phase: 'streaming', text: 'Half an ans', prompt: 'Question', receipt: null, toolActivity: [] }], nextCursor: null }
       return undefined
@@ -2930,11 +2930,32 @@ describe('text deltas', () => {
     await context.controller.openThread('thread-1')
 
     context.event(delta(11, 'wer'))
-    expect(context.messages().at(-1).run.text).toBe('Half an ans')
+    expect(context.messages().at(-1).run.text).toBe('Half an answer')
 
-    context.event(whole('Half an answer'))
+    context.event(delta(20, 'skipped'))
+    expect(context.messages().at(-1).run.text).toBe('Half an answer')
+
+    context.event(whole('Half an answer here'))
+    context.event(delta(19, '.'))
+    expect(context.messages().at(-1).run.text).toBe('Half an answer here.')
+  })
+
+  it('reconciles the deltas that landed while the pages loaded with the page text', async () => {
+    const page = deferred()
+    const invoke = vi.fn((command) => command === 'chat_thread_open' ? page.promise : Promise.resolve(undefined))
+    const context = setup(invoke)
+    await context.start()
+    const opening = context.controller.openThread('thread-1')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.anything()))
+
+    // The page holds the first of these deltas and the second follows it.
+    context.event(delta(5, 'an ans'))
+    context.event(delta(11, 'wer'))
+    page.resolve({ entries: [{ runId: 'run-1', phase: 'streaming', text: 'Half an ans', prompt: 'Question', receipt: null, toolActivity: [] }], nextCursor: null })
+    await opening
+
+    expect(context.messages().at(-1).run.text).toBe('Half an answer')
     context.event(delta(14, ' here'))
-
     expect(context.messages().at(-1).run.text).toBe('Half an answer here')
   })
 

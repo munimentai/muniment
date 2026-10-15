@@ -56,7 +56,7 @@
   const loadCodeDiff = () => codeDiffModule ??= import('./lib/CodeDiff.svelte')
   import FileChanges from './files/FileChanges.svelte'
   import RoutingDetails from './lib/RoutingDetails.svelte'
-  import { createChangedFiles, fileName } from './files/file-changes.js'
+  import { appliedDiffLabel, createChangedFiles, fileName } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { commitType, readStoredType, stepType, typeSizeShortcutStep } from './lib/type-state.js'
@@ -681,6 +681,15 @@
     void Promise.allSettled(files.map(file => tauri.invoke('artifact_from_file', {threadId, path:file.path})))
   })
   function openFile(file) { requestedWorkspaceFile = { ...file, name: file.name || fileName(file.path) }; showBrowser(`file:${file.path}`) }
+  // Chat events leave out tool output bodies and applied diffs. The runtime
+  // reads one from the run's record when its detail opens.
+  const runDetail = (runId, effectId, kind) => tauri.invoke('chat_run_detail', { runId, effectId, kind })
+  let appliedDiffReads = $state({})
+  function readAppliedDiff(runId, effectId, retry = false) {
+    const key = `${runId}\n${effectId}`
+    if (appliedDiffReads[key] && !retry) return
+    appliedDiffReads[key] = runDetail(runId, effectId, 'code_diff').then((detail) => detail.diff)
+  }
   let recordPanelOpen = $derived(railOccupant === 'record')
   let artifactRailWidth = $state(defaultArtifactRailWidth(window.innerWidth))
   let artifactRailMaximum = $state(ARTIFACT_RAIL_MAX_WIDTH)
@@ -2568,18 +2577,30 @@
               {/if}
               {#each parts as part, index}
                 {#if part.type === 'actions'}
-                  <ActionFeedback onopenfile={openFile} activities={part.activities} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
+                  <ActionFeedback onopenfile={openFile} loadoutput={(effectId) => runDetail(message.run.id, effectId, 'tool_output')} activities={part.activities} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
                 {:else if message.run.phase === 'streaming'}
                   <div class="streaming"><AssistantMarkdown {tauri} onopenlink={openChatLink} text={part.text} caret={index === parts.length - 1} /></div>
                 {:else}<AssistantMarkdown {tauri} onopenlink={openChatLink} text={part.text} />{/if}
               {/each}
               {#if message.run.phase === 'recovering'}<p class="thinking">Restoring reply…</p>{/if}
               {#each message.run.appliedDiffs ?? [] as appliedDiff}
-                <div class="applied-diff tool-card">
-                  <strong>Applied file changes</strong>
-                  {#if appliedDiff.diff}{#await loadCodeDiff() then module}{@const CodeDiff = module.default}<CodeDiff codeDiff={appliedDiff.diff} />{/await}
-                  {:else}<p>The changes were applied, but their record is no longer stored.</p>{/if}
-                </div>
+                {#if appliedDiff.summary}
+                  {@const request = appliedDiffReads[`${message.run.id}\n${appliedDiff.effectId}`]}
+                  <details class="applied-diff tool-card" ontoggle={(event) => { if (event.currentTarget.open) readAppliedDiff(message.run.id, appliedDiff.effectId) }}>
+                    <summary><strong>Applied file changes</strong><span>{appliedDiffLabel(appliedDiff.summary)}</span></summary>
+                    {#if request}
+                      {#await request}<p>Loading the changes.</p>
+                      {:then diff}{#await loadCodeDiff() then module}{@const CodeDiff = module.default}<CodeDiff codeDiff={diff} />{/await}
+                      {:catch}<p role="alert">The changes could not be loaded. <button type="button" onclick={() => readAppliedDiff(message.run.id, appliedDiff.effectId, true)}>Load changes</button></p>
+                      {/await}
+                    {/if}
+                  </details>
+                {:else}
+                  <div class="applied-diff tool-card">
+                    <strong>Applied file changes</strong>
+                    <p>The changes were applied, but their record is no longer stored.</p>
+                  </div>
+                {/if}
               {/each}
               {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry prepares the message for review.</span> <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button></div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
@@ -3293,6 +3314,10 @@
   .permission-card strong, .applied-diff strong { font-weight: 600; }
   .permission-card p, .applied-diff p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
   .applied-diff { color: var(--ink); }
+  .applied-diff summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; }
+  .applied-diff summary span { color: var(--muted); }
+  .applied-diff[open] summary { margin-bottom: 8px; }
+  .applied-diff button { min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
   .permission-field { display: block; width: 100%; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); outline: 0; background: var(--surface); color: var(--ink); font: inherit; }
   .permission-field:focus { border-color: var(--muted); }
   .permission-field::placeholder { color: var(--muted); }
