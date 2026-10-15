@@ -14,7 +14,7 @@
         {
           "id": "account",
           "title": "Connect your first account",
-          "body": "Open Settings → Models & decisions → Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device. Your provider sets access and usage limits."
+          "body": "Open Settings → Models & decisions → Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device unless you share them with your own machines. Your provider sets access and usage limits."
         },
         {
           "id": "first-message",
@@ -57,6 +57,11 @@
           "id": "capacity",
           "title": "Capacity",
           "body": "Open Capacity beside the model picker to see each subscription account and its remaining allowance. Reset times appear when the provider supplies them. An unavailable allowance is unknown, not zero. API charges follow your provider account."
+        },
+        {
+          "id": "machines",
+          "title": "Shared connections",
+          "body": "Each paired machine keeps its own model connections, and a thread runs with the models of the machine it started on. Open Settings → Machines and turn on Share model connections to let your paired machines use the providers, sign-ins and API keys connected on this computer. They travel over each pairing's encrypted link. A shared subscription depends on this computer: when it sleeps or goes offline, a paired machine can lose it within 30 minutes. Shared API keys keep working. With a free MuniCloud account, turn on Keep them in MuniCloud: MuniCloud holds the connections encrypted and renews sign-ins, so paired machines keep them while this computer is off. A free account shares with up to five machines. Removing a machine deletes what this computer shared there."
         }
       ]
     },

@@ -73,6 +73,10 @@ impl AccountService for DesktopAccount {
         sign_out(&self.tracker, runtime_activity).map_err(|_| ProtocolError::persistence_failed())
     }
 
+    fn cloud_api_base(&self) -> Option<String> {
+        Some(api_base_url())
+    }
+
     fn list_devices(&self, access_token: &str) -> Result<NativeDeviceList, ProtocolError> {
         list_devices(access_token).map_err(device_list_protocol_error)
     }

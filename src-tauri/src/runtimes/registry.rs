@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 /// The id the app gives its own runtime.
 pub(crate) const LOCAL_RUNTIME_ID: &str = "local";
 const INDEX_FILE: &str = "runtimes.json";
+/// The machine tokens each paired machine reads the model vault with.
+const VAULT_TOKENS_FILE: &str = "vault-tokens.json";
 
 /// How the app reaches a runtime through an SSH local forward.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +54,13 @@ pub(crate) struct RuntimeIndex {
     /// turning sharing off clears each one.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) shared_with: BTreeSet<String>,
+    /// Whether the shared connections live in the account's model vault.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) share_via_cloud: bool,
+    /// Whether the model vault holds this computer's connections, so turning
+    /// MuniCloud off takes them back.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) vault_held: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -245,6 +254,64 @@ impl Registry {
             index.share_models = share;
             Ok(())
         })
+    }
+
+    pub(crate) fn share_via_cloud(&self) -> bool {
+        self.index().share_via_cloud
+    }
+
+    pub(crate) fn set_share_via_cloud(&self, cloud: bool) -> io::Result<()> {
+        self.update(|index| {
+            index.share_via_cloud = cloud;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn vault_held(&self) -> bool {
+        self.index().vault_held
+    }
+
+    pub(crate) fn set_vault_held(&self, held: bool) -> io::Result<()> {
+        self.update(|index| {
+            index.vault_held = held;
+            Ok(())
+        })
+    }
+
+    /// The machine token, with its vault URL, that the machine `id` reads the
+    /// model vault with.
+    pub(crate) fn vault_token(&self, id: &str) -> Option<serde_json::Value> {
+        self.vault_tokens().remove(id)
+    }
+
+    pub(crate) fn set_vault_token(&self, id: &str, link: Option<serde_json::Value>) -> io::Result<()> {
+        let mut tokens = self.vault_tokens();
+        match link {
+            Some(link) => tokens.insert(id.to_owned(), link),
+            None => tokens.remove(id),
+        };
+        if tokens.is_empty() {
+            return match std::fs::remove_file(self.directory.join(VAULT_TOKENS_FILE)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            };
+        }
+        let bytes = serde_json::to_vec_pretty(&tokens).map_err(io::Error::other)?;
+        write_owner_only(&self.directory.join(VAULT_TOKENS_FILE), &bytes)
+    }
+
+    pub(crate) fn clear_vault_tokens(&self) -> io::Result<()> {
+        for id in self.vault_tokens().into_keys() {
+            self.set_vault_token(&id, None)?;
+        }
+        Ok(())
+    }
+
+    fn vault_tokens(&self) -> BTreeMap<String, serde_json::Value> {
+        std::fs::read(self.directory.join(VAULT_TOKENS_FILE))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
     }
 
     /// The paired machines that hold connections this computer shared.

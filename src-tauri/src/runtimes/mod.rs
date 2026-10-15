@@ -211,6 +211,11 @@ pub(crate) struct RuntimeList {
     runtimes: Vec<RuntimeView>,
     /// Whether this computer shares its model connections with its machines.
     share_models: bool,
+    /// Whether the shared connections live in the account's model vault.
+    share_via_cloud: bool,
+    /// Why the last share could not reach the model vault.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_error: Option<String>,
     /// One line about the command that answered this list, such as a removed
     /// runtime that still lists this device.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,12 +299,18 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
         .registry
         .as_ref()
         .is_some_and(Registry::share_models);
+    let share_via_cloud = runtimes
+        .registry
+        .as_ref()
+        .is_some_and(Registry::share_via_cloud);
     RuntimeList {
         app_version: APP_VERSION,
         device_name: device_name(),
         selected: active.unwrap_or_else(|| LOCAL_RUNTIME_ID.into()),
         runtimes: views,
         share_models,
+        share_via_cloud,
+        share_error: runtimes.sharing.error(),
         notice: None,
     }
 }

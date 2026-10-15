@@ -3,8 +3,9 @@
   // machine with its kind, version and state, and Rename and Remove in its
   // menu. Every machine stays connected, and a thread runs on the machine it
   // started on. An older machine updates on its own. Under the list, one
-  // switch shares this computer's model connections with every machine.
-  // Below that, Pair shares this computer and adds another machine.
+  // switch shares this computer's model connections with every machine, and
+  // for a signed-in account a second keeps them in MuniCloud. Below that,
+  // Pair shares this computer and adds another machine.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
@@ -14,17 +15,23 @@
   import RuntimeAdd from './RuntimeAdd.svelte'
   import ThisComputer from './ThisComputer.svelte'
   import { errorLine } from './runtimes.js'
+  import { featureFlags } from '../feature-flags.js'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
   let list = $state(null)
   let error = $state('')
   let notice = $state('')
   let busy = $state('')
+  let signedIn = $state(false)
+  const viaCloud = $derived(signedIn && !!list?.shareViaCloud)
 
   onMount(() => {
     let alive = true
     let stop
     void load().then(refresh)
+    if (featureFlags.cloud) {
+      Promise.resolve(tauri.invoke('auth_status')).then((status) => { if (alive) signedIn = !!status?.signed_in }).catch(() => {})
+    }
     Promise.resolve(listen?.('runtimes-changed', ({ payload }) => { if (payload?.runtimes) list = payload }))
       .then((unlisten) => { if (alive) stop = unlisten; else unlisten?.() })
       .catch(() => {})
@@ -90,10 +97,20 @@
     <Row title="Share model connections" description="Paired machines use the providers, sign-ins and keys connected on this computer.">
       <Toggle checked={list?.shareModels ?? false} label="Share model connections" disabled={!list || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { share: next })} />
     </Row>
+    {#if signedIn}
+      <Row title="Keep them in MuniCloud" description="MuniCloud holds them encrypted and renews sign-ins. A free account shares with up to five machines.">
+        <Toggle checked={viaCloud} label="Keep them in MuniCloud" disabled={!list?.shareModels || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { share: true, cloud: next })} />
+      </Row>
+    {/if}
   </Group>
+  {#if list?.shareError}<p class="line" role="alert">{list.shareError}</p>{/if}
   <div class="share-notice" role="note">
     <span class="share-notice-icon"><LucideIcon name="info" size={16} variant="action" /></span>
-    <p>Shared subscriptions depend on this computer. When it sleeps or goes offline, a paired machine can lose them within 30 minutes. Shared API keys keep working.</p>
+    {#if viaCloud}
+      <p>MuniCloud renews shared sign-ins, so paired machines keep them while this computer is off. Each machine counts toward your account's pairings.</p>
+    {:else}
+      <p>Shared subscriptions depend on this computer. When it sleeps or goes offline, a paired machine can lose them within 30 minutes. Shared API keys keep working.</p>
+    {/if}
   </div>
 
   <ThisComputer {tauri}>

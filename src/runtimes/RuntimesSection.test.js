@@ -4,6 +4,8 @@ import '@testing-library/jest-dom/vitest'
 import RuntimesSection from './RuntimesSection.svelte'
 import MachinePicker from './MachinePicker.svelte'
 
+vi.mock('../feature-flags.js', () => ({ featureFlags: { cloud: true } }))
+
 afterEach(cleanup)
 
 const LINK = `muniment://pair?v=1&id=018f0000-0000-7000-8000-000000000044&name=Lab&fp=${'00'.repeat(32)}&host=192.0.2.20%3A7443#${'ab'.repeat(16)}`
@@ -217,5 +219,31 @@ describe('Model sharing', () => {
     render(RuntimesSection, { tauri: tauri({ runtime_list: () => ({ ...runtimeList([local, reader]), shareModels: true }), runtime_refresh: () => ({ ...runtimeList([local, reader]), shareModels: true }) }), listen })
     const desk = await screen.findByRole('group', { name: 'Studio' })
     expect(within(desk).getByText("Pair it again with run access to share this computer's models.")).toBeInTheDocument()
+  })
+
+  it('keeps shared connections in MuniCloud for a signed-in account', async () => {
+    let state = { shareModels: true, shareViaCloud: false }
+    const limited = { ...studio, status: 'online', sharing: 'limit' }
+    const current = () => ({ ...runtimeList([local, limited]), ...state })
+    const bridge = tauri({
+      auth_status: () => ({ signed_in: true, subject: 'owner' }),
+      runtime_list: current,
+      runtime_refresh: current,
+      runtime_share_models: ({ share, cloud }) => { state = { shareModels: share, shareViaCloud: cloud ?? state.shareViaCloud }; return current() },
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    const cloud = await screen.findByRole('switch', { name: 'Keep them in MuniCloud' })
+    expect(screen.getByRole('note')).toHaveTextContent('Shared subscriptions depend on this computer.')
+    await fireEvent.click(cloud)
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { share: true, cloud: true }))
+    await waitFor(() => expect(screen.getByRole('note')).toHaveTextContent('MuniCloud renews shared sign-ins'))
+    const desk = screen.getByRole('group', { name: 'Studio' })
+    expect(within(desk).getByText('Your account shares with as many machines as it may. Remove one to add this machine.')).toBeInTheDocument()
+  })
+
+  it('hides MuniCloud from a computer that is not signed in', async () => {
+    render(RuntimesSection, { tauri: tauri({ auth_status: () => ({ signed_in: false }) }), listen })
+    await screen.findByRole('switch', { name: 'Share model connections' })
+    expect(screen.queryByRole('switch', { name: 'Keep them in MuniCloud' })).toBeNull()
   })
 })
