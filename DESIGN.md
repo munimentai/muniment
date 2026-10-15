@@ -152,7 +152,7 @@ and draws the thread and rail as `surface` cards clipped `--card-ring` inside th
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
 The composer band is one mono row under the composer. The plus,
-model selector, capacity control and context meter share their height and spacing. The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A window no source knows shows no meter. The model picker shows each window in mono and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
+model selector, thinking level, capacity control and context meter share their height and spacing. The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A window no source knows shows no meter. The model picker shows each window in mono and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
 opens with Add files and folders. Voice sits beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
 text, and the same button with a filled stop square while a reply is in flight. Enter sends. A

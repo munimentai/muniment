@@ -165,6 +165,8 @@ shows the model source, Home, the context meter and the running cost. A global s
 **The model chip.** The chip shows the provider's mark and the model id in use,
 the saved default when it is shown, else the first shown model. When no
 provider answers it reads `Connect a model`, and the chip and Send open the provider catalog.
+Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
+The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
 **Settings → Models is one component on three pages.** Model providers, Model list
 and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage

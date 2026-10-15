@@ -420,14 +420,15 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'local_mode_provider_inventory') return {
       providers: [
         ...(new URLSearchParams(location.search).has('accounts') ? [{ id: 'anthropic', name: 'Anthropic', source: 'key', base_url: null, models: [] }] : []),
-        { id: 'google', name: 'Google', source: 'key', base_url: null, models: [{ id: 'gemini-3-pro', context: '1M', max_out: '64K', thinking: true, images: true }] },
-        { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }, { id: 'qwen3:8b', context: '40K', max_out: '8K', thinking: true, images: false }] },
+        { id: 'google', name: 'Google', source: 'key', base_url: null, models: [{ id: 'gemini-3-pro', context: '1M', max_out: '64K', thinking: true, images: true, thinking_levels: ['low', 'high'], thinking_default: 'high' }] },
+        { id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false, thinking_levels: [], thinking_default: null }, { id: 'qwen3:8b', context: '40K', max_out: '8K', thinking: true, images: false, thinking_levels: ['off', 'minimal', 'low', 'medium', 'high'], thinking_default: 'medium' }] },
       ],
+      // `?thinking` starts on a model with thinking levels, so the composer shows its level control.
       default_provider: 'ollama',
-      default_model: 'llama3.2:3b',
+      default_model: new URLSearchParams(location.search).has('thinking') ? 'qwen3:8b' : 'llama3.2:3b',
       hidden: [],
     }
-    if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
+    if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_set_thinking_level', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
     if (command === 'local_mode_store_endpoint') return 'custom-endpoint'
     if (command === 'model_registry') return (await fetch('./fixtures/model-registry.json')).json()
     if (command === 'local_mode_claude_code_status') return { installed: true, logged_in: true, path: '/usr/local/bin/claude' }

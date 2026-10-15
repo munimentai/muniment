@@ -34,6 +34,8 @@ export function createChatController({
   readAnnounced,
   readDraft,
   readFiles,
+  // The thinking level a send carries, or null for the model's default.
+  readThinkingLevel = () => null,
   readThreadId = () => null,
   readThreadSummaries = () => [],
   blocked = () => false,
@@ -874,7 +876,8 @@ export function createChatController({
       const preparation = prepareSubmit({ prompt, files })
       if (preparation) await preparation
       if (destroyed || submissionId !== submissionSequence) return
-      const run = await submitWhenAvailable({ prompt, files })
+      const thinkingLevel = readThinkingLevel()
+      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}) })
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
       if (!preserveDraft) {

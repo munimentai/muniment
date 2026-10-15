@@ -36,6 +36,8 @@
   import AgentProfile from './lib/AgentProfile.svelte'
   import ChatComposer from './composer/ChatComposer.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
+  import ThinkingPicker from './lib/ThinkingPicker.svelte'
+  import { modelThinking, thinkingLabel, withThinkingLevel } from './lib/thinking-level.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
   import Capacity from './lib/Capacity.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
@@ -142,11 +144,13 @@
   let inventoryError = $state('')
   let inventoryRequestVersion = 0
   let pickerOpen = $state(false)
+  let thinkingOpen = $state(false)
   let capacityOpen = $state(false)
   let contextOpen = $state(false)
   $effect(() => {
     const panel = event => {
       pickerOpen = event.detail === 'model'
+      thinkingOpen = event.detail === 'thinking'
       capacityOpen = event.detail === 'capacity'
       contextOpen = event.detail === 'context'
       if (event.detail !== 'speech') speechInstallDismissed = true
@@ -172,6 +176,10 @@
 
   const modelSourceLabel = $derived(modelChipLabel(inventory))
   const chipModel = $derived(currentModel(inventory))
+  // The levels the chip's model thinks at and the one a send carries. A model
+  // without reasoning shows no thinking control and sends no level.
+  const chipThinking = $derived(auth.name === 'local' ? modelThinking(inventory, chipModel) : null)
+  let thinkingChip = $state()
 
   let settingsOpen = $state(false)
   let agentsExpanded = $state(false)
@@ -434,6 +442,27 @@
     if (!pickerOpen && needsModel()) openModelProviders()
     else if (pickerOpen) closePicker()
     else openComposerPanel('model')
+  }
+
+  function closeThinking() {
+    thinkingOpen = false
+    void tick().then(() => thinkingChip?.focus())
+  }
+
+  // The runtime keeps one level per model, so every window and the next
+  // send see the choice.
+  async function chooseThinkingLevel(level) {
+    const model = chipModel
+    closeThinking()
+    if (!model || level === chipThinking?.level) return
+    const before = chipThinking?.level
+    inventory = withThinkingLevel(inventory, model.provider, model.model, level)
+    try {
+      await tauri.invoke('local_mode_set_thinking_level', { provider: model.provider, model: model.model, level })
+    } catch (_) {
+      inventory = withThinkingLevel(inventory, model.provider, model.model, before)
+      accountStatus = 'Muniment could not save the thinking level. Try again.'
+    }
   }
 
   async function chooseModel(provider, model) {
@@ -819,6 +848,7 @@
     readAnnounced: () => announcedRun,
     readDraft: () => draft,
     readFiles: () => selectedFiles,
+    readThinkingLevel: () => chipThinking?.level ?? null,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
     blocked: () => dictationBusy() || runtimeUpgradePending() || modelChoicePending || compacting || !!retryReview?.chooseModel,
@@ -2030,7 +2060,7 @@
         settingsShortcutPressed()
         return
       }
-      if (event.key === 'Escape' && (pickerOpen || capacityOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
+      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || capacityOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
       if (event.key === 'Escape' && projectsOpen) { projectsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && artifactsOpen) { artifactsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && agentsOpen) { agentsOpen = false; event.preventDefault() }
@@ -2692,6 +2722,9 @@
         {#if pickerOpen}
           <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
         {/if}
+        {#if thinkingOpen && chipThinking}
+          <ThinkingPicker levels={chipThinking.levels} current={chipThinking.level} onchoose={chooseThinkingLevel} onclose={closeThinking} />
+        {/if}
         {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <section data-composer-panel data-panel="speech" data-panel-variant="overlay" class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
@@ -2775,6 +2808,7 @@
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
+              {#if chipThinking}<button type="button" class="quiet thinking-trigger" bind:this={thinkingChip} aria-label={`Thinking level: ${thinkingLabel(chipThinking.level)}`} aria-haspopup="menu" aria-expanded={thinkingOpen} onclick={() => openComposerPanel(thinkingOpen ? null : 'thinking')}><LucideIcon name="brain" size={14} /><span class="model-chip-label">{thinkingLabel(chipThinking.level)}</span></button>{/if}
               {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
             {/if}
             {#if compacting || contextOpen || contextMeterShown(contextUsage)}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
@@ -3220,7 +3254,7 @@
   .artifact-empty p { margin: 0; color: var(--muted); }
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
-  .capacity-trigger { color: var(--muted); }
+  .capacity-trigger, .thinking-trigger { color: var(--muted); }
   .collection-children { padding-left: 16px; }
 
   .workspace.sidebar-resizing .thread-panel { transition: none; }
@@ -3341,10 +3375,10 @@
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
-  /* The three composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
+  /* The composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
   .model-chip { color: var(--ink); }
-  .model-chip, .capacity-trigger { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); font: var(--text-12) var(--font-mono); white-space: nowrap; }
-  .model-chip:hover:not(:disabled), .capacity-trigger:hover:not(:disabled) { background: var(--faint); }
+  .model-chip, .capacity-trigger, .thinking-trigger { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .model-chip:hover:not(:disabled), .capacity-trigger:hover:not(:disabled), .thinking-trigger:hover:not(:disabled) { background: var(--faint); }
   /* The label's line box holds the mono descenders the clip would take off a g or a p. */
   .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }

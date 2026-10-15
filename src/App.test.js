@@ -8119,6 +8119,50 @@ it('keeps one composer panel open and dismisses it with Escape or an outside cli
 })
 
 
+it('offers the chip model thinking levels, saves a choice and sends it with the prompt', async () => {
+  localModeStatus = true
+  threadSummaryResult = []
+  const reasoning = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [
+    { id: 'gpt-5.5', context: '400K', max_out: '128K', thinking: true, images: true, thinking_levels: ['low', 'medium', 'high', 'xhigh'], thinking_default: 'medium' },
+  ] }], default_provider: 'openai', default_model: 'gpt-5.5', hidden: [] }
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command,args) => command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null})
+    : command === 'local_mode_provider_inventory' ? Promise.resolve(reasoning)
+      : command === 'local_mode_set_thinking_level' ? Promise.resolve(null)
+        : command === 'chat_submit' ? Promise.resolve({ runId: 'run-thinking', attachments: [] })
+          : original(command,args))
+  render(App)
+  const composer = await findReadyWorkspaceComposer()
+  const chip = await screen.findByRole('button', { name: 'Thinking level: Medium' })
+  expect(chip.querySelector('[data-icon=brain]')).not.toBeNull()
+  await fireEvent.click(chip)
+  const menu = screen.getByRole('menu', { name: 'Thinking level' })
+  expect(within(menu).getAllByRole('menuitemradio').map((item) => item.textContent.trim())).toEqual(['Low', 'Medium', 'High', 'Extra high'])
+  await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Extra high' }))
+  expect(invoke).toHaveBeenCalledWith('local_mode_set_thinking_level', { provider: 'openai', model: 'gpt-5.5', level: 'xhigh' })
+  expect(screen.queryByRole('menu', { name: 'Thinking level' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Thinking level: Extra high' })).toBeInTheDocument()
+  await fireEvent.input(composer, { target: { value: 'Think hard' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Think hard', files: [], thinkingLevel: 'xhigh' }))
+})
+
+it('shows no thinking control for a model without reasoning', async () => {
+  localModeStatus = true
+  threadSummaryResult = []
+  const plain = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [
+    { id: 'gpt-4.1', context: '1M', max_out: '32K', thinking: false, images: true, thinking_levels: [], thinking_default: null },
+  ] }], default_provider: 'openai', default_model: 'gpt-4.1', hidden: [] }
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command,args) => command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(plain) : original(command,args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_provider_inventory'))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(document.querySelector('.model-chip')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /^Thinking level/ })).not.toBeInTheDocument()
+})
+
 it.each([[], [{id:'api',source:'key',family:'openai'}]])('hides composer capacity without subscriptions: %j', async (accounts) => {
   localModeStatus = true
   const original = invoke.getMockImplementation()

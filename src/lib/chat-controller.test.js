@@ -12,7 +12,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null } = {}) {
   let messages = []
   let active = null
   let announced = null
@@ -45,6 +45,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     readAnnounced: () => announced,
     readDraft: () => draft,
     readFiles: () => files,
+    readThinkingLevel: () => thinkingLevel,
     readThreadId: () => openThreadId,
     readProject: () => projectId,
     readAgent: () => agentId,
@@ -456,6 +457,21 @@ describe('chat delivery recovery', () => {
     context.controller.cleanup()
     context.event({ runId: 'run-1', phase: 'delivery-failed', failureReason: 'Reply delivery failed.' })
     expect(context.onHistoryError).not.toHaveBeenCalled()
+  })
+})
+
+describe('thinking level', () => {
+  it('sends the chip model level with the prompt and leaves it out for a model without one', async () => {
+    for (const [thinkingLevel, payload] of [
+      ['xhigh', { prompt: 'Hello', files: [], thinkingLevel: 'xhigh' }],
+      [null, { prompt: 'Hello', files: [] }],
+    ]) {
+      const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'run-1' } : undefined)
+      const ui = setup(invoke, { thinkingLevel })
+      await expect(ui.controller.send()).resolves.toBe(true)
+      expect(invoke).toHaveBeenCalledWith('chat_submit', payload)
+      ui.controller.cleanup()
+    }
   })
 })
 
