@@ -44,6 +44,10 @@ jobs:
       - name: Steering check
         if: needs.changes.outputs.reuse != 'true'
         run: scripts/check-steering.sh .
+      - name: Private address check
+        run: |
+          scripts/check-private-addresses.sh
+          python3 -B scripts/test_private_addresses.py
       - name: Forgejo workflow copy
         run: |
           for workflow in ci.yml secret-scan.yml muniment-core-update.yml nightly.yml release.yml; do

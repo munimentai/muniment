@@ -90,6 +90,7 @@ test('The bounded CI job keeps the steering and copy checks with their reuse gat
   const ci = jobs(workflows['ci.yml'])
   assert.match(ci.checks, /needs: changes/)
   assert.match(ci.checks, /name: Steering check\n        if: needs.changes.outputs.reuse != 'true'\n        run: scripts\/check-steering.sh ./)
+  assert.match(ci.checks, /name: Private address check\n        run: \|\n          scripts\/check-private-addresses.sh\n          python3 -B scripts\/test_private_addresses.py\n/)
   assert.match(ci.checks, /name: UI copy law\n        if: needs.changes.outputs.reuse != 'true' && \(needs.changes.outputs.desktop == 'true' \|\| github.event_name != 'pull_request'\)\n        run: node test\/ui-copy-lint.mjs src src-tauri browser-control/)
   assert.doesNotMatch(ci.checks, /\bnpm\b/)
   const copyCommand = ci.checks.match(/run: (node test\/ui-copy-lint.mjs [^\n]+)/)[1]
