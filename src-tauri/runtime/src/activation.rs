@@ -260,6 +260,7 @@ fn run_runtime_activation_inner(
         RuntimeAttachState::open(crate::desktop_host(), profile_directory, config_directory)
             .map_err(|_| RuntimeActivationError::State)?,
     );
+    crate::start_remote_route(&state);
     let filesystem = AttachFilesystem::from_runtime_directory(runtime_directory.as_os_str())
         .map_err(|_| RuntimeActivationError::Filesystem)?;
     let (command_tx, command_rx) = mpsc::channel();
@@ -388,6 +389,7 @@ fn run_runtime_activation_inner(
         Err(_) => Err(RuntimeActivationError::InstanceLock),
     };
     let _ = wake_tx.send(ActivationWake::ListenerFinished);
+    state.stop_remote_route();
     let _ = command_tx.send(RetentionScheduleCommand::Stop);
     if let Some(retention_thread) = retention_thread {
         retention_thread

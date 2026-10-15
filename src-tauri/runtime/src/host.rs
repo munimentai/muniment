@@ -38,6 +38,26 @@ pub fn desktop_host() -> RuntimeHost {
     }
 }
 
+/// Opens remote access for this runtime and starts its remote listener as
+/// the stored settings direct. The listener stays off until the owner turns
+/// pairing on, and the local desktop's welcome then names this runtime.
+pub fn start_remote_route(state: &Arc<muniment_runtime_core::RuntimeAttachState>) {
+    use muniment_core::attach::{
+        InstallKind, RemoteAccessOptions, RemoteRouteOptions, RemoteSettingsOverrides,
+    };
+    let options = RemoteRouteOptions {
+        access: RemoteAccessOptions {
+            runtime_name: None,
+            runtime_version: env!("MUNIMENT_APP_VERSION").to_owned(),
+            install_kind: InstallKind::Desktop,
+        },
+        overrides: RemoteSettingsOverrides::default(),
+    };
+    if let Err(error) = state.start_remote_route(options) {
+        eprintln!("muniment-runtime: {error}");
+    }
+}
+
 /// The reader sidecar the installer stages beside the runtime executable.
 pub fn reader_beside(runtime_executable: &Path) -> Option<PathBuf> {
     Some(runtime_executable.parent()?.join(READER_NAME))

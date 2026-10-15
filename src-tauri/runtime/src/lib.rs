@@ -35,7 +35,7 @@ pub use directories::{
 };
 #[cfg(target_os = "windows")]
 pub use directories::{windows_local_app_data, windows_log_directory};
-pub use host::{desktop_host, DesktopChatGrants};
+pub use host::{desktop_host, start_remote_route, DesktopChatGrants};
 #[cfg(target_os = "macos")]
 pub use macos_activation::SystemMacosAttachFactory;
 pub use macos_activation::{

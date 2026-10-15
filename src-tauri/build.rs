@@ -206,7 +206,20 @@ const APP_COMMANDS: &[&str] = &[
     "e2e_folder_dialog_snapshot",
 ];
 
+/// The app version in `package.json`, which the app compares with each
+/// paired runtime's version and names in an update request.
+fn app_version() -> String {
+    let manifest = std::fs::read_to_string("../package.json").expect("package.json is readable");
+    manifest
+        .split_once("\"version\"")
+        .and_then(|(_, rest)| rest.split('"').nth(1))
+        .expect("package.json names a version")
+        .to_owned()
+}
+
 fn main() {
+    println!("cargo:rerun-if-changed=../package.json");
+    println!("cargo:rustc-env=MUNIMENT_APP_VERSION={}", app_version());
     // Bind installed diagnostics to the source that built the signed executable.
     let git = |args: &[&str]| {
         std::process::Command::new("git")

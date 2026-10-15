@@ -137,14 +137,19 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
             let _ = app.emit("chat-event", event);
         }
         SubscriptionEvent::ModelsLogin(step) => crate::account_login::deliver_step(app, step),
+        // Only this computer's runtime sends an update request, on its owner route.
+        SubscriptionEvent::RuntimeUpdateRequested(_) => {}
     }
 }
 
 /// Hands a local runtime event to the window only while this computer's
-/// runtime is selected. The window shows one runtime's threads at a time.
+/// runtime is selected, since the window shows one runtime's threads at a
+/// time. An update request for this computer applies whichever is selected.
 #[cfg(any(unix, target_os = "windows"))]
 fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: SubscriptionEvent) {
-    if !app.state::<AttachCompanionState>().remote_active() {
+    if let SubscriptionEvent::RuntimeUpdateRequested(request) = event {
+        crate::runtimes::update_requested(app, request);
+    } else if !app.state::<AttachCompanionState>().remote_active() {
         deliver_subscription_event(app, event);
     }
 }

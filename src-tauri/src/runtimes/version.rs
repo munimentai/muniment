@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use muniment_core::attach::SCOPE_RUNTIME_ADMIN;
 
-/// This app's version, which an update request names.
-pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This app's version from `package.json`, which an update request names.
+pub(crate) const APP_VERSION: &str = env!("MUNIMENT_APP_VERSION");
 
 fn parse(version: &str) -> Option<semver::Version> {
     let version = version.trim();

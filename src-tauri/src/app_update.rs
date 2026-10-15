@@ -127,6 +127,15 @@ pub async fn app_update_prepare(
     app: tauri::AppHandle,
     state: State<'_, AppUpdate>,
 ) -> Result<Option<String>, UpdateFailure> {
+    prepare(&app, &state).await
+}
+
+/// Checks the release feed and downloads a newer verified update, answering
+/// its version, or `None` when this build takes no in-app update.
+pub(crate) async fn prepare<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppUpdate,
+) -> Result<Option<String>, UpdateFailure> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("APPIMAGE").is_none() {
         return Ok(None);
@@ -176,6 +185,15 @@ pub async fn app_update_install(
     app: tauri::AppHandle,
     activity: State<'_, muniment_core::attach::RuntimeActivityRegistry>,
     state: State<'_, AppUpdate>,
+) -> Result<(), UpdateFailure> {
+    install(&app, &activity, &state).await
+}
+
+/// Installs the prepared update and restarts, once no runtime work is active.
+pub(crate) async fn install<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    activity: &muniment_core::attach::RuntimeActivityRegistry,
+    state: &AppUpdate,
 ) -> Result<(), UpdateFailure> {
     muniment_core::attach::evaluate_quiesce(activity.snapshot())
         .map_err(|_| UpdateFailure::Busy)?;

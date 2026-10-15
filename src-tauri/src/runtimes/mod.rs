@@ -6,6 +6,7 @@
 mod commands;
 mod connection;
 mod registry;
+mod requested_update;
 mod ssh;
 mod version;
 
@@ -20,6 +21,7 @@ pub(crate) use commands::*;
 pub(crate) use connection::{Connector, RemoteSupervisor};
 use connection::{Observation, RemoteControl, RuntimeStatus};
 use registry::{PairedRuntime, Registry, LOCAL_RUNTIME_ID};
+pub(crate) use requested_update::update_requested;
 use version::{update_offered, APP_VERSION};
 
 /// What a runtime answered last, kept for the runtime list.
@@ -256,6 +258,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if selected.is_some() {
         activate(app, selected.as_deref());
     }
+    requested_update::check_saved_request(app);
 }
 
 /// Closes the selected runtime's connections and its SSH tunnel.
