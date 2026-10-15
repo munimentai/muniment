@@ -8,7 +8,7 @@ describe('address bar', () => {
     expect(addressFor('example.com/a?b=1', 'google')).toBe('https://example.com/a?b=1')
     expect(addressFor('http://example.com', 'google')).toBe('http://example.com')
     expect(addressFor('localhost:5173', 'google')).toBe('http://localhost:5173')
-    expect(addressFor('10.1.10.102:57090', 'google')).toBe('http://10.1.10.102:57090')
+    expect(addressFor('192.0.2.102:57090', 'google')).toBe('http://192.0.2.102:57090')
     expect(addressFor('3m.com', 'google')).toBe('https://3m.com')
     expect(addressFor('grace hopper', 'google')).toBe('https://www.google.com/search?q=grace%20hopper')
     expect(addressFor('3.14 pie', 'bing')).toBe('https://www.bing.com/search?q=3.14%20pie')

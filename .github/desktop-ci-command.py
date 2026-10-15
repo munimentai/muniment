@@ -8,7 +8,7 @@ import sys
 # Leave time for VM setup and artifact collection after the slot opens.
 COLLECTION_SECONDS = 1200
 CLEANUP_SECONDS = 30
-# The host driver sets LOCK_WAIT=7200 in mikeydiamonds/homelab/scripts/desktop-ci.sh.
+# The desktop-CI host driver waits up to 7200 seconds (LOCK_WAIT) for a slot.
 DRIVER_SLOT_SECONDS = 7200
 
 

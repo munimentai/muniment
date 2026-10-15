@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createWingetManifest, machineMsiAsset, stableVersion } from "./winget-manifest.mjs";
 
-const asset = { name: "nightly-sha-windows-muniment-machine.msi", url: "https://api.github.test/assets/1", browser_download_url: "https://github.com/mikeydiamonds/muniment-desktop/releases/download/v1.2.3/nightly-sha-windows-muniment-machine.msi" };
+const asset = { name: "nightly-sha-windows-muniment-machine.msi", url: "https://api.github.test/assets/1", browser_download_url: "https://github.com/munimentai/muniment/releases/download/v1.2.3/nightly-sha-windows-muniment-machine.msi" };
 const release = { tag_name: "v1.2.3", draft: false, prerelease: false, published_at: "2026-07-17T12:34:56Z", assets: [asset] };
 
 describe("WinGet stable manifest", () => {

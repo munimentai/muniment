@@ -21,24 +21,32 @@ import {
 } from "../.github/lib/macos-signing.mjs";
 
 const home = homedir();
-// The certificate lives in OpenBao, the homelab secret store. The read
-// credential is the `ansible` AppRole in the homelab repo's vault.yml, which
-// ~/.vault_pass opens. See ~/gk/homelab/docs/services/openbao.md.
-const homelab = process.env.MUNIMENT_HOMELAB_DIR ?? join(home, "gk", "homelab");
-const openbao = "https://10.1.10.107:50080";
-// OpenBao serves a self-signed certificate, so curl trusts that certificate
-// alone instead of skipping verification. It is /etc/openbao/tls/openbao.crt
-// on openbao-01; copy it to this machine and name the copy here.
-const openbaoCa = process.env.MUNIMENT_OPENBAO_CA;
-if (!openbaoCa || !existsSync(openbaoCa)) {
-  console.error("Set MUNIMENT_OPENBAO_CA to a local copy of /etc/openbao/tls/openbao.crt from openbao-01 (10.1.10.107).");
+// The signing certificate lives in an OpenBao KV v2 secret. Every location
+// comes from the environment, so no host or path sits in the repository.
+const requireEnv = (name, meaning) => {
+  const value = process.env[name];
+  if (!value) {
+    console.error(`Set ${name} to ${meaning}.`);
+    process.exit(1);
+  }
+  return value;
+};
+const openbao = requireEnv("MUNIMENT_OPENBAO_ADDR", "the OpenBao base URL, for example https://bao.example.com:8200");
+// The AppRole credential sits in an Ansible project's encrypted
+// inventory/group_vars/all/vault.yml. ansible-vault runs in that project, so
+// the project's ansible.cfg supplies the vault password.
+const vaultProject = requireEnv("MUNIMENT_OPENBAO_VAULT_DIR", "the Ansible project directory whose inventory/group_vars/all/vault.yml holds openbao_ansible_role_id and openbao_ansible_secret_id");
+// The KV v2 read path, base64 of the .p12 in one field and its password in another.
+const secretPath = requireEnv("MUNIMENT_OPENBAO_SECRET_PATH", "the KV v2 read path of the signing secret, for example secret/data/apple");
+const certificateField = requireEnv("MUNIMENT_OPENBAO_CERTIFICATE_FIELD", "the secret field that holds the base64 Developer ID .p12");
+const passwordField = requireEnv("MUNIMENT_OPENBAO_PASSWORD_FIELD", "the secret field that holds the .p12 password");
+// OpenBao may serve a self-signed certificate, so curl trusts that certificate
+// alone instead of skipping verification.
+const openbaoCa = requireEnv("MUNIMENT_OPENBAO_CA", "a local copy of the OpenBao server's TLS certificate");
+if (!existsSync(openbaoCa)) {
+  console.error(`MUNIMENT_OPENBAO_CA names ${openbaoCa}, which does not exist.`);
   process.exit(1);
 }
-// The Developer ID Application certificate sits with the company's other Apple
-// credentials under the greenkangaroo group, base64 of the .p12.
-const secretPath = "homelab/data/greenkangaroo";
-const certificateField = "greenkangaroo_apple_devid_certificate_p12";
-const passwordField = "greenkangaroo_apple_devid_certificate_password";
 
 const target = join("src-tauri", "target");
 const runtimeSource = join(target, "aarch64-apple-darwin", "release", "muniment-runtime");
@@ -118,7 +126,7 @@ process.on("exit", () => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
-const vault = capture("read AppRole credential", "ansible-vault", ["view", join("inventory", "group_vars", "all", "vault.yml")], { cwd: homelab });
+const vault = capture("read AppRole credential", "ansible-vault", ["view", join("inventory", "group_vars", "all", "vault.yml")], { cwd: vaultProject });
 const roleId = vault.match(/^openbao_ansible_role_id:\s*"?([^"\s]+)/m)?.[1];
 const secretId = vault.match(/^openbao_ansible_secret_id:\s*"?([^"\s]+)/m)?.[1];
 if (!roleId || !secretId) {
@@ -136,7 +144,7 @@ tokenIssued = true;
 const secret = JSON.parse(capture("read signing certificate", "curl", ["-s", "--cacert", openbaoCa, "-H", `@${headerFile}`, `${openbao}/v1/${secretPath}`]))?.data?.data ?? {};
 for (const field of [certificateField, passwordField]) {
   if (!secret[field]) {
-    console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch homelab/greenkangaroo ${field}=<value>`);
+    console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch ${secretPath.replace("/data/", "/")} ${field}=<value>`);
     process.exit(1);
   }
 }

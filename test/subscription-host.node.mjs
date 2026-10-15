@@ -38,7 +38,7 @@ for (const [name, ssh, reason] of [
   ['shell permission refusal', { status: 126, stderr: 'sh: 1: python3: Permission denied\n' }, sudoDenied],
   ['guest sudo refusal', { status: 1, stdout: acquired + building, stderr: 'sudo: a password is required\n' }, unavailable],
   ['successful sudo diagnostic', { status: 0, stderr: 'sudo: a password is required\n' }, unavailable],
-  ['unreachable host', { status: 255, stderr: 'ssh: connect to host 10.1.10.10 port 22: Connection timed out\n' }, unavailable],
+  ['unreachable host', { status: 255, stderr: 'ssh: connect to host 192.0.2.10 port 22: Connection timed out\n' }, unavailable],
   ['missing ssh', { status: null, error: Object.assign(new Error('spawnSync ssh ENOENT'), { code: 'ENOENT' }) }, unavailable],
   ['disconnect during the slot wait', { status: 255, stdout: waiting, stderr: 'Connection closed\n' }, unavailable],
   ['unconfirmed timeout', { status: 124, stdout: '' }, unavailable],

@@ -3338,7 +3338,7 @@ describe('installed local-mode chat contract', () => {
 
   it('stores the local provider and waits for the first reply', () => {
     expect(localProvider).toContain('export const OLLAMA_BASE_URL')
-    expect(localProvider).toContain('10.1.10.105')
+    expect(localProvider).toContain("process.env.MUNIMENT_E2E_OLLAMA_HOST || '127.0.0.1'")
     expect(spec).toContain("import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'")
     expect(spec).not.toContain('MUNIMENT_E2E_PROVIDER_KEY')
     expect(spec).toContain("import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'")
