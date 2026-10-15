@@ -363,6 +363,8 @@ export function buildProbeCommandTable(fixtureName) {
   const runtimesFixture = fixtureName === 'runtimes'
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
   let runtimeList = probeRuntimes(runtimesState)
+  let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
+  let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'
   const threadSummaries = history.length
     ? [
@@ -687,6 +689,17 @@ export function buildProbeCommandTable(fixtureName) {
     ]
     if (command === 'attach_revoke_companion') return null
     if (command === 'runtime_list' || command === 'runtime_refresh') return structuredClone(runtimeList)
+    if (command === 'local_access_settings') return structuredClone(localAccess)
+    if (command === 'local_access_save') {
+      localAccess = probeLocalAccess(payload.enabled, payload.endpoints)
+      return structuredClone(localAccess)
+    }
+    if (command === 'local_pairing_link') return { link: PROBE_LOCAL_LINK, qrSvg: probeQrSvg(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), scopes: payload.admin ? ['run.write', 'runtime.admin', 'thread.read'] : ['run.write', 'thread.read'] }
+    if (command === 'local_devices') return { devices: structuredClone(localDevices) }
+    if (command === 'local_device_revoke') {
+      localDevices = localDevices.filter((device) => device.device_id !== payload.deviceId)
+      return true
+    }
     if (command === 'runtime_select') {
       runtimeList = { ...runtimeList, selected: payload.id, runtimes: runtimeList.runtimes.map((runtime) => ({ ...runtime, active: runtime.id === payload.id })) }
       return structuredClone(runtimeList)
@@ -737,6 +750,53 @@ export function buildProbeCommandTable(fixtureName) {
     invokedCommands,
     unknownCommands,
   }
+}
+
+const PROBE_LOCAL_LINK = `muniment://pair?v=1&id=018f0000-0000-7000-8000-000000000041&name=Laptop&fp=${'7a'.repeat(32)}&host=192.0.2.20%3A7443&host=100.64.0.7%3A7443#${'4d'.repeat(16)}`
+
+// This computer's remote access: off, or on with a local network address, a
+// private overlay network address and an address the user named.
+function probeLocalAccess(enabled, configured = []) {
+  return {
+    settings: { enabled, listen: null, endpoints: configured },
+    overridden: false,
+    runtime_id: '018f0000-0000-7000-8000-000000000041',
+    runtime_name: 'Laptop',
+    certificate_sha256: '7a'.repeat(32),
+    listening: enabled ? '[::]:7443' : null,
+    endpoints: enabled
+      ? configured.length
+        ? configured.map((endpoint) => ({ endpoint, kind: 'configured' }))
+        : [{ endpoint: '192.0.2.20:7443', kind: 'lan' }, { endpoint: '100.64.0.7:7443', kind: 'overlay' }, { endpoint: '[2001:db8::20]:7443', kind: 'public' }]
+      : [],
+    error: null,
+  }
+}
+
+function probeDevices() {
+  const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
+  return [
+    { device_id: '018f0000-0000-7000-8000-000000000051', name: 'Studio', kind: 'desktop-client', scopes: ['run.write', 'thread.read'], created_at: at(9000), last_seen_at: at(12) },
+    { device_id: '018f0000-0000-7000-8000-000000000052', name: 'Build box', kind: 'desktop-client', scopes: ['run.write', 'runtime.admin', 'thread.read'], created_at: at(20000), last_seen_at: null },
+  ]
+}
+
+// A QR-shaped stand-in: three finder squares and a fixed module pattern. The
+// app draws the real code from the link.
+function probeQrSvg() {
+  const size = 29
+  let path = ''
+  const finder = (x, y) => x < 7 && y < 7 || x >= size - 7 && y < 7 || x < 7 && y >= size - 7
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dark = finder(x, y)
+        ? (Math.max(Math.abs((x % (size - 7)) - 3), Math.abs((y % (size - 7)) - 3)) !== 2)
+        : ((x * 7 + y * 13 + x * y) % 5 < 2)
+      if (dark) path += `M${x + 4},${y + 4}h1v1h-1z`
+    }
+  }
+  const width = size + 8
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${width}" shape-rendering="crispEdges" role="img" aria-label="Pairing code"><rect width="${width}" height="${width}" fill="white"/><path fill="black" d="${path}"/></svg>`
 }
 
 // This computer, then a desktop that is offline and an older container this
@@ -794,6 +854,11 @@ function runtimesRendered() {
   }
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
+  const allow = page.querySelector('[role="switch"][aria-label="Allow pairing"]')
+  if (runtimesState === 'pairing-off') return allow?.getAttribute('aria-checked') === 'false' && !allow.disabled && page.textContent.includes('No device is paired')
+  if (runtimesState === 'pairing-on') return page.textContent.includes('Private overlay network')
+  if (runtimesState === 'link') return !!page.querySelector('.pairing-qr svg')
+  if (runtimesState === 'devices') return !!page.querySelector('[aria-label="Revoke Build box"]')
   const rows = page.querySelectorAll('[role="group"]').length
   if (runtimesState === 'local') return rows === 1
   if (runtimesState === 'paired') return rows === 3 && page.textContent.includes('Offline') && !!page.querySelector('[aria-label="Update Build box"]')
@@ -904,6 +969,14 @@ function advanceRuntimesFixture() {
     if (pair && !pair.disabled && !probePairClicked) {
       probePairClicked = true
       pair.click()
+    }
+    return
+  }
+  if (runtimesState === 'link') {
+    const create = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Create pairing link')
+    if (create && !create.disabled && !probePairClicked) {
+      probePairClicked = true
+      create.click()
     }
     return
   }
