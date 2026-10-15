@@ -305,19 +305,21 @@ pub async fn runtime_rename(
     .await
 }
 
-/// Revokes this device on a paired runtime, as a device holding the admin
-/// scope may. Answers whether the runtime confirmed it.
-fn revoke_self(connector: &Connector) -> bool {
-    let Ok(record) = connector.registry.record(&connector.runtime_id) else {
-        return false;
-    };
-    let revoked = connector.connect().is_ok_and(|mut client| {
-        client
+/// Whether the runtime no longer holds this device's credential: `Some(true)`
+/// after this call revoked it, `Some(false)` when the runtime had already
+/// refused it, and none when the runtime did not answer.
+fn released(connector: &Connector) -> Option<bool> {
+    let record = connector.registry.record(&connector.runtime_id).ok()?;
+    let answer = match connector.connect() {
+        Ok(mut client) => client
             .revoke_remote_device(record.credential.device_id.as_str())
             .is_ok()
-    });
+            .then_some(true),
+        Err(RuntimeStatus::Revoked) => Some(false),
+        Err(_) => None,
+    };
     connector.control.stop();
-    revoked
+    answer
 }
 
 /// Forgets a paired runtime and deletes its device credential. The device
@@ -330,10 +332,10 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
     }
     let id = paired_id(&id)?;
     blocking(move || {
+        let runtimes = app.state::<Runtimes>();
         if let Some(connections) = app.state::<AttachCompanionState>().remove_remote(&id) {
             connections.stop();
         }
-        let runtimes = app.state::<Runtimes>();
         let registry = runtimes.registry()?;
         let name = registry
             .entry(&id)
@@ -341,10 +343,11 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
         // A runtime that revoked this device already forgot it. One that is
         // offline, or older than self revocation, keeps the credential until
         // its owner revokes it there.
-        let revoked = runtimes.observed(&id).status == RuntimeStatus::Revoked;
-        let notice = (!revoked && !revoke_self(&connector(&app, registry, &id))).then(|| {
-            format!("{name} still lists this device. Revoke it on {name} to end its access.")
-        });
+        let notice = released(&connector(&app, registry, &id))
+            .is_none()
+            .then(|| {
+                format!("{name} still lists this device. Revoke it on {name} to end its access.")
+            });
         registry
             .remove(&id)
             .map_err(|_| "The runtime could not be removed.".to_owned())?;
@@ -536,6 +539,12 @@ mod tests {
     use super::super::version::CORE_VERSION;
     use super::*;
     use muniment_core::attach::SCOPE_RUNTIME_ADMIN;
+
+    /// Revokes this device on a paired runtime and answers whether the
+    /// runtime confirmed it.
+    fn revoke_self(connector: &Connector) -> bool {
+        released(connector) == Some(true)
+    }
     use std::collections::BTreeSet;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
@@ -736,8 +745,13 @@ mod tests {
         assert_eq!(runtime.access.list_devices().unwrap().len(), 1);
         assert!(revoke_self(&connector_for(&registry, &admin, &seen)));
         assert_eq!(runtime.access.list_devices().unwrap().len(), 0);
-        // A revoked device cannot reach the runtime to revoke itself again.
+        // A revoked device cannot reach the runtime to revoke itself again,
+        // and the runtime's refusal shows it holds the credential no more.
         assert!(!revoke_self(&connector_for(&registry, &admin, &seen)));
+        assert_eq!(
+            released(&connector_for(&registry, &admin, &seen)),
+            Some(false)
+        );
         std::fs::remove_dir_all(directory).unwrap();
         std::fs::remove_dir_all(reader_directory).unwrap();
     }
