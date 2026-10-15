@@ -5,6 +5,7 @@
 
 mod commands;
 mod connection;
+mod local_access;
 mod registry;
 mod requested_update;
 mod ssh;
@@ -20,6 +21,7 @@ use crate::attach_service::AttachCompanionState;
 pub(crate) use commands::*;
 pub(crate) use connection::{Connector, RemoteSupervisor};
 use connection::{Observation, RemoteControl, RuntimeStatus};
+pub(crate) use local_access::*;
 use registry::{PairedRuntime, Registry, LOCAL_RUNTIME_ID};
 pub(crate) use requested_update::update_requested;
 use version::{update_offered, APP_VERSION};
@@ -132,6 +134,10 @@ pub(crate) struct RuntimeList {
     device_name: String,
     selected: String,
     runtimes: Vec<RuntimeView>,
+    /// One line about the command that answered this list, such as a removed
+    /// runtime that still lists this device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notice: Option<String>,
 }
 
 fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
@@ -193,6 +199,7 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
         device_name: device_name(),
         selected: active.unwrap_or_else(|| LOCAL_RUNTIME_ID.into()),
         runtimes: views,
+        notice: None,
     }
 }
 
@@ -247,6 +254,50 @@ pub(crate) fn activate<R: tauri::Runtime>(app: &tauri::AppHandle<R>, selected: O
         chat.session_thread.fresh(None);
     }
     emit_changed(app);
+}
+
+/// Names the selected paired runtime in place of the background service when
+/// a request could not reach it, with the state it answered last.
+pub(crate) fn name_unreachable<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    error: String,
+) -> String {
+    if error != crate::auth::background_service_error() {
+        return error;
+    }
+    let Some(id) = app.state::<AttachCompanionState>().remote_runtime_id() else {
+        return error;
+    };
+    let runtimes = app.state::<Runtimes>();
+    let name = runtimes
+        .registry
+        .as_ref()
+        .and_then(|registry| registry.entry(&id))
+        .map_or_else(|| "The selected runtime".to_owned(), |entry| entry.name);
+    unreachable_message(&name, runtimes.observed(&id).status)
+}
+
+pub(crate) fn unreachable_message(name: &str, status: RuntimeStatus) -> String {
+    match status {
+        RuntimeStatus::CertificateChanged => {
+            format!("{name} answered with a new certificate. Pair it again in Settings, Runtimes.")
+        }
+        RuntimeStatus::Revoked => {
+            format!("{name} revoked this computer. Pair it again in Settings, Runtimes.")
+        }
+        RuntimeStatus::VersionMismatch => {
+            format!("{name} runs an incompatible version. Update the app or the runtime.")
+        }
+        RuntimeStatus::RuntimeMismatch => {
+            format!("A different runtime answers at {name}'s address. Pair it again.")
+        }
+        RuntimeStatus::Connecting | RuntimeStatus::Unknown => {
+            format!("{name} has not answered yet. Wait a moment, then retry.")
+        }
+        RuntimeStatus::Offline | RuntimeStatus::Online => {
+            format!("{name} is offline. Check that it is running and reachable.")
+        }
+    }
 }
 
 /// Manages the runtimes and attaches to the selected one. The caller has
@@ -362,6 +413,18 @@ mod tests {
         assert!(runtimes.record(id, welcome.clone()));
         assert!(!runtimes.record(id, welcome));
         assert_eq!(runtimes.observed(id).version.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn an_unreachable_runtime_is_named_with_its_state() {
+        assert_eq!(
+            unreachable_message("Build box", RuntimeStatus::Offline),
+            "Build box is offline. Check that it is running and reachable."
+        );
+        assert!(unreachable_message("Build box", RuntimeStatus::Revoked).contains("revoked"));
+        assert!(
+            unreachable_message("Build box", RuntimeStatus::Connecting).starts_with("Build box")
+        );
     }
 
     #[test]

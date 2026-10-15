@@ -59,9 +59,9 @@ fn connect_selected<R: tauri::Runtime>(
     }
 }
 
-/// Opens a desktop client connection of its own to the runtime.
+/// Opens a desktop client connection of its own to this computer's runtime.
 #[cfg(unix)]
-fn connect() -> Result<DesktopClient, ClientError> {
+pub(crate) fn connect() -> Result<DesktopClient, ClientError> {
     let endpoint =
         crate::attach_service::runtime_profile_endpoint().ok_or(ClientError::DesktopUnavailable)?;
     muniment_core::attach::connect_desktop_client_at(
@@ -71,9 +71,9 @@ fn connect() -> Result<DesktopClient, ClientError> {
     )
 }
 
-/// Opens a desktop client connection of its own to the runtime.
+/// Opens a desktop client connection of its own to this computer's runtime.
 #[cfg(target_os = "windows")]
-fn connect() -> Result<DesktopClient, ClientError> {
+pub(crate) fn connect() -> Result<DesktopClient, ClientError> {
     muniment_core::attach::connect_windows_desktop_client(
         env!("CARGO_PKG_VERSION"),
         IO_TIMEOUT,

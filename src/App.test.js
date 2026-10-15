@@ -5565,7 +5565,7 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(7)
+    expect(eventUnlisten).toHaveBeenCalledTimes(8)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
@@ -8641,6 +8641,13 @@ describe('runtimes', () => {
     expect(screen.getByRole('button', { name: 'Runtime: Build box. Switch runtime' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Agents group' })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Projects' })).toBeNull()
+
+    // A paired runtime cannot read this computer's files, so the composer attaches none.
+    await fireEvent.click(screen.getByRole('button', { name: 'Extensions' }))
+    const files = await screen.findByRole('button', { name: /Add files and folders/ })
+    expect(files).toBeDisabled()
+    expect(files).toHaveTextContent('Files stay on this computer. A paired runtime cannot read them.')
+    await fireEvent.keyDown(window, { key: 'Escape' })
 
     // The cloud account belongs to this computer, so Settings hides Account and notes the local pages.
     await openSettings('Storage')

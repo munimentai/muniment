@@ -86,3 +86,42 @@ export function errorLine(failure, fallback = 'The runtime did not answer.') {
 export function looksLikePairingLink(text) {
   return /^muniment:\/\/pair\?/i.test(String(text ?? '').trim())
 }
+
+// Where an address a pairing link names comes from.
+const ENDPOINT_KINDS = {
+  configured: 'Set in these settings',
+  loopback: 'This computer only',
+  lan: 'Local network',
+  overlay: 'Private overlay network',
+  public: 'Public address',
+}
+
+export function endpointKindLabel(kind) {
+  return ENDPOINT_KINDS[kind] ?? 'Address'
+}
+
+const SCOPES = [['thread.read', 'Read'], ['run.write', 'Run'], ['runtime.admin', 'Updates and pairing']]
+
+// The scopes a paired device holds, in plain words.
+export function scopeLabels(scopes = []) {
+  const labels = SCOPES.filter(([scope]) => scopes.includes(scope)).map(([, label]) => label)
+  return labels.length ? labels.join(', ') : 'No access'
+}
+
+// The port the settings name, else the port the listener bound.
+export function listenPort(access) {
+  const address = access?.settings?.listen ?? access?.listening
+  const port = Number(String(address ?? '').split(':').pop())
+  return Number.isInteger(port) && port > 0 ? port : null
+}
+
+export function seenLabel(value, now = Date.now()) {
+  const date = value ? new Date(value) : null
+  if (!date || Number.isNaN(date.getTime())) return 'Not seen yet'
+  const minutes = Math.round((now - date.getTime()) / 60000)
+  if (minutes < 2) return 'Seen just now'
+  if (minutes < 60) return `Seen ${minutes} minutes ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `Seen ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`
+  return `Seen ${date.toLocaleDateString()}`
+}

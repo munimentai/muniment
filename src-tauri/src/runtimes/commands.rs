@@ -280,8 +280,24 @@ pub async fn runtime_rename(
     .await
 }
 
-/// Forgets a paired runtime and deletes its device credential. Removing the
-/// selected runtime switches the app to this computer.
+/// Revokes this device on a paired runtime, as a device holding the admin
+/// scope may. Answers whether the runtime confirmed it.
+fn revoke_self(connector: &Connector) -> bool {
+    let Ok(record) = connector.registry.record(&connector.runtime_id) else {
+        return false;
+    };
+    let revoked = connector.connect().is_ok_and(|mut client| {
+        client
+            .revoke_remote_device(record.credential.device_id.as_str())
+            .is_ok()
+    });
+    connector.control.stop();
+    revoked
+}
+
+/// Forgets a paired runtime and deletes its device credential. A device
+/// holding the admin scope first revokes itself there. Removing the selected
+/// runtime switches the app to this computer.
 #[tauri::command]
 pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<RuntimeList, String> {
     if id == LOCAL_RUNTIME_ID {
@@ -298,8 +314,25 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
             activate(&app, None);
         }
         let runtimes = app.state::<Runtimes>();
-        runtimes
-            .registry()?
+        let registry = runtimes.registry()?;
+        let name = registry
+            .entry(&id)
+            .map_or_else(|| "The runtime".to_owned(), |entry| entry.name);
+        let admin = registry
+            .record(&id)
+            .is_ok_and(|record| record.scopes.contains(SCOPE_RUNTIME_ADMIN));
+        let notice = if admin && revoke_self(&connector(&app, registry, &id)) {
+            None
+        } else if admin {
+            Some(format!(
+                "{name} did not answer, so it still lists this device. Revoke it on {name}."
+            ))
+        } else {
+            Some(format!(
+                "{name} still lists this device. Revoke it on {name} to end its access."
+            ))
+        };
+        registry
             .remove(&id)
             .map_err(|_| "The runtime could not be removed.".to_owned())?;
         runtimes
@@ -308,7 +341,10 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&id);
         emit_changed(&app);
-        Ok(list(&app))
+        Ok(RuntimeList {
+            notice,
+            ..list(&app)
+        })
     })
     .await
 }
@@ -647,6 +683,33 @@ mod tests {
         assert_eq!(connector.connect().unwrap_err(), RuntimeStatus::Revoked);
         supervisor.stop();
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_admin_device_revokes_itself_and_a_reader_cannot() {
+        let runtime = LoopbackRuntime::start("0.0.1");
+        let (readers, reader_directory) = registry();
+        let (registry, directory) = registry();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (admin, _) = pair(
+            &registry,
+            runtime.link(&["thread.read", "runtime.admin"]),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        // One registry keeps one record per runtime, so the reader pairs in its own.
+        let (reader, _) = pair(&readers, runtime.link(&["thread.read"]), None, None, None).unwrap();
+        assert_eq!(runtime.access.list_devices().unwrap().len(), 2);
+        assert!(!revoke_self(&connector_for(&readers, &reader, &seen)));
+        assert_eq!(runtime.access.list_devices().unwrap().len(), 2);
+        assert!(revoke_self(&connector_for(&registry, &admin, &seen)));
+        assert_eq!(runtime.access.list_devices().unwrap().len(), 1);
+        // A revoked device cannot reach the runtime to revoke itself again.
+        assert!(!revoke_self(&connector_for(&registry, &admin, &seen)));
+        std::fs::remove_dir_all(directory).unwrap();
+        std::fs::remove_dir_all(reader_directory).unwrap();
     }
 
     #[test]

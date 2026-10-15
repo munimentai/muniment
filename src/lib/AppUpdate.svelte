@@ -1,20 +1,25 @@
 <script>
   import { onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { tauri, busy = false } = $props()
+  let { tauri, busy = false, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
   let version = $state(null), installing = $state(false), error = $state('')
   onMount(() => {
     let disposed = false, checking = false
     async function check() {
       if (checking || version || installing) return
       checking = true
-      try { const next = await tauri.invoke('app_update_prepare'); if (!disposed) version = next }
+      try { const next = await tauri.invoke('app_update_prepare'); if (!disposed && next) version = next }
       catch { /* Offline checks leave the workspace unchanged. Retry on the next interval. */ }
       finally { checking = false }
     }
     void check()
     const timer = setInterval(check, 60 * 60 * 1000)
-    return () => { disposed = true; clearInterval(timer) }
+    // An update a paired client requested downloads in the app, which then shows it here.
+    let stop
+    Promise.resolve(listen?.('app-update-ready', ({ payload }) => { if (!disposed && typeof payload === 'string') version = payload }))
+      .then((unlisten) => { if (disposed) unlisten?.(); else stop = unlisten })
+      .catch(() => {})
+    return () => { disposed = true; clearInterval(timer); stop?.() }
   })
   async function install() {
     if (busy || installing) return

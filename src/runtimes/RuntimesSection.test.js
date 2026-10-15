@@ -25,6 +25,8 @@ function tauri(handlers = {}) {
   const invoke = vi.fn(async (command, payload) => {
     if (handlers[command]) return handlers[command](payload)
     if (command === 'runtime_list' || command === 'runtime_refresh') return current
+    if (command === 'local_access_settings') return { settings: { enabled: false, listen: null, endpoints: [] }, overridden: false, listening: null, endpoints: [], error: null }
+    if (command === 'local_devices') return { devices: [] }
     if (command === 'runtime_select') {
       current = runtimeList(undefined, payload.id)
       return current
@@ -62,7 +64,7 @@ describe('Runtimes page', () => {
   it('switches, renames and removes a runtime, asking once before removal', async () => {
     const bridge = tauri({
       runtime_rename: ({ name }) => runtimeList([local, studio, { ...buildBox, name }], buildBox.id),
-      runtime_remove: () => runtimeList([local, { ...buildBox, name: 'Lab' }], buildBox.id),
+      runtime_remove: () => ({ ...runtimeList([local, { ...buildBox, name: 'Lab' }], buildBox.id), notice: 'Studio still lists this device. Revoke it on Studio to end its access.' }),
     })
     render(RuntimesSection, { tauri: bridge, listen })
     await fireEvent.click(await screen.findByRole('button', { name: 'Switch to Build box' }))
@@ -83,6 +85,7 @@ describe('Runtimes page', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     expect(bridge.invoke).toHaveBeenCalledWith('runtime_remove', { id: studio.id })
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Studio' })).toBeNull())
+    expect(screen.getByRole('status')).toHaveTextContent('Studio still lists this device. Revoke it on Studio to end its access.')
   })
 
   it('locks Switch while a reply runs', async () => {

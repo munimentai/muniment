@@ -9,6 +9,7 @@
   import Button from '../lib/ui/Button.svelte'
   import RuntimeRow from './RuntimeRow.svelte'
   import RuntimeAdd from './RuntimeAdd.svelte'
+  import ThisComputer from './ThisComputer.svelte'
   import { errorLine, updatableRuntimes } from './runtimes.js'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), switchDisabled = false } = $props()
@@ -62,6 +63,7 @@
     try {
       const next = await tauri.invoke(command, payload)
       if (next?.runtimes) list = next
+      if (next?.notice) notice = next.notice
       return true
     } catch (failure) {
       error = errorLine(failure)
@@ -134,6 +136,8 @@
   {#if list?.runtimes?.length === 1}<p class="line">This app attaches to one runtime at a time. Threads stay on the runtime that holds them.</p>{/if}
 
   <RuntimeAdd {tauri} deviceName={list?.deviceName ?? ''} onpaired={(next) => { if (next?.runtimes) list = next; clear() }} />
+
+  <ThisComputer {tauri} />
 </section>
 
 <style>

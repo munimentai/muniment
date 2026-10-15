@@ -26,4 +26,14 @@ describe('application update', () => {
     expect(await screen.findByRole('button')).toBeDisabled()
     expect(invoke).not.toHaveBeenCalledWith('app_update_install')
   })
+  it('shows an update a paired client requested once the app downloads it', async () => {
+    const invoke = vi.fn().mockResolvedValue(null)
+    let announce
+    const listen = vi.fn(async (event, listener) => { if (event === 'app-update-ready') announce = listener; return () => {} })
+    render(AppUpdate, { tauri: { invoke }, listen })
+    await waitFor(() => expect(announce).toBeTypeOf('function'))
+    expect(screen.queryByRole('button')).toBeNull()
+    announce({ payload: '0.3.0' })
+    expect(await screen.findByRole('button', { name: 'Install update 0.3.0 and restart' })).toBeEnabled()
+  })
 })

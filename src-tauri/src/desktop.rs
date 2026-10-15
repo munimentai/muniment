@@ -339,6 +339,11 @@ pub fn run() {
             runtimes::runtime_select,
             runtimes::runtime_update,
             runtimes::runtime_update_all,
+            runtimes::local_access_settings,
+            runtimes::local_access_save,
+            runtimes::local_pairing_link,
+            runtimes::local_devices,
+            runtimes::local_device_revoke,
             #[cfg(target_os = "macos")]
             macos_runtime_service::open_login_items,
             #[cfg(target_os = "macos")]

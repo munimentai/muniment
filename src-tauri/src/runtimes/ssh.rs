@@ -152,14 +152,19 @@ fn common_options() -> Vec<String> {
     .into()
 }
 
-/// `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -- <host> <command…> pair --json`
+/// `ssh -T -o BatchMode=yes -o ConnectTimeout=10 -- <host> <command…> pair --scopes … --json`
 pub(crate) fn pair_arguments(host: &str, words: &[String]) -> Vec<String> {
     let mut arguments = common_options();
     arguments.extend(["-o".into(), "ClearAllForwardings=yes".into()]);
     arguments.push("--".into());
     arguments.push(host.to_owned());
     arguments.extend(words.iter().cloned());
-    arguments.extend(["pair".into(), "--json".into()]);
+    arguments.extend([
+        "pair".into(),
+        "--scopes".into(),
+        SSH_PAIRING_SCOPES.into(),
+        "--json".into(),
+    ]);
     arguments
 }
 
@@ -220,11 +225,17 @@ pub(crate) struct PairOutput {
     pub(crate) link: PairingLink,
 }
 
-/// Reads the JSON object `pair --json` prints. The object names the link and
-/// may also name the certificate fingerprint, the runtime id and the expiry.
+/// The scopes an SSH pairing asks for. A user who can run the pairing
+/// command over SSH controls that host, so the device may also update it.
+pub(crate) const SSH_PAIRING_SCOPES: &str = "thread.read,run.write,runtime.admin";
+
+/// Reads the one JSON object `pair --json` prints:
+/// `{"link","expires_at","scopes","endpoints","fingerprint","runtime_id","runtime_name"}`.
+/// Every field must agree with the link it names.
 pub(crate) fn parse_pair_output(stdout: &[u8]) -> Result<PairOutput, SshError> {
+    use serde_json::Value;
     let text = std::str::from_utf8(stdout).map_err(|_| SshError::InvalidOutput)?;
-    let value = serde_json::from_str::<serde_json::Value>(text.trim())
+    let value = serde_json::from_str::<Value>(text.trim())
         .ok()
         .or_else(|| {
             text.lines()
@@ -232,32 +243,41 @@ pub(crate) fn parse_pair_output(stdout: &[u8]) -> Result<PairOutput, SshError> {
                 .filter(|line| line.trim_start().starts_with('{'))
                 .find_map(|line| serde_json::from_str(line.trim()).ok())
         })
-        .filter(serde_json::Value::is_object)
+        .filter(Value::is_object)
         .ok_or(SshError::InvalidOutput)?;
-    let field = |names: &[&str]| {
-        names
-            .iter()
-            .find_map(|name| value.get(*name).and_then(serde_json::Value::as_str))
-            .map(str::to_owned)
-    };
-    let link = field(&["link"])
-        .and_then(|link| PairingLink::parse(&link).ok())
+    let text_field = |name: &str| value.get(name).and_then(Value::as_str);
+    let link = text_field("link")
+        .and_then(|link| PairingLink::parse(link).ok())
         .ok_or(SshError::InvalidOutput)?;
-    if let Some(fingerprint) = field(&["fingerprint", "certificate_sha256"]) {
-        if CertificateFingerprint::parse(&fingerprint) != Some(link.fingerprint) {
-            return Err(SshError::InvalidOutput);
-        }
+    let endpoints: Option<Vec<&str>> = value
+        .get("endpoints")
+        .and_then(Value::as_array)
+        .map(|endpoints| endpoints.iter().filter_map(Value::as_str).collect());
+    let scopes_valid = value
+        .get("scopes")
+        .and_then(Value::as_array)
+        .is_some_and(|scopes| {
+            !scopes.is_empty()
+                && scopes.iter().all(|scope| {
+                    scope
+                        .as_str()
+                        .is_some_and(|scope| muniment_core::attach::REMOTE_SCOPES.contains(&scope))
+                })
+        });
+    let agrees = text_field("fingerprint").and_then(CertificateFingerprint::parse)
+        == Some(link.fingerprint)
+        && text_field("runtime_id")
+            .is_some_and(|id| id.eq_ignore_ascii_case(link.runtime_id.as_str()))
+        && text_field("runtime_name") == Some(link.runtime_name.as_str())
+        && endpoints.is_some_and(|endpoints| endpoints == link.endpoints)
+        && scopes_valid;
+    if !agrees {
+        return Err(SshError::InvalidOutput);
     }
-    if let Some(runtime_id) = field(&["runtime_id"]) {
-        if !runtime_id.eq_ignore_ascii_case(link.runtime_id.as_str()) {
-            return Err(SshError::InvalidOutput);
-        }
-    }
-    if field(&["expires_at"])
-        .as_deref()
+    let expiry = text_field("expires_at")
         .and_then(|expiry| chrono::DateTime::parse_from_rfc3339(expiry).ok())
-        .is_some_and(|expiry| expiry <= chrono::Utc::now())
-    {
+        .ok_or(SshError::InvalidOutput)?;
+    if expiry <= chrono::Utc::now() {
         return Err(SshError::Expired);
     }
     Ok(PairOutput { link })
@@ -446,6 +466,19 @@ mod tests {
         }
     }
 
+    /// What `muniment-server pair --json` prints for `link`.
+    pub(super) fn server_output(link: &PairingLink) -> serde_json::Value {
+        serde_json::json!({
+            "link": link.to_uri(),
+            "expires_at": "2030-01-01T00:00:00Z",
+            "scopes": ["run.write", "runtime.admin", "thread.read"],
+            "endpoints": link.endpoints,
+            "fingerprint": link.fingerprint.to_hex(),
+            "runtime_id": link.runtime_id.as_str(),
+            "runtime_name": link.runtime_name,
+        })
+    }
+
     #[test]
     fn hosts_take_names_aliases_users_and_addresses_but_no_option() {
         for host in [
@@ -545,6 +578,8 @@ mod tests {
                 "muniment-runtime",
                 "muniment-server",
                 "pair",
+                "--scopes",
+                "thread.read,run.write,runtime.admin",
                 "--json",
             ]
         );
@@ -560,12 +595,7 @@ mod tests {
     #[test]
     fn pair_output_is_checked_against_its_link() {
         let link = link();
-        let output = serde_json::json!({
-            "link": link.to_uri(),
-            "fingerprint": link.fingerprint.to_hex(),
-            "runtime_id": link.runtime_id.as_str(),
-            "expires_at": "2030-01-01T00:00:00Z",
-        });
+        let output = server_output(&link);
         let parsed = parse_pair_output(output.to_string().as_bytes()).unwrap();
         assert_eq!(parsed.link, link);
         assert!(!format!("{parsed:?}").contains(&"ab".repeat(16)));
@@ -583,6 +613,26 @@ mod tests {
         wrong["runtime_id"] = serde_json::json!("018f0000-0000-7000-8000-000000000099");
         assert_eq!(
             parse_pair_output(wrong.to_string().as_bytes()).unwrap_err(),
+            SshError::InvalidOutput
+        );
+        for (field, value) in [
+            ("runtime_name", serde_json::json!("Other box")),
+            ("endpoints", serde_json::json!(["192.0.2.99:7443"])),
+            ("scopes", serde_json::json!(["owner"])),
+            ("expires_at", serde_json::json!("soon")),
+        ] {
+            let mut wrong = output.clone();
+            wrong[field] = value;
+            assert_eq!(
+                parse_pair_output(wrong.to_string().as_bytes()).unwrap_err(),
+                SshError::InvalidOutput,
+                "{field}"
+            );
+        }
+        let mut missing = output.clone();
+        missing.as_object_mut().unwrap().remove("fingerprint");
+        assert_eq!(
+            parse_pair_output(missing.to_string().as_bytes()).unwrap_err(),
             SshError::InvalidOutput
         );
         let mut expired = output.clone();
@@ -648,12 +698,7 @@ mod tests {
         #[test]
         fn pairing_runs_the_command_and_reads_the_link() {
             let link = link();
-            let output = serde_json::json!({
-                "link": link.to_uri(),
-                "fingerprint": link.fingerprint.to_hex(),
-                "runtime_id": link.runtime_id.as_str(),
-                "expires_at": "2030-01-01T00:00:00Z",
-            });
+            let output = server_output(&link);
             let (directory, log) = fake(&format!("printf '%s\\n' '{output}'"));
             let target = target(
                 "me@box",

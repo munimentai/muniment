@@ -244,6 +244,7 @@ pub async fn chat_thread_summaries(
     // An account that cannot name its subject gets that error before the runtime call.
     chat_subject(&app_handle, &auth_state)?;
     chat_thread_summaries_command(session, limit, cursor.as_deref())
+        .map_err(|error| crate::runtimes::name_unreachable(&app_handle, error))
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -385,6 +386,7 @@ pub async fn chat_thread_open(
     chat_subject(&app_handle, &auth_state)?;
     state_session_root(&app_handle)?;
     chat_thread_open_command(&attach_state, &thread_id, limit, cursor.as_deref())
+        .map_err(|error| crate::runtimes::name_unreachable(&app_handle, error))
 }
 
 #[cfg(any(unix, target_os = "windows"))]

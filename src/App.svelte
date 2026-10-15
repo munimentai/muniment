@@ -385,6 +385,7 @@
   // artifacts and projects step aside.
   let runtimeList = $state(null)
   const remoteRuntime = $derived(remoteSelected(runtimeList) ? activeRuntime(runtimeList) : null)
+  const REMOTE_FILES_NOTE = 'Files stay on this computer. A paired runtime cannot read them.'
   // A first-run choice the providers page opens at once.
   let settingsConnectProvider = $state(null)
   let settingsButton = $state()
@@ -420,6 +421,7 @@
   async function runtimeSwitched() {
     selectTask(null)
     messages = []
+    selectedFiles = []
     threadSummaries = []
     agentsOpen = false
     artifactsOpen = false
@@ -1652,7 +1654,8 @@
   function updateMention() {
     clearTimeout(mentionTimer)
     const version = ++mentionVersion
-    mention = !active && composer ? mentionQuery(composer.value, composer.selectionStart) : null
+    // A paired runtime cannot read this computer's files, so `@` finds none there.
+    mention = !active && !remoteRuntime && composer ? mentionQuery(composer.value, composer.selectionStart) : null
     mentionSelected = 0; mentionError = ''; mentionFiles = []
     if (!mention) { mentionLoading = false; return }
     openComposerPanel('mentions')
@@ -2215,6 +2218,10 @@
   }
 
   async function addFiles(paths) {
+    if (remoteRuntime) {
+      submitError = REMOTE_FILES_NOTE
+      return
+    }
     const known = new Set(selectedFiles.map(({ path }) => path))
     const additions = []
     try {
@@ -2878,7 +2885,7 @@
           {/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
-            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} />
+            <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if chipThinking}<button type="button" class="quiet thinking-trigger" bind:this={thinkingChip} aria-label={`Thinking level: ${thinkingLabel(chipThinking.level)}`} aria-haspopup="menu" aria-expanded={thinkingOpen} onclick={() => openComposerPanel(thinkingOpen ? null : 'thinking')}><LucideIcon name="brain" size={14} /><span class="model-chip-label">{thinkingLabel(chipThinking.level)}</span></button>{/if}

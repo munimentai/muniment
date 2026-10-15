@@ -33,7 +33,7 @@ Select Over SSH and enter:
 The app runs the system `ssh` with your keys and no prompt:
 
 ```sh
-ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ClearAllForwardings=yes -- build-box docker exec muniment-runtime muniment-server pair --json
+ssh -T -o BatchMode=yes -o ConnectTimeout=10 -o ClearAllForwardings=yes -- build-box docker exec muniment-runtime muniment-server pair --scopes thread.read,run.write,runtime.admin --json
 ```
 
 It then forwards a loopback port to the runtime port and pairs through it:
@@ -44,6 +44,21 @@ ssh -N -T -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=yes -o S
 
 The tunnel opens whenever the app attaches to the runtime and closes when the
 app switches away or quits. The host and command take plain words only.
+
+The app checks each value the command prints against the link: the
+fingerprint, runtime id, runtime name, endpoints, scopes and expiry. A user who
+runs the pairing command over SSH controls that host, so the device asks for the
+`runtime.admin` scope there.
+
+## Pair with this computer
+
+Under This computer, turn on Allow pairing. Pairing is off until you turn it on.
+The listen port defaults to `7443`. The page lists the addresses a link names
+and where each comes from: local network, private overlay network, public
+address, this computer only, or set in these settings. Create pairing link
+shows the link, a QR code and the time it stops working. Allow updates adds the
+`runtime.admin` scope to the next link. Paired devices lists each device with
+its scopes and when it was last seen, with Revoke.
 
 ## States
 
@@ -61,3 +76,13 @@ A runtime that runs an older version than the app shows Update when this
 device holds the `runtime.admin` scope there. Update sends the runtime an
 update request for the app's version. Update all sends it to every such
 runtime. A runtime without that scope shows its version only.
+
+When a paired client asks this computer's runtime to update, the app checks its
+release feed, downloads the verified update, and installs it once no reply is
+running. The app clears the request once it runs the requested version.
+
+## Remove
+
+Remove deletes the device credential on this computer. With `runtime.admin`, the
+app first revokes the device on the runtime. Otherwise the runtime still lists
+the device until you revoke it there.
