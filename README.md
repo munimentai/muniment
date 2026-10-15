@@ -93,17 +93,17 @@ brew install --cask muniment
 
 ## Releases
 
-GitHub Releases on `munimentai/muniment` host every download. Forgejo Actions at `factory/muniment` build and publish them.
-Only an owner dispatch of `main` runs a release job. Each job checks this in its first step and fails before any credential is read.
+GitHub Releases on `munimentai/muniment` host every download. The CI workflows in `.forgejo/workflows/` build and publish them.
+Only a maintainer dispatch of `main` runs a release job. Each job checks this in its first step and fails before any credential is read.
 
 1. Dispatch `nightly.yml` on `main`. It signs the three platform builds, uploads them to the `nightly` pre-release, and runs the installed checks.
 2. Dispatch `subscriptions.yml` on GitHub with the nightly source SHA. Its native runners are on GitHub.
 3. Dispatch `release.yml` on `main` with the source SHA, the version, and `dry_run` set. The dry run runs every check and creates nothing.
-4. Dispatch `release.yml` again without `dry_run`. It creates the version tag on Forgejo, and the push mirror carries it to GitHub.
+4. Dispatch `release.yml` again without `dry_run`. It creates the version tag in the source repository, and the mirror carries it to GitHub.
    The job then publishes the verified nightly bytes, `latest.json`, and `SHA256SUMS` as the stable release.
 
 The `GH_RELEASE_TOKEN` secret holds a fine-grained GitHub token with Contents write on `munimentai/muniment`.
-Every GitHub Releases call uses it. The job token reaches only Forgejo.
+Every GitHub Releases call uses it. The CI job token reaches only the source repository.
 
 ## Issues and license
 

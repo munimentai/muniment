@@ -13,7 +13,7 @@ Evidence files are written to be lifted verbatim into the public docs site
 - copy-pasteable commands and config;
 - no roadmap speculation;
 - no internal codenames;
-- no pricing or monetization content (owner-only).
+- no pricing or monetization content (maintainer-only).
 
 The reviewer blocks a PR that changes a public surface without updating
 evidence. Merged evidence changes are picked up automatically by the site lane

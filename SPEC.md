@@ -149,7 +149,7 @@ checkable in the diff:
   timeout records a failed reply with its cause in the run journal and shell.
   The runtime logs the run start, Pi spawn, first reply, provider outcome and
   stderr tail by run id.
-- Pi sidecar parity with the factory harness, below.
+- Pi harness contents, below.
 
 ## First run
 
@@ -361,7 +361,7 @@ onboarding spec proves the connect question, the Home picker and More providers.
 13. **Company graph writes use propose and commit.** A model never writes a graph row. The
     SQL tool is read-only. Kind validation applies to every write. No reader
     writes back to a source.
-14. **Monetization, launch and publicity are owner-only.**
+14. **Monetization, launch and publicity are maintainer-only.**
 
 Settings loads on demand. Its sidebar groups pages under Models, Extend, Preferences, Personal and Workspace. Storage distinguishes the workspace from managed extensions.
 ## Workspace panels
@@ -449,7 +449,7 @@ user's Claude Code connection. Other providers use their configured transports.
 
 The **production pin** is the exact Pi version and extension versions a shipped desktop carries.
 `pins/pins.toml` in the `muniment-core` tag holds every pin: the Pi release and its rollback, each platform
-archive with size and SHA-256, the extension packages, and the Claude Code version. The factory reads the same file.
+archive with size and SHA-256, the extension packages, and the Claude Code version.
 The **candidate** is the exact versions the nightly exercises ahead of production, and only passing nightly
 evidence on Linux, macOS and Windows qualifies it for promotion. Neither track follows npm `latest`, a
 semver range, or a mutable release manifest. The executable pin and the candidate are one version, and
@@ -464,12 +464,11 @@ The Node floor is the pinned Pi package's `engines.node` range, met by an
 Active LTS release. It moves with the pin or not at all, and it adds no system
 Node dependency to the standalone Pi executable distribution.
 
-### Parity with the factory harness
+### Pi harness contents
 
-The desktop's Pi carries what the factory's Pi carries, or the local harness is
-weaker than the one that built it. Four items:
+The desktop's Pi carries four items:
 
-1. **The extension packages** the factory installs: `npm:pi-web-access`,
+1. **The extension packages** `pins/pins.toml` lists: `npm:pi-web-access`,
    `npm:pi-subagents`, `npm:pi-background-tasks`, and `npm:pi-claude-bridge`
    for Anthropic through the Claude Code sign-in. They give Pi web search and
    fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
@@ -485,7 +484,7 @@ weaker than the one that built it. Four items:
    the working directory, which is the thread's project or session folder. Each message opens with its
    send time. No harness or product name. Pi reads `bash` `timeout` in seconds with no
    default, so the prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
-4. **The version pin** moves to the version the factory runs.
+4. **The version pin** follows `pins/pins.toml` in the `muniment-core` tag.
 
 The desktop enables every built-in tool the pinned registry defines and sets
 `defaultTools` in `settings.json` to that full set. It never uses `--tools`,
@@ -524,8 +523,8 @@ criterion names its enforcing artifact. A criterion whose enforcer reads "gap"
 is open work: closing it is a gate change first and a symptom ticket second.
 
 1. The nightly three-platform e2e run is green with a readable evidence
-   envelope on every platform. Enforcer: `.github/workflows/nightly.yml`, with
-   `linux-e2e-report` consumed by the factory tester.
+   envelope on every platform. Enforcer: `.github/workflows/nightly.yml` and
+   its `linux-e2e-report` artifact.
 2. The PR compile and build matrix is green on linux, windows and macos.
    Enforcer: the desktop-compile and desktop-build jobs in `ci.yml`.
 3. Windows installers are signed and verified. The per-user MSI and the NSIS

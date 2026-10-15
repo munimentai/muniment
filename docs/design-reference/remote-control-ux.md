@@ -1,7 +1,7 @@
 # Remote Control desktop UX reference
 
 **Status:** Design note, measured 2026-07-29. Every proposal in this note is
-pending owner mockup confirmation. Owner mockups remain ground truth.
+pending maintainer mockup confirmation. Maintainer mockups remain ground truth.
 
 ## Boundary
 
@@ -48,7 +48,7 @@ non-modal and never relies on color.
 
 ## Pending desktop proposal
 
-All details below remain pending owner mockup confirmation.
+All details below remain pending maintainer mockup confirmation.
 
 The session menu gets one action: **Start Remote Control**. It opens a radius
 `10` modal on `surface` with `shadow-overlay`. The modal shows this exact copy:
@@ -103,4 +103,4 @@ This note does not decide or change:
 3. The entitlement copy, eligibility rules, owner kill-switch copy, or
    entitlement toast.
 
-Owner mockups must confirm every proposal before implementation.
+Maintainer mockups must confirm every proposal before implementation.

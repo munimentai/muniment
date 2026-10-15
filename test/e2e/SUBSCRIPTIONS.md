@@ -25,10 +25,10 @@ Use a disposable GUI login or a disposable VM on each platform:
 ### macOS capture capability
 
 The Intel `desktop-ci macos` runner must supply an unlocked disposable GUI login with an active WindowServer display.
-Its capture process needs Screen Recording authorization in that login, not in the owner's login.
+Its capture process needs Screen Recording authorization in that login, not in the host's main login.
 The job must support `CGPreflightScreenCaptureAccess()` and `/usr/sbin/screencapture -x -l<window-id>` from the same process chain as `runner/subscriptions.mjs`.
 Grant access to the responsible capture process, not just the installed app.
-Do not edit the owner's privacy database.
+Do not edit the main login's privacy database.
 Do not request consent during the probe.
 
 The screenshot log records a noninteractive permission check and numeric metadata for the installed app's visible, normal-layer windows.
@@ -42,7 +42,7 @@ After a capture failure, the runner checks permission and window metadata again 
 - `diagnostics-unavailable` means the compiler or window probe failed, so the runner cannot classify the capture failure.
 - `capture-failed` covers other capture command failures, including a missing tool or timeout.
 
-For `window-uncapturable`, the runner owner must provide a display that supplies backing images for the installed CEF window.
+For `window-uncapturable`, the runner administrator must provide a display that supplies backing images for the installed CEF window.
 Check the app log for GPU initialization errors in the disposable VM.
 A hypervisor screendump does not replace the installed-window screenshot.
 The screenshot gate remains mandatory.
@@ -84,9 +84,9 @@ The host keeps guest failure evidence when artifact collection succeeds.
 Run `node --test test/subscription-host.node.mjs` as an unprivileged Linux user with passwordless sudo.
 The tests use real sudo to check root driver cleanup after SIGTERM fails.
 
-## Factory subscriptions
+## Subscription leases
 
-The factory's refresh owner supplies fresh access leases for every selected provider.
+The holder of the subscription credentials supplies fresh access leases for every selected provider.
 Account balancing needs two distinct accounts from one provider and two selected models that both accounts serve.
 The lease file is a JSON array with these fields:
 
@@ -109,7 +109,7 @@ Keep the leases valid through all four platform jobs.
 Do not supply refresh tokens, API keys, provider home directories, or `gh` credentials.
 The runner rejects extra lease fields and never writes to the lease file.
 It copies only the leased access fields into a disposable app profile.
-The factory retains the shared credentials and refresh ownership.
+The credential holder retains the shared credentials and refresh ownership.
 
 ## Run a platform check
 
@@ -144,7 +144,7 @@ node test/e2e/runner/subscriptions.mjs CANDIDATE PACKAGE SIGNATURE INSTALLED_APP
 
 Use absolute paths for the package, signature, installed app, lease file, and output directory.
 Keep the lease and output directories outside the checkout.
-The app and runtime do not inherit factory secrets, proxies, provider homes, or Pi settings.
+The app and runtime do not inherit runner secrets, proxies, provider homes, or Pi settings.
 The redactor retains its injected-secret checks.
 It creates a new app profile for every run and removes that profile after it stops the probe processes.
 On macOS, the runner creates private profiles under `/tmp` instead of the GUI login's longer temporary directory.
@@ -174,7 +174,7 @@ A missing feature observation blocks that feature, even when chat passes.
 A failed reply, changed payload, wrong model, or cleanup failure also returns a nonzero exit code.
 Every run replaces stale passing evidence before it checks prerequisites.
 
-Collect each platform's output in the owner release job:
+Collect each platform's output in the release job:
 
 ```text
 node test/e2e/runner/collect-subscriptions.mjs SOURCE_SHA OUTPUT LINUX_OUTPUT WINDOWS_OUTPUT ARM64_OUTPUT X64_OUTPUT

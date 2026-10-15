@@ -327,7 +327,7 @@ Create a private state directory outside the desktop profile.
 Run one request per process:
 
 ```sh
-muniment-router-shadow --state /private/factory-shadow/router.sqlite < request.json
+muniment-router-shadow --state /var/lib/router-shadow/router.sqlite < request.json
 ```
 
 The process reads one UTF-8 JSON object through EOF, with a 1 MiB limit.
@@ -336,7 +336,7 @@ Success exits with zero, and errors exit with one.
 Errors contain `version`, `mode: "shadow"`, and a bounded `error` code, never raw input or storage errors.
 
 Use a local SQLite file, not a network filesystem.
-Restrict access to the executable and state directory to the factory service account.
+Restrict access to the executable and state directory to the scheduler's service account.
 The contract accepts trusted scheduler metadata, not provider credentials or untrusted task policy.
 
 ### Requests and affinity
@@ -395,7 +395,7 @@ Do not delete state to recover from a timeout or storage error.
 
 ### Classifier observations and evidence
 
-The factory owns the Kev-4B service and its deadline.
+The scheduler owns the classifier service and its deadline.
 Use `inspect` to get the eligible digest and request digest before classifier evaluation.
 The request digest binds the observation to the job constraints and context without storing the context.
 Submit the observation with its revision, trace identity, both digests, elapsed milliseconds, status, and optional answer.
@@ -410,16 +410,16 @@ Concurrent eligibility changes can invalidate an observation without changing th
 Responses include the original baseline, shadow selection, eligible digest, policy revision, decision reason, classifier revision, confidence, timing, and fallback cause.
 Retries return the original decision evidence with `reused: true`.
 Release returns that evidence with the outcome and the same trace identity.
-The factory attaches its dispatch, classifier observation, and outcome to that trace in Langfuse.
+The scheduler can attach its dispatch, classifier observation, and outcome to that trace in its tracing backend.
 Trace metadata may contain opaque account/model references and the eligible digest, never credentials or full prompts.
 
-Grafana labels use only operation, role, fallback, outcome, mode, and bounded error codes.
+Metric labels use only operation, role, fallback, outcome, mode, and bounded error codes.
 Do not label metrics with identities, revisions, model names, digests, context, or decision text.
 Record classifier and routing milliseconds as numeric observations, not labels.
 
 The Python `evaluate` function returns the caller's unchanged baseline as `live_selection` and keeps shadow evidence separate.
 Classifier failure, executable failure, invalid responses, and timeouts cannot replace that baseline.
-The factory retains its model caps, reset handling, resume handling, and isolated `pi-claude-bridge` execution.
+The scheduler retains its model caps, reset handling, resume handling, and isolated `pi-claude-bridge` execution.
 The shared router neither imports account configuration nor launches Pi.
 Live adaptive selection and Ollama replacement require evaluation approval outside this contract.
 
