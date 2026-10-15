@@ -41,7 +41,7 @@
   const TRUST = {
     user: 'Added by you',
     conversation: 'Saved from a chat',
-    external: 'Saved after web, file or tool content. Chats reach it only by search. Edit it to confirm it.',
+    external: 'Saved after web, file or tool content. Chats reach it only by search. Confirm or edit it to trust it.',
   }
   const TRUST_ICON = { user: 'user', conversation: 'messages-square' }
   // The list renders a page of rows at a time so hundreds of facts stay fast.
@@ -208,6 +208,26 @@
     finally { busy = false }
   }
   let deleting = $state('')
+  // An unconfirmed row acts from its icons: edit and delete open the row at
+  // that step, and confirm saves the fact unchanged as the user's own.
+  async function quickEdit(fact) {
+    expanded = `saved:${fact.id}`
+    await editFact(fact)
+  }
+  function quickDelete(fact) {
+    if (draft.id) clearDraft()
+    expanded = `saved:${fact.id}`
+    deleting = fact.id
+  }
+  async function confirmFact(fact) {
+    busy = true
+    try {
+      await memory.invoke('memory_fact_save', { fact: { ...fact } })
+      facts = await memory.invoke('memory_facts')
+      status = 'Memory confirmed.'
+    } catch (e) { status = String(e) }
+    finally { busy = false }
+  }
   async function refreshDeleted() {
     try { deletedFacts = await memory.invoke('memory_deleted_facts') || [] }
     catch (e) { status = String(e) }
@@ -326,9 +346,17 @@
       <span class="chevron" class:open><LucideIcon name="chevron-right" size={14} variant="action" /></span>
       <span class="fact-title">{fact.title}</span>
       <span class="fact-preview" aria-hidden="true">{fact.content}</span>
-      {#if fact.trust === 'external'}<span class="badge">Unconfirmed</span>
+      {#if fact.trust === 'external' && list === 'saved'}<span class="quick-space"><span class="visually-hidden">Unconfirmed</span></span>
+      {:else if fact.trust === 'external'}<span class="badge">Unconfirmed</span>
       {:else if TRUST_ICON[fact.trust]}<span class="trust-icon"><LucideIcon name={TRUST_ICON[fact.trust]} size={14} variant="action" /><span class="visually-hidden">{TRUST[fact.trust]}</span></span>{/if}
     </button>
+    {#if fact.trust === 'external' && list === 'saved'}
+      <span class="quick">
+        <Button icon="pencil" iconOnly aria-label="Edit memory" disabled={busy} onclick={() => quickEdit(fact)} />
+        <span class="danger"><Button icon="trash-2" iconOnly aria-label="Delete memory" disabled={busy} onclick={() => quickDelete(fact)} /></span>
+        <span class="accent"><Button icon="check" iconOnly aria-label="Confirm memory" disabled={busy} onclick={() => confirmFact(fact)} /></span>
+      </span>
+    {/if}
     {#if open}
       <div class="fact-detail" id={`${uid}-${key}`}>
         {#if list === 'saved' && draft.id === fact.id}<section aria-label="Edit memory">{@render factForm('Cancel edit', clearDraft)}</section>
@@ -343,7 +371,7 @@
             {:else if deleting === fact.id}
               <Button disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
               <Button onclick={() => { deleting = '' }}>Cancel</Button>
-            {:else}
+            {:else if fact.trust !== 'external'}
               <Button disabled={busy} onclick={() => editFact(fact)}>Edit</Button>
               <Button disabled={busy} onclick={() => { deleting = fact.id }}>Delete</Button>
             {/if}
@@ -442,6 +470,14 @@
   .fact-head[aria-expanded="true"] .fact-preview { visibility: hidden; }
   .badge { padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font-size: var(--text-12); line-height: 18px; white-space: nowrap; }
   .trust-icon { display: inline-flex; color: var(--muted); }
+  /* An unconfirmed row holds its three icon buttons over a reserved slot at
+     the head's right end, outside the head button so a click acts once. */
+  .quick-space { width: 80px; height: 20px; }
+  .quick { position: absolute; top: 6px; right: 12px; display: flex; gap: 4px; }
+  .quick :global(button) { min-width: 24px; min-height: 24px; padding: 3px; }
+  .quick .danger :global(button) { color: var(--oxide); }
+  .quick .accent :global(button) { color: var(--accent, var(--ink)); }
+  .quick > span { display: inline-flex; }
   .fact-detail { display: grid; gap: 10px; padding: 2px 12px 12px 36px; }
   .fact-content { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
   .fact-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: var(--text-12); }
@@ -449,6 +485,7 @@
   .fact-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
   .record { font-family: var(--font-mono); }
   .fact-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .fact-actions:empty { display: none; }
   .fact-form { display: grid; gap: 12px; }
   .fact-form .field { padding: 0; }
   .fact-form .field-actions { padding: 0; }

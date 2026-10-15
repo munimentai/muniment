@@ -22,6 +22,7 @@ function setup(facts, deleted = []) {
     if (cmd === 'memory_profile_read') return ''
     if (cmd === 'memory_facts') return [...saved]
     if (cmd === 'memory_deleted_facts') return [...deleted]
+    if (cmd === 'memory_fact_delete') { deleted = [...deleted, ...saved.filter(f => f.id === args.id)]; saved = saved.filter(f => f.id !== args.id); return null }
     if (cmd === 'memory_fact_save') {
       const fact = { ...args.fact, id: args.fact.id || 'new-fact', trust: 'user' }
       saved = [...saved.filter(f => f.id !== fact.id), fact]
@@ -60,19 +61,19 @@ it('marks only external facts and explains them', async () => {
   expect(within(list()).getAllByText('Unconfirmed')).toHaveLength(1)
   expect(screen.getByRole('button', { name: 'Fact 1 Added by you' })).toBeInTheDocument()
   await fireEvent.click(external)
-  expect(screen.getByText('Saved after web, file or tool content. Chats reach it only by search. Edit it to confirm it.')).toBeInTheDocument()
+  expect(screen.getByText('Saved after web, file or tool content. Chats reach it only by search. Confirm or edit it to trust it.')).toBeInTheDocument()
 })
 
 it('filters to unconfirmed facts and combines the filter with search', async () => {
   setup(many(9))
   await screen.findByRole('button', { name: 'Fact 1 Added by you' })
   await fireEvent.click(screen.getByRole('radio', { name: 'Unconfirmed (3)' }))
-  expect(within(list()).getAllByRole('button').map(b => b.querySelector('.fact-title').textContent)).toEqual(['Fact 3', 'Fact 6', 'Fact 9'])
+  expect([...list().querySelectorAll('.fact-title')].map(title => title.textContent)).toEqual(['Fact 3', 'Fact 6', 'Fact 9'])
   await fireEvent.input(screen.getByLabelText('Search memories'), { target: { value: 'fact 6' } })
-  expect(within(list()).getAllByRole('button')).toHaveLength(1)
+  expect(within(list()).getAllByRole('listitem')).toHaveLength(1)
   await fireEvent.click(screen.getByRole('radio', { name: 'All' }))
   await fireEvent.input(screen.getByLabelText('Search memories'), { target: { value: '' } })
-  expect(within(list()).getAllByRole('button')).toHaveLength(9)
+  expect(within(list()).getAllByRole('listitem')).toHaveLength(9)
 })
 
 it('renders 50 rows at a time and shows more on request', async () => {
@@ -89,19 +90,72 @@ it('renders 50 rows at a time and shows more on request', async () => {
 
 it('edits a fact inside its row and saves it as a user fact', async () => {
   const invoke = setup(many(3))
-  await fireEvent.click(await screen.findByRole('button', { name: 'Fact 3 Unconfirmed' }))
+  await fireEvent.click(await screen.findByRole('button', { name: 'Fact 2 Saved from a chat' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
   const form = screen.getByRole('region', { name: 'Edit memory' })
   expect(within(list()).getByRole('region', { name: 'Edit memory' })).toBe(form)
-  expect(within(form).getByLabelText('Title')).toHaveValue('Fact 3')
+  expect(within(form).getByLabelText('Title')).toHaveValue('Fact 2')
   expect(screen.getAllByLabelText('Title')).toHaveLength(1)
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   await fireEvent.input(within(form).getByLabelText('Fact'), { target: { value: 'Checked by hand.' } })
   await fireEvent.click(within(form).getByRole('button', { name: 'Save memory' }))
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_save', { fact: expect.objectContaining({ id: 'f3', content: 'Checked by hand.' }) }))
-  const row = await screen.findByRole('button', { name: 'Fact 3 Added by you' })
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_save', { fact: expect.objectContaining({ id: 'f2', content: 'Checked by hand.' }) }))
+  const row = await screen.findByRole('button', { name: 'Fact 2 Added by you' })
   expect(row).toHaveAttribute('aria-expanded', 'true')
   expect(within(document.getElementById(row.getAttribute('aria-controls'))).getByText('Added by you')).toBeInTheDocument()
+})
+
+const quick = (title) => screen.getByRole('button', { name: `${title} Unconfirmed` }).closest('li')
+
+it('puts edit, delete and confirm icons only on unconfirmed rows', async () => {
+  setup(many(3))
+  await screen.findByRole('button', { name: 'Fact 3 Unconfirmed' })
+  const row = quick('Fact 3')
+  expect(within(row).getAllByRole('button').map(b => b.getAttribute('aria-label'))).toEqual([null, 'Edit memory', 'Delete memory', 'Confirm memory'])
+  expect(within(screen.getByRole('button', { name: 'Fact 1 Added by you' }).closest('li')).getAllByRole('button')).toHaveLength(1)
+  const head = screen.getByRole('button', { name: 'Fact 3 Unconfirmed' })
+  await fireEvent.click(head)
+  const detail = document.getElementById(head.getAttribute('aria-controls'))
+  expect(within(detail).getByText('Content of fact 3.')).toBeInTheDocument()
+  expect(within(detail).queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
+  expect(within(detail).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  expect(document.querySelectorAll('[title]')).toHaveLength(0)
+})
+
+it('confirms an unconfirmed fact as a user fact from its row', async () => {
+  const invoke = setup(many(9))
+  await screen.findByRole('button', { name: 'Fact 3 Unconfirmed' })
+  expect(screen.getByRole('radio', { name: 'Unconfirmed (3)' })).toBeInTheDocument()
+  const head = screen.getByRole('button', { name: 'Fact 3 Unconfirmed' })
+  await fireEvent.click(within(quick('Fact 3')).getByRole('button', { name: 'Confirm memory' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_save', { fact: expect.objectContaining({ id: 'f3', title: 'Fact 3', content: 'Content of fact 3.' }) }))
+  const row = await screen.findByRole('button', { name: 'Fact 3 Added by you' })
+  expect(row).toHaveAttribute('aria-expanded', 'false')
+  expect(head).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.getByRole('radio', { name: 'Unconfirmed (2)' })).toBeInTheDocument()
+})
+
+it('opens an unconfirmed fact straight into edit mode from its icon', async () => {
+  setup(many(3))
+  await screen.findByRole('button', { name: 'Fact 3 Unconfirmed' })
+  await fireEvent.click(within(quick('Fact 3')).getByRole('button', { name: 'Edit memory' }))
+  expect(screen.getByRole('button', { name: 'Fact 3 Unconfirmed' })).toHaveAttribute('aria-expanded', 'true')
+  const form = within(list()).getByRole('region', { name: 'Edit memory' })
+  await waitFor(() => expect(within(form).getByLabelText('Title')).toHaveFocus())
+  expect(within(form).getByLabelText('Title')).toHaveValue('Fact 3')
+})
+
+it('deletes an unconfirmed fact from its icon after the confirm step', async () => {
+  const invoke = setup(many(3))
+  await screen.findByRole('button', { name: 'Fact 3 Unconfirmed' })
+  await fireEvent.click(within(quick('Fact 3')).getByRole('button', { name: 'Delete memory' }))
+  expect(screen.getByRole('button', { name: 'Fact 3 Unconfirmed' })).toHaveAttribute('aria-expanded', 'true')
+  expect(invoke).not.toHaveBeenCalledWith('memory_fact_delete', expect.anything())
+  await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_delete', { id: 'f3' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Fact 3 Unconfirmed' })).not.toBeInTheDocument())
+  await fireEvent.click(screen.getByRole('button', { name: 'Deleted memories' }))
+  expect(await within(await screen.findByRole('list', { name: 'Deleted memories' })).findByRole('button', { name: 'Fact 3 Unconfirmed' })).toBeInTheDocument()
 })
 
 it('lists deleted facts as compact rows with Restore in the details', async () => {
