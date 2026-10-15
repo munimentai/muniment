@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce ADR 0030 without a GUI toolchain."""
+"""Enforce the core boundary in docs/core-boundary.md without a GUI toolchain."""
 
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-ADR = Path("docs/decisions/0030-public-core-boundary.md")
+BOUNDARY = Path("docs/core-boundary.md")
 MANIFEST = "src-tauri/Cargo.toml"
 SHELL = "muniment-desktop"
 INTEGRATION = "muniment-desktop-integration"
@@ -47,7 +47,7 @@ def inventory(text):
 
 def check_workspace(tables, members):
     require(tables["Desktop"] == set(members),
-            "The ADR must list every workspace crate in the Desktop table.")
+            "The boundary doc must list every workspace crate in the Desktop table.")
     require(SHELL in members and INTEGRATION in members,
             "The workspace needs the shell and the integration crate.")
 
@@ -82,7 +82,7 @@ def check_tree(text, forbidden_crates, package):
 
 def main():
     require(len(sys.argv) == 1, "The core boundary check accepts no arguments.")
-    tables = inventory(ADR.read_text())
+    tables = inventory(BOUNDARY.read_text())
     metadata = json.loads(subprocess.check_output([
         "cargo", "metadata", "--manifest-path", MANIFEST, "--locked", "--format-version", "1"],
         text=True))

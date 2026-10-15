@@ -45,5 +45,4 @@ is out of scope for this ticket.
 - [Handy README and architecture](https://github.com/cjpais/Handy/blob/76736d5ac7bd6d4a6328a6ab392748aa35f5a12b/README.md#architecture)
 - [Handy Rust dependencies](https://github.com/cjpais/Handy/blob/76736d5ac7bd6d4a6328a6ab392748aa35f5a12b/src-tauri/Cargo.toml)
 - [Handy MIT License](https://github.com/cjpais/Handy/blob/76736d5ac7bd6d4a6328a6ab392748aa35f5a12b/LICENSE)
-- [Muniment desktop ASR decision](../decisions/0004-desktop-asr-runtime.md)
 - [Muniment desktop specification](../spec/02-desktop-app.md)

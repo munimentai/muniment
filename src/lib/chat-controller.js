@@ -80,7 +80,7 @@ export function createChatController({
   let destroyed = false
   let switchingThread = false
   // The run the window left on another thread, as { threadId, runId }. The
-  // runtime keeps driving it (ADR 0012), and its settling event clears it.
+  // runtime keeps driving it, and its settling event clears it.
   let background = null
   let switchBlocked = false
   // How many calls replace the transcript with freshly read pages right now: a
@@ -510,8 +510,8 @@ export function createChatController({
       }
       const published = historyMessages(history)
       // The runtime keeps driving an unsettled run while the window is away. The
-      // desktop rejoins that run instead of starting one (ADR 0012, desktop run
-      // rejoin). handleEvent carries it forward by run id from here.
+      // desktop rejoins that run instead of starting one. handleEvent carries it
+      // forward by run id from here.
       const recorded = unsettledRun(published)
       // handleEvent buffered every event that landed during the load, so the
       // pages loaded over a growing buffer. The recorded state is stale by

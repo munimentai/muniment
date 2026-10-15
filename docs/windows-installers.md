@@ -20,8 +20,7 @@ The log directory sits outside the install directory, so diagnostics do not bloc
 
 ## Planned runtime task contract
 
-[ADR 0012](decisions/0012-user-level-runtime-service.md) defines the planned
-Windows runtime contract. Each user gets one
+This section defines the planned Windows runtime contract. Each user gets one
 `\Muniment\Runtime-{user-sid}` Scheduled Task. It runs as that interactive user
 with least privilege. It starts at logon, and surfaces request an idempotent
 start through Task Scheduler.

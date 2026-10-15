@@ -169,7 +169,7 @@ It checks the iframe boundary and exercises Custom HTTP sign-in without private 
 This demo pins the MCP probe graph only. It does not install the four optional extension packages or the adapter.
 The production graph still retains those packages, including the Claude bridge.
 The full approved extension graph and any background-tasks compatibility build belong to the later production migration.
-This demo neither promotes that graph nor changes SPEC or ADR 0008's runtime contract.
+This demo neither promotes that graph nor changes the SPEC runtime contract.
 Production promotion still requires the owner's review, rollback proof, and native installed chat and MCP proof on all three platforms.
 No native installed proof accompanies this browser demo.
 

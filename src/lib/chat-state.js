@@ -275,7 +275,7 @@ export function historyMessages(history) {
 
 // The phases a run reaches once it stops. src-tauri/src/chat.rs projection_phase
 // answers one of these for a settled run and thinking, streaming, or
-// pending-permission for a run that still executes (ADR 0012, desktop run rejoin).
+// pending-permission for a run that still executes.
 export const settledPhases = new Set(['complete', 'cancelled', 'failed', 'interrupted'])
 
 // The run the runtime still drives in a projected message list. A thread whose

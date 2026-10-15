@@ -12,7 +12,7 @@ hidden feature while the desktop harness earns adoption.
 
 This repo contains the Tauri v2 shell, the runtime binary with its host and service registration, the Pi sidecar and the on-device voice stack.
 The shared core, the platform-neutral runtime, model router and runtime pins come from one `munimentai/muniment-core` release tag.
-`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control ([ADR 0030](docs/decisions/0030-public-core-boundary.md)).
+`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control. [docs/core-boundary.md](docs/core-boundary.md) lists the shared and desktop crates.
 Existing company data and cloud credentials remain on disk when those features are hidden.
 The release license is FSL-1.1-Apache-2.0. Each version converts to Apache 2.0 two years after its release. Third-party notices ship with the app.
 
@@ -128,7 +128,7 @@ nothing that identifies the user or machine, and verifies signatures bound to
 the announced version. It shows one install control after download and waits
 for idle runtime activity. Windows preserves MSI scope or NSIS identity, macOS
 uses the signed app bundle, and Linux uses AppImage. Debian updates use the
-system package manager. ADR 0029 defines the update path.
+system package manager.
 
 ## The definition of working
 
@@ -286,7 +286,7 @@ over the caps shows no Import. A file with a secret, a file that is not text and
 a file over 64 KB are left out, each named. A second import copies only new or
 changed files. An export ZIP from ChatGPT or claude.ai copies under
 `memory/imports/export/` from the same panel. The panel never shows imported
-text, which is untrusted data under [ADR 0018](docs/decisions/0018-untrusted-content-boundary.md).
+text, which is untrusted data.
 
 The scan reads names, never file bodies. It walks only the user-level roots
 below, honors each root's environment override, stops at a depth of six, a two
@@ -353,8 +353,7 @@ onboarding spec proves the connect question, the Home picker and More providers.
    that routes audio to a network endpoint is wrong by construction.
 10. **Platform chrome follows the OS.** Brand tokens are identical across
     platforms.
-11. **Local run state is event-sourced.** The append-only SQLite journal in
-    [ADR 0002](docs/decisions/0002-event-sourced-run-journal.md) is
+11. **Local run state is event-sourced.** The append-only SQLite journal is
     authoritative for live and resumed sessions. UI, receipts and relay are
     rebuildable projections.
 12. **Public evidence.** A pull request that changes a public surface updates
@@ -440,15 +439,13 @@ runtime holds each cursor and does every write as the `reader` service
 principal acting for the owner, through an `approved` `mapping` record whose
 identity column keys each row, so a repeat run updates and never duplicates,
 and it keeps each row it could not place in `resolve-<mapping>.json` beside the
-graph. [ADR 0033](docs/decisions/0033-reader-contract.md) fixes the mapping and
-the three `reader.*` operations, desktop only. Third-party data is queried from
+graph. The mapping and the three `reader.*` operations are desktop only. Third-party data is queried from
 the graph, never from the source API.
 
 ## Pi version policy
 
 The desktop owns its Pi release cycle. Its agent harness is Pi. The optional Claude provider bridge uses the
-user's Claude Code connection. Other providers use their configured transports. [ADR 0008](docs/decisions/0008-pi-runtime-distribution.md)
-governs executable acquisition and rollback.
+user's Claude Code connection. Other providers use their configured transports.
 
 ### Production pin and candidate
 
@@ -463,11 +460,11 @@ The nightly and local builds select the candidate with `MUNIMENT_PI_CANDIDATE=1`
 
 The harness installs only packages listed on [pi.dev/packages](https://pi.dev/packages)
 and executables from the official [earendil-works/pi repository](https://github.com/earendil-works/pi)
-or a Muniment-controlled mirror that keeps ADR 0008's provenance checks.
+or a Muniment-controlled mirror that keeps the pinned size and SHA-256 checks.
 
 The Node floor is the pinned Pi package's `engines.node` range, met by an
 Active LTS release. It moves with the pin or not at all, and it adds no system
-Node dependency to ADR 0008's standalone executable distribution.
+Node dependency to the standalone Pi executable distribution.
 
 ### Parity with the factory harness
 
@@ -503,8 +500,7 @@ the exact pin.
 local provider classifier configured in Decision models. Its taxonomy is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, about
-282 MB with its tokenizer, and [ADR
-0028](docs/decisions/0028-bundled-router-classifier.md) names the bytes. The
+282 MB with its tokenizer. The
 desktop keeps this classifier's result off the cloud-bound wire. Its presence
 does not enable cloud sign-in or require a company graph.
 
@@ -519,10 +515,8 @@ measured so far.
 **Rules for every bundled or downloaded model.** Apache-2.0 or MIT only,
 verified against the HuggingFace model card, so Gemma and Llama-licensed
 models are out. Per-channel int8 is mandatory and retested per model. The
-head and the taxonomy version with the encoder, and the ADR names the bytes:
-path, size, sha256. [ADR 0021](docs/decisions/0021-on-device-classifier-store.md)
-and [ADR 0027](docs/decisions/0027-pinned-model-artifact-lifecycle.md) carry
-the download: staging, resumable `.part` files, the `current`, `previous` and
+head and the taxonomy version with the encoder, and its pin names the bytes:
+path, size, sha256. The download uses staging, resumable `.part` files, the `current`, `previous` and
 `rejected` pointers, and the install lock.
 
 ## Production-ready gates (release gate)
@@ -547,8 +541,8 @@ is open work: closing it is a gate change first and a symptom ticket second.
    `.github/lib/release-promotion.mjs`.
 6. UI copy obeys the vocabulary law, records render in mono, and the provenance
    line is on every reply. Enforcers: the three law steps in the `ci.yml` smoke job.
-7. The update path follows the Updates paragraph above and ADR 0029. Enforcer:
-   `test/smoke.sh` asserts the ADR exists and states the trigger.
+7. The update path follows the Updates paragraph above. Enforcers:
+   `.github/lib/updater-signature.test.js` and `.github/lib/update-feed.test.js`.
 8. The steering files obey the rules in `AGENTS.md`. Enforcer:
    `scripts/check-steering.sh .` in the `ci.yml` smoke job.
 
@@ -559,8 +553,8 @@ family at the ceiling. A new folder needs 5 files or a machine reader named in
 the pull request. Depth stops at 3 levels below the source root. Related files
 share a prefix stem, and a family of 15 or more is the designated split. Tests
 mirror source except where a harness needs a layout. Append-only stores,
-generated, vendored and asset trees are exempt. `docs/public-evidence/`,
-`protocol-fixtures/` and `docs/decisions/` are frozen machine-read paths that
+generated, vendored and asset trees are exempt. `docs/public-evidence/`
+and `protocol-fixtures/` are frozen machine-read paths that
 move only with a consumer sweep. A directory over the ceiling is a recorded
 gap, closed gate-first with a check that holds the new shape, and related changes include their readers when a family moves.
 

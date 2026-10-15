@@ -8,14 +8,11 @@ pending owner mockup confirmation. Owner mockups remain ground truth.
 Account settings hosts QR phone pairing when cloud is enabled and the owner is
 signed in. Live-session remote control remains a later surface.
 
-[Harness specification §14](../spec/harness-spec.md#14-remote-control-owner-decision-2026-07-17)
-and [ADR 0012](../decisions/0012-user-level-runtime-service.md) ratify the
-surface but do not build it. The specification requires a desktop session
-action, a persistent attached banner, a disconnect control, and an expiring
-URL plus QR handoff. ADR 0012 assigns the single outbound relay leg to the
-runtime service. The shipped MV3 loopback relay controls a browser and is not
-this surface. Journal-backed relay publication also remains deferred in
-[ADR 0002](../decisions/0002-event-sourced-run-journal.md).
+The remote-control surface is specified but not built. It requires a desktop
+session action, a persistent attached banner, a disconnect control, and an
+expiring URL plus QR handoff. The runtime service owns the single outbound relay
+leg. The shipped MV3 loopback relay controls a browser and is not this surface.
+Journal-backed relay publication also remains deferred.
 
 The requested polish has no implementation to change. This note sets a
 standard for the future surface.

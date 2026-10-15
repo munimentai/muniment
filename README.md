@@ -114,7 +114,6 @@ and [SECURITY.md](SECURITY.md) for issue and private vulnerability reports.
 Muniment uses [FSL-1.1-ALv2](LICENSE.md), a Fair Source license.
 Each version converts to Apache 2.0 after two years.
 Third-party components retain their own licenses.
-See the [test architecture](docs/decisions/0013-desktop-e2e-harness.md) for verification details.
 
 `npm run check:agent-dependencies` checks Claude Code, Pi, and extension pins against current releases and Pi peer ranges.
 Updates require the focused regression tests and the native CI and installed nightly checks.

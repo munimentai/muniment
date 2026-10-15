@@ -171,23 +171,21 @@ the normal supervisor restart path.
 
 ## Scope boundary
 
-Browser control is not a supervised generic sidecar or an instance of ADR
-0009's companion attach service. The desktop-owned loopback relay and MV3
+Browser control is not a supervised generic sidecar or an instance of the
+companion attach service. The desktop-owned loopback relay and MV3
 `chrome.debugger` extension follow the pairing, executable-path verification,
 connect-tab ownership, and deterministic cleanup contract in
 [harness-spec §6.8](spec/harness-spec.md). Relay loss must detach browser
 targets; `SidecarSupervisor` restart semantics must never silently reconstruct
 or reauthorize a browser session.
 
-Desktop ASR is deliberately outside the sidecar boundary. As decided in
-[ADR 0004](decisions/0004-desktop-asr-runtime.md), `muniment_core` will own
+Desktop ASR is deliberately outside the sidecar boundary. `muniment_core` will own
 microphone PCM and invoke the pinned sherpa-onnx v1.13.2 C API in process with
 the pinned Parakeet-TDT 0.6B v3 INT8 offline artifact. No ASR socket or child
 process is introduced. Only utterance-final transcript text proceeds to the
 composer, and voice bytes never enter a network client, Pi, telemetry, or crash
 reports. Model acquisition
-also remains outside sidecar supervision: [ADR
-0005](decisions/0005-asr-model-lifecycle.md) selects a Rust-native first-use
+also remains outside sidecar supervision: it uses a Rust-native first-use
 install with complete-set verification and atomic publication. Acquisition is
 the only ASR-related network boundary, and model bytes never cross the webview.
 The desktop now packages the pinned sherpa-onnx v1.13.2 CPU shared runtime and
@@ -207,17 +205,15 @@ streaming. Native recognizer, stream, and result handles are RAII-owned and are
 released on success and failure.
 
 Microphone capture, PCM buffering, VAD, commands/webview state, first-use
-install UI, and the ADR 0004 target-hardware latency/quality matrix remain
+install UI, and the target-hardware latency/quality matrix remain
 follow-up work. This boundary adds no PCM persistence, service, telemetry, or
 Pi routing.
 
-The following resident runtime design is superseded by the 2026-07-29 cloud
-ingress ruling. The desktop no longer ships this runtime.
+The desktop does not ship the following resident runtime design.
 
 `muniment_core::llama` owned the local llama.cpp boundary. The typed resident
 descriptor pins the resident artifact identity, stable API alias, and context
-limit selected in [ADR 0017](decisions/0017-resident-model-artifact-pin.md),
-which supersedes ADR 0003.
+limit.
 `LlamaServerConfig` turns an explicit executable, installed artifact path, and port into
 separate process arguments and always supplies `--host 127.0.0.1` (or the
 explicit IPv6 loopback `::1`). `LlamaServer` delegates spawning, restart
@@ -271,7 +267,7 @@ mock HTTP responses. CI never loads the model.
 
 Supervisor lifecycle events and stderr are diagnostic telemetry, not durable
 user-session history. Pi integration will translate only user-relevant domain
-facts into the append-only journal defined by [ADR 0002](decisions/0002-event-sourced-run-journal.md).
+facts into the append-only run journal.
 That journal—not the supervisor replay buffer, raw JSON-RPC transcript, or
 current status—is the source for explicit resume and receipt projections, and
 the future source for mobile relay.
