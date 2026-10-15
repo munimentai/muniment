@@ -46,18 +46,6 @@ pub(crate) fn prepare_thread(
     let attach = app.state::<crate::attach_service::AttachCompanionState>();
     let client = match attach.desktop_client_session() {
         crate::attach_service::DesktopClientSession::Connected(client) => client,
-        #[cfg(target_os = "linux")]
-        crate::attach_service::DesktopClientSession::NoSupervisor => {
-            if fresh {
-                *state
-                    .pending_project
-                    .lock()
-                    .map_err(|_| "The project choice is unavailable.")? =
-                    project_id.map(str::to_owned);
-                state.session_thread.fresh(subject);
-            }
-            return Ok(String::new());
-        }
         _ => return Err(crate::auth::background_service_error()),
     };
     let thread = client
