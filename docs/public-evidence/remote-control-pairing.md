@@ -28,6 +28,6 @@ company-record features.
 Run the contract tests from the repository root:
 
 ```sh
-cargo test --manifest-path src-tauri/core/Cargo.toml --locked --test remote_control_pairing
-cargo test --manifest-path src-tauri/runtime/Cargo.toml --locked --test pairing
+cargo test --manifest-path src-tauri/integration/Cargo.toml --locked --lib remote_control_pairing
+cargo test --manifest-path src-tauri/runtime/Cargo.toml --locked --lib pairing
 ```
