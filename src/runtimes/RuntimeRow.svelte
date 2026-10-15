@@ -50,13 +50,15 @@
       <p class="runtime-facts">
         {#if !runtime.local}<span>{kindLabel(runtime)}</span>{/if}
         {#if runtime.sshHost}<span class="record">ssh {runtime.sshHost}</span>{/if}
+        {#if runtime.sharing === 'shared'}<span>Uses this computer's models</span>{/if}
         {#if updating}
           <span class="runtime-state" data-tone="signal">Updating to v{runtime.updateTarget ?? appVersion}</span>
         {:else}
           <span class="runtime-state" data-tone={statusTone(runtime)}>{statusLabel(runtime)}</span>
         {/if}
       </p>
-      {#if statusHint(runtime)}<p class="runtime-hint">{statusHint(runtime)}</p>{/if}
+      {#if statusHint(runtime)}<p class="runtime-hint">{statusHint(runtime)}</p>
+      {:else if runtime.sharing === 'no_access'}<p class="runtime-hint">Pair it again with run access to share this computer's models.</p>{/if}
     {/snippet}
     {#if !runtime.local}
       <span class="menu-wrap" bind:this={root}>

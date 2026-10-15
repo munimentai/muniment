@@ -41,6 +41,12 @@
     <rect width="20" height="14" x="2" y="3" rx="2" /><line x1="8" x2="16" y1="21" y2="21" /><line x1="12" x2="12" y1="17" y2="21" />
   {:else if name === 'laptop'}
     <path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z" /><path d="M20.054 15.987H3.946" />
+  {:else if name === 'pc-case'}
+    <rect width="14" height="20" x="5" y="2" rx="2" /><path d="M15 14h.01" /><path d="M9 6h6" /><path d="M9 10h6" />
+  {:else if name === 'terminal'}
+    <polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" />
+  {:else if name === 'info'}
+    <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
   {:else if name === 'container'}
     <path d="M22 7.7c0-.6-.4-1.2-.8-1.5l-6.3-3.9a1.72 1.72 0 0 0-1.7 0l-10.3 6c-.5.2-.9.8-.9 1.4v6.6c0 .5.4 1.2.8 1.5l6.3 3.9a1.72 1.72 0 0 0 1.7 0l10.3-6c.5-.3.9-1 .9-1.5Z" /><path d="M10 21.9V14L2.1 9.1" /><path d="m10 14 11.9-6.9" /><path d="M14 19.8v-8.1" /><path d="M18 17.5V9.4" />
   {:else if name === 'chevrons-up-down'}

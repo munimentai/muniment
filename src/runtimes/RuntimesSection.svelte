@@ -2,10 +2,14 @@
   // The Machines page of Settings: this computer first, then each paired
   // machine with its kind, version and state, and Rename and Remove in its
   // menu. Every machine stays connected, and a thread runs on the machine it
-  // started on. An older machine updates on its own. Below the list, Pair
-  // shares this computer and adds another machine.
+  // started on. An older machine updates on its own. Under the list, one
+  // switch shares this computer's model connections with every machine.
+  // Below that, Pair shares this computer and adds another machine.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
+  import Row from '../lib/ui/Row.svelte'
+  import Toggle from '../lib/Toggle.svelte'
+  import LucideIcon from '../lib/LucideIcon.svelte'
   import RuntimeRow from './RuntimeRow.svelte'
   import RuntimeAdd from './RuntimeAdd.svelte'
   import ThisComputer from './ThisComputer.svelte'
@@ -82,6 +86,16 @@
     {/if}
   </Group>
 
+  <Group label="Model sharing">
+    <Row title="Share model connections" description="Paired machines use the providers, sign-ins and keys connected on this computer.">
+      <Toggle checked={list?.shareModels ?? false} label="Share model connections" disabled={!list || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { share: next })} />
+    </Row>
+  </Group>
+  <div class="share-notice" role="note">
+    <span class="share-notice-icon"><LucideIcon name="info" size={16} variant="action" /></span>
+    <p>Shared subscriptions depend on this computer. When it sleeps or goes offline, a paired machine can lose them within 30 minutes. Shared API keys keep working.</p>
+  </div>
+
   <ThisComputer {tauri}>
     {#snippet add()}
       <RuntimeAdd {tauri} deviceName={list?.deviceName ?? ''} onpaired={(next) => { if (next?.runtimes) list = next; error = ''; notice = '' }} />
@@ -93,4 +107,7 @@
   .settings-runtimes { display: grid; gap: var(--page-gap); }
   .line { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .line[role="alert"] { color: var(--ink); }
+  .share-notice { display: flex; align-items: flex-start; gap: 10px; margin-top: calc(var(--page-gap) * -0.5); padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--faint); }
+  .share-notice-icon { display: inline-flex; flex: none; padding-top: 1px; color: var(--muted); }
+  .share-notice p { margin: 0; color: var(--ink); font-size: var(--text-13); }
 </style>

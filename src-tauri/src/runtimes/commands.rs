@@ -105,6 +105,7 @@ pub(crate) fn pair(
     let Observation::Welcome {
         version,
         install_kind,
+        ..
     } = observation.clone()
     else {
         unreachable!("a welcome observation");
@@ -404,6 +405,7 @@ fn request_update(connector: &Connector) -> Result<String, String> {
     let Observation::Welcome {
         version,
         install_kind,
+        ..
     } = observation
     else {
         unreachable!("a welcome observation");
@@ -677,6 +679,8 @@ mod tests {
             Observation::Welcome {
                 version: Some("0.0.1".into()),
                 install_kind: Some("container".into()),
+                form_factor: muniment_core::form_factor::detect()
+                    .map(|shape| shape.as_str().to_owned()),
             }
         );
         let paired = registry.list();

@@ -36,6 +36,17 @@ describe('runtime labels', () => {
     expect(kindIcon({})).toBe('server')
   })
 
+  it('draws each machine as the shape it announces', () => {
+    expect(kindIcon({ kind: 'local', formFactor: 'laptop' })).toBe('laptop')
+    expect(kindIcon({ kind: 'desktop', formFactor: 'all_in_one' })).toBe('monitor')
+    expect(kindIcon({ kind: 'desktop', formFactor: 'desktop' })).toBe('pc-case')
+    expect(kindIcon({ kind: 'server' })).toBe('terminal')
+    expect(kindIcon({ kind: 'server', formFactor: 'laptop' })).toBe('terminal')
+    expect(kindIcon({ kind: 'server', formFactor: 'server' })).toBe('server')
+    expect(kindIcon({ kind: 'container', formFactor: 'laptop' })).toBe('container')
+    expect(kindIcon({ kind: 'desktop-client' })).toBe('laptop')
+  })
+
   it('names each state with its next step and tone', () => {
     expect(statusLabel({ status: 'online' })).toBe('Online')
     expect(statusHint({ status: 'online' })).toBe('')

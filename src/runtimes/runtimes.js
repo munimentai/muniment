@@ -9,16 +9,24 @@ export const DEFAULT_SSH_PORT = 7443
 const KINDS = {
   local: ['This computer', 'monitor'],
   desktop: ['Desktop', 'laptop'],
-  server: ['Server', 'server'],
+  'desktop-client': ['Desktop', 'laptop'],
+  server: ['Server', 'terminal'],
   container: ['Container', 'container'],
 }
+
+// The icon for the shape a machine announces. A server draws a rack only on
+// rack hardware, and a terminal on any other host.
+const SHAPES = { laptop: 'laptop', all_in_one: 'monitor', desktop: 'pc-case', server: 'server' }
 
 export function kindLabel(runtime) {
   return KINDS[runtime?.kind]?.[0] ?? 'Runtime'
 }
 
 export function kindIcon(runtime) {
-  return KINDS[runtime?.kind]?.[1] ?? 'server'
+  const kind = runtime?.kind
+  if (kind === 'container') return 'container'
+  if (kind === 'server') return runtime?.formFactor === 'server' ? 'server' : 'terminal'
+  return SHAPES[runtime?.formFactor] ?? KINDS[kind]?.[1] ?? 'server'
 }
 
 // [label, next step, tone]. The tone picks ink, ochre for caution or oxide for a refusal.

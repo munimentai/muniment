@@ -197,6 +197,7 @@ const APP_COMMANDS: &[&str] = &[
     "runtime_select",
     "runtime_update",
     "runtime_update_all",
+    "runtime_share_models",
     "local_access_settings",
     "local_access_save",
     "local_pairing_link",

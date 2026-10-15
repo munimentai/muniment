@@ -87,6 +87,7 @@ pub(crate) enum Observation {
     Welcome {
         version: Option<String>,
         install_kind: Option<String>,
+        form_factor: Option<String>,
     },
 }
 
@@ -236,6 +237,9 @@ pub(crate) fn welcome(client: &DesktopClient) -> Observation {
         install_kind: info
             .and_then(|info| info.install_kind)
             .map(|kind| kind.as_str().to_owned()),
+        form_factor: info
+            .and_then(|info| info.form_factor)
+            .map(|shape| shape.as_str().to_owned()),
     }
 }
 

@@ -8,6 +8,7 @@ mod connection;
 mod local_access;
 mod registry;
 mod requested_update;
+mod sharing;
 mod ssh;
 mod version;
 
@@ -19,6 +20,7 @@ use tauri::{Emitter, Manager};
 
 use crate::attach_service::AttachCompanionState;
 pub(crate) use commands::*;
+pub(crate) use sharing::*;
 pub(crate) use connection::{Connector, RemoteSupervisor};
 use connection::{Observation, RemoteControl, RuntimeStatus};
 pub(crate) use local_access::*;
@@ -32,6 +34,7 @@ struct Observed {
     status: RuntimeStatus,
     version: Option<String>,
     install_kind: Option<String>,
+    form_factor: Option<String>,
     /// The runtime turned down the update the app asked for, so its row
     /// stops showing one on the way.
     update_refused: bool,
@@ -43,6 +46,7 @@ impl Default for Observed {
             status: RuntimeStatus::Unknown,
             version: None,
             install_kind: None,
+            form_factor: None,
             update_refused: false,
         }
     }
@@ -58,6 +62,7 @@ pub(crate) struct Runtimes {
     /// The app asks each one once, on the first welcome that names an older
     /// version.
     auto_updates: Mutex<HashSet<String>>,
+    sharing: sharing::Sharing,
 }
 
 impl Runtimes {
@@ -67,6 +72,7 @@ impl Runtimes {
             observed: Mutex::new(HashMap::new()),
             pairing: Mutex::new(()),
             auto_updates: Mutex::new(HashSet::new()),
+            sharing: sharing::Sharing::default(),
         }
     }
 
@@ -145,17 +151,21 @@ impl Runtimes {
             Observation::Welcome {
                 version,
                 install_kind,
+                form_factor,
             } => {
-                let changed = entry.version != version || entry.install_kind != install_kind;
+                let changed = entry.version != version
+                    || entry.install_kind != install_kind
+                    || entry.form_factor != form_factor;
                 if entry.version != version {
                     entry.update_refused = false;
                 }
                 entry.version = version.clone();
                 entry.install_kind = install_kind.clone();
+                entry.form_factor = form_factor.clone();
                 drop(observed);
                 if changed {
                     if let Some(registry) = &self.registry {
-                        let _ = registry.observe(id, version, install_kind);
+                        let _ = registry.observe(id, version, install_kind, form_factor);
                     }
                 }
                 changed
@@ -172,6 +182,9 @@ pub(crate) struct RuntimeView {
     name: String,
     /// `local` for this computer, else the install kind the runtime named.
     kind: Option<String>,
+    /// `laptop`, `all_in_one`, `desktop` or `server`, when the runtime says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    form_factor: Option<String>,
     version: Option<String>,
     status: RuntimeStatus,
     active: bool,
@@ -184,6 +197,9 @@ pub(crate) struct RuntimeView {
     #[serde(skip_serializing_if = "Option::is_none")]
     update_target: Option<&'static str>,
     ssh_host: Option<String>,
+    /// How the last share of this computer's model connections went there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sharing: Option<sharing::ShareState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -193,6 +209,8 @@ pub(crate) struct RuntimeList {
     device_name: String,
     selected: String,
     runtimes: Vec<RuntimeView>,
+    /// Whether this computer shares its model connections with its machines.
+    share_models: bool,
     /// One line about the command that answered this list, such as a removed
     /// runtime that still lists this device.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -209,6 +227,7 @@ fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
         id: LOCAL_RUNTIME_ID.into(),
         name: "This computer".into(),
         kind: Some("local".into()),
+        form_factor: muniment_core::form_factor::detect().map(|shape| shape.as_str().to_owned()),
         status: if version.is_some() {
             RuntimeStatus::Online
         } else {
@@ -222,12 +241,14 @@ fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
         update_offered: false,
         update_target: None,
         ssh_host: None,
+        sharing: None,
     }
 }
 
 fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> RuntimeView {
     let version = observed.version.or(runtime.entry.version);
     let kind = observed.install_kind.or(runtime.entry.install_kind);
+    let form_factor = observed.form_factor.or(runtime.entry.form_factor);
     let target = target_version(kind.as_deref());
     let admin = runtime
         .scopes
@@ -240,6 +261,7 @@ fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> Runt
         id: runtime.id,
         name: runtime.entry.name,
         kind,
+        form_factor,
         version,
         status: observed.status,
         active,
@@ -247,6 +269,7 @@ fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> Runt
         scopes: runtime.scopes.into_iter().collect(),
         admin,
         ssh_host: runtime.entry.ssh.map(|ssh| ssh.host),
+        sharing: None,
     }
 }
 
@@ -260,14 +283,23 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
         views.extend(registry.list().into_iter().map(|runtime| {
             let observed = runtimes.observed(&runtime.id);
             let selected = active.as_deref() == Some(runtime.id.as_str());
-            paired_view(runtime, observed, selected)
+            let sharing = runtimes.sharing.state(&runtime.id);
+            RuntimeView {
+                sharing,
+                ..paired_view(runtime, observed, selected)
+            }
         }));
     }
+    let share_models = runtimes
+        .registry
+        .as_ref()
+        .is_some_and(Registry::share_models);
     RuntimeList {
         app_version: APP_VERSION,
         device_name: device_name(),
         selected: active.unwrap_or_else(|| LOCAL_RUNTIME_ID.into()),
         runtimes: views,
+        share_models,
         notice: None,
     }
 }
@@ -283,6 +315,10 @@ fn observer<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> connection::Observe
         let runtimes = app.state::<Runtimes>();
         if runtimes.record(id, observation) {
             emit_changed(&app);
+        }
+        // A machine that connects gets this computer's connections at once.
+        if welcome && runtimes.registry.as_ref().is_some_and(Registry::share_models) {
+            runtimes.sharing.wake();
         }
         // Updates are automatic: a runtime that answers with an older version
         // is asked once to install its kind's target version.
@@ -457,6 +493,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let selected = registry.as_ref().and_then(Registry::selected);
     app.manage(Runtimes::new(registry));
     connect_all(app);
+    sharing::start(app);
     if selected.is_some() {
         activate(app, selected.as_deref());
     }
@@ -495,6 +532,7 @@ mod tests {
                 ssh: None,
                 version: version.map(str::to_owned),
                 install_kind: Some("server".into()),
+                form_factor: None,
             },
             scopes: scopes(scopes_held),
         }
@@ -532,6 +570,7 @@ mod tests {
             status: RuntimeStatus::Online,
             version: Some(version::CORE_VERSION.into()),
             install_kind: Some("container".into()),
+            form_factor: None,
             update_refused: false,
         };
         let view = paired_view(current, observed, false);
@@ -549,6 +588,7 @@ mod tests {
         let welcome = Observation::Welcome {
             version: Some("1.0.0".into()),
             install_kind: Some("desktop".into()),
+            form_factor: Some("laptop".into()),
         };
         assert!(runtimes.record(id, welcome.clone()));
         assert!(!runtimes.record(id, welcome));

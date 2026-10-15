@@ -209,6 +209,7 @@
     "allow-runtime-select",
     "allow-runtime-update",
     "allow-runtime-update-all",
+    "allow-runtime-share-models",
     "allow-local-access-settings",
     "allow-local-access-save",
     "allow-local-pairing-link",

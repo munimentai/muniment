@@ -32,6 +32,9 @@ pub(crate) struct RuntimeEntry {
     pub(crate) version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) install_kind: Option<String>,
+    /// The shape of the computer, which picks its icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) form_factor: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +44,18 @@ pub(crate) struct RuntimeIndex {
     pub(crate) selected: Option<String>,
     #[serde(default)]
     pub(crate) runtimes: BTreeMap<String, RuntimeEntry>,
+    /// Whether this computer shares its model connections with its paired
+    /// machines.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) share_models: bool,
+    /// The paired machines that hold connections this computer shared, so
+    /// turning sharing off clears each one.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) shared_with: BTreeSet<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// One paired runtime as the registry lists it.
@@ -166,6 +181,7 @@ impl Registry {
                     ssh,
                     version,
                     install_kind,
+                    form_factor: None,
                 },
             );
             Ok(id.clone())
@@ -194,6 +210,7 @@ impl Registry {
         id: &str,
         version: Option<String>,
         install_kind: Option<String>,
+        form_factor: Option<String>,
     ) -> io::Result<()> {
         let Some(id) = canonical_id(id) else {
             return Ok(());
@@ -202,13 +219,49 @@ impl Registry {
         let Some(entry) = index.runtimes.get(&id) else {
             return Ok(());
         };
-        if entry.version == version && entry.install_kind == install_kind {
+        if entry.version == version
+            && entry.install_kind == install_kind
+            && entry.form_factor == form_factor
+        {
             return Ok(());
         }
         self.update(|index| {
             if let Some(entry) = index.runtimes.get_mut(&id) {
                 entry.version = version;
                 entry.install_kind = install_kind;
+                entry.form_factor = form_factor;
+            }
+            Ok(())
+        })
+    }
+
+    /// Whether this computer shares its model connections.
+    pub(crate) fn share_models(&self) -> bool {
+        self.index().share_models
+    }
+
+    pub(crate) fn set_share_models(&self, share: bool) -> io::Result<()> {
+        self.update(|index| {
+            index.share_models = share;
+            Ok(())
+        })
+    }
+
+    /// The paired machines that hold connections this computer shared.
+    pub(crate) fn shared_with(&self) -> BTreeSet<String> {
+        self.index().shared_with
+    }
+
+    /// Records whether the machine `id` holds connections this computer shared.
+    pub(crate) fn mark_shared(&self, id: &str, held: bool) -> io::Result<()> {
+        if self.index().shared_with.contains(id) == held {
+            return Ok(());
+        }
+        self.update(|index| {
+            if held {
+                index.shared_with.insert(id.to_owned());
+            } else {
+                index.shared_with.remove(id);
             }
             Ok(())
         })
@@ -446,12 +499,29 @@ mod tests {
             }
         }
         registry
-            .observe(RUNTIME_ID, Some("2.0.0".into()), Some("container".into()))
+            .observe(RUNTIME_ID, Some("2.0.0".into()), Some("container".into()), None)
             .unwrap();
         let entry = registry.entry(RUNTIME_ID).unwrap();
         assert_eq!(entry.version.as_deref(), Some("2.0.0"));
         assert_eq!(entry.install_kind.as_deref(), Some("container"));
         assert_eq!(entry.ssh.unwrap().remote_port, 7443);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_index_keeps_the_sharing_switch_and_the_machines_that_hold_shares() {
+        let (registry, directory) = registry();
+        assert!(!registry.share_models());
+        registry.set_share_models(true).unwrap();
+        registry.mark_shared(RUNTIME_ID, true).unwrap();
+        let reopened = Registry::new(directory.clone());
+        assert!(reopened.share_models());
+        assert!(reopened.shared_with().contains(RUNTIME_ID));
+        reopened.mark_shared(RUNTIME_ID, false).unwrap();
+        reopened.set_share_models(false).unwrap();
+        // An index that shares nothing writes neither field.
+        let text = std::fs::read_to_string(directory.join(INDEX_FILE)).unwrap();
+        assert!(!text.contains("share_models") && !text.contains("shared_with"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

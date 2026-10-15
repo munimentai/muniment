@@ -186,3 +186,36 @@ describe('machine picker', () => {
     expect(toggle).toHaveFocus()
   })
 })
+
+describe('Model sharing', () => {
+  it('turns sharing on under the machine list and shows which machines use it', async () => {
+    const shared = { ...buildBox, sharing: 'shared' }
+    const reader = { ...studio, sharing: 'no_access' }
+    let on = false
+    const current = () => ({ ...runtimeList(on ? [local, reader, shared] : [local, studio, buildBox]), shareModels: on })
+    const bridge = tauri({
+      runtime_list: current,
+      runtime_refresh: current,
+      runtime_share_models: ({ share }) => { on = share; return current() },
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    const toggle = await screen.findByRole('switch', { name: 'Share model connections' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('note')).toHaveTextContent('Shared subscriptions depend on this computer.')
+
+    await fireEvent.click(toggle)
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { share: true }))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
+    const box = screen.getByRole('group', { name: 'Build box' })
+    expect(within(box).getByText("Uses this computer's models")).toBeInTheDocument()
+    const desk = screen.getByRole('group', { name: 'Studio' })
+    expect(within(desk).getByText('Check that it is running and reachable.')).toBeInTheDocument()
+  })
+
+  it('asks a machine this device may not run on to pair again', async () => {
+    const reader = { ...studio, status: 'online', scopes: ['thread.read'], sharing: 'no_access' }
+    render(RuntimesSection, { tauri: tauri({ runtime_list: () => ({ ...runtimeList([local, reader]), shareModels: true }), runtime_refresh: () => ({ ...runtimeList([local, reader]), shareModels: true }) }), listen })
+    const desk = await screen.findByRole('group', { name: 'Studio' })
+    expect(within(desk).getByText("Pair it again with run access to share this computer's models.")).toBeInTheDocument()
+  })
+})

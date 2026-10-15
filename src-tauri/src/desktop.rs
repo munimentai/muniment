@@ -339,6 +339,7 @@ pub fn run() {
             runtimes::runtime_select,
             runtimes::runtime_update,
             runtimes::runtime_update_all,
+            runtimes::runtime_share_models,
             runtimes::local_access_settings,
             runtimes::local_access_save,
             runtimes::local_pairing_link,
