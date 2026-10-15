@@ -35,14 +35,28 @@ pub(crate) async fn request<R: tauri::Runtime>(
     if !matches!(session, DesktopClientSession::Connected(_)) {
         return Err(auth::background_service_error());
     }
+    let connect_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut client = connect().map_err(auth::desktop_client_error)?;
+        let mut client = connect_selected(&connect_app).map_err(auth::desktop_client_error)?;
         client
             .models_request(action, data)
             .map_err(|error| auth::desktop_request_error(error, client.last_request_error()))
     })
     .await
     .map_err(|_| auth::background_service_error())?
+}
+
+/// Opens a connection of its own to the selected runtime: the selected
+/// paired runtime, else this computer's runtime.
+fn connect_selected<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<DesktopClient, ClientError> {
+    match app.state::<AttachCompanionState>().remote_connector() {
+        Some(remote) => remote
+            .connect()
+            .map_err(|_| ClientError::DesktopUnavailable),
+        None => connect(),
+    }
 }
 
 /// Opens a desktop client connection of its own to the runtime.

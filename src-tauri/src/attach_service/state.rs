@@ -59,6 +59,9 @@ pub struct AttachCompanionState {
     pub(super) connected_changed: Condvar,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) chat_events_connected: Mutex<bool>,
+    /// The selected paired runtime's connections. `None` attaches the app to
+    /// this computer's runtime.
+    pub(super) remote: Mutex<Option<crate::runtimes::RemoteSupervisor>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -348,8 +351,32 @@ impl AttachCompanionState {
         }
     }
 
+    /// The session of the selected runtime: a paired runtime's when one is
+    /// selected, else this computer's.
     #[cfg(any(unix, target_os = "windows"))]
     pub(crate) fn desktop_client_session(&self) -> DesktopClientSession {
+        self.remote_session()
+            .unwrap_or_else(|| self.local_client_session())
+    }
+
+    fn remote_session(&self) -> Option<DesktopClientSession> {
+        self.remote
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|remote| {
+                if remote.connected() {
+                    DesktopClientSession::Connected(remote.holder.clone())
+                } else {
+                    DesktopClientSession::Disconnected
+                }
+            })
+    }
+
+    /// The session of this computer's runtime, whichever runtime is
+    /// selected. The cloud account and same-machine companions live there.
+    #[cfg(any(unix, target_os = "windows"))]
+    pub(crate) fn local_client_session(&self) -> DesktopClientSession {
         if self
             .desktop_client
             .lock()
@@ -378,8 +405,18 @@ impl AttachCompanionState {
         wait: std::time::Duration,
     ) -> DesktopClientSession {
         let deadline = std::time::Instant::now() + wait;
+        if self.remote_active() {
+            loop {
+                match self.desktop_client_session() {
+                    DesktopClientSession::Disconnected if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    session => return session,
+                }
+            }
+        }
         loop {
-            match self.desktop_client_session() {
+            match self.local_client_session() {
                 DesktopClientSession::Disconnected => {
                     let now = std::time::Instant::now();
                     if now >= deadline {
@@ -478,6 +515,7 @@ impl Default for AttachCompanionState {
             connected: Mutex::new(false),
             connected_changed: Condvar::new(),
             chat_events_connected: Mutex::new(false),
+            remote: Mutex::new(None),
         }
     }
 }
@@ -485,10 +523,64 @@ impl Default for AttachCompanionState {
 #[cfg(not(any(unix, target_os = "windows")))]
 impl Default for AttachCompanionState {
     fn default() -> Self {
-        Self {}
+        Self {
+            remote: Mutex::new(None),
+        }
     }
 }
 
 impl AttachCompanionState {
     pub(crate) fn clear_workspace(&self) {}
+
+    /// Whether a paired runtime is selected.
+    pub(crate) fn remote_active(&self) -> bool {
+        self.remote
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
+    /// The selected paired runtime's id, or `None` for this computer.
+    pub(crate) fn remote_runtime_id(&self) -> Option<String> {
+        self.remote
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|remote| remote.runtime_id.clone())
+    }
+
+    /// Opens connections of their own to the selected paired runtime.
+    pub(crate) fn remote_connector(&self) -> Option<crate::runtimes::Connector> {
+        self.remote
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(crate::runtimes::RemoteSupervisor::connector)
+    }
+
+    /// Selects `next` and answers the connections it replaces.
+    pub(crate) fn replace_remote(
+        &self,
+        next: Option<crate::runtimes::RemoteSupervisor>,
+    ) -> Option<crate::runtimes::RemoteSupervisor> {
+        std::mem::replace(
+            &mut *self
+                .remote
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            next,
+        )
+    }
+
+    /// The version this computer's runtime named in its welcome, while the
+    /// app holds a connection to it.
+    #[cfg(any(unix, target_os = "windows"))]
+    pub(crate) fn local_runtime_version(&self) -> Option<String> {
+        self.desktop_client_holder.runtime_version()
+    }
+
+    #[cfg(not(any(unix, target_os = "windows")))]
+    pub(crate) fn local_runtime_version(&self) -> Option<String> {
+        None
+    }
 }

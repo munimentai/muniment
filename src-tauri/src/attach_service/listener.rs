@@ -118,7 +118,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                         move |connected| {
                             observe_chat_event_subscription(&event_status_app, connected);
                         },
-                        move |event| deliver_subscription_event(&event_app, event),
+                        move |event| deliver_local_event(&event_app, event),
                     );
                 })
             },
@@ -128,7 +128,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
 /// Hands one event of the chat-event subscription to the window: a chat event
 /// as `chat-event`, and a provider sign-in step as `local-mode-login`.
 #[cfg(any(unix, target_os = "windows"))]
-fn deliver_subscription_event<R: tauri::Runtime>(
+pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     event: SubscriptionEvent,
 ) {
@@ -137,6 +137,15 @@ fn deliver_subscription_event<R: tauri::Runtime>(
             let _ = app.emit("chat-event", event);
         }
         SubscriptionEvent::ModelsLogin(step) => crate::account_login::deliver_step(app, step),
+    }
+}
+
+/// Hands a local runtime event to the window only while this computer's
+/// runtime is selected. The window shows one runtime's threads at a time.
+#[cfg(any(unix, target_os = "windows"))]
+fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: SubscriptionEvent) {
+    if !app.state::<AttachCompanionState>().remote_active() {
+        deliver_subscription_event(app, event);
     }
 }
 
@@ -187,7 +196,7 @@ pub(crate) fn start_desktop_client<R: tauri::Runtime>(app: &tauri::AppHandle<R>)
                         move |connected| {
                             observe_chat_event_subscription(&event_status_app, connected);
                         },
-                        move |event| deliver_subscription_event(&event_app, event),
+                        move |event| deliver_local_event(&event_app, event),
                     );
                 })
             },

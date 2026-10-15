@@ -5,7 +5,7 @@ pub fn attach_companions(
     state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<AuthorizedCompanion>, ProtocolError> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    return match state.desktop_client_session() {
+    return match state.local_client_session() {
         DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
             Err(ProtocolError::persistence_failed())
         }
@@ -87,7 +87,7 @@ pub fn attach_revoke_companion(
     client_identity: String,
 ) -> Result<(), ProtocolError> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    return match state.desktop_client_session() {
+    return match state.local_client_session() {
         DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => {
             Err(ProtocolError::persistence_failed())
         }

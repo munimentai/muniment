@@ -454,6 +454,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
     #[cfg(target_os = "macos")]
     crate::attach_service::start_desktop_client(app);
+    crate::runtimes::setup(app);
     let start_app = app.clone();
     std::thread::spawn(move || finish_start(&start_app));
     let app = app.clone();

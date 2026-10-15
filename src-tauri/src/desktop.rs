@@ -45,6 +45,7 @@ mod terminal;
 mod web_search;
 mod record;
 mod runtime_owner;
+mod runtimes;
 mod subscription_probe;
 #[cfg(test)]
 mod test_support;
@@ -329,6 +330,15 @@ pub fn run() {
             runtime_owner::runtime_state,
             runtime_owner::runtime_start,
             runtime_owner::runtime_stop,
+            runtimes::runtime_list,
+            runtimes::runtime_refresh,
+            runtimes::runtime_pair_link,
+            runtimes::runtime_pair_ssh,
+            runtimes::runtime_rename,
+            runtimes::runtime_remove,
+            runtimes::runtime_select,
+            runtimes::runtime_update,
+            runtimes::runtime_update_all,
             #[cfg(target_os = "macos")]
             macos_runtime_service::open_login_items,
             #[cfg(target_os = "macos")]
@@ -342,6 +352,8 @@ pub fn run() {
         .expect("error while running muniment")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // A paired runtime's SSH tunnel closes with the app.
+                runtimes::shutdown(app);
                 cef_native::shutdown();
                 #[cfg(feature = "cef-smoke")]
                 if std::env::args().any(|arg| arg == "--cef-smoke") {
@@ -366,6 +378,6 @@ pub fn run() {
                 let _ = app.state::<runtime_owner::RuntimeOwner>().stop_child();
             }
             #[cfg(not(target_os = "macos"))]
-            let _ = (app, event);
+            let _ = event;
         });
 }

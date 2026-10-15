@@ -43,6 +43,8 @@ mod migration;
 mod state;
 
 pub use commands::*;
+#[cfg(any(unix, target_os = "windows"))]
+pub(crate) use listener::deliver_subscription_event;
 #[cfg(unix)]
 pub(crate) use listener::runtime_profile_endpoint;
 #[cfg(target_os = "macos")]

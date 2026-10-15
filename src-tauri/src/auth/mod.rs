@@ -47,7 +47,7 @@ pub(crate) fn fresh_tokens<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<muniment_desktop_integration::auth::TokenSet, String> {
     let status = state.marked_refresh_blocking(|| {
-        runtime_status(app.state::<AttachCompanionState>().desktop_client_session())
+        runtime_status(app.state::<AttachCompanionState>().local_client_session())
     })?;
     status_projection(status)
 }
@@ -56,7 +56,7 @@ pub(crate) async fn fresh_tokens_async<R: tauri::Runtime>(
     state: &AuthState,
     app: &tauri::AppHandle<R>,
 ) -> Result<muniment_desktop_integration::auth::TokenSet, String> {
-    let session = app.state::<AttachCompanionState>().desktop_client_session();
+    let session = app.state::<AttachCompanionState>().local_client_session();
     let status = state
         .marked_refresh(move || runtime_status(session))
         .await
@@ -126,7 +126,7 @@ pub async fn auth_sign_in(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
     let started = native_auth_command_start();
-    let result = sign_in_for_session(&state, attach_state.desktop_client_session(), |client| {
+    let result = sign_in_for_session(&state, attach_state.local_client_session(), |client| {
         let mut authorization_failure = None;
         let response = native_auth_runtime_result(
             || {
@@ -285,7 +285,7 @@ fn runtime_status(session: DesktopClientSession) -> Result<AuthStatus, String> {
 pub async fn auth_status(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<AuthStatus, String> {
-    status_for_session(attach_state.desktop_client_session(), |client| {
+    status_for_session(attach_state.local_client_session(), |client| {
         serde_json::from_value(client.session_status().map_err(desktop_client_error)?)
             .map_err(|_| runtime_response_error())
     })
@@ -325,7 +325,7 @@ async fn auth_entitlement_snapshot_with_state<R: tauri::Runtime>(
     state: tauri::State<'_, AuthState>,
     #[cfg(any(unix, target_os = "windows"))] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<auth::EntitlementSnapshotView, String> {
-    let client = connected_client(attach_state.desktop_client_session())?;
+    let client = connected_client(attach_state.local_client_session())?;
     let response = state
         .marked_refresh(move || client.entitlement_snapshot().map_err(desktop_client_error))
         .await
@@ -359,7 +359,7 @@ async fn auth_devices_with_state<R: tauri::Runtime>(
     #[cfg(any(unix, target_os = "windows"))] attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<Vec<auth::NativeDevice>, String> {
     let _ = app;
-    let client = connected_client(attach_state.desktop_client_session())?;
+    let client = connected_client(attach_state.local_client_session())?;
     let response = state
         .marked_refresh(move || client.list_devices().map_err(desktop_client_error))
         .await
@@ -376,7 +376,7 @@ pub async fn auth_pairing_challenge(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<auth::PairingChallengeView, String> {
     let _ = app;
-    let client = connected_client(attach_state.desktop_client_session())?;
+    let client = connected_client(attach_state.local_client_session())?;
     let response = state
         .marked_refresh(move || {
             client
@@ -397,7 +397,7 @@ pub async fn auth_pairing_status(
     attach_state: tauri::State<'_, AttachCompanionState>,
 ) -> Result<auth::PairingStatusView, String> {
     let _ = app;
-    let client = connected_client(attach_state.desktop_client_session())?;
+    let client = connected_client(attach_state.local_client_session())?;
     let response = state
         .marked_refresh(move || {
             client
@@ -422,7 +422,7 @@ pub async fn auth_pairing_revoke(
     if uuid::Uuid::parse_str(&pair_id).is_err() {
         return Err("The pairing request failed.".into());
     }
-    let client = connected_client(attach_state.desktop_client_session())?;
+    let client = connected_client(attach_state.local_client_session())?;
     let response = state
         .marked_refresh(move || {
             client
@@ -512,7 +512,7 @@ pub async fn auth_sign_out(
 ) -> Result<AuthStatus, String> {
     sign_out_for_session(
         &state,
-        attach_state.desktop_client_session(),
+        attach_state.local_client_session(),
         || attach_state.clear_workspace(),
         |client| {
             let response = client.sign_out().map_err(desktop_client_error)?;
