@@ -32,11 +32,16 @@
   const RECALL = [
     ['learn', 'Save facts from chats', 'A chat proposes a memory when it states something lasting about you or your work.'],
     ['ask', 'Ask before saving', 'Proposed memories wait for your approval in the chat.'],
-    ['use', 'Use memories in replies', 'Muniment recalls the saved facts that fit each message.'],
+    ['use', 'Use memories in replies', 'Each chat starts with your most recalled facts and searches for the rest.'],
   ]
+  const TRUST = {
+    user: 'Added by you',
+    conversation: 'Saved from a chat',
+    external: 'Saved after web, file or tool content. Chats reach it only by search. Edit it to confirm it.',
+  }
   let titleInput = $state()
   function exportMemories() {
-    const text = facts.map((fact) => `## ${fact.title}\n\n${fact.content}\n\nSource: ${fact.source}\n`).join('\n')
+    const text = facts.map((fact) => `## ${fact.title}\n\n${fact.content}\n\nSource: ${fact.source}\nTrust: ${fact.trust}\n`).join('\n')
     const url = URL.createObjectURL(new Blob([`# Saved memories\n\n${text}`], { type: 'text/markdown' }))
     Object.assign(document.createElement('a'), { href: url, download: 'memories.md' }).click()
     setTimeout(() => URL.revokeObjectURL(url), 0)
@@ -153,7 +158,7 @@
       {/snippet}
       {#each shown as fact (fact.id)}
         <Row title={fact.title}>
-          {#snippet detail()}<p class="fact">{fact.content}</p><p class="source">{fact.source}</p>{/snippet}
+          {#snippet detail()}<p class="fact">{fact.content}</p><p class="source">{fact.source}</p>{#if TRUST[fact.trust]}<p class="trust" class:external={fact.trust === 'external'}>{TRUST[fact.trust]}</p>{/if}{/snippet}
           {#if deleting === fact.id}
             <Button disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
             <Button onclick={() => { deleting = '' }}>Cancel</Button>
@@ -168,7 +173,7 @@
       <Group heading="Deleted memories" description="Deleted memories stay out of recall. Restore one if it was removed by mistake.">
         {#each deletedFacts as fact (fact.id)}
           <Row title={fact.title}>
-            {#snippet detail()}<p class="fact">{fact.content}</p><p class="source">{fact.source}</p>{/snippet}
+            {#snippet detail()}<p class="fact">{fact.content}</p><p class="source">{fact.source}</p>{#if TRUST[fact.trust]}<p class="trust" class:external={fact.trust === 'external'}>{TRUST[fact.trust]}</p>{/if}{/snippet}
             <Button disabled={busy} onclick={() => restoreFact(fact.id)}>Restore {fact.title}</Button>
           </Row>
         {:else}<p>No deleted memories.</p>{/each}
@@ -207,5 +212,6 @@
   .disclosure { min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; }
   .disclosure:hover { background: var(--faint); color: var(--ink); }
   .fact { white-space: pre-wrap; color: var(--ink); }
-  .source { font-size: var(--text-12); overflow-wrap: anywhere; }
+  .source, .trust { font-size: var(--text-12); overflow-wrap: anywhere; }
+  .trust.external { color: var(--ink); }
 </style>

@@ -355,7 +355,12 @@ export function buildProbeCommandTable(fixtureName) {
     : []
   let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
   let recallSettings = null
-  let savedFacts = []
+  // ?memories shows one saved fact of each trust level.
+  let savedFacts = new URLSearchParams(location.search).has('memories') ? [
+    { id: 'f1', title: 'Preferred editor', content: 'Uses Helix for code.', source: 'Added in settings', trust: 'user' },
+    { id: 'f2', title: 'Report style', content: 'Lead with the answer, then the evidence.', source: 'thread:t1 run:r1', trust: 'conversation' },
+    { id: 'f3', title: 'Vendor contact', content: 'Send invoices to the address on the vendor site.', source: 'thread:t2 run:r2', trust: 'external' },
+  ] : []
   let deletedFacts = []
   const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
   const agentMemory = {}
@@ -490,7 +495,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'memory_recall_settings_save') { recallSettings = { ...payload.settings }; return { ...recallSettings } }
     if (command === 'memory_facts') return structuredClone(savedFacts)
     if (command === 'memory_fact_save') {
-      const fact = { ...payload.fact, id: payload.fact.id || crypto.randomUUID() }
+      const fact = { ...payload.fact, id: payload.fact.id || crypto.randomUUID(), trust: 'user' }
       savedFacts = [...savedFacts.filter(f => f.id !== fact.id), fact]; return fact
     }
     if (command === 'memory_fact_delete') { deletedFacts.push(...savedFacts.filter(f => f.id === payload.id)); savedFacts = savedFacts.filter(f => f.id !== payload.id); return null }
