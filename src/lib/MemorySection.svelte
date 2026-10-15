@@ -354,7 +354,7 @@
       <span class="quick">
         <Button icon="pencil" iconOnly aria-label="Edit memory" disabled={busy} onclick={() => quickEdit(fact)} />
         <span class="danger"><Button icon="trash-2" iconOnly aria-label="Delete memory" disabled={busy} onclick={() => quickDelete(fact)} /></span>
-        <span class="accent"><Button icon="check" iconOnly aria-label="Confirm memory" disabled={busy} onclick={() => confirmFact(fact)} /></span>
+        <span class="confirm"><Button icon="check" iconOnly aria-label="Confirm memory" disabled={busy} onclick={() => confirmFact(fact)} /></span>
       </span>
     {/if}
     {#if open}
@@ -474,9 +474,15 @@
      the head's right end, outside the head button so a click acts once. */
   .quick-space { width: 80px; height: 20px; }
   .quick { position: absolute; top: 6px; right: 12px; display: flex; gap: 4px; }
-  .quick :global(button) { min-width: 24px; min-height: 24px; padding: 3px; }
+  .quick :global(button) { min-width: 24px; min-height: 24px; padding: 3px; color: var(--ink); }
+  /* Each icon's border takes the icon's own color on hover and focus. */
+  .quick :global(button:hover:not(:disabled)), .quick :global(button:focus-visible) { border-color: currentColor; }
   .quick .danger :global(button) { color: var(--oxide); }
-  .quick .accent :global(button) { color: var(--accent, var(--ink)); }
+  /* Confirm takes the theme's accent, else its signal. Moss keeps its green
+     signal even in the vibrant set, whose accent is not green. */
+  .quick .confirm { --confirm: var(--accent, var(--signal)); }
+  :global(:root[data-theme^="moss-vibrant-"]) .quick .confirm { --confirm: var(--signal); }
+  .quick .confirm :global(button) { color: var(--confirm); }
   .quick > span { display: inline-flex; }
   .fact-detail { display: grid; gap: 10px; padding: 2px 12px 12px 36px; }
   .fact-content { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }

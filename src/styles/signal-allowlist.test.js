@@ -43,6 +43,10 @@ const ALLOWED = {
 
   // The same switch turns an account in a pool on, and turns routing on.
   'src/lib/AllowanceMeter.svelte': { '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.' },
+  'src/lib/MemorySection.svelte': {
+    '.quick .confirm': 'The Confirm check on an unconfirmed memory row',
+    ':global(:root[data-theme^="moss-vibrant-"]) .quick .confirm': 'The Confirm check on an unconfirmed memory row in Moss vibrant',
+  },
 
 
 }
