@@ -14,7 +14,7 @@ after a failed exit. `RestartSec=5s` spaces those restarts.
 `StartLimitIntervalSec=300s` and `StartLimitBurst=5` bound them. The manager
 allows five starts in five minutes. A crash loop that restarts every five
 seconds reaches that limit in about twenty seconds. The unit then stays failed,
-which is the needs-attention state ADR 0012 asks for.
+which is the needs-attention state.
 
 Clear a failed unit with
 `systemctl --user reset-failed muniment-runtime.service`.

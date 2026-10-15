@@ -41,16 +41,15 @@ runtime access.
 | Surface | Runtime execution | Permission gates | Receipts | Local capabilities | State in this repository |
 | --- | --- | --- | --- | --- | --- |
 | Desktop | Starts and steers runs | Answers locally | Shows governed run records | May invoke granted runtime capabilities | Built |
-| CLI | Starts and steers runs through attach | Answers in the terminal | Prints run receipts | May invoke granted runtime capabilities | **Deferred indefinitely under the 2026-07-29 owner ruling ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
-| Editor extension | Starts and steers runs through attach | Answers in the editor | Shows run receipts | May invoke granted runtime capabilities | **Retired under the 2026-07-29 owner ruling ([ADR 0022](docs/decisions/0022-acp-agent-interop.md))** |
-| ACP adapter | The Linux desktop package installs the adapter at `/usr/lib/muniment/muniment-acp`. Installation grants no authority. An editor must spawn the binary, and the desktop must approve pairing before authority exists. Pairs over `muniment.attach/1`. Persists its identity and credential under `$XDG_CONFIG_HOME/muniment/`. Persists versioned session records under `$XDG_CONFIG_HOME/muniment/acp-sessions/` as zero-authority locators. Treats the request `cwd` only as a local execution root that the attach owner canonicalizes and records under the signed workspace and client identity. The `cwd` grants no scope. Starts runs. Streams released assistant text. Forwards each tool effect's ID, released display name, and outcome from the authorized run stream. These fields are runtime-owned journal content under the [ADR 0009 tool-effect disclosure amendment](docs/decisions/0009-companion-attach-protocol.md#amendment--2026-08-03-tool-effect-disclosure). The editor performs no Muniment effect. Cancels the current run for a matching `session/cancel`. Provides record-checked `session/load` through `thread.open` replay and advertises `loadSession: true`. Each load re-runs the authorized attach checks. A copied or edited record cannot select a subject, expand workspace scope, open an unauthorized thread, or revive a revoked capability. | Forwards a pending gate to the editor as `session/request_permission` and submits the mapped answer over attach. An editor answer grants nothing by itself. The runtime validates the matching gate and current authority. | Shows runtime-owned receipts | No claimed local filesystem or terminal capability | Built ([ADR 0022](docs/decisions/0022-acp-agent-interop.md)) |
+| CLI | Starts and steers runs through attach | Answers in the terminal | Prints run receipts | May invoke granted runtime capabilities | **Deferred indefinitely** |
+| Editor extension | Starts and steers runs through attach | Answers in the editor | Shows run receipts | May invoke granted runtime capabilities | **Retired** |
+| ACP adapter | The Linux desktop package installs the adapter at `/usr/lib/muniment/muniment-acp`. Installation grants no authority. An editor must spawn the binary, and the desktop must approve pairing before authority exists. Pairs over `muniment.attach/1`. Persists its identity and credential under `$XDG_CONFIG_HOME/muniment/`. Persists versioned session records under `$XDG_CONFIG_HOME/muniment/acp-sessions/` as zero-authority locators. Treats the request `cwd` only as a local execution root that the attach owner canonicalizes and records under the signed workspace and client identity. The `cwd` grants no scope. Starts runs. Streams released assistant text. Forwards each tool effect's ID, released display name, and outcome from the authorized run stream. These fields are runtime-owned journal content. The editor performs no Muniment effect. Cancels the current run for a matching `session/cancel`. Provides record-checked `session/load` through `thread.open` replay and advertises `loadSession: true`. Each load re-runs the authorized attach checks. A copied or edited record cannot select a subject, expand workspace scope, open an unauthorized thread, or revive a revoked capability. | Forwards a pending gate to the editor as `session/request_permission` and submits the mapped answer over attach. An editor answer grants nothing by itself. The runtime validates the matching gate and current authority. | Shows runtime-owned receipts | No claimed local filesystem or terminal capability | Built |
 | Mobile companion | No local runtime | Planned remote answers for live desktop runs | Planned display | None | **Not built** |
 | Agent access | Planned server-side headless access | Not defined here | Server-owned, when designed | No local surface claim | **Not built** |
 
 The desktop uses the governed runtime boundary. Mobile is a companion, not a
-local execution surface. The 2026-07-29 owner ruling retires the editor
-extension and defers the CLI indefinitely.
-[ADR 0022](docs/decisions/0022-acp-agent-interop.md) records both dispositions.
+local execution surface. The editor extension is retired, and the CLI is
+deferred indefinitely.
 
 ## Loopback identities
 
@@ -58,36 +57,32 @@ No loopback assigns authority to a magic username.
 
 | Loopback | Identity trusted | Why a client cannot mint it |
 | --- | --- | --- |
-| Attach socket | Linux checks `SO_PEERCRED` against the runtime effective UID. The socket must have that owner and mode `0600`. Pairing then binds approval, a client credential, and a capability to the connection and workspace scopes. The credential store records the credential, claimed kind, claimed version, and approval time. The two claims carry no authority. Under the [ADR 0009 workspace-namespace amendment](docs/decisions/0009-companion-attach-protocol.md#amendment--2026-08-04-attach-workspace-namespace), the signed `grant.workspace` value is the only workspace authority for `thread.list`, `thread.open`, `thread.create`, and `run.start`. A companion-supplied directory is only a local execution root. The attach owner canonicalizes and records it under the signed workspace and client identity. The directory grants no scope. With no current cloud grant, approval and all four operations fail closed. Under the [ADR 0009 revocation amendment](docs/decisions/0009-companion-attach-protocol.md#amendment--2026-08-04-companion-revocation), revocation removes the persisted client credential before it invalidates the live connection capabilities. It emits one `capability.revoked` event per affected connection. The event discloses no companion identity, credential, or workspace value. A revoked companion regains authority only through a fresh visible approval. | A client-chosen ID grants nothing. The runtime creates the random challenge, credential, and capability. The desktop supplies the approval. Other OS users fail the peer and filesystem checks. |
+| Attach socket | Linux checks `SO_PEERCRED` against the runtime effective UID. The socket must have that owner and mode `0600`. Pairing then binds approval, a client credential, and a capability to the connection and workspace scopes. The credential store records the credential, claimed kind, claimed version, and approval time. The two claims carry no authority. The signed `grant.workspace` value is the only workspace authority for `thread.list`, `thread.open`, `thread.create`, and `run.start`. A companion-supplied directory is only a local execution root. The attach owner canonicalizes and records it under the signed workspace and client identity. The directory grants no scope. With no current cloud grant, approval and all four operations fail closed. Revocation removes the persisted client credential before it invalidates the live connection capabilities. It emits one `capability.revoked` event per affected connection. The event discloses no companion identity, credential, or workspace value. A revoked companion regains authority only through a fresh visible approval. | A client-chosen ID grants nothing. The runtime creates the random challenge, credential, and capability. The desktop supplies the approval. Other OS users fail the peer and filesystem checks. |
 | Sign-in redirect catcher | The catcher trusts a callback on an ephemeral `127.0.0.1` port only when its `state` matches the current sign-in attempt. | A callback cannot choose the expected random state. A wrong state ends the attempt. The listener accepts no LAN address or durable account name. |
 | Browser-control relay | The relay trusts a single-use random token plus the browser process and canonical executable identity derived through OS process and socket APIs. | The client cannot assert its executable path. The OS supplies the process identity, and the desktop supplies the expected path and token. Missing or contradictory evidence fails closed. |
-| ADR 0012 runtime service | The accepted design trusts one per-user service managed by the OS and the same attach peer checks. The desktop serves no attach endpoint, so it admits no `migration.control` session. The runtime routes a connection from the installed desktop payload by its first hello. A `desktop-client` hello takes a connection-bound desktop client session. The peer check is its only admission authority. Neither visible approval nor a stored companion credential applies. The runtime admits this session while it holds no signed workspace. Its capability carries no workspace scope until the first resolved run grant records the signed workspace. The session then carries owner authority over the signed `grant.workspace` value, including its workspace, thread, run, permission, and subscription authority. It may send every companion operation that grant authorizes. It may also send `thread.rename`, `thread.delete`, `session.status`, `entitlement.snapshot`, `device.list`, `session.sign_out`, `companion.list`, `companion.revoke`, `thread.summaries`, `thread.history`, `run.chat_events`, and `thread.select`. The event subscription uses a second desktop client connection and carries unredacted `ChatEvent` values. It delivers every run in the workspace the runtime recorded, including a run another client started. The broadcast reads that recorded workspace at delivery and sends nothing while the runtime holds none. The two thread operations and the two write operations in the second tranche require an idempotency key. The four read operations in the second tranche, both third-tranche operations, and `run.chat_events` require none. Companion sessions receive `unauthorized` for desktop-only operations. The desktop client session still receives `unauthorized` for `migration.control` and `approval.present`. Browser sign-in and `home.ensure` remain outside the first two tranches. The run surface, session-thread tracker commands, and `home.ensure` remain outside the third tranche. The five run commands remain outside the fourth tranche. It carries neither migration control nor approval presentation. A `desktop` hello takes the presenter session. A `desktop-handoff-probe` hello keeps the readiness answer. Every other connection takes the companion route. The routing check consumes no byte because the admitted path reads the first hello. An unreadable, oversized, or late first frame takes the companion route and still requires visible pairing approval. The runtime admits at most one connection-bound presenter session. That session carries only `approval.present` over `muniment.attach/1` and ends with the connection. The desktop starts its presenter supervisor at launch. The supervisor reconnects until desktop shutdown stops it. A dropped connection cancels no earlier approval. The presenting desktop shows the visible pairing prompt. The desktop holds no listener or instance lock, so it prepares no handoff. The landed ADR 0009 per-profile instance lock prevents another listener from binding the profile endpoint. The shipped `muniment-runtime` binary takes the instance lock and waits for a termination signal. Its dormant service entries open the journal and CAS and drive Pi only when a caller invokes them. No production path reaches them before the cutover. | An unresolved or mismatched peer fails closed. An approved client credential and a claimed kind each grant no migration control authority. A missing presenter, disconnect, denial, or expired decision fails approval closed. The [2026-08-22 Windows attach peer identity amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-22-windows-attach-peer-identity) defines the Windows peer check. Under the [ADR 0012 Windows route amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-09-03-windows-attach-route-refinement-and-handling), a verified Windows desktop-image peer takes the route selected by its first Hello. A `desktop` kind takes the approval-presenter route, a `desktop-client` kind takes the desktop-client route, and every other kind takes the companion route. The claim selects a route only after the desktop-image check and grants no authority. The presenter route serves `approval.present`. The companion route serves pairing through the live approval waiter and shared connection registry. The same-user check does not defend against a compromised process running as the current OS user. The 2026-08-20 macOS amendment defines that platform's peer identity. The [ADR 0012 passive chat-event delivery amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-18-passive-chat-event-delivery) records the workspace scope of that subscription. The [ADR 0012 fourth desktop client operation tranche amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-15-fourth-desktop-client-operation-tranche) records the event subscription. The [ADR 0012 third desktop client operation tranche amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-15-third-desktop-client-operation-tranche) records the third tranche. The [ADR 0012 second desktop client operation tranche amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-14-second-desktop-client-operation-tranche) records the second tranche. The [ADR 0012 desktop client operation surface amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-14-desktop-client-operation-surface) records the first tranche. The [ADR 0012 desktop client lifecycle amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-14-desktop-client-session-lifecycle) records when the desktop connects. The [ADR 0012 desktop client session amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-14-desktop-client-session-admission) records desktop client admission and authority. The [ADR 0012 presenter lifecycle amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-14-desktop-approval-presenter-lifecycle) records when the desktop presents. The [ADR 0012 routing amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-13-runtime-attach-connection-routing) records connection routing. The [ADR 0012 approval presentation amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-13-approval-presentation-session) records presenter admission and authority. The [ADR 0012 migration session amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-10-migration-control-session-admission) records admission. The [ADR 0012 migration control authority amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-05-migration-control-request-authority) records request authority. The [ADR 0012 extraction amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-04-runtime-service-extraction-sequence) records the staged handoff. |
-| Editor-spawned ACP adapter ([ADR 0022](docs/decisions/0022-acp-agent-interop.md)) | ADR 0009 peer checks establish the same OS user. Attach approval binds the adapter identity, connection nonces, signed-in profile, and workspace scopes to a revocable capability. | The claimed process name, ACP session ID, and `cwd` grant no authority. Missing, contradictory, or stale identity evidence fails closed. |
+| Runtime service | The design trusts one per-user service managed by the OS and the same attach peer checks. The desktop serves no attach endpoint, so it admits no `migration.control` session. The runtime routes a connection from the installed desktop payload by its first hello. A `desktop-client` hello takes a connection-bound desktop client session. The peer check is its only admission authority. Neither visible approval nor a stored companion credential applies. The runtime admits this session while it holds no signed workspace. Its capability carries no workspace scope until the first resolved run grant records the signed workspace. The session then carries owner authority over the signed `grant.workspace` value, including its workspace, thread, run, permission, and subscription authority. It may send every companion operation that grant authorizes. It may also send `thread.rename`, `thread.delete`, `session.status`, `entitlement.snapshot`, `device.list`, `session.sign_out`, `companion.list`, `companion.revoke`, `thread.summaries`, `thread.history`, `run.chat_events`, and `thread.select`. The event subscription uses a second desktop client connection and carries unredacted `ChatEvent` values. It delivers every run in the workspace the runtime recorded, including a run another client started. The broadcast reads that recorded workspace at delivery and sends nothing while the runtime holds none. The two thread operations and the two write operations in the second tranche require an idempotency key. The four read operations in the second tranche, both third-tranche operations, and `run.chat_events` require none. Companion sessions receive `unauthorized` for desktop-only operations. The desktop client session still receives `unauthorized` for `migration.control` and `approval.present`. Browser sign-in and `home.ensure` remain outside the first two tranches. The run surface, session-thread tracker commands, and `home.ensure` remain outside the third tranche. The five run commands remain outside the fourth tranche. It carries neither migration control nor approval presentation. A `desktop` hello takes the presenter session. A `desktop-handoff-probe` hello keeps the readiness answer. Every other connection takes the companion route. The routing check consumes no byte because the admitted path reads the first hello. An unreadable, oversized, or late first frame takes the companion route and still requires visible pairing approval. The runtime admits at most one connection-bound presenter session. That session carries only `approval.present` over `muniment.attach/1` and ends with the connection. The desktop starts its presenter supervisor at launch. The supervisor reconnects until desktop shutdown stops it. A dropped connection cancels no earlier approval. The presenting desktop shows the visible pairing prompt. The desktop holds no listener or instance lock, so it prepares no handoff. The per-profile instance lock prevents another listener from binding the profile endpoint. The shipped `muniment-runtime` binary takes the instance lock and waits for a termination signal. Its dormant service entries open the journal and CAS and drive Pi only when a caller invokes them. No production path reaches them before the cutover. | An unresolved or mismatched peer fails closed. An approved client credential and a claimed kind each grant no migration control authority. A missing presenter, disconnect, denial, or expired decision fails approval closed. The Windows section below defines the Windows peer check. A verified Windows desktop-image peer takes the route selected by its first Hello. A `desktop` kind takes the approval-presenter route, a `desktop-client` kind takes the desktop-client route, and every other kind takes the companion route. The claim selects a route only after the desktop-image check and grants no authority. The presenter route serves `approval.present`. The companion route serves pairing through the live approval waiter and shared connection registry. The same-user check does not defend against a compromised process running as the current OS user. The macOS section below defines that platform's peer identity. |
+| Editor-spawned ACP adapter | The attach peer checks establish the same OS user. Attach approval binds the adapter identity, connection nonces, signed-in profile, and workspace scopes to a revocable capability. | The claimed process name, ACP session ID, and `cwd` grant no authority. Missing, contradictory, or stale identity evidence fails closed. |
 
-The [ADR 0012 fifth desktop client operation tranche amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-16-fifth-desktop-client-operation-tranche)
-adds `run.submit`, `run.resume`, `run.steer`, `run.follow_up`, and
-`run.permission_answer` to the desktop client session. It reuses `run.cancel`.
+The desktop client session also carries `run.submit`, `run.resume`, `run.steer`, `run.follow_up`, and
+`run.permission_answer`. It reuses `run.cancel`.
 The peer check and signed workspace grant remain the authority boundaries.
 Companion sessions receive `unauthorized` for the five desktop-only operations.
 
-The [ADR 0012 sixth desktop client operation tranche amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-16-sixth-desktop-client-operation-tranche)
-adds the desktop-only `thread.select` operation. It makes the desktop tracker
+The desktop client session also carries the desktop-only `thread.select` operation. It makes the desktop tracker
 the only thread selection authority for desktop prompts. A null `thread_id`
 starts a fresh thread on both service halves. The runtime validates ownership
 through `subject_owns_first_run`. A companion session receives `unauthorized`.
 The operation appends nothing, so it requires no idempotency key.
 The desktop converts all five run commands in one later slice.
 
-The [ADR 0012 installed-payload refresh amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-17-installed-payload-refresh)
-makes the runtime the only process that may request its upgrade exit. The
+The installed-payload refresh makes the runtime the only process that may request its upgrade exit. The
 runtime drains new quiesce-blocking work, then waits for `evaluate_quiesce`.
 Its distinct failure exit triggers the shipped `Restart=on-failure` policy.
 An explicit service stop leaves the service stopped. The owner-only endpoint,
 process signaling rules, and per-user service manager prevent another OS user
 from triggering the refresh. Package replacement grants no runtime authority.
 
-The [ADR 0012 passive chat-event delivery amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-18-passive-chat-event-delivery)
-scopes the chat-event broadcast by the workspace the runtime recorded. A
+Passive chat-event delivery scopes the chat-event broadcast by the workspace the runtime recorded. A
 subscriber receives every run in that workspace, including a run another
 client started. The broadcast reads the recorded workspace at delivery, so a
 connection admitted before the first run grant needs no resubscribe.
@@ -132,8 +127,7 @@ instance lock.
 The runtime resolves the expected desktop executable from the installed
 runtime payload layout at bind time, and a failed resolution fails the bind.
 The accept path runs the `getpeereid` check above before it names a route.
-Under the [ADR 0012 macOS route amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-30-macos-attach-route-refinement-and-handling),
-the runtime then reads the kernel-supplied peer process ID through
+The runtime then reads the kernel-supplied peer process ID through
 `LOCAL_PEERPID` and reads that process image path through `proc_pidpath`. A
 peer whose absolute path differs from the installed desktop payload takes the
 companion route without a frame read. A failed process ID or image path read
@@ -153,9 +147,9 @@ peer. It grants no other authority.
 
 The runtime opens one `RuntimeAttachState` per activation and composes one
 `DesktopAttachService` for each connection. The approval-presenter route runs
-the ADR 0012 approval-presentation session. The desktop-client route writes
-`reconnect_welcome`, then `DesktopClientAuthorizedGrant`, and serves the ADR
-0012 desktop client session. That session carries no workspace scope until the
+the approval-presentation session. The desktop-client route writes
+`reconnect_welcome`, then `DesktopClientAuthorizedGrant`, and serves the
+desktop client session. That session carries no workspace scope until the
 first resolved run grant records the signed workspace.
 
 The companion route runs the platform-neutral pairing and authorization
@@ -175,8 +169,7 @@ check. It does not prove binary integrity or defend against compromise under
 the same account. A claimed Hello kind carries no authority beyond route
 selection for a verified desktop-image peer.
 
-On Windows, the [ADR 0012 Windows activation amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-08-21-windows-activation-registration-and-startup)
-registers one per-user Scheduled Task named `\Muniment\Runtime-{user-sid}`.
+On Windows, runtime activation registers one per-user Scheduled Task named `\Muniment\Runtime-{user-sid}`.
 The task principal uses the user's canonical SID, an interactive token, and
 least privilege. Its action runs the signed payload directly, with no arguments
 or shell command. It uses either
@@ -198,16 +191,15 @@ path differs from the installed desktop executable takes the companion route.
 A failed process ID, image path, or expected desktop path read also takes that
 route.
 
-Under the [ADR 0012 Windows route amendment](docs/decisions/0012-user-level-runtime-service.md#amendment--2026-09-03-windows-attach-route-refinement-and-handling),
-the runtime refines the route from the verified desktop-image peer's first
+The runtime refines the route from the verified desktop-image peer's first
 Hello frame. A `desktop` kind takes the approval-presenter route. A
 `desktop-client` kind takes the desktop-client route. Every other kind takes
 the companion route. The claimed kind selects a route only for that verified
 peer. It grants no other authority.
 
-The approval-presenter route runs the ADR 0012 approval-presentation session.
+The approval-presenter route runs the approval-presentation session.
 The desktop-client route writes `reconnect_welcome`, then
-`DesktopClientAuthorizedGrant`, and serves the ADR 0012 desktop client session.
+`DesktopClientAuthorizedGrant`, and serves the desktop client session.
 The companion route runs the platform-neutral pairing and authorization
 exchange with the live approval waiter and shared connection registry. A new
 pairing writes a `welcome` challenge and requires visible approval. A valid
@@ -234,8 +226,8 @@ defines a model-context boundary.
 ## Known gaps
 
 - **Runtime service extraction remains open.** The desktop still owns the
-  runtime. [ADR 0012](docs/decisions/0012-user-level-runtime-service.md)
-  defines the target boundary.
+  runtime. The target boundary is a user-level runtime
+  service.
 - **A same-user process can take the desktop-client and presenter routes on
   Linux and Windows.** On Linux, the runtime reads the peer executable and start
   time at accept, before any frame, and again when the hello arrives, and
@@ -246,11 +238,9 @@ defines a model-context boundary.
   the current OS user, so these routes carry no defense against one.
 - **Default permission gates are not isolation.** Windows has no claimed
   native full-auto sandbox.
-  [ADR 0009](docs/decisions/0009-companion-attach-protocol.md) records
-  same-user compromise as a deferred risk.
-- **Mobile has no implementation here.**
-  [ADR 0007](docs/decisions/0007-mobile-companion-repo-strategy.md) assigns it
+  Same-user compromise is a deferred risk.
+- **Mobile has no implementation here.** It belongs
   to a separate repository and delivery lane.
 - **Agent access has no implementation here.**
-  [ADR 0009](docs/decisions/0009-companion-attach-protocol.md) assigns
-  automation to a server-side layer.
+  Automation belongs to a
+  server-side layer.

@@ -2220,7 +2220,7 @@
     openSettings('providers', modelChip)
   }
 
-  // ADR 0012: the runtime rejects a new run while its upgrade is pending. The
+  // The runtime rejects a new run while its upgrade is pending. The
   // shell holds send, resume and queue until a compatible welcome clears the flag.
   function runtimeUpgradePending() {
     return desktopClientStatus?.runtime_upgrade_pending === true

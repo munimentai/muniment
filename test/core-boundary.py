@@ -16,14 +16,14 @@ TAG = "git+https://github.com/munimentai/muniment-core?tag=v1.2.3#" + "0" * 40
 
 class CoreBoundaryTests(unittest.TestCase):
     def test_inventory_reads_both_tables(self):
-        tables = boundary.inventory(boundary.ADR.read_text())
+        tables = boundary.inventory(boundary.BOUNDARY.read_text())
         self.assertIn("muniment-core", tables["Shared"])
         self.assertIn("muniment-router", tables["Shared"])
         self.assertIn("muniment-runtime", tables["Desktop"])
         self.assertIn("muniment-desktop-integration", tables["Desktop"])
 
     def test_inventory_rejects_empty_duplicate_and_invalid_rows(self):
-        text = boundary.ADR.read_text()
+        text = boundary.BOUNDARY.read_text()
         for invalid in (
             "", text.replace("## Desktop", "## Other"),
             text.replace("## Desktop", "| crate | muniment-core | It duplicates a crate. |\n\n## Desktop"),
@@ -36,7 +36,7 @@ class CoreBoundaryTests(unittest.TestCase):
                 boundary.inventory(invalid)
 
     def test_workspace_must_match_the_desktop_table(self):
-        tables = boundary.inventory(boundary.ADR.read_text())
+        tables = boundary.inventory(boundary.BOUNDARY.read_text())
         boundary.check_workspace(tables, set(tables["Desktop"]))
         for members in (tables["Desktop"] | {"muniment-core"}, tables["Desktop"] - {"muniment-cli"}):
             with self.assertRaises(ValueError):

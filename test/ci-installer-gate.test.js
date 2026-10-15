@@ -80,7 +80,7 @@ describe('PR gate shape', () => {
     'SPEC.md',
     'ROADMAP.md',
     'DESIGN.md',
-    'docs/decisions/0030-public-core-boundary.md',
+    'docs/core-boundary.md',
   ])('skips the installer matrix for a change to %s alone', (file) => {
     expect(classify([file])).toMatchObject({ installer: 'false', desktop: 'false', docs_only: 'true' })
   })

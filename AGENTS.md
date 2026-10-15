@@ -49,8 +49,10 @@ CI runs on Forgejo Actions at `factory/muniment`. The nightly and stable promoti
 ## Steering files
 
 This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`,
-`ROADMAP.md`, `DESIGN.md`, and `docs/decisions/`. They are instruction, not
-record: present tense, stating what is. No dates, ticket ids, commit shas, or
+`ROADMAP.md`, and `DESIGN.md`. `docs/` holds technical documentation about the
+app, such as `docs/core-boundary.md`. Decision records are not kept in this
+repository. Steering files and `docs/` describe the app, not product or business
+decisions. They are instruction, not record: present tense, stating what is. No dates, ticket ids, commit shas, or
 pull request numbers. No history phrases: "decided", "superseded", "previously", "no longer".
 No ledger file under any name: no open-items,
 build-history, decision-log, handoff, journal, notes, or todo file. A finished

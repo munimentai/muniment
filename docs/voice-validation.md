@@ -3,7 +3,7 @@
 The validation runner decodes a versioned, local WAV corpus with the production
 offline recognizer and writes a comparable JSON report. It performs no network
 requests and never downloads a model or audio. Build and run the same release
-binary on every ADR 0004 target:
+binary on every target machine:
 
 ```sh
 cargo run --release --manifest-path src-tauri/Cargo.toml -p muniment-core \
@@ -15,7 +15,7 @@ cargo run --release --manifest-path src-tauri/Cargo.toml -p muniment-core \
 ```
 
 `--model-root` is the explicit model lifecycle root containing the verified
-`current` pointer and `revisions/` directory defined by ADR 0005. Construction
+`current` pointer and `revisions/` directory of the ASR model lifecycle. Construction
 uses `OfflineParakeetRecognizer::from_verified_current`, so missing, modified,
 or unpinned model files fail before decoding. Corpus paths are relative to the
 manifest, must already exist, and cannot be absolute.
@@ -25,7 +25,7 @@ manifest, must already exist, and cannot be absolute.
 Audio must be non-empty mono 16 kHz WAV containing 16-bit PCM or normalized
 32-bit float samples. The declared duration must match the WAV duration to
 within one sample (with a 1 ms minimum tolerance).
-The manifest must include both a clean and noisy case at each ADR-required
+The manifest must include both a clean and noisy case at each required
 duration (5, 15, and 60 seconds). A declared duration within 0.25 seconds of a
 required duration fills that matrix slot; the stricter WAV-duration check still
 ensures the declaration describes the actual audio.
@@ -65,7 +65,7 @@ platforms where the runner cannot measure it.
 
 ## 100-utterance endurance gate
 
-On each ADR 0004 target machine, run the same release binary and corpus with
+On each target machine, run the same release binary and corpus with
 the bounded endurance option:
 
 ```sh
@@ -83,7 +83,7 @@ decodes by cycling through the manifest in order. The report's `decode_run`
 object must show both `requested_decode_count` and `completed_decode_count` as
 100. Its `start_process_resident_memory_bytes` and
 `end_process_resident_memory_bytes` are current resident-memory observations
-taken immediately before and after those decodes; compare them for ADR 0004's
+taken immediately before and after those decodes; compare them for the
 no-unbounded-growth gate. The aggregate `process_peak_rss_bytes` is the process
 lifetime high-water mark used for the separate 2 GiB peak-RSS gate. Unsupported
 memory measurements are JSON `null`. The report retains at most one case object

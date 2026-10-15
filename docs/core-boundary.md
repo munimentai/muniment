@@ -1,17 +1,13 @@
-# 0030 — Declare the public core boundary
-
-- Status: accepted
-
-## Decision
+# Core boundary
 
 The shared core lives in `munimentai/muniment-core` under FSL, with its tests.
-The desktop and the AI software factory build on it.
 The desktop depends on the shared crates through git dependencies pinned to one release tag.
 No desktop workspace crate vendors a shared crate or patches its source.
 
 The desktop-only modules `auth`, `chat_grant` and `browser_control` live in the `muniment-desktop-integration` workspace crate.
 The shared core never names them.
 The desktop supplies their behavior through the core's port-owned values and traits.
+`scripts/check-core-boundary.sh` reads the Shared and Desktop tables in this file.
 
 ## Shared
 
@@ -58,5 +54,5 @@ It requires every shared crate to resolve from the `muniment-core` git repositor
 It requires the three desktop-only modules in `muniment-desktop-integration`.
 It checks every desktop crate except the shell with Cargo's all-target dependency tree, including build and test dependencies.
 It rejects the shell and Tauri packages in those trees.
-CI runs this check in the smoke job, including pushes to `main` and changes to this record.
+CI runs this check in the smoke job, including pushes to `main` and changes to this file.
 `muniment-core` runs its own boundary check, which rejects any shared source that names a desktop-only module.

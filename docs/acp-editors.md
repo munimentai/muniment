@@ -2,8 +2,7 @@
 
 The Linux desktop package ships `muniment-acp` at
 `/usr/lib/muniment/muniment-acp`. Muniment does not ship the adapter on Windows
-or macOS today. See [ADR 0022's distribution amendment](decisions/0022-acp-agent-interop.md#amendment--2026-08-03-adapter-distribution-and-editor-configuration)
-for this contract.
+or macOS today.
 
 Before you connect an editor, start the Muniment desktop and sign in. The first
 connection shows one approval prompt in the desktop. The adapter stores its

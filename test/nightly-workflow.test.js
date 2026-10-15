@@ -140,8 +140,8 @@ describe('nightly Linux E2E workflow', () => {
   })
 
   // desktop-ci resolves --ref with init+fetch-by-ref, so it takes a branch or a
-  // commit; ADR 0013 requires the installed lanes to pin the exact SHA their
-  // artifacts were built from rather than whatever main points at by then.
+  // commit; the installed lanes pin the exact SHA their artifacts were built
+  // from rather than whatever main points at by then.
   it('pins every installed-E2E lane to the source SHA at --ref', () => {
     expect(workflow.match(/--ref '\$SOURCE_SHA'/g)).toHaveLength(3)
     for (const lane of ['linux', 'windows', 'macos']) {

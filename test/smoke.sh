@@ -74,35 +74,15 @@ for lane in build linux-e2e windows-e2e macos-e2e; do
     END { exit !found }
   ' .github/workflows/nightly.yml
 done
-# installed-nightly E2E architecture remains accepted and platform-bounded
-e2e_adr=docs/decisions/0013-desktop-e2e-harness.md
-test -f "$e2e_adr"
-grep -Fq -- '- Status: accepted' "$e2e_adr"
-grep -Fq '@wdio/tauri-service' "$e2e_adr"
-grep -Fq 'provider on Linux, Windows, and macOS' "$e2e_adr"
-grep -Fq "driverProvider: 'embedded'" "$e2e_adr"
-grep -Fq 'tauri-plugin-wdio-webdriver' "$e2e_adr"
-grep -Fq 'The three-lane contract is:' "$e2e_adr"
-grep -Fq 'pinned `.app` smoke and Proxmox screendump through `macos.sh`' "$e2e_adr"
-grep -Fq 'It then runs WDIO chat, real sign-in, onboarding, and cleanup through `macos-wdio.sh`.' "$e2e_adr"
-grep -Fq 'The macOS smoke and WDIO phases share the pinned source, not the same artifact.' "$e2e_adr"
-grep -Fq 'builds a separate binary with `--no-bundle --features e2e-webdriver`' "$e2e_adr"
-grep -Fq 'Later phases still run after a spec failure, and any failure fails the lane.' "$e2e_adr"
+# installed-nightly E2E docs keep macOS WDIO and automated sign-in
 test -z "$(grep -nE 'smoke-only|macOS does not run WDIO|Do not automate sign-in' \
-  README.md "$e2e_adr" test/e2e/EVIDENCE.md)"
-grep -Fq 'test/e2e/specs/' "$e2e_adr"
-grep -Fq 'ci_gate_wait_minutes' "$e2e_adr"
-grep -Fq 'non-human E2E identity' "$e2e_adr"
-grep -Fq 'desktop E2E runner contract' "$e2e_adr"
-grep -Fq '0013-desktop-e2e-harness.md' README.md
+  README.md test/e2e/EVIDENCE.md)"
 # Optional classifier catalog entries may name any supported model.
 # The artifact lifecycle must not restore resident-model startup or voice code.
 test -z "$(grep -RilE \
   --exclude='*.test.js' \
   'llama-server|RESIDENT_MODEL|required_model_acquisition_status|dictation_polish|dictation_transform|onboarding_triage' \
   src src-tauri/src src-tauri/integration/src "$core_root/crates/core/src" "$core_root/crates/models/src" "$core_root/crates/router/src" test/probe 2>/dev/null)"
-grep -Fq -- '- Status: superseded by the 2026-07-29 cloud ingress ruling' \
-  docs/decisions/0017-resident-model-artifact-pin.md
 grep -Fq 'The desktop sends no classification metadata.' SPEC.md
 # SPEC law 13 permits the bundled local classifier but keeps its result off the
 # cloud-bound wire. Reserved classification fields remain forbidden in source.
@@ -116,21 +96,11 @@ grep -Fq 'fn the_grant_request_carries_no_client_classification' \
   src-tauri/integration/src/chat_grant.rs
 grep -Fq 'fn the_receipt_request_carries_only_the_run_id' \
   src-tauri/integration/src/chat_grant.rs
-classifier_adr=docs/decisions/0028-bundled-router-classifier.md
 classifier_module="$core_root/crates/core/src/router_classifier.rs"
-test -f "$classifier_adr"
 test -f "$classifier_module"
-grep -Fq 'This artifact has no download, no lifecycle pointer, and no user opt-in.' \
-  "$classifier_adr"
 for classifier_class in route.cloud route.local route.proxy; do
-  grep -Fq "\`$classifier_class\`" "$classifier_adr"
   grep -Fq "\"$classifier_class\"" "$classifier_module"
 done
-# Release updates bind the announced version to the signed artifact.
-update_adr=docs/decisions/0029-update-path.md
-test -f "$update_adr"
-grep -Fq 'Each signature binds the artifact to the announced version.' \
-  "$update_adr"
 # SPEC and ROADMAP name that one mode identically, and neither names it a chat.
 grep -Fq 'the thread surface' SPEC.md
 grep -Fq 'the thread surface' ROADMAP.md
@@ -139,19 +109,18 @@ test -z "$(grep -rilw 'chat mode' SPEC.md ROADMAP.md)"
 grep -Fq 'desktop_thread_chat' docs/desktop-single-mode.md
 grep -Fq 'Ratifying MUNICLOUD ticket' docs/desktop-single-mode.md
 grep -Fq 'docs/desktop-single-mode.md' SPEC.md
-# no current document may name the retired Gemma alias; ADR 0003 preserves the
-# historical decision it records. No document may call the resident model Gemma.
+# No document may name the retired Gemma alias or call the resident model Gemma.
 # (`! grep` would be exempt from errexit, so assert on empty output instead)
-test -z "$(grep -rl --exclude='0003-resident-gemma-model.md' 'muniment-resident-gemma' docs/)"
+test -z "$(grep -rl 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
 # The public core boundary names both sets and runs in the smoke job.
-boundary_adr=docs/decisions/0030-public-core-boundary.md
-test -f "$boundary_adr"
-grep -Fxq '## Shared' "$boundary_adr"
-grep -Fxq '## Desktop' "$boundary_adr"
-grep -Fq '| crate | muniment-core |' "$boundary_adr"
-grep -Fq '| crate | muniment-desktop |' "$boundary_adr"
-grep -Fq '| crate | muniment-desktop-integration |' "$boundary_adr"
+boundary_doc=docs/core-boundary.md
+test -f "$boundary_doc"
+grep -Fxq '## Shared' "$boundary_doc"
+grep -Fxq '## Desktop' "$boundary_doc"
+grep -Fq '| crate | muniment-core |' "$boundary_doc"
+grep -Fq '| crate | muniment-desktop |' "$boundary_doc"
+grep -Fq '| crate | muniment-desktop-integration |' "$boundary_doc"
 test -x scripts/check-core-boundary.sh
 grep -Fq 'run: scripts/check-core-boundary.sh' "$ci"
 python3 -B test/core-boundary.py
