@@ -354,16 +354,19 @@ export function buildProbeCommandTable(fixtureName) {
     ? [{ threadId: 'probe-older', title: 'Older correspondence', updatedAt: '2026-07-20T12:00:00Z' }]
     : []
   let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
-  let recallSettings = null
   // ?memories shows one saved fact of each trust level. ?memories=200 shows
-  // that many varied facts and a few deleted ones.
+  // that many varied facts and a few deleted ones. Both start with Ask before
+  // saving on and four suggested changes waiting for review.
   const memoryCount = Number(new URLSearchParams(location.search).get('memories')) || 0
+  const memorySeed = new URLSearchParams(location.search).has('memories')
+  let recallSettings = memorySeed ? { learn: true, use: true, ask: true } : null
   let savedFacts = memoryCount ? probeFacts(memoryCount) : new URLSearchParams(location.search).has('memories') ? [
     { id: 'f1', title: 'Preferred editor', content: 'Uses Helix for code.', source: 'Added in settings', trust: 'user' },
     { id: 'f2', title: 'Report style', content: 'Lead with the answer, then the evidence.', source: 'thread:t1 run:r1', trust: 'conversation' },
     { id: 'f3', title: 'Vendor contact', content: 'Send invoices to the address on the vendor site.', source: 'thread:t2 run:r2', trust: 'external' },
   ] : []
   let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
+  let pendingChanges = memorySeed ? probePending(savedFacts) : []
   const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
@@ -503,11 +506,26 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'memory_fact_delete') { deletedFacts.push(...savedFacts.filter(f => f.id === payload.id)); savedFacts = savedFacts.filter(f => f.id !== payload.id); return null }
     if (command === 'memory_deleted_facts') return structuredClone(deletedFacts)
     if (command === 'memory_fact_restore') { savedFacts.push(...deletedFacts.filter(f => f.id === payload.id)); deletedFacts = deletedFacts.filter(f => f.id !== payload.id); return null }
+    // Suggested changes wait only while Ask before saving is on. The one
+    // marked stale fails to apply, as a proposal does when its fact changed.
+    if (command === 'memory_pending') return recallSettings?.ask ? structuredClone(pendingChanges.map(({ stale, ...proposal }) => proposal)) : []
+    if (command === 'memory_pending_apply') {
+      const proposal = pendingChanges.find(p => p.id === payload.id)
+      if (!proposal) throw 'This suggested change is no longer waiting.'
+      pendingChanges = pendingChanges.filter(p => p.id !== payload.id)
+      if (proposal.stale) throw 'This memory changed after the suggestion. Review it again.'
+      if (proposal.op === 'delete') { deletedFacts.push(...savedFacts.filter(f => f.id === proposal.fact_id)); savedFacts = savedFacts.filter(f => f.id !== proposal.fact_id); return null }
+      const fact = { ...(proposal.before || { id: crypto.randomUUID(), source: proposal.source }), ...proposal.after, trust: 'conversation' }
+      savedFacts = proposal.op === 'add' ? [...savedFacts, fact] : savedFacts.map(f => f.id === fact.id ? fact : f)
+      return structuredClone(fact)
+    }
+    if (command === 'memory_pending_dismiss') { pendingChanges = pendingChanges.filter(p => p.id !== payload.id); return null }
     if (command === 'record_report') return { report: { open: 0, findings: [], counts: {} } }
     if (command === 'agent_memory') {
       const data = agentMemory[payload.id] ||= { facts: [], deleted: [] }
       if (payload.action === 'memory_facts') return structuredClone(data.facts)
       if (payload.action === 'memory_deleted_facts') return structuredClone(data.deleted)
+      if (payload.action === 'memory_pending') return []
       if (payload.action === 'memory_fact_save') { const fact = JSON.parse(JSON.stringify({ ...payload.fact, id: payload.fact.id || crypto.randomUUID() })); data.facts = [...data.facts.filter(item => item.id !== fact.id), fact]; return fact }
       if (payload.action === 'memory_fact_delete') { data.deleted.push(...data.facts.filter(item => item.id === payload.factId)); data.facts = data.facts.filter(item => item.id !== payload.factId); return null }
       if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
@@ -859,6 +877,19 @@ window.__TAURI_INTERNALS__ = {
 
 // Builds `count` saved facts that mix the three trust levels, short and long
 // content, and long titles.
+// One add, two updates and one delete over the first three seeded facts,
+// newest first. The first update is stale.
+function probePending(facts) {
+  const [first, second, third] = facts
+  const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
+  return [
+    { id: 'p1', op: 'add', fact_id: null, before: null, after: { title: 'Standup time', content: 'Joins the team standup at 9:30 each weekday.' }, source: 'thread:t12 run:r31', created: at(4) },
+    { id: 'p2', op: 'update', fact_id: first.id, before: { ...first }, after: { title: first.title, content: 'Uses Helix for code and Zed when pairing.' }, source: 'thread:t14 run:r33', created: at(26), stale: true },
+    { id: 'p3', op: 'update', fact_id: second.id, before: { ...second }, after: { title: second.title, content: 'Lead with the answer, then the evidence, then one next step.' }, source: 'thread:t14 run:r33', created: at(26) },
+    { id: 'p4', op: 'delete', fact_id: third.id, before: { ...third }, after: null, source: 'thread:t15 run:r34', created: at(180) },
+  ]
+}
+
 function probeFacts(count, prefix = 'f') {
   const subjects = ['Preferred editor', 'Report style', 'Vendor contact', 'Time zone', 'Meeting hours', 'Invoice address', 'Code review habit', 'Travel preference', 'Project codename', 'Reading list', 'Coffee order', 'Release cadence', 'Backup schedule', 'Favorite shell', 'Writing tone', 'Quarterly goals', 'Client naming rule', 'Lease renewal date', 'Test command', 'Deployment window']
   const contents = [

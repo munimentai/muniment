@@ -163,3 +163,131 @@ it('adds agent memories from the same dialog', async () => {
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save' })))
   await waitFor(() => expect(dialog).not.toHaveAttribute('open'))
 })
+
+const proposals = () => [
+  { id: 'p1', op: 'add', fact_id: null, before: null, after: { title: 'Standup time', content: 'Joins standup at 9:30.' }, source: 'thread:t9 run:r9', created: '2026-10-14T12:00:00Z' },
+  { id: 'p2', op: 'update', fact_id: 'f1', before: { id: 'f1', title: 'Fact 1', content: 'Content of fact 1.', source: 'Added in settings', trust: 'user' }, after: { title: 'Fact 1', content: 'Revised fact 1.' }, source: 'thread:t8 run:r8', created: '2026-10-14T11:00:00Z' },
+  { id: 'p3', op: 'delete', fact_id: 'f2', before: { id: 'f2', title: 'Fact 2', content: 'Content of fact 2.', source: 'thread:t2 run:r2', trust: 'conversation' }, after: null, source: 'thread:t7 run:r7', created: '2026-10-14T10:00:00Z' },
+]
+
+function setupPending(facts, waiting, { stale = [] } = {}) {
+  let saved = facts
+  let pending = waiting
+  const invoke = vi.fn(async (cmd, args) => {
+    if (cmd === 'memory_profile_read') return ''
+    if (cmd === 'memory_facts') return [...saved]
+    if (cmd === 'memory_pending') return [...pending]
+    if (cmd === 'memory_pending_apply') {
+      const proposal = pending.find(p => p.id === args.id)
+      pending = pending.filter(p => p.id !== args.id)
+      if (stale.includes(args.id)) throw 'This memory changed after the suggestion. Review it again.'
+      if (proposal.op === 'delete') { saved = saved.filter(f => f.id !== proposal.fact_id); return null }
+      const fact = { ...(proposal.before || { id: 'added', source: proposal.source }), ...proposal.after, trust: 'conversation' }
+      saved = proposal.op === 'add' ? [...saved, fact] : saved.map(f => f.id === fact.id ? fact : f)
+      return fact
+    }
+    if (cmd === 'memory_pending_dismiss') { pending = pending.filter(p => p.id !== args.id); return null }
+    return null
+  })
+  render(MemorySection, { tauri: { invoke }, part: 'memory' })
+  return invoke
+}
+
+const review = async () => {
+  await fireEvent.click(await screen.findByRole('button', { name: 'Review' }))
+  return screen.getByRole('list', { name: 'Suggested changes' })
+}
+const open = async (name) => {
+  const row = within(screen.getByRole('list', { name: 'Suggested changes' })).getByRole('button', { name })
+  await fireEvent.click(row)
+  return document.getElementById(row.getAttribute('aria-controls'))
+}
+
+it('shows a suggested changes notice only while changes wait', async () => {
+  setupPending(many(3), proposals())
+  expect(await screen.findByText('3 suggested changes')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Review' })).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByRole('list', { name: 'Suggested changes' })).not.toBeInTheDocument()
+  cleanup()
+  setupPending(many(3), [])
+  await screen.findByRole('button', { name: 'Fact 1 Added by you' })
+  expect(screen.queryByText(/suggested change/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument()
+})
+
+it('lists one compact row per suggested change and opens its details', async () => {
+  setupPending(many(3), proposals())
+  const rows = within(await review()).getAllByRole('button')
+  expect(rows.map(row => [row.querySelector('.op').textContent, row.querySelector('.fact-title').textContent])).toEqual([['Add', 'Standup time'], ['Update', 'Fact 1'], ['Delete', 'Fact 2']])
+  expect(screen.getByRole('button', { name: 'Hide' })).toHaveAttribute('aria-expanded', 'true')
+  const update = await open('Update Fact 1')
+  expect(within(update).getByText('Before')).toBeInTheDocument()
+  expect(within(update).getByText('Content of fact 1.')).toBeInTheDocument()
+  expect(within(update).getByText('After')).toBeInTheDocument()
+  expect(within(update).getByText('Revised fact 1.')).toBeInTheDocument()
+  expect(within(update).getByText('thread:t8 run:r8')).toBeInTheDocument()
+  expect(within(update).getByRole('button', { name: 'Apply' })).toBeInTheDocument()
+  expect(within(update).getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
+  const removal = await open('Delete Fact 2')
+  expect(within(removal).getByText('Removes')).toBeInTheDocument()
+  expect(within(removal).getByText('Content of fact 2.')).toBeInTheDocument()
+  expect(document.querySelectorAll('[title]')).toHaveLength(0)
+})
+
+it('applies an update and a delete in place and refreshes the waiting changes', async () => {
+  const invoke = setupPending(many(3), proposals())
+  await review()
+  await fireEvent.click(within(await open('Update Fact 1')).getByRole('button', { name: 'Apply' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_pending_apply', { id: 'p2' }))
+  expect(await screen.findByText('2 suggested changes')).toBeInTheDocument()
+  expect(within(list()).getByText('Revised fact 1.')).toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([cmd]) => cmd === 'memory_pending')).toHaveLength(2)
+  expect(invoke.mock.calls.filter(([cmd]) => cmd === 'memory_facts')).toHaveLength(1)
+  await fireEvent.click(within(await open('Delete Fact 2')).getByRole('button', { name: 'Apply' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Fact 2 Saved from a chat' })).not.toBeInTheDocument())
+  expect(await screen.findByText('1 suggested change')).toBeInTheDocument()
+})
+
+it('keeps a failed apply in place with its error until it is dismissed', async () => {
+  const invoke = setupPending(many(3), proposals(), { stale: ['p2'] })
+  await review()
+  await fireEvent.click(within(await open('Update Fact 1')).getByRole('button', { name: 'Apply' }))
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('This memory changed after the suggestion. Review it again.')
+  const rows = within(screen.getByRole('list', { name: 'Suggested changes' })).getAllByRole('button', { expanded: false })
+  expect(rows.map(row => row.querySelector('.fact-title').textContent)).toEqual(['Standup time', 'Fact 2'])
+  const detail = alert.closest('.fact-detail')
+  expect(within(detail).queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([cmd]) => cmd === 'memory_facts')).toHaveLength(2)
+  await fireEvent.click(within(detail).getByRole('button', { name: 'Dismiss' }))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByText('2 suggested changes')).toBeInTheDocument()
+  expect(invoke).not.toHaveBeenCalledWith('memory_pending_dismiss', expect.anything())
+})
+
+it('dismisses a suggested change and hides the notice when none wait', async () => {
+  const invoke = setupPending(many(3), proposals().slice(0, 1))
+  await review()
+  await fireEvent.click(within(await open('Add Standup time')).getByRole('button', { name: 'Dismiss' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_pending_dismiss', { id: 'p1' }))
+  await waitFor(() => expect(screen.queryByText(/suggested change/)).not.toBeInTheDocument())
+  expect(screen.queryByRole('list', { name: 'Suggested changes' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Standup time Saved from a chat' })).not.toBeInTheDocument()
+})
+
+it('reviews an agent memory change through the agent command', async () => {
+  let pending = proposals().slice(0, 1)
+  const invoke = vi.fn(async (cmd, args) => {
+    if (args?.action === 'memory_facts') return []
+    if (args?.action === 'memory_pending') return [...pending]
+    if (args?.action === 'memory_pending_apply') { pending = []; return { id: 'a1', ...proposals()[0].after, source: 'thread:t9 run:r9', trust: 'conversation' } }
+    return null
+  })
+  render(MemorySection, { tauri: { invoke }, agentId: 'scout' })
+  await review()
+  await fireEvent.click(within(await open('Add Standup time')).getByRole('button', { name: 'Apply' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_pending_apply', factId: 'p1' })))
+  expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_pending' }))
+  expect(await screen.findByRole('button', { name: 'Standup time Saved from a chat' })).toBeInTheDocument()
+  await waitFor(() => expect(screen.queryByText(/suggested change/)).not.toBeInTheDocument())
+})

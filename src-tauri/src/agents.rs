@@ -111,6 +111,15 @@ pub async fn agent_memory(
             ModelAction::MemoryFactRestore,
             json!({"agent": id, "id": fact_id.ok_or("Choose a memory.")?}),
         ),
+        "memory_pending" => (ModelAction::MemoryPending, json!({"agent": id})),
+        "memory_pending_apply" => (
+            ModelAction::MemoryPendingApply,
+            json!({"agent": id, "id": fact_id.ok_or("Choose a suggested change.")?}),
+        ),
+        "memory_pending_dismiss" => (
+            ModelAction::MemoryPendingDismiss,
+            json!({"agent": id, "id": fact_id.ok_or("Choose a suggested change.")?}),
+        ),
         _ => return Err("The memory action is unknown.".into()),
     };
     crate::model_service::request(&app, action, data).await

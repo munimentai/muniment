@@ -42,6 +42,18 @@ pub async fn memory_fact_restore(app: tauri::AppHandle, id: String) -> Result<Va
     model_service::request(&app, ModelAction::MemoryFactRestore, json!({"id": id})).await
 }
 #[tauri::command]
+pub async fn memory_pending(app: tauri::AppHandle) -> Result<Value, String> {
+    model_service::request(&app, ModelAction::MemoryPending, json!({})).await
+}
+#[tauri::command]
+pub async fn memory_pending_apply(app: tauri::AppHandle, id: String) -> Result<Value, String> {
+    model_service::request(&app, ModelAction::MemoryPendingApply, json!({"id": id})).await
+}
+#[tauri::command]
+pub async fn memory_pending_dismiss(app: tauri::AppHandle, id: String) -> Result<Value, String> {
+    model_service::request(&app, ModelAction::MemoryPendingDismiss, json!({"id": id})).await
+}
+#[tauri::command]
 pub async fn memory_recall_settings(app: tauri::AppHandle) -> Result<Value, String> {
     model_service::request(&app, ModelAction::MemoryRecallSettings, json!({})).await
 }
