@@ -84,31 +84,34 @@ pub async fn agent_import_link(url: String) -> Result<serde_json::Value, String>
     .map_err(|_| "The template could not be loaded.".to_string())?
 }
 
+/// One agent's facts. The runtime owns the memory files, so each action
+/// forwards to its model service with the agent named.
 #[tauri::command]
-pub fn agent_memory(
+pub async fn agent_memory(
+    app: tauri::AppHandle,
     id: String,
     action: String,
     fact: Option<muniment_core::memory_files::Fact>,
     fact_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    use muniment_core::memory_files as memory;
-    let (home, private) = agents::memory_paths(&profile()?, &id)?;
-    match action.as_str() {
-        "memory_facts" => Ok(serde_json::json!(memory::facts_in(&home)?)),
-        "memory_deleted_facts" => Ok(serde_json::json!(memory::deleted_facts(&private)?)),
-        "memory_fact_save" => Ok(serde_json::json!(memory::fact_save_in(
-            &private,
-            &home,
-            fact.ok_or("Give the memory a title and fact.")?
-        )?)),
-        "memory_fact_delete" => {
-            memory::fact_delete_in(&private, &home, &fact_id.ok_or("Choose a memory.")?)?;
-            Ok(serde_json::Value::Null)
-        }
-        "memory_fact_restore" => {
-            memory::fact_restore_in(&private, &home, &fact_id.ok_or("Choose a memory.")?)?;
-            Ok(serde_json::Value::Null)
-        }
-        _ => Err("The memory action is unknown.".into()),
-    }
+    use muniment_core::attach::ModelAction;
+    use serde_json::json;
+    let (action, data) = match action.as_str() {
+        "memory_facts" => (ModelAction::MemoryFacts, json!({"agent": id})),
+        "memory_deleted_facts" => (ModelAction::MemoryDeletedFacts, json!({"agent": id})),
+        "memory_fact_save" => (
+            ModelAction::MemoryFactSave,
+            json!({"agent": id, "fact": fact.ok_or("Give the memory a title and fact.")?}),
+        ),
+        "memory_fact_delete" => (
+            ModelAction::MemoryFactDelete,
+            json!({"agent": id, "id": fact_id.ok_or("Choose a memory.")?}),
+        ),
+        "memory_fact_restore" => (
+            ModelAction::MemoryFactRestore,
+            json!({"agent": id, "id": fact_id.ok_or("Choose a memory.")?}),
+        ),
+        _ => return Err("The memory action is unknown.".into()),
+    };
+    crate::model_service::request(&app, action, data).await
 }
