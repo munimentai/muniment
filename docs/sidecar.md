@@ -174,8 +174,7 @@ the normal supervisor restart path.
 Browser control is not a supervised generic sidecar or an instance of the
 companion attach service. The desktop-owned loopback relay and MV3
 `chrome.debugger` extension follow the pairing, executable-path verification,
-connect-tab ownership, and deterministic cleanup contract in
-[harness-spec §6.8](spec/harness-spec.md). Relay loss must detach browser
+connect-tab ownership, and deterministic cleanup contract. Relay loss must detach browser
 targets; `SidecarSupervisor` restart semantics must never silently reconstruct
 or reauthorize a browser session.
 
