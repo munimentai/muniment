@@ -92,26 +92,14 @@ impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-pub(super) async fn handle_run_submit<C, L, F>(
+pub(super) async fn handle_run_submit<C: RunCommandClient>(
     session: RunCommandSession<C>,
     state: &ChatState,
     subject: Option<&str>,
     prompt: &str,
     files: Vec<SelectedFile>,
-    local: L,
-) -> Result<SubmitResult, String>
-where
-    C: RunCommandClient,
-    L: FnOnce(Vec<SelectedFile>) -> F,
-    F: std::future::Future<Output = Result<SubmitResult, String>>,
-{
+) -> Result<SubmitResult, String> {
     match session {
-        RunCommandSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            local(files).await
-        }
         RunCommandSession::Connected(client) => {
             let thread_id = state.session_thread.current(subject);
             let file_paths = files
@@ -129,34 +117,25 @@ where
                 .select(accepted.thread_id.clone(), subject);
             Ok(submit_result(accepted))
         }
-        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+        RunCommandSession::NoSupervisor | RunCommandSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
     }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-pub(super) async fn handle_run_resume<C, L, F>(
+pub(super) async fn handle_run_resume<C: RunCommandClient>(
     session: RunCommandSession<C>,
-    _state: &ChatState,
     run_id: &str,
-    local: L,
-) -> Result<SubmitResult, String>
-where
-    C: RunCommandClient,
-    L: FnOnce() -> F,
-    F: std::future::Future<Output = Result<SubmitResult, String>>,
-{
+) -> Result<SubmitResult, String> {
     match session {
-        RunCommandSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            local().await
-        }
         RunCommandSession::Connected(client) => client
             .run_resume(run_id)
             .map(resume_result)
             .map_err(auth::desktop_client_error),
-        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+        RunCommandSession::NoSupervisor | RunCommandSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
     }
 }
 
@@ -189,89 +168,66 @@ pub(super) fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-pub(super) fn handle_run_queue<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
+pub(super) fn handle_run_queue<C: RunCommandClient>(
     session: RunCommandSession<C>,
     run_id: &str,
     delivery: ChatDelivery,
     message: &str,
-    local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            local()
-        }
         RunCommandSession::Connected(client) => match delivery {
             ChatDelivery::Steer => client.run_steer(run_id, message),
             ChatDelivery::FollowUp => client.run_follow_up(run_id, message),
         }
         .map(|_| ())
         .map_err(auth::desktop_client_error),
-        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+        RunCommandSession::NoSupervisor | RunCommandSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
     }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-pub(super) fn handle_run_cancel<C: RunCommandClient, L: FnOnce() -> Result<(), String>>(
+pub(super) fn handle_run_cancel<C: RunCommandClient>(
     session: RunCommandSession<C>,
     run_id: &str,
-    local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            local()
-        }
         RunCommandSession::Connected(client) => client
             .run_cancel(run_id)
             .map(|_| ())
             .map_err(auth::desktop_client_error),
-        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+        RunCommandSession::NoSupervisor | RunCommandSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
     }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-pub(super) fn handle_run_permission_answer<
-    C: RunCommandClient,
-    L: FnOnce() -> Result<(), String>,
->(
+pub(super) fn handle_run_permission_answer<C: RunCommandClient>(
     session: RunCommandSession<C>,
     run_id: &str,
     gate_id: &str,
     answer: AttachChatPermissionAnswer,
-    local: L,
 ) -> Result<(), String> {
     match session {
-        RunCommandSession::NoSupervisor => {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            return Err(auth::background_service_error());
-            #[cfg(target_os = "linux")]
-            local()
-        }
         RunCommandSession::Connected(client) => client
             .run_permission_answer(run_id, gate_id, answer)
             .map(|_| ())
             .map_err(auth::desktop_client_error),
-        RunCommandSession::Disconnected => Err(auth::background_service_error()),
+        RunCommandSession::NoSupervisor | RunCommandSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
     }
 }
 
 #[tauri::command]
 pub async fn chat_queue(
     app: tauri::AppHandle,
-    state: tauri::State<'_, ChatState>,
     run_id: String,
     delivery: ChatDelivery,
     message: String,
 ) -> Result<(), String> {
-    #[cfg(any(unix, target_os = "windows"))]
-    let local_run_id = run_id.clone();
-    #[cfg(any(unix, target_os = "windows"))]
-    let local_message = message.clone();
     #[cfg(any(unix, target_os = "windows"))]
     return handle_run_queue(
         app.state::<crate::attach_service::AttachCompanionState>()
@@ -280,55 +236,27 @@ pub async fn chat_queue(
         &run_id,
         delivery,
         &message,
-        || local_chat_queue(&state, local_run_id, delivery, local_message),
     );
 }
 
-pub(super) fn local_chat_queue(
-    state: &ChatState,
-    run_id: String,
-    delivery: ChatDelivery,
-    message: String,
-) -> Result<(), String> {
-    queue_message(
-        &state.active,
-        ChatQueueRequest {
-            run_id,
-            workspace: None,
-            delivery,
-            message,
-        },
-    )
-}
-
 #[tauri::command]
-pub async fn chat_cancel(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, ChatState>,
-    run_id: String,
-) -> Result<(), String> {
+pub async fn chat_cancel(app: tauri::AppHandle, run_id: String) -> Result<(), String> {
     #[cfg(any(unix, target_os = "windows"))]
     return handle_run_cancel(
         app.state::<crate::attach_service::AttachCompanionState>()
             .desktop_client_session()
             .into(),
         &run_id,
-        || cancel_active_run(&state.active, &run_id, None),
     );
 }
 
 #[tauri::command]
 pub async fn chat_answer_permission(
     app: tauri::AppHandle,
-    state: tauri::State<'_, ChatState>,
     run_id: String,
     gate_id: String,
     answer: ChatPermissionAnswer,
 ) -> Result<(), String> {
-    #[cfg(any(unix, target_os = "windows"))]
-    let local_run_id = run_id.clone();
-    #[cfg(any(unix, target_os = "windows"))]
-    let local_gate_id = gate_id.clone();
     #[cfg(any(unix, target_os = "windows"))]
     return handle_run_permission_answer(
         app.state::<crate::attach_service::AttachCompanionState>()
@@ -336,7 +264,6 @@ pub async fn chat_answer_permission(
             .into(),
         &run_id,
         &gate_id,
-        attach_permission_answer(answer.clone()),
-        || queue_permission_answer(&state.active, local_run_id, local_gate_id, answer),
+        attach_permission_answer(answer),
     );
 }

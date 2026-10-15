@@ -1,20 +1,9 @@
 use super::*;
 
-#[cfg(target_os = "linux")]
-pub(super) type WorkspaceContexts = Arc<Mutex<WorkspaceContextMap>>;
-
 #[cfg(unix)]
 type PlatformChatEventStopHandle = ChatEventStopHandle;
 #[cfg(target_os = "windows")]
 type PlatformChatEventStopHandle = WindowsChatEventStopHandle;
-
-#[cfg(target_os = "linux")]
-pub(crate) struct AttachListenerState {
-    pub(super) workspace_contexts: WorkspaceContexts,
-    pub(super) client_credentials: Arc<Mutex<HashMap<String, ClientCredential>>>,
-    pub(super) companion_registry: CompanionRegistry,
-    pub(super) approval: SignedWorkspaceApproval,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct AuthorizedCompanion {
@@ -54,24 +43,10 @@ impl AttachCompanionState {
 }
 
 pub struct AttachCompanionState {
-    #[cfg(target_os = "linux")]
-    pub(super) listener: Mutex<Option<Arc<AttachListenerState>>>,
-    #[cfg(target_os = "linux")]
-    pub(super) approval: SignedWorkspaceApproval,
-    #[cfg(target_os = "linux")]
-    pub(super) listener_lifecycle: Mutex<AttachListenerLifecycle>,
-    #[cfg(target_os = "linux")]
-    pub(super) listener_stop: Mutex<AttachListenerStopState>,
-    #[cfg(target_os = "linux")]
-    pub(super) listener_stopped: Condvar,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) approval_presenter: Mutex<Option<ApprovalPresenterStopHandle>>,
-    #[cfg(target_os = "linux")]
-    pub(super) presenting: Mutex<bool>,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) desktop_supervisor_lifecycle: Mutex<()>,
-    #[cfg(all(test, target_os = "linux"))]
-    pub(super) desktop_stop_started: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) desktop_client: Mutex<Option<DesktopClientSupervisor>>,
     #[cfg(any(unix, target_os = "windows"))]
@@ -97,13 +72,6 @@ pub struct AttachListenerStatus {
     pub(super) connected: bool,
     pub(super) chat_events_connected: bool,
     pub(super) runtime_upgrade_pending: bool,
-}
-
-#[cfg(target_os = "linux")]
-pub(super) enum AttachListenerStopState {
-    Pending { stop_requested: bool },
-    Listening(AttachStopHandle),
-    Stopped,
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -192,178 +160,6 @@ pub(crate) enum DesktopClientSession {
 
 #[cfg(any(unix, target_os = "windows"))]
 impl AttachCompanionState {
-    #[cfg(all(target_os = "linux", test))]
-    pub(super) fn new(listener: Arc<AttachListenerState>) -> Self {
-        Self {
-            approval: listener.approval.clone(),
-            listener: Mutex::new(Some(listener)),
-            listener_lifecycle: Mutex::new(AttachListenerLifecycle::Listening),
-            listener_stop: Mutex::new(AttachListenerStopState::Pending {
-                stop_requested: false,
-            }),
-            listener_stopped: Condvar::new(),
-            approval_presenter: Mutex::new(None),
-            presenting: Mutex::new(false),
-            desktop_supervisor_lifecycle: Mutex::new(()),
-            #[cfg(all(test, target_os = "linux"))]
-            desktop_stop_started: Mutex::new(None),
-            desktop_client: Mutex::new(None),
-            desktop_client_holder: DesktopClientHolder::new(),
-            chat_events: Mutex::new(None),
-            connected: Mutex::new(false),
-            connected_changed: Condvar::new(),
-            chat_events_connected: Mutex::new(false),
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn set_listener(&self, listener: Arc<AttachListenerState>) {
-        *self
-            .listener
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(listener);
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn listener(&self) -> Result<Arc<AttachListenerState>, ProtocolError> {
-        self.listener
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?
-            .clone()
-            .ok_or_else(ProtocolError::persistence_failed)
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn record_listener_started(&self) {
-        self.stop_approval_presenter();
-        self.stop_desktop_client();
-        self.listener_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .record_listening();
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn record_listener_pending(&self) {
-        self.listener_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .record_pending();
-        *self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            AttachListenerStopState::Pending {
-                stop_requested: false,
-            };
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn record_listener_start_failure(&self, failure: AttachListenerStartFailure) {
-        self.listener_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .record_failure(failure);
-        self.record_listener_finished();
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn publish_listener_stop(&self, stop: AttachStopHandle) {
-        let mut listener_stop = self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if matches!(
-            *listener_stop,
-            AttachListenerStopState::Pending {
-                stop_requested: true
-            }
-        ) {
-            stop.stop();
-        }
-        *listener_stop = AttachListenerStopState::Listening(stop);
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn record_listener_stopped(&self) {
-        self.listener_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .record_stopped();
-        self.record_listener_finished();
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn record_listener_finished(&self) {
-        *self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = AttachListenerStopState::Stopped;
-        self.listener_stopped.notify_all();
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn stop_listener(&self) {
-        let mut stop = self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match &mut *stop {
-            AttachListenerStopState::Pending { stop_requested } => *stop_requested = true,
-            AttachListenerStopState::Listening(handle) => handle.stop(),
-            AttachListenerStopState::Stopped => return,
-        }
-        while !matches!(*stop, AttachListenerStopState::Stopped) {
-            stop = self
-                .listener_stopped
-                .wait(stop)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn listener_status(&self) -> AttachListenerStatus {
-        let lifecycle = *self
-            .listener_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let failure = match lifecycle {
-            AttachListenerLifecycle::Failed(failure) => Some(failure),
-            _ => None,
-        };
-        let connected = *self
-            .connected
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        AttachListenerStatus {
-            started: lifecycle == AttachListenerLifecycle::Listening,
-            failure: failure.map(|failure| match failure {
-                AttachListenerStartFailure::Filesystem => "filesystem",
-                AttachListenerStartFailure::InstanceLock => "instance_lock",
-                AttachListenerStartFailure::Bind => "bind",
-            }),
-            pending: lifecycle == AttachListenerLifecycle::Pending,
-            stopped: lifecycle == AttachListenerLifecycle::Stopped,
-            presenting: *self
-                .presenting
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            supervisor_running: self
-                .desktop_client
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_some(),
-            connected,
-            chat_events_connected: *self
-                .chat_events_connected
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            runtime_upgrade_pending: connected
-                && runtime_upgrade_pending(&self.desktop_client_holder),
-        }
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(super) fn listener_status(&self) -> AttachListenerStatus {
         let connected = *self
             .connected
@@ -405,7 +201,7 @@ impl AttachCompanionState {
         start(stop);
     }
 
-    #[cfg(any(unix, target_os = "windows"))]
+    #[cfg(test)]
     pub(super) fn stop_approval_presenter(&self) {
         if let Some(stop) = self
             .approval_presenter
@@ -511,21 +307,12 @@ impl AttachCompanionState {
         self.start_chat_events_locked(start_chat_events);
     }
 
+    #[cfg(test)]
     pub(super) fn stop_desktop_client(&self) {
         let _lifecycle = self
             .desktop_supervisor_lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        #[cfg(all(test, target_os = "linux"))]
-        if let Some(started) = self
-            .desktop_stop_started
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            let _ = started.send(());
-        }
-        #[cfg(any(unix, target_os = "windows"))]
         self.stop_chat_events_locked();
         let supervisor = self
             .desktop_client
@@ -548,7 +335,7 @@ impl AttachCompanionState {
         self.stop_chat_events_locked();
     }
 
-    #[cfg(any(unix, target_os = "windows"))]
+    #[cfg(test)]
     pub(super) fn stop_chat_events_locked(&self) {
         let supervisor = self
             .chat_events
@@ -644,65 +431,6 @@ impl AttachCompanionState {
     pub(crate) fn stop_desktop_client_for_test(&self) {
         self.stop_desktop_client();
     }
-
-    #[cfg(all(test, target_os = "linux"))]
-    pub(super) fn observe_desktop_stop_start(&self) -> std::sync::mpsc::Receiver<()> {
-        let (started, receiver) = std::sync::mpsc::channel();
-        *self
-            .desktop_stop_started
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(started);
-        receiver
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(super) fn record_presenting(&self, presenting: bool) {
-        *self
-            .presenting
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = presenting;
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn record_workspace(&self, workspace: String) {
-        self.approval.record(workspace);
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn clear_workspace(&self) {
-        self.approval.clear();
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn approval(&self) -> Option<Approval> {
-        self.approval.approval()
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Default for AttachCompanionState {
-    fn default() -> Self {
-        Self {
-            listener: Mutex::new(None),
-            approval: SignedWorkspaceApproval::default(),
-            listener_lifecycle: Mutex::new(AttachListenerLifecycle::Pending),
-            listener_stop: Mutex::new(AttachListenerStopState::Pending {
-                stop_requested: false,
-            }),
-            listener_stopped: Condvar::new(),
-            approval_presenter: Mutex::new(None),
-            presenting: Mutex::new(false),
-            desktop_supervisor_lifecycle: Mutex::new(()),
-            #[cfg(all(test, target_os = "linux"))]
-            desktop_stop_started: Mutex::new(None),
-            desktop_client: Mutex::new(None),
-            desktop_client_holder: DesktopClientHolder::new(),
-            chat_events: Mutex::new(None),
-            connected: Mutex::new(false),
-            connected_changed: Condvar::new(),
-            chat_events_connected: Mutex::new(false),
-        }
-    }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -738,23 +466,7 @@ impl Drop for AttachCompanionState {
     }
 }
 
-#[cfg(target_os = "macos")]
-impl Default for AttachCompanionState {
-    fn default() -> Self {
-        Self {
-            approval_presenter: Mutex::new(None),
-            desktop_supervisor_lifecycle: Mutex::new(()),
-            desktop_client: Mutex::new(None),
-            desktop_client_holder: DesktopClientHolder::new(),
-            chat_events: Mutex::new(None),
-            connected: Mutex::new(false),
-            connected_changed: Condvar::new(),
-            chat_events_connected: Mutex::new(false),
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
+#[cfg(any(unix, target_os = "windows"))]
 impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {
@@ -777,9 +489,6 @@ impl Default for AttachCompanionState {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl AttachCompanionState {
-    pub(crate) fn record_workspace(&self, _workspace: String) {}
-
     pub(crate) fn clear_workspace(&self) {}
 }

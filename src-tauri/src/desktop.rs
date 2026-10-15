@@ -28,7 +28,6 @@ mod macos_run_start_probe;
 mod macos_runtime_notice_probe;
 #[cfg(any(target_os = "macos", all(test, unix)))]
 mod macos_runtime_service;
-mod memory;
 mod memory_import;
 mod model_install;
 mod model_router;
@@ -56,8 +55,8 @@ mod window_state;
 #[cfg(any(target_os = "windows", all(test, unix)))]
 mod windows_runtime_service;
 
-use muniment_core::attach::{DrainState, PreparedHandoffSlot, RuntimeActivityRegistry};
-use std::sync::{Arc, Mutex};
+use muniment_core::attach::RuntimeActivityRegistry;
+use std::sync::Arc;
 use tauri::Manager;
 
 #[tauri::command]
@@ -103,10 +102,7 @@ pub fn run() {
         cef_native::initialize(None, &browser_root).expect("Start the browser before GTK");
     }
     let runtime_activity = RuntimeActivityRegistry::new();
-    let builder = tauri::Builder::default()
-        .manage(runtime_activity.clone())
-        .manage(DrainState::new())
-        .manage(Mutex::new(PreparedHandoffSlot::new()));
+    let builder = tauri::Builder::default().manage(runtime_activity.clone());
     #[cfg(feature = "e2e-webdriver")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
@@ -145,19 +141,7 @@ pub fn run() {
             window_state::restore_main_window(app)?;
             #[cfg(target_os = "macos")]
             launcher::setup(app.handle())?;
-            let memory_runtime = Arc::new(memory::ApplicationMemoryRuntime::new(
-                state.clone(),
-                state.join("memory"),
-            ));
-            app.manage(Arc::clone(&memory_runtime));
-            #[cfg(unix)]
-            {
-                app.manage(chat::ChatState::new(runtime_activity.clone()));
-            }
-            #[cfg(target_os = "windows")]
-            {
-                app.manage(chat::ChatState::new(runtime_activity.clone()));
-            }
+            app.manage(chat::ChatState::default());
             runtime_owner::setup(app.handle());
             let parakeet_root = state.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(

@@ -19,44 +19,7 @@ pub(crate) fn runtime_clients_ready<R: tauri::Runtime>(app: &tauri::AppHandle<R>
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn should_retry_attach_accept(error: AttachAcceptError) -> bool {
-    matches!(
-        error,
-        AttachAcceptError::Accept
-            | AttachAcceptError::PeerCredentials
-            | AttachAcceptError::WrongUid(_)
-    )
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn initialize_attach_listener<R, F>(
-    app: &tauri::AppHandle<R>,
-    credential_path: F,
-) -> Option<Arc<AttachListenerState>>
-where
-    R: tauri::Runtime,
-    F: FnOnce() -> Option<PathBuf>,
-{
-    app.manage(AttachCompanionState::default());
-    let Some(credential_path) = credential_path() else {
-        app.state::<AttachCompanionState>()
-            .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
-        return None;
-    };
-    let approval = app.state::<AttachCompanionState>().approval.clone();
-    let Ok(state) = AttachListenerState::load_with_approval(&credential_path, approval) else {
-        app.state::<AttachCompanionState>()
-            .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
-        return None;
-    };
-    let state = Arc::new(state);
-    app.state::<AttachCompanionState>()
-        .set_listener(state.clone());
-    Some(state)
-}
-
-#[cfg(unix)]
-pub(super) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Some(endpoint) = runtime_profile_endpoint() else {
         eprintln!("approval presenter profile lookup failed");
         return;
@@ -66,24 +29,13 @@ pub(super) fn start_approval_presenter<R: tauri::Runtime>(app: &tauri::AppHandle
         .start_approval_presenter(move |stop| {
             std::thread::spawn(move || {
                 let approvals = presenter_app.state::<AttachApprovalState>().inner().clone();
-                #[cfg(target_os = "linux")]
-                let observer_app = presenter_app.clone();
-                #[cfg(target_os = "macos")]
-                eprintln!("desktop approval presenter connected=false");
                 serve_approval_presenter_at(
                     &endpoint,
                     env!("CARGO_PKG_VERSION"),
                     Duration::from_secs(5),
                     Duration::from_millis(250),
                     stop,
-                    move |presenting| {
-                        #[cfg(target_os = "linux")]
-                        observer_app
-                            .state::<AttachCompanionState>()
-                            .record_presenting(presenting);
-                        #[cfg(target_os = "macos")]
-                        eprintln!("desktop approval presenter connected={presenting}");
-                    },
+                    |_| {},
                     move |request| answer_presented_approval(&approvals, request),
                 );
             });
@@ -380,182 +332,4 @@ pub(super) fn register_approval_event_presenter<R: tauri::Runtime>(app: &tauri::
                 .emit("attach-pairing-requested", &request)
                 .is_ok()
         });
-}
-
-#[cfg(target_os = "linux")]
-pub fn start_attach_listener<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    if app.try_state::<AttachCompanionState>().is_some() {
-        app.state::<AttachCompanionState>()
-            .record_listener_pending();
-    }
-    let Some(state) = initialize_attach_listener(&app, || {
-        muniment_runtime::profile_directory()
-            .ok()
-            .map(|path| path.join(COMPANION_CREDENTIAL_FILE_NAME))
-    }) else {
-        return;
-    };
-    register_approval_event_presenter(&app);
-    std::thread::spawn(move || {
-        let Ok(filesystem) = AttachFilesystem::from_environment() else {
-            app.state::<AttachCompanionState>()
-                .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
-            eprintln!(
-                "{}",
-                attach_listener_start_diagnostic(AttachListenerStartFailure::Filesystem)
-            );
-            return;
-        };
-        run_attach_listener(app, state, filesystem);
-    });
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn run_attach_listener<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: Arc<AttachListenerState>,
-    filesystem: AttachFilesystem,
-) {
-    run_attach_listener_with_hooks(app, state, filesystem, || {}, || {});
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn run_attach_listener_with_hooks<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    state: Arc<AttachListenerState>,
-    filesystem: AttachFilesystem,
-    after_lock: impl FnOnce(),
-    after_bind_failure: impl FnOnce(),
-) {
-    let Ok(instance_lock) = filesystem.acquire_instance_lock() else {
-        app.state::<AttachCompanionState>()
-            .record_listener_start_failure(AttachListenerStartFailure::InstanceLock);
-        start_approval_presenter(&app);
-        start_desktop_client(&app);
-        eprintln!(
-            "{}",
-            attach_listener_start_diagnostic(AttachListenerStartFailure::InstanceLock)
-        );
-        return;
-    };
-    after_lock();
-    let Ok(listener) = AttachTransport::bind(&filesystem) else {
-        drop(instance_lock);
-        app.state::<AttachCompanionState>()
-            .record_listener_start_failure(AttachListenerStartFailure::Bind);
-        eprintln!(
-            "{}",
-            attach_listener_start_diagnostic(AttachListenerStartFailure::Bind)
-        );
-        after_bind_failure();
-        return;
-    };
-    if let Some(chat_state) = app.try_state::<crate::chat::ChatState>() {
-        if chat_state.open_storage(&app).is_err() {
-            drop(listener);
-            drop(instance_lock);
-            app.state::<AttachCompanionState>()
-                .record_listener_start_failure(AttachListenerStartFailure::Filesystem);
-            eprintln!("Muniment could not open chat storage.");
-            return;
-        }
-    }
-    let companion_state = app.state::<AttachCompanionState>();
-    companion_state.publish_listener_stop(listener.stop_handle());
-    companion_state.record_listener_started();
-    let status = companion_state.listener_status();
-    let _ = app.emit("desktop-client-status-changed", status);
-    let expected_desktop_executable = std::env::current_exe().ok();
-    loop {
-        let (stream, credentials) = match listener.accept() {
-            Ok(accepted) => accepted,
-            Err(error) if should_retry_attach_accept(error) => {
-                if error == AttachAcceptError::Accept {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                continue;
-            }
-            Err(_) => break,
-        };
-        let app = app.clone();
-        let workspace_contexts = state.workspace_contexts.clone();
-        let client_credentials = state.client_credentials.clone();
-        let live_connections = state.companion_registry.live_connections();
-        let approval_state = state.clone();
-        let expected_desktop_executable = expected_desktop_executable.clone();
-        std::thread::spawn(move || {
-            let route = expected_desktop_executable.as_ref().map_or(
-                AttachConnectionRoute::Companion,
-                |expected_desktop_executable| {
-                    name_attach_connection_route(
-                        &stream,
-                        credentials,
-                        expected_desktop_executable,
-                        &ProcReader,
-                        Duration::from_secs(5),
-                    )
-                },
-            );
-            if matches!(
-                route,
-                AttachConnectionRoute::ApprovalPresenter | AttachConnectionRoute::DesktopClient
-            ) {
-                return;
-            }
-            let Ok(mut service) =
-                DesktopAttachService::new(app, workspace_contexts, client_credentials)
-            else {
-                return;
-            };
-            let approvals = service
-                .boundaries
-                .app
-                .state::<AttachApprovalState>()
-                .inner()
-                .clone();
-            let expected_executable = service
-                .boundaries
-                .app
-                .path()
-                .resource_dir()
-                .ok()
-                .map(|directory| directory.join("muniment-runtime"))
-                .unwrap_or_else(|| PathBuf::from("muniment-runtime"));
-            let process_reader = ProcReader;
-            let _ = run_authenticated_session_with_service_approvals_registry_and_migration(
-                stream,
-                credentials,
-                env!("CARGO_PKG_VERSION"),
-                &mut service,
-                approval_waiter_with_claims(
-                    move |challenge: &muniment_core::attach::PairingChallenge,
-                          claimed_kind: &str,
-                          claimed_version: &str,
-                          remaining: Duration| {
-                        Some(request_attach_pairing_approval(
-                            &approval_state,
-                            &approvals,
-                            challenge.as_str(),
-                            claimed_kind,
-                            claimed_version,
-                            remaining,
-                        ))
-                    },
-                ),
-                &live_connections,
-                MigrationControlSessionDependencies {
-                    expected_executable: &expected_executable,
-                    process_reader: &process_reader,
-                },
-            );
-        });
-    }
-    drop(listener);
-    drop(instance_lock);
-    companion_state.record_listener_stopped();
-}
-
-#[cfg(target_os = "linux")]
-pub fn stop_attach_listener<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    app.state::<AttachCompanionState>().stop_listener();
 }
