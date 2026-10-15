@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use muniment_core::attach::SCOPE_RUNTIME_ADMIN;
+use muniment_core::attach::{SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE};
 
 /// This app's version from `package.json`, which an update request names.
 pub(crate) const APP_VERSION: &str = env!("MUNIMENT_APP_VERSION");
@@ -18,14 +18,20 @@ pub(crate) fn is_older(runtime: &str, app: &str) -> Option<bool> {
     Some(parse(runtime)? < parse(app)?)
 }
 
-/// Whether the app offers to update a runtime: it runs an older version and
-/// this device holds the admin scope there.
+/// Whether this device may ask a runtime to update: it holds the update or
+/// the admin scope there.
+pub(crate) fn may_update(scopes: &BTreeSet<String>) -> bool {
+    scopes.contains(SCOPE_RUNTIME_UPDATE) || scopes.contains(SCOPE_RUNTIME_ADMIN)
+}
+
+/// Whether the app asks a runtime to update: it runs an older version and
+/// this device may ask.
 pub(crate) fn update_offered(
     runtime_version: Option<&str>,
     scopes: &BTreeSet<String>,
     app_version: &str,
 ) -> bool {
-    scopes.contains(SCOPE_RUNTIME_ADMIN)
+    may_update(scopes)
         && runtime_version.and_then(|version| is_older(version, app_version)) == Some(true)
 }
 
@@ -45,9 +51,12 @@ mod tests {
     }
 
     #[test]
-    fn an_update_needs_an_older_version_and_the_admin_scope() {
+    fn an_update_needs_an_older_version_and_the_update_or_admin_scope() {
         let admin = BTreeSet::from(["thread.read".to_owned(), "runtime.admin".to_owned()]);
         let reader = BTreeSet::from(["thread.read".to_owned(), "run.write".to_owned()]);
+        let updater = BTreeSet::from(["thread.read".to_owned(), "runtime.update".to_owned()]);
+        assert!(update_offered(Some("0.1.0"), &updater, "0.2.0"));
+        assert!(!update_offered(Some("0.2.0"), &updater, "0.2.0"));
         assert!(update_offered(Some("0.1.0"), &admin, "0.2.0"));
         assert!(!update_offered(Some("0.1.0"), &reader, "0.2.0"));
         assert!(!update_offered(Some("0.2.0"), &admin, "0.2.0"));

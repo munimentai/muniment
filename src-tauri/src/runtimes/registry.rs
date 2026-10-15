@@ -136,7 +136,10 @@ impl Registry {
     }
 
     /// Saves a newly paired runtime. Pairing a runtime again replaces its
-    /// record and keeps the name the user gave it.
+    /// record and keeps the name the user gave it. A record that names a
+    /// paired runtime's id with another certificate is refused with
+    /// `AlreadyExists`: a runtime keeps its certificate, so the link points
+    /// somewhere else.
     pub(crate) fn add(
         &self,
         record: &RemoteRuntimeRecord,
@@ -146,7 +149,11 @@ impl Registry {
     ) -> io::Result<String> {
         let id = canonical_id(record.runtime_id.as_str())
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        record.save(&self.record_path(&id)?)?;
+        let path = self.record_path(&id)?;
+        if path.exists() && RemoteRuntimeRecord::load(&path)?.fingerprint != record.fingerprint {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        record.save(&path)?;
         self.update(|index| {
             let name = index
                 .runtimes
@@ -352,6 +359,29 @@ mod tests {
         assert!(registry.list().is_empty());
         assert_eq!(registry.selected(), None);
         assert_eq!(registry.index().selected, None);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_known_runtime_id_with_another_certificate_is_refused() {
+        let (registry, directory) = registry();
+        let id = "018f0000-0000-7000-8000-000000000051";
+        registry.add(&record(id, "Studio"), None, None, None).unwrap();
+        // Pairing the same runtime again with its own certificate is allowed.
+        registry.add(&record(id, "Studio"), None, None, None).unwrap();
+        let mut impostor = record(id, "Studio");
+        impostor.endpoints = vec!["198.51.100.9:7443".into()];
+        impostor.fingerprint = CertificateFingerprint::of_certificate(b"other der");
+        assert_eq!(
+            registry
+                .add(&impostor, None, None, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        let kept = registry.record(id).unwrap();
+        assert_eq!(kept.endpoints, vec!["192.0.2.20:7443".to_owned()]);
+        assert_eq!(kept.fingerprint, CertificateFingerprint::of_certificate(b"der"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

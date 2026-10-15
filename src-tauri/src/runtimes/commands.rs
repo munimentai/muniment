@@ -14,7 +14,7 @@ use tauri::Manager;
 use super::connection::{client_options, welcome, Connector, Observation, RemoteControl};
 use super::registry::{canonical_id, Registry, SshTarget, LOCAL_RUNTIME_ID};
 use super::ssh::{self, Ssh};
-use super::version::{is_older, APP_VERSION};
+use super::version::{is_older, may_update, APP_VERSION};
 use super::{activate, connector, emit_changed, list, RuntimeList, RuntimeStatus, Runtimes};
 use crate::attach_service::AttachCompanionState;
 
@@ -105,7 +105,14 @@ pub(crate) fn pair(
     };
     let id = registry
         .add(&record, ssh, version, install_kind)
-        .map_err(|_| "The paired runtime could not be saved.".to_owned())?;
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                "This link names a machine you already paired, but its certificate is different. \
+                 Remove that machine first if you reinstalled it."
+                    .to_owned()
+            }
+            _ => "The paired runtime could not be saved.".to_owned(),
+        })?;
     Ok((id, observation))
 }
 
@@ -374,10 +381,10 @@ pub async fn runtime_select(app: tauri::AppHandle, id: String) -> Result<Runtime
 pub(crate) struct RuntimeUpdateResult {
     id: String,
     name: String,
-    ok: bool,
+    pub(crate) ok: bool,
     /// The version the runtime's host was asked to install.
     version: Option<String>,
-    message: String,
+    pub(crate) message: String,
 }
 
 /// Asks one paired runtime's host to install this app's version.
@@ -399,7 +406,7 @@ fn request_update(connector: &Connector) -> Result<String, String> {
         Ok(_) => Ok(APP_VERSION.to_owned()),
         Err(_) => Err(match client.last_request_error().map(|error| error.code()) {
             Some(ErrorCode::Unauthorized) => {
-                "This device cannot update that runtime. Pair it with a link that allows updates."
+                "This device cannot update that runtime. Pair it again to allow updates."
             }
             Some(ErrorCode::UnsupportedOperation) => "That runtime cannot take update requests.",
             _ => "The update request did not reach the runtime. Try again.",
@@ -408,7 +415,10 @@ fn request_update(connector: &Connector) -> Result<String, String> {
     }
 }
 
-fn update_one<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) -> RuntimeUpdateResult {
+pub(crate) fn update_one<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    id: &str,
+) -> RuntimeUpdateResult {
     let runtimes = app.state::<Runtimes>();
     let attach = app.state::<AttachCompanionState>();
     let name = runtimes
@@ -422,9 +432,9 @@ fn update_one<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) -> Runtime
         let record = registry
             .record(id)
             .map_err(|_| "That runtime is not paired.".to_owned())?;
-        if !record.scopes.contains(SCOPE_RUNTIME_ADMIN) {
+        if !may_update(&record.scopes) {
             return Err(
-                "This device cannot update that runtime. Pair it with a link that allows updates."
+                "This device cannot update that runtime. Pair it again to allow updates."
                     .to_owned(),
             );
         }

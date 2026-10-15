@@ -128,8 +128,8 @@
 
 {#if enabled}
   <Group heading="Pairing link" description="Open the link on the other computer, or scan the code. It works once.">
-    <Row title="Allow updates" description="The other computer may update this runtime and manage its pairing.">
-      <Toggle checked={admin} label="Allow updates" disabled={!!busy} onchange={(next) => { admin = next }} />
+    <Row title="Allow pairing management" description="The other computer may pair and revoke devices here. Updates are always allowed.">
+      <Toggle checked={admin} label="Allow pairing management" disabled={!!busy} onchange={(next) => { admin = next }} />
     </Row>
     <div class="link-actions">
       <Button icon="plus" disabled={!!busy || !endpoints.length} onclick={createLink}>{link ? 'Create another link' : 'Create pairing link'}</Button>

@@ -73,7 +73,7 @@ describe('This computer', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     render(ThisComputer, { tauri })
-    await fireEvent.click(await screen.findByRole('switch', { name: 'Allow updates' }))
+    await fireEvent.click(await screen.findByRole('switch', { name: 'Allow pairing management' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Create pairing link' }))
     expect(tauri.invoke).toHaveBeenCalledWith('local_pairing_link', { admin: true })
     expect(await screen.findByRole('img', { name: 'Pairing code' })).toBeInTheDocument()

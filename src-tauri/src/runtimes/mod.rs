@@ -11,7 +11,7 @@ mod requested_update;
 mod ssh;
 mod version;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -50,6 +50,10 @@ pub(crate) struct Runtimes {
     observed: Mutex<HashMap<String, Observed>>,
     /// One pairing runs at a time.
     pairing: Mutex<()>,
+    /// The runtimes asked to update to this app's version since it started.
+    /// The app asks each one once, on the first welcome that names an older
+    /// version.
+    auto_updates: Mutex<HashSet<String>>,
 }
 
 impl Runtimes {
@@ -58,6 +62,7 @@ impl Runtimes {
             registry,
             observed: Mutex::new(HashMap::new()),
             pairing: Mutex::new(()),
+            auto_updates: Mutex::new(HashSet::new()),
         }
     }
 
@@ -74,6 +79,32 @@ impl Runtimes {
             .get(id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Whether `id` should be asked to update now: it is paired, it runs an
+    /// older version than this app, this device may ask, and the app has not
+    /// asked it yet. A yes is recorded, so each runtime is asked once.
+    fn claim_auto_update(&self, id: &str) -> bool {
+        if id == LOCAL_RUNTIME_ID {
+            return false;
+        }
+        let Some(registry) = &self.registry else {
+            return false;
+        };
+        let Ok(record) = registry.record(id) else {
+            return false;
+        };
+        let version = self
+            .observed(id)
+            .version
+            .or_else(|| registry.entry(id).and_then(|entry| entry.version));
+        if !update_offered(version.as_deref(), &record.scopes, APP_VERSION) {
+            return false;
+        }
+        self.auto_updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_owned())
     }
 
     /// Records an observation and answers whether the list changed.
@@ -210,8 +241,26 @@ pub(crate) fn emit_changed<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 fn observer<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> connection::Observer {
     let app = app.clone();
     Arc::new(move |id: &str, observation: Observation| {
-        if app.state::<Runtimes>().record(id, observation) {
+        let welcome = matches!(observation, Observation::Welcome { .. });
+        let runtimes = app.state::<Runtimes>();
+        if runtimes.record(id, observation) {
             emit_changed(&app);
+        }
+        // Updates are automatic: a runtime that answers with an older version
+        // is asked once to install this app's version.
+        if welcome && runtimes.claim_auto_update(id) {
+            let app = app.clone();
+            let id = id.to_owned();
+            std::thread::spawn(move || {
+                let result = update_one(&app, &id);
+                if !result.ok {
+                    eprintln!(
+                        "muniment-desktop: automatic runtime update not requested runtime={id} reason={}",
+                        result.message
+                    );
+                }
+                emit_changed(&app);
+            });
         }
     })
 }
