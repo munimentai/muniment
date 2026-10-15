@@ -30,7 +30,6 @@ pub fn workspace_folders(
     let home = muniment_core::home::configured_home(&profile)
         .map_err(|e| e.to_string())?
         .ok_or("Choose a Home folder first.")?;
-    muniment_core::projects::migrate_session_names(&profile)?;
     let mut folders = vec![Folder {
         label: "Muniment folder".into(),
         path: home.clone(),
