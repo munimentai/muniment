@@ -49,9 +49,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
+          RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
-          if [ "$REPOSITORY" != factory/muniment ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ "$ACTOR" != mikeydiamonds ]; then
-            echo '::error::Release jobs run only from an owner dispatch of main in factory/muniment.' >&2
+          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
+            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
 
@@ -144,9 +146,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
+          RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
-          if [ "$REPOSITORY" != factory/muniment ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ "$ACTOR" != mikeydiamonds ]; then
-            echo '::error::Release jobs run only from an owner dispatch of main in factory/muniment.' >&2
+          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
+            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
 
@@ -176,7 +180,7 @@ jobs:
         with:
           path: winget-pkgs
           token: ${{ secrets.WINGET_PKGS_TOKEN }}
-          push-to-fork: mikeydiamonds/winget-pkgs
+          push-to-fork: ${{ vars.WINGET_PKGS_FORK }}
           branch: winget/muniment-${{ inputs.version }}
           delete-branch: true
           draft: true

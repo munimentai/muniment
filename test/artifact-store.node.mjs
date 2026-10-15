@@ -6,8 +6,10 @@ import { join } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { endpoint, upload, download, readArtifact, transport } from '../.github/lib/artifact-store.mjs'
 
+process.env.ARTIFACT_STORE_ENDPOINT = 'https://store.example'
+process.env.ARTIFACT_STORE_BUCKET = 'ci-artifacts'
 const id = { repository: 'munimentai/muniment', run: 42, attempt: 2, source: 'a'.repeat(40) }
-const prefix = 's3://factory-ci-artifacts/muniment-desktop/42/evidence/'
+const prefix = 's3://ci-artifacts/muniment-desktop/42/evidence/'
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'artifact-store-test-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -60,7 +62,7 @@ test('The store republishes acknowledged uploads when GetObject reports NoSuchKe
   const bytes = Buffer.alloc(64 * 1024 * 1024, 7)
   writeFileSync(join(f.input, 'diagnostics.bin'), bytes)
   const attempts = new Map()
-  const store = transport({ AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
+  const store = transport({ ...process.env, AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
     if (args[6] === 's3') {
       const key = args[9]
       const attempt = (attempts.get(key) ?? 0) + 1
@@ -90,7 +92,7 @@ test('Readback retries stay bounded and do not retry other failures.', t => {
     ['AccessDenied', 'GetObject', 1], ['InternalError', 'GetObject', 1],
   ]) {
     let puts = 0
-    const store = transport({ AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
+    const store = transport({ ...process.env, AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }, (_cli, args) => {
       if (args[6] === 's3') {
         assert.equal(args[9], prefix + 'proof.json')
         puts++
@@ -112,15 +114,15 @@ test('Readback retries stay bounded and do not retry other failures.', t => {
 
 test('The store rejects empty directories, links and invalid identities.', t => {
   const f = fixture(t)
-  for (const change of [{ repository: 'other/muniment' }, { run: 0 }, { run: -1 }, { run: 1.5 },
+  for (const change of [{ repository: 'muniment' }, { repository: 'a/b/c' }, { repository: '../muniment' }, { run: 0 }, { run: -1 }, { run: 1.5 },
     { run: Number.MAX_SAFE_INTEGER + 1 }, { attempt: 0 }, { attempt: NaN }, { source: 'main' }, { source: '' }]) {
     assert.throws(() => upload({ ...id, ...change }, 'evidence', f.input, f.store))
   }
   for (const name of ['', '../escape', 'a/b', '.', '..']) {
     assert.throws(() => upload(id, name, f.input, f.store))
   }
-  const forgejo = { ...id, repository: 'factory/muniment' }
-  assert.equal(upload(forgejo, 'forgejo-evidence', f.input, f.store).repository, 'factory/muniment')
+  const forgejo = { ...id, repository: 'example/muniment' }
+  assert.equal(upload(forgejo, 'forgejo-evidence', f.input, f.store).repository, 'example/muniment')
   rmSync(join(f.input, 'proof.json'))
   assert.throws(() => upload(id, 'evidence', f.input, f.store))
   symlinkSync(join(f.root, 'secret'), join(f.input, 'proof.json'))
@@ -186,22 +188,26 @@ else if (args[8].startsWith('s3://')) {
   const store = transport(env)
   store.put(prefix + 'file', Buffer.from('upload'))
   let args = JSON.parse(readFileSync(record))
-  assert.deepEqual(args.slice(0, 8), ['--endpoint-url', endpoint, '--cli-connect-timeout', '15', '--cli-read-timeout', '120', 's3', 'cp'])
-  assert.equal(endpoint, 'https://s3.roo.run')
+  assert.deepEqual(args.slice(0, 8), ['--endpoint-url', endpoint(), '--cli-connect-timeout', '15', '--cli-read-timeout', '120', 's3', 'cp'])
+  assert.equal(endpoint(), 'https://store.example')
   assert.equal(args.includes('probe-secret'), false)
   assert.equal(store.get(prefix + 'nested/file', 8).toString(), 'readback')
   args = JSON.parse(readFileSync(record))
-  assert.deepEqual(args.slice(0, 12), ['--endpoint-url', endpoint, '--cli-connect-timeout', '15', '--cli-read-timeout', '120',
-    's3api', 'get-object', '--bucket', 'factory-ci-artifacts', '--key', 'muniment-desktop/42/evidence/nested/file'])
+  assert.deepEqual(args.slice(0, 12), ['--endpoint-url', endpoint(), '--cli-connect-timeout', '15', '--cli-read-timeout', '120',
+    's3api', 'get-object', '--bucket', 'ci-artifacts', '--key', 'muniment-desktop/42/evidence/nested/file'])
   assert.equal(args.length, 13)
   assert.equal(existsSync(args[12]), false)
   assert.throws(() => store.get(prefix + 'file', 7), /size limit/)
   assert.throws(() => transport({ ...env, FAIL: '1' }).get(prefix + 'file', 100), /^Error: MinIO transfer failed: CLI exited with status 1\.$/)
   assert.throws(() => transport({ ...env, AWS_SECRET_ACCESS_KEY: '' }).get(prefix + 'file', 100), /Missing MinIO credentials/)
+  for (const value of [undefined, '', 'store.example', 'https://store.example/path', 'https://store example']) {
+    assert.throws(() => transport({ ...env, ARTIFACT_STORE_ENDPOINT: value }).get(prefix + 'file', 100), /Missing artifact store endpoint/)
+  }
+  assert.equal(endpoint({ ARTIFACT_STORE_ENDPOINT: 'http://store.example:9000/' }), 'http://store.example:9000')
 })
 
 test('Transport errors expose only a fixed class and a validated exit status.', () => {
-  const env = { AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
+  const env = { ARTIFACT_STORE_ENDPOINT: 'https://store.example', AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
   const cases = [
     [{ code: 'ENOENT' }, 'CLI missing'],
     [{ code: 'ETIMEDOUT', status: 1 }, 'timeout'],
@@ -240,7 +246,7 @@ test('A slow 64 MiB upload verifies its readback before the store publishes its 
   writeFileSync(join(f.input, 'proof.json'), bytes)
   const objects = new Map()
   const calls = []
-  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  const env = { ARTIFACT_STORE_ENDPOINT: 'https://store.example', AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
   const store = transport(env, (_cli, args, options) => {
     const put = args[6] === 's3'
     const key = put ? args[9] : `s3://${args[9]}/${args[11]}`
@@ -267,7 +273,7 @@ test('A slow 64 MiB upload verifies its readback before the store publishes its 
 
 test('The transport caps size-based upload deadlines and rejects stalled uploads.', t => {
   const f = fixture(t)
-  const env = { AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
+  const env = { ARTIFACT_STORE_ENDPOINT: 'https://store.example', AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' }
   for (const [size, deadline] of [[0, 180_000], [1, 181_000], [64 * 1024 * 1024, 436_000], [128 * 1024 * 1024, 600_000]]) {
     let path
     const store = transport(env, (_cli, args, options) => {
@@ -290,7 +296,7 @@ test('The transport caps size-based upload deadlines and rejects stalled uploads
 })
 
 test('S3 failures expose only bounded, allow-listed codes and operations.', () => {
-  const env = { AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
+  const env = { ARTIFACT_STORE_ENDPOINT: 'https://store.example', AWS_ACCESS_KEY_ID: 'private-access', AWS_SECRET_ACCESS_KEY: 'private-secret' }
   const diagnostic = (code, operation = 'CreateMultipartUpload') =>
     `upload failed: private-key to https://private-host/?X-Amz-Signature=private-signature\n` +
     `An error occurred (${code}) when calling the ${operation} operation: private-secret private-token`
@@ -380,7 +386,7 @@ if (source.startsWith('s3://')) {
     assert.equal(result.status, 1)
     assert.equal(result.stdout, '')
     assert.equal(result.stderr, message + '\n')
-    assert.equal(existsSync(join(env.STORE, 'factory-ci-artifacts/muniment-desktop/42/private-key/manifest.json')), false)
+    assert.equal(existsSync(join(env.STORE, 'ci-artifacts/muniment-desktop/42/private-key/manifest.json')), false)
   }
   const unknown = run({}, join(f.root, 'private-missing-input'))
   assert.equal(unknown.status, 1)
@@ -435,7 +441,7 @@ fs.copyFileSync(local(source), local(target));
     const result = run(mode, mode)
     assert.equal(result.status, 0, result.stderr)
   }
-  const objectRoot = join(env.STORE, 'factory-ci-artifacts/muniment-desktop/42')
+  const objectRoot = join(env.STORE, 'ci-artifacts/muniment-desktop/42')
   const uploaded = readFileSync(join(objectRoot, 'transport-probe-diagnostics/attempt-2/diagnostics.bin'))
   assert.equal(uploaded.length, 64 * 1024 * 1024)
   assert.ok(readFileSync(join(objectRoot, 'transport-probe-diagnostics-collection/attempt-2/diagnostics.bin')).equals(uploaded))
@@ -532,20 +538,29 @@ test('Every workflow uses MinIO while native tests and public distribution keep 
   assert.match(subscriptions, /SUBSCRIPTION_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/)
   assert.match(subscriptions, /test "\$COLLECT_STATUS" = 0/)
   for (const step of subscriptions.split('      - ').filter(value => value.includes('run: node test/e2e/runner/subscription-'))) {
-    assert.doesNotMatch(step, /FACTORY_CI_S3|AWS_SECRET_ACCESS_KEY/)
+    assert.doesNotMatch(step, /ARTIFACT_STORE_|AWS_SECRET_ACCESS_KEY/)
   }
   for (const name of ['ci', 'secret-scan']) {
     const text = readFileSync(`.github/workflows/${name}.yml`, 'utf8')
     assert.match(text, /uses: .\/.github\/actions\/store-artifact/)
     assert.match(text, /uses: .\/.github\/actions\/setup-artifact-store/)
     assert.ok(text.includes(`name: ${name}.yml-proof`))
-    assert.match(text, /secrets.FACTORY_CI_S3_ACCESS_KEY/)
-    assert.match(text, /secrets.FACTORY_CI_S3_SECRET_KEY/)
   }
   const nightlyDiagnostics = readFileSync('.github/workflows/nightly.yml', 'utf8')
   assert.match(nightlyDiagnostics, /uses: .\/.github\/actions\/setup-artifact-store/)
-  assert.match(nightlyDiagnostics, /secrets.FACTORY_CI_S3_ACCESS_KEY/)
-  assert.match(nightlyDiagnostics, /secrets.FACTORY_CI_S3_SECRET_KEY/)
+  // Every step that holds the store keys also names the store from repository variables.
+  for (const name of workflows) {
+    const text = readFileSync(`.github/workflows/${name}`, 'utf8')
+    for (const step of text.split(/\n(?= +- )/).filter(value => value.includes('AWS_ACCESS_KEY_ID'))) {
+      assert.match(step, /AWS_ACCESS_KEY_ID: \$\{\{ secrets.ARTIFACT_STORE_ACCESS_KEY \}\}/)
+      assert.match(step, /AWS_SECRET_ACCESS_KEY: \$\{\{ secrets.ARTIFACT_STORE_SECRET_KEY \}\}/)
+      assert.match(step, /ARTIFACT_STORE_ENDPOINT: \$\{\{ vars.ARTIFACT_STORE_ENDPOINT \}\}/)
+      assert.match(step, /ARTIFACT_STORE_BUCKET: \$\{\{ vars.ARTIFACT_STORE_BUCKET \}\}/)
+    }
+  }
+  for (const name of ['ci', 'secret-scan', 'nightly']) {
+    assert.match(readFileSync(`.github/workflows/${name}.yml`, 'utf8'), /secrets.ARTIFACT_STORE_ACCESS_KEY/)
+  }
   const proof = readFileSync('.github/lib/ci-proof.mjs', 'utf8')
   assert.match(proof, /attempt: run.run_attempt, source: run.head_sha/)
   assert.doesNotMatch(proof, /listWorkflowRunArtifacts|downloadArtifact/)

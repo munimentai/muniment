@@ -75,7 +75,7 @@ gates:
     # `CI / Desktop compile preflight (<platform>) (pull_request)` reports when
     # desktop code changes and then gates the merge as well.
     required: []
-    # The desktop matrix queues behind the shared desktop-ci slot on pve01.
+    # The desktop matrix queues behind the shared desktop-ci slot.
     timeout_s: 14400
 
 budgets:

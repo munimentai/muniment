@@ -599,7 +599,7 @@ test('the collector preserves blocked runner reasons and still fails', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-collect-blocked-'))
   const output = path.join(root, 'out')
   const inputs = []
-  const reason = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
+  const reason = 'Provide the SUBSCRIPTION_LEASES secret with access-only leases.'
   try {
     for (const platform of platforms) {
       const directory = path.join(root, platform)
@@ -1287,11 +1287,11 @@ test('the host publishes blocked cases when leases, models, or native runners ar
     const modelsJson = JSON.stringify(models)
     const leasesJson = JSON.stringify([lease])
     assert.equal(host({ sourceSha, platform: 'linux', output, leases: '', models: modelsJson, sshKey: 'k', knownHosts: 'h', invoke }), 1)
-    assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /FACTORY_SUBSCRIPTION_LEASES/)
+    assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /SUBSCRIPTION_LEASES/)
     assert.equal(host({ sourceSha, platform: 'windows', output, leases: leasesJson, models: '', sshKey: 'k', knownHosts: 'h', invoke }), 1)
-    assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /FACTORY_SUBSCRIPTION_MODELS/)
+    assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /SUBSCRIPTION_MODELS/)
     assert.equal(host({ sourceSha, platform: 'macos-arm64', output, leases: '{', models: modelsJson, sshKey: 'k', knownHosts: 'h', invoke }), 1)
-    assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /FACTORY_SUBSCRIPTION_LEASES/)
+    assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /SUBSCRIPTION_LEASES/)
     assert.equal(host({ sourceSha, platform: 'macos-x64', output, leases: leasesJson, models: modelsJson, sshKey: '', knownHosts: 'h', invoke }), 1)
     assert.match(JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'))).cases[0].reason, /native desktop-ci runner/)
     assert.equal(called, 0)
@@ -1349,7 +1349,7 @@ test('the host copies guest evidence and keeps a failed native check red', () =>
     assert.equal(JSON.parse(fs.readFileSync(path.join(mapped, 'release-acceptance.json'))).cases[0].platform, 'macos-x64')
     assert.equal(host({
       sourceSha, platform: 'macos-arm64', output: mapped, leases: JSON.stringify([lease]), models: JSON.stringify(models),
-      sshKey: 'k', knownHosts: 'h', invoke: () => assert.fail('ARM64 must not use the Intel factory runner.'),
+      sshKey: 'k', knownHosts: 'h', invoke: () => assert.fail('ARM64 must not use the Intel desktop-ci runner.'),
     }), 1)
     assert.match(JSON.parse(fs.readFileSync(path.join(mapped, 'release-acceptance.json'))).cases[0].reason, /macos-15/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -1366,7 +1366,7 @@ for (const platform of ['linux', 'macos', 'windows']) {
       assert.deepEqual(runDesktopCi({
         sourceSha, platform, subscriptionPlatform: platform === 'macos' ? 'macos-x64' : platform,
         output: root, leases, models: modelJson, repository: 'owner/repo', token: 'fixture-token',
-        sshKey: 'fixture-key', knownHosts: 'fixture-host', harnessSha: 'b'.repeat(40),
+        sshKey: 'fixture-key', knownHosts: 'fixture-host', sshHost: 'ci@fixture-host', harnessSha: 'b'.repeat(40),
         spawnProcess(command, args, options) {
           calls += 1
           if (command === 'ssh') {
@@ -1414,7 +1414,7 @@ for (const platform of ['linux', 'macos', 'windows']) {
       }), 1)
       assert.equal(fetched, false)
       const proof = fs.readFileSync(path.join(output, 'release-acceptance.json'), 'utf8')
-      assert.match(proof, /FACTORY_SUBSCRIPTION_LEASES/)
+      assert.match(proof, /SUBSCRIPTION_LEASES/)
       assert.equal(proof.includes(lease.access), false)
       assert.equal(proof.includes(transported.MUNIMENT_SUBSCRIPTION_LEASES_BASE64), false)
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -1434,7 +1434,7 @@ test('the guest blocks malformed encoded payloads without exposing their values'
           fetchRelease: () => assert.fail('Invalid payloads must block before a download.'),
         }), 1)
         const proof = fs.readFileSync(path.join(root, 'release-acceptance.json'), 'utf8')
-        assert.match(proof, field === 'encodedLeases' ? /FACTORY_SUBSCRIPTION_LEASES/ : /FACTORY_SUBSCRIPTION_MODELS/)
+        assert.match(proof, field === 'encodedLeases' ? /SUBSCRIPTION_LEASES/ : /SUBSCRIPTION_MODELS/)
         assert.equal(proof.includes('fixture-secret'), false)
       }
     }
@@ -1483,8 +1483,8 @@ test('the guest distinguishes the Windows job self-test from package failures', 
     assert.equal(guestFailureReason(step, failure), 'The native subscription guest failed.')
   }
   for (const message of [missingPackage,
-    'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.',
-    'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.',
+    'Provide the SUBSCRIPTION_LEASES secret with access-only leases.',
+    'Provide the SUBSCRIPTION_MODELS variable with four distinct supported model IDs.',
     'Run this check on the requested native platform and architecture.',
   ]) {
     assert.equal(guestFailureReason('guest/unknown', new Error(message)), message)
@@ -1496,9 +1496,9 @@ test('the guest publishes blocked cases when models are missing', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-guest-'))
   try {
     assert.equal(await guest({ sourceSha, platform: 'linux', output: root, leases: '[]', models: '', repository: 'owner/repo', token: 't' }), 1)
-    assert.match(JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'))).cases[0].reason, /FACTORY_SUBSCRIPTION_MODELS/)
+    assert.match(JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'))).cases[0].reason, /SUBSCRIPTION_MODELS/)
     assert.equal(await guest({ sourceSha, platform: 'windows', output: root, leases: '', models: '[]', repository: 'owner/repo', token: 't' }), 1)
-    assert.match(JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'))).cases[0].reason, /FACTORY_SUBSCRIPTION_LEASES/)
+    assert.match(JSON.parse(fs.readFileSync(path.join(root, 'release-acceptance.json'))).cases[0].reason, /SUBSCRIPTION_LEASES/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -1518,7 +1518,7 @@ test('the guest defaults artifacts to the desktop-ci collection directory', asyn
     }), 1)
     const output = path.join(temp, 'dci-artifacts')
     const proof = JSON.parse(fs.readFileSync(path.join(output, 'release-acceptance.json'), 'utf8'))
-    assert.match(proof.cases[0].reason, /FACTORY_SUBSCRIPTION_LEASES/)
+    assert.match(proof.cases[0].reason, /SUBSCRIPTION_LEASES/)
     assert.equal(JSON.stringify(proof).includes('secret-token'), false)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
@@ -1653,8 +1653,9 @@ for (const platform of ['linux', 'windows', 'macos-x64']) {
     assert.deepEqual(job.match(/^    runs-on: .+$/gm), ['    runs-on: muniment-release'])
     assert.match(job, /run: node test\/e2e\/runner\/subscription-host\.mjs/)
     assert.match(job, /DESKTOP_CI_KNOWN_HOSTS: \$\{\{ vars\.DESKTOP_CI_KNOWN_HOSTS \}\}/)
-    assert.match(job, /FACTORY_SUBSCRIPTION_LEASES: \$\{\{ secrets\.FACTORY_SUBSCRIPTION_LEASES \}\}/)
-    assert.match(job, /FACTORY_SUBSCRIPTION_MODELS: \$\{\{ vars\.FACTORY_SUBSCRIPTION_MODELS \}\}/)
+    assert.match(job, /DESKTOP_CI_HOST: \$\{\{ vars\.DESKTOP_CI_HOST \}\}/)
+    assert.match(job, /SUBSCRIPTION_LEASES: \$\{\{ secrets\.SUBSCRIPTION_LEASES \}\}/)
+    assert.match(job, /SUBSCRIPTION_MODELS: \$\{\{ vars\.SUBSCRIPTION_MODELS \}\}/)
     // The private release runner supplies the SSH key through its environment.
     assert.doesNotMatch(workflow, /DESKTOP_CI_SSH_KEY/)
     const hostSource = fs.readFileSync('test/e2e/runner/subscription-host.mjs', 'utf8')
@@ -1717,8 +1718,8 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.match(workflow, /workflow_call:/)
   assert.match(workflow, /node test\/e2e\/runner\/subscription-host\.mjs/)
   assert.match(workflow, /node test\/e2e\/runner\/collect-subscriptions\.mjs/)
-  assert.match(workflow, /FACTORY_SUBSCRIPTION_LEASES: \$\{\{ secrets\.FACTORY_SUBSCRIPTION_LEASES \}\}/)
-  assert.match(workflow, /FACTORY_SUBSCRIPTION_MODELS: \$\{\{ vars\.FACTORY_SUBSCRIPTION_MODELS \}\}/)
+  assert.match(workflow, /SUBSCRIPTION_LEASES: \$\{\{ secrets\.SUBSCRIPTION_LEASES \}\}/)
+  assert.match(workflow, /SUBSCRIPTION_MODELS: \$\{\{ vars\.SUBSCRIPTION_MODELS \}\}/)
   for (const platform of platforms) {
     assert.match(workflow, new RegExp(`  ${platform}:`))
     assert.match(workflow, new RegExp(`PLATFORM: ${platform}`))
@@ -1733,6 +1734,7 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.match(armJob, /if: always\(\)/)
   assert.match(armJob, /uses: .\/.github\/actions\/store-artifact/)
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-subscription-evidence-'))
+  process.env.ARTIFACT_STORE_BUCKET ??= 'ci-artifacts'
   try {
     assert.throws(() => upload({ repository: 'munimentai/muniment', run: 1, attempt: 1, source: sourceSha },
       'subscription-macos-arm64', empty, { put() { assert.fail('Empty evidence must not upload.') } }), /Invalid artifact file count/)
@@ -1750,8 +1752,8 @@ test('the workflow runs a native job per platform and uploads release-acceptance
   assert.ok((workflow.match(/if: always\(\)/g) ?? []).length >= 6)
   assert.match(workflow, /needs: \[linux, windows, macos-arm64, macos-x64\]/)
   assert.equal(nightly.includes('subscription-host.mjs'), false)
-  assert.equal(nightly.includes('FACTORY_SUBSCRIPTION_LEASES'), false)
-  assert.equal(workflow.includes('echo $FACTORY_SUBSCRIPTION_LEASES'), false)
+  assert.equal(nightly.includes('SUBSCRIPTION_LEASES'), false)
+  assert.equal(workflow.includes('echo $SUBSCRIPTION_LEASES'), false)
   const hostSource = fs.readFileSync('test/e2e/runner/subscription-host.mjs', 'utf8')
   assert.match(hostSource, /harnessSha: process\.env\.HARNESS_SHA \?\? process\.env\.SOURCE_SHA/)
   assert.equal(hostSource.includes('console.log(leases'), false)

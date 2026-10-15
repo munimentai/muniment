@@ -16,7 +16,7 @@ const sudoDenied = 'The desktop-CI host denied permission to start the driver.'
 const sourceSha = 'a'.repeat(40)
 const leases = JSON.stringify([{ provider: 'openai-codex', access: 'private-access', account_id: 'private-account', expires_ms: Date.now() + 4 * 60 * 60_000 }])
 const models = JSON.stringify(Array.from({ length: 4 }, (_, i) => ({ family: 'openai', id: `model-${i}` })))
-const options = { sourceSha, platform: 'windows', subscriptionPlatform: 'windows', leases, models, repository: 'owner/repo', token: 'private-token', sshKey: 'private-key', knownHosts: 'host' }
+const options = { sourceSha, platform: 'windows', subscriptionPlatform: 'windows', leases, models, repository: 'owner/repo', token: 'private-token', sshKey: 'private-key', knownHosts: 'host', sshHost: 'ci@host' }
 
 function temporary(work) {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-host-test-'))
@@ -147,7 +147,7 @@ print("guest started", flush=True)
   assert.equal(result.error, undefined)
   assert.equal(result.status, 124)
   assert.match(result.stdout, /cleanup\n/)
-  assert.match(result.stdout, /::error::The desktop-CI runner at 10\.1\.10\.10 is busy \(blocked\)\. The slot-wait budget expired\.\n\n\[subscription-host\] timeout=slot-wait\n$/)
+  assert.match(result.stdout, /::error::The desktop-CI host is busy \(blocked\)\. The slot-wait budget expired\.\n\n\[subscription-host\] timeout=slot-wait\n$/)
   assert.doesNotMatch(result.stdout, /guest started/)
 })
 

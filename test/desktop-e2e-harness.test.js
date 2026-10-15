@@ -693,6 +693,7 @@ ${sequence}
       encoding: 'utf8', timeout: 10_000,
       env: {
         ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, STUCK_PROCESS: stuckProcess, MUNIMENT_E2E_LAUNCHCTL: 'launchctl',
+        MUNIMENT_E2E_OLLAMA_HOST: '192.0.2.5',
         MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_ONBOARDING_ONLY: '0', MUNIMENT_E2E_CLEANUP_ONLY: '0',
       },
     })
@@ -994,7 +995,7 @@ if [[ $FIXTURE_MODE == publication-failure ]]; then mv() { return 1; }; fi
       env: {
         ...process.env, HOME: home, TMPDIR: directory, DCI_ARTIFACTS_DIR: artifacts,
         FIXTURE_MODE: mode, FIXTURE_APP: app, FIXTURE_LAUNCHER: launcher,
-        MUNIMENT_E2E_LAUNCHCTL: launchctl,
+        MUNIMENT_E2E_LAUNCHCTL: launchctl, MUNIMENT_E2E_OLLAMA_HOST: '192.0.2.5',
         MUNIMENT_E2E_PASSWORD: 'fixture-secret', MUNIMENT_E2E_FINALIZER_TEST_MODE: '0',
       },
     })

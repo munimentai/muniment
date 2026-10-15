@@ -88,7 +88,12 @@ log_command() {
 }
 
 start_ollama_forward() {
-  node test/e2e/support/ollama-forward.mjs 52000 10.1.10.105 52000 "$raw/ollama-forward.log" &
+  # MUNIMENT_E2E_OLLAMA_HOST names the model host the forward reaches.
+  if [[ -z ${MUNIMENT_E2E_OLLAMA_HOST:-} ]]; then
+    echo 'Set MUNIMENT_E2E_OLLAMA_HOST to the model host.' >&2
+    return 1
+  fi
+  node test/e2e/support/ollama-forward.mjs 52000 "$MUNIMENT_E2E_OLLAMA_HOST" 52000 "$raw/ollama-forward.log" &
   ollama_forward_pid=$!
   # The spec types this address, so the app and Pi reach the model host through
   # the loopback rather than the local network.

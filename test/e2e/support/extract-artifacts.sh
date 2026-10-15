@@ -64,7 +64,7 @@ fail() {
 
 # A slot timeout cannot supply passing guest evidence, including a stale envelope.
 if [[ $run_status == 124 ]] && grep -Fxq '[subscription-host] timeout=slot-wait' "$input"; then
-  reason='The desktop-CI runner at 10.1.10.10 is busy (blocked). The slot-wait budget expired.'
+  reason='The desktop-CI host is busy (blocked). The slot-wait budget expired.'
   mkdir -p "$destination"
   printf '%s\n' "$reason" >"$destination/runner-failure.txt"
   fail slot-wait "$reason"

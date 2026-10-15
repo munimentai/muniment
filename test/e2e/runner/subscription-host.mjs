@@ -45,7 +45,7 @@ function compactJson(value, reason) {
   }
 }
 
-export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output, leases, models, repository, token, sshKey, knownHosts, harnessSha, spawnProcess = spawnSync }) {
+export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output, leases, models, repository, token, sshKey, knownHosts, sshHost, harnessSha, spawnProcess = spawnSync }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'subscription-host-'))
   const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
   let detail = 'step=desktop-ci/ssh\n'
@@ -53,6 +53,7 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     const keyFile = path.join(root, 'key')
     const hostsFile = path.join(root, 'known_hosts')
     const transcript = path.join(root, 'output')
+    if (!sshHost) throw new Error('Set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address.')
     fs.writeFileSync(keyFile, sshKey, { mode: 0o600 })
     fs.writeFileSync(hostsFile, knownHosts.endsWith('\n') ? knownHosts : `${knownHosts}\n`, { mode: 0o600 })
     let cmd = 'node test/e2e/runner/subscription-guest.mjs'
@@ -77,7 +78,7 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
     const ssh = spawnProcess('ssh', [
       '-i', keyFile, '-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${hostsFile}`,
       '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=8',
-      'desktopci@10.1.10.10', remote,
+      sshHost, remote,
     ], { input, encoding: 'utf8', timeout: desktopCiBudget.client * 1000, maxBuffer: 32 * 1024 * 1024 })
     fs.writeFileSync(transcript, `${ssh.stdout ?? ''}${ssh.stderr ?? ''}`, { mode: 0o600 })
     detail += `status=${ssh.status ?? 'none'} signal=${ssh.signal ?? 'none'} error=${redact(ssh.error?.message ?? 'none')}\n`
@@ -99,15 +100,15 @@ export function runDesktopCi({ sourceSha, platform, subscriptionPlatform, output
   }
 }
 
-export function host({ sourceSha, platform, output, leases, models, repository, token, sshKey, knownHosts, harnessSha, invoke = runDesktopCi }) {
+export function host({ sourceSha, platform, output, leases, models, repository, token, sshKey, knownHosts, sshHost, harnessSha, invoke = runDesktopCi }) {
   if (!platforms.includes(platform) || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) {
     throw new Error('Provide a supported native platform and the exact candidate source SHA.')
   }
   const missingRunner = platform === 'macos-arm64'
-    ? 'Use the macos-15 GitHub-hosted ARM64 job. The factory macOS runner supports Intel only.'
+    ? 'Use the macos-15 GitHub-hosted ARM64 job. The desktop-ci macOS runner supports Intel only.'
     : 'The native desktop-ci runner for this platform is unavailable.'
-  const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
-  const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
+  const missingLeases = 'Provide the SUBSCRIPTION_LEASES secret with access-only leases.'
+  const missingModels = 'Provide the SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
   let reason = 'Provide the pinned signed package, a native GUI runner, and fresh factory subscription access leases.'
   const redact = subscriptionRedactor({ leases, values: [token, sshKey] })
   let status = 1
@@ -130,7 +131,7 @@ export function host({ sourceSha, platform, output, leases, models, repository, 
       try {
         result = invoke({
           sourceSha, platform: desktopCiName(platform), subscriptionPlatform: platform, output: artifacts,
-          leases: compactLeases, models: compactModels, repository, token, sshKey, knownHosts, harnessSha,
+          leases: compactLeases, models: compactModels, repository, token, sshKey, knownHosts, sshHost, harnessSha,
         })
       } finally {
         if (platform === 'windows') copyWindowsUpdate(artifacts, output)
@@ -172,12 +173,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     sourceSha: process.env.SOURCE_SHA,
     platform: process.env.PLATFORM,
     output: process.env.OUTPUT,
-    leases: process.env.FACTORY_SUBSCRIPTION_LEASES,
-    models: process.env.FACTORY_SUBSCRIPTION_MODELS,
+    leases: process.env.SUBSCRIPTION_LEASES,
+    models: process.env.SUBSCRIPTION_MODELS,
     repository: process.env.REPOSITORY,
     token: process.env.RELEASE_TOKEN,
     sshKey: process.env.DESKTOP_CI_SSH_KEY,
     knownHosts: process.env.DESKTOP_CI_KNOWN_HOSTS,
+    sshHost: process.env.DESKTOP_CI_HOST,
     harnessSha: process.env.HARNESS_SHA ?? process.env.SOURCE_SHA,
   })
 }

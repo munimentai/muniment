@@ -6,7 +6,10 @@ import { join } from 'node:path'
 import { proofConfiguration, readProof, reusePullRequest } from './ci-proof.mjs'
 
 const toolchain = `sha256:${'1'.repeat(64)}`
-beforeEach(() => vi.stubEnv('CI_PROOF_CONFIGURATION', JSON.stringify({ CI_TOOLCHAIN_REVISION: toolchain })))
+beforeEach(() => {
+  vi.stubEnv('CI_PROOF_CONFIGURATION', JSON.stringify({ CI_TOOLCHAIN_REVISION: toolchain }))
+  vi.stubEnv('ARTIFACT_STORE_BUCKET', 'ci-artifacts')
+})
 afterEach(() => vi.unstubAllEnvs())
 
 function fixture() {
@@ -140,7 +143,7 @@ it('reads bounded MinIO proofs for the exact repository, run, attempt and source
     save({ ...proof, padding: 'x'.repeat(64 * 1024) })
     await expect(read()).rejects.toThrow()
     save(proof)
-    objects.set('s3://factory-ci-artifacts/muniment-desktop/1/ci.yml-proof/proof.json', Buffer.from('{}'))
+    objects.set('s3://ci-artifacts/muniment-desktop/1/ci.yml-proof/proof.json', Buffer.from('{}'))
     await expect(read()).rejects.toThrow()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

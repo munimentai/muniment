@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { desktopCiBudget } from './e2e/runner/subscription-host.mjs'
 
 const helper = '.github/desktop-ci-command.py'
-const reason = 'The desktop-CI runner at 10.1.10.10 is busy (blocked). The slot-wait budget expired.'
+const reason = 'The desktop-CI host is busy (blocked). The slot-wait budget expired.'
 const waiting = '[desktop-ci 10:00:00] waiting for a desktop-CI slot (lock)...\n'
 const acquired = '[desktop-ci 11:59:00] slot 0 acquired\n'
 const expired = '[desktop-ci 12:00:00] FATAL: no slot after 7200s\n'
@@ -37,7 +37,8 @@ function checkJob(job) {
   assert.ok(commands.length > 0)
   const wrappers = [...job.matchAll(/(remote|ssh_cmd)=\$\(python3 \.github\/desktop-ci-command.py "\$DESKTOP_CI_SLOT_SECONDS" "\$\1"\)/g)]
   assert.equal(wrappers.length, commands.length, 'Wrap every desktop-CI invocation.')
-  assert.doesNotMatch(job, /desktopci@10\.1\.10\.10\s+"sudo/)
+  assert.doesNotMatch(job, /"\$DESKTOP_CI_HOST"\s+"sudo/)
+  assert.match(job, /DESKTOP_CI_HOST: \$\{\{ vars\.DESKTOP_CI_HOST \}\}/)
   assert.match(job, /uses: actions\/checkout@/)
   const attempts = job.includes('while true; do') ? Number(job.match(/"\$attempt" -ge (\d+)/)?.[1]) : 1
   assert.ok(Number.isInteger(attempts) && attempts > 0)

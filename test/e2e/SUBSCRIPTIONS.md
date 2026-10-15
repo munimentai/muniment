@@ -195,7 +195,7 @@ This check does not apply an update or alter the production feed.
 `.github/workflows/subscriptions.yml` runs this probe on Linux, Windows, macOS ARM64, and macOS x64.
 Full nightly runs call it after the existing installed gates, including runs that reuse packages.
 Targeted nightly runs keep their platform gates and do not claim full acceptance.
-It reads `FACTORY_SUBSCRIPTION_LEASES` and `FACTORY_SUBSCRIPTION_MODELS`.
+It reads `SUBSCRIPTION_LEASES` and `SUBSCRIPTION_MODELS`.
 A missing secret, model list, or native desktop-ci runner still publishes blocked cases.
 The collector job then uploads `release-acceptance` and fails with that reason.
 The nightly proof also requires this workflow to pass.

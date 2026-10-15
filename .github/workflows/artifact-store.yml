@@ -36,8 +36,10 @@ jobs:
         id: upload
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
         run: |
           test "$(uname -m)" = arm64
           node .github/lib/artifact-store-probe.mjs upload
@@ -54,6 +56,8 @@ jobs:
         env:
           UPLOAD_ATTEMPT: ${{ needs.upload.outputs.attempt }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
         run: node .github/lib/artifact-store-probe.mjs collect

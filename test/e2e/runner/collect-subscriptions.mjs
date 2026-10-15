@@ -31,7 +31,7 @@ export function collect(sourceSha, output, inputs, jobResults) {
   fs.writeFileSync(path.join(output, 'release-acceptance.json'), JSON.stringify({ ...combined,
     cases: platforms.flatMap(platform => blocked(sourceSha, platform, 'The native evidence collection has not finished.').cases),
   }, null, 2) + '\n', { mode: 0o600 })
-  const redact = subscriptionRedactor({ leases: process.env.FACTORY_SUBSCRIPTION_LEASES })
+  const redact = subscriptionRedactor({ leases: process.env.SUBSCRIPTION_LEASES })
   let complete = true
   for (const platform of platforms) {
     const evidenceName = `${platform}-subscription.json`

@@ -720,7 +720,7 @@ for (const mode of ['missing-envelope', 'blocked-guest', 'ssh-throw']) {
     const messages = []
     t.mock.method(console, 'error', text => messages.push(text))
     fs.writeFileSync(path.join(output, 'linux-subscription.log'), 'stale transcript')
-    const status = host({ sourceSha, platform: 'linux', output, leases, models, token, sshKey: key, knownHosts: 'host',
+    const status = host({ sourceSha, platform: 'linux', output, leases, models, token, sshKey: key, knownHosts: 'host', sshHost: 'ci@host',
       invoke: options => runDesktopCi({ ...options, spawnProcess(command, args) {
         if (command === 'ssh') {
           if (mode === 'ssh-throw') throw new Error(`SSH failed ${token}`)
@@ -931,8 +931,8 @@ test('The failure summary names failed features after a successful update restar
 test('collection prints every platform reason with lease-aware redaction', t => temporary(root => {
   const messages = []
   t.mock.method(console, 'error', text => messages.push(text))
-  const previous = process.env.FACTORY_SUBSCRIPTION_LEASES
-  process.env.FACTORY_SUBSCRIPTION_LEASES = leases
+  const previous = process.env.SUBSCRIPTION_LEASES
+  process.env.SUBSCRIPTION_LEASES = leases
   try {
     const inputs = platforms.slice(0, 3).map(platform => {
       const input = path.join(root, platform)
@@ -948,8 +948,8 @@ test('collection prints every platform reason with lease-aware redaction', t => 
     }
     assertSafe(messages.join('\n'))
   } finally {
-    if (previous === undefined) delete process.env.FACTORY_SUBSCRIPTION_LEASES
-    else process.env.FACTORY_SUBSCRIPTION_LEASES = previous
+    if (previous === undefined) delete process.env.SUBSCRIPTION_LEASES
+    else process.env.SUBSCRIPTION_LEASES = previous
   }
 }))
 
@@ -984,7 +984,7 @@ test('nightly uses the redacted transcript tail on every native E2E failure', ()
   fs.writeFileSync(file, `Native failure ${privateValues.join('\n')} fixture-user\n` +
     '-----DESKTOP-CI-SCREENDUMP-BEGIN-----\n' + 'pixels\n'.repeat(300) + '-----DESKTOP-CI-SCREENDUMP-END-----\n')
   const result = spawnSync(process.execPath, ['test/e2e/support/transcript-tail.mjs', file], {
-    encoding: 'utf8', env: { ...process.env, FACTORY_SUBSCRIPTION_LEASES: leases,
+    encoding: 'utf8', env: { ...process.env, SUBSCRIPTION_LEASES: leases,
       GH_TOKEN: token, DESKTOP_CI_SSH_KEY: key, FIXTURE_USERNAME: 'fixture-user' },
   })
   assert.equal(result.status, 0)
@@ -992,5 +992,5 @@ test('nightly uses the redacted transcript tail on every native E2E failure', ()
   for (const hidden of ['pixels', 'DESKTOP-CI', 'fixture-user']) assert.equal(result.stderr.includes(hidden), false)
   assertSafe(result.stderr)
   const subscriptions = fs.readFileSync('.github/workflows/subscriptions.yml', 'utf8').split('  collect:\n')[1]
-  assert.match(subscriptions, /FACTORY_SUBSCRIPTION_LEASES: \$\{\{ secrets\.FACTORY_SUBSCRIPTION_LEASES \}\}/)
+  assert.match(subscriptions, /SUBSCRIPTION_LEASES: \$\{\{ secrets\.SUBSCRIPTION_LEASES \}\}/)
 }))

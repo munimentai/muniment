@@ -81,8 +81,10 @@ jobs:
         if: github.event_name == 'push' && github.server_url == 'https://github.com'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
         with:
           script: |
             const { reusePullRequest } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
@@ -359,8 +361,10 @@ jobs:
         if: github.event_name == 'pull_request' && github.server_url == 'https://github.com'
         uses: ./.github/actions/store-artifact
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
         with:
           name: ci.yml-proof
           path: ${{ runner.temp }}/proof.json
@@ -436,6 +440,7 @@ jobs:
           REF: ${{ github.head_ref || github.ref_name }}
           SOURCE_SHA: ${{ github.sha }}
           DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+          DESKTOP_CI_HOST: ${{ vars.DESKTOP_CI_HOST }}
         run: |
           set -uo pipefail
           case "$REF" in
@@ -451,6 +456,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
+          : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
 
           cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'
           if [ "$PLATFORM" = "linux" ]; then
@@ -502,7 +508,7 @@ jobs:
             attempt_log="$RUNNER_TEMP/desktop-ci-$PLATFORM-$attempt.log"
             if ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                    -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                   desktopci@10.1.10.10 \
+                   "$DESKTOP_CI_HOST" \
                    "$remote" <<<"$guest_env" \
                    2>&1 | tee "$attempt_log"; then
               status=0

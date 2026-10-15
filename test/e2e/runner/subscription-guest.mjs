@@ -11,8 +11,8 @@ import { subscriptionRedactor, nativeFailure, readDiagnosticLog } from '../suppo
 import { prepareLinuxSandbox, sandboxRequirement } from './subscription-linux-sandbox.mjs'
 
 const missingPackage = 'The signed nightly package or updater signature for this platform is missing.'
-const missingLeases = 'Provide the FACTORY_SUBSCRIPTION_LEASES secret with access-only factory leases.'
-const missingModels = 'Provide the FACTORY_SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
+const missingLeases = 'Provide the SUBSCRIPTION_LEASES secret with access-only leases.'
+const missingModels = 'Provide the SUBSCRIPTION_MODELS variable with four distinct supported model IDs.'
 
 export function guestFailureReason(step, error) {
   const known = [missingPackage, missingLeases, missingModels,

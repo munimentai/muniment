@@ -32,13 +32,14 @@ fs.copyFileSync(local(source), local(dest));
 if (source.startsWith('s3://') && process.env.CORRUPT) fs.appendFileSync(local(dest), 'corrupt');
 `, { mode: 0o755 })
     const env = { ...process.env, PATH: `${root}:${process.env.PATH}`, STORE: store,
-      AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '2',
+      AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test',
+      ARTIFACT_STORE_ENDPOINT: 'https://store.example', ARTIFACT_STORE_BUCKET: 'ci-artifacts', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '2',
       GITHUB_REPOSITORY: 'munimentai/muniment', SOURCE_SHA: 'a'.repeat(40),
       GITHUB_STEP_SUMMARY: join(root, 'summary') }
     const publish = () => spawnSync('bash', [resolve('.github/publish-ci-artifacts.sh'), 'windows', source], { env, encoding: 'utf8' })
     const result = publish()
     expect(result.status, result.stderr).toBe(0)
-    const prefix = join(store, 'factory-ci-artifacts/muniment-desktop/42')
+    const prefix = join(store, 'ci-artifacts/muniment-desktop/42')
     expect(readdirSync(join(prefix, 'windows-e2e-report'))).toEqual(['junit-results.xml', 'manifest.json'])
     const manifest = JSON.parse(readFileSync(join(prefix, 'windows-e2e-report/manifest.json')))
     expect(manifest).toMatchObject({ repository: env.GITHUB_REPOSITORY, run: 42, attempt: 2, source: env.SOURCE_SHA })

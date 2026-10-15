@@ -41,7 +41,7 @@ export SSH_ATTEMPTS="$fixture/attempts"
 export RUNNER_TEMP="$fixture"
 export PLATFORM=windows
 export key=unused known_hosts=unused repo_url=unused REF=unused cmd=unused build_timeout=5400 REPO_TOKEN=fixture-only-token
-export remote=unused guest_env=unused
+export remote=unused guest_env=unused DESKTOP_CI_HOST=ci@192.0.2.10
 
 export SSH_STATUS=1
 export SSH_FAIL_ONCE=true

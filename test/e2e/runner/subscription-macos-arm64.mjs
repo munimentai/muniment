@@ -48,8 +48,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   process.exitCode = await hostedArm64({
     sourceSha: process.env.SOURCE_SHA,
     output: process.env.OUTPUT,
-    leases: process.env.FACTORY_SUBSCRIPTION_LEASES,
-    models: process.env.FACTORY_SUBSCRIPTION_MODELS,
+    leases: process.env.SUBSCRIPTION_LEASES,
+    models: process.env.SUBSCRIPTION_MODELS,
     repository: process.env.REPOSITORY,
     token: process.env.GH_TOKEN,
   })

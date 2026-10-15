@@ -5,7 +5,6 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
-export const endpoint = 'https://s3.roo.run'
 const maxFile = 256 * 1024 * 1024
 const maxManifest = 1024 * 1024
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -47,20 +46,32 @@ function transferError(error) {
   return new ArtifactStoreError(`MinIO transfer failed: ${message}${s3ErrorClass(error.stderr)}`)
 }
 
+// The workflow names the store in ARTIFACT_STORE_ENDPOINT and ARTIFACT_STORE_BUCKET.
+export function endpoint(env = process.env) {
+  const value = env.ARTIFACT_STORE_ENDPOINT ?? ''
+  if (!/^https?:\/\/[^\s/]+\/?$/.test(value)) throw new ArtifactStoreError('Missing artifact store endpoint.')
+  return value.replace(/\/$/, '')
+}
+
+export function bucket(env = process.env) {
+  const value = env.ARTIFACT_STORE_BUCKET
+  if (!component(value)) throw new ArtifactStoreError('Missing artifact store bucket.')
+  return value
+}
+
 export function identity(env = process.env) {
   const number = value => /^[1-9][0-9]*$/.test(value ?? '') ? Number(value) : NaN
   return { repository: env.GITHUB_REPOSITORY, run: number(env.GITHUB_RUN_ID),
     attempt: number(env.GITHUB_RUN_ATTEMPT), source: env.SOURCE_SHA }
 }
 
-// GitHub runs report the public repository and Forgejo runs report the record.
-const repositories = new Set(['munimentai/muniment', 'factory/muniment'])
+const repository = value => typeof value === 'string' && value.split('/').length === 2 && value.split('/').every(component)
 
 function prefix(id, name) {
-  if (!repositories.has(id.repository) || !positive(id.run) || !positive(id.attempt) ||
+  if (!repository(id.repository) || !positive(id.run) || !positive(id.attempt) ||
       !/^[a-f0-9]{40}$/.test(id.source ?? '') || !component(name)) throw new Error('Invalid artifact identity.')
-  // Keep the factory release reader's run-scoped paths. The manifest binds the full identity.
-  return `s3://factory-ci-artifacts/muniment-desktop/${id.run}/${name}/`
+  // Keep the run-scoped paths that release readers use. The manifest binds the full identity.
+  return `s3://${bucket()}/muniment-desktop/${id.run}/${name}/`
 }
 
 function safePath(path) {
@@ -72,8 +83,9 @@ function safePath(path) {
 export function transport(env = process.env, execute = execFileSync) {
   const request = (args, timeout = 180_000) => {
     if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) throw new ArtifactStoreError('Missing MinIO credentials.')
+    const url = endpoint(env)
     try {
-      execute(env.AWS_CLI || 'aws', ['--endpoint-url', endpoint,
+      execute(env.AWS_CLI || 'aws', ['--endpoint-url', url,
         '--cli-connect-timeout', '15', '--cli-read-timeout', '120', ...args],
       { env: { ...env, AWS_DEFAULT_REGION: 'us-east-1', AWS_EC2_METADATA_DISABLED: 'true' },
         stdio: 'pipe', timeout, maxBuffer: 4096 })

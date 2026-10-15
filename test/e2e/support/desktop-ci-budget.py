@@ -91,7 +91,7 @@ def run(slot_seconds, run_seconds, cleanup_seconds, command):
                 deadline = time.monotonic() + cleanup_seconds
         if failure is not None:
             if failure == "slot-wait":
-                print("\n::error::The desktop-CI runner at 10.1.10.10 is busy (blocked). The slot-wait budget expired.", flush=True)
+                print("\n::error::The desktop-CI host is busy (blocked). The slot-wait budget expired.", flush=True)
             print(f"\n[subscription-host] timeout={failure}", flush=True)
             return 124
         return child.wait()

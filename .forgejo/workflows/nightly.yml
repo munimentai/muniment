@@ -40,9 +40,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
+          RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
-          if [ "$REPOSITORY" != factory/muniment ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ "$ACTOR" != mikeydiamonds ]; then
-            echo '::error::Release jobs run only from an owner dispatch of main in factory/muniment.' >&2
+          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
+            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
 
@@ -89,9 +91,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
+          RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
-          if [ "$REPOSITORY" != factory/muniment ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ "$ACTOR" != mikeydiamonds ]; then
-            echo '::error::Release jobs run only from an owner dispatch of main in factory/muniment.' >&2
+          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
+            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
 
@@ -107,6 +111,7 @@ jobs:
           REPOSITORY: munimentai/muniment
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+          DESKTOP_CI_HOST: ${{ vars.DESKTOP_CI_HOST }}
           # Azure Artifact Signing (Windows). Empty until the six repo secrets
           # exist => unsigned build. TENANT/CLIENT/SECRET authenticate the
           # service principal; ENDPOINT/ACCOUNT/PROFILE address the cert profile.
@@ -135,6 +140,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" > "$key"
           trap 'rm -f "$key" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
+          : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
 
           # Build VMs install packages without install scripts, and no step
           # before signing sees a signing secret. The updater key never enters
@@ -199,7 +205,7 @@ jobs:
           { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if [ -n "$signing_env" ]; then printf '%s\n' "$signing_env"; fi; } \
           | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-                desktopci@10.1.10.10 "$ssh_cmd"
+                "$DESKTOP_CI_HOST" "$ssh_cmd"
 
       # The updater key stays on the runner in this one step, which runs only
       # this repository's code and Node's crypto, makes no tool download, and
@@ -255,6 +261,9 @@ jobs:
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+      DESKTOP_CI_HOST: ${{ vars.DESKTOP_CI_HOST }}
+      # The local-mode chat specs reach the model host at this address.
+      MUNIMENT_E2E_OLLAMA_HOST: ${{ vars.MUNIMENT_E2E_OLLAMA_HOST }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -277,6 +286,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" >"$known_hosts"
+          : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
 
           cmd='bash test/e2e/runner/linux.sh'
           remote="sudo desktop-ci linux --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
@@ -289,9 +299,10 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+            "MUNIMENT_E2E_OLLAMA_HOST=$MUNIMENT_E2E_OLLAMA_HOST" \
           | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 "$remote" >"$output" 2>&1
+              "$DESKTOP_CI_HOST" "$remote" >"$output" 2>&1
           run_status=$?
           set -e
 
@@ -314,8 +325,10 @@ jobs:
       - name: Publish diagnostics and JUnit to MinIO
         if: always()
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
           AWS_DEFAULT_REGION: us-east-1
         run: bash .github/publish-ci-artifacts.sh linux "$RUNNER_TEMP/muniment-e2e-artifacts"
 
@@ -345,6 +358,9 @@ jobs:
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+      DESKTOP_CI_HOST: ${{ vars.DESKTOP_CI_HOST }}
+      # The local-mode chat specs reach the model host at this address.
+      MUNIMENT_E2E_OLLAMA_HOST: ${{ vars.MUNIMENT_E2E_OLLAMA_HOST }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -367,6 +383,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" >"$known_hosts"
+          : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
 
           cmd='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/e2e/runner/windows.ps1'
           remote="sudo desktop-ci windows --console-user --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts"
@@ -379,9 +396,10 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+            "MUNIMENT_E2E_OLLAMA_HOST=$MUNIMENT_E2E_OLLAMA_HOST" \
           | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 "$remote" >"$output" 2>&1
+              "$DESKTOP_CI_HOST" "$remote" >"$output" 2>&1
           run_status=$?
           set -e
 
@@ -402,8 +420,10 @@ jobs:
       - name: Publish diagnostics and JUnit to MinIO
         if: always()
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
           AWS_DEFAULT_REGION: us-east-1
         run: bash .github/publish-ci-artifacts.sh windows "$RUNNER_TEMP/muniment-windows-e2e-artifacts"
 
@@ -415,7 +435,7 @@ jobs:
 
   macos-e2e:
     needs: [prepare, windows-e2e]
-    # pve01 permits one desktop VM at a time. macOS starts only after the
+    # The desktop-ci host permits one VM at a time. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
       !cancelled() && needs.prepare.result == 'success' &&
@@ -433,6 +453,9 @@ jobs:
       FIXTURE_USERNAME: ${{ secrets.DESKTOP_E2E_USERNAME }}
       FIXTURE_PASSWORD: ${{ secrets.DESKTOP_E2E_PASSWORD }}
       DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
+      DESKTOP_CI_HOST: ${{ vars.DESKTOP_CI_HOST }}
+      # The local-mode chat specs reach the model host at this address.
+      MUNIMENT_E2E_OLLAMA_HOST: ${{ vars.MUNIMENT_E2E_OLLAMA_HOST }}
     steps:
       - name: Check out E2E harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -455,6 +478,7 @@ jobs:
           printf '%s' "$DESKTOP_CI_SSH_KEY" >"$key"
           trap 'rm -f "$key" "$output" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" >"$known_hosts"
+          : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
 
           cmd='bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos.sh >/tmp/muniment-macos-smoke-artifacts && bash test/e2e/support/macos-keychain-session.sh bash test/e2e/runner/macos-wdio.sh'
           remote="sudo desktop-ci macos --repo 'https://github.com/${REPOSITORY}.git' --ref '$SOURCE_SHA' --cmd '$cmd' --env-stdin --memory 8192 --build-timeout 2400 --collect-artifacts --screendump"
@@ -467,9 +491,10 @@ jobs:
             "MUNIMENT_E2E_SOURCE_SHA=$SOURCE_SHA" \
             "MUNIMENT_E2E_USERNAME=$FIXTURE_USERNAME" \
             "MUNIMENT_E2E_PASSWORD=$FIXTURE_PASSWORD" \
+            "MUNIMENT_E2E_OLLAMA_HOST=$MUNIMENT_E2E_OLLAMA_HOST" \
           | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
               -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
-              desktopci@10.1.10.10 "$remote" >"$output" 2>&1
+              "$DESKTOP_CI_HOST" "$remote" >"$output" 2>&1
           run_status=$?
           set -e
 
@@ -490,8 +515,10 @@ jobs:
       - name: Publish diagnostics and JUnit to MinIO
         if: always()
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
+          ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}
+          ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}
           AWS_DEFAULT_REGION: us-east-1
         run: bash .github/publish-ci-artifacts.sh macos "$RUNNER_TEMP/muniment-macos-e2e-artifacts"
 

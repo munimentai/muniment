@@ -44,7 +44,7 @@ const copyPairs = [
 ];
 const uploadName = (call) => new URL(call.url).searchParams.get("name");
 const smoke = { name: "smoke", status: "completed", conclusion: "success" };
-const forgejo = "http://forgejo.test/api/v1/repos/factory/muniment";
+const forgejo = "http://forgejo.test/api/v1/repos/example/muniment";
 const installedJobs = ["build (linux)", "build (windows)", "build (macos)", "publish", "linux-e2e", "windows-e2e", "macos-e2e"];
 const task = (name, extra = {}) => ({ name, workflow_id: "nightly.yml", head_sha: sha, run_number: 99, status: "success", ...extra });
 

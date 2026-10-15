@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url'
 import { diagnosticTail, subscriptionRedactor, transcriptText } from './subscription-diagnostics.mjs'
 
 export function transcriptTail(text, redact = subscriptionRedactor({
-  leases: process.env.FACTORY_SUBSCRIPTION_LEASES,
+  leases: process.env.SUBSCRIPTION_LEASES,
   values: [process.env.FIXTURE_USERNAME, process.env.MUNIMENT_E2E_USERNAME],
 })) {
   // Redact before filtering or truncating so neither operation can split a secret.

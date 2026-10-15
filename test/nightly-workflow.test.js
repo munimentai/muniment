@@ -126,9 +126,20 @@ describe('nightly Linux E2E workflow', () => {
       const step = lane.slice(lane.indexOf('      - name: Publish diagnostics and JUnit to MinIO'), lane.indexOf('      - name: Preserve E2E result'))
       expect(step).toContain('if: always()')
       expect(step).not.toContain('continue-on-error')
-      expect(step).toContain('AWS_ACCESS_KEY_ID: ${{ secrets.FACTORY_CI_S3_ACCESS_KEY }}')
-      expect(step).toContain('AWS_SECRET_ACCESS_KEY: ${{ secrets.FACTORY_CI_S3_SECRET_KEY }}')
+      expect(step).toContain('AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}')
+      expect(step).toContain('AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}')
+      expect(step).toContain('ARTIFACT_STORE_ENDPOINT: ${{ vars.ARTIFACT_STORE_ENDPOINT }}')
+      expect(step).toContain('ARTIFACT_STORE_BUCKET: ${{ vars.ARTIFACT_STORE_BUCKET }}')
       expect(step).toContain(`bash .github/publish-ci-artifacts.sh ${platform}`)
+    }
+  })
+
+  it('passes the model host from a repository variable to each E2E guest', () => {
+    for (const platform of ['linux', 'windows', 'macos']) {
+      const lane = job(`${platform}-e2e`, platform === 'linux' ? 'windows-e2e' : platform === 'windows' ? 'macos-e2e' : 'verify-requested-e2e')
+      expect(lane).toContain('MUNIMENT_E2E_OLLAMA_HOST: ${{ vars.MUNIMENT_E2E_OLLAMA_HOST }}')
+      expect(lane).toContain('"MUNIMENT_E2E_OLLAMA_HOST=$MUNIMENT_E2E_OLLAMA_HOST"')
+      expect(lane).toContain('DESKTOP_CI_HOST: ${{ vars.DESKTOP_CI_HOST }}')
     }
   })
 
@@ -379,13 +390,16 @@ describe('release job gate', () => {
   const read = (file) => fs.readFileSync(`.github/workflows/${file}`, 'utf8')
   const jobText = (text, name) => text.slice(text.indexOf('\njobs:\n')).match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|$(?![\\s\\S]))`, 'm'))[1]
   const gates = [['nightly.yml', 'prepare'], ['nightly.yml', 'build'], ['release.yml', 'promote'], ['release.yml', 'draft-winget-pr']]
-  const owner = { REPOSITORY: 'factory/muniment', EVENT: 'workflow_dispatch', REF: 'refs/heads/main', ACTOR: 'mikeydiamonds' }
+  const owner = { REPOSITORY: 'example/muniment', EVENT: 'workflow_dispatch', REF: 'refs/heads/main', ACTOR: 'owner',
+    RELEASE_REPOSITORY: 'example/muniment', RELEASE_ACTORS: 'owner' }
 
   it.each(gates)('%s %s admits the dispatch in its first step, before any secret', (file, name) => {
     const text = jobText(read(file), name)
     const steps = text.slice(text.indexOf('    steps:\n'))
     expect(steps.match(/^      - .+$/m)[0]).toBe('      - name: Admit only an owner dispatch of main')
     expect(text.slice(0, text.indexOf('      - name: Admit only an owner dispatch of main'))).not.toContain('secrets.')
+    expect(steps).toContain('RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}')
+    expect(steps).toContain('RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}')
   })
 
   it('makes every other nightly job wait for the gated prepare job', () => {
@@ -397,7 +411,13 @@ describe('release job gate', () => {
 
   it.skipIf(process.platform === 'win32').each([
     [{}, 0],
-    [{ ACTOR: 'factory-bot' }, 1],
+    [{ RELEASE_ACTORS: 'maintainer owner' }, 0],
+    [{ ACTOR: 'agent-bot' }, 1],
+    [{ ACTOR: 'own' }, 1],
+    [{ RELEASE_REPOSITORY: '' }, 1],
+    [{ RELEASE_REPOSITORY: '', REPOSITORY: '' }, 1],
+    [{ RELEASE_ACTORS: '' }, 1],
+    [{ RELEASE_ACTORS: '', ACTOR: '' }, 1],
     [{ REF: 'refs/heads/agent/branch' }, 1],
     [{ REF: 'refs/tags/v1.0.0' }, 1],
     [{ EVENT: 'push' }, 1],
