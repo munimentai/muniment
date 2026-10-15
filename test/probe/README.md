@@ -19,13 +19,14 @@ Open `applied-diff.html` for a settled run with applied file changes.
 Open `select.html` for a run paused on a choice request.
 Open `input.html` for a run paused on a single-line text request.
 Open `editor.html` for a run paused on a multi-line text request.
+Open `runtimes.html` for Settings → Runtimes with two paired runtimes, one offline and one older. `?state=local` holds this computer alone, `?state=pairing` and `?state=failed` paste a link and pair, `?state=ssh` fills the SSH form, `?state=switcher` opens the sidebar switcher, and `?state=remote` selects a paired runtime.
 
 Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners` in the browser console. Emit an event with `window.__PROBE__.emit(event, payload)`.
 
 Capture every fixture at the default desktop size:
 
 ```sh
-for fixture in index history local-mode in-flight access markdown signed-out onboarding approved-files permission select input editor code-diff code-diff-unavailable applied-diff; do
+for fixture in index history local-mode in-flight access markdown signed-out onboarding approved-files permission select input editor code-diff code-diff-unavailable applied-diff runtimes; do
   playwright screenshot --browser chromium --viewport-size "1100,720" --wait-for-selector "[data-probe-ready]" "http://127.0.0.1:4173/test/probe/$fixture.html" "/tmp/muniment-probe-$fixture.png"
 done
 ```

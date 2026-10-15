@@ -1,6 +1,7 @@
 export const historyFixtures = {
   'signed-out': [],
   'runtime-exit': [],
+  runtimes: [],
   onboarding: [],
   scan: [],
   access: [],
@@ -357,6 +358,11 @@ export function buildProbeCommandTable(fixtureName) {
   const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
   const signedOutFixture = fixtureName === 'signed-out'
+  // `runtimes.html?state=` picks local, paired, remote, switcher, pairing,
+  // failed or ssh. Every other fixture holds this computer's runtime alone.
+  const runtimesFixture = fixtureName === 'runtimes'
+  const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
+  let runtimeList = probeRuntimes(runtimesState)
   const onboardingHomePath = '/Users/alice/Documents/muniment'
   const threadSummaries = history.length
     ? [
@@ -680,6 +686,31 @@ export function buildProbeCommandTable(fixtureName) {
       },
     ]
     if (command === 'attach_revoke_companion') return null
+    if (command === 'runtime_list' || command === 'runtime_refresh') return structuredClone(runtimeList)
+    if (command === 'runtime_select') {
+      runtimeList = { ...runtimeList, selected: payload.id, runtimes: runtimeList.runtimes.map((runtime) => ({ ...runtime, active: runtime.id === payload.id })) }
+      return structuredClone(runtimeList)
+    }
+    if (command === 'runtime_pair_link' || command === 'runtime_pair_ssh') {
+      if (runtimesState === 'failed') throw 'The runtime refused the link. It may be used or expired. Create a new link.'
+      // Pairing stays in progress, so the fixture shows its state line.
+      return new Promise(() => {})
+    }
+    if (command === 'runtime_rename') {
+      runtimeList = { ...runtimeList, runtimes: runtimeList.runtimes.map((runtime) => runtime.id === payload.id ? { ...runtime, name: payload.name } : runtime) }
+      return structuredClone(runtimeList)
+    }
+    if (command === 'runtime_remove') {
+      runtimeList = { ...runtimeList, runtimes: runtimeList.runtimes.filter((runtime) => runtime.id !== payload.id) }
+      return structuredClone(runtimeList)
+    }
+    if (command === 'runtime_update') {
+      const runtime = runtimeList.runtimes.find((entry) => entry.id === payload.id)
+      return { id: payload.id, name: runtime?.name ?? '', ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` }
+    }
+    if (command === 'runtime_update_all') {
+      return runtimeList.runtimes.filter((runtime) => runtime.updateOffered).map((runtime) => ({ id: runtime.id, name: runtime.name, ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` }))
+    }
     if (command === 'voice_input_devices') return ['MacBook Pro Microphone', 'USB Audio Device']
     if (command === 'parakeet_install_facts') return { totalDownloadBytes: 482_000_000, requiredFreeBytes: 1_100_000_000 }
     if (command === 'parakeet_install_status') return { state: 'installed' }
@@ -697,12 +728,31 @@ export function buildProbeCommandTable(fixtureName) {
     scanFixture,
     accessFixture,
     signedOutFixture,
+    runtimesFixture,
+    runtimesState,
     onboardingHomePath,
     threadSummaries,
     olderThreadSummaries,
     eventListeners,
     invokedCommands,
     unknownCommands,
+  }
+}
+
+// This computer, then a desktop that is offline and an older container this
+// device may update over its SSH tunnel.
+function probeRuntimes(state) {
+  const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
+  const paired = [
+    { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.2.0', status: 'offline', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null },
+    { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'runtime.admin', 'thread.read'], admin: true, updateOffered: true, sshHost: 'build-box' },
+  ]
+  const selected = state === 'remote' ? paired[1].id : 'local'
+  return {
+    appVersion: '0.2.0',
+    deviceName: 'Laptop',
+    selected,
+    runtimes: (state === 'local' ? [local] : [local, ...paired]).map((runtime) => ({ ...runtime, active: runtime.id === selected })),
   }
 }
 
@@ -720,6 +770,8 @@ const {
   scanFixture,
   accessFixture,
   signedOutFixture,
+  runtimesFixture,
+  runtimesState,
   onboardingHomePath,
   threadSummaries,
   olderThreadSummaries,
@@ -727,12 +779,32 @@ const {
   invokedCommands,
   unknownCommands,
 } = probeTable
+const PROBE_PAIRING_LINK = `muniment://pair?v=1&id=018f0000-0000-7000-8000-000000000044&name=Lab&fp=${'3c'.repeat(32)}&host=192.0.2.20%3A7443#${'5e'.repeat(16)}`
+let probePairClicked = false
 
 function recordInvoke(surface, command, payload) {
   invokedCommands.push({ surface, command, payload })
 }
 
+function runtimesRendered() {
+  if (runtimesState === 'remote' || runtimesState === 'switcher') {
+    const toggle = document.querySelector('.runtime-switcher .switcher')
+    if (!toggle?.textContent.includes(runtimesState === 'remote' ? 'Build box' : 'This computer')) return false
+    return runtimesState === 'remote' ? !document.querySelector('[aria-label="Agents group"]') : !!document.querySelector('.runtime-menu')
+  }
+  const page = document.querySelector('.settings-runtimes')
+  if (!page) return false
+  const rows = page.querySelectorAll('[role="group"]').length
+  if (runtimesState === 'local') return rows === 1
+  if (runtimesState === 'paired') return rows === 3 && page.textContent.includes('Offline') && !!page.querySelector('[aria-label="Update Build box"]')
+  if (runtimesState === 'pairing') return page.textContent.includes('Pairing with the runtime…')
+  if (runtimesState === 'failed') return !!page.querySelector('[role="alert"]')?.textContent.includes('refused the link')
+  if (runtimesState === 'ssh') return page.querySelector('input[placeholder^="build-box"]')?.value === 'me@build-box'
+  return false
+}
+
 function fixtureRendered() {
+  if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
     const notice = document.querySelector('[data-testid="runtime-notice"]')
     return notice?.querySelector('p.record')?.textContent === 'The runtime exited.'
@@ -802,6 +874,47 @@ function advanceAccessFixture() {
   if (account && account.getAttribute('aria-current') !== 'true') account.click()
 }
 
+function typeInto(input, value) {
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+// The Runtimes page lives in Settings, so the fixture opens it, and a pairing
+// state pastes a link and presses Pair.
+function advanceRuntimesFixture() {
+  if (!runtimesFixture || fixtureRendered()) return
+  if (runtimesState === 'switcher') {
+    document.querySelector('.runtime-switcher .switcher[aria-expanded="false"]')?.click()
+    return
+  }
+  if (runtimesState === 'remote') return
+  if (!document.querySelector('.settings-layout')) {
+    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    return
+  }
+  const runtimes = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
+    .find((button) => button.textContent.trim() === 'Runtimes')
+  if (runtimes && runtimes.getAttribute('aria-current') !== 'true') return runtimes.click()
+  const page = document.querySelector('.settings-runtimes')
+  if (!page) return
+  if (runtimesState === 'pairing' || runtimesState === 'failed') {
+    const link = page.querySelector('input[placeholder^="muniment://pair"]')
+    if (link && !link.value) return typeInto(link, PROBE_PAIRING_LINK)
+    const pair = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Pair')
+    if (pair && !pair.disabled && !probePairClicked) {
+      probePairClicked = true
+      pair.click()
+    }
+    return
+  }
+  if (runtimesState === 'ssh') {
+    const ssh = Array.from(page.querySelectorAll('[role="radio"]')).find((radio) => radio.textContent.trim() === 'Over SSH')
+    if (ssh && ssh.getAttribute('aria-checked') !== 'true') return ssh.click()
+    const host = page.querySelector('input[placeholder^="build-box"]')
+    if (host && !host.value) typeInto(host, 'me@build-box')
+  }
+}
+
 async function markProbeReady() {
   await document.fonts.ready
   document.body.dataset.probeReady = ''
@@ -810,6 +923,7 @@ async function markProbeReady() {
 function markReadyAfterFixtureRender() {
   advanceScanFixture()
   advanceAccessFixture()
+  advanceRuntimesFixture()
   if (fixtureRendered()) {
     void markProbeReady()
     return
@@ -817,6 +931,7 @@ function markReadyAfterFixtureRender() {
   const observer = new MutationObserver(() => {
     advanceScanFixture()
     advanceAccessFixture()
+    advanceRuntimesFixture()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
