@@ -4,8 +4,8 @@
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { settingsGroups, settingsPage } from './lib/settings-sections.js'
-  import RuntimeSwitcher from './runtimes/RuntimeSwitcher.svelte'
-  import { activeRuntime, remoteSelected } from './runtimes/runtimes.js'
+  import MachinePicker from './runtimes/MachinePicker.svelte'
+  import { activeRuntime, LOCAL_RUNTIME_ID, remoteSelected, statusLabel, statusTone } from './runtimes/runtimes.js'
   import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
@@ -265,6 +265,7 @@
     if (values[1].status === 'fulfilled' && Array.isArray(values[1].value)) artifactItems = values[1].value
   }
   async function startCreation(kind, chosen = creationDefaults(kind)) {
+    if (remoteSelected(runtimeList)) await onThisComputer()
     if (switchLocked) return
     if (!await newSidebarThread(selectedProject) || !currentThreadId) return
     pendingCreation = { threadId: currentThreadId, kind, goal: chosen.goal, output: chosen.output, resultId: null }
@@ -287,7 +288,14 @@
     turnExtensions = { enabled: [], blocked: [], automatic: null }
     composer?.focus()
   }
+  // Agents, artifacts and projects live on this computer, so opening one
+  // sends requests there again.
+  async function onThisComputer() {
+    if (remoteSelected(runtimeList)) await selectRuntime(runtimeList.runtimes.find((runtime) => runtime.local))
+  }
+
   async function openCreation(item) {
+    if (remoteSelected(runtimeList)) await onThisComputer()
     if (switchLocked) return
     if (!item.threadId) {
       if (!await newSidebarThread(selectedProject) || !currentThreadId) return
@@ -313,6 +321,7 @@
     showBrowser('artifacts')
   }
   async function showArtifacts() {
+    if (remoteSelected(runtimeList)) await onThisComputer()
     await refreshCreations()
     artifactsOpen=true;projectsOpen=false; agentsOpen=false;agentProfileOpen=false;closeRail()
   }
@@ -330,6 +339,7 @@
   let agentPanelId = $state(null)
   let agentCreateNew = $state(false)
   async function showAgents(id = null, create = false) {
+    if (remoteSelected(runtimeList)) await onThisComputer()
     await Promise.all([refreshAgents(),refreshCreations()])
     if (create) return startCreation('agent')
     projectsOpen=false; artifactsOpen=false; agentsOpen=true; agentProfileOpen=false; agentsRequest+=1;closeRail()
@@ -354,6 +364,7 @@
     catch (_) { /* The manager presents errors and retry state. */ }
   }
   async function openAgent(agent) {
+    if (remoteSelected(runtimeList)) await onThisComputer()
     if (switchLocked || agentOpening) return
     agentOpening = true
     try {
@@ -416,19 +427,10 @@
     if (previous && previous !== next.selected) void runtimeSwitched()
   }
 
-  // A switch shows the newly selected runtime's threads and models. Its first
-  // send starts a thread there.
+  // The thread list holds every machine's threads, so a change of the machine
+  // requests go to only loads that machine's models.
   async function runtimeSwitched() {
-    selectTask(null)
-    messages = []
-    selectedFiles = []
-    threadSummaries = []
-    agentsOpen = false
-    artifactsOpen = false
-    projectsOpen = false
-    selectedAgent = null
     await refreshInventory()
-    await chatController.loadHistory()
   }
 
   async function selectRuntime(runtime) {
@@ -663,6 +665,11 @@
   const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? 'Projects' : '')
   let currentThreadTitle = $derived(profileAgent?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
+  // The machine the open thread lives on. A new thread has none until its
+  // first message, and its machine comes from the composer's picker.
+  const threadMachine = $derived(!freshThread && currentThreadId
+    ? threadSummaries.find((summary) => summary.threadId === currentThreadId)?.runtimeId ?? runtimeList?.selected ?? null
+    : null)
   let threadSwitching = $state(false)
   const runningThreadId = $derived(backgroundRun?.threadId ?? (active ? currentThreadId : null))
   // A running agent or artifact chat marks its own sidebar row, or its collapsed group.
@@ -994,6 +1001,7 @@
   }
 
   async function saveProject() {
+    if (remoteSelected(runtimeList)) await onThisComputer()
     if (projectBusy || !projectName.trim()) return
     projectBusy = true
     try {
@@ -1022,6 +1030,8 @@
     agentsOpen = false
     agentProfileOpen = false
     selectedAgent = null
+    // A new thread starts on this computer. The composer's picker moves it.
+    if (remoteSelected(runtimeList)) await selectRuntime(runtimeList.runtimes.find((runtime) => runtime.local))
     if (!await chatController.newThread()) return
     threadSearch = ''
     archivedThreads = false
@@ -2351,6 +2361,11 @@
             </ul>
 {/snippet}
 
+{#snippet machineBadge(summary)}
+  {@const machine = summary.runtimeId && summary.runtimeId !== LOCAL_RUNTIME_ID ? runtimeList?.runtimes?.find((runtime) => runtime.id === summary.runtimeId) : null}
+  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={statusTone(machine)} aria-hidden="true"></i>{machine.name}<span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
+{/snippet}
+
 {#snippet rowMark(selected, running = false)}
   {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} variant="action" /></span>{:else}<span class:run-mark={running} aria-hidden={running ? 'true' : undefined}></span>{/if}
 {/snippet}
@@ -2371,10 +2386,10 @@
                     </form>
                   {:else if current && !(agentsOpen || artifactsOpen || projectsOpen)}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-title">{rowTitle}</div><time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-title">{rowTitle}</div>{@render machineBadge(summary)}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
                   {:else}
                     {@const running = summary.threadId === backgroundRun?.threadId}
-                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-title">{rowTitle}</div>{#if running}<span class="visually-hidden">Running</span>{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-title">{rowTitle}</div>{@render machineBadge(summary)}{#if running}<span class="visually-hidden">Running</span>{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -2441,6 +2456,7 @@
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
               <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread || !!active} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
+              {#if threadMachine && threadMachine !== LOCAL_RUNTIME_ID}{@render machineBadge({ runtimeId: threadMachine })}{/if}
             {/if}
             <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
             {/if}
@@ -2484,10 +2500,8 @@
               <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={switchLocked} onclick={() => newSidebarThread()}>
                 <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
               </button>
-              <RuntimeSwitcher list={runtimeList} disabled={switchLocked || !!active || !!backgroundRun} onselect={selectRuntime} onmanage={() => openSettings('runtimes')} />
             </div>
             <div class="side-scroll" use:panelScroll>
-            {#if !remoteRuntime}
             <section class="sidebar-collection" aria-label="Agents group">
               <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} running={!agentsExpanded && !!backgroundRunAgent} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
               {#if agentsExpanded}<div class="collection-children">
@@ -2507,9 +2521,7 @@
             {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span>{#if item.threadId && item.threadId === backgroundRunArtifact}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
-            {/if}
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
-            {#if !remoteRuntime}
             <section class="project-section" aria-label="Projects">
               <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
               {#if projectForm}
@@ -2529,7 +2541,6 @@
               </div>{/if}
               {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
             </section>
-            {/if}
             <!-- The selection takes the Threads heading's row, so no row moves under the pointer. -->
             {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
             {:else}<ThreadFilter status={includeArchived ? 'all' : archivedThreads ? 'archived' : 'active'} sort={threadSort} onchange={(status, sort) => { archivedThreads = status === 'archived'; includeArchived = status === 'all'; threadSort = sort; filterThreads() }} />{/if}
@@ -2886,6 +2897,7 @@
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
+            <MachinePicker list={runtimeList} locked={threadMachine} disabled={switchLocked || !!active} onselect={selectRuntime} onmanage={() => openSettings('runtimes')} />
             {#if auth.name === 'local'}
               <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
               {#if chipThinking}<button type="button" class="quiet thinking-trigger" bind:this={thinkingChip} aria-label={`Thinking level: ${thinkingLabel(chipThinking.level)}`} aria-haspopup="menu" aria-expanded={thinkingOpen} onclick={() => openComposerPanel(thinkingOpen ? null : 'thinking')}><LucideIcon name="brain" size={14} /><span class="model-chip-label">{thinkingLabel(chipThinking.level)}</span></button>{/if}
@@ -3278,7 +3290,16 @@
   /* The time always shows: the title takes the rest of the row and fades at its end. */
   .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
+  .thread-row > span.machine-badge, .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 88px; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .active-thread > span.machine-badge { width: auto; height: auto; background: transparent; }
+  .machine-dot { flex: none; width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--border); }
+  .machine-dot[data-tone="ink"] { background: var(--ink); }
+  .machine-dot[data-tone="caution"] { background: var(--ochre); }
+  .machine-dot[data-tone="critical"] { background: var(--oxide); }
   .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .thread-row:has(.machine-badge) .thread-row-title { min-width: 56px; }
+  /* A thread on another machine shows its machine where the date sits. */
+  .thread-row:has(.machine-badge) time { display: none; }
   .thread-row-title[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .title-thread-actions { flex: none; }

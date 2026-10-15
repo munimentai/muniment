@@ -279,30 +279,92 @@ fn connector<R: tauri::Runtime>(
     }
 }
 
-/// Attaches the app to `selected`, a paired runtime id, or to this
-/// computer's runtime for `None`. The local runtime keeps running either way.
-pub(crate) fn activate<R: tauri::Runtime>(app: &tauri::AppHandle<R>, selected: Option<&str>) {
+/// Starts connections to the paired runtime `id` unless it has them. Its
+/// chat events reach the window while it is the active runtime.
+fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let attach = app.state::<AttachCompanionState>();
-    if let Some(previous) = attach.replace_remote(None) {
+    if attach.has_remote(id) {
+        return;
+    }
+    let runtimes = app.state::<Runtimes>();
+    let Ok(registry) = runtimes.registry() else {
+        return;
+    };
+    let event_app = app.clone();
+    let event_runtime = id.to_owned();
+    let status_app = app.clone();
+    let supervisor = RemoteSupervisor::start(
+        connector(app, registry, id),
+        move |event| {
+            let active = event_app
+                .state::<AttachCompanionState>()
+                .remote_runtime_id();
+            if active.as_deref() == Some(event_runtime.as_str()) {
+                crate::attach_service::deliver_subscription_event(&event_app, event);
+            }
+        },
+        move |_| emit_changed(&status_app),
+    );
+    if let Some(previous) = attach.insert_remote(supervisor) {
         previous.stop();
     }
-    if let Some(id) = selected {
-        if let Ok(registry) = app.state::<Runtimes>().registry() {
-            let event_app = app.clone();
-            let status_app = app.clone();
-            let supervisor = RemoteSupervisor::start(
-                connector(app, registry, id),
-                move |event| crate::attach_service::deliver_subscription_event(&event_app, event),
-                move |_| emit_changed(&status_app),
-            );
-            attach.replace_remote(Some(supervisor));
-        }
+}
+
+/// Connects every paired runtime, so the thread list holds each one's
+/// threads and a thread on any of them opens at once.
+pub(crate) fn connect_all<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let runtimes = app.state::<Runtimes>();
+    let Ok(registry) = runtimes.registry() else {
+        return;
+    };
+    for runtime in registry.list() {
+        connect(app, &runtime.id);
     }
+}
+
+/// Restarts the paired runtime `id`'s connections after its record changed,
+/// keeping it active when it was.
+fn reconnect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
+    let attach = app.state::<AttachCompanionState>();
+    let was_active = attach.remote_runtime_id().as_deref() == Some(id);
+    if let Some(previous) = attach.remove_remote(id) {
+        previous.stop();
+    }
+    connect(app, id);
+    if was_active {
+        attach.set_active(Some(id.to_owned()));
+    }
+}
+
+/// Sends requests to `selected`, a paired runtime id, or to this computer's
+/// runtime for `None`, for a new thread there. Every runtime stays connected.
+pub(crate) fn activate<R: tauri::Runtime>(app: &tauri::AppHandle<R>, selected: Option<&str>) {
+    if let Some(id) = selected {
+        connect(app, id);
+    }
+    app.state::<AttachCompanionState>()
+        .set_active(selected.map(str::to_owned));
     // The next message starts a thread on the runtime the app now shows.
     if let Some(chat) = app.try_state::<crate::chat::ChatState>() {
         chat.session_thread.fresh(None);
     }
     emit_changed(app);
+}
+
+/// Sends requests to the runtime `thread_id` lives on, when the merged
+/// thread list named it. A thread stays on the runtime it started on.
+pub(crate) fn follow_thread<R: tauri::Runtime>(app: &tauri::AppHandle<R>, thread_id: &str) {
+    let attach = app.state::<AttachCompanionState>();
+    let Some(runtime) = attach.thread_runtime(thread_id) else {
+        return;
+    };
+    let target = (runtime != LOCAL_RUNTIME_ID).then_some(runtime);
+    if let Some(id) = &target {
+        connect(app, id);
+    }
+    if attach.set_active(target) {
+        emit_changed(app);
+    }
 }
 
 /// Names the selected paired runtime in place of the background service when
@@ -355,6 +417,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let registry = Registry::open_default().ok();
     let selected = registry.as_ref().and_then(Registry::selected);
     app.manage(Runtimes::new(registry));
+    connect_all(app);
     if selected.is_some() {
         activate(app, selected.as_deref());
     }
@@ -364,8 +427,8 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 /// Closes the selected runtime's connections and its SSH tunnel.
 pub(crate) fn shutdown<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(attach) = app.try_state::<AttachCompanionState>() {
-        if let Some(previous) = attach.replace_remote(None) {
-            previous.stop();
+        for remote in attach.take_remotes() {
+            remote.stop();
         }
     }
 }

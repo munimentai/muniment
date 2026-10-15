@@ -15,7 +15,9 @@ use super::connection::{client_options, welcome, Connector, Observation, RemoteC
 use super::registry::{canonical_id, Registry, SshTarget, LOCAL_RUNTIME_ID};
 use super::ssh::{self, Ssh};
 use super::version::{is_older, may_update, APP_VERSION};
-use super::{activate, connector, emit_changed, list, RuntimeList, RuntimeStatus, Runtimes};
+use super::{
+    activate, connector, emit_changed, list, reconnect, RuntimeList, RuntimeStatus, Runtimes,
+};
 use crate::attach_service::AttachCompanionState;
 
 fn link_error(error: PairingLinkError) -> String {
@@ -125,14 +127,7 @@ fn finish_pairing<R: tauri::Runtime>(
     runtimes.record(id, observation);
     runtimes.record(id, Observation::Status(RuntimeStatus::Online));
     // A runtime paired again replaces the connection that used the old record.
-    if app
-        .state::<AttachCompanionState>()
-        .remote_runtime_id()
-        .as_deref()
-        == Some(id)
-    {
-        activate(app, Some(id));
-    }
+    reconnect(app, id);
     emit_changed(app);
     list(app)
 }
@@ -312,13 +307,8 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
     }
     let id = paired_id(&id)?;
     blocking(move || {
-        if app
-            .state::<AttachCompanionState>()
-            .remote_runtime_id()
-            .as_deref()
-            == Some(id.as_str())
-        {
-            activate(&app, None);
+        if let Some(connections) = app.state::<AttachCompanionState>().remove_remote(&id) {
+            connections.stop();
         }
         let runtimes = app.state::<Runtimes>();
         let registry = runtimes.registry()?;
@@ -404,14 +394,18 @@ fn request_update(connector: &Connector) -> Result<String, String> {
     }
     match client.request_runtime_update(APP_VERSION) {
         Ok(_) => Ok(APP_VERSION.to_owned()),
-        Err(_) => Err(match client.last_request_error().map(|error| error.code()) {
-            Some(ErrorCode::Unauthorized) => {
-                "This device cannot update that runtime. Pair it again to allow updates."
+        Err(_) => Err(
+            match client.last_request_error().map(|error| error.code()) {
+                Some(ErrorCode::Unauthorized) => {
+                    "This device cannot update that runtime. Pair it again to allow updates."
+                }
+                Some(ErrorCode::UnsupportedOperation) => {
+                    "That runtime cannot take update requests."
+                }
+                _ => "The update request did not reach the runtime. Try again.",
             }
-            Some(ErrorCode::UnsupportedOperation) => "That runtime cannot take update requests.",
-            _ => "The update request did not reach the runtime. Try again.",
-        }
-        .to_owned()),
+            .to_owned(),
+        ),
     }
 }
 

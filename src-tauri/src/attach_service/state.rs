@@ -59,9 +59,14 @@ pub struct AttachCompanionState {
     pub(super) connected_changed: Condvar,
     #[cfg(any(unix, target_os = "windows"))]
     pub(super) chat_events_connected: Mutex<bool>,
-    /// The selected paired runtime's connections. `None` attaches the app to
-    /// this computer's runtime.
-    pub(super) remote: Mutex<Option<crate::runtimes::RemoteSupervisor>>,
+    /// The connections of every paired runtime, by runtime id. Each one
+    /// stays connected while the app runs.
+    pub(super) remotes: Mutex<std::collections::HashMap<String, crate::runtimes::RemoteSupervisor>>,
+    /// The paired runtime requests go to: the one holding the open thread, or
+    /// the one the new-thread picker chose. `None` is this computer.
+    pub(super) active: Mutex<Option<String>>,
+    /// The runtime each listed thread lives on, from the merged thread list.
+    pub(super) thread_runtimes: Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -360,17 +365,19 @@ impl AttachCompanionState {
     }
 
     fn remote_session(&self) -> Option<DesktopClientSession> {
-        self.remote
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|remote| {
-                if remote.connected() {
-                    DesktopClientSession::Connected(remote.holder.clone())
-                } else {
-                    DesktopClientSession::Disconnected
-                }
-            })
+        let id = self.remote_runtime_id()?;
+        Some(self.paired_session(&id))
+    }
+
+    /// The session of the paired runtime `id`, whichever runtime is active.
+    #[cfg(any(unix, target_os = "windows"))]
+    pub(crate) fn paired_session(&self, id: &str) -> DesktopClientSession {
+        match lock(&self.remotes).get(id) {
+            Some(remote) if remote.connected() => {
+                DesktopClientSession::Connected(remote.holder.clone())
+            }
+            _ => DesktopClientSession::Disconnected,
+        }
     }
 
     /// The session of this computer's runtime, whichever runtime is
@@ -415,6 +422,17 @@ impl AttachCompanionState {
                 }
             }
         }
+        self.local_client_session_within(wait)
+    }
+
+    /// This computer's session once its client connects, or after `wait`
+    /// with no connection, whichever runtime is active.
+    #[cfg(any(unix, target_os = "windows"))]
+    pub(crate) fn local_client_session_within(
+        &self,
+        wait: std::time::Duration,
+    ) -> DesktopClientSession {
+        let deadline = std::time::Instant::now() + wait;
         loop {
             match self.local_client_session() {
                 DesktopClientSession::Disconnected => {
@@ -515,7 +533,9 @@ impl Default for AttachCompanionState {
             connected: Mutex::new(false),
             connected_changed: Condvar::new(),
             chat_events_connected: Mutex::new(false),
-            remote: Mutex::new(None),
+            remotes: Mutex::new(std::collections::HashMap::new()),
+            active: Mutex::new(None),
+            thread_runtimes: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -524,7 +544,9 @@ impl Default for AttachCompanionState {
 impl Default for AttachCompanionState {
     fn default() -> Self {
         Self {
-            remote: Mutex::new(None),
+            remotes: Mutex::new(std::collections::HashMap::new()),
+            active: Mutex::new(None),
+            thread_runtimes: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -532,44 +554,82 @@ impl Default for AttachCompanionState {
 impl AttachCompanionState {
     pub(crate) fn clear_workspace(&self) {}
 
-    /// Whether a paired runtime is selected.
+    /// Whether a paired runtime is active.
     pub(crate) fn remote_active(&self) -> bool {
-        self.remote
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some()
+        self.remote_runtime_id().is_some()
     }
 
-    /// The selected paired runtime's id, or `None` for this computer.
+    /// The active paired runtime's id, or `None` for this computer.
     pub(crate) fn remote_runtime_id(&self) -> Option<String> {
-        self.remote
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|remote| remote.runtime_id.clone())
+        lock(&self.active).clone()
     }
 
-    /// Opens connections of their own to the selected paired runtime.
+    /// Makes `id` the runtime requests go to, `None` for this computer, and
+    /// answers whether that changed.
+    pub(crate) fn set_active(&self, id: Option<String>) -> bool {
+        let mut active = lock(&self.active);
+        let changed = *active != id;
+        *active = id;
+        changed
+    }
+
+    /// Opens connections of their own to the active paired runtime.
     pub(crate) fn remote_connector(&self) -> Option<crate::runtimes::Connector> {
-        self.remote
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
+        let id = self.remote_runtime_id()?;
+        lock(&self.remotes)
+            .get(&id)
             .map(crate::runtimes::RemoteSupervisor::connector)
     }
 
-    /// Selects `next` and answers the connections it replaces.
-    pub(crate) fn replace_remote(
+    /// Whether the paired runtime `id` has connections.
+    pub(crate) fn has_remote(&self, id: &str) -> bool {
+        lock(&self.remotes).contains_key(id)
+    }
+
+    /// The ids of the paired runtimes with connections.
+    pub(crate) fn remote_ids(&self) -> Vec<String> {
+        lock(&self.remotes).keys().cloned().collect()
+    }
+
+    /// Keeps `next` connected and answers the connections it replaces.
+    pub(crate) fn insert_remote(
         &self,
-        next: Option<crate::runtimes::RemoteSupervisor>,
+        next: crate::runtimes::RemoteSupervisor,
     ) -> Option<crate::runtimes::RemoteSupervisor> {
-        std::mem::replace(
-            &mut *self
-                .remote
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            next,
-        )
+        lock(&self.remotes).insert(next.runtime_id.clone(), next)
+    }
+
+    /// Takes the connections of the paired runtime `id`. An active runtime
+    /// that loses its connections hands requests back to this computer.
+    pub(crate) fn remove_remote(&self, id: &str) -> Option<crate::runtimes::RemoteSupervisor> {
+        let removed = lock(&self.remotes).remove(id);
+        let mut active = lock(&self.active);
+        if active.as_deref() == Some(id) {
+            *active = None;
+        }
+        removed
+    }
+
+    /// Takes every paired runtime's connections.
+    pub(crate) fn take_remotes(&self) -> Vec<crate::runtimes::RemoteSupervisor> {
+        *lock(&self.active) = None;
+        lock(&self.remotes)
+            .drain()
+            .map(|(_, remote)| remote)
+            .collect()
+    }
+
+    /// Records which runtime each listed thread lives on.
+    pub(crate) fn remember_thread_runtimes(
+        &self,
+        threads: impl IntoIterator<Item = (String, String)>,
+    ) {
+        lock(&self.thread_runtimes).extend(threads);
+    }
+
+    /// The runtime a listed thread lives on, when the merged list named it.
+    pub(crate) fn thread_runtime(&self, thread_id: &str) -> Option<String> {
+        lock(&self.thread_runtimes).get(thread_id).cloned()
     }
 
     /// The version this computer's runtime named in its welcome, while the
@@ -583,4 +643,10 @@ impl AttachCompanionState {
     pub(crate) fn local_runtime_version(&self) -> Option<String> {
         None
     }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

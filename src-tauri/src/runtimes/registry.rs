@@ -366,9 +366,13 @@ mod tests {
     fn a_known_runtime_id_with_another_certificate_is_refused() {
         let (registry, directory) = registry();
         let id = "018f0000-0000-7000-8000-000000000051";
-        registry.add(&record(id, "Studio"), None, None, None).unwrap();
+        registry
+            .add(&record(id, "Studio"), None, None, None)
+            .unwrap();
         // Pairing the same runtime again with its own certificate is allowed.
-        registry.add(&record(id, "Studio"), None, None, None).unwrap();
+        registry
+            .add(&record(id, "Studio"), None, None, None)
+            .unwrap();
         let mut impostor = record(id, "Studio");
         impostor.endpoints = vec!["198.51.100.9:7443".into()];
         impostor.fingerprint = CertificateFingerprint::of_certificate(b"other der");
@@ -381,7 +385,10 @@ mod tests {
         );
         let kept = registry.record(id).unwrap();
         assert_eq!(kept.endpoints, vec!["192.0.2.20:7443".to_owned()]);
-        assert_eq!(kept.fingerprint, CertificateFingerprint::of_certificate(b"der"));
+        assert_eq!(
+            kept.fingerprint,
+            CertificateFingerprint::of_certificate(b"der")
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

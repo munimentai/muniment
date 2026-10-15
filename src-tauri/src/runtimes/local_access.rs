@@ -86,7 +86,12 @@ pub async fn local_pairing_link(admin: bool) -> Result<Value, String> {
     // Every link allows automatic updates. Pairing management is delegated
     // only on request.
     let scopes = if admin {
-        json!(["thread.read", "run.write", "runtime.update", "runtime.admin"])
+        json!([
+            "thread.read",
+            "run.write",
+            "runtime.update",
+            "runtime.admin"
+        ])
     } else {
         json!(["thread.read", "run.write", "runtime.update"])
     };

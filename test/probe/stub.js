@@ -366,7 +366,15 @@ export function buildProbeCommandTable(fixtureName) {
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
   let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'
-  const threadSummaries = history.length
+  // The runtimes fixture lists a thread on each machine, so the sidebar
+  // shows the machine badges.
+  const threadSummaries = runtimesFixture
+    ? [
+        { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+        { threadId: 'probe-box', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
+        { threadId: 'probe-studio', title: 'Draft board memo', updatedAt: '2026-07-27T09:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000042' },
+      ]
+    : history.length
     ? [
         { threadId: 'probe-thread', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z' },
         { threadId: 'probe-archive', title: 'Archive review', updatedAt: '2026-07-28T09:00:00Z' },
@@ -694,7 +702,7 @@ export function buildProbeCommandTable(fixtureName) {
       localAccess = probeLocalAccess(payload.enabled, payload.endpoints)
       return structuredClone(localAccess)
     }
-    if (command === 'local_pairing_link') return { link: PROBE_LOCAL_LINK, qrSvg: probeQrSvg(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), scopes: payload.admin ? ['run.write', 'runtime.admin', 'thread.read'] : ['run.write', 'thread.read'] }
+    if (command === 'local_pairing_link') return { link: PROBE_LOCAL_LINK, qrSvg: probeQrSvg(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), scopes: payload.admin ? ['run.write', 'runtime.admin', 'runtime.update', 'thread.read'] : ['run.write', 'runtime.update', 'thread.read'] }
     if (command === 'local_devices') return { devices: structuredClone(localDevices) }
     if (command === 'local_device_revoke') {
       localDevices = localDevices.filter((device) => device.device_id !== payload.deviceId)
@@ -848,23 +856,25 @@ function recordInvoke(surface, command, payload) {
 
 function runtimesRendered() {
   if (runtimesState === 'remote' || runtimesState === 'switcher') {
-    const toggle = document.querySelector('.runtime-switcher .switcher')
-    if (!toggle?.textContent.includes(runtimesState === 'remote' ? 'Build box' : 'This computer')) return false
-    return runtimesState === 'remote' ? !document.querySelector('[aria-label="Agents group"]') : !!document.querySelector('.runtime-menu')
+    const chip = document.querySelector('.machine-chip')
+    if (!chip?.textContent.includes(runtimesState === 'remote' ? 'Build box' : 'This computer')) return false
+    if (!document.querySelector('#sidebar .machine-badge')) return false
+    return runtimesState === 'remote' ? !!document.querySelector('[aria-label="Agents group"]') : !!document.querySelector('[data-fresh-thread]') && !!document.querySelector('.machine-menu')
   }
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
-  const allow = page.querySelector('[role="switch"][aria-label="Allow pairing"]')
-  if (runtimesState === 'pairing-off') return allow?.getAttribute('aria-checked') === 'false' && !allow.disabled && page.textContent.includes('No device is paired')
+  const accept = page.querySelector('[role="switch"][aria-label="Accept connections"]')
+  const show = Array.from(page.querySelectorAll('button')).some((button) => button.textContent.trim() === 'Show pairing code')
+  if (runtimesState === 'pairing-off') return accept?.getAttribute('aria-checked') === 'false' && !accept.disabled && show && !page.textContent.includes('Devices using this computer')
   if (runtimesState === 'pairing-on') return page.textContent.includes('Private overlay network')
-  if (runtimesState === 'link') return !!page.querySelector('.pairing-qr svg')
+  if (runtimesState === 'link') return !!page.querySelector('.pairing-qr svg') && page.textContent.includes('expires in')
   if (runtimesState === 'devices') return !!page.querySelector('[aria-label="Revoke Build box"]')
-  const rows = page.querySelectorAll('[role="group"]').length
+  const rows = page.querySelectorAll('.group-card [role="group"]').length
   if (runtimesState === 'local') return rows === 1
-  if (runtimesState === 'paired') return rows === 3 && page.textContent.includes('Offline') && !!page.querySelector('[aria-label="Update Build box"]')
-  if (runtimesState === 'pairing') return page.textContent.includes('Pairing with the runtime…')
+  if (runtimesState === 'paired') return rows === 3 && page.textContent.includes('Offline') && page.textContent.includes('Updating to v0.2.0')
+  if (runtimesState === 'pairing') return page.textContent.includes('Connecting…')
   if (runtimesState === 'failed') return !!page.querySelector('[role="alert"]')?.textContent.includes('refused the link')
-  if (runtimesState === 'ssh') return page.querySelector('input[placeholder^="build-box"]')?.value === 'me@build-box'
+  if (runtimesState === 'ssh') return page.querySelector('input[placeholder="user@host"]')?.value === 'me@build-box'
   return false
 }
 
@@ -948,8 +958,11 @@ function typeInto(input, value) {
 // state pastes a link and presses Pair.
 function advanceRuntimesFixture() {
   if (!runtimesFixture || fixtureRendered()) return
+  // An open thread keeps its machine, so the picker opens on a new thread.
   if (runtimesState === 'switcher') {
-    document.querySelector('.runtime-switcher .switcher[aria-expanded="false"]')?.click()
+    const chip = document.querySelector('button.machine-chip[aria-expanded="false"]')
+    if (chip) return chip.click()
+    if (document.querySelector('span.machine-chip.locked')) document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
     return
   }
   if (runtimesState === 'remote') return
@@ -958,14 +971,14 @@ function advanceRuntimesFixture() {
     return
   }
   const runtimes = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
-    .find((button) => button.textContent.trim() === 'Runtimes')
+    .find((button) => button.textContent.trim() === 'Machines')
   if (runtimes && runtimes.getAttribute('aria-current') !== 'true') return runtimes.click()
   const page = document.querySelector('.settings-runtimes')
   if (!page) return
   if (runtimesState === 'pairing' || runtimesState === 'failed') {
-    const link = page.querySelector('input[placeholder^="muniment://pair"]')
+    const link = page.querySelector('input[placeholder="Paste a pairing link"]')
     if (link && !link.value) return typeInto(link, PROBE_PAIRING_LINK)
-    const pair = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Pair')
+    const pair = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Add')
     if (pair && !pair.disabled && !probePairClicked) {
       probePairClicked = true
       pair.click()
@@ -973,7 +986,7 @@ function advanceRuntimesFixture() {
     return
   }
   if (runtimesState === 'link') {
-    const create = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Create pairing link')
+    const create = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Show pairing code')
     if (create && !create.disabled && !probePairClicked) {
       probePairClicked = true
       create.click()
@@ -981,9 +994,10 @@ function advanceRuntimesFixture() {
     return
   }
   if (runtimesState === 'ssh') {
-    const ssh = Array.from(page.querySelectorAll('[role="radio"]')).find((radio) => radio.textContent.trim() === 'Over SSH')
-    if (ssh && ssh.getAttribute('aria-checked') !== 'true') return ssh.click()
-    const host = page.querySelector('input[placeholder^="build-box"]')
+    const host = page.querySelector('input[placeholder="user@host"]')
+    if (!host) {
+      return Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Use SSH instead')?.click()
+    }
     if (host && !host.value) typeInto(host, 'me@build-box')
   }
 }
@@ -1009,8 +1023,9 @@ function markReadyAfterFixtureRender() {
     observer.disconnect()
     void markProbeReady()
   })
-  // A fixture can finish on a text change, such as a path or a scan count.
-  observer.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true })
+  // A fixture can finish on a text change, such as a path or a scan count, or
+  // on a control that turns on once its settings load.
+  observer.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {

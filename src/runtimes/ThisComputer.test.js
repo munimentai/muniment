@@ -40,71 +40,75 @@ function bridge({ enabled = false, devices = [] } = {}) {
 }
 
 describe('This computer', () => {
-  it('keeps pairing off until the user turns it on, then lists its addresses with their kinds', async () => {
+  it('shows a pairing code in one click, turning on connections the first time', async () => {
     const tauri = bridge()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     render(ThisComputer, { tauri })
-    const toggle = await screen.findByRole('switch', { name: 'Allow pairing' })
-    await waitFor(() => expect(toggle).toBeEnabled())
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByText('No other computer can reach this runtime.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Create pairing link' })).toBeNull()
+    const accept = await screen.findByRole('switch', { name: 'Accept connections' })
+    await waitFor(() => expect(accept).toBeEnabled())
+    expect(accept).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText('No other device can reach this computer.')).toBeInTheDocument()
 
-    await fireEvent.click(toggle)
+    await fireEvent.click(screen.getByRole('button', { name: 'Show pairing code' }))
+    await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_pairing_link', { admin: false }))
     expect(tauri.invoke).toHaveBeenCalledWith('local_access_save', { enabled: true, port: null, endpoints: [] })
-    expect(await screen.findByText('Private overlay network')).toBeInTheDocument()
-    expect(within(screen.getByRole('group', { name: '192.0.2.20:7443' })).getByText('Local network')).toBeInTheDocument()
-    expect(screen.getByText('[::]:7443')).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: 'Listen port' })).toHaveValue('7443')
+    expect(await screen.findByRole('img', { name: 'Pairing code' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Pairing link' })).toHaveValue(LINK)
+    expect(screen.getByRole('timer')).toHaveTextContent(/^Works once · expires in \d+:\d\d$/)
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(writeText).toHaveBeenCalledWith(LINK)
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    expect(localStorage.length).toBe(0)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop pairing' }))
+    expect(screen.queryByRole('img', { name: 'Pairing code' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Show pairing code' })).toBeInTheDocument()
   })
 
-  it('moves the listen port and names its own addresses', async () => {
+  it('makes a new code on request', async () => {
     const tauri = bridge({ enabled: true })
     render(ThisComputer, { tauri })
-    const port = await screen.findByRole('textbox', { name: 'Listen port' })
+    const show = await screen.findByRole('button', { name: 'Show pairing code' })
+    await waitFor(() => expect(show).toBeEnabled())
+    await fireEvent.click(show)
+    await fireEvent.click(await screen.findByRole('button', { name: 'New code' }))
+    await waitFor(() => expect(tauri.invoke.mock.calls.filter(([command]) => command === 'local_pairing_link')).toHaveLength(2))
+    expect(tauri.invoke).not.toHaveBeenCalledWith('local_access_save', expect.anything())
+  })
+
+  it('lists its addresses with their kinds and moves the port under Network', async () => {
+    const tauri = bridge({ enabled: true })
+    render(ThisComputer, { tauri })
+    expect(await screen.findByText(/Private overlay network/)).toBeInTheDocument()
+    expect(screen.getByText(/Local network/)).toBeInTheDocument()
+    const port = screen.getByRole('textbox', { name: 'Port' })
     await waitFor(() => expect(port).toHaveValue('7443'))
     await fireEvent.input(port, { target: { value: '9443' } })
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Addresses links name' }), { target: { value: 'build.example.net:9443, 192.0.2.30:9443' } })
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Addresses in the link' }), { target: { value: 'build.example.net:9443, 192.0.2.30:9443' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(tauri.invoke).toHaveBeenCalledWith('local_access_save', { enabled: true, port: 9443, endpoints: ['build.example.net:9443', '192.0.2.30:9443'] })
   })
 
-  it('creates a one-time link with its QR code, expiry and copy', async () => {
-    const tauri = bridge({ enabled: true })
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-    render(ThisComputer, { tauri })
-    await fireEvent.click(await screen.findByRole('switch', { name: 'Allow pairing management' }))
-    await fireEvent.click(screen.getByRole('button', { name: 'Create pairing link' }))
-    expect(tauri.invoke).toHaveBeenCalledWith('local_pairing_link', { admin: true })
-    expect(await screen.findByRole('img', { name: 'Pairing code' })).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: 'Link to open on the other computer' })).toHaveValue(LINK)
-    expect(screen.getByText(/^Works once, until/)).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Copy link' }))
-    expect(writeText).toHaveBeenCalledWith(LINK)
-    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
-    expect(localStorage.length).toBe(0)
-  })
-
-  it('lists paired devices and revokes one after asking once', async () => {
+  it('lists devices using this computer and revokes one after asking once', async () => {
     const tauri = bridge({ devices: [
       { device_id: 'd1', name: 'Studio', kind: 'desktop-client', scopes: ['run.write', 'thread.read'], created_at: '2030-01-01T00:00:00Z', last_seen_at: null },
     ] })
     render(ThisComputer, { tauri })
     const row = await screen.findByRole('group', { name: 'Studio' })
-    expect(within(row).getByText('desktop-client')).toBeInTheDocument()
-    expect(within(row).getByText('Read, Run · Not seen yet')).toBeInTheDocument()
+    expect(within(row).getByText('Not seen yet')).toBeInTheDocument()
     await fireEvent.click(within(row).getByRole('button', { name: 'Revoke Studio' }))
     expect(tauri.invoke).not.toHaveBeenCalledWith('local_device_revoke', expect.anything())
     await fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     expect(tauri.invoke).toHaveBeenCalledWith('local_device_revoke', { deviceId: 'd1' })
-    expect(await screen.findByText('No device is paired with this computer.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Devices using this computer')).toBeNull())
   })
 
-  it('names the reason pairing cannot listen', async () => {
+  it('names the reason connections cannot start', async () => {
     const tauri = bridge({ enabled: true })
     tauri.invoke.mockImplementationOnce(async () => access(true, { listening: null, error: 'Address already in use' }))
     render(ThisComputer, { tauri })
-    expect(await screen.findByRole('alert')).toHaveTextContent('Pairing cannot listen. Address already in use.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Connections cannot start. Address already in use.')
   })
 })
 

@@ -220,6 +220,68 @@ pub async fn chat_current_thread(
     Ok(state.session_thread.current(subject.as_deref()))
 }
 
+/// The id the merged thread list gives this computer's runtime.
+#[cfg(any(unix, target_os = "windows"))]
+const LOCAL_RUNTIME: &str = "local";
+
+/// One runtime's page of thread summaries in the merged list.
+#[cfg(any(unix, target_os = "windows"))]
+struct RuntimePage {
+    runtime_id: String,
+    page: serde_json::Value,
+}
+
+/// Merges each runtime's page into one list, newest first. Each summary names
+/// its runtime, and the next cursor holds the cursor of every runtime with
+/// more threads, as a JSON object from runtime id to cursor.
+#[cfg(any(unix, target_os = "windows"))]
+fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
+    let mut summaries = Vec::new();
+    let mut cursors = serde_json::Map::new();
+    for RuntimePage { runtime_id, page } in pages {
+        if let Some(listed) = page.get("summaries").and_then(serde_json::Value::as_array) {
+            for summary in listed {
+                let mut summary = summary.clone();
+                if let Some(object) = summary.as_object_mut() {
+                    object.insert("runtimeId".into(), runtime_id.clone().into());
+                }
+                summaries.push(summary);
+            }
+        }
+        if let Some(next) = page.get("nextCursor").and_then(serde_json::Value::as_str) {
+            cursors.insert(runtime_id, next.into());
+        }
+    }
+    let updated = |summary: &serde_json::Value| {
+        summary
+            .get("updatedAt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    summaries.sort_by_key(|summary| std::cmp::Reverse(updated(summary)));
+    let next_cursor = (!cursors.is_empty()).then(|| serde_json::Value::Object(cursors).to_string());
+    serde_json::json!({ "summaries": summaries, "nextCursor": next_cursor })
+}
+
+/// The runtimes a page request reads, with each one's cursor: every runtime
+/// for the first page, then those the merged cursor names.
+#[cfg(any(unix, target_os = "windows"))]
+fn merged_cursor_targets(
+    cursor: Option<&str>,
+    runtimes: &[String],
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let Some(cursor) = cursor else {
+        return Ok(runtimes.iter().map(|id| (id.clone(), None)).collect());
+    };
+    let cursors: std::collections::BTreeMap<String, String> = serde_json::from_str(cursor)
+        .map_err(|_| "Conversation history is unavailable.".to_string())?;
+    Ok(cursors
+        .into_iter()
+        .map(|(id, cursor)| (id, Some(cursor)))
+        .collect())
+}
+
 #[cfg(any(unix, target_os = "windows"))]
 #[tauri::command]
 pub async fn chat_thread_summaries(
@@ -229,22 +291,47 @@ pub async fn chat_thread_summaries(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let waiting_app = app_handle.clone();
-    let session = tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Manager;
-        waiting_app
-            .state::<AttachCompanionState>()
-            .desktop_client_session_within(HISTORY_CONNECT_WAIT)
-    })
-    .await
-    .map_err(|_| auth::background_service_error())?;
     let _ = &attach_state;
-    #[cfg(target_os = "macos")]
-    require_runtime(&session)?;
     // An account that cannot name its subject gets that error before the runtime call.
     chat_subject(&app_handle, &auth_state)?;
-    chat_thread_summaries_command(session, limit, cursor.as_deref())
-        .map_err(|error| crate::runtimes::name_unreachable(&app_handle, error))
+    let reading_app = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let attach = reading_app.state::<AttachCompanionState>();
+        let mut runtimes = vec![LOCAL_RUNTIME.to_owned()];
+        runtimes.extend(attach.remote_ids());
+        let targets = merged_cursor_targets(cursor.as_deref(), &runtimes)?;
+        let mut pages = Vec::new();
+        let mut first_error = None;
+        for (runtime_id, cursor) in targets {
+            let session = if runtime_id == LOCAL_RUNTIME {
+                attach.local_client_session_within(HISTORY_CONNECT_WAIT)
+            } else {
+                attach.paired_session(&runtime_id)
+            };
+            match chat_thread_summaries_command(session, limit, cursor.as_deref()) {
+                Ok(page) => pages.push(RuntimePage { runtime_id, page }),
+                // A paired runtime that is offline leaves its threads out.
+                Err(error) if runtime_id == LOCAL_RUNTIME => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        if pages.is_empty() {
+            return Err(first_error.unwrap_or_else(auth::background_service_error));
+        }
+        let merged = merge_thread_pages(pages);
+        if let Some(listed) = merged["summaries"].as_array() {
+            attach.remember_thread_runtimes(listed.iter().filter_map(|summary| {
+                Some((
+                    summary.get("threadId")?.as_str()?.to_owned(),
+                    summary.get("runtimeId")?.as_str()?.to_owned(),
+                ))
+            }));
+        }
+        Ok(merged)
+    })
+    .await
+    .map_err(|_| auth::background_service_error())?
+    .map_err(|error| crate::runtimes::name_unreachable(&app_handle, error))
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -256,6 +343,7 @@ pub async fn chat_select_thread(
     attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
 ) -> Result<(), String> {
+    crate::runtimes::follow_thread(&app_handle, &thread_id);
     let session: ThreadSelectSession<_> = attach_state.desktop_client_session().into();
     if matches!(&session, ThreadSelectSession::Disconnected) {
         return Err(auth::background_service_error());
@@ -281,6 +369,7 @@ pub async fn chat_rename_thread(
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
+    crate::runtimes::follow_thread(&app_handle, &thread_id);
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state.desktop_client_session())?;
     // An account that cannot name its subject gets that error before the runtime call.
@@ -297,6 +386,7 @@ pub async fn chat_delete_thread(
     attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
 ) -> Result<(), String> {
+    crate::runtimes::follow_thread(&app_handle, &thread_id);
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state.desktop_client_session())?;
     let subject = chat_subject(&app_handle, &auth_state)?;
@@ -379,6 +469,7 @@ pub async fn chat_thread_open(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    crate::runtimes::follow_thread(&app_handle, &thread_id);
     #[cfg(target_os = "macos")]
     require_runtime(&attach_state.desktop_client_session())?;
     // An account that cannot name its subject, or a missing profile, gets that
@@ -615,6 +706,7 @@ pub async fn thread_context_usage(
     app_handle: tauri::AppHandle,
     thread_id: String,
 ) -> Result<ThreadContextUsage, String> {
+    crate::runtimes::follow_thread(&app_handle, &thread_id);
     let client = context_client(&app_handle).await?;
     tauri::async_runtime::spawn_blocking(move || {
         let snapshot = poll_runtime(
@@ -623,7 +715,9 @@ pub async fn thread_context_usage(
             || {
                 client
                     .thread_context_usage(&thread_id)
-                    .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))
+                    .map_err(|(error, failure)| {
+                        auth::desktop_request_error(error, failure.as_ref())
+                    })
             },
             |snapshot| (snapshot["reading"] == false).then(|| Ok(snapshot.clone())),
         )?;
@@ -649,6 +743,7 @@ pub async fn thread_compact(
     thread_id: String,
     instructions: Option<String>,
 ) -> Result<ThreadCompaction, String> {
+    crate::runtimes::follow_thread(&app_handle, &thread_id);
     let client = context_client(&app_handle).await?;
     tauri::async_runtime::spawn_blocking(move || {
         let instructions = instructions
@@ -668,7 +763,9 @@ pub async fn thread_compact(
             || {
                 client
                     .thread_context_usage(&thread_id)
-                    .map_err(|(error, failure)| auth::desktop_request_error(error, failure.as_ref()))
+                    .map_err(|(error, failure)| {
+                        auth::desktop_request_error(error, failure.as_ref())
+                    })
             },
             |snapshot| compaction_outcome(snapshot, &run_id),
         )
@@ -1153,7 +1250,10 @@ mod tests {
                 "estimated_tokens_after": 31900, "error": "Nothing to compact"
             }})
         };
-        assert_eq!(compaction_outcome(&answer("running", "run-1"), "run-1"), None);
+        assert_eq!(
+            compaction_outcome(&answer("running", "run-1"), "run-1"),
+            None
+        );
         assert_eq!(
             compaction_outcome(&answer("completed", "run-1"), "run-1"),
             Some(Ok(ThreadCompaction {
@@ -1190,5 +1290,57 @@ mod tests {
             .unwrap_err(),
             "late"
         );
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn thread_pages_merge_newest_first_with_each_runtime_named() {
+        let merged = merge_thread_pages(vec![
+            RuntimePage {
+                runtime_id: "local".into(),
+                page: serde_json::json!({
+                    "summaries": [
+                        {"threadId": "a", "updatedAt": "2026-10-15T10:00:00Z"},
+                        {"threadId": "b", "updatedAt": "2026-10-13T10:00:00Z"}
+                    ],
+                    "nextCursor": "local-2"
+                }),
+            },
+            RuntimePage {
+                runtime_id: "box".into(),
+                page: serde_json::json!({
+                    "summaries": [{"threadId": "c", "updatedAt": "2026-10-14T10:00:00Z"}],
+                    "nextCursor": null
+                }),
+            },
+        ]);
+        let order: Vec<(&str, &str)> = merged["summaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|summary| {
+                (
+                    summary["threadId"].as_str().unwrap(),
+                    summary["runtimeId"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(order, vec![("a", "local"), ("c", "box"), ("b", "local")]);
+        let cursor = merged["nextCursor"].as_str().unwrap();
+        assert_eq!(
+            merged_cursor_targets(Some(cursor), &[]).unwrap(),
+            vec![("local".to_owned(), Some("local-2".to_owned()))]
+        );
+        assert_eq!(
+            merged_cursor_targets(None, &["local".to_owned(), "box".to_owned()]).unwrap(),
+            vec![("local".to_owned(), None), ("box".to_owned(), None)]
+        );
+        assert!(merged_cursor_targets(Some("not json"), &[]).is_err());
+
+        let last = merge_thread_pages(vec![RuntimePage {
+            runtime_id: "local".into(),
+            page: serde_json::json!({"summaries": [], "nextCursor": null}),
+        }]);
+        assert!(last["nextCursor"].is_null());
     }
 }

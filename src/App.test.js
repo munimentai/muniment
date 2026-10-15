@@ -1484,7 +1484,7 @@ describe('workspace composer entry', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Runtimes', 'Companies'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Machines', 'Companies'])
     expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
@@ -8617,32 +8617,44 @@ describe('runtimes', () => {
   const buildBox = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
   const listFor = (selected) => ({ appVersion: '0.2.0', deviceName: 'Laptop', selected, runtimes: [thisComputer, buildBox].map((runtime) => ({ ...runtime, active: runtime.id === selected })) })
 
-  it('switches to a paired runtime, shows its threads and hides what stays on this computer', async () => {
+  it('lists the threads of every machine, starts a new thread on the machine the composer picks and keeps the sections of this computer', async () => {
     const fallback = invoke.getMockImplementation()
     let list = listFor('local')
+    threadSummaryResult = [
+      { threadId: 'local-1', title: 'Local work', updatedAt: '', runtimeId: 'local' },
+      { threadId: 'remote-1', title: 'Remote work', updatedAt: '', runtimeId: buildBox.id },
+    ]
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'runtime_list') return list
       if (command === 'runtime_select') {
         list = listFor(payload.id)
-        threadSummaryResult = [{ threadId: 'remote-1', title: 'Remote work', updatedAt: '' }]
         return list
       }
+      if (command === 'chat_new_thread') return null
       return fallback(command, payload)
     })
     render(App)
     await findWorkspaceComposer()
+    // A thread on a paired machine names it in the sidebar.
+    expect(await screen.findByText('Remote work')).toBeInTheDocument()
+    const remoteRow = screen.getByText('Remote work').closest('.thread-row')
+    expect(remoteRow.querySelector('.machine-badge')).toHaveTextContent('Build box, Online')
+    expect(screen.getByText('Local work').closest('.thread-row').querySelector('.machine-badge')).toBeNull()
+
+    // The newest thread opens first, and New thread waits for it.
+    await waitFor(async () => {
+      await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+      expect(invoke).toHaveBeenCalledWith('chat_new_thread')
+    })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: /Build box/ }))
+    expect(invoke).toHaveBeenCalledWith('runtime_select', { id: buildBox.id })
+    expect(await screen.findByRole('button', { name: 'Machine: Build box. Choose a machine' })).toBeInTheDocument()
+    // Agents and projects stay in the sidebar, since they live on this computer.
     expect(screen.getByRole('region', { name: 'Agents group' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Projects' })).toBeInTheDocument()
 
-    await fireEvent.click(await screen.findByRole('button', { name: 'Runtime: This computer. Switch runtime' }))
-    await fireEvent.click(screen.getByRole('menuitemradio', { name: /Build box/ }))
-    expect(invoke).toHaveBeenCalledWith('runtime_select', { id: buildBox.id })
-    expect(await screen.findByText('Remote work')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Runtime: Build box. Switch runtime' })).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: 'Agents group' })).toBeNull()
-    expect(screen.queryByRole('region', { name: 'Projects' })).toBeNull()
-
-    // A paired runtime cannot read this computer's files, so the composer attaches none.
+    // A paired machine cannot read this computer's files, so the composer attaches none.
     await fireEvent.click(screen.getByRole('button', { name: 'Extensions' }))
     const files = await screen.findByRole('button', { name: /Add files and folders/ })
     expect(files).toBeDisabled()
@@ -8654,7 +8666,7 @@ describe('runtimes', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     const pages = within(nav).getAllByRole('button').map((button) => button.textContent)
     expect(pages).not.toContain('Account')
-    expect(pages).toContain('Runtimes')
+    expect(pages).toContain('Machines')
     expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
   })
 })
