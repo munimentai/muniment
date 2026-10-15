@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use muniment_core::attach::{
-    is_valid_display_name, pair_with_link, ClientError, ErrorCode, PairingLink, PairingLinkError,
-    RemoteConnectError, SCOPE_RUNTIME_ADMIN,
+    connect_remote_runtime, is_valid_display_name, pair_with_link, ClientError, ErrorCode,
+    PairingLink, PairingLinkError, RemoteConnectError, RemoteRuntimeRecord,
 };
 use serde::Serialize;
 use tauri::Manager;
@@ -14,7 +14,7 @@ use tauri::Manager;
 use super::connection::{client_options, welcome, Connector, Observation, RemoteControl};
 use super::registry::{canonical_id, Registry, SshTarget, LOCAL_RUNTIME_ID};
 use super::ssh::{self, Ssh};
-use super::version::{is_older, may_update, APP_VERSION};
+use super::version::{is_older, may_update, target_version};
 use super::{
     activate, connector, emit_changed, list, reconnect, RuntimeList, RuntimeStatus, Runtimes,
 };
@@ -94,6 +94,10 @@ pub(crate) fn pair(
     if let Some(endpoint) = endpoint {
         link.endpoints = vec![endpoint];
     }
+    // Pairing a runtime again replaces this device's credential there.
+    let previous = canonical_id(link.runtime_id.as_str())
+        .and_then(|id| registry.record(&id).ok())
+        .filter(|previous| previous.fingerprint == link.fingerprint);
     let (client, record) =
         pair_with_link(&link, &client_options(device_name)).map_err(pairing_error)?;
     let observation = welcome(&client);
@@ -115,7 +119,26 @@ pub(crate) fn pair(
             }
             _ => "The paired runtime could not be saved.".to_owned(),
         })?;
+    if let Some(mut previous) =
+        previous.filter(|previous| previous.credential.device_id != record.credential.device_id)
+    {
+        previous.endpoints = link.endpoints.clone();
+        revoke_previous(&previous);
+    }
     Ok((id, observation))
+}
+
+/// Revokes the credential a new pairing replaced, so the runtime lists this
+/// device once.
+fn revoke_previous(previous: &RemoteRuntimeRecord) {
+    let device = previous.credential.device_id.as_str();
+    let revoked = connect_remote_runtime(previous, &client_options(None))
+        .is_ok_and(|mut client| client.revoke_remote_device(device).is_ok());
+    if !revoked {
+        eprintln!(
+            "muniment-desktop: the replaced device credential was not revoked device_id={device}"
+        );
+    }
 }
 
 fn finish_pairing<R: tauri::Runtime>(
@@ -297,9 +320,9 @@ fn revoke_self(connector: &Connector) -> bool {
     revoked
 }
 
-/// Forgets a paired runtime and deletes its device credential. A device
-/// holding the admin scope first revokes itself there. Removing the selected
-/// runtime switches the app to this computer.
+/// Forgets a paired runtime and deletes its device credential. The device
+/// first revokes itself there. Removing the selected runtime switches the app
+/// to this computer.
 #[tauri::command]
 pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<RuntimeList, String> {
     if id == LOCAL_RUNTIME_ID {
@@ -315,20 +338,11 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
         let name = registry
             .entry(&id)
             .map_or_else(|| "The runtime".to_owned(), |entry| entry.name);
-        let admin = registry
-            .record(&id)
-            .is_ok_and(|record| record.scopes.contains(SCOPE_RUNTIME_ADMIN));
-        let notice = if admin && revoke_self(&connector(&app, registry, &id)) {
-            None
-        } else if admin {
-            Some(format!(
-                "{name} did not answer, so it still lists this device. Revoke it on {name}."
-            ))
-        } else {
-            Some(format!(
-                "{name} still lists this device. Revoke it on {name} to end its access."
-            ))
-        };
+        // A runtime that is offline, or older than self revocation, keeps
+        // the credential until its owner revokes it there.
+        let notice = (!revoke_self(&connector(&app, registry, &id))).then(|| {
+            format!("{name} still lists this device. Revoke it on {name} to end its access.")
+        });
         registry
             .remove(&id)
             .map_err(|_| "The runtime could not be removed.".to_owned())?;
@@ -382,18 +396,25 @@ fn request_update(connector: &Connector) -> Result<String, String> {
     let mut client = connector.connect().map_err(status_error)?;
     let observation = welcome(&client);
     (connector.observe)(&connector.runtime_id, observation.clone());
-    let Observation::Welcome { version, .. } = observation else {
+    let Observation::Welcome {
+        version,
+        install_kind,
+    } = observation
+    else {
         unreachable!("a welcome observation");
+    };
+    let Some(target) = target_version(install_kind.as_deref()) else {
+        return Err("This app does not know which version that runtime should run.".into());
     };
     if version
         .as_deref()
-        .and_then(|version| is_older(version, APP_VERSION))
+        .and_then(|version| is_older(version, target))
         != Some(true)
     {
         return Err("That runtime already runs this version or a newer one.".into());
     }
-    match client.request_runtime_update(APP_VERSION) {
-        Ok(_) => Ok(APP_VERSION.to_owned()),
+    match client.request_runtime_update(target) {
+        Ok(_) => Ok(target.to_owned()),
         Err(_) => Err(
             match client.last_request_error().map(|error| error.code()) {
                 Some(ErrorCode::Unauthorized) => {
@@ -510,7 +531,9 @@ pub async fn runtime_update_all(app: tauri::AppHandle) -> Result<Vec<RuntimeUpda
 
 #[cfg(test)]
 mod tests {
+    use super::super::version::CORE_VERSION;
     use super::*;
+    use muniment_core::attach::SCOPE_RUNTIME_ADMIN;
     use std::collections::BTreeSet;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
@@ -660,10 +683,11 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let connector = connector_for(&registry, &id, &seen);
-        assert_eq!(request_update(&connector), Ok(APP_VERSION.to_owned()));
+        // A container is asked for the core release the app bundles.
+        assert_eq!(request_update(&connector), Ok(CORE_VERSION.to_owned()));
         assert_eq!(
             runtime.access.requested_update().unwrap().version,
-            APP_VERSION
+            CORE_VERSION
         );
 
         let supervisor = super::super::RemoteSupervisor::start(
@@ -690,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn an_admin_device_revokes_itself_and_a_reader_cannot() {
+    fn admin_and_reader_devices_each_revoke_themselves() {
         let runtime = LoopbackRuntime::start("0.0.1");
         let (readers, reader_directory) = registry();
         let (registry, directory) = registry();
@@ -706,10 +730,10 @@ mod tests {
         // One registry keeps one record per runtime, so the reader pairs in its own.
         let (reader, _) = pair(&readers, runtime.link(&["thread.read"]), None, None, None).unwrap();
         assert_eq!(runtime.access.list_devices().unwrap().len(), 2);
-        assert!(!revoke_self(&connector_for(&readers, &reader, &seen)));
-        assert_eq!(runtime.access.list_devices().unwrap().len(), 2);
-        assert!(revoke_self(&connector_for(&registry, &admin, &seen)));
+        assert!(revoke_self(&connector_for(&readers, &reader, &seen)));
         assert_eq!(runtime.access.list_devices().unwrap().len(), 1);
+        assert!(revoke_self(&connector_for(&registry, &admin, &seen)));
+        assert_eq!(runtime.access.list_devices().unwrap().len(), 0);
         // A revoked device cannot reach the runtime to revoke itself again.
         assert!(!revoke_self(&connector_for(&registry, &admin, &seen)));
         std::fs::remove_dir_all(directory).unwrap();
@@ -717,9 +741,26 @@ mod tests {
     }
 
     #[test]
+    fn pairing_a_runtime_again_revokes_the_credential_it_replaces() {
+        let runtime = LoopbackRuntime::start("0.0.1");
+        let (registry, directory) = registry();
+        let (id, _) = pair(&registry, runtime.link(&["thread.read"]), None, None, None).unwrap();
+        let first = registry.record(&id).unwrap().credential.device_id;
+        pair(&registry, runtime.link(&["thread.read"]), None, None, None).unwrap();
+        let devices = runtime.access.list_devices().unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_ne!(devices[0].device_id, first.as_str());
+        assert_eq!(
+            devices[0].device_id,
+            registry.record(&id).unwrap().credential.device_id.as_str()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn an_update_needs_the_admin_scope_and_an_older_runtime() {
         let older = LoopbackRuntime::start("0.0.1");
-        let current = LoopbackRuntime::start(APP_VERSION);
+        let current = LoopbackRuntime::start(CORE_VERSION);
         let (registry, directory) = registry();
         let seen = Arc::new(Mutex::new(Vec::new()));
 

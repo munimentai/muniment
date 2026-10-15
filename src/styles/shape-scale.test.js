@@ -9,7 +9,7 @@ const RADIUS_EXCEPTIONS = {
   'src/lib/AppUpdate.svelte': { 'button': ['var(--radius-pill)', 'Update control shares the settings pill shape.'] },
   'src/lib/SettingsTabs.svelte': { 'button': ['var(--radius-pill)', 'Shared settings pill tabs.'] },
   'src/App.svelte': {
-    '.active-thread > span:not(.select-mark)': ['50%', '§1.5 circular current-thread status dot'],
+    '.active-thread > span:not(.select-mark):not(.machine-badge)': ['50%', '§1.5 circular current-thread status dot'],
     '.artifact-divider': ['0', '§4 square divider reset'],
     '.sidebar-divider': ['0', '§4 square divider reset'],
   },

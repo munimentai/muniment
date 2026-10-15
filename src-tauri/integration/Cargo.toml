@@ -26,6 +26,9 @@ ureq = { version = "2", default-features = false, features = ["json"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 quircs = "0.10"
 resvg = { version = "0.45", default-features = false }

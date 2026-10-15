@@ -24,7 +24,7 @@ use connection::{Observation, RemoteControl, RuntimeStatus};
 pub(crate) use local_access::*;
 use registry::{PairedRuntime, Registry, LOCAL_RUNTIME_ID};
 pub(crate) use requested_update::update_requested;
-use version::{update_offered, APP_VERSION};
+use version::{target_version, update_offered, APP_VERSION};
 
 /// What a runtime answered last, kept for the runtime list.
 #[derive(Clone, Debug)]
@@ -32,6 +32,9 @@ struct Observed {
     status: RuntimeStatus,
     version: Option<String>,
     install_kind: Option<String>,
+    /// The runtime turned down the update the app asked for, so its row
+    /// stops showing one on the way.
+    update_refused: bool,
 }
 
 impl Default for Observed {
@@ -40,6 +43,7 @@ impl Default for Observed {
             status: RuntimeStatus::Unknown,
             version: None,
             install_kind: None,
+            update_refused: false,
         }
     }
 }
@@ -82,8 +86,8 @@ impl Runtimes {
     }
 
     /// Whether `id` should be asked to update now: it is paired, it runs an
-    /// older version than this app, this device may ask, and the app has not
-    /// asked it yet. A yes is recorded, so each runtime is asked once.
+    /// older version than its kind's target, this device may ask, and the app
+    /// has not asked it yet. A yes is recorded, so each runtime is asked once.
     fn claim_auto_update(&self, id: &str) -> bool {
         if id == LOCAL_RUNTIME_ID {
             return false;
@@ -94,17 +98,35 @@ impl Runtimes {
         let Ok(record) = registry.record(id) else {
             return false;
         };
-        let version = self
-            .observed(id)
+        let observed = self.observed(id);
+        let entry = registry.entry(id);
+        let version = observed
             .version
-            .or_else(|| registry.entry(id).and_then(|entry| entry.version));
-        if !update_offered(version.as_deref(), &record.scopes, APP_VERSION) {
+            .or_else(|| entry.as_ref().and_then(|entry| entry.version.clone()));
+        let kind = observed
+            .install_kind
+            .or_else(|| entry.and_then(|entry| entry.install_kind));
+        if !update_offered(
+            version.as_deref(),
+            &record.scopes,
+            target_version(kind.as_deref()),
+        ) {
             return false;
         }
         self.auto_updates
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.to_owned())
+    }
+
+    /// Records that `id` turned down the update the app asked for.
+    fn refuse_update(&self, id: &str) {
+        self.observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(id.to_owned())
+            .or_default()
+            .update_refused = true;
     }
 
     /// Records an observation and answers whether the list changed.
@@ -125,6 +147,9 @@ impl Runtimes {
                 install_kind,
             } => {
                 let changed = entry.version != version || entry.install_kind != install_kind;
+                if entry.version != version {
+                    entry.update_refused = false;
+                }
                 entry.version = version.clone();
                 entry.install_kind = install_kind.clone();
                 drop(observed);
@@ -155,6 +180,9 @@ pub(crate) struct RuntimeView {
     /// The device holds `runtime.admin` there.
     admin: bool,
     update_offered: bool,
+    /// The version an offered update brings the runtime to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_target: Option<&'static str>,
     ssh_host: Option<String>,
 }
 
@@ -172,7 +200,11 @@ pub(crate) struct RuntimeList {
 }
 
 fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
-    let version = attach.local_runtime_version();
+    // This computer's runtime ships inside the app, so the app's version
+    // names it, as it does for a paired desktop.
+    let version = attach
+        .local_runtime_version()
+        .map(|_| APP_VERSION.to_owned());
     RuntimeView {
         id: LOCAL_RUNTIME_ID.into(),
         name: "This computer".into(),
@@ -188,20 +220,26 @@ fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
         scopes: Vec::new(),
         admin: true,
         update_offered: false,
+        update_target: None,
         ssh_host: None,
     }
 }
 
 fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> RuntimeView {
     let version = observed.version.or(runtime.entry.version);
+    let kind = observed.install_kind.or(runtime.entry.install_kind);
+    let target = target_version(kind.as_deref());
     let admin = runtime
         .scopes
         .contains(muniment_core::attach::SCOPE_RUNTIME_ADMIN);
+    let offered =
+        !observed.update_refused && update_offered(version.as_deref(), &runtime.scopes, target);
     RuntimeView {
-        update_offered: update_offered(version.as_deref(), &runtime.scopes, APP_VERSION),
+        update_offered: offered,
+        update_target: target.filter(|_| offered),
         id: runtime.id,
         name: runtime.entry.name,
-        kind: observed.install_kind.or(runtime.entry.install_kind),
+        kind,
         version,
         status: observed.status,
         active,
@@ -247,13 +285,14 @@ fn observer<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> connection::Observe
             emit_changed(&app);
         }
         // Updates are automatic: a runtime that answers with an older version
-        // is asked once to install this app's version.
+        // is asked once to install its kind's target version.
         if welcome && runtimes.claim_auto_update(id) {
             let app = app.clone();
             let id = id.to_owned();
             std::thread::spawn(move || {
                 let result = update_one(&app, &id);
                 if !result.ok {
+                    app.state::<Runtimes>().refuse_update(&id);
                     eprintln!(
                         "muniment-desktop: automatic runtime update not requested runtime={id} reason={}",
                         result.message
@@ -435,30 +474,7 @@ pub(crate) fn shutdown<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 /// The name this computer offers a runtime when it pairs.
 pub(crate) fn device_name() -> String {
-    let name = host_name().unwrap_or_default();
-    let name = name.trim().trim_end_matches(".local").trim();
-    if muniment_core::attach::is_valid_display_name(name) {
-        name.to_owned()
-    } else {
-        "Desktop".to_owned()
-    }
-}
-
-#[cfg(unix)]
-fn host_name() -> Option<String> {
-    let mut buffer = [0_u8; 256];
-    // SAFETY: the buffer outlives the call and its length is passed with it.
-    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    if result != 0 {
-        return None;
-    }
-    let end = buffer.iter().position(|byte| *byte == 0)?;
-    String::from_utf8(buffer[..end].to_vec()).ok()
-}
-
-#[cfg(not(unix))]
-fn host_name() -> Option<String> {
-    std::env::var("COMPUTERNAME").ok()
+    muniment_desktop_integration::computer_name::computer_name()
 }
 
 #[cfg(test)]
@@ -490,6 +506,8 @@ mod tests {
         let view = paired_view(older, Observed::default(), false);
         assert!(view.admin);
         assert!(view.update_offered);
+        // A server updates to the core release the app bundles.
+        assert_eq!(view.update_target, Some(version::CORE_VERSION));
         assert_eq!(view.kind.as_deref(), Some("server"));
         assert_eq!(view.status, RuntimeStatus::Unknown);
 
@@ -497,14 +515,24 @@ mod tests {
         let view = paired_view(reader, Observed::default(), true);
         assert!(!view.admin);
         assert!(!view.update_offered);
+        assert_eq!(view.update_target, None);
         assert!(view.active);
+
+        // A runtime that turned the update down shows no update on the way.
+        let refused = paired(&["runtime.admin"], Some("0.0.1"));
+        let observed = Observed {
+            update_refused: true,
+            ..Observed::default()
+        };
+        assert!(!paired_view(refused, observed, false).update_offered);
 
         // A newer welcome replaces the version the index kept.
         let current = paired(&["runtime.admin"], Some("0.0.1"));
         let observed = Observed {
             status: RuntimeStatus::Online,
-            version: Some(APP_VERSION.into()),
+            version: Some(version::CORE_VERSION.into()),
             install_kind: Some("container".into()),
+            update_refused: false,
         };
         let view = paired_view(current, observed, false);
         assert!(!view.update_offered);

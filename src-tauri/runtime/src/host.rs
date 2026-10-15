@@ -47,7 +47,8 @@ pub fn start_remote_route(state: &Arc<muniment_runtime_core::RuntimeAttachState>
     };
     let options = RemoteRouteOptions {
         access: RemoteAccessOptions {
-            runtime_name: None,
+            // Paired devices list this computer under the name it pairs with.
+            runtime_name: Some(muniment_desktop_integration::computer_name::computer_name()),
             runtime_version: env!("MUNIMENT_APP_VERSION").to_owned(),
             install_kind: InstallKind::Desktop,
         },

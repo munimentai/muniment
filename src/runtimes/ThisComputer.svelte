@@ -3,8 +3,9 @@
   // for another device, with its QR code, link, Copy and countdown, beside
   // the `add` panel. Showing a code turns on connections the first time.
   // Devices using this computer lists each paired device with Revoke, and
-  // Network holds the switch, port and addresses. The link holds a secret, so
-  // it lives in this page's state and nowhere else.
+  // Network holds the switch, port and addresses. While a code shows, the
+  // page watches for the device that uses it and then closes the code. The
+  // link holds a secret, so it lives in this page's state and nowhere else.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
@@ -25,6 +26,8 @@
   let error = $state('')
   let copied = $state(false)
   let confirming = $state(null)
+  let paired = $state('')
+  let network = $state(false)
   let now = $state(Date.now())
   const enabled = $derived(!!access?.settings?.enabled)
   const endpoints = $derived(access?.endpoints ?? [])
@@ -55,10 +58,29 @@
     if (listed) devices = Array.isArray(listed.devices) ? listed.devices : []
   }
 
+  // A code works once, so a device that was not listed when it showed used it.
+  async function watchCode() {
+    let listed
+    try {
+      listed = await tauri.invoke('local_devices')
+    } catch (_) {
+      return
+    }
+    const next = Array.isArray(listed?.devices) ? listed.devices : []
+    const known = new Set(devices.map((device) => device.device_id))
+    const added = next.find((device) => !known.has(device.device_id))
+    devices = next
+    if (added && link) {
+      link = null
+      paired = `${added.name} paired with this computer.`
+    }
+  }
+
   onMount(() => {
     void call('load', 'local_access_settings').then((next) => { if (next) apply(next) }).then(loadDevices)
     const ticker = setInterval(() => { now = Date.now() }, 1000)
-    return () => { clearInterval(ticker); link = null }
+    const watcher = setInterval(() => { if (link && !busy) void watchCode() }, 2000)
+    return () => { clearInterval(ticker); clearInterval(watcher); link = null }
   })
 
   async function save(nextEnabled, nextPort = null) {
@@ -70,9 +92,18 @@
   }
 
   async function showCode() {
+    paired = ''
     if (!enabled && !await save(true)) return
+    if (access?.error) {
+      error = /address already in use/i.test(String(access.error))
+        ? `Another program uses port ${port}. Choose another port under Network.`
+        : `Connections cannot start. ${errorLine(access.error)}`
+      network = true
+      return
+    }
     if (!endpoints.length) {
       error = 'This computer has no address to share. Add one under Network.'
+      network = true
       return
     }
     copied = false
@@ -127,7 +158,7 @@
           </div>
         </div>
       {:else}
-        <p class="line">Scan the code or paste the link on the other device.</p>
+        <p class="line" role={paired ? 'status' : undefined}>{paired || 'Scan the code or paste the link on the other device.'}</p>
         <div><Button variant="primary" disabled={!access || !!busy} onclick={showCode}>Show pairing code</Button></div>
       {/if}
     </section>
@@ -154,7 +185,7 @@
   </Group>
 {/if}
 
-<details class="network">
+<details class="network" bind:open={network}>
   <DisclosureSummary>Network</DisclosureSummary>
   <div class="network-body">
     <Row title="Accept connections" description={enabled ? 'Paired devices can reach this computer.' : 'No other device can reach this computer.'}>

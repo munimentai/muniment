@@ -420,11 +420,17 @@
     composer?.focus()
   }
 
+  // Which paired machines answer, so the thread list follows a machine that
+  // goes offline, comes back or revokes this device.
+  const machineStates = (list) => (list?.runtimes ?? []).filter((runtime) => !runtime.local).map((runtime) => `${runtime.id}:${runtime.status}`).join(' ')
+
   function applyRuntimes(next) {
     if (!next?.runtimes) return
     const previous = runtimeList?.selected
+    const previousStates = runtimeList ? machineStates(runtimeList) : null
     runtimeList = next
     if (previous && previous !== next.selected) void runtimeSwitched()
+    if (previousStates !== null && previousStates !== machineStates(next)) void chatController?.refreshThreads()
   }
 
   // The thread list holds every machine's threads, so a change of the machine
@@ -2363,7 +2369,7 @@
 
 {#snippet machineBadge(summary)}
   {@const machine = summary.runtimeId && summary.runtimeId !== LOCAL_RUNTIME_ID ? runtimeList?.runtimes?.find((runtime) => runtime.id === summary.runtimeId) : null}
-  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={statusTone(machine)} aria-hidden="true"></i>{machine.name}<span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
+  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={statusTone(machine)} aria-hidden="true"></i><span class="machine-name">{machine.name}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
 {#snippet rowMark(selected, running = false)}
@@ -3290,8 +3296,8 @@
   /* The time always shows: the title takes the rest of the row and fades at its end. */
   .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
-  .thread-row > span.machine-badge, .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 88px; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .active-thread > span.machine-badge { width: auto; height: auto; background: transparent; }
+  .thread-row > span.machine-badge, .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .machine-dot { flex: none; width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--border); }
   .machine-dot[data-tone="ink"] { background: var(--ink); }
   .machine-dot[data-tone="caution"] { background: var(--ochre); }
@@ -3329,7 +3335,7 @@
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
   .active-thread { background: var(--faint); }
   /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
-  .active-thread > span:not(.select-mark) { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+  .active-thread > span:not(.select-mark):not(.machine-badge) { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
   /* A thread whose reply still runs in the background: a quiet muted ring in the dot's place. */
   .thread-row > span.run-mark { width: 5px; height: 5px; border: 1px solid var(--muted); border-radius: var(--radius-chip); }
   .quiet { background: transparent; border-color: transparent; }

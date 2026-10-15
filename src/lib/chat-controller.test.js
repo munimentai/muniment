@@ -537,6 +537,19 @@ describe('chat controller', () => {
     expect(setup().controller.refreshThreads).toEqual(expect.any(Function))
   })
 
+  it('drops older threads of a machine that no longer answers', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_current_thread'
+      ? null
+      : { summaries: [{ threadId: 'new', runtimeId: 'local' }], nextCursor: null, runtimeIds: ['local', 'box'] })
+    const context = setup(invoke, { summaries: [
+      { threadId: 'mine', runtimeId: 'local' },
+      { threadId: 'boxed', runtimeId: 'box' },
+      { threadId: 'gone', runtimeId: 'revoked' },
+    ] })
+    await context.controller.refreshThreads()
+    expect(context.onThreadSummaries.mock.lastCall[0].map((summary) => summary.threadId)).toEqual(['new', 'mine', 'boxed'])
+  })
+
   it('keeps the restored thread selected when the backend has no explicit selection', async () => {
     const invoke = vi.fn(async (command) => command === 'chat_current_thread'
       ? null

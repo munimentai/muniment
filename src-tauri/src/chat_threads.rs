@@ -232,13 +232,16 @@ struct RuntimePage {
 }
 
 /// Merges each runtime's page into one list, newest first. Each summary names
-/// its runtime, and the next cursor holds the cursor of every runtime with
-/// more threads, as a JSON object from runtime id to cursor.
+/// its runtime, `runtimeIds` names the runtimes that answered, and the next
+/// cursor holds the cursor of every runtime with more threads, as a JSON
+/// object from runtime id to cursor.
 #[cfg(any(unix, target_os = "windows"))]
 fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
     let mut summaries = Vec::new();
     let mut cursors = serde_json::Map::new();
+    let mut answered = Vec::new();
     for RuntimePage { runtime_id, page } in pages {
+        answered.push(runtime_id.clone());
         if let Some(listed) = page.get("summaries").and_then(serde_json::Value::as_array) {
             for summary in listed {
                 let mut summary = summary.clone();
@@ -261,7 +264,7 @@ fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
     };
     summaries.sort_by_key(|summary| std::cmp::Reverse(updated(summary)));
     let next_cursor = (!cursors.is_empty()).then(|| serde_json::Value::Object(cursors).to_string());
-    serde_json::json!({ "summaries": summaries, "nextCursor": next_cursor })
+    serde_json::json!({ "summaries": summaries, "nextCursor": next_cursor, "runtimeIds": answered })
 }
 
 /// The runtimes a page request reads, with each one's cursor: every runtime
@@ -1326,6 +1329,7 @@ mod tests {
             })
             .collect();
         assert_eq!(order, vec![("a", "local"), ("c", "box"), ("b", "local")]);
+        assert_eq!(merged["runtimeIds"], serde_json::json!(["local", "box"]));
         let cursor = merged["nextCursor"].as_str().unwrap();
         assert_eq!(
             merged_cursor_targets(Some(cursor), &[]).unwrap(),

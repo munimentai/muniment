@@ -264,7 +264,10 @@ export function createChatController({
       ])
       if (destroyed || sequence !== threadRefreshSequence) return false
       const refreshedThreadIds = new Set(firstPage.summaries.map((summary) => summary.threadId))
-      const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId))
+      // A machine that did not answer, such as one that revoked this device, leaves its threads out.
+      const answered = Array.isArray(firstPage.runtimeIds) ? new Set(firstPage.runtimeIds) : null
+      const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId)
+        && (!answered || !summary.runtimeId || answered.has(summary.runtimeId)))
       const summaries = [...firstPage.summaries, ...retainedSummaries]
       onThreadSummaries(summaries)
       const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())

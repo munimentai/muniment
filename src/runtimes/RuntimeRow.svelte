@@ -51,7 +51,7 @@
         {#if !runtime.local}<span>{kindLabel(runtime)}</span>{/if}
         {#if runtime.sshHost}<span class="record">ssh {runtime.sshHost}</span>{/if}
         {#if updating}
-          <span class="runtime-state" data-tone="signal">Updating to v{appVersion}</span>
+          <span class="runtime-state" data-tone="signal">Updating to v{runtime.updateTarget ?? appVersion}</span>
         {:else}
           <span class="runtime-state" data-tone={statusTone(runtime)}>{statusLabel(runtime)}</span>
         {/if}

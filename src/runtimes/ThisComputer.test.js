@@ -36,7 +36,7 @@ function bridge({ enabled = false, devices = [] } = {}) {
     if (command === 'local_pairing_link') return { link: LINK, qrSvg: '<svg role="img" aria-label="Pairing code"></svg>', expiresAt: '2030-01-01T12:05:00Z', scopes: payload.admin ? ['run.write', 'runtime.admin', 'thread.read'] : ['run.write', 'thread.read'] }
     throw new Error(`unexpected command: ${command}`)
   })
-  return { invoke }
+  return { invoke, pairDevice: (device) => { listed = [...listed, device] } }
 }
 
 describe('This computer', () => {
@@ -109,6 +109,32 @@ describe('This computer', () => {
     tauri.invoke.mockImplementationOnce(async () => access(true, { listening: null, error: 'Address already in use' }))
     render(ThisComputer, { tauri })
     expect(await screen.findByRole('alert')).toHaveTextContent('Connections cannot start. Address already in use.')
+  })
+})
+
+describe('This computer while a code shows', () => {
+  it('closes a code once a device uses it and lists that device', async () => {
+    const tauri = bridge({ enabled: true })
+    render(ThisComputer, { tauri })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Show pairing code' }))
+    expect(await screen.findByRole('img', { name: 'Pairing code' })).toBeInTheDocument()
+    expect(screen.queryByText('Devices using this computer')).toBeNull()
+    tauri.pairDevice({ device_id: 'd2', name: 'Studio', kind: 'desktop-client', scopes: ['run.write', 'thread.read'], created_at: '2030-01-01T00:00:00Z', last_seen_at: null })
+    expect(await screen.findByRole('status', {}, { timeout: 4000 })).toHaveTextContent('Studio paired with this computer.')
+    expect(screen.queryByRole('img', { name: 'Pairing code' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Studio' })).toBeInTheDocument()
+  })
+
+  it('names a port another program holds instead of asking for an address', async () => {
+    const tauri = bridge({ enabled: true })
+    tauri.invoke.mockImplementationOnce(async () => access(true, { listening: null, endpoints: [], error: 'The listener could not bind 0.0.0.0:7443: remote attach listener bind failed: Address already in use (os error 48)' }))
+    render(ThisComputer, { tauri })
+    const show = await screen.findByRole('button', { name: 'Show pairing code' })
+    await waitFor(() => expect(show).toBeEnabled())
+    await fireEvent.click(show)
+    expect(await screen.findByText('Another program uses port 7443. Choose another port under Network.')).toBeInTheDocument()
+    expect(tauri.invoke).not.toHaveBeenCalledWith('local_pairing_link', expect.anything())
+    expect(screen.getByText('Network').closest('details')).toHaveAttribute('open')
   })
 })
 
