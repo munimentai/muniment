@@ -78,6 +78,7 @@
     "allow-local-mode-provider-inventory",
     "allow-local-mode-set-default-model",
     "allow-local-mode-set-model-hidden",
+    "allow-local-mode-set-thinking-level",
     "allow-local-mode-disconnect-provider",
     "allow-local-mode-store-endpoint",
     "allow-local-mode-claude-code-status",

@@ -7,7 +7,7 @@ use uuid::Uuid;
 #[cfg(any(unix, target_os = "windows"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RunClientCall {
-    Submit(String, Vec<String>, Option<String>),
+    Submit(String, Vec<String>, Option<String>, Option<String>),
     Resume(String),
     Steer(String, String),
     FollowUp(String, String),
@@ -37,6 +37,7 @@ impl RunCommandClient for FakeRunClient {
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
+        thinking_level: Option<&str>,
     ) -> Result<RunSubmitAccepted, String> {
         if self.1 {
             return Err(auth::desktop_client_error(
@@ -47,6 +48,7 @@ impl RunCommandClient for FakeRunClient {
             text.to_owned(),
             files.to_vec(),
             thread_id.map(str::to_owned),
+            thinking_level.map(str::to_owned),
         ));
         Ok(RunSubmitAccepted {
             run_id: "remote-run".to_string(),
@@ -161,6 +163,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         None,
         "prompt",
         vec![],
+        None,
     )));
 
     state
@@ -175,6 +178,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         vec![SelectedFile {
             path: PathBuf::from("/tmp/a.txt"),
         }],
+        Some("high"),
     ));
     assert_eq!(connected.unwrap().run_id, "remote-run");
     assert_eq!(
@@ -186,7 +190,8 @@ fn chat_submit_routes_all_desktop_client_states() {
         [RunClientCall::Submit(
             "prompt".to_string(),
             vec!["/tmp/a.txt".to_string()],
-            Some("selected-thread".to_string())
+            Some("selected-thread".to_string()),
+            Some("high".to_string())
         )]
     );
 
@@ -197,6 +202,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         Some("subject-2"),
         "new prompt",
         vec![],
+        None,
     ));
     assert!(created.is_ok());
     assert_eq!(
@@ -209,6 +215,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         None,
         "prompt",
         vec![],
+        None,
     )));
     assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
         FakeRunClient,
@@ -218,6 +225,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         None,
         "prompt",
         vec![],
+        None,
     )));
 }
 

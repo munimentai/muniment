@@ -95,6 +95,7 @@ fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
             workspace: None,
             provenance: None,
             thread_id: None,
+            thinking_level: None,
         },
     )
     .unwrap();
@@ -179,6 +180,7 @@ fn local_mode_run(configured: bool) {
                 text: "local prompt".into(),
                 files: Vec::new(),
                 thread_id: None,
+                thinking_level: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
@@ -380,6 +382,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
                 text: "hello".into(),
                 files: Vec::new(),
                 thread_id: None,
+                thinking_level: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
@@ -419,6 +422,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
                 text: "hello again".into(),
                 files: Vec::new(),
                 thread_id: None,
+                thinking_level: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000013").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000014").unwrap(),
@@ -498,6 +502,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
                 text: "first".into(),
                 files: Vec::new(),
                 thread_id: None,
+                thinking_level: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000015").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000016").unwrap(),
@@ -524,6 +529,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
                 text: "hello".into(),
                 files: Vec::new(),
                 thread_id: Some(first.thread_id.clone()),
+                thinking_level: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000017").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000018").unwrap(),
@@ -640,6 +646,7 @@ fn runtime_boundaries_prepare_a_desktop_run() {
                 extra: BTreeMap::from([("attach_profile".into(), "profile-a".into())]),
             }),
             thread_id: Some(thread_id.clone()),
+            thinking_level: None,
         },
     )
     .unwrap();
@@ -699,6 +706,7 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
             workspace: Some("local".into()),
             provenance: None,
             thread_id: None,
+            thinking_level: None,
         },
     )
     .unwrap();
@@ -761,6 +769,7 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
                 text: "hello".into(),
                 files: Vec::new(),
                 thread_id: None,
+                thinking_level: None,
             },
             &Id::new("018f0000-0000-7000-8000-000000000019").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000020").unwrap(),

@@ -267,7 +267,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
             })
             .unwrap();
         assert_eq!(
-            client.run_submit("hello", &[], None).unwrap_err(),
+            client.run_submit("hello", &[], None, None).unwrap_err(),
             ClientError::RequestRejected
         );
         assert_eq!(
@@ -275,7 +275,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
             "code=\"invalid_request\" reason=\"A reply is already in progress.\""
         );
         active_boundaries.clear_active_run("busy-run");
-        let accepted = client.run_submit("hello", &[], None).unwrap();
+        let accepted = client.run_submit("hello", &[], None, None).unwrap();
         assert!(!accepted.run_id.is_empty());
         assert_eq!(approval.approval().unwrap().workspace, "local");
 

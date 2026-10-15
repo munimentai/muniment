@@ -52,6 +52,7 @@ pub async fn chat_submit(
     state: tauri::State<'_, ChatState>,
     prompt: String,
     files: Option<Vec<SelectedFile>>,
+    thinking_level: Option<String>,
 ) -> Result<SubmitResult, SubmissionError> {
     #[cfg(any(unix, target_os = "windows"))]
     {
@@ -81,9 +82,16 @@ pub async fn chat_submit(
         crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)
             .map_err(SubmissionError::at("thread"))?;
         let selected_files = files.unwrap_or_default();
-        return handle_run_submit(session, &state, subject.as_deref(), &prompt, selected_files)
-            .await
-            .map_err(SubmissionError::at("submit"));
+        return handle_run_submit(
+            session,
+            &state,
+            subject.as_deref(),
+            &prompt,
+            selected_files,
+            thinking_level.as_deref(),
+        )
+        .await
+        .map_err(SubmissionError::at("submit"));
     }
 }
 

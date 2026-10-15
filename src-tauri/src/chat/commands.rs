@@ -9,6 +9,7 @@ pub(super) trait RunCommandClient {
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
+        thinking_level: Option<&str>,
     ) -> Result<RunSubmitAccepted, String>;
     fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError>;
     fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError>;
@@ -29,11 +30,13 @@ impl RunCommandClient for DesktopClientHolder {
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
+        thinking_level: Option<&str>,
     ) -> Result<RunSubmitAccepted, String> {
         self.run_submit_with_reason(
             text,
             files,
             thread_id,
+            thinking_level,
             crate::attach_service::runtime_version_compatible,
         )
         .map_err(|(error, response)| auth::desktop_request_error(error, response.as_ref()))
@@ -98,6 +101,7 @@ pub(super) async fn handle_run_submit<C: RunCommandClient>(
     subject: Option<&str>,
     prompt: &str,
     files: Vec<SelectedFile>,
+    thinking_level: Option<&str>,
 ) -> Result<SubmitResult, String> {
     match session {
         RunCommandSession::Connected(client) => {
@@ -111,7 +115,8 @@ pub(super) async fn handle_run_submit<C: RunCommandClient>(
                         .ok_or_else(attachment_error)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let accepted = client.run_submit(prompt, &file_paths, thread_id.as_deref())?;
+            let accepted =
+                client.run_submit(prompt, &file_paths, thread_id.as_deref(), thinking_level)?;
             state
                 .session_thread
                 .select(accepted.thread_id.clone(), subject);

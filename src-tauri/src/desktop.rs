@@ -199,6 +199,7 @@ pub fn run() {
             local_mode::local_mode_provider_inventory,
             local_mode::local_mode_set_default_model,
             local_mode::local_mode_set_model_hidden,
+            local_mode::local_mode_set_thinking_level,
             local_mode::local_mode_disconnect_provider,
             local_mode::local_mode_store_endpoint,
             local_mode::local_mode_claude_code_status,

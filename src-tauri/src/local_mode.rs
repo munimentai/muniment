@@ -166,6 +166,28 @@ pub(crate) async fn local_mode_set_default_model(
     result
 }
 
+/// Saves the thinking level a model runs at when a chat names none. No level
+/// restores the runtime's own default for the model.
+#[tauri::command]
+pub(crate) async fn local_mode_set_thinking_level(
+    app: tauri::AppHandle,
+    provider: String,
+    model: String,
+    level: Option<String>,
+) -> Result<(), String> {
+    model_service::request(
+        &app,
+        ModelAction::SetThinkingLevel,
+        data([
+            ("provider", json!(provider)),
+            ("model", json!(model)),
+            ("level", json!(level)),
+        ]),
+    )
+    .await
+    .map(drop)
+}
+
 #[tauri::command]
 pub(crate) async fn local_mode_set_model_hidden(
     app: tauri::AppHandle,
