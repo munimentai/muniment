@@ -8669,4 +8669,23 @@ describe('runtimes', () => {
     expect(pages).toContain('Machines')
     expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
   })
+
+  it('holds sending in a thread whose machine revoked this device and names the next step', async () => {
+    const fallback = invoke.getMockImplementation()
+    const revoked = { ...listFor('local'), runtimes: [thisComputer, { ...buildBox, status: 'revoked' }] }
+    threadSummaryResult = [{ threadId: 'remote-1', title: 'Remote work', updatedAt: '', runtimeId: buildBox.id }]
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return revoked
+      if (command === 'chat_current_thread') return 'remote-1'
+      return fallback(command, payload)
+    })
+    render(App)
+    expect(await screen.findByText('Build box: Access revoked')).toHaveClass('record', 'error-record')
+    expect(screen.getByText('This thread lives on Build box. Pair it again with a new link.')).toHaveClass('support')
+    const composer = await findReadyWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'Still there?' } })
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true')
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  })
 })

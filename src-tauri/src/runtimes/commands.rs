@@ -338,9 +338,11 @@ pub async fn runtime_remove(app: tauri::AppHandle, id: String) -> Result<Runtime
         let name = registry
             .entry(&id)
             .map_or_else(|| "The runtime".to_owned(), |entry| entry.name);
-        // A runtime that is offline, or older than self revocation, keeps
-        // the credential until its owner revokes it there.
-        let notice = (!revoke_self(&connector(&app, registry, &id))).then(|| {
+        // A runtime that revoked this device already forgot it. One that is
+        // offline, or older than self revocation, keeps the credential until
+        // its owner revokes it there.
+        let revoked = runtimes.observed(&id).status == RuntimeStatus::Revoked;
+        let notice = (!revoked && !revoke_self(&connector(&app, registry, &id))).then(|| {
             format!("{name} still lists this device. Revoke it on {name} to end its access.")
         });
         registry

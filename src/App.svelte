@@ -5,7 +5,7 @@
   import { featureFlags } from './feature-flags.js'
   import { settingsGroups, settingsPage } from './lib/settings-sections.js'
   import MachinePicker from './runtimes/MachinePicker.svelte'
-  import { activeRuntime, LOCAL_RUNTIME_ID, remoteSelected, statusLabel, statusTone } from './runtimes/runtimes.js'
+  import { activeRuntime, LOCAL_RUNTIME_ID, remoteSelected, statusHint, statusLabel, statusTone } from './runtimes/runtimes.js'
   import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
@@ -676,6 +676,13 @@
   const threadMachine = $derived(!freshThread && currentThreadId
     ? threadSummaries.find((summary) => summary.threadId === currentThreadId)?.runtimeId ?? runtimeList?.selected ?? null
     : null)
+  // The open thread's machine while it cannot take a message, such as one
+  // that is offline or revoked this device. Each such state names a next step.
+  const unreachableMachine = $derived.by(() => {
+    if (!threadMachine || threadMachine === LOCAL_RUNTIME_ID) return null
+    const machine = runtimeList?.runtimes?.find((runtime) => runtime.id === threadMachine)
+    return machine && statusHint(machine) ? machine : null
+  })
   let threadSwitching = $state(false)
   const runningThreadId = $derived(backgroundRun?.threadId ?? (active ? currentThreadId : null))
   // A running agent or artifact chat marks its own sidebar row, or its collapsed group.
@@ -922,7 +929,7 @@
     readThinkingLevel: () => chipThinking?.level ?? null,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
-    blocked: () => dictationBusy() || runtimeUpgradePending() || modelChoicePending || compacting || !!retryReview?.chooseModel,
+    blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,
     onMessages: (next) => { messages = next },
     onActive: (next) => { const finished = !!active && !next; active = next; if (finished) void revealSavedArtifact() },
     onAnnounce: (next) => { announcedRun = next },
@@ -2336,7 +2343,7 @@
   }
 
   function sendDisabled() {
-    return runtimeUpgradePending() || !draft.trim() || !!backgroundRun || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || !!unreachableMachine || !draft.trim() || !!backgroundRun || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   // The band's one action control: an up arrow that sends while the draft has
@@ -2894,6 +2901,12 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          {#if unreachableMachine}
+            <section class="update-notice" aria-live="polite">
+              <p class="record error-record">{unreachableMachine.name}: {statusLabel(unreachableMachine)}</p>
+              <p class="support">This thread lives on {unreachableMachine.name}. {statusHint(unreachableMachine)}</p>
+            </section>
+          {/if}
           {#if runtimeUpgradePending()}
             <section class="update-notice" aria-live="polite">
               <p class="record error-record">A Muniment update is finishing.</p>
