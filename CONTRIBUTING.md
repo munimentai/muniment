@@ -1,8 +1,7 @@
 # Contributing to Muniment
 
 Muniment is a desktop harness for models, tools and local work.
-Read [SPEC.md](SPEC.md) for behavior, [DESIGN.md](DESIGN.md) for interface rules,
-and [ROADMAP.md](ROADMAP.md) for product direction.
+Read [SPEC.md](SPEC.md) for behavior and [DESIGN.md](DESIGN.md) for interface rules.
 
 ## Issues and pull requests
 

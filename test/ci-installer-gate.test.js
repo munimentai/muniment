@@ -78,7 +78,6 @@ describe('PR gate shape', () => {
     'AGENTS.md',
     'README.md',
     'SPEC.md',
-    'ROADMAP.md',
     'DESIGN.md',
     'docs/core-boundary.md',
   ])('skips the installer matrix for a change to %s alone', (file) => {

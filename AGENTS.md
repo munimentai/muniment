@@ -4,7 +4,7 @@ Muniment desktop is the local harness for the user's models, tools and work.
 Phase one delivers the free desktop and its public release. Phase two
 adds cloud availability with paid accounts. The Tauri shell, Rust runtime,
 Pi sidecar and on-device voice stack serve the desktop without a Muniment account.
-`SPEC.md` defines current behavior and `ROADMAP.md` lists remaining outcomes.
+`SPEC.md` defines current behavior.
 
 ## Local work and optional features
 
@@ -48,15 +48,14 @@ Windows-specific code CANNOT be compiled or tested in the agent's Linux checkout
 CI runs on Forgejo Actions at `factory/muniment`. The nightly and stable promotion workflows run there from an owner dispatch of `main`. They publish to GitHub Releases on `munimentai/muniment` with the `GH_RELEASE_TOKEN` secret. Installed subscription acceptance (`subscriptions.yml`) runs on GitHub Actions. CI logs land in the Forgejo Actions run linked from the pull request's checks. Open the failed `Desktop compile preflight (windows)` check. Expand `Check (windows) via desktop-ci`, then read the first compiler error and its command output.
 ## Steering files
 
-This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`,
-`ROADMAP.md`, and `DESIGN.md`. `docs/` holds technical documentation about the
+This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`, and
+`DESIGN.md`. `docs/` holds technical documentation about the
 app, such as `docs/core-boundary.md`. Decision records are not kept in this
 repository. Steering files and `docs/` describe the app, not product or business
 decisions. They are instruction, not record: present tense, stating what is. No dates, ticket ids, commit shas, or
 pull request numbers. No history phrases: "decided", "superseded", "previously", "no longer".
 No ledger file under any name: no open-items,
-build-history, decision-log, handoff, journal, notes, or todo file. A finished
-roadmap phase is deleted, not marked done. Caps: `SPEC.md` 600 lines,
-`DESIGN.md` 250, `ROADMAP.md` 150, `AGENTS.md` 120. Issues track work and git holds history.
+build-history, decision-log, handoff, journal, notes, or todo file. Caps:
+`SPEC.md` 600 lines, `DESIGN.md` 250, `AGENTS.md` 120. Issues track work and git holds history.
 `CONTRIBUTING.md`, `SECURITY.md` and `LICENSE.md` define public participation,
 private vulnerability reporting and licensing.

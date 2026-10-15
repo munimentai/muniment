@@ -101,14 +101,9 @@ test -f "$classifier_module"
 for classifier_class in route.cloud route.local route.proxy; do
   grep -Fq "\"$classifier_class\"" "$classifier_module"
 done
-# SPEC and ROADMAP name that one mode identically, and neither names it a chat.
+# SPEC names that one mode and never calls it a chat.
 grep -Fq 'the thread surface' SPEC.md
-grep -Fq 'the thread surface' ROADMAP.md
-test -z "$(grep -rilw 'chat mode' SPEC.md ROADMAP.md)"
-# The committed note carries the routing-surface name raised with MUNICLOUD.
-grep -Fq 'desktop_thread_chat' docs/desktop-single-mode.md
-grep -Fq 'Ratifying MUNICLOUD ticket' docs/desktop-single-mode.md
-grep -Fq 'docs/desktop-single-mode.md' SPEC.md
+test -z "$(grep -rilw 'chat mode' SPEC.md)"
 # No document may name the retired Gemma alias or call the resident model Gemma.
 # (`! grep` would be exempt from errexit, so assert on empty output instead)
 test -z "$(grep -rl 'muniment-resident-gemma' docs/)"

@@ -65,4 +65,34 @@ Keep `MACOS_SIGNING_ENABLED` set to `false` until the Apple credentials exist.
 After enrollment clears, add the documented credentials and set that repository variable to `true`.
 The nightly build then signs and notarizes both macOS artifacts.
 
-See [macOS signing](macos-signing.md) for the credential contract and verification commands.
+## Signing credentials
+
+`.github/build-macos-app.mjs` signs, notarizes and staples the macOS builds, and
+`.github/lib/macos-signing.mjs` holds its configuration. With
+`MACOS_SIGNING_ENABLED` set to `true`, the build needs all six secrets below,
+and a partial set fails with the missing key names.
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE` | One `.p12` with the Developer ID Application and Installer identities and their private keys, base64 on one line. |
+| `APPLE_CERTIFICATE_PASSWORD` | The `.p12` export password. |
+| `APPLE_TEAM_ID` | The 10-character Apple Developer Team ID. |
+| `APPLE_API_KEY` | The App Store Connect `.p8` key for `notarytool`, base64 on one line. The key needs the Developer role or higher. |
+| `APPLE_API_KEY_ID` | The key's Key ID. |
+| `APPLE_API_ISSUER` | The App Store Connect issuer UUID. |
+
+The build imports the `.p12` into a throwaway keychain and places the vendored
+Developer ID G2 intermediate in the login keychain for the run. It checks for a
+valid Developer ID Application identity before the first `codesign` call. It
+signs the app with the hardened runtime and a secure timestamp, notarizes and
+staples the app archives, then signs, notarizes and staples every PKG and DMG.
+
+Verify a signed app on a Mac:
+
+```bash
+codesign --verify --deep --strict --verbose=2 muniment.app
+xcrun stapler validate muniment.app
+spctl --assess --type execute --verbose=4 muniment.app
+```
+
+All three must pass before distribution.

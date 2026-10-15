@@ -326,9 +326,7 @@ onboarding spec proves the connect question, the Home picker and More providers.
    Entitlement snapshots are display hints. The server enforces cloud use.
 3. **One mode.** The desktop runs a single mode, **the thread surface**, with
    no mode switcher. Workspace tabs and the optional record panel are panels of
-   it. This file and the ROADMAP name that mode identically and never as a
-   chat, and [docs/desktop-single-mode.md](docs/desktop-single-mode.md) maps
-   it to the cloud routing-surface name. Enforcer:
+   it. This file names that mode identically and never as a chat. Enforcer:
    `test/smoke.sh`.
 4. **Color law.** Color means computation. `--signal` appears only on the
    mark's thinking state, the running-tool pulse, the streaming underline and
@@ -536,7 +534,7 @@ is open work: closing it is a gate change first and a symptom ticket second.
    MDM and RMM. Enforcer: `test/windows-installers.ps1` in the desktop-build job.
 4. macOS ships signed, notarized universal, Apple silicon and Intel DMGs and PKGs.
    DMGs are the default. Updates select the native architecture. Local builds
-   verify signing only. Enforcer: `.github/lib/macos-signing.mjs` and `docs/macos-signing.md`.
+   verify signing only. Enforcer: `.github/lib/macos-signing.mjs` and `docs/macos-packages.md`.
 5. A release promotes only the exact bytes of a green nightly SHA. Enforcer:
    `.github/lib/release-promotion.mjs`.
 6. UI copy obeys the vocabulary law, records render in mono, and the provenance

@@ -63,10 +63,9 @@ else
   repo="$(cd "$1" && pwd)" || { finding "no such directory: $1"; exit 1; }
   root="$repo"
   check_forbidden "$repo"
-  for f in AGENTS.md README.md SPEC.md ROADMAP.md DESIGN.md; do check_history "$repo/$f"; done
+  for f in AGENTS.md README.md SPEC.md DESIGN.md; do check_history "$repo/$f"; done
   check_cap "$repo/SPEC.md" 600
   check_cap "$repo/DESIGN.md" 250
-  check_cap "$repo/ROADMAP.md" 150
   check_cap "$repo/AGENTS.md" 120
 fi
 
