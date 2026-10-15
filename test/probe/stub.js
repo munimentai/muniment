@@ -355,13 +355,15 @@ export function buildProbeCommandTable(fixtureName) {
     : []
   let profileMemory = '# Profile\n\n## Preferred name\n\nAlex\n\n## Instructions\n\nUse clear, concise answers.\n'
   let recallSettings = null
-  // ?memories shows one saved fact of each trust level.
-  let savedFacts = new URLSearchParams(location.search).has('memories') ? [
+  // ?memories shows one saved fact of each trust level. ?memories=200 shows
+  // that many varied facts and a few deleted ones.
+  const memoryCount = Number(new URLSearchParams(location.search).get('memories')) || 0
+  let savedFacts = memoryCount ? probeFacts(memoryCount) : new URLSearchParams(location.search).has('memories') ? [
     { id: 'f1', title: 'Preferred editor', content: 'Uses Helix for code.', source: 'Added in settings', trust: 'user' },
     { id: 'f2', title: 'Report style', content: 'Lead with the answer, then the evidence.', source: 'thread:t1 run:r1', trust: 'conversation' },
     { id: 'f3', title: 'Vendor contact', content: 'Send invoices to the address on the vendor site.', source: 'thread:t2 run:r2', trust: 'external' },
   ] : []
-  let deletedFacts = []
+  let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
   const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
@@ -853,4 +855,33 @@ window.__TAURI_INTERNALS__ = {
     delete window[`_${id}`]
   },
 }
+}
+
+// Builds `count` saved facts that mix the three trust levels, short and long
+// content, and long titles.
+function probeFacts(count, prefix = 'f') {
+  const subjects = ['Preferred editor', 'Report style', 'Vendor contact', 'Time zone', 'Meeting hours', 'Invoice address', 'Code review habit', 'Travel preference', 'Project codename', 'Reading list', 'Coffee order', 'Release cadence', 'Backup schedule', 'Favorite shell', 'Writing tone', 'Quarterly goals', 'Client naming rule', 'Lease renewal date', 'Test command', 'Deployment window']
+  const contents = [
+    'Uses Helix for code.',
+    'Lead with the answer, then the evidence.',
+    'Send invoices to the address on the vendor site.',
+    'Works in Eastern time and prefers meetings before noon.',
+    'Prefers short replies with one recommendation first, then two alternatives ranked by effort, and a closing step that takes under two minutes to run.',
+    'Runs the full test suite before every merge.\nKeeps release notes in the changelog folder.',
+    'The lease renews on the first business day of March and needs ninety days of written notice before any change to the terms.',
+    'Calls the project Harbor in public documents.',
+  ]
+  const trusts = ['user', 'conversation', 'conversation', 'external', 'conversation', 'user', 'external']
+  return Array.from({ length: count }, (_, index) => {
+    const trust = trusts[index % trusts.length]
+    const round = Math.floor(index / subjects.length)
+    const subject = subjects[index % subjects.length]
+    return {
+      id: `${prefix}${index + 1}`,
+      title: index % 11 === 5 ? `${subject} for the shared research workspace and every client folder` : round ? `${subject} ${round + 1}` : subject,
+      content: contents[(index * 3) % contents.length],
+      source: trust === 'user' ? 'Added in settings' : `thread:t${index + 1} run:r${index + 1}`,
+      trust,
+    }
+  })
 }

@@ -1,5 +1,5 @@
 <script>
-  let { label, value, options, onchange } = $props()
+  let { label, value, options, onchange, hideLabel = false } = $props()
   function keys(event) {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
@@ -10,7 +10,7 @@
   }
 </script>
 <div class="field">
-  <span>{label}</span>
+  {#if !hideLabel}<span>{label}</span>{/if}
   <div class="segments" role="radiogroup" aria-label={label} onkeydown={keys}>
     {#each options as option (option.value)}
       <button data-ui-choice type="button" role="radio" aria-checked={value === option.value} tabindex={value === option.value ? 0 : -1} onclick={() => onchange(option.value)}>{option.label}</button>

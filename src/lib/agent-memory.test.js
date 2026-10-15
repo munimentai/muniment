@@ -22,7 +22,7 @@ it('loads and replaces a profile, then saves and deletes a sourced fact', async 
   await fireEvent.input(screen.getByLabelText('Title'), { target: { value: 'Reply style' } })
   await fireEvent.input(screen.getByLabelText('Fact'), { target: { value: 'Use concise replies.' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Save memory' }))
-  await screen.findByText('Use concise replies.')
+  await fireEvent.click(await screen.findByRole('button', { name: 'Reply style' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }))
   expect(invoke).not.toHaveBeenCalledWith('memory_fact_delete', expect.anything())
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
