@@ -4,6 +4,8 @@ import '@testing-library/jest-dom/vitest'
 import MemorySection from './MemorySection.svelte'
 
 afterEach(cleanup)
+HTMLDialogElement.prototype.showModal = function () { this.open = true }
+HTMLDialogElement.prototype.close = function () { this.open = false }
 
 const TRUSTS = ['user', 'conversation', 'external']
 const many = (count) => Array.from({ length: count }, (_, index) => ({
@@ -20,7 +22,11 @@ function setup(facts, deleted = []) {
     if (cmd === 'memory_profile_read') return ''
     if (cmd === 'memory_facts') return [...saved]
     if (cmd === 'memory_deleted_facts') return [...deleted]
-    if (cmd === 'memory_fact_save') { saved = saved.map(f => f.id === args.fact.id ? { ...args.fact, trust: 'user' } : f); return args.fact }
+    if (cmd === 'memory_fact_save') {
+      const fact = { ...args.fact, id: args.fact.id || 'new-fact', trust: 'user' }
+      saved = [...saved.filter(f => f.id !== fact.id), fact]
+      return fact
+    }
     if (cmd === 'memory_recall_settings') return null
     return null
   })
@@ -89,6 +95,7 @@ it('edits a fact inside its row and saves it as a user fact', async () => {
   expect(within(list()).getByRole('region', { name: 'Edit memory' })).toBe(form)
   expect(within(form).getByLabelText('Title')).toHaveValue('Fact 3')
   expect(screen.getAllByLabelText('Title')).toHaveLength(1)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   await fireEvent.input(within(form).getByLabelText('Fact'), { target: { value: 'Checked by hand.' } })
   await fireEvent.click(within(form).getByRole('button', { name: 'Save memory' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_save', { fact: expect.objectContaining({ id: 'f3', content: 'Checked by hand.' }) }))
@@ -105,4 +112,54 @@ it('lists deleted facts as compact rows with Restore in the details', async () =
   await fireEvent.click(within(deleted).getByRole('button', { name: 'Old fact Added by you' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Restore Old fact' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_restore', { id: 'd1' }))
+})
+
+it('adds a memory from a dialog and opens the new fact in the list', async () => {
+  const invoke = setup(many(120))
+  await screen.findByRole('button', { name: 'Fact 1 Added by you' })
+  expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+  const add = screen.getByRole('button', { name: 'Add memory' })
+  expect(add.closest('.group-title')).toHaveTextContent(/^Saved memories\s*120$/)
+  add.focus()
+  await fireEvent.click(add)
+  const dialog = screen.getByRole('dialog', { name: 'Add memory' })
+  expect(dialog).toHaveAttribute('open')
+  await waitFor(() => expect(within(dialog).getByLabelText('Title')).toHaveFocus())
+  await fireEvent.input(within(dialog).getByLabelText('Title'), { target: { value: 'Zebra rule' } })
+  await fireEvent.input(within(dialog).getByLabelText('Fact'), { target: { value: 'Stripes first.' } })
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Save memory' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_save', { fact: expect.objectContaining({ id: '', title: 'Zebra rule', content: 'Stripes first.' }) }))
+  await waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+  expect(add).toHaveFocus()
+  const row = await screen.findByRole('button', { name: 'Zebra rule Added by you' })
+  expect(row).toHaveAttribute('aria-expanded', 'true')
+})
+
+it('closes the add dialog with Escape and returns focus to the plus button', async () => {
+  const invoke = setup(many(2))
+  const add = await screen.findByRole('button', { name: 'Add memory' })
+  add.focus()
+  await fireEvent.click(add)
+  const dialog = screen.getByRole('dialog', { name: 'Add memory' })
+  await fireEvent(dialog, new Event('cancel', { cancelable: true }))
+  expect(dialog).not.toHaveAttribute('open')
+  expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+  expect(add).toHaveFocus()
+  expect(invoke).not.toHaveBeenCalledWith('memory_fact_save', expect.anything())
+})
+
+it('adds agent memories from the same dialog', async () => {
+  const invoke = vi.fn(async (cmd, args) => {
+    if (args?.action === 'memory_facts') return []
+    if (args?.action === 'memory_fact_save') return { ...args.fact, id: 'a1' }
+    return null
+  })
+  render(MemorySection, { tauri: { invoke }, agentId: 'scout' })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Add memory' }))
+  const dialog = screen.getByRole('dialog', { name: 'Add memory' })
+  await fireEvent.input(within(dialog).getByLabelText('Title'), { target: { value: 'Goal' } })
+  await fireEvent.input(within(dialog).getByLabelText('Fact'), { target: { value: 'Find sources.' } })
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Save memory' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save' })))
+  await waitFor(() => expect(dialog).not.toHaveAttribute('open'))
 })

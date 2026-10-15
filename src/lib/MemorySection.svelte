@@ -8,6 +8,8 @@
   import Button from './ui/Button.svelte'
   import SegmentedField from './ui/SegmentedField.svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import PopupClose from './PopupClose.svelte'
+  import { dialogDismiss } from './dialog-dismiss.js'
   import MemoryImports from './MemoryImports.svelte'
   import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
@@ -77,10 +79,32 @@
     await tick()
     titleInput?.focus()
   }
-  async function addMemory() {
+  // Add memory opens a modal form and returns focus to its opener on close.
+  let adding = $state(false)
+  let addDialog = $state()
+  let opener = null
+  async function openAdd(event) {
+    opener = event?.currentTarget ?? document.activeElement
     clearDraft()
+    adding = true
     await tick()
+    if (!addDialog.open) addDialog.showModal()
     titleInput?.focus()
+  }
+  function closeAdd() {
+    if (addDialog?.open) addDialog.close()
+    adding = false
+    clearDraft()
+    opener?.focus?.({ preventScroll: true })
+  }
+  // A new fact opens in the list, on a page the list shows.
+  async function reveal(id) {
+    const index = shown.findIndex(f => f.id === id)
+    if (index < 0) return
+    if (index >= limit) limit = (Math.floor(index / PAGE) + 1) * PAGE
+    expanded = `saved:${id}`
+    await tick()
+    document.getElementById(`${uid}-saved:${id}`)?.scrollIntoView?.({ block: 'nearest' })
   }
   onMount(async () => {
     if (part === 'memory' && !agentId) {
@@ -112,10 +136,16 @@
     event.preventDefault()
     busy = true
     try {
-      await memory.invoke('memory_fact_save', { fact: { ...draft } })
+      const saved = await memory.invoke('memory_fact_save', { fact: { ...draft } })
       facts = await memory.invoke('memory_facts')
       clearDraft()
       status = 'Memory saved.'
+      if (adding) {
+        filter = ''
+        trustFilter = 'all'
+        closeAdd()
+        if (saved?.id) await reveal(saved.id)
+      }
     } catch (e) { status = String(e) }
     finally { busy = false }
   }
@@ -163,7 +193,6 @@
     {#if !agentId}
       <PageHead intro="Save one fact and its source. Muniment recalls the facts that fit each message.">
         {#snippet actions()}
-          <Button disabled={!loaded || busy} onclick={addMemory}>Add memory</Button>
           <Button disabled={!facts.length} onclick={exportMemories}>Export</Button>
         {/snippet}
       </PageHead>
@@ -177,6 +206,7 @@
       <MemoryImports {tauri} />
     {/if}
     <Group heading="Saved memories" count={facts.length} plain>
+      {#snippet trail()}<Button icon="plus" iconOnly aria-label="Add memory" disabled={!loaded} onclick={openAdd} />{/snippet}
       {#snippet actions()}
         <button class="disclosure" aria-expanded={showDeleted} onclick={() => { showDeleted = !showDeleted; deletedLimit = PAGE; if (showDeleted) void refreshDeleted() }}>Deleted memories</button>
       {/snippet}
@@ -195,7 +225,12 @@
         {@render factList(deletedFacts, 'deleted', deletedLimit, () => { deletedLimit += PAGE }, 'No deleted memories.')}
       </Group>
     {/if}
-    {#if !draft.id || expanded !== `saved:${draft.id}`}{@render factForm()}{/if}
+    <dialog class="memory-dialog" data-panel="memory-add" data-panel-variant="overlay" bind:this={addDialog} use:dialogDismiss={{ onclose: closeAdd, disabled: busy }} aria-labelledby={`${uid}-add`}>
+      {#if adding}
+        <div class="dialog-head"><h2 id={`${uid}-add`}>Add memory</h2><PopupClose label="Close" disabled={busy} onclick={closeAdd} /></div>
+        {@render factForm('Cancel', closeAdd)}
+      {/if}
+    </dialog>
   {/if}
   {#if status}<p role="status">{status}</p>{/if}
 </section>
@@ -225,7 +260,7 @@
     </button>
     {#if open}
       <div class="fact-detail" id={`${uid}-${key}`}>
-        {#if list === 'saved' && draft.id === fact.id}{@render factForm()}
+        {#if list === 'saved' && draft.id === fact.id}<section aria-label="Edit memory">{@render factForm('Cancel edit', clearDraft)}</section>
         {:else}
           <p class="fact-content">{fact.content}</p>
           <dl class="fact-meta">
@@ -247,17 +282,15 @@
     {/if}
   </li>
 {/snippet}
-{#snippet factForm()}
-  <form onsubmit={saveFact}>
-    <Group heading={draft.id ? '' : 'Add memory'} label="Edit memory" plain={!!draft.id}>
-      <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
-      <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
-      <label class="field">Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
-      <div class="field-actions">
-        {#if draft.id}<Button onclick={clearDraft}>Cancel edit</Button>{/if}
-        <Button type="submit" disabled={!loaded || busy}>Save memory</Button>
-      </div>
-    </Group>
+{#snippet factForm(cancelLabel, cancel)}
+  <form class="fact-form" onsubmit={saveFact}>
+    <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
+    <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
+    <label class="field">Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
+    <div class="field-actions">
+      <Button onclick={cancel}>{cancelLabel}</Button>
+      <Button type="submit" disabled={!loaded || busy}>Save memory</Button>
+    </div>
   </form>
 {/snippet}
 <style>
@@ -304,7 +337,14 @@
   .fact-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
   .record { font-family: var(--font-mono); }
   .fact-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  .fact-detail .field { padding: 6px 0; }
+  .fact-form { display: grid; gap: 12px; }
+  .fact-form .field { padding: 0; }
+  .fact-form .field-actions { padding: 0; }
+  .memory-dialog { position: fixed; inset: 0; margin: auto; width: min(520px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 20px 24px 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
+  .memory-dialog::backdrop { background: var(--overlay-backdrop); }
+  .memory-dialog[open] { display: grid; gap: 16px; }
+  .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .dialog-head h2 { margin: 0; font-size: var(--text-17); font-weight: var(--weight-semibold); }
   .more { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .tally { color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* A narrow list puts the preview under the title. */

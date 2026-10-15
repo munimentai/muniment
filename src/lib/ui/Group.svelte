@@ -3,14 +3,20 @@
   // actions, then its rows in one bordered card. Every Settings page builds
   // its sections from Group and Row, so the pages share one design. A plain
   // group keeps the heading and drops the card, for a grid of cards.
-  let { heading = '', description = '', label = '', count = null, level = 4, plain = false, lead, actions, children } = $props()
+  // `trail` puts a control after the heading text, before the count.
+  let { heading = '', description = '', label = '', count = null, level = 4, plain = false, lead, trail, actions, children } = $props()
   const id = $props.id()
 </script>
 
 <section class="group" aria-labelledby={heading ? `${id}-heading` : undefined} aria-label={heading ? undefined : label || undefined}>
   {#if heading || actions}
     <div class="group-head">
-      {#if heading}<svelte:element this={`h${level}`} id={`${id}-heading`} class="settings-heading group-heading">{@render lead?.()}{heading}{#if count !== null}<span class="group-count">{count}</span>{/if}</svelte:element>{/if}
+      {#if heading}
+        <div class="group-title">
+          <svelte:element this={`h${level}`} id={`${id}-heading`} class="settings-heading group-heading">{@render lead?.()}{heading}{#if count !== null && !trail}<span class="group-count">{count}</span>{/if}</svelte:element>
+          {#if trail}{@render trail()}{#if count !== null}<span class="group-count">{count}</span>{/if}{/if}
+        </div>
+      {/if}
       {#if actions}<div class="group-actions">{@render actions()}</div>{/if}
     </div>
   {/if}
@@ -21,6 +27,7 @@
 <style>
   .group { display: grid; gap: 10px; min-width: 0; }
   .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
+  .group-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .group-heading { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; }
   .group-count { color: var(--muted); font: var(--weight-regular) var(--text-12) var(--font-mono); }
   .group-actions { display: flex; flex: none; align-items: center; gap: 6px; }

@@ -5,6 +5,8 @@ import MemorySection from './MemorySection.svelte'
 import AgentManager from './AgentManager.svelte'
 
 afterEach(cleanup)
+HTMLDialogElement.prototype.showModal = function () { this.open = true }
+HTMLDialogElement.prototype.close = function () { this.open = false }
 it('loads and replaces a profile, then saves and deletes a sourced fact', async () => {
   let facts = []
   const invoke = vi.fn(async (cmd, args) => {
@@ -19,10 +21,11 @@ it('loads and replaces a profile, then saves and deletes a sourced fact', async 
   await fireEvent.input(screen.getByLabelText('Preferred name'), { target: { value: 'Alex' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Save profile' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_profile_save', { content: expect.stringContaining('## Preferred name\n\nAlex') }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Add memory' }))
   await fireEvent.input(screen.getByLabelText('Title'), { target: { value: 'Reply style' } })
   await fireEvent.input(screen.getByLabelText('Fact'), { target: { value: 'Use concise replies.' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Save memory' }))
-  await fireEvent.click(await screen.findByRole('button', { name: 'Reply style' }))
+  expect(await screen.findByRole('button', { name: 'Reply style' })).toHaveAttribute('aria-expanded', 'true')
   await fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }))
   expect(invoke).not.toHaveBeenCalledWith('memory_fact_delete', expect.anything())
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
