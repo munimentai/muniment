@@ -1234,6 +1234,8 @@ impl DesktopClient {
                 &["routine", "secret", "hook"]
             }
             Operation::RoutineWebhookInfo => &["hook"],
+            Operation::AgentThreads => &["threads"],
+            Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)
@@ -1242,6 +1244,16 @@ impl DesktopClient {
     /// Lists the runtime's agents with their routines and latest runs.
     pub fn list_agents(&mut self) -> Result<Value, ClientError> {
         self.agent_request(Operation::AgentList, serde_json::json!({}))
+    }
+
+    /// Lists every thread of one agent, newest first, with its title.
+    pub fn agent_threads(&mut self, id: &str) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentThreads, serde_json::json!({"id": id}))
+    }
+
+    /// Lists the built-in tools, MCP servers and skills of this runtime.
+    pub fn agent_tool_catalog(&mut self) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentToolCatalog, serde_json::json!({}))
     }
 
     pub fn read_agent(&mut self, id: &str) -> Result<Value, ClientError> {

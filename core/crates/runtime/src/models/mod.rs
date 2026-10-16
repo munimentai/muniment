@@ -65,7 +65,8 @@ impl ModelService {
         let engine = PiRpcEngine::new(None)
             .with_agent_directory(&agent)
             .with_harness_root(
-                profile_directory.join(muniment_core::state_root::HARNESS_DIRECTORY_NAME),
+                muniment_core::chat_profile::ChatProfile::new(profile_directory)
+                    .installed_pi_root(),
             );
         Self {
             state_directory: profile_directory.to_path_buf(),

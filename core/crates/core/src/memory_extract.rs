@@ -547,7 +547,7 @@ pub fn extraction_model(profile: PathBuf) -> Model {
             || router_complete(&agent, system, user),
             || {
                 let executable = crate::sidecar::pi_install::resolve_current_for(
-                    &pi_install_root(&profile),
+                    &crate::chat_profile::ChatProfile::new(&profile).installed_pi_root(),
                     crate::sidecar::pi_install::PI_SELECTED_ARTIFACT,
                 )
                 .map_err(|_| "The agent runtime is not installed.")?;
@@ -555,14 +555,6 @@ pub fn extraction_model(profile: PathBuf) -> Model {
             },
         )
     })
-}
-
-/// The folder that holds Pi's installed revisions, as a chat launch finds it.
-fn pi_install_root(profile: &Path) -> PathBuf {
-    std::env::var_os("MUNIMENT_PI_ROOT")
-        .filter(|root| !root.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| crate::chat_profile::ChatProfile::new(profile).pi_install_root())
 }
 
 /// Why the router gave no answer.

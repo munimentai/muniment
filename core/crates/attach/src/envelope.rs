@@ -510,6 +510,13 @@ pub enum Operation {
     /// Reads where a webhook routine is reached.
     #[serde(rename = "routine.webhook_info")]
     RoutineWebhookInfo,
+    /// Lists every thread of one agent with its title and time.
+    #[serde(rename = "agent.threads")]
+    AgentThreads,
+    /// Lists the built-in tools, MCP servers and skills an agent on this
+    /// runtime can use.
+    #[serde(rename = "agent.tool_catalog")]
+    AgentToolCatalog,
 }
 
 impl Operation {
@@ -651,6 +658,8 @@ impl Operation {
             Self::RoutineWebhookCreate => "routine.webhook_create",
             Self::RoutineWebhookRotate => "routine.webhook_rotate",
             Self::RoutineWebhookInfo => "routine.webhook_info",
+            Self::AgentThreads => "agent.threads",
+            Self::AgentToolCatalog => "agent.tool_catalog",
         }
     }
 
@@ -698,6 +707,8 @@ impl Operation {
                 | Self::RoutineWebhookCreate
                 | Self::RoutineWebhookRotate
                 | Self::RoutineWebhookInfo
+                | Self::AgentThreads
+                | Self::AgentToolCatalog
         )
     }
 }

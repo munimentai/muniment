@@ -85,7 +85,7 @@ pub fn command(root: &Path, action: &str, mut data: Value) -> Result<Value, Stri
         .lock()
         .map_err(|_| "Extension settings are busy.")?;
     let executable = crate::sidecar::pi_install::acquire_pi(
-        &root.join("harness"),
+        &crate::chat_profile::ChatProfile::new(root).installed_pi_root(),
         &std::sync::atomic::AtomicBool::new(false),
     )
     .map_err(|_| "The local runtime could not be prepared. Try again.")?;
@@ -512,6 +512,173 @@ pub fn mcp_tools(root: &Path) -> Vec<crate::agent_extract::McpTool> {
     tools
 }
 
+/// What an agent on this runtime can use, as `agent.tool_catalog` answers
+/// it: the built-in tools a launch offers, each enabled MCP server with the
+/// tools its last connection test listed, and each enabled skill by the id
+/// an agent's `skills` names.
+pub fn tool_catalog(root: &Path) -> Value {
+    let builtin: Vec<Value> = crate::pi_launch::builtin_tools()
+        .map(|(id, label)| {
+            json!({"id": id, "label": label,
+                "read_only": crate::permission_gate::is_read_only_tool(id)})
+        })
+        .collect();
+    let state = inventory(root).unwrap_or_else(|_| json!({"items": []}));
+    let mut mcp = Vec::new();
+    let mut skills = Vec::new();
+    for item in state["items"].as_array().into_iter().flatten() {
+        let id = item["id"].as_str().unwrap_or("");
+        if id.is_empty() || item["enabled"] == false {
+            continue;
+        }
+        let name = item["name"].as_str().unwrap_or("").trim();
+        if item["kind"] == "mcp" {
+            if name.is_empty() {
+                continue;
+            }
+            let tools: Vec<Value> = item["lastCheck"]["toolNames"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|tool| json!({"name": tool}))
+                .collect();
+            let mut server = json!({"server": name, "tools": tools});
+            if let Some(checked) = item["lastCheck"]["checkedAt"].as_str() {
+                server["checked_at"] = json!(checked);
+            }
+            mcp.push(server);
+            continue;
+        }
+        for member in item["servers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(member, _)| member)
+        {
+            mcp.push(json!({"server": member, "tools": []}));
+        }
+        for skill in item["skills"].as_array().into_iter().flatten() {
+            let (Some(path), Some(skill_name)) = (skill["path"].as_str(), skill["name"].as_str())
+            else {
+                continue;
+            };
+            skills.push(json!({
+                "id": format!("{id}:{path}"),
+                "name": skill_name,
+                "description": skill["description"].as_str().unwrap_or(""),
+            }));
+        }
+    }
+    json!({"builtin": builtin, "mcp": mcp, "skills": skills})
+}
+
+/// The saved MCP servers `servers` names, by id or name, with their saved
+/// bearer tokens, for an agent that moves to another runtime with routines
+/// that call them. A plugin's servers stay with the plugin.
+pub fn export_mcp_servers(root: &Path, servers: &[String]) -> (Vec<Value>, Value) {
+    let Ok(state) = inventory(root) else {
+        return (Vec::new(), json!({}));
+    };
+    let saved: Value = fs::read(root.join(MCP_TOKENS))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| json!({}));
+    let mut items = Vec::new();
+    let mut tokens = serde_json::Map::new();
+    for item in state["items"].as_array().into_iter().flatten() {
+        let id = item["id"].as_str().unwrap_or("");
+        if item["kind"] != "mcp" || id.is_empty() {
+            continue;
+        }
+        let name = item["name"].as_str().unwrap_or("");
+        let pi_name = server_name(&state, id, name);
+        if !servers.iter().any(|server| {
+            [id, name, pi_name.as_str()]
+                .iter()
+                .any(|known| !known.is_empty() && known.eq_ignore_ascii_case(server))
+        }) {
+            continue;
+        }
+        let key = format!("extend-{id}");
+        if let Some(token) = saved.get(&key) {
+            tokens.insert(key, token.clone());
+        }
+        items.push(item.clone());
+    }
+    (items, Value::Object(tokens))
+}
+
+/// Adds MCP servers another runtime handed over, with their tokens. A server
+/// this runtime already has under the same id or name stays as it is.
+pub fn import_mcp_servers(root: &Path, items: &[Value], tokens: &Value) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let _lock = MUTATION
+        .lock()
+        .map_err(|_| "Extension settings are busy.")?;
+    let mut state = inventory(root)?;
+    if !state["items"].is_array() {
+        state["items"] = json!([]);
+    }
+    let mut added = Vec::new();
+    for item in items {
+        let (Some(id), Some(name)) = (item["id"].as_str(), item["name"].as_str()) else {
+            continue;
+        };
+        if item["kind"] != "mcp" || id.is_empty() {
+            continue;
+        }
+        let present = state["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|other| {
+                other["id"] == id
+                    || other["name"]
+                        .as_str()
+                        .is_some_and(|other| other.eq_ignore_ascii_case(name))
+            });
+        if present {
+            continue;
+        }
+        if let Some(list) = state["items"].as_array_mut() {
+            list.push(item.clone());
+        }
+        added.push(id.to_owned());
+    }
+    if added.is_empty() {
+        return Ok(());
+    }
+    let directory = root.join("extensions");
+    fs::create_dir_all(&directory).map_err(|_| "The extension folder could not be created.")?;
+    let mut saved: Value = fs::read(root.join(MCP_TOKENS))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| json!({}));
+    let mut tokens_changed = false;
+    for id in &added {
+        let key = format!("extend-{id}");
+        if let (Some(token), Some(object)) = (tokens.get(&key), saved.as_object_mut()) {
+            object.insert(key, token.clone());
+            tokens_changed = true;
+        }
+    }
+    if tokens_changed {
+        crate::model_router::config::write_private(
+            &root.join(MCP_TOKENS),
+            &serde_json::to_vec(&saved).map_err(|_| "Invalid extension settings.")?,
+        )
+        .map_err(|_| "The MCP tokens could not be saved.")?;
+    }
+    crate::model_router::config::write_private(
+        &root.join("extensions/inventory.json"),
+        &serde_json::to_vec_pretty(&state).map_err(|_| "Invalid extension settings.")?,
+    )
+    .map_err(|_| "Extension settings could not be saved.".to_string())
+}
+
 /// The thread name an MCP poll's capability snapshot is built for.
 const POLL_THREAD: &str = "muniment-mcp-poll";
 
@@ -651,7 +818,7 @@ pub fn mcp_call(
 ) -> Result<Value, String> {
     let files = prepare_mcp_call(root, server, tool, args)?;
     let executable = crate::sidecar::pi_install::resolve_current_for(
-        &root.join("harness"),
+        &crate::chat_profile::ChatProfile::new(root).installed_pi_root(),
         crate::sidecar::pi_install::PI_SELECTED_ARTIFACT,
     )
     .map_err(|_| "The agent runtime is not installed.")?;
@@ -1139,6 +1306,124 @@ mod tests {
         assert_eq!(package_folder(&root.0, Some("review")).unwrap(), folder);
         assert!(package_folder(&root.0, Some("outside")).is_err());
         assert!(package_folder(&root.0, Some("missing")).is_err());
+    }
+
+    #[test]
+    fn mcp_servers_a_moved_agent_calls_travel_with_their_tokens() {
+        let source =
+            Extracted(std::env::temp_dir().join(format!("extend-export-{}", uuid::Uuid::new_v4())));
+        let target =
+            Extracted(std::env::temp_dir().join(format!("extend-import-{}", uuid::Uuid::new_v4())));
+        fs::create_dir_all(source.0.join("extensions")).unwrap();
+        fs::write(
+            source.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&json!({"items":[
+                {"id":"m1","kind":"mcp","name":"Leads","definition":{"url":"https://leads.example/mcp","auth":"bearer"},
+                 "lastCheck":{"status":"connected","tools":1,"toolNames":["search"]}},
+                {"id":"m2","kind":"mcp","name":"Other","definition":{"url":"https://other.example/mcp"}},
+                {"id":"p1","kind":"plugin","name":"Leads plugin","servers":{"leads":{"command":"x"}}}
+            ],"turns":{}}))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            source.0.join(MCP_TOKENS),
+            serde_json::to_vec(&json!({"extend-m1":"leads-token","extend-m2":"other-token"}))
+                .unwrap(),
+        )
+        .unwrap();
+        let (items, tokens) = export_mcp_servers(&source.0, &["leads".into()]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["id"], "m1");
+        assert_eq!(tokens, json!({"extend-m1": "leads-token"}));
+
+        fs::create_dir_all(target.0.join("extensions")).unwrap();
+        fs::write(
+            target.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&json!({"items":[
+                {"id":"local","kind":"mcp","name":"Calendar","definition":{"url":"https://cal.example/mcp"}}
+            ],"turns":{"t":{"selected":[]}}}))
+            .unwrap(),
+        )
+        .unwrap();
+        import_mcp_servers(&target.0, &items, &tokens).unwrap();
+        // A second hand-over of the same server changes nothing.
+        import_mcp_servers(&target.0, &items, &json!({"extend-m1": "replaced"})).unwrap();
+        let state = inventory(&target.0).unwrap();
+        let ids: Vec<&str> = state["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["local", "m1"]);
+        assert_eq!(state["turns"], json!({"t":{"selected":[]}}));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(target.0.join(MCP_TOKENS)).unwrap()).unwrap(),
+            json!({"extend-m1": "leads-token"})
+        );
+        assert_eq!(mcp_tools(&target.0).len(), 1);
+    }
+
+    #[test]
+    fn the_tool_catalog_lists_this_runtimes_tools_servers_and_skills() {
+        let root = Extracted(
+            std::env::temp_dir().join(format!("extend-catalog-{}", uuid::Uuid::new_v4())),
+        );
+        let empty = tool_catalog(&root.0);
+        assert_eq!(empty["mcp"], json!([]));
+        assert_eq!(empty["skills"], json!([]));
+        let builtin = empty["builtin"].as_array().unwrap();
+        let ids: Vec<&str> = builtin
+            .iter()
+            .filter_map(|tool| tool["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"read") && ids.contains(&"write"));
+        assert!(ids.contains(&crate::launch_facts::SHELL));
+        assert_eq!(
+            ids.iter()
+                .filter(|id| ["bash", "powershell"].contains(id))
+                .count(),
+            1
+        );
+        assert!(!ids.contains(&crate::pi_launch::EXCLUDED_TOOLS));
+        let read_only =
+            |id: &str| builtin.iter().find(|tool| tool["id"] == id).unwrap()["read_only"].clone();
+        assert_eq!(read_only("read"), json!(true));
+        assert_eq!(read_only("write"), json!(false));
+
+        fs::create_dir_all(root.0.join("extensions")).unwrap();
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&json!({"items":[
+                {"id":"m1","kind":"mcp","name":"Leads","definition":{"url":"https://leads.example/mcp"},
+                 "lastCheck":{"status":"connected","tools":2,"toolNames":["search","get_lead"],
+                              "checkedAt":"2026-01-01T09:00:00Z"}},
+                {"id":"m2","kind":"mcp","name":"Untested","definition":{"url":"https://other.example/mcp"}},
+                {"id":"m3","kind":"mcp","name":"Off","enabled":false,"definition":{}},
+                {"id":"p1","kind":"plugin","name":"Docs","base":"/x",
+                 "skills":[{"name":"review","description":"Review a draft.","path":"skills/review/SKILL.md"}],
+                 "servers":{"docs":{"command":"docs-mcp"}}},
+                {"id":"p2","kind":"skill","name":"Off skill","enabled":false,
+                 "skills":[{"name":"hidden","path":"SKILL.md"}]}
+            ],"turns":{}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let catalog = tool_catalog(&root.0);
+        assert_eq!(
+            catalog["mcp"],
+            json!([
+                {"server":"Leads","tools":[{"name":"search"},{"name":"get_lead"}],
+                 "checked_at":"2026-01-01T09:00:00Z"},
+                {"server":"Untested","tools":[]},
+                {"server":"docs","tools":[]}
+            ])
+        );
+        assert_eq!(
+            catalog["skills"],
+            json!([{"id":"p1:skills/review/SKILL.md","name":"review","description":"Review a draft."}])
+        );
     }
 
     #[test]

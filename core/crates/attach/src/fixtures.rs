@@ -688,6 +688,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("group-create", Operation::GroupCreate),
         ("group-list", Operation::GroupList),
         ("group-update", Operation::GroupUpdate),
+        ("agent-threads", Operation::AgentThreads),
+        ("agent-tool-catalog", Operation::AgentToolCatalog),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -751,6 +753,49 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("group-create", json!({"group": fixture_group()})),
         ("group-list", json!({"groups": [fixture_group()]})),
         ("group-update", json!({"group": fixture_group()})),
+        (
+            "agent-threads",
+            json!({"threads": [
+                {
+                    "thread_id": FIXTURE_THREAD_ID,
+                    "title": "Morning lead check",
+                    "updated_at": "2026-01-01T09:00:12Z",
+                    "primary": true
+                },
+                {
+                    "thread_id": "019965a0-0000-7000-8000-0000000000e2",
+                    "title": "Draft the west region summary",
+                    "updated_at": "2025-12-30T16:41:03Z",
+                    "primary": false
+                }
+            ]}),
+        ),
+        (
+            "agent-tool-catalog",
+            json!({
+                "builtin": [
+                    {"id": "read", "label": "Read files", "read_only": true},
+                    {"id": "write", "label": "Write files", "read_only": false},
+                    {"id": "bash", "label": "Shell commands", "read_only": false},
+                    {"id": "web_search", "label": "Web search", "read_only": true}
+                ],
+                "mcp": [
+                    {
+                        "server": "Leads",
+                        "tools": [{"name": "search_leads"}, {"name": "get_lead"}],
+                        "checked_at": "2026-01-01T08:55:00Z"
+                    },
+                    {"server": "Calendar", "tools": []}
+                ],
+                "skills": [
+                    {
+                        "id": "018f0000-0000-4000-8000-0000000000d1:skills/review/SKILL.md",
+                        "name": "review",
+                        "description": "Review a draft against the house style."
+                    }
+                ]
+            }),
+        ),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1432,6 +1477,8 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::RoutineWebhookRotate | Operation::RoutineWebhookInfo => {
             json!({"agent_id": FIXTURE_AGENT_ID, "routine_id": "build-hook"})
         }
+        Operation::AgentThreads => json!({"id": FIXTURE_AGENT_ID}),
+        Operation::AgentToolCatalog => json!({}),
     }
 }
 
@@ -2058,6 +2105,8 @@ mod tests {
             Operation::GroupCreate,
             Operation::GroupList,
             Operation::GroupUpdate,
+            Operation::AgentThreads,
+            Operation::AgentToolCatalog,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -2134,12 +2183,14 @@ mod tests {
             "response-agent-export.json",
             "response-routine-webhook-create.json",
             "response-routine-webhook-info.json",
+            "response-agent-threads.json",
+            "response-agent-tool-catalog.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1,
+            157 + 14 + 14 + 3 + 1 + 4,
             "every canonical fixture must be inventoried"
         );
     }

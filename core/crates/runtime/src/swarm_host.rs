@@ -97,6 +97,19 @@ impl SwarmHost for RuntimeSwarmHost {
         .ok_or_else(|| "The gate refused the answer.".to_string())
     }
 
+    fn hook_secret(&self, hook_id: &str) -> Option<String> {
+        self.host
+            .credentials
+            .read(muniment_core::agent_hooks::SECRET_SERVICE, hook_id)
+            .filter(|secret| !secret.is_empty())
+    }
+
+    fn store_hook_secret(&self, hook_id: &str, secret: &str) -> Result<(), String> {
+        self.host
+            .credentials
+            .write(muniment_core::agent_hooks::SECRET_SERVICE, hook_id, secret)
+    }
+
     fn kick_runs(&self) {
         let state = self
             .state

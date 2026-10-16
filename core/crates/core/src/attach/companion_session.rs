@@ -450,6 +450,8 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::RoutineWebhookCreate
         | Operation::RoutineWebhookRotate
         | Operation::RoutineWebhookInfo
+        | Operation::AgentThreads
+        | Operation::AgentToolCatalog
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }

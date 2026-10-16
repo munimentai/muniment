@@ -242,6 +242,11 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "mcp__record__sql",
 ];
 
+/// Whether the tool named `tool` reads and changes nothing.
+pub fn is_read_only_tool(tool: &str) -> bool {
+    READ_ONLY_TOOLS.contains(&tool)
+}
+
 /// The exact policy request one tool call makes: a shell command as its
 /// argument vector in the working directory, a file tool's absolute path
 /// and operation, or any other tool's name and exact input.

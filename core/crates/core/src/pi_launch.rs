@@ -19,6 +19,34 @@ pub const AGENT_PERMISSIONS_EXTENSION_FILE: &str = "agent-permissions.mjs";
 /// An extension tool whose name carries the harness never reaches the model.
 pub const EXCLUDED_TOOLS: &str = "bg_run_pi_attested";
 
+/// The built-in tools a chat launch offers, `(id, label)`, which an agent can
+/// turn off by id. Of the two shell tools, the host's own shell is offered.
+pub const BUILTIN_TOOLS: [(&str, &str); 14] = [
+    ("read", "Read files"),
+    ("write", "Write files"),
+    ("edit", "Edit files"),
+    ("ls", "List folders"),
+    ("find", "Find files"),
+    ("grep", "Search file contents"),
+    ("bash", "Shell commands"),
+    ("powershell", "PowerShell commands"),
+    ("codemode", "Scripts"),
+    ("subagent", "Child agents"),
+    ("bg_run", "Background tasks"),
+    ("web_search", "Web search"),
+    ("fetch_content", "Fetch web pages"),
+    ("ask_user_question", "Ask the user"),
+];
+
+/// The built-in tools this host offers, `(id, label)`, without the excluded
+/// ones.
+pub fn builtin_tools() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUILTIN_TOOLS.into_iter().filter(|(id, _)| {
+        !EXCLUDED_TOOLS.split(',').any(|excluded| excluded == *id)
+            && (!matches!(*id, "bash" | "powershell") || *id == crate::launch_facts::SHELL)
+    })
+}
+
 /// The whole system prompt. It states the assistant's purpose and its tools and
 /// names no harness and no product. Pi appends the working directory, the
 /// project instruction files it finds there, and the skills list.

@@ -127,6 +127,55 @@ impl RunJournal {
         })
     }
 
+    /// The summaries of the named threads, newest first. A deleted thread or
+    /// one the journal does not hold is left out.
+    pub fn summaries_of_threads(
+        &mut self,
+        thread_ids: &[String],
+    ) -> Result<Vec<ThreadSummary>, ThreadSummaryListError> {
+        let mut keys = Vec::new();
+        {
+            let coordination = self.coordination.clone();
+            let _operation = coordination
+                .as_ref()
+                .map(|state| state.operation.lock().unwrap());
+            self.refresh_after_compaction()?;
+            let connection = self
+                .connection
+                .as_ref()
+                .expect("journal connection is always present outside compaction");
+            let mut statement = connection.prepare_cached(
+                "WITH thread_time AS (\
+                    SELECT MAX(recorded_at) AS updated_at FROM thread_events \
+                    WHERE thread_id=?1), run_time AS (\
+                    SELECT MAX((SELECT e.recorded_at FROM events e \
+                        WHERE e.run_id=rt.run_id ORDER BY e.run_seq DESC LIMIT 1)) AS updated_at \
+                    FROM run_threads rt WHERE rt.thread_id=?1) \
+                 SELECT MAX(tt.updated_at, COALESCE(rt.updated_at, tt.updated_at)) \
+                 FROM thread_time tt CROSS JOIN run_time rt \
+                 WHERE tt.updated_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
+                    WHERE deleted.thread_id=?1 AND deleted.event_type='thread.deleted')",
+            )?;
+            for thread_id in thread_ids {
+                if keys
+                    .iter()
+                    .any(|(kept, _): &(String, String)| kept == thread_id)
+                {
+                    continue;
+                }
+                let updated_at: Option<String> = statement
+                    .query_row([thread_id], |row| row.get(0))
+                    .optional()?
+                    .flatten();
+                if let Some(updated_at) = updated_at {
+                    keys.push((thread_id.clone(), updated_at));
+                }
+            }
+        }
+        keys.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(self.titled_summary_page(None, keys, None)?.summaries)
+    }
+
     /// Walks the summary listing page by page and keeps the threads `keep`
     /// accepts, as a caller that reads successive pages would. The summary
     /// aggregate runs once for the whole walk, so a scan over 2,000 threads

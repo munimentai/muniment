@@ -188,7 +188,9 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::AgentRuns
         | Operation::RoutineList
         | Operation::AgentRoutineProposals
-        | Operation::RoutineWebhookInfo => RemoteRule::Scope(SCOPE_THREAD_READ),
+        | Operation::RoutineWebhookInfo
+        | Operation::AgentThreads
+        | Operation::AgentToolCatalog => RemoteRule::Scope(SCOPE_THREAD_READ),
         Operation::AgentRunNow => RemoteRule::Scope(SCOPE_RUN_WRITE),
         // A saved agent and its routines act on their own later, so changing
         // them takes its own scope, which `runtime.admin` grants too.

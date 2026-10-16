@@ -3,9 +3,11 @@
 //! `muniment-server serve` runs the runtime with a host that has no cloud
 //! account, no keychain and no OS service manager: secrets live in files
 //! under the state root, with overrides from the environment. State lives in
-//! the directory `MUNIMENT_STATE_DIR` names, or `~/.muniment`. The attach
-//! endpoint sits under `XDG_RUNTIME_DIR`, or under `run` in the state root
-//! when that is unset. SIGTERM and SIGINT stop it cleanly.
+//! the directory `MUNIMENT_STATE_DIR` names, or `~/.muniment`. The Home
+//! folder, which holds agents, memory and projects, is `home` under the state
+//! root unless `home.json` names another. The attach endpoint sits under
+//! `XDG_RUNTIME_DIR`, or under `run` in the state root when that is unset.
+//! SIGTERM and SIGINT stop it cleanly.
 //!
 //! `pair`, `devices`, `revoke` and `info` manage remote access on the same
 //! state directory while `serve` runs in another process.
@@ -43,7 +45,9 @@ options:
   -h, --help  print this help
   --version   print the version
 
-State lives in MUNIMENT_STATE_DIR, or ~/.muniment. MUNIMENT_PI_ROOT names
+State lives in MUNIMENT_STATE_DIR, or ~/.muniment. Agents, memory and
+projects live in the Home folder home.json names, which serve sets to
+<state>/home when none is saved. MUNIMENT_PI_ROOT names
 the directory that holds the installed Pi. MUNIMENT_REMOTE_ACCESS (on or
 off), MUNIMENT_REMOTE_LISTEN (address:port) and MUNIMENT_REMOTE_ENDPOINTS
 (host:port,...) override the stored remote access settings.
@@ -174,6 +178,11 @@ fn serve() -> Result<(), String> {
     if !marker.is_file() {
         std::fs::write(&marker, "1").map_err(|error| format!("local mode marker: {error}"))?;
     }
+    // No one picks a Home folder on a headless runtime, so agents, memory and
+    // projects live in one under the state root unless one is saved.
+    let home = muniment_core::home::initialize_state_home(&state)
+        .map_err(|error| format!("home: {error}"))?;
+    eprintln!("muniment-server: home={}", home.display());
     let directories = RuntimeDirectories {
         profile: state.clone(),
         config: state.clone(),

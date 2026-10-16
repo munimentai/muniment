@@ -12,7 +12,8 @@
 # bind mount starts empty, and the runtime installs them on the first run.
 #
 # Secrets live in /data/credentials. A MUNIMENT_SECRET_<SERVICE>_<NAME>
-# variable overrides one.
+# variable overrides one. Agents, memory and projects live in the Home
+# folder /data/home, which the server sets up on its first start.
 #
 # Remote access is on: the runtime serves the remote attach route over TLS on
 # port 7443. MUNIMENT_REMOTE_ENDPOINTS names the host:port clients reach,

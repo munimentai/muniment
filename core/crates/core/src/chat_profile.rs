@@ -31,6 +31,16 @@ impl ChatProfile {
             .join(crate::state_root::HARNESS_DIRECTORY_NAME)
     }
 
+    /// The folder that holds Pi's installed revisions, as a chat launch finds
+    /// it: `MUNIMENT_PI_ROOT`, such as a container image's own Pi, or
+    /// [`Self::pi_install_root`].
+    pub fn installed_pi_root(&self) -> PathBuf {
+        std::env::var_os("MUNIMENT_PI_ROOT")
+            .filter(|root| !root.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.pi_install_root())
+    }
+
     pub fn pi_session_root(&self) -> PathBuf {
         self.directory
             .join(crate::state_root::SESSIONS_DIRECTORY_NAME)

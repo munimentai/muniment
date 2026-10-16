@@ -859,6 +859,43 @@ pub fn thread_instructions(profile: &Path, thread: &str) -> Result<Option<String
         }))
         .transpose()
 }
+/// `agent.threads`: every thread of one agent that the journal holds, newest
+/// first, as `{thread_id, title, updated_at, primary}`.
+pub fn threads(
+    profile: &Path,
+    journal: &mut crate::journal::RunJournal,
+    id: &str,
+) -> Result<serde_json::Value, String> {
+    let agent = get(profile, id)?;
+    let state = state(profile)?;
+    let primary = state.primary_threads.get(&agent.id).cloned();
+    let ids: Vec<String> = primary
+        .iter()
+        .cloned()
+        .chain(
+            state
+                .threads
+                .iter()
+                .filter(|(_, owner)| owner.as_str() == agent.id)
+                .map(|(thread, _)| thread.clone()),
+        )
+        .collect();
+    let summaries = journal
+        .summaries_of_threads(&ids)
+        .map_err(|_| "The agent's threads could not be read.".to_string())?;
+    let threads: Vec<serde_json::Value> = summaries
+        .into_iter()
+        .map(|summary| {
+            serde_json::json!({
+                "primary": primary.as_deref() == Some(summary.thread_id.as_str()),
+                "thread_id": summary.thread_id,
+                "title": summary.title,
+                "updated_at": summary.updated_at,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({"threads": threads}))
+}
 /// Select an existing conversation once. Routine dispatch never replaces it.
 pub fn ensure_primary(state: &mut State, id: &str) -> Option<String> {
     if let Some(thread) = state.primary_threads.get(id) {
@@ -1255,6 +1292,11 @@ pub fn operation(
                 "latest_runs": latest,
                 "errors": listing.errors,
             }))
+        }
+        "agent.tool_catalog" => {
+            parse::<Empty>(body)?;
+            // A runtime's profile is the state root a launch reads extensions from.
+            Ok(crate::extend::tool_catalog(profile))
         }
         "agent.read" => {
             let request: ById = parse(body)?;
@@ -2070,6 +2112,83 @@ mod tests {
         .unwrap_err()
         .contains("invalid"));
         assert!(operation(&profile, "agent.forget", serde_json::json!({})).is_err());
+        let catalog = operation(&profile, "agent.tool_catalog", serde_json::json!({})).unwrap();
+        assert!(catalog["builtin"].as_array().unwrap().len() > 5);
+        assert!(catalog["mcp"].is_array() && catalog["skills"].is_array());
+        assert!(operation(&profile, "agent.tool_catalog", serde_json::json!({"x": 1})).is_err());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn agent_threads_lists_every_thread_of_the_agent_newest_first() {
+        let (root_dir, profile) = profile();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "Threads".into(),
+                instructions: "Work.".into(),
+                ..Agent::default()
+            },
+        )
+        .unwrap();
+        let mut journal = crate::journal::RunJournal::open(root_dir.join("runs.sqlite3")).unwrap();
+        let provenance = crate::journal::Provenance {
+            source: "desktop".into(),
+            source_version: "1".into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: [("attach_profile".to_owned(), serde_json::json!("owner"))]
+                .into_iter()
+                .collect(),
+        };
+        let mut create = |at: &str| {
+            journal
+                .create_thread("local", at, provenance.clone())
+                .unwrap()
+        };
+        let primary = create("2026-01-01T09:00:00Z");
+        let older = create("2026-01-01T08:00:00Z");
+        let deleted = create("2026-01-01T10:00:00Z");
+        let other = create("2026-01-01T11:00:00Z");
+        let seq = journal.last_thread_seq(&older).unwrap();
+        journal
+            .append_thread_title_renamed(
+                seq,
+                &older,
+                "Old report",
+                "2026-01-01T08:30:00Z",
+                &provenance,
+            )
+            .unwrap();
+        let seq = journal.last_thread_seq(&deleted).unwrap();
+        journal
+            .append_thread_deleted(seq, &deleted, "2026-01-01T10:30:00Z", &provenance)
+            .unwrap();
+        with_state(&profile, |state| {
+            state
+                .primary_threads
+                .insert(agent.id.clone(), primary.clone());
+            for thread in [&primary, &older, &deleted] {
+                state.threads.insert(thread.clone(), agent.id.clone());
+            }
+            state.threads.insert(other.clone(), "another-agent".into());
+            state
+                .threads
+                .insert("missing-thread".into(), agent.id.clone());
+            Ok(())
+        })
+        .unwrap();
+        let listed = threads(&profile, &mut journal, &agent.id).unwrap();
+        assert_eq!(
+            listed,
+            serde_json::json!({"threads": [
+                {"thread_id": primary, "title": "Untitled run", "updated_at": "2026-01-01T09:00:00Z", "primary": true},
+                {"thread_id": older, "title": "Old report", "updated_at": "2026-01-01T08:30:00Z", "primary": false}
+            ]})
+        );
+        assert!(threads(&profile, &mut journal, "no-such-agent").is_err());
         fs::remove_dir_all(root_dir).unwrap();
     }
 

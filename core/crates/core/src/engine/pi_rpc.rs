@@ -64,7 +64,8 @@ impl PiRpcEngine {
         Self {
             session_root,
             agent_directory: state.as_deref().map(crate::state_root::agent_directory),
-            harness_root: state.map(|state| state.join(crate::state_root::HARNESS_DIRECTORY_NAME)),
+            harness_root: state
+                .map(|state| crate::chat_profile::ChatProfile::new(&state).installed_pi_root()),
         }
     }
 

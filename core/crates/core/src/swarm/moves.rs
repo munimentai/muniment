@@ -8,6 +8,7 @@
 //! target may force the move from the directory's copy of the definition;
 //! the old primary steps down when it sees the higher epoch.
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{directory, link, lock, messaging, sync, DirectoryEntry, Inner, Message};
+use crate::agent_routines::Trigger;
 use crate::agents::{self, Agent};
 
 /// The bytes of memory files one handover carries at most.
@@ -57,6 +59,37 @@ struct Handover {
     routine_state: Option<Value>,
     #[serde(default)]
     sessions: Vec<SessionFile>,
+    /// The secrets of the agent's webhook routines by hook id, so a sender
+    /// that reaches the new primary still authenticates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    hook_secrets: BTreeMap<String, String>,
+    /// The saved MCP servers the agent's MCP routines call, as extension
+    /// inventory items, and their saved bearer tokens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mcp_servers: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    mcp_tokens: Value,
+}
+
+/// The webhook secrets and MCP servers the agent's routines need.
+fn routine_needs(inner: &Inner, agent: &Agent, handover: &mut Handover) {
+    let mut servers = Vec::new();
+    for routine in &agent.routines {
+        match &routine.trigger {
+            Trigger::Webhook(hook) if !hook.hook_id.is_empty() => {
+                if let Some(secret) = inner.host.hook_secret(&hook.hook_id) {
+                    handover.hook_secrets.insert(hook.hook_id.clone(), secret);
+                }
+            }
+            Trigger::Mcp(call) => servers.push(call.server.clone()),
+            _ => {}
+        }
+    }
+    if !servers.is_empty() {
+        let (items, tokens) = crate::extend::export_mcp_servers(&inner.profile, &servers);
+        handover.mcp_servers = items;
+        handover.mcp_tokens = tokens;
+    }
 }
 
 fn session_root(inner: &Inner) -> PathBuf {
@@ -196,9 +229,11 @@ fn hand_over(inner: &Inner, agent_id: &str, to: &str) -> Result<DirectoryEntry, 
             .get(agent_id)
             .and_then(|routines| serde_json::to_value(routines).ok()),
         sessions: Vec::new(),
+        ..Handover::default()
     };
     let mut handover = handover;
     handover.sessions = session_files(inner, &handover.threads)?;
+    routine_needs(inner, &agent, &mut handover);
     let mut entry = directory::entry(inner, agent_id).unwrap_or(DirectoryEntry {
         agent_id: agent.id.clone(),
         name: agent.name.clone(),
@@ -276,6 +311,18 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
             std::fs::write(sessions.join(&session.locator), bytes)
                 .map_err(|error| error.to_string())?;
         }
+    }
+    for (hook_id, secret) in &handover.hook_secrets {
+        if let Err(error) = inner.host.store_hook_secret(hook_id, secret) {
+            crate::runtime_eprintln!("swarm: webhook secret not kept: {error}");
+        }
+    }
+    if let Err(error) = crate::extend::import_mcp_servers(
+        &inner.profile,
+        &handover.mcp_servers,
+        &handover.mcp_tokens,
+    ) {
+        crate::runtime_eprintln!("swarm: MCP servers not added: {error}");
     }
     let root = memory_root(inner, &agent.id);
     for file in &handover.memory {
