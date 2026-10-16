@@ -729,6 +729,8 @@ fn agents_message_across_runtimes_with_results_hops_allow_lists_and_handoffs() {
         .iter()
         .any(|entry| entry["agent_id"] == analyst.id.as_str())));
 
+    // A's clients hear B's runs that warrant a notification.
+    let remote_runs = muniment_core::agent_runs::subscribe(a.profile());
     // A request crosses to B, runs there in an untrusted block, and its
     // final answer returns to the planner as a result.
     let sent = a
@@ -754,6 +756,17 @@ fn agents_message_across_runtimes_with_results_hops_allow_lists_and_handoffs() {
         "the analyst never ran"
     );
     let woken = woken.unwrap();
+    let notice_deadline = Instant::now() + Duration::from_secs(30);
+    let notice = loop {
+        assert!(Instant::now() < notice_deadline, "A never heard of B's run");
+        match remote_runs.recv_timeout(Duration::from_millis(200)) {
+            Ok(body) if body["id"] == woken.id.as_str() => break body,
+            _ => {}
+        }
+    };
+    assert_eq!(notice["runtime_id"], b.runtime_id());
+    assert_eq!(notice["notify"], true);
+    assert_eq!(notice["status"], "completed");
     assert_eq!(woken.trigger.kind, TriggerKind::AgentMessage);
     assert_eq!(woken.hop, 1);
     assert!(woken.prompt.contains("intent=\"request\""));
@@ -930,6 +943,19 @@ fn group_chats_route_mentions_and_hold_meetings_across_members() {
         )
         .unwrap_err()
         .contains("2 to 6"));
+    // An update on the owner reaches every member.
+    let renamed = a
+        .op(
+            Operation::GroupUpdate,
+            json!({"group_id": group["group_id"], "name": "Cockpit"}),
+        )
+        .unwrap();
+    assert_eq!(renamed["group"]["name"], "Cockpit");
+    assert!(wait(|| b.op(Operation::GroupList, json!({})).unwrap()["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|listed| listed["group_id"] == group["group_id"] && listed["name"] == "Cockpit")));
 
     // An @mention posted on B wakes only the named agent, on its machine.
     assert!(wait(|| b
