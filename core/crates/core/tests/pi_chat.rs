@@ -478,9 +478,10 @@ fn deferred_session_supervisor(
     }
     config.health_interval = Duration::from_secs(60);
     let wiring = PiRpcWiring::new();
+    // A stub whose binary is not in the file cache can take over 100 ms to
+    // answer its first request, which a shorter probe reads as a failed start.
     let supervisor =
-        SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_millis(100)))
-            .unwrap();
+        SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_secs(1))).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while supervisor.status() != SidecarStatus::Healthy && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
