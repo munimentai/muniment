@@ -122,7 +122,7 @@ composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small mono meta line over its title, the machine's shape and name once a machine is paired, then the time ago. Hover is a lighter wash than the open thread,
-New thread leads the sidebar, followed by Agents and title search, with no static Threads heading. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use, and a paired runtime hides Agents, Artifacts and Projects.
+New thread leads the sidebar, followed by Agents, Artifacts, Activity and title search, with no static Threads heading. Activity counts the agent runs that raised a notification since it last opened, in a mono chip. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers, each row and card with its machine's shape icon, and Artifacts and Projects open on this computer.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
 Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.

@@ -44,15 +44,17 @@ Create makes the folder. Rename moves the folder and preserves its files and thr
 A project thread runs in its folder. Generated files stay there unless the user names another path.
 Threads without a project use `sessions/<thread-name>-<short-id>/`. Project folders use `<project-name>-<short-id>`. Search and previews use the same folder.
 Saved artifacts have an editable HTML export in `artifacts/<artifact-name>-<short-id>/index.html`. Full identifiers remain the lookup keys; readable folder names use underscores, a bounded portable name, and eight identifier characters, with case-insensitive collision checks. Files follows the active catalog, project, agent, artifact, or thread and remembers browsing state per context. Internal folders are hidden by default. Workspace tools stay open across navigation. Browser keeps its page; Terminal uses a retained shell per context, started in that context’s folder. Switching contexts never changes or stops a retained shell. Closing the Terminal tab ends its shells.
-Agent definitions live in `agents/<agent-name>-<short-id>/agent.md`, with name, job title, instructions, avatar, project and schedule.
-The profile shows the instructions under Instructions, and a card shows the schedule. Original SVG avatars use a stable, versioned seed. Faces are mostly neutral or happy; frown and kiss mouths each have a 1-in-500 chance.
+Agent definitions live in `agents/<agent-name>-<short-id>/agent.md`, with name, job title, instructions, avatar, project, model, tools, skills, permissions, messaging and routines.
+The runtime that holds an agent owns its definition, routines and runs. Every agent view reads and changes them through that runtime's agent operations, for this computer and for each paired machine.
+The profile shows the instructions, the model from the composer's picker with its thinking level, a switch per tool, the installed skills, the permission mode with its Always allow and Ask first rules, the agents it may message, its primary machine, its routines and its runs. Delete asks once and can also delete the agent's memory. Original SVG avatars use a stable, versioned seed. Faces are mostly neutral or happy; frown and kiss mouths each have a 1-in-500 chance.
 New avatars combine shapes, colors, eyes, mouths, glasses, cheeks and face positions. Saved versions keep their appearance.
 Avatars render locally in the sidebar, catalog and profile. Rename preserves the seed; Change avatar replaces it.
 The Agents control follows New thread and exposes a plus button on hover or keyboard focus.
 It opens a card catalog. New agent opens a dedicated creation chat that offers the catalog starters, with the chosen one marked.
 An empty catalog opens the creation chat. Each agent or artifact has a goal, a specified output, and one dedicated chat. Artifacts opens saved artifact chats or a creation chat with suggestions. The preview opens when a creation chat first saves its artifact. Creation chats stay outside ordinary thread lists.
 Each agent has one persisted primary conversation. Interactive messages and routine runs reuse it.
-Routine history stays in the agent profile with time, status, errors, and conversation links.
+Each run shows its state, trigger, duration, a silent mark and a conversation link, in the profile and in Activity. Activity lists every agent's runs on every machine, newest first, and follows each machine's run updates live.
+A completed, failed or waiting run that the app did not start raises a system notification where the system allows one. A runtime that marks a run's notification decides it.
 Agent facts live under agents/<id>/memory/facts. Agent recall reads its own memory.
 General recall excludes agent facts. Manual edits and chat tools use the same files, with recoverable deletion.
 Changing the agent project directs new work to that project and preserves existing files.
@@ -68,7 +70,8 @@ Portable export preserves template context and the avatar seed, with schedules p
 Export for Grok Bot writes a Markdown setup file containing the profile, template context and original SVG.
 Exports omit local project assignments, conversation history, account credentials and private learned memory.
 Chat can list, read, save and run agents through harness tools backed by the same files as manual editing.
-Daily, weekday and weekly schedules use the host time zone and the local background service.
+The Agents group lists the agents of every paired machine that answers, each with its machine's shape. An agent on a paired machine opens its conversation there once its first run starts it.
+Routines start an agent on a cron schedule in a time zone, a webhook, or a tool check whose condition holds on an MCP tool's result. The routine editor builds daily, weekday, weekly and interval schedules beside the raw expression, and all and any groups of checks. Routines proposed from instructions wait as Accept and Dismiss cards.
 Due runs wait for the current reply. A missed schedule runs once when the service returns.
 An interrupted dispatch requires review instead of an automatic retry. Run results link to their thread.
 Profile has separate name, preferred name, work and instructions fields backed by `memory/profile.md`. Memory lists, edits, restores and exports saved facts. Voice holds the dictation shortcut and its hold, toggle or auto behavior, the microphone, the Parakeet install, start and stop tones, a macOS output mute, filler removal, custom words that bias recognition and fix casing, and send on stop. Each dictation reads them at its start, and Escape cancels from any app while it listens. Companies' Backups is the one setting that runs ahead of the runtime, and it stays on the device in `device-preferences.js` until the runtime reads it.

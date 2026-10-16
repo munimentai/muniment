@@ -1,4 +1,7 @@
+import { handleAgentRequest, probeAgentStores, probeExtensions } from './agents-fixture.js'
+
 export const historyFixtures = {
+  agents: [],
   'signed-out': [],
   'runtime-exit': [],
   runtimes: [],
@@ -362,13 +365,25 @@ export function buildProbeCommandTable(fixtureName) {
   // failed or ssh. Every other fixture holds this computer's runtime alone.
   const runtimesFixture = fixtureName === 'runtimes'
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
-  let runtimeList = probeRuntimes(runtimesState)
+  // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals
+  // or activity, with agents on three machines that all answer.
+  const agentsFixture = fixtureName === 'agents'
+  const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
+  let runtimeList = probeRuntimes(agentsFixture ? 'agents' : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
   let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'
   // The runtimes fixture lists a thread on each machine, so the sidebar
   // shows the machine badges.
-  const threadSummaries = runtimesFixture
+  const threadSummaries = agentsFixture
+    ? [
+        { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a2', title: 'Inbox triage', updatedAt: '2026-07-28T11:00:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a3', title: 'Release editor', updatedAt: '2026-07-28T10:30:00Z', runtimeId: '018f0000-0000-7000-8000-000000000042' },
+        { threadId: 'thread-a4', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
+        { threadId: 'probe-box', title: 'Nightly test notes', updatedAt: '2026-07-27T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
+      ]
+    : runtimesFixture
     ? [
         { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
         { threadId: 'probe-box', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
@@ -398,7 +413,7 @@ export function buildProbeCommandTable(fixtureName) {
   ] : []
   let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
   let pendingChanges = memorySeed ? probePending(savedFacts) : []
-  const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
+  const agentStores = probeAgentStores(agentsFixture)
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
   const projectThreads = { 'probe-thread': 'project-lease', 'probe-archive': 'project-lease', 'probe-notes': 'project-research' }
@@ -436,7 +451,7 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'launcher_register') return null
     if (command === 'artifact_list' || command === 'creation_list') return []
-    if (command === 'extend_command' && payload?.action === 'read') return { items: [] }
+    if (command === 'extend_command' && payload?.action === 'read') return agentsFixture ? structuredClone(probeExtensions) : { items: [] }
     if (command === 'browser_view') return null
     if (command === 'runtime_state') return runtimeState
     if (command === 'runtime_start') {
@@ -565,16 +580,8 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'agent_import_link') return { url: payload.url, html: await (await fetch('./fixtures/grok-template.html')).text() }
     if (command === 'agent_export_template') return true
-    if (command === 'agent_list') return structuredClone(agentData)
-    if (command === 'agent_save') {
-      const agent = JSON.parse(JSON.stringify({ ...payload.agent, id: payload.agent.id || crypto.randomUUID() }))
-      agentData.agents = [...agentData.agents.filter(a => a.id !== agent.id), agent]
-      agentData.state.runs[agent.id] ||= { status: 'Ready' }
-      return structuredClone(agent)
-    }
-    if (command === 'agent_delete') { agentData.agents = agentData.agents.filter(a => a.id !== payload.id); delete agentData.state.runs[payload.id]; return null }
+    if (command === 'agent_request') return handleAgentRequest(agentStores, payload)
     if (command === 'agent_open') return null
-    if (command === 'agent_run') { agentData.state.runs[payload.id] = { status: 'queued' }; return null }
     if (command === 'project_list') return { projects: { ...projects }, threads: { ...projectThreads } }
     if (command === 'project_create') {
       if (Object.values(projects).includes(payload.name)) throw new Error('A project with that name already exists.')
@@ -583,11 +590,12 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'project_rename') { projects[payload.projectId] = payload.name; return null }
     if (command === 'project_open') return null
     if (command === 'chat_new_thread') {
-      if (payload?.agentId && agentData.state.primaryThreads[payload.agentId]) { currentThreadId = agentData.state.primaryThreads[payload.agentId]; return currentThreadId }
+      const local = agentStores.local
+      if (payload?.agentId && local.primaryThreads[payload.agentId]) { currentThreadId = local.primaryThreads[payload.agentId]; return currentThreadId }
       currentThreadId = crypto.randomUUID()
-      const projectId = payload?.projectId || agentData.agents.find(a => a.id === payload?.agentId)?.projectId
+      const projectId = payload?.projectId || local.agents.find(a => a.id === payload?.agentId)?.projectId
       if (projectId) projectThreads[currentThreadId] = projectId
-      if (payload?.agentId) { agentData.state.threads[currentThreadId] = payload.agentId; agentData.state.primaryThreads[payload.agentId] = currentThreadId }
+      if (payload?.agentId) local.primaryThreads[payload.agentId] = currentThreadId
       threadSummaries.unshift({ threadId: currentThreadId, title: 'New thread', updatedAt: new Date().toISOString() })
       return currentThreadId
     }
@@ -750,6 +758,8 @@ export function buildProbeCommandTable(fixtureName) {
     invoke,
     history,
     runDetails,
+    agentsFixture,
+    agentsState,
     onboardingFixture,
     scanFixture,
     accessFixture,
@@ -817,7 +827,7 @@ function probeQrSvg() {
 function probeRuntimes(state) {
   const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const paired = [
-    { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.2.0', status: 'offline', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null },
+    { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.2.0', status: state === 'agents' ? 'online' : 'offline', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null },
     // The container reports the update it installs.
     { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'runtime.admin', 'thread.read'], admin: true, behind: true, mayUpdate: true, updateOffered: true, updateTarget: '0.2.0', updateCapability: 'launcher', updateStatus: { state: 'installing', targetVersion: '0.2.0', blockers: [] }, sshHost: 'build-box' },
   ]
@@ -840,6 +850,8 @@ let callbackId = 0
 const {
   history,
   runDetails,
+  agentsFixture,
+  agentsState,
   onboardingFixture,
   scanFixture,
   accessFixture,
@@ -884,7 +896,60 @@ function runtimesRendered() {
   return false
 }
 
+// The agents fixture opens the catalog, an agent's profile, one routine's
+// editor or Activity, as its state names.
+const AGENT_STATES = {
+  list: { agent: null },
+  profile: { agent: 'Lead scout' },
+  cron: { agent: 'Lead scout', routine: 'Weekday briefing' },
+  webhook: { agent: 'Lead scout', routine: 'Build finished' },
+  mcp: { agent: 'Lead scout', routine: 'New leads' },
+  proposals: { agent: 'Inbox triage' },
+  activity: { agent: null },
+}
+
+function agentsRendered() {
+  const marks = document.querySelectorAll('#sidebar .agent-roster .machine-mark').length
+  if (agentsState === 'list') return document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 4 && marks === 4
+  if (agentsState === 'activity') return document.querySelectorAll('[data-panel="activity"] .run').length >= 9
+  const profile = document.querySelector('aside[aria-label="Agent profile"]')
+  if (!profile?.textContent.includes(AGENT_STATES[agentsState].agent) || !profile.querySelector('[aria-label="Permissions"]')) return false
+  if (agentsState === 'proposals') return profile.querySelectorAll('.proposal').length === 2
+  const routine = AGENT_STATES[agentsState].routine
+  if (!routine) return !!profile.querySelector('.runs .run')
+  const editor = document.querySelector('[data-panel="routine"]')
+  if (!editor?.querySelector('input')?.value.includes(routine)) return false
+  if (agentsState === 'mcp') return editor.querySelectorAll('[aria-label^="Check"]').length >= 2
+  return true
+}
+
+function advanceAgentsFixture() {
+  if (!agentsFixture || fixtureRendered()) return
+  const target = AGENT_STATES[agentsState] ?? AGENT_STATES.list
+  const sidebarButton = (name) => Array.from(document.querySelectorAll('#sidebar button')).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
+  const expand = sidebarButton('Expand Agents')
+  if (expand) return expand.click()
+  if (agentsState === 'list') {
+    if (!document.querySelector('[data-panel="agents"]')) sidebarButton('Agents')?.click()
+    return
+  }
+  if (agentsState === 'activity') {
+    if (!document.querySelector('[data-panel="activity"]')) sidebarButton('Activity')?.click()
+    return
+  }
+  const profile = document.querySelector('aside[aria-label="Agent profile"]')
+  if (!profile?.textContent.includes(target.agent)) {
+    const row = Array.from(document.querySelectorAll('#sidebar .agent-roster button')).find((button) => button.textContent.trim().startsWith(target.agent))
+    if (row && !row.disabled) row.click()
+    return
+  }
+  if (target.routine && !document.querySelector('[data-panel="routine"]')) {
+    Array.from(profile.querySelectorAll('.routine button')).find((button) => button.textContent.trim() === target.routine)?.click()
+  }
+}
+
 function fixtureRendered() {
+  if (agentsFixture) return agentsRendered()
   if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
     const notice = document.querySelector('[data-testid="runtime-notice"]')
@@ -1017,6 +1082,7 @@ function markReadyAfterFixtureRender() {
   advanceScanFixture()
   advanceAccessFixture()
   advanceRuntimesFixture()
+  advanceAgentsFixture()
   if (fixtureRendered()) {
     void markProbeReady()
     return
@@ -1025,6 +1091,7 @@ function markReadyAfterFixtureRender() {
     advanceScanFixture()
     advanceAccessFixture()
     advanceRuntimesFixture()
+    advanceAgentsFixture()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
