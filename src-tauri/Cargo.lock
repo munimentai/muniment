@@ -3385,6 +3385,7 @@ dependencies = [
 [[package]]
 name = "muniment-atomic-file"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -3392,6 +3393,7 @@ dependencies = [
 [[package]]
 name = "muniment-attach"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "getrandom 0.4.3",
  "rustls",
@@ -3414,6 +3416,7 @@ dependencies = [
 [[package]]
 name = "muniment-code-diff"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "serde",
  "serde_json",
@@ -3422,6 +3425,7 @@ dependencies = [
 [[package]]
 name = "muniment-core"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "base64 0.23.1",
  "cap-fs-ext",
@@ -3550,6 +3554,7 @@ dependencies = [
 [[package]]
 name = "muniment-models"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "muniment-atomic-file",
  "muniment-pins",
@@ -3567,6 +3572,7 @@ dependencies = [
 [[package]]
 name = "muniment-pins"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "serde",
  "toml 1.1.8+spec-1.1.0",
@@ -3575,6 +3581,7 @@ dependencies = [
 [[package]]
 name = "muniment-router"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3608,6 +3615,7 @@ dependencies = [
 [[package]]
 name = "muniment-runtime-core"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "muniment-attach",
  "muniment-core",
@@ -3620,6 +3628,7 @@ dependencies = [
 [[package]]
 name = "muniment-search"
 version = "0.0.1"
+source = "git+https://github.com/munimentai/muniment-core?tag=v1.14.0#46454389afb239a453a1b4c4962cb551525d9129"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -6194,7 +6203,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
