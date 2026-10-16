@@ -431,7 +431,7 @@ fn require_hash(path: &Path, expected: &str) {
         digest.update(&buffer[..count]);
     }
     assert_eq!(
-        format!("{:x}", digest.finalize()),
+        hex::encode(digest.finalize()),
         expected,
         "packaged ASR runtime component has the wrong pinned identity: {display}"
     );

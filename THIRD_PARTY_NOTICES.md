@@ -4,16 +4,16 @@
 
 The built desktop bundle carries the following code with no embedded license comment. This document provides the notice for that code.
 
-- `monaco-editor` 0.56.0 — MIT
+- `monaco-editor` 0.57.0 — MIT
 - `highlight.js` 11.12.0 — BSD-3-Clause
 - `marked` 18.1.1 — MIT
 - `dompurify` 3.4.17 — MPL-2.0 OR Apache-2.0
 - `diff2html` 3.4.56 — MIT
 - `svelte` 5.57.2 — MIT
-- `@tauri-apps/api` 2.12.3 — Apache-2.0 OR MIT
-- `@tauri-apps/plugin-dialog` 2.8.2 — MIT OR Apache-2.0
+- `@tauri-apps/api` 2.12.4 — Apache-2.0 OR MIT
+- `@tauri-apps/plugin-dialog` 2.8.3 — MIT OR Apache-2.0
 - `@tauri-apps/plugin-global-shortcut` 2.4.1 — MIT OR Apache-2.0
-- `@tauri-apps/plugin-opener` 2.7.1 — MIT OR Apache-2.0
+- `@tauri-apps/plugin-opener` 2.7.2 — MIT OR Apache-2.0
 
 The bundle also carries these font files:
 
@@ -223,7 +223,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-## monaco-editor (0.56.0)
+## monaco-editor (0.57.0)
 
 The MIT License (MIT)
 

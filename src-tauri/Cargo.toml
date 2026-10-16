@@ -30,13 +30,15 @@ muniment-router = { path = "../../muniment-core/crates/router" }
 muniment-runtime-core = { path = "../../muniment-core/crates/runtime" }
 
 [build-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
+hex = "0.4"
 cc = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-sha2 = "0.10"
-base64 = "0.22"
+sha2 = "0.11"
+hex = "0.4"
+base64 = "0.23"
 cap-fs-ext = "4.0.3"
 cap-std = "4.0.3"
 flate2 = "1"
@@ -44,7 +46,7 @@ tar = "0.4"
 ureq = { version = "2", default-features = false, features = ["tls", "proxy-from-env"] }
 cef = { version = "=154.5.0", default-features = false, features = ["sandbox"] }
 tiny_http = "0.12"
-cpal = "0.16"
+cpal = "0.18"
 libc = "0.2"
 muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.13.1", features = ["tls"] }
 muniment-desktop-integration = { path = "integration" }
@@ -56,7 +58,7 @@ tauri-plugin-dialog = "2"
 uuid = { version = "1", features = ["v7"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-opener = "=2.7.1"
+tauri-plugin-opener = "=2.7.2"
 tauri-plugin-window-state = "=2.5.0"
 url = "2"
 # The shell reads the one state root and the runtime profile on every platform.
@@ -77,7 +79,7 @@ x11-dl = "2.21"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 core-foundation = { version = "0.10", optional = true }
-objc2 = "0.6.4"
+objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSPanel", "NSOpenPanel", "NSSavePanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSEnumerator", "NSError", "NSNotification", "NSString", "NSURL"] }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["SMAppService", "SMErrors", "objc2", "objc2-foundation", "std"] }
@@ -87,8 +89,8 @@ muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1
 flate2 = "1"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "linux-native"] }
 muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.13.1", features = ["client"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
-sha2 = "0.10"
+rusqlite = { version = "0.40", features = ["bundled"] }
+sha2 = "0.11"
 tar = "0.4"
 tauri = { version = "2", features = ["test"] }
 

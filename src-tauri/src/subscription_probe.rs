@@ -267,7 +267,7 @@ pub(crate) async fn subscription_probe_update(app: tauri::AppHandle) -> Result<(
         .map_err(|error| error.probe_code())?
         .ok_or("update-unavailable")?;
     let (mut update, bytes) = state.prepared().map_err(|error| error.probe_code())?;
-    if plan["packageSha256"].as_str() != Some(format!("{:x}", Sha256::digest(&bytes)).as_str()) {
+    if plan["packageSha256"].as_str() != Some(hex::encode(Sha256::digest(&bytes)).as_str()) {
         return Err("update-package-digest".into());
     }
     update.download_url = endpoint.join("/tampered").map_err(|_| "update-address")?;

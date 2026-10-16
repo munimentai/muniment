@@ -478,7 +478,7 @@ fn read_text(path: &Path) -> Result<TextFile, String> {
     if bytes.len() > 2_000_000 {
         return Err("This file exceeds the 2 MB editor limit.".into());
     }
-    let revision = format!("{:x}", Sha256::digest(&bytes));
+    let revision = hex::encode(Sha256::digest(&bytes));
     let content = String::from_utf8(bytes).map_err(|_| "This file is not UTF-8 text.")?;
     if content.contains('\0') {
         return Err("This file contains binary data.".into());

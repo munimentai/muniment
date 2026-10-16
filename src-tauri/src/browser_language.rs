@@ -223,7 +223,7 @@ fn download(url: &str, manifest: &Manifest) -> Result<Vec<u8>, String> {
         .take(manifest.size + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| failed.to_owned())?;
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = hex::encode(Sha256::digest(&bytes));
     if bytes.len() as u64 != manifest.size || !digest.eq_ignore_ascii_case(&manifest.sha256) {
         return Err("The downloaded language packs do not match this version of Muniment.".into());
     }

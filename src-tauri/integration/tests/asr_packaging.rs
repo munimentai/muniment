@@ -124,5 +124,5 @@ fn runtime_loader_paths_resolve_from_the_installed_runtime_binary() {
 }
 
 fn sha256(path: &PathBuf) -> String {
-    format!("{:x}", Sha256::digest(fs::read(path).unwrap()))
+    hex::encode(Sha256::digest(fs::read(path).unwrap()))
 }

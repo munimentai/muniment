@@ -83,7 +83,7 @@ jobs:
       - name: Reuse tested PR tree
         id: proof
         if: github.event_name == 'push' && github.server_url == 'https://github.com'
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.ARTIFACT_STORE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.ARTIFACT_STORE_SECRET_KEY }}
@@ -338,7 +338,7 @@ jobs:
 
       - name: Go toolchain for the reader sidecar
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: src-tauri/reader/go.mod
 
@@ -355,7 +355,7 @@ jobs:
 
       - name: Record tested PR tree
         if: github.event_name == 'pull_request' && github.server_url == 'https://github.com'
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { writeProof } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);

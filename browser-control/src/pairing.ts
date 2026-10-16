@@ -23,7 +23,7 @@ export interface PairingSessionOptions<Identity> {
   expectedIdentity: Identity;
   verifyIdentity(expectedIdentity: Identity, peerIdentity: Identity): boolean | Promise<boolean>;
   now?: () => number;
-  randomBytes?: (bytes: Uint8Array) => void;
+  randomBytes?: (bytes: Uint8Array<ArrayBuffer>) => void;
 }
 
 const FAILURE_MESSAGES: Record<PairingFailureCode, string> = {
@@ -41,7 +41,7 @@ type TerminalState = 'consumed' | 'revoked' | 'closed';
 /** Pure authorization boundary; socket ownership and process inspection are injected by callers. */
 export class PairingSession<Identity> {
   readonly #now: () => number;
-  readonly #randomBytes: (bytes: Uint8Array) => void;
+  readonly #randomBytes: (bytes: Uint8Array<ArrayBuffer>) => void;
   readonly #verifyIdentity: PairingSessionOptions<Identity>['verifyIdentity'];
   #expectedIdentity: Identity;
   #tokenBytes?: Uint8Array;
