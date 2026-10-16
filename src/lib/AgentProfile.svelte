@@ -8,8 +8,7 @@
   import ModelPicker from './ModelPicker.svelte'
   import Button from './ui/Button.svelte'
   import { newAvatar } from './agent-avatar.js'
-  import { exportTemplate, exportGrokSetup, templateSummary } from './agent-templates.js'
-  import { runActive, runStatusLabel } from './agent-labels.js'
+  import { runActive, runStatusLabel, templateNote } from './agent-labels.js'
   import { thinkingLabel } from './thinking-level.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
   import { agentTools, toggleTool } from '../agents/agent-tools.js'
@@ -17,11 +16,16 @@
   import MachineMark from '../agents/MachineMark.svelte'
   import RoutinesPanel from '../agents/RoutinesPanel.svelte'
   import RunList from '../agents/RunList.svelte'
+  import MoveDialog from '../agents/MoveDialog.svelte'
+  import { exportAgent } from '../agents/import.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
   // The agent lives on the machine `agent.runtimeId` names, and every change
   // is an agent operation there. The runtime validates and stores each one.
-  let { agent, tauri, projects = [], run, runs = [], agents = [], runtimeList = null, inventory = null, skills = [], servers = [], webhooks = false,
+  // An agent the app sees only through the swarm directory (`replica`) shows
+  // its profile, its primary machine and a move, since its settings live on
+  // a machine this device does not reach.
+  let { agent, tauri, projects = [], run, runs = [], agents = [], runtimeList = null, swarm = null, inventory = null, skills = [], servers = [], webhooks = true,
     onclose, onchange = async () => {}, ondelete, onopen, onrun = () => {}, onmanagemodels = () => {} } = $props()
   let editing = $state(null)
   let value = $state('')
@@ -32,12 +36,15 @@
   let memoryOpen = $state(false)
   let modelOpen = $state(false)
   let ruleForm = $state(null)
+  let moving = $state(false)
+  let notice = $state('')
   let panel
   const local = $derived((agent.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID)
   const others = $derived(agents.filter((entry) => entry.id !== agent.id))
   const permissions = $derived(agent.permissions ?? { mode: 'ask', always_allow: [], ask_first: [] })
   const allowList = $derived(agent.messaging?.allow ?? 'any')
-  const primary = $derived(agentMachine(runtimeList, { runtimeId: agent.primary_runtime ?? agent.runtimeId }))
+  const primary = $derived(agent.primaryMachine ?? agentMachine(runtimeList, { runtimeId: agent.runtimeId }))
+  const movable = $derived((swarm?.members?.length ?? 0) > 1)
   const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
   let instructionsOpen = $state(false)
   const fieldLabel = (field) => field === 'projectId' ? 'project' : field === 'label' ? 'job title' : field
@@ -102,6 +109,13 @@
 <aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
   <header data-panel-header><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
   <div class="body" use:panelScroll>
+    {#if agent.replica}
+      <div class="avatar"><AgentAvatar {agent} size={92} /></div>
+      <section class="field"><div class="field-heading"><h3>Name</h3></div><p class="name">{agent.name}</p></section>
+      {#if agent.label}<section class="field"><div class="field-heading"><h3>Job title</h3></div><p>{agent.label}</p></section>{/if}
+      {@render primaryMachine()}
+      <p class="muted">Its instructions, tools, routines and memory live on {primary.name}. Pair this device with that machine to change them.</p>
+    {:else}
     <div class="avatar"><AgentAvatar {agent} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={() => change({ avatar: newAvatar() })}><LucideIcon name="refresh-cw" size={14} /></button></div>
     {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Instructions'], ...(local ? [['projectId', 'Project']] : [])] as [field, label]}
       <section class="field">
@@ -183,11 +197,7 @@
       {/if}
     </section>
 
-    <section class="field" aria-label="Primary machine">
-      <div class="field-heading"><h3>Primary machine</h3></div>
-      <p><MachineMark machine={primary} /></p>
-      <small>Routines and runs happen on this machine.</small>
-    </section>
+    {@render primaryMachine()}
 
     <RoutinesPanel {agent} {tauri} {servers} {webhooks} disabled={busy} {onchange} />
 
@@ -197,12 +207,12 @@
     </section>
 
     {#if local}<details class="template" bind:open={memoryOpen}><summary>Memory</summary>{#if memoryOpen}{#key agent.id}<MemorySection {tauri} agentId={agent.id} />{/key}{/if}</details>{/if}
-    {#if agent.template}<details class="template"><summary>Imported template</summary><p>{templateSummary(agent.template)}</p><pre>{JSON.stringify(agent.template, null, 2)}</pre></details>{/if}
+    {#if agent.template}<details class="template"><summary>Imported template</summary><p>{templateNote(agent.template)}</p><pre>{JSON.stringify(agent.template, null, 2)}</pre></details>{/if}
     <div class="actions secondary">
       <Button disabled={busy || runActive(run?.status)} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.run_now', { id: agent.id }); if (answer?.run) onrun({ ...answer.run, runtimeId: agent.runtimeId ?? LOCAL_RUNTIME_ID }); await onchange() })}>Run now</Button>
       {#if local}<Button disabled={busy} onclick={() => action(() => tauri.invoke('agent_open', { id: agent.id }))}>Open folder</Button>{/if}
-      <Button disabled={busy} onclick={() => action(() => tauri.invoke('agent_export_template', { content: exportTemplate(agent), name: agent.name }))}>Export template</Button>
-      <Button disabled={busy} onclick={() => action(() => tauri.invoke('agent_export_template', { content: exportGrokSetup(agent), name: agent.name, format: 'markdown' }))}>Export for Grok Bot</Button>
+      <Button disabled={busy} onclick={() => action(() => exportAgent(tauri, agent, 'muniment'))}>Export for Muniment</Button>
+      <Button disabled={busy} onclick={() => action(() => exportAgent(tauri, agent, 'grok_bot'))}>Export for Grok Bot</Button>
       {#if deleting}
         <div class="confirm" role="group" aria-label="Delete agent">
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
@@ -210,9 +220,23 @@
         </div>
       {:else}<Button disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button>{/if}
     </div>
+    {/if}
+    {#if notice}<p class="muted" role="status">{notice}</p>{/if}
     {#if error}<p role="alert">{error}</p>{/if}
   </div>
 </aside>
+
+{#snippet primaryMachine()}
+  <section class="field" aria-label="Primary machine">
+    <div class="field-heading"><h3>Primary machine</h3>{#if movable}<button class="quiet link" disabled={busy} onclick={() => { moving = true; notice = '' }}>Move</button>{/if}</div>
+    <p class="machine"><MachineMark machine={primary} />{#if agent.online === false}<span class="offline">Offline</span>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" size={12} />Synced copy</span>{/if}</p>
+    <small>Routines and runs happen on this machine.</small>
+  </section>
+{/snippet}
+
+{#if moving}
+  <MoveDialog {tauri} {agent} {swarm} {runtimeList} onclose={() => { moving = false }} onmoved={async (line) => { notice = line; await onchange() }} />
+{/if}
 <style>
   .profile { grid-area: rail;   display: flex; flex-direction: column; overflow: hidden;     }
 
@@ -253,6 +277,9 @@
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .id { margin-left: 6px; color: var(--muted); }
   .muted { color: var(--muted); font-size: var(--text-12); }
+  .machine { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .offline { color: var(--ochre); font: var(--text-12) var(--font-mono); }
+  .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
   .toggles li, .rules li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font-size: var(--text-13); }
   .rules li .record { min-width: 0; overflow-wrap: anywhere; }

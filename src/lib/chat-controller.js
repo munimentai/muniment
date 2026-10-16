@@ -66,6 +66,8 @@ export function createChatController({
   onSubmission = () => {},
   onSignInLink = () => {},
   onBackgroundRun = () => {},
+  // The messages posted to a thread on swarm members, from its first page.
+  onPosted = () => {},
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -505,12 +507,14 @@ export function createChatController({
         selected = true
       }
       const history = []
+      let posted = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
         const payload = { threadId, limit: historyPageLimit }
         if (cursor !== undefined) payload.cursor = cursor
         const result = await invoke('chat_thread_open', payload)
         if (destroyed) return
+        if (page === 0) posted = result.posted ?? []
         history.push(...result.entries)
         if (result.nextCursor == null) break
         cursor = result.nextCursor
@@ -543,6 +547,7 @@ export function createChatController({
       publishMessages(rejoined
         ? published.map((message) => message.run?.id === rejoined.id ? { ...message, run: rejoined } : message)
         : published)
+      onPosted(threadId, posted)
       onActive(settled ? null : rejoined)
       if (rejoined) onAnnounce(rejoined)
       onHistoryLoaded()
@@ -626,11 +631,13 @@ export function createChatController({
     holdBuffer()
     try {
       const history = []
+      let posted = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
         const payload = { threadId, limit: historyPageLimit }
         if (cursor !== undefined) payload.cursor = cursor
         const result = await invoke('chat_thread_open', payload)
+        if (page === 0) posted = result.posted ?? []
         // A thread switch can land while the pages load. The pages then describe
         // a thread the shell no longer shows, so this call drops them.
         if (destroyed || readThreadId() !== threadId) return
@@ -638,6 +645,7 @@ export function createChatController({
         if (result.nextCursor == null) break
         cursor = result.nextCursor
       }
+      onPosted(threadId, posted)
       // Another call published while the pages loaded, so the pages describe an
       // older transcript. That call owns the view now, and publishing the pages
       // would drop the message and the run it just added.
