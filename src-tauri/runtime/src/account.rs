@@ -6,27 +6,33 @@ mod pairing_tests;
 
 pub use muniment_core::attach::EntitlementSnapshotResult;
 use muniment_core::attach::{ProtocolError, RuntimeActivityRegistry};
+use muniment_core::relay_encryption::{DesktopAgreement, RelayKeys};
+use muniment_desktop_integration::auth::remote_control_pairing::load_stored_pair;
 use muniment_desktop_integration::auth::{
     api_base_url, create_pairing_challenge, ensure_native_session as ensure_core_native_session,
     list_native_devices, native_status, read_pairing, revoke_pairing, run_native_sign_in_while,
-    sign_out_native_session, AuthStatus, BrowserOpenError, BrowserOpener,
-    EntitlementSnapshotTracker, FreshNativeSession, FreshNativeSessionError,
-    KeyringNativeCredentialStore, NativeDeviceList, NativeDeviceListError, NativeSignInError,
-    NativeTokenError, PairId, PairingChallengeView, PairingError, PairingRevokeView,
-    PairingStatusView, UreqAuthorizationTransport, UreqNativeDeviceListTransport,
-    UreqPairingTransport, UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport,
-    PAIR_FILE_NAME,
+    sign_out_native_session, stored_relay_keys, AuthStatus, BrowserOpenError, BrowserOpener,
+    DesktopIdentity, EntitlementSnapshotTracker, FreshNativeSession, FreshNativeSessionError,
+    KeyringNativeCredentialStore, NativeCredentialBackend, NativeCredentialStore, NativeDeviceList,
+    NativeDeviceListError, NativeSignInError, NativeTokenError, PairId, PairingChallengeView,
+    PairingError, PairingRevokeView, PairingStatusView, PendingAgreement, PlatformKeychain,
+    UreqAuthorizationTransport, UreqNativeDeviceListTransport, UreqPairingTransport,
+    UreqRegistrationTransport, UreqRevocationTransport, UreqTokenTransport, PAIR_FILE_NAME,
 };
 use muniment_runtime_core::host::{AccountService, AccountSession, LinkOpener};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The account the desktop runtime serves: the keychain session and the
 /// cloud's native endpoints. It tracks the entitlement snapshot version
-/// across reads.
+/// across reads, holds the agreement material of the pairing code on screen,
+/// and keeps the relay keys it last read from the keychain.
 #[derive(Default)]
 pub struct DesktopAccount {
     tracker: EntitlementSnapshotTracker,
+    pending_agreement: Mutex<Option<PendingAgreement>>,
+    relay_keys: Mutex<Option<RelayKeys>>,
 }
 
 impl AccountService for DesktopAccount {
@@ -86,14 +92,32 @@ impl AccountService for DesktopAccount {
         access_token: &str,
         profile_directory: &Path,
     ) -> Result<PairingStatusView, ProtocolError> {
-        pairing_status(access_token, profile_directory).map_err(pairing_protocol_error)
+        let status = pairing_status(
+            access_token,
+            profile_directory,
+            &self.pending_agreement,
+            &PlatformKeychain,
+        );
+        self.forget_cached_relay_keys();
+        status.map_err(pairing_protocol_error)
     }
 
     fn create_pairing_challenge(
         &self,
         access_token: &str,
     ) -> Result<PairingChallengeView, ProtocolError> {
-        request_pairing_challenge(access_token).map_err(pairing_protocol_error)
+        // A new code replaces the earlier code's agreement material.
+        let pending = || {
+            self.pending_agreement
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        *pending() = None;
+        let (view, agreement) = desktop_identity()
+            .and_then(|identity| request_pairing_challenge(access_token, &identity))
+            .map_err(pairing_protocol_error)?;
+        *pending() = Some(agreement);
+        Ok(view)
     }
 
     fn revoke_pairing(
@@ -102,8 +126,35 @@ impl AccountService for DesktopAccount {
         pair_id: PairId,
         profile_directory: &Path,
     ) -> Result<PairingRevokeView, ProtocolError> {
-        revoke_pairing_pair(access_token, pair_id, profile_directory)
-            .map_err(pairing_protocol_error)
+        let revoked =
+            revoke_pairing_pair(access_token, pair_id, profile_directory, &PlatformKeychain);
+        self.forget_cached_relay_keys();
+        revoked.map_err(pairing_protocol_error)
+    }
+
+    fn relay_keys(&self, profile_directory: &Path) -> Option<RelayKeys> {
+        let stored_pair = load_stored_pair(&pair_store(profile_directory)).ok()??;
+        let mut cached = self
+            .relay_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(keys) = cached
+            .as_ref()
+            .filter(|keys| keys.pair_id == stored_pair.pair_id.to_string())
+        {
+            return Some(keys.clone());
+        }
+        *cached = stored_relay_keys(&pair_store(profile_directory), &PlatformKeychain);
+        cached.clone()
+    }
+}
+
+impl DesktopAccount {
+    fn forget_cached_relay_keys(&self) {
+        *self
+            .relay_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
@@ -257,29 +308,58 @@ fn pair_store(profile_directory: &Path) -> std::path::PathBuf {
     profile_directory.join(PAIR_FILE_NAME)
 }
 
-/// Requests a QR pairing challenge for the signed-in desktop installation.
-pub fn request_pairing_challenge(access_token: &str) -> Result<PairingChallengeView, PairingError> {
-    create_pairing_challenge(&pairing_transport(), &api_base_url(), access_token)
+/// This installation's identity from the keychain.
+fn desktop_identity() -> Result<DesktopIdentity, PairingError> {
+    KeyringNativeCredentialStore::new()
+        .load_installation()
+        .map_err(|_| PairingError::Transport("the installation is unavailable".into()))?
+        .map(|installation| DesktopIdentity::from_installation(&installation))
+        .ok_or(PairingError::CredentialsMissing)
 }
 
-/// Reads the current pair and stores or clears the local peer identity.
+/// Requests a QR pairing challenge for the signed-in desktop installation
+/// with fresh agreement material.
+pub fn request_pairing_challenge(
+    access_token: &str,
+    identity: &DesktopIdentity,
+) -> Result<(PairingChallengeView, PendingAgreement), PairingError> {
+    let agreement = DesktopAgreement::generate()
+        .map_err(|_| PairingError::Config("the agreement keys could not be made".into()))?;
+    create_pairing_challenge(
+        &pairing_transport(),
+        &api_base_url(),
+        access_token,
+        identity,
+        agreement,
+    )
+}
+
+/// Reads the current pair, stores or clears the local peer identity, and
+/// completes the pending agreement into relay keys in the keychain.
 pub fn pairing_status(
     access_token: &str,
     profile_directory: &Path,
+    pending: &Mutex<Option<PendingAgreement>>,
+    keys: &dyn NativeCredentialBackend,
 ) -> Result<PairingStatusView, PairingError> {
     read_pairing(
         &pairing_transport(),
         &api_base_url(),
         access_token,
         &pair_store(profile_directory),
+        pending,
+        keys,
+        muniment_core::chrono::Utc::now(),
     )
 }
 
-/// Revokes the named pair and clears matching stored peer identity.
+/// Revokes the named pair and erases its relay keys and matching stored
+/// peer identity.
 pub fn revoke_pairing_pair(
     access_token: &str,
     pair_id: PairId,
     profile_directory: &Path,
+    keys: &dyn NativeCredentialBackend,
 ) -> Result<PairingRevokeView, PairingError> {
     revoke_pairing(
         &pairing_transport(),
@@ -287,6 +367,7 @@ pub fn revoke_pairing_pair(
         access_token,
         pair_id,
         &pair_store(profile_directory),
+        keys,
     )
 }
 
@@ -315,7 +396,7 @@ fn pairing_protocol_error(error: PairingError) -> ProtocolError {
         PairingError::CredentialsMissing | PairingError::HttpStatus(401 | 403) => {
             ProtocolError::unauthorized()
         }
-        PairingError::HttpStatus(409 | 429) => {
+        PairingError::HttpStatus(409 | 429) | PairingError::Agreement => {
             ProtocolError::persistence_failed_with_reason(error.to_string())
         }
         PairingError::Config(_)

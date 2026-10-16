@@ -48,7 +48,7 @@ pub use flow::{
     run_sign_in, sign_out, OidcConfig,
 };
 #[cfg(feature = "keyring")]
-pub use keychain::KeyringNativeCredentialStore;
+pub use keychain::{KeyringNativeCredentialStore, PlatformKeychain};
 pub use loopback::RedirectCatcher;
 pub use native_authorization::{
     begin_native_authorization, run_native_browser_authorization, AuthorizationTransport,
@@ -93,10 +93,12 @@ pub use native_token::{
 };
 pub use pkce::{random_state, PkcePair};
 pub use remote_control_pairing::{
-    challenge_expired, create_pairing_challenge, qr_json, qr_svg, read_pairing, revoke_pairing,
-    AuthorizedPhone, PairId, PairingChallengeView, PairingError, PairingQr, PairingRevokeView,
-    PairingStatusView, PairingTransport, RelayPair, UreqPairingTransport, CHALLENGE_PATH,
-    CONTRACT_VERSION, PAIRING_PATH, PAIR_FILE_NAME, POLL_INTERVAL, REPLACEMENT_INTERVAL,
+    challenge_expired, create_pairing_challenge, displayed_qr_json, qr_json, qr_svg, read_pairing,
+    relay_key_entry, revoke_pairing, stored_relay_keys, AuthorizedPhone, DesktopIdentity, PairId,
+    PairingChallengeView, PairingError, PairingQr, PairingRevokeView, PairingStatusView,
+    PairingTransport, PendingAgreement, RelayPair, RemoteControlState, UreqPairingTransport,
+    CHALLENGE_PATH, CONTRACT_VERSION, LEGACY_CONTRACT_VERSION, PAIRING_PATH, PAIR_FILE_NAME,
+    POLL_INTERVAL, REPLACEMENT_INTERVAL,
 };
 pub use store::{status, AuthStatus, InMemoryTokenStore, TokenSet, TokenStore};
 

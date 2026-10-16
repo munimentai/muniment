@@ -17,7 +17,9 @@ const NATIVE_KEYS: NativeCredentialKeys = NativeCredentialKeys {
     legacy_installation: "native-installation",
 };
 
-struct PlatformKeychain;
+/// Entries under the desktop's keychain service, such as the relay keys of a
+/// phone pair.
+pub struct PlatformKeychain;
 
 // One refusal at the keychain prompt holds for the rest of the process: the
 // saved session is unreadable here, so every later read answers signed out
