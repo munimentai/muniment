@@ -65,3 +65,15 @@ export function whenLabel(value, now = Date.now()) {
   if (minutes < 24 * 60) return `${Math.round(minutes / 60)}h ago`
   return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
+
+// What an imported template brought, as the profile's template note says.
+export function templateNote(template) {
+  if (!template) return ''
+  const skills = (template.skills ?? []).length
+  const plugins = (template.plugins ?? []).length
+  return [
+    template.coverage === 'public-profile' ? 'Imported from a public share page, which holds the profile only.' : 'Imported from a template.',
+    skills ? `${skills} ${skills === 1 ? 'skill stays' : 'skills stay'} as reference text.` : '',
+    plugins ? `${plugins} ${plugins === 1 ? 'tool needs' : 'tools need'} setup in Extend.` : '',
+  ].filter(Boolean).join(' ')
+}

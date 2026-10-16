@@ -1,21 +1,46 @@
 <script>
-  // An agent's routines: proposals from its instructions to accept or
-  // dismiss, then each routine with its trigger, last result and switch.
-  // Every change is a routine operation on the agent's machine.
+  // An agent's routines: proposals from its instructions or an imported
+  // template to accept or dismiss, then each routine with its trigger, last
+  // result, last tool check and switch. Every change is a routine operation
+  // on the agent's machine. Core reads proposals again after each save, in
+  // the background, so the cards reload when the agent changes.
   import Toggle from '../lib/Toggle.svelte'
   import Button from '../lib/ui/Button.svelte'
   import RoutineEditor from './RoutineEditor.svelte'
   import { agentRequest } from './agent-runtime.js'
   import { conditionLabel } from './condition.js'
-  import { isProposal, lastFiredLabel, triggerSummary } from './routine-labels.js'
+  import { isProposal, lastFiredLabel, pollLabel, triggerSummary } from './routine-labels.js'
 
-  let { agent, tauri, servers = [], webhooks = false, disabled = false, onchange = async () => {} } = $props()
+  let { agent, tauri, servers = [], webhooks = true, disabled = false, onchange = async () => {} } = $props()
   let editing = $state(null)
   let busy = $state(false)
   let error = $state('')
+  let proposals = $state([])
 
-  const proposals = $derived((agent.routines ?? []).filter(isProposal))
   const routines = $derived((agent.routines ?? []).filter((routine) => !isProposal(routine)))
+
+  // The proposals come from core's live operation. The agent's own routines
+  // hold them too, so a machine without the operation still shows them.
+  async function loadProposals() {
+    const current = agent
+    if (!current) return
+    try {
+      const answer = await agentRequest(tauri, current.runtimeId, 'agent.routine_proposals', { agent_id: current.id })
+      proposals = answer?.proposals ?? []
+    } catch {
+      proposals = (current.routines ?? []).filter(isProposal)
+    }
+  }
+  // A save of the instructions changes the agent. Core's model pass adds its
+  // proposals a little later, so the cards look again after a pause.
+  let revision = 0
+  $effect(() => {
+    agent.instructions; agent.routines
+    const current = ++revision
+    void loadProposals()
+    const later = setTimeout(() => { if (current === revision) void loadProposals() }, 8000)
+    return () => clearTimeout(later)
+  })
 
   async function work(task) {
     busy = true
@@ -26,21 +51,28 @@
   const remove = (routine) => agentRequest(tauri, agent.runtimeId, 'routine.delete', { agent_id: agent.id, routine_id: routine.id })
   async function saveAndRefresh(routine) { await save(routine); await onchange() }
   async function removeAndRefresh(routine) { await remove(routine); await onchange() }
+  const accept = (routine) => agentRequest(tauri, agent.runtimeId, 'agent.routine_proposal_accept', { agent_id: agent.id, routine_id: routine.id })
+  const dismiss = (routine) => agentRequest(tauri, agent.runtimeId, 'agent.routine_proposal_dismiss', { agent_id: agent.id, routine_id: routine.id })
+  async function createWebhook(routine) {
+    const answer = await agentRequest(tauri, agent.runtimeId, 'routine.webhook_create', { agent_id: agent.id, routine })
+    await onchange()
+    return answer
+  }
 </script>
 
 <section class="routines" aria-label="Routines">
   <div class="heading"><h3>Routines</h3><Button icon="plus" disabled={disabled || busy} onclick={() => { editing = { routine: null } }}>Add routine</Button></div>
   {#each proposals as routine (routine.id)}
     <article class="proposal" aria-label={`Proposed routine ${routine.name}`}>
-      <p class="kicker">Proposed from instructions</p>
+      <p class="kicker">{routine.id?.startsWith('import-') ? 'Proposed from the imported template' : 'Proposed from instructions'}</p>
       <strong>{routine.name}</strong>
       <p class="record">{triggerSummary(routine.trigger)}</p>
       {#if routine.trigger?.kind === 'mcp' && routine.trigger.condition}<p class="record">When {conditionLabel(routine.trigger.condition)}</p>{/if}
       {#if routine.prompt}<p class="prompt">{routine.prompt}</p>{/if}
       <div class="actions">
-        <Button disabled={disabled || busy} onclick={() => work(() => save({ ...routine, enabled: true }))}>Accept</Button>
-        <Button disabled={disabled || busy} onclick={() => { editing = { routine } }}>Edit</Button>
-        <Button disabled={disabled || busy} onclick={() => work(() => remove(routine))}>Dismiss</Button>
+        <Button disabled={disabled || busy} onclick={() => work(() => accept(routine))}>Accept</Button>
+        <Button disabled={disabled || busy} onclick={() => { editing = { routine: { ...routine, enabled: true } } }}>Edit</Button>
+        <Button disabled={disabled || busy} onclick={() => work(() => dismiss(routine))}>Dismiss</Button>
       </div>
     </article>
   {/each}
@@ -50,18 +82,19 @@
         <button type="button" class="name" disabled={disabled || busy} onclick={() => { editing = { routine } }}>{routine.name}</button>
         <span class="record">{triggerSummary(routine.trigger)}</span>
         <span class="record">{lastFiredLabel(routine)}</span>
+        {#if routine.trigger?.kind === 'mcp'}<span class="record">{pollLabel(routine)}</span>{/if}
       </div>
       <Toggle checked={routine.enabled} label={`${routine.name} on`} disabled={disabled || busy} onchange={(checked) => work(() => save({ ...routine, enabled: checked }))} />
     </div>
   {:else}
     {#if !proposals.length}<p class="empty">Runs only when you ask.</p>{/if}
   {/each}
-  {#if agent.paused_reason}<p class="note">Routines are paused while no one uses this machine. Open the agent to resume them.</p>{/if}
+  {#if agent.paused_reason}<p class="note">{agent.paused_reason === 'absence' ? 'Routines paused after 14 days without use. Resume them from the sidebar.' : 'Routines are paused.'}</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 
 {#if editing}
-  <RoutineEditor routine={editing.routine} {servers} {webhooks} onsave={saveAndRefresh} ondelete={editing.routine ? removeAndRefresh : null} onclose={() => { editing = null }} />
+  <RoutineEditor routine={editing.routine} {servers} {webhooks} {tauri} {agent} onsave={saveAndRefresh} oncreatewebhook={createWebhook} ondelete={editing.routine && !isProposal(editing.routine) ? removeAndRefresh : null} onclose={() => { editing = null }} />
 {/if}
 
 <style>

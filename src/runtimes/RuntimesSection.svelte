@@ -6,8 +6,9 @@
   // own. Update all asks every machine that is behind and answers, names the
   // ones it skips, and updates this computer last. Under the list, one
   // switch shares this computer's model connections with every machine, and
-  // for a signed-in account a second keeps them in MuniCloud. Below that,
-  // Pair shares this computer and adds another machine.
+  // for a signed-in account a second keeps them in MuniCloud. The swarm
+  // follows: linked machines and their links. Below that, Pair shares this
+  // computer and adds another machine.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
@@ -18,6 +19,7 @@
   import RuntimeRow from './RuntimeRow.svelte'
   import RuntimeAdd from './RuntimeAdd.svelte'
   import ThisComputer from './ThisComputer.svelte'
+  import SwarmSection from '../agents/SwarmSection.svelte'
   import { errorLine, skipLabel } from './runtimes.js'
   import { interruptionCount, interruptionMessage } from '../lib/app-update.js'
   import { featureFlags } from '../feature-flags.js'
@@ -167,6 +169,8 @@
       <p role="status">Loading machines…</p>
     {/if}
   </Group>
+
+  {#if list}<SwarmSection {tauri} {list} {listen} />{/if}
 
   <Group label="Model sharing">
     <Row title="Share model connections" description="Paired machines use the providers, sign-ins and keys connected on this computer.">

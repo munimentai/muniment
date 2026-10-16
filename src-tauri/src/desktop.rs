@@ -290,7 +290,6 @@ pub fn run() {
             agents::agent_request,
             agents::agent_memory,
             agents::agent_export_template,
-            agents::agent_import_link,
             agents::agent_open,
             personal_memory::memory_profile_read,
             personal_memory::memory_profile_save,

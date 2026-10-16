@@ -8,10 +8,13 @@
   import Button from '../lib/ui/Button.svelte'
   import CronEditor from './CronEditor.svelte'
   import ConditionBuilder from './ConditionBuilder.svelte'
+  import WebhookPanel from './WebhookPanel.svelte'
   import { conditionToTree, treeToCondition } from './condition.js'
   import { localTimeZone } from './cron.js'
 
-  let { routine = null, servers = [], webhooks = false, onsave, ondelete = null, onclose } = $props()
+  // A new webhook routine goes through `oncreatewebhook`, which answers core's
+  // `routine.webhook_create`: the routine, its address and its one-time secret.
+  let { routine = null, servers = [], webhooks = false, tauri = null, agent = null, onsave, oncreatewebhook = null, ondelete = null, onclose } = $props()
   const original = routine
   const trigger = original?.trigger ?? { kind: 'cron', expr: '0 9 * * *', tz: localTimeZone() }
   let name = $state(original?.name ?? '')
@@ -28,6 +31,7 @@
   let busy = $state(false)
   let error = $state('')
   let confirmDelete = $state(false)
+  let created = $state(null)
   let panel
   const id = $props.id()
 
@@ -46,6 +50,10 @@
     busy = true
     error = ''
     try {
+      if (kind === 'webhook' && !original && oncreatewebhook) {
+        created = await oncreatewebhook({ name: name.trim(), enabled, prompt, trigger: { kind: 'webhook', preset } })
+        return
+      }
       const next = { ...(original ?? { id: '', created_from: 'user', last_fired_at: null, last_result: null }), name: name.trim(), enabled, prompt, trigger: buildTrigger() }
       await onsave(next)
       onclose()
@@ -99,8 +107,12 @@
             <option value="github">GitHub</option>
             <option value="forgejo">Forgejo</option>
           </select></label>
-          {#if trigger.hook_id}<p class="record">Hook {trigger.hook_id}</p>{/if}
-          <p class="note">{webhooks ? 'The address and secret show once after you save.' : 'This machine does not issue webhook addresses yet. Update its runtime to add one.'}</p>
+          {#if webhooks && tauri && agent}
+            {#key created}<WebhookPanel {tauri} runtime={agent.runtimeId} agentId={agent.id} routineId={created?.routine?.id ?? (original?.trigger?.kind === 'webhook' ? original.id : null)} {created} disabled={busy} />{/key}
+          {:else}
+            {#if trigger.hook_id}<p class="record">Hook {trigger.hook_id}</p>{/if}
+            <p class="note">This machine does not issue webhook addresses yet. Update its runtime to add one.</p>
+          {/if}
         {:else}
           <div class="line">
             <label class="grow">Server<input class="mono" list={`${id}-servers`} bind:value={server} required disabled={busy} spellcheck="false" autocomplete="off" /></label>
@@ -116,12 +128,16 @@
         {#if error}<p role="alert">{error}</p>{/if}
       </div>
       <div class="dialog-actions">
-        {#if ondelete && original}
+        {#if ondelete && original && !created}
           {#if confirmDelete}<Button disabled={busy} onclick={remove}>Confirm delete</Button>{:else}<Button disabled={busy} onclick={() => { confirmDelete = true }}>Delete</Button>{/if}
         {/if}
         <span class="spacer"></span>
-        <Button disabled={busy} onclick={onclose}>Cancel</Button>
-        <Button type="submit" variant="primary" disabled={busy || !name.trim() || (kind === 'webhook' && !webhooks)}>Save</Button>
+        {#if created}
+          <Button variant="primary" onclick={onclose}>Done</Button>
+        {:else}
+          <Button disabled={busy} onclick={onclose}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={busy || !name.trim() || (kind === 'webhook' && !webhooks)}>Save</Button>
+        {/if}
       </div>
     </form>
   </div>
