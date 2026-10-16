@@ -13,6 +13,7 @@ id = "generic-api-key"
     '''(^|/)(test|tests|__tests__|spec)/''',
     '''\.(test|spec)\.[jt]sx?$''',
     '''_test\.go$''',
+    '''_tests\.rs$''',
   ]
   # An uppercase environment name assigned a value is a variable, not a
   # credential. A real credential's captured secret carries no NAME= prefix.
