@@ -38,6 +38,9 @@ pub enum ChatResumeError {
 pub struct ResumeContext {
     pub events: Vec<EventEnvelope>,
     pub locator: PiSessionLocator,
+    /// A note the `run.resumed` event carries into the thread, such as why
+    /// the runtime resumed the run on its own.
+    pub notice: Option<String>,
 }
 
 pub struct ResumeLaunch<S> {
@@ -138,6 +141,7 @@ pub fn resumable_context(
     Ok(ResumeContext {
         events: events.to_vec(),
         locator,
+        notice: None,
     })
 }
 

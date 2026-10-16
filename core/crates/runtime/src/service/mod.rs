@@ -12,8 +12,8 @@ pub use company::{create_company, delete_company, list_companies, rename_company
 pub use record::RecordRegistry;
 pub use run::{
     accept_compaction, accept_prompt, answer_permission, cancel_run, configure_run,
-    drive_compaction, drive_prompt, queue_run_message, resume_run, run_prompt, ConfigureRunError,
-    PromptAcceptance, PromptLaunch,
+    drive_compaction, drive_prompt, queue_run_message, resume_run, resume_run_with_notice,
+    run_prompt, ConfigureRunError, PromptAcceptance, PromptLaunch,
 };
 pub use threads::{
     apply_retention, create_thread, delete_thread, rename_thread, select_thread, stream_run,

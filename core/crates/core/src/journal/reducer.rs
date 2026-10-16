@@ -571,6 +571,9 @@ pub struct ChatProjection {
     pub turn_started: bool,
     pub routing_stage: Option<String>,
     pub prompt_storage_notice: Option<String>,
+    /// The note a `run.resumed` event carried, such as why the runtime
+    /// resumed the run on its own.
+    pub resume_notice: Option<String>,
     pub text: String,
     pub receipt: Option<Value>,
     pub status: Option<RunStatus>,
@@ -652,6 +655,11 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
             "chat.prompt.storage_notice" => {
                 chat.prompt_storage_notice = Some(field(event, "notice")?);
             }
+            "run.resumed" => {
+                if let Some(notice) = optional_field(event, "notice")? {
+                    chat.resume_notice = Some(notice);
+                }
+            }
             "chat.attachment.ingested" => {
                 let EventPayload::Attachment { attachment } = &event.payload else {
                     return Err(ReduceError::MissingAttachmentPayload {
@@ -722,6 +730,7 @@ pub(crate) struct ChatCheckpoint {
     turn_started: bool,
     routing_stage: Option<String>,
     prompt_storage_notice: Option<String>,
+    resume_notice: Option<String>,
     receipt: Option<Option<Value>>,
     tool_activity_len: usize,
     finished_activity: Option<(usize, ToolActivity)>,
@@ -775,6 +784,7 @@ impl ChatProjector {
             turn_started: self.chat.turn_started,
             routing_stage: self.chat.routing_stage.clone(),
             prompt_storage_notice: self.chat.prompt_storage_notice.clone(),
+            resume_notice: self.chat.resume_notice.clone(),
             receipt: (event.event_type == "run.completed").then(|| self.chat.receipt.clone()),
             tool_activity_len: self.chat.tool_activity.len(),
             finished_activity,
@@ -792,6 +802,7 @@ impl ChatProjector {
         self.chat.turn_started = checkpoint.turn_started;
         self.chat.routing_stage = checkpoint.routing_stage;
         self.chat.prompt_storage_notice = checkpoint.prompt_storage_notice;
+        self.chat.resume_notice = checkpoint.resume_notice;
         if let Some(receipt) = checkpoint.receipt {
             self.chat.receipt = receipt;
         }
@@ -818,6 +829,11 @@ impl ChatProjector {
             }
             "chat.prompt.storage_notice" => {
                 self.chat.prompt_storage_notice = Some(field(event, "notice")?);
+            }
+            "run.resumed" => {
+                if let Some(notice) = optional_field(event, "notice")? {
+                    self.chat.resume_notice = Some(notice);
+                }
             }
             "chat.attachment.ingested" => {
                 let EventPayload::Attachment { attachment } = &event.payload else {

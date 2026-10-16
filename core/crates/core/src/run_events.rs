@@ -41,6 +41,9 @@ pub struct ChatEvent {
     pub turn_started: bool,
     pub routing_stage: Option<String>,
     pub prompt_storage_notice: Option<String>,
+    /// The note of the run's last `run.resumed` event, such as a resume after
+    /// a runtime update.
+    pub resume_notice: Option<String>,
     pub failure_reason: Option<String>,
     pub receipt: Option<Value>,
     pub tool_activity: Vec<ChatToolActivity>,
@@ -85,6 +88,8 @@ struct ChatEventWire<'a> {
     routing_stage: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_storage_notice: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resume_notice: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_reason: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +138,7 @@ impl Serialize for ChatEvent {
             turn_started: self.turn_started,
             routing_stage: self.routing_stage.as_deref(),
             prompt_storage_notice: self.prompt_storage_notice.as_deref(),
+            resume_notice: self.resume_notice.as_deref(),
             failure_reason: self.failure_reason.as_deref(),
             receipt: self.receipt.as_ref(),
             tool_activity: &self.tool_activity,
@@ -236,6 +242,7 @@ pub fn chat_event(
         turn_started: projection.turn_started,
         routing_stage: projection.routing_stage,
         prompt_storage_notice: projection.prompt_storage_notice,
+        resume_notice: projection.resume_notice,
         failure_reason: crate::chat_view::failure_reason(&projection.status),
         receipt: projection.receipt,
         tool_activity: chat_tool_activity(&projection.tool_activity),
@@ -342,6 +349,7 @@ pub(crate) fn text_delta(
         turn_started: false,
         routing_stage: None,
         prompt_storage_notice: None,
+        resume_notice: None,
         failure_reason: None,
         receipt: None,
         tool_activity: Vec::new(),

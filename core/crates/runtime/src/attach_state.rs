@@ -299,6 +299,15 @@ impl RuntimeAttachState {
         self.drain_state.clone()
     }
 
+    /// The id and workspace of the run in progress, if any.
+    pub(crate) fn active_run_identity(&self) -> Option<(String, String)> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|run| (run.id.clone(), run.workspace.clone()))
+    }
+
     pub(crate) fn agent_profile(&self) -> &Path {
         &self.profile_directory
     }

@@ -645,6 +645,87 @@ fn run_service_error(error: String) -> RunStartError {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
+impl RuntimeAttachBoundaries {
+    /// Resumes an interrupted run, and its `run.resumed` event carries
+    /// `notice` into the thread.
+    pub fn resume_run_with_notice(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        notice: Option<String>,
+    ) -> Result<AttachResumeAccepted, RunStartError> {
+        if self.active_run_exists() {
+            return Err(RunStartError::InvalidRequest(
+                "A reply is already in progress.".into(),
+            ));
+        }
+        let workspace = if self.local_mode() {
+            "local"
+        } else {
+            workspace
+        };
+        let belongs_to_workspace = self
+            .storage
+            .lock()
+            .map_err(|error| persistence_error("lock", error.to_string()))?
+            .journal
+            .run_belongs_to_workspace(run_id, workspace)
+            .map_err(|error| persistence_error("journal", error))?;
+        if !belongs_to_workspace {
+            return Err(RunStartError::InvalidRequest(
+                "The run was not found or is inaccessible.".into(),
+            ));
+        }
+        let tokens = self.fresh_tokens()?;
+        let grant = self.configure_run(run_id, "", &tokens, Some(workspace))?;
+        service::resume_run_with_notice(
+            &self.host,
+            &self.profile_directory,
+            Arc::clone(&self.storage),
+            Arc::clone(&self.runtime),
+            &self.runtime_activity,
+            &self.config_directory,
+            run_id.to_owned(),
+            tokens.access_token,
+            tokens.subject,
+            grant,
+            Arc::clone(&self.active),
+            RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
+            self.pi_artifact,
+            notice,
+        )
+        .map_err(run_service_error)?;
+        let mut storage = self
+            .storage
+            .lock()
+            .map_err(|error| persistence_error("lock", error.to_string()))?;
+        let thread_id = storage
+            .journal
+            .run_thread_id(run_id)
+            .map_err(|error| persistence_error("journal", error))?
+            .ok_or(RunStartError::ThreadNotFound)?;
+        let committed_seq = storage
+            .journal
+            .events(run_id)
+            .map_err(|error| persistence_error("journal", error))?
+            .last()
+            .map(|event| event.run_seq)
+            .ok_or_else(|| {
+                persistence_error(
+                    "journal",
+                    format!("The journal has no events for run {run_id}."),
+                )
+            })?;
+        Ok(AttachResumeAccepted {
+            run_id: run_id.to_owned(),
+            thread_id,
+            committed_seq,
+            accepted_at: accepted_time_now(),
+        })
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
 impl RunAttachBoundaries for RuntimeAttachBoundaries {
     fn submit_run(
         &self,
@@ -715,73 +796,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         workspace: &str,
         run_id: &str,
     ) -> Result<AttachResumeAccepted, RunStartError> {
-        if self.active_run_exists() {
-            return Err(RunStartError::InvalidRequest(
-                "A reply is already in progress.".into(),
-            ));
-        }
-        let workspace = if self.local_mode() {
-            "local"
-        } else {
-            workspace
-        };
-        let belongs_to_workspace = self
-            .storage
-            .lock()
-            .map_err(|error| persistence_error("lock", error.to_string()))?
-            .journal
-            .run_belongs_to_workspace(run_id, workspace)
-            .map_err(|error| persistence_error("journal", error))?;
-        if !belongs_to_workspace {
-            return Err(RunStartError::InvalidRequest(
-                "The run was not found or is inaccessible.".into(),
-            ));
-        }
-        let tokens = self.fresh_tokens()?;
-        let grant = self.configure_run(run_id, "", &tokens, Some(workspace))?;
-        service::resume_run(
-            &self.host,
-            &self.profile_directory,
-            Arc::clone(&self.storage),
-            Arc::clone(&self.runtime),
-            &self.runtime_activity,
-            &self.config_directory,
-            run_id.to_owned(),
-            tokens.access_token,
-            tokens.subject,
-            grant,
-            Arc::clone(&self.active),
-            RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
-            self.pi_artifact,
-        )
-        .map_err(run_service_error)?;
-        let mut storage = self
-            .storage
-            .lock()
-            .map_err(|error| persistence_error("lock", error.to_string()))?;
-        let thread_id = storage
-            .journal
-            .run_thread_id(run_id)
-            .map_err(|error| persistence_error("journal", error))?
-            .ok_or(RunStartError::ThreadNotFound)?;
-        let committed_seq = storage
-            .journal
-            .events(run_id)
-            .map_err(|error| persistence_error("journal", error))?
-            .last()
-            .map(|event| event.run_seq)
-            .ok_or_else(|| {
-                persistence_error(
-                    "journal",
-                    format!("The journal has no events for run {run_id}."),
-                )
-            })?;
-        Ok(AttachResumeAccepted {
-            run_id: run_id.to_owned(),
-            thread_id,
-            committed_seq,
-            accepted_at: accepted_time_now(),
-        })
+        self.resume_run_with_notice(workspace, run_id, None)
     }
 
     fn queue_attach_message(
@@ -1495,6 +1510,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 turn_started: false,
                 routing_stage: None,
                 prompt_storage_notice: None,
+                resume_notice: None,
                 failure_reason: Some(cause.to_owned()),
                 receipt: None,
                 tool_activity: Vec::new(),
@@ -1632,6 +1648,7 @@ fn sign_in_link_event(url: &str) -> muniment_core::run_events::ChatEvent {
         turn_started: false,
         routing_stage: None,
         prompt_storage_notice: None,
+        resume_notice: None,
         failure_reason: None,
         receipt: None,
         tool_activity: Vec::new(),

@@ -160,6 +160,22 @@ listener is off until the host binds it.
   `<state root>/remote/runtime-update.json` and sends it to
   `RemoteAccess::update_requests`. The host's updater applies it only from
   its own signed releases.
+- `runtime.info` answers the runtime's identity, `certificate_sha256`,
+  `update_request`, `update_capability` and `update_status`.
+  `update_capability` names who installs a requested version: `launcher`
+  (the server's launcher), `desktop` (the desktop app's updater) or `manual`
+  (nothing on the runtime). A desktop install reports `desktop`, and a server
+  or container `manual` unless its host calls
+  `RemoteAccess::set_update_capability`. `update_status` is
+  `{"state", "target_version", "blockers", "error"?, "updated_at"}`, where
+  `state` is `idle`, `queued`, `downloading`, `draining`, `installing`,
+  `restarting` or `failed`, `target_version` names the version or is null,
+  and while draining `blockers` lists the work the runtime waits for:
+  `active_run`, `pending_permission_gate`, `authentication_operation`,
+  `session_refresh` or `in_flight_external_effect`. The updater saves it in
+  `<state root>/remote/update-status.json` with
+  `RemoteAccess::set_update_status`. A pending request with no updater
+  status reads as `queued`.
 - The client side is `pair_with_link`, `connect_remote_runtime` and
   `RemoteRuntimeRecord`, which saves the credential to an owner-only file.
   `cargo run -p muniment-attach --features client --example remote-smoke --
@@ -202,6 +218,15 @@ remote access. Its chat-event subscription (`run.chat_events`) also carries
 `runtime.update_requested` events with the body `{"version",
 "requested_at", "requested_by"}`, so the desktop runs its updater. A remote
 device never receives them.
+
+A chat-event subscription on either route that sends
+`{"update_status": true}` also receives `runtime.update_status` events, whose
+body is the `update_status` of `runtime.info`: first the current status, then
+each change, checked once a second. A runtime that predates the field refuses
+the request as `invalid_request`, and
+`DesktopClient::subscribe_chat_events_with_update_status` then subscribes
+without it. A run the runtime resumed on its own carries `resumeNotice` in
+its chat events and thread history.
 
 ## Phone relay
 
@@ -310,7 +335,9 @@ feature, so it never opens a keychain: prompt history lives in files under the
 state root and secrets live in `FileCredentialStore`. State lives in the
 directory `MUNIMENT_STATE_DIR` names, or `~/.muniment`. The attach endpoint
 sits under `XDG_RUNTIME_DIR`, or under `run` in the state root when that is
-unset. One instance holds the endpoint's instance lock.
+unset. One instance holds the endpoint's instance lock. `muniment-server
+launch` runs `serve` under the launcher that installs requested updates, as
+[Self-update](#self-update) describes.
 
 `muniment-server health` exits 0 when the runtime's attach endpoint answers a
 handshake. `muniment-server prepare` installs the pinned Pi into the directory
@@ -348,8 +375,8 @@ process, such as over SSH or `docker exec`:
 - `muniment-server revoke <device-id>` revokes one. Its live sessions close
   within a second.
 - `muniment-server info [--json]` prints the runtime id, name, version,
-  install kind, certificate fingerprint, remote access state and any update
-  request.
+  install kind, certificate fingerprint, remote access state, any update
+  request and the launcher's update status.
 
 `deploy/runtime/Containerfile` builds a non-root image with the server, the
 pinned Pi for the image's architecture and the pinned packages. State lives in
@@ -369,7 +396,7 @@ docker run -d --name muniment -p 192.0.2.20:7443:7443 \
 docker exec muniment muniment-server pair
 ```
 
-Each release publishes the image for linux/amd64 as
+Each release publishes the image for linux/amd64 and linux/arm64 as
 `ghcr.io/munimentai/muniment-runtime:<version>` and `:latest`:
 
 ```sh
@@ -383,6 +410,12 @@ release job tags a version. It pushes to each image repository in the
 `RUNTIME_IMAGE_REPOSITORIES` variable (a space list) and logs in with the
 `RUNTIME_IMAGE_LOGINS` secret, one `<registry> <user> <password>` line per
 registry. A repository whose registry has no login is skipped with a warning.
+For the platforms in `RUNTIME_IMAGE_PLATFORMS` (default
+`linux/amd64,linux/arm64`), buildx builds each platform from the release's
+signed server archive for its architecture, so no platform compiles under
+emulation. Only `muniment-server prepare` runs emulated, to install the
+pinned Pi for that architecture. A runner without buildx or an emulator for
+the other platform publishes its own platform from source and warns.
 
 A `runtime.update` request writes `/data/remote/runtime-update.json`
 (`<state root>/remote/runtime-update.json` outside the image), owner-only:
@@ -392,11 +425,74 @@ A `runtime.update` request writes `/data/remote/runtime-update.json`
 ```
 
 `version` starts with a digit and holds letters, digits, `.`, `-` and `+`.
-A container host's updater reads the file, pulls that version's image,
-recreates the container on the same volume and deletes the file.
 `deploy/runtime/smoke.sh <image>` builds the `remote-smoke` target of the
 same file, pairs it with the runtime, reconnects across a restart and checks
 that a revoked device is refused.
+
+### Self-update
+
+The image runs `muniment-server launch`, which runs the server under a
+launcher that installs the requested version itself. A server outside a
+container gets the same with `launch` in place of `serve`. The launcher is
+the binary it started from, so it stays the same across the versions it
+installs, and a new image replaces it. It keeps each version under
+`<state root>/runtime/versions/<version>/` with `current` and `previous`
+pointers, and runs the current version, or its own when that is newer or
+nothing is installed. It reports `update_capability: launcher` when it can
+verify releases and write its versions directory, and `manual` otherwise.
+
+Each release publishes, beside `pins.toml`,
+`muniment-server-<version>-linux-x86_64.tar.gz` and
+`muniment-server-<version>-linux-aarch64.tar.gz`, each the server and the
+speech runtime libraries it loads from its own directory. `SHA256SUMS` lists
+them, and `SHA256SUMS.minisig` is a minisign signature over it. The release
+job cross-compiles both with cargo-zigbuild against glibc 2.36 and signs
+with the `MUNIMENT_RELEASE_SIGNING_KEY` secret, and the optional
+`MUNIMENT_RELEASE_SIGNING_PASSWORD`. It fails before tagging when the key is
+missing or `RELEASE_PUBLIC_KEY` in `crates/server/src/release.rs` does not
+verify the signature, so no release goes out unsigned.
+
+While a request names a version newer than the running one, the launcher:
+
+1. Downloads the archive for its architecture, `SHA256SUMS` and the
+   signature from `<feed>/v<version>/`.
+2. Checks the signature against the release public key, then the archive's
+   SHA-256, and unpacks its regular files into a staging directory.
+3. Runs the new server's `--version`, which must name the version.
+4. Sends the server `SIGUSR1`. The server refuses new runs with the
+   retryable `runtime_draining` error and waits up to the grace period for
+   running work to finish, reporting `draining` with its blockers. It
+   records the runs still active, then stops.
+5. Stops what is left of the server's process group, so no agent of the
+   old version runs beside the new one, and snapshots the SQLite files under
+   the state root.
+6. Starts the new version as a trial. It keeps it when `health` passes
+   within the trial period. Otherwise it restores the snapshot, starts the
+   earlier version again, reports `failed` and never retries that version.
+   A newer release installs as usual.
+7. Clears the request and reports `idle`.
+
+A failed download leaves the request queued, with the error in
+`update_status`, and retries after the retry delay, doubling each time up to
+an hour, so a runtime that was offline still converges. A launcher that
+stops during a trial rolls it back when it starts again.
+
+After the new version starts and the launcher keeps it, the runtime resumes
+each run the update interrupted from its Pi session, one at a time, and the
+thread shows that the reply resumed after an update. A run that waited on a
+permission gate stays as it was for its owner to answer or resume, and a
+thread resumes on its own at most three times in a row. A run that stopped
+in the middle of a tool call needs a manual decision, since the tool's
+outcome is unknown, so it stays interrupted too.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MUNIMENT_UPDATE_GRACE_SECS` | 120 | How long a drain waits for running work. |
+| `MUNIMENT_UPDATE_SHUTDOWN_SECS` | 60 | How long the server has to stop before it is killed. |
+| `MUNIMENT_UPDATE_TRIAL_SECS` | 120 | How long a new version has to pass `health`. |
+| `MUNIMENT_UPDATE_RETRY_SECS` | 60 | The first retry delay after a failed download. |
+| `MUNIMENT_UPDATE_FEED` | the public GitHub releases | The release feed base URL. `file://` reads a local directory. |
+| `MUNIMENT_UPDATE_PUBLIC_KEY` | `RELEASE_PUBLIC_KEY` | The minisign public key releases verify against, for tests and mirrors that sign their own releases. |
 
 ## Development
 

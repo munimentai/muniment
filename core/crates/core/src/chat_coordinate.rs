@@ -893,7 +893,10 @@ fn coordinate_work(
             &run_id,
             &mut seq,
             "run.resumed",
-            json!({}),
+            resume
+                .notice
+                .as_ref()
+                .map_or_else(|| json!({}), |notice| json!({"notice": notice})),
             subject.as_deref(),
         )
         .is_err()

@@ -764,6 +764,44 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     )?;
     insert(
         &mut fixtures,
+        "request-run-chat-events-update-status.json",
+        &Request {
+            protocol: Protocol,
+            request_id: id(127)?,
+            operation: Operation::RunChatEvents,
+            capability: "fixture-capability".into(),
+            idempotency_key: None,
+            body: json!({"update_status": true}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-runtime-info.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(162)?,
+            ok: Success,
+            body: json!({
+                "runtime_id": "018f0000-0000-7000-8000-000000000095",
+                "runtime_name": "Office server",
+                "runtime_version": "0.1.0",
+                "install_kind": "container",
+                "form_factor": "server",
+                "certificate_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+                "update_request": null,
+                "update_capability": "launcher",
+                "update_status": {
+                    "state": "failed",
+                    "target_version": "0.2.0",
+                    "blockers": [],
+                    "error": "Version 0.2.0 did not report healthy, so the runtime runs 0.1.0 again.",
+                    "updated_at": "2026-01-01T00:05:00Z"
+                }
+            }),
+        },
+    )?;
+    insert(
+        &mut fixtures,
         "response-approval-present.json",
         &Response {
             protocol: Protocol,
@@ -830,6 +868,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             "runtime-update-requested",
             EventName::RuntimeUpdateRequested,
         ),
+        ("runtime-update-status", EventName::RuntimeUpdateStatus),
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
@@ -840,6 +879,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 | EventName::ChatEvent
                 | EventName::ModelsLogin
                 | EventName::RuntimeUpdateRequested
+                | EventName::RuntimeUpdateStatus
         );
         insert(
             &mut fixtures,
@@ -1160,6 +1200,12 @@ fn event_body(event: &EventName) -> serde_json::Value {
             "requested_at": "2026-01-01T00:00:00Z",
             "requested_by": "018f0000-0000-7000-8000-000000000096"
         }),
+        EventName::RuntimeUpdateStatus => json!({
+            "state": "draining",
+            "target_version": "0.2.0",
+            "blockers": ["active_run"],
+            "updated_at": "2026-01-01T00:00:00Z"
+        }),
         EventName::Unknown(name) => json!({"name": name.as_str(), "optional": true}),
     }
 }
@@ -1349,12 +1395,15 @@ mod tests {
             "event-unknown.json",
             "event-models-login.json",
             "event-runtime-update-requested.json",
+            "event-runtime-update-status.json",
+            "request-run-chat-events-update-status.json",
+            "response-runtime-info.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            120,
+            123,
             "every canonical fixture must be inventoried"
         );
     }

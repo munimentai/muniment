@@ -1,4 +1,5 @@
 .git
 target
+dist
 third-party
 **/.DS_Store

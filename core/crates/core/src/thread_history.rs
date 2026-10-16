@@ -27,6 +27,8 @@ pub struct HistoryEntry {
     pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_storage_notice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_notice: Option<String>,
     pub phase: String,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,6 +129,7 @@ fn project_history_entry_without_prompt(
         sent_at: events.first().map(|event| event.recorded_at.clone()),
         prompt: None,
         prompt_storage_notice: projection.prompt_storage_notice,
+        resume_notice: projection.resume_notice,
         phase: projection_phase(&projection.status).into(),
         text: projection.text,
         failure_reason: crate::chat_view::failure_reason(&projection.status),

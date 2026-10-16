@@ -568,6 +568,43 @@ pub fn resume_run(
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
+    resume_run_with_notice(
+        host,
+        profile_directory,
+        storage,
+        runtime,
+        runtime_activity,
+        config_directory,
+        run_id,
+        access_token,
+        subject,
+        grant,
+        active,
+        events,
+        pi_artifact,
+        None,
+    )
+}
+
+/// Resumes a run like [`resume_run`], and its `run.resumed` event carries
+/// `notice` into the thread.
+#[allow(clippy::too_many_arguments)]
+pub fn resume_run_with_notice(
+    host: &RuntimeHost,
+    profile_directory: impl AsRef<Path>,
+    storage: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: &RuntimeActivityRegistry,
+    config_directory: impl AsRef<Path>,
+    run_id: String,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    active: Arc<Mutex<Option<ActiveRun>>>,
+    events: RuntimeChatEventTarget,
+    pi_artifact: Option<PiArtifactDescriptor>,
+    notice: Option<String>,
+) -> Result<(), String> {
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
     let (resume, thread_id) = {
@@ -583,8 +620,9 @@ pub fn resume_run(
             .run_thread_id(&run_id)
             .map_err(|_| "This reply cannot be resumed.".to_string())?
             .ok_or_else(|| "This reply cannot be resumed.".to_string())?;
-        let resume = resumable_context(&events, subject.as_deref(), &profile.pi_session_root())
+        let mut resume = resumable_context(&events, subject.as_deref(), &profile.pi_session_root())
             .map_err(|_| "This reply cannot be resumed.".to_string())?;
+        resume.notice = notice;
         (resume, thread_id)
     };
     let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(

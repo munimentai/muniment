@@ -87,4 +87,6 @@ and carries no separate rules.
 - Never force-push `main`. On a rebase conflict in an append-only file, keep both lines in time order.
 
 The release workflow tags `main` with the next version from these prefixes and
-attaches `pins/pins.toml` to the GitHub release.
+attaches `pins/pins.toml` and the signed `muniment-server` archives to the
+GitHub release. It fails without the `MUNIMENT_RELEASE_SIGNING_KEY` secret or
+when `RELEASE_PUBLIC_KEY` in `crates/server/src/release.rs` does not verify it.

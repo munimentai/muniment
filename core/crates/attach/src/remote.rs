@@ -190,6 +190,67 @@ impl InstallKind {
     }
 }
 
+/// Who installs a requested version, as `runtime.info` reports it in
+/// `update_capability`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateCapability {
+    /// The runtime's launcher downloads, verifies and installs the release.
+    Launcher,
+    /// The desktop app's updater installs the release.
+    Desktop,
+    /// Nothing on the runtime installs a release. The owner updates it.
+    Manual,
+}
+
+impl UpdateCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Launcher => "launcher",
+            Self::Desktop => "desktop",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+/// One step of a runtime update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeUpdateState {
+    /// No update waits.
+    Idle,
+    /// A version waits for the updater, which retries after a failed
+    /// download.
+    Queued,
+    /// The updater fetches and verifies the release.
+    Downloading,
+    /// The runtime refuses new runs and waits for running work to finish.
+    Draining,
+    /// The runtime stopped and the updater swaps the version.
+    Installing,
+    /// The new version starts and must report healthy.
+    Restarting,
+    /// The version did not install. The runtime runs its earlier version.
+    Failed,
+}
+
+/// The `update_status` of `runtime.info` and the body of a
+/// `runtime.update_status` event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeUpdateStatus {
+    pub state: RuntimeUpdateState,
+    /// The version being installed, or the one that failed.
+    pub target_version: Option<String>,
+    /// While draining, the work the runtime waits for, such as
+    /// `active_run` or `pending_permission_gate`.
+    #[serde(default)]
+    pub blockers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// When the state last changed, in RFC 3339.
+    pub updated_at: String,
+}
+
 /// The shape of the computer a runtime runs on, which picks the icon a
 /// paired device draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

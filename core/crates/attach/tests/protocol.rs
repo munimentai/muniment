@@ -1081,3 +1081,118 @@ fn desktop_client_grant_allows_empty_workspace_authority() {
     let grant = serde_json::from_value::<DesktopClientAuthorizedGrant>(empty_scopes).unwrap();
     assert!(grant.workspace_scopes.is_empty());
 }
+
+#[test]
+fn canonical_runtime_info_fixture_carries_the_update_capability_and_status() {
+    let request: Envelope =
+        serde_json::from_value(canonical_fixture("request-runtime-info.json")).unwrap();
+    let Envelope::Request(request) = request else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(request.operation, Operation::RuntimeInfo);
+    let response: Envelope =
+        serde_json::from_value(canonical_fixture("response-runtime-info.json")).unwrap();
+    let Envelope::Response(response) = response else {
+        panic!("expected response fixture");
+    };
+    assert_eq!(response.request_id, request.request_id);
+    let body = response.body;
+
+    // A client that predates the update fields still reads the identity.
+    let info = RuntimeInfo::from_fields(
+        body["runtime_id"].as_str().map(str::to_owned),
+        body["runtime_name"].as_str().map(str::to_owned),
+        body["runtime_version"].as_str().map(str::to_owned),
+        body.get("install_kind"),
+        body.get("form_factor"),
+    )
+    .unwrap();
+    assert_eq!(info.install_kind, Some(InstallKind::Container));
+
+    let capability: UpdateCapability =
+        serde_json::from_value(body["update_capability"].clone()).unwrap();
+    assert_eq!(capability, UpdateCapability::Launcher);
+    let status: RuntimeUpdateStatus =
+        serde_json::from_value(body["update_status"].clone()).unwrap();
+    assert_eq!(status.state, RuntimeUpdateState::Failed);
+    assert_eq!(status.target_version.as_deref(), Some("0.2.0"));
+    assert!(status.blockers.is_empty());
+    assert!(status.error.is_some());
+    assert_eq!(
+        serde_json::to_value(&status).unwrap(),
+        body["update_status"]
+    );
+}
+
+#[test]
+fn canonical_update_status_event_fixture_decodes() {
+    let event: Envelope =
+        serde_json::from_value(canonical_fixture("event-runtime-update-status.json")).unwrap();
+    let Envelope::Event(event) = event else {
+        panic!("expected event fixture");
+    };
+    assert_eq!(event.event, EventName::RuntimeUpdateStatus);
+    assert!(event.run_id.is_none() && event.run_seq.is_none());
+    let status: RuntimeUpdateStatus = serde_json::from_value(event.body.clone()).unwrap();
+    assert_eq!(
+        status,
+        RuntimeUpdateStatus {
+            state: RuntimeUpdateState::Draining,
+            target_version: Some("0.2.0".into()),
+            blockers: vec!["active_run".into()],
+            error: None,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    );
+    // An idle status names no version and no error.
+    assert_eq!(
+        serde_json::to_value(RuntimeUpdateStatus {
+            state: RuntimeUpdateState::Idle,
+            target_version: None,
+            blockers: Vec::new(),
+            error: None,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        })
+        .unwrap(),
+        json!({
+            "state": "idle",
+            "target_version": null,
+            "blockers": [],
+            "updated_at": "2026-01-01T00:00:00Z"
+        })
+    );
+    let request: Envelope = serde_json::from_value(canonical_fixture(
+        "request-run-chat-events-update-status.json",
+    ))
+    .unwrap();
+    let Envelope::Request(request) = request else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(request.operation, Operation::RunChatEvents);
+    assert_eq!(request.body, json!({"update_status": true}));
+}
+
+#[test]
+fn every_update_state_and_capability_has_its_wire_name() {
+    for (state, name) in [
+        (RuntimeUpdateState::Idle, "idle"),
+        (RuntimeUpdateState::Queued, "queued"),
+        (RuntimeUpdateState::Downloading, "downloading"),
+        (RuntimeUpdateState::Draining, "draining"),
+        (RuntimeUpdateState::Installing, "installing"),
+        (RuntimeUpdateState::Restarting, "restarting"),
+        (RuntimeUpdateState::Failed, "failed"),
+    ] {
+        assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
+    }
+    for capability in [
+        UpdateCapability::Launcher,
+        UpdateCapability::Desktop,
+        UpdateCapability::Manual,
+    ] {
+        assert_eq!(
+            serde_json::to_value(capability).unwrap(),
+            json!(capability.as_str())
+        );
+    }
+}

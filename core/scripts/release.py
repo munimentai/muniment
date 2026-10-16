@@ -8,6 +8,9 @@ Without `--publish` the script prints the plan and changes nothing.
 `--publish` pushes the tag to `origin`, the Forgejo record, waits until the
 push mirror carries it to the GitHub repository, and creates the GitHub release
 there with `gh`, which reads its token from `GH_TOKEN`.
+
+`--print-tag` prints only the next tag, or nothing when no release is due, so
+a job can build the release assets for that version before it publishes.
 """
 
 import argparse
@@ -88,19 +91,25 @@ def main():
                         help="the GitHub push mirror that hosts the release")
     parser.add_argument("--asset", action="append", default=[],
                         help="a file to attach to the release")
+    parser.add_argument("--print-tag", action="store_true",
+                        help="print only the next tag, or nothing when none is due")
     args = parser.parse_args()
+    report = sys.stderr if args.print_tag else sys.stdout
 
     version = last_tag(args.revision)
     if version is None:
-        print("No v* tag exists. Create the first release tag by hand.")
+        print("No v* tag exists. Create the first release tag by hand.", file=report)
         return
     base = "v%d.%d.%d" % version
     entries = list(commits(base, args.revision))
     change = max((level(s, b) for _, s, b in entries), default=0)
     if change == 0:
-        print(f"No release: no feat, fix, perf, or breaking commit since {base}.")
+        print(f"No release: no feat, fix, perf, or breaking commit since {base}.", file=report)
         return
     tag = "v%d.%d.%d" % bump(version, change)
+    if args.print_tag:
+        print(tag)
+        return
     notes = "".join(f"- {subject} ({short})\n" for short, subject, _ in entries)
     print(f"{base} -> {tag}\n{notes}", end="")
     if not args.publish:
