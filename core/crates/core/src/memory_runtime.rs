@@ -917,6 +917,96 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    struct NoHost;
+
+    impl crate::swarm::SwarmHost for NoHost {
+        fn replica_scope(&self) -> Option<crate::swarm::ReplicaScope> {
+            None
+        }
+        fn steer(&self, _thread_id: &str, _text: &str) -> Option<String> {
+            None
+        }
+        fn answer_permission(
+            &self,
+            _run_id: &str,
+            _gate_id: &str,
+            _answer: crate::permission_gate::ChatPermissionAnswer,
+        ) -> Result<(), String> {
+            Err("No run is live.".into())
+        }
+        fn kick_runs(&self) {}
+    }
+
+    #[test]
+    fn the_message_tools_reach_an_agent_on_the_same_runtime() {
+        let root = std::env::temp_dir().join(format!("muniment-agent-message-{}", Uuid::new_v4()));
+        let config = root.join("config");
+        fs::create_dir_all(&config).unwrap();
+        crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(config.clone(), config.join("memory"));
+        let thread = "01900000-0000-7000-8000-000000000003";
+        runtime
+            .open_session(
+                "run-two",
+                thread,
+                ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters: 8192,
+                },
+            )
+            .unwrap();
+        let tool = |name: &str, arguments: serde_json::Value| {
+            runtime.agent_tool("run-two", name, &arguments.to_string())
+        };
+        tool(
+            "agent-save",
+            serde_json::json!({"name": "Planner", "instructions": "Plan the work."}),
+        )
+        .unwrap();
+        let analyst = crate::agents::save(
+            &config,
+            crate::agents::Agent {
+                name: "Analyst".into(),
+                instructions: "Analyze.".into(),
+                ..crate::agents::Agent::default()
+            },
+        )
+        .unwrap();
+        let message =
+            serde_json::json!({"to": "Analyst", "intent": "question", "text": "How many leads?"});
+        // Without a swarm the tools answer that messaging is unavailable.
+        assert_eq!(
+            tool("agent-message", message.clone()).unwrap_err(),
+            "Agent messaging is unavailable on this machine."
+        );
+        let storage = std::sync::Arc::new(std::sync::Mutex::new(crate::run_events::ChatStorage {
+            journal: crate::journal::RunJournal::open(config.join("runs.sqlite3")).unwrap(),
+            cas: crate::cas::LocalCas::open(&config.join("cas")).unwrap(),
+        }));
+        let swarm =
+            crate::swarm::Swarm::open(&config, storage, std::sync::Arc::new(NoHost)).unwrap();
+        let sent = tool("agent-message", message).unwrap();
+        assert_eq!(sent["delivered"], true);
+        assert_eq!(sent["hop"], 1);
+        let queued = crate::agent_runs::RunStore::open(&config)
+            .unwrap()
+            .latest(&analyst.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            queued.trigger.kind,
+            crate::agent_runs::TriggerKind::AgentMessage
+        );
+        assert!(queued.prompt.contains("intent=\"question\""));
+        let handed = tool(
+            "agent-handoff",
+            serde_json::json!({"to": analyst.id, "task": "Write the report."}),
+        )
+        .unwrap();
+        assert_eq!(handed["message_id"], "handoff:run-two");
+        drop(swarm);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn routine_tools_validate_and_store_every_trigger_kind() {
         let root = std::env::temp_dir().join(format!("muniment-routines-{}", Uuid::new_v4()));
