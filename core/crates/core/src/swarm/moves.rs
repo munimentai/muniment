@@ -8,13 +8,12 @@
 //! target may force the move from the directory's copy of the definition;
 //! the old primary steps down when it sees the higher epoch.
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-use std::collections::BTreeMap;
 
 use super::{directory, link, lock, messaging, sync, DirectoryEntry, Inner, Message};
 use crate::agent_routines::Trigger;
