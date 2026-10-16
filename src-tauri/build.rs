@@ -138,6 +138,7 @@ const APP_COMMANDS: &[&str] = &[
     "chat_pick_attachments",
     "app_update_prepare",
     "app_update_install",
+    "app_update_interruptions",
     "launcher_register",
     "launcher_start_failed",
     "launcher_open",

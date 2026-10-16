@@ -16,6 +16,7 @@ use serde::Serialize;
 
 use super::registry::{Registry, SshTarget};
 use super::ssh::{Ssh, SshTunnel};
+use super::update_state::{UpdateInfo, UpdateStatus};
 use super::version::APP_VERSION;
 
 /// The client kind this app names in its hello.
@@ -89,6 +90,10 @@ pub(crate) enum Observation {
         install_kind: Option<String>,
         form_factor: Option<String>,
     },
+    /// The update fields of the runtime's `runtime.info`.
+    Update(UpdateInfo),
+    /// A `runtime.update_status` event.
+    UpdateStatus(UpdateStatus),
 }
 
 pub(crate) type Observer = Arc<dyn Fn(&str, Observation) + Send + Sync>;
@@ -351,17 +356,44 @@ impl Drop for RemoteSupervisor {
     }
 }
 
+/// Reads the runtime's update capability and status, which an older runtime
+/// does not send.
+pub(crate) fn observe_update_info(connector: &Connector, client: &mut DesktopClient) {
+    if let Ok(info) = client.read_runtime_info() {
+        (connector.observe)(
+            &connector.runtime_id,
+            Observation::Update(UpdateInfo::from_runtime_info(&info)),
+        );
+    }
+}
+
 fn serve_chat_events(connector: &Connector, deliver: impl Fn(SubscriptionEvent)) {
     // Each reconnect resumes after the newest chat event already delivered.
     let mut cursor = None;
     while !connector.control.stopped() {
         if let Some(mut client) = connector.attempt() {
-            if client.subscribe_chat_events_after(cursor).is_ok() {
+            observe_update_info(connector, &mut client);
+            // An older runtime refuses the update status, and the
+            // subscription then carries chat events only.
+            if client
+                .subscribe_chat_events_with_update_status(cursor)
+                .is_ok()
+            {
                 while let Ok(event) = client.read_subscription_event() {
                     if connector.control.stopped() {
                         return;
                     }
-                    deliver(event);
+                    match event {
+                        SubscriptionEvent::RuntimeUpdateStatus(body) => {
+                            if let Some(status) = UpdateStatus::from_body(&body) {
+                                (connector.observe)(
+                                    &connector.runtime_id,
+                                    Observation::UpdateStatus(status),
+                                );
+                            }
+                        }
+                        event => deliver(event),
+                    }
                 }
                 cursor = client.chat_cursor().or(cursor);
             }

@@ -253,7 +253,7 @@ export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   if (event.sentAt) run = { ...run, startedAt: event.sentAt }
   const pendingPermission = event.pendingPermission ?? null
-  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
+  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, resumeNotice: event.resumeNotice ?? run.resumeNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, recalls: event.recalls ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
@@ -269,7 +269,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

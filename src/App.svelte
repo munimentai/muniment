@@ -2518,7 +2518,7 @@
             {/if}
 
             <span class="title-spacer" data-tauri-drag-region></span>
-            <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || !!active || !!backgroundRun || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
+            <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
             {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
             <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
           </div>
@@ -2696,6 +2696,9 @@
                   <summary>Prompt text stays in runtime memory for this run.</summary>
                   <p>{message.run.promptStorageNotice}</p>
                 </details>
+              {/if}
+              {#if message.run.resumeNotice}
+                <p class="resume-notice"><span data-tooltip={message.run.resumeNotice} tabindex="0">Resumed after update</span></p>
               {/if}
               {#if message.run.phase === 'acquiring-pi'}
                 <p class="thinking">{runAnnouncement(message.run)}</p>
@@ -3449,6 +3452,10 @@
   .user-message > p { margin: 0; white-space: pre-wrap; }
   .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .prompt-storage-notice { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .resume-notice { min-height: 24px; margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 24px; }
+  .resume-notice span { position: relative; }
+  .resume-notice span::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; bottom: calc(100% + 6px); width: max-content; max-width: 320px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); line-height: 1.4; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .resume-notice span:hover::after, .resume-notice span:focus-visible::after { opacity: 1; transition-delay: 350ms; }
   .prompt-storage-notice summary { min-height: 24px; line-height: 24px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .prompt-storage-notice summary:hover { color: var(--ink); }
   .prompt-storage-notice p { margin: 6px 0 0; overflow-wrap: anywhere; }

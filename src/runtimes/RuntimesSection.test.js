@@ -49,13 +49,81 @@ describe('Machines page', () => {
     expect(within(desk).getByText('Offline')).toBeInTheDocument()
     expect(within(desk).getByText('Check that it is running and reachable.')).toBeInTheDocument()
 
-    // An older machine this device may update shows that it updates on its own.
+    // An older machine claims no update until it reports one.
     const box = screen.getByRole('group', { name: 'Build box' })
     expect(within(box).getByText('ssh build-box')).toBeInTheDocument()
-    expect(within(box).getByText('Updating to v0.2.0')).toBeInTheDocument()
+    expect(within(box).getByText('Online')).toBeInTheDocument()
+    expect(within(box).queryByText(/Updating/)).toBeNull()
     expect(screen.queryByRole('button', { name: /^Switch/ })).toBeNull()
-    expect(screen.queryByRole('button', { name: /^Update/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Update all' })).toBeEnabled()
     expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box'])
+  })
+
+  it('shows the update state each machine reports', async () => {
+    const draining = { ...buildBox, updateStatus: { state: 'draining', targetVersion: '0.2.0', blockers: ['active_run', 'pending_permission_gate'] } }
+    const failed = { ...studio, id: '018f0000-0000-7000-8000-000000000045', name: 'Lab', status: 'online', updateStatus: { state: 'failed', targetVersion: '0.2.0', blockers: [], error: 'Version 0.2.0 did not report healthy.' } }
+    const manual = { ...buildBox, id: '018f0000-0000-7000-8000-000000000046', name: 'Rack', behind: true, updateOffered: false, updateCapability: 'manual', updateTarget: '0.2.0' }
+    const asked = { ...buildBox, id: '018f0000-0000-7000-8000-000000000047', name: 'Mini box', updateRequested: true }
+    const bridge = tauri({ runtime_list: () => runtimeList([local, draining, failed, manual, asked]), runtime_refresh: () => runtimeList([local, draining, failed, manual, asked]) })
+    render(RuntimesSection, { tauri: bridge, listen })
+    const finishing = await within(await screen.findByRole('group', { name: 'Build box' })).findByText('Finishing current work')
+    expect(finishing).toHaveAttribute('data-tooltip', 'Waiting for a reply in progress and a permission request.')
+    expect(within(screen.getByRole('group', { name: 'Lab' })).getByText('Update failed')).toHaveAttribute('data-tooltip', 'Version 0.2.0 did not report healthy.')
+    expect(within(screen.getByRole('group', { name: 'Rack' })).getByText('v0.2.0 available, update manually')).toBeInTheDocument()
+    expect(within(screen.getByRole('group', { name: 'Mini box' })).getByText('Update requested')).toBeInTheDocument()
+  })
+
+  it('updates one machine from its menu', async () => {
+    const bridge = tauri({ runtime_update: () => ({ id: buildBox.id, name: 'Build box', ok: true, version: '0.2.0', message: 'Update to 0.2.0 requested.' }) })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'More for Build box' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Update' }))
+    expect(bridge.invoke).toHaveBeenCalledWith('runtime_update', { id: buildBox.id })
+    expect(await screen.findByText('Update to 0.2.0 requested.')).toBeInTheDocument()
+    // A machine this device may not update offers no Update.
+    await fireEvent.click(screen.getByRole('button', { name: 'More for Studio' }))
+    expect(screen.queryByRole('menuitem', { name: 'Update' })).toBeNull()
+  })
+
+  it('updates every machine that is behind, names each skip and updates this computer last', async () => {
+    const order = []
+    const bridge = tauri({
+      runtime_update_all: () => {
+        order.push('machines')
+        return {
+          results: [{ id: buildBox.id, name: 'Build box', ok: true, version: '0.2.0', message: 'Update to 0.2.0 requested.' }],
+          skipped: [
+            { id: studio.id, name: 'Studio', reason: 'offline' },
+            { id: 'reader', name: 'Reader', reason: 'no_permission' },
+            { id: 'rack', name: 'Rack', reason: 'manual' },
+            { id: 'lab', name: 'Lab', reason: 'current' },
+          ],
+        }
+      },
+      app_update_prepare: () => { order.push('prepare'); return '0.3.0' },
+      app_update_interruptions: () => { order.push('count'); return 1 },
+      app_update_install: () => { order.push('install'); return null },
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Update all' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Install update 0.3.0?' })
+    expect(dialog).toHaveTextContent('Installing now stops 1 running reply. It resumes after the update.')
+    expect(screen.getByText('Update requested on Build box.')).toBeInTheDocument()
+    expect(screen.getByText('Skipped: Studio (offline), Reader (no permission), Rack (manual install), Lab (already current).')).toBeInTheDocument()
+    expect(order).toEqual(['machines', 'prepare', 'count'])
+    await fireEvent.click(screen.getByRole('button', { name: 'Install and restart' }))
+    await waitFor(() => expect(order).toEqual(['machines', 'prepare', 'count', 'install']))
+  })
+
+  it('names this computer as current when no app update waits', async () => {
+    const bridge = tauri({
+      runtime_update_all: () => ({ results: [], skipped: [] }),
+      app_update_prepare: () => null,
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Update all' }))
+    expect(await screen.findByText('Skipped: This computer (already current).')).toBeInTheDocument()
+    expect(bridge.invoke).not.toHaveBeenCalledWith('app_update_install')
   })
 
   it('renames and removes a machine from its menu, asking once before removal', async () => {

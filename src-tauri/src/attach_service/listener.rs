@@ -137,8 +137,10 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
             let _ = app.emit("chat-event", event);
         }
         SubscriptionEvent::ModelsLogin(step) => crate::account_login::deliver_step(app, step),
-        // Only this computer's runtime sends an update request, on its owner route.
-        SubscriptionEvent::RuntimeUpdateRequested(_) => {}
+        // Only this computer's runtime sends an update request, on its owner
+        // route. The runtimes list takes each runtime's update status.
+        SubscriptionEvent::RuntimeUpdateRequested(_)
+        | SubscriptionEvent::RuntimeUpdateStatus(_) => {}
     }
 }
 
@@ -149,6 +151,8 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
 fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: SubscriptionEvent) {
     if let SubscriptionEvent::RuntimeUpdateRequested(request) = event {
         crate::runtimes::update_requested(app, request);
+    } else if let SubscriptionEvent::RuntimeUpdateStatus(status) = event {
+        crate::runtimes::local_update_status(app, status);
     } else if !app.state::<AttachCompanionState>().remote_active() {
         deliver_subscription_event(app, event);
     }
@@ -263,7 +267,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_after(cursor)?;
+                    client.subscribe_chat_events_with_update_status(cursor)?;
                     Ok(client)
                 })
             {
@@ -292,7 +296,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_after(cursor)?;
+                    client.subscribe_chat_events_with_update_status(cursor)?;
                     Ok(client)
                 })
             {

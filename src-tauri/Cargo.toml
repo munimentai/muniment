@@ -98,6 +98,14 @@ name = "sidecar-test-stub"
 path = "examples/sidecar-test-stub.rs"
 test = false
 
+# Temporary until the next muniment-core tag: build against a local
+# muniment-core checkout beside this repository.
+[patch."https://github.com/munimentai/muniment-core"]
+muniment-attach = { path = "../../muniment-core/crates/attach" }
+muniment-code-diff = { path = "../../muniment-core/crates/code-diff" }
+muniment-core = { path = "../../muniment-core/crates/core" }
+muniment-runtime-core = { path = "../../muniment-core/crates/runtime" }
+
 [profile.release]
 strip = true
 

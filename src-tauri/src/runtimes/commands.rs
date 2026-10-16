@@ -14,9 +14,11 @@ use tauri::Manager;
 use super::connection::{client_options, welcome, Connector, Observation, RemoteControl};
 use super::registry::{canonical_id, Registry, SshTarget, LOCAL_RUNTIME_ID};
 use super::ssh::{self, Ssh};
+use super::update_state::{SkipReason, UpdateInfo};
 use super::version::{is_older, may_update, target_version};
 use super::{
-    activate, connector, emit_changed, list, reconnect, RuntimeList, RuntimeStatus, Runtimes,
+    activate, connector, emit_changed, list, reconnect, update_all_plan, RuntimeList,
+    RuntimeStatus, Runtimes,
 };
 use crate::attach_service::AttachCompanionState;
 
@@ -397,11 +399,19 @@ pub(crate) struct RuntimeUpdateResult {
     pub(crate) message: String,
 }
 
-/// Asks one paired runtime's host to install this app's version.
-fn request_update(connector: &Connector) -> Result<String, String> {
+/// Asks one paired runtime's host to install its kind's target version. A
+/// runtime that installs by hand, or already works toward that version, is
+/// not asked. Only an `explicit` request asks again for a version the
+/// runtime failed to install.
+fn request_update(connector: &Connector, explicit: bool) -> Result<String, String> {
     let mut client = connector.connect().map_err(status_error)?;
     let observation = welcome(&client);
     (connector.observe)(&connector.runtime_id, observation.clone());
+    let info = client
+        .read_runtime_info()
+        .map(|info| UpdateInfo::from_runtime_info(&info))
+        .unwrap_or_default();
+    (connector.observe)(&connector.runtime_id, Observation::Update(info.clone()));
     let Observation::Welcome {
         version,
         install_kind,
@@ -419,6 +429,17 @@ fn request_update(connector: &Connector) -> Result<String, String> {
         != Some(true)
     {
         return Err("That runtime already runs this version or a newer one.".into());
+    }
+    if info.capability.as_deref() == Some("manual") {
+        return Err("That machine installs updates by hand. Update it there.".into());
+    }
+    if let Some(status) = &info.status {
+        if status.pending_for(target) {
+            return Ok(target.to_owned());
+        }
+        if !explicit && status.failed_for(target) {
+            return Err("That machine could not install this version.".into());
+        }
     }
     match client.request_runtime_update(target) {
         Ok(_) => Ok(target.to_owned()),
@@ -440,6 +461,7 @@ fn request_update(connector: &Connector) -> Result<String, String> {
 pub(crate) fn update_one<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     id: &str,
+    explicit: bool,
 ) -> RuntimeUpdateResult {
     let runtimes = app.state::<Runtimes>();
     let attach = app.state::<AttachCompanionState>();
@@ -465,18 +487,21 @@ pub(crate) fn update_one<R: tauri::Runtime>(
             .remote_connector()
             .filter(|active| active.runtime_id == id)
         {
-            Some(active) => request_update(&active),
+            Some(active) => request_update(&active, explicit),
             None => {
                 let temporary = Connector {
                     control: Arc::new(RemoteControl::default()),
                     ..connector(app, registry, id)
                 };
-                let result = request_update(&temporary);
+                let result = request_update(&temporary, explicit);
                 temporary.control.stop();
                 result
             }
         }
     })();
+    if let Ok(version) = &result {
+        runtimes.mark_requested(id, version);
+    }
     match result {
         Ok(version) => RuntimeUpdateResult {
             id: id.to_owned(),
@@ -502,28 +527,41 @@ pub async fn runtime_update(
 ) -> Result<RuntimeUpdateResult, String> {
     let id = paired_id(&id)?;
     blocking(move || {
-        let result = update_one(&app, &id);
+        let result = update_one(&app, &id, true);
         emit_changed(&app);
         Ok(result)
     })
     .await
 }
 
-/// Sends the update request to every paired runtime the app offers to update.
+/// A machine Update all left alone, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SkippedRuntime {
+    id: String,
+    name: String,
+    reason: SkipReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UpdateAllReport {
+    /// The requests, one per machine asked, in list order.
+    results: Vec<RuntimeUpdateResult>,
+    skipped: Vec<SkippedRuntime>,
+}
+
+/// Asks every paired machine that is behind and reachable to update, and
+/// names each machine it skips. The window updates this computer after.
 #[tauri::command]
-pub async fn runtime_update_all(app: tauri::AppHandle) -> Result<Vec<RuntimeUpdateResult>, String> {
+pub async fn runtime_update_all(app: tauri::AppHandle) -> Result<UpdateAllReport, String> {
     blocking(move || {
-        let offered: Vec<String> = list(&app)
-            .runtimes
+        let (asked, skipped) = update_all_plan(&app);
+        let workers: Vec<_> = asked
             .into_iter()
-            .filter(|runtime| runtime.update_offered)
-            .map(|runtime| runtime.id)
-            .collect();
-        let workers: Vec<_> = offered
-            .into_iter()
-            .map(|id| {
+            .map(|view| {
                 let app = app.clone();
-                std::thread::spawn(move || update_one(&app, &id))
+                std::thread::spawn(move || update_one(&app, &view.id, true))
             })
             .collect();
         let results = workers
@@ -531,7 +569,17 @@ pub async fn runtime_update_all(app: tauri::AppHandle) -> Result<Vec<RuntimeUpda
             .filter_map(|worker| worker.join().ok())
             .collect();
         emit_changed(&app);
-        Ok(results)
+        Ok(UpdateAllReport {
+            results,
+            skipped: skipped
+                .into_iter()
+                .map(|(view, reason)| SkippedRuntime {
+                    id: view.id,
+                    name: view.name,
+                    reason,
+                })
+                .collect(),
+        })
     })
     .await
 }
@@ -540,6 +588,7 @@ pub async fn runtime_update_all(app: tauri::AppHandle) -> Result<Vec<RuntimeUpda
 mod tests {
     use super::super::version::CORE_VERSION;
     use super::*;
+    use crate::runtimes::update_state::UpdateInfo;
     use muniment_core::attach::SCOPE_RUNTIME_ADMIN;
 
     /// Revokes this device on a paired runtime and answers whether the
@@ -554,7 +603,7 @@ mod tests {
     use muniment_core::attach::thread_service::ThreadListService;
     use muniment_core::attach::{
         InstallKind, PairingLinkRequest, RemoteAccess, RemoteAccessOptions, RemoteListener,
-        RemoteListenerConfig, SignedWorkspaceApproval,
+        RemoteListenerConfig, RuntimeUpdateState, SignedWorkspaceApproval, UpdateCapability,
     };
 
     struct Service;
@@ -584,6 +633,8 @@ mod tests {
                 },
             )
             .unwrap();
+            // A container's launcher installs the releases it is asked for.
+            access.set_update_capability(UpdateCapability::Launcher);
             let listener =
                 RemoteListener::bind(RemoteListenerConfig::new("127.0.0.1:0".parse().unwrap()))
                     .unwrap();
@@ -699,7 +750,10 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let connector = connector_for(&registry, &id, &seen);
         // A container is asked for the core release the app bundles.
-        assert_eq!(request_update(&connector), Ok(CORE_VERSION.to_owned()));
+        assert_eq!(
+            request_update(&connector, false),
+            Ok(CORE_VERSION.to_owned())
+        );
         assert_eq!(
             runtime.access.requested_update().unwrap().version,
             CORE_VERSION
@@ -792,7 +846,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let refused = request_update(&connector_for(&registry, &reader, &seen)).unwrap_err();
+        let refused = request_update(&connector_for(&registry, &reader, &seen), false).unwrap_err();
         assert!(refused.contains("cannot update"), "{refused}");
         assert_eq!(older.access.requested_update(), None);
 
@@ -804,11 +858,81 @@ mod tests {
             None,
         )
         .unwrap();
-        let refused = request_update(&connector_for(&registry, &admin, &seen)).unwrap_err();
+        let refused = request_update(&connector_for(&registry, &admin, &seen), false).unwrap_err();
         assert!(refused.contains("already runs"), "{refused}");
         assert_eq!(current.access.requested_update(), None);
         let scopes: BTreeSet<String> = registry.record(&admin).unwrap().scopes;
         assert!(scopes.contains(SCOPE_RUNTIME_ADMIN));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_request_skips_manual_pending_and_failed_runtimes_and_reads_their_status() {
+        let runtime = LoopbackRuntime::start("0.0.1");
+        let (registry, directory) = registry();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (id, _) = pair(
+            &registry,
+            runtime.link(&["thread.read", "runtime.admin"]),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let connector = connector_for(&registry, &id, &seen);
+
+        // The runtime reported a failed install of this version: only an
+        // explicit request asks again.
+        runtime
+            .access
+            .set_update_status(
+                RuntimeUpdateState::Failed,
+                Some(CORE_VERSION),
+                Vec::new(),
+                Some("Did not report healthy.".into()),
+            )
+            .unwrap();
+        let refused = request_update(&connector, false).unwrap_err();
+        assert!(refused.contains("could not install"), "{refused}");
+        assert_eq!(runtime.access.requested_update(), None);
+        assert!(seen.lock().unwrap().iter().any(|observation| matches!(
+            observation,
+            Observation::Update(UpdateInfo { capability: Some(capability), status: Some(status) })
+                if capability == "launcher" && status.state == "failed"
+        )));
+        assert_eq!(
+            request_update(&connector, true),
+            Ok(CORE_VERSION.to_owned())
+        );
+        assert_eq!(
+            runtime.access.requested_update().unwrap().version,
+            CORE_VERSION
+        );
+
+        // A runtime that works toward the version is not asked again.
+        runtime
+            .access
+            .set_update_status(
+                RuntimeUpdateState::Downloading,
+                Some(CORE_VERSION),
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        runtime.access.clear_update_request().unwrap();
+        assert_eq!(
+            request_update(&connector, false),
+            Ok(CORE_VERSION.to_owned())
+        );
+        assert_eq!(runtime.access.requested_update(), None);
+
+        // A runtime that installs by hand takes no request.
+        runtime
+            .access
+            .set_update_capability(UpdateCapability::Manual);
+        let refused = request_update(&connector, true).unwrap_err();
+        assert!(refused.contains("by hand"), "{refused}");
+        assert_eq!(runtime.access.requested_update(), None);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

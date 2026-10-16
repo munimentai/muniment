@@ -157,6 +157,7 @@
     "allow-chat-pick-attachments",
     "allow-app-update-prepare",
     "allow-app-update-install",
+    "allow-app-update-interruptions",
     "allow-launcher-register",
     "allow-agent-list",
     "allow-agent-memory",

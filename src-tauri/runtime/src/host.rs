@@ -40,7 +40,9 @@ pub fn desktop_host() -> RuntimeHost {
 
 /// Opens remote access for this runtime and starts its remote listener as
 /// the stored settings direct. The listener stays off until the owner turns
-/// pairing on, and the local desktop's welcome then names this runtime.
+/// pairing on, and the local desktop's welcome then names this runtime. It
+/// then resumes the runs the last update interrupted and watches for the
+/// app's update drain requests.
 pub fn start_remote_route(state: &Arc<muniment_runtime_core::RuntimeAttachState>) {
     use muniment_core::attach::{
         InstallKind, RemoteAccessOptions, RemoteRouteOptions, RemoteSettingsOverrides,
@@ -56,6 +58,13 @@ pub fn start_remote_route(state: &Arc<muniment_runtime_core::RuntimeAttachState>
     };
     if let Err(error) = state.start_remote_route(options) {
         eprintln!("muniment-runtime: {error}");
+        return;
+    }
+    // The desktop app installs updates. Runs an update interrupted resume
+    // now, and the app's drain requests arrive beside the update status.
+    state.resume_after_update();
+    if let Ok(profile) = crate::profile_directory() {
+        crate::update_drain::start(state, profile.join("remote"));
     }
 }
 

@@ -69,6 +69,16 @@ describe('chat composer and projection', () => {
     expect(applyChatEvent(initial, { ...entry, runId: 'other' })).toBe(initial)
   })
 
+  it('keeps the resume notice across live events and restored history', () => {
+    const resumeNotice = 'Muniment updated while this reply ran, so it resumed where it stopped.'
+    const initial = { id: 'r', phase: 'thinking', text: '' }
+    const live = applyChatEvent(initial, { runId: 'r', phase: 'streaming', text: 'Reply', resumeNotice })
+    expect(live.resumeNotice).toBe(resumeNotice)
+    expect(applyChatEvent(live, { runId: 'r', phase: 'complete', text: 'Reply' }).resumeNotice).toBe(resumeNotice)
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Reply', prompt: null, resumeNotice }])[0].run.resumeNotice).toBe(resumeNotice)
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Reply', prompt: null }])[0].run.resumeNotice).toBeNull()
+  })
+
   it('tracks the in-flight word from the projections: Routing, Thinking, the tool verb, Writing', () => {
     let run = { id: 'r', phase: 'thinking', text: '' }
     expect(stageWord(run.stage)).toBe('Routing')

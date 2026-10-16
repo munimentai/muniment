@@ -280,6 +280,7 @@ pub fn run() {
             attachment_picker::chat_pick_attachments,
             app_update::app_update_prepare,
             app_update::app_update_install,
+            app_update::app_update_interruptions,
             launcher::launcher_register,
             launcher::launcher_start_failed,
             launcher::launcher_open,

@@ -12,6 +12,11 @@ import {
   statusTone,
   updatableRuntimes,
   versionLabel,
+  updateLabel,
+  blockersLine,
+  canRequestUpdate,
+  olderVersion,
+  skipLabel,
 } from './runtimes.js'
 
 const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', active: true, local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
@@ -79,5 +84,56 @@ describe('runtime labels', () => {
     expect(errorLine('')).toBe('The runtime did not answer.')
     expect(looksLikePairingLink(' muniment://pair?v=1&id=x#secret ')).toBe(true)
     expect(looksLikePairingLink('https://example.com')).toBe(false)
+  })
+})
+
+describe('update labels', () => {
+  const machine = (fields) => ({ ...buildBox, ...fields })
+  const status = (state, fields = {}) => machine({ updateStatus: { state, targetVersion: '0.2.0', blockers: [], ...fields } })
+
+  it('names each state the machine reports', () => {
+    expect(updateLabel(status('queued'))).toEqual({ text: 'Update queued', tooltip: '' })
+    expect(updateLabel(status('downloading'))).toEqual({ text: 'Downloading v0.2.0', tooltip: '' })
+    expect(updateLabel(status('draining', { blockers: ['active_run'] }))).toEqual({ text: 'Finishing current work', tooltip: 'Waiting for a reply in progress.' })
+    expect(updateLabel(status('installing'))).toEqual({ text: 'Updating to v0.2.0', tooltip: '' })
+    expect(updateLabel(status('restarting'))).toEqual({ text: 'Updating to v0.2.0', tooltip: '' })
+    expect(updateLabel(status('failed', { error: 'Version 0.2.0 did not report healthy.' }))).toEqual({ text: 'Update failed', tooltip: 'Version 0.2.0 did not report healthy.' })
+    expect(updateLabel(status('idle', { targetVersion: null }))).toBeNull()
+  })
+
+  it('names a request the machine has not acted on and a manual machine that is behind', () => {
+    expect(updateLabel(machine({ updateRequested: true }))).toEqual({ text: 'Update requested', tooltip: '' })
+    expect(updateLabel(machine({ behind: true, updateCapability: 'manual', updateTarget: '0.2.0' }))).toEqual({ text: 'v0.2.0 available, update manually', tooltip: '' })
+    // A machine that is behind and installs releases itself shows only its version.
+    expect(updateLabel(machine({ behind: true, updateCapability: 'launcher', updateTarget: '0.2.0' }))).toBeNull()
+    // An older runtime without update fields never claims an update.
+    expect(updateLabel(buildBox)).toBeNull()
+  })
+
+  it('drops a status for a version the machine already runs', () => {
+    expect(updateLabel(status('restarting', {}))).not.toBeNull()
+    expect(updateLabel({ ...status('restarting'), version: '0.2.0' })).toBeNull()
+    expect(updateLabel({ ...status('failed'), version: 'v0.2.0' })).toBeNull()
+  })
+
+  it('words the blockers and compares versions', () => {
+    expect(blockersLine([])).toBe('')
+    expect(blockersLine(['active_run', 'session_refresh', 'in_flight_external_effect'])).toBe('Waiting for a reply in progress, a session refresh and an action in progress.')
+    expect(olderVersion('0.1.9', '0.2.0')).toBe(true)
+    expect(olderVersion('v0.2.0', '0.2.0')).toBe(false)
+    expect(olderVersion('0.10.0', '0.9.0')).toBe(false)
+    expect(olderVersion('1.0.0-rc.1', '1.0.0')).toBe(true)
+    expect(olderVersion('nightly', '1.0.0')).toBeNull()
+  })
+
+  it('offers Update only for a reachable machine that takes requests and has none on the way', () => {
+    expect(canRequestUpdate(buildBox)).toBe(true)
+    expect(canRequestUpdate(studio)).toBe(false)
+    expect(canRequestUpdate(local)).toBe(false)
+    expect(canRequestUpdate({ ...buildBox, status: 'offline' })).toBe(false)
+    expect(canRequestUpdate(status('downloading'))).toBe(false)
+    expect(canRequestUpdate(status('failed'))).toBe(true)
+    expect(skipLabel({ name: 'Rack', reason: 'manual' })).toBe('Rack (manual install)')
+    expect(skipLabel({ name: 'Lab', reason: 'no_permission' })).toBe('Lab (no permission)')
   })
 })

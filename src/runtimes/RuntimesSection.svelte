@@ -1,20 +1,25 @@
 <script>
   // The Machines page of Settings: this computer first, then each paired
-  // machine with its kind, version and state, and Rename and Remove in its
-  // menu. Every machine stays connected, and a thread runs on the machine it
-  // started on. An older machine updates on its own. Under the list, one
+  // machine with its kind, version, state and update state, and Update,
+  // Rename and Remove in its menu. Every machine stays connected, and a
+  // thread runs on the machine it started on. An older machine updates on its
+  // own. Update all asks every machine that is behind and answers, names the
+  // ones it skips, and updates this computer last. Under the list, one
   // switch shares this computer's model connections with every machine, and
   // for a signed-in account a second keeps them in MuniCloud. Below that,
   // Pair shares this computer and adds another machine.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
+  import Button from '../lib/ui/Button.svelte'
   import Toggle from '../lib/Toggle.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
+  import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import RuntimeRow from './RuntimeRow.svelte'
   import RuntimeAdd from './RuntimeAdd.svelte'
   import ThisComputer from './ThisComputer.svelte'
-  import { errorLine } from './runtimes.js'
+  import { errorLine, skipLabel } from './runtimes.js'
+  import { interruptionCount, interruptionMessage } from '../lib/app-update.js'
   import { featureFlags } from '../feature-flags.js'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
@@ -23,6 +28,9 @@
   let notice = $state('')
   let busy = $state('')
   let signedIn = $state(false)
+  let skipped = $state([])
+  let failures = $state([])
+  let localUpdate = $state(null)
   const viaCloud = $derived(signedIn && !!list?.shareViaCloud)
 
   onMount(() => {
@@ -55,6 +63,67 @@
     }
   }
 
+  function named(names) {
+    return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  }
+
+  // Asks one machine to install the version this app brings it to.
+  async function updateOne(runtime) {
+    busy = runtime.id
+    error = ''
+    notice = ''
+    try {
+      const result = await tauri.invoke('runtime_update', { id: runtime.id })
+      if (result?.ok) notice = result.message
+      else error = errorLine(result?.message)
+    } catch (failure) {
+      error = errorLine(failure)
+    } finally {
+      busy = ''
+    }
+  }
+
+  // Asks every paired machine that is behind and answers, then updates this
+  // computer last, since its install restarts the app.
+  async function updateAll() {
+    busy = 'all'
+    error = ''
+    notice = ''
+    skipped = []
+    failures = []
+    try {
+      const report = await tauri.invoke('runtime_update_all')
+      const results = report?.results ?? []
+      const asked = results.filter((result) => result.ok).map((result) => result.name)
+      failures = results.filter((result) => !result.ok).map((result) => `${result.name}: ${errorLine(result.message)}`)
+      const skips = [...(report?.skipped ?? [])]
+      let version = null
+      try { version = await tauri.invoke('app_update_prepare') } catch { /* This computer keeps its version. */ }
+      if (!version) skips.push({ id: 'local', name: 'This computer', reason: 'current' })
+      skipped = skips
+      notice = asked.length ? `Update requested on ${named(asked)}.` : ''
+      if (version) await updateThisComputer(version)
+    } catch (failure) {
+      error = errorLine(failure)
+    } finally {
+      busy = ''
+    }
+  }
+
+  async function updateThisComputer(version) {
+    const count = await interruptionCount(tauri)
+    if (count > 0) localUpdate = { version, count }
+    else await installThisComputer()
+  }
+
+  async function installThisComputer() {
+    try {
+      await tauri.invoke('app_update_install')
+    } catch (failure) {
+      error = errorLine(failure, 'The update could not be installed. Try again.')
+    }
+  }
+
   async function act(id, command, payload) {
     busy = id
     error = ''
@@ -77,15 +146,21 @@
   {#if error}<p class="line" role="alert">{error}</p>{/if}
   {#if notice}<p class="line" role="status">{notice}</p>{/if}
 
+  {#each failures as failure (failure)}<p class="line" role="alert">{failure}</p>{/each}
+  {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
+
   <Group heading="Machines" count={list?.runtimes?.length ?? null}>
+    {#snippet actions()}
+      <Button icon="arrow-down" disabled={!list || !!busy} onclick={updateAll}>Update all</Button>
+    {/snippet}
     {#if list}
       {#each list.runtimes as runtime (runtime.id)}
         <RuntimeRow
           {runtime}
-          appVersion={list.appVersion}
-          busy={busy === runtime.id}
+          busy={busy === runtime.id || busy === 'all'}
           onrename={(name) => act(runtime.id, 'runtime_rename', { id: runtime.id, name })}
           onremove={() => act(runtime.id, 'runtime_remove', { id: runtime.id })}
+          onupdate={() => updateOne(runtime)}
         />
       {/each}
     {:else if !error}
@@ -112,6 +187,12 @@
       <p>Shared subscriptions depend on this computer. When it sleeps or goes offline, a paired machine can lose them within 30 minutes. Shared API keys keep working.</p>
     {/if}
   </div>
+
+  {#if localUpdate}
+    <ConfirmDialog title="Install update {localUpdate.version}?" cancelLabel="Not now" confirmLabel="Install and restart" onDecision={async (approve) => { localUpdate = null; if (approve) await installThisComputer() }}>
+      <p>{interruptionMessage(localUpdate.count)}</p>
+    </ConfirmDialog>
+  {/if}
 
   <ThisComputer {tauri}>
     {#snippet add()}
