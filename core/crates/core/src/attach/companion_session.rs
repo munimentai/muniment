@@ -427,6 +427,15 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::RoutineList
         | Operation::RoutineSave
         | Operation::RoutineDelete
+        | Operation::AgentRoutineProposals
+        | Operation::AgentRoutineProposalAccept
+        | Operation::AgentRoutineProposalDismiss
+        | Operation::AgentImport
+        | Operation::AgentImportCommit
+        | Operation::AgentExport
+        | Operation::RoutineWebhookCreate
+        | Operation::RoutineWebhookRotate
+        | Operation::RoutineWebhookInfo
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }

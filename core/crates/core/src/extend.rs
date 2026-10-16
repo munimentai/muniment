@@ -483,6 +483,222 @@ fn assist_name(agent: &Path) -> Option<String> {
     Some(name.split(" · ").next().unwrap_or(name).trim().to_owned())
 }
 
+/// The tools of each enabled MCP server, as its last connection test listed
+/// them, named by the server's own name.
+pub fn mcp_tools(root: &Path) -> Vec<crate::agent_extract::McpTool> {
+    let Ok(state) = inventory(root) else {
+        return Vec::new();
+    };
+    let mut tools = Vec::new();
+    for item in state["items"].as_array().into_iter().flatten() {
+        if item["kind"] != "mcp" || item["enabled"] == false {
+            continue;
+        }
+        let Some(server) = item["name"].as_str().filter(|name| !name.trim().is_empty()) else {
+            continue;
+        };
+        for tool in item["lastCheck"]["toolNames"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            tools.push(crate::agent_extract::McpTool {
+                server: server.to_owned(),
+                tool: tool.to_owned(),
+            });
+        }
+    }
+    tools
+}
+
+/// The thread name an MCP poll's capability snapshot is built for.
+const POLL_THREAD: &str = "muniment-mcp-poll";
+
+/// The files one MCP tool call runs with: the server definition the servers
+/// extension registers, and the request the poll extension reads.
+#[derive(Debug)]
+pub struct McpCallFiles {
+    pub directory: std::path::PathBuf,
+    pub servers: std::path::PathBuf,
+    pub request: std::path::PathBuf,
+    pub output: std::path::PathBuf,
+    pub servers_extension: std::path::PathBuf,
+    pub poll_extension: std::path::PathBuf,
+}
+
+impl Drop for McpCallFiles {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Writes the files to call `tool` on the installed server `server`, named
+/// by the item's id, its name, or the name chats know it by. The definition
+/// comes from the same capability snapshot a chat turn builds, so a saved
+/// bearer token reaches the server the same way. The server's tools are
+/// exposed directly, so the call needs no codemode script.
+pub fn prepare_mcp_call(
+    root: &Path,
+    server: &str,
+    tool: &str,
+    args: &Value,
+) -> Result<McpCallFiles, String> {
+    let mut state = inventory(root)?;
+    let matches = |names: &[&str]| {
+        names
+            .iter()
+            .any(|name| !name.is_empty() && name.eq_ignore_ascii_case(server))
+    };
+    let mut found = None;
+    for item in state["items"].as_array().into_iter().flatten() {
+        let id = item["id"].as_str().unwrap_or("");
+        if item["enabled"] == false {
+            continue;
+        }
+        let name = item["name"].as_str().unwrap_or("");
+        if item["kind"] == "mcp" {
+            let pi_name = server_name(&state, id, name);
+            if matches(&[id, name, &pi_name]) {
+                found = Some((id.to_owned(), pi_name));
+                break;
+            }
+        }
+        for member in item["servers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(m, _)| m)
+        {
+            let member_id = format!("{id}:{member}");
+            let pi_name = server_name(&state, &member_id, member);
+            if matches(&[&member_id, member, &pi_name]) {
+                found = Some((member_id, pi_name));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+    let (select, pi_name) = found.ok_or("The MCP server is not installed or is turned off.")?;
+    state["turns"][POLL_THREAD] = json!({"selected": [select], "disabled": []});
+    let snapshot = snapshot(&state, POLL_THREAD, json!({}));
+    let mut definition = snapshot["mcpServers"][&pi_name].clone();
+    let Some(object) = definition.as_object_mut() else {
+        return Err("The MCP server is not installed or is turned off.".into());
+    };
+    object.insert("exposure".into(), json!("direct"));
+    object.remove("toolExposure");
+    let directory = root
+        .join("extensions/polls")
+        .join(uuid::Uuid::new_v4().to_string());
+    fs::create_dir_all(directory.join("work")).map_err(|_| "Cannot prepare the MCP call.")?;
+    let files = McpCallFiles {
+        servers: directory.join("servers.json"),
+        request: directory.join("request.json"),
+        output: directory.join("output.json"),
+        servers_extension: directory.join("mcp-servers.mjs"),
+        poll_extension: directory.join("mcp-poll.mjs"),
+        directory,
+    };
+    let write = |path: &Path, bytes: &[u8]| {
+        crate::model_router::config::write_private(path, bytes)
+            .map_err(|_| "Cannot prepare the MCP call.".to_string())
+    };
+    write(
+        &files.servers,
+        &serde_json::to_vec(&json!({"mcpServers": {&pi_name: definition},
+            "tokenFile": root.join(MCP_TOKENS)}))
+        .map_err(|_| "Cannot prepare the MCP call.")?,
+    )?;
+    write(
+        &files.request,
+        &serde_json::to_vec(
+            &json!({"server": pi_name, "tool": tool, "args": args, "output": files.output}),
+        )
+        .map_err(|_| "Cannot prepare the MCP call.")?,
+    )?;
+    write(&files.servers_extension, include_bytes!("extend_mcp.mjs"))?;
+    write(&files.poll_extension, include_bytes!("extend_mcp_poll.mjs"))?;
+    Ok(files)
+}
+
+/// The flags of an MCP call: no saved session, no built-in tools, skills,
+/// prompt templates, themes or context files, no project-local files and no
+/// network start-up work. Built-in MCP support stays on, since it makes the
+/// call.
+const MCP_CALL_ISOLATION: [&str; 8] = [
+    "--no-session",
+    "--no-builtin-tools",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--no-approve",
+    "--offline",
+];
+
+/// Calls one MCP tool with no model, through Pi's MCP client and the same
+/// server definitions and tokens chats use, and answers the tool's raw
+/// result: `{isError, content, structuredContent}`.
+pub fn mcp_call(
+    root: &Path,
+    server: &str,
+    tool: &str,
+    args: &Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let files = prepare_mcp_call(root, server, tool, args)?;
+    let executable = crate::sidecar::pi_install::resolve_current_for(
+        &root.join("harness"),
+        crate::sidecar::pi_install::PI_SELECTED_ARTIFACT,
+    )
+    .map_err(|_| "The agent runtime is not installed.")?;
+    let mut command = Command::new(executable);
+    command
+        .args(MCP_CALL_ISOLATION)
+        .arg("--extension")
+        .arg(&files.servers_extension)
+        .arg("--extension")
+        .arg(&files.poll_extension)
+        .args([
+            "--provider",
+            "muniment-mcp-poll",
+            "--model",
+            "call",
+            "--print",
+            "Call the tool.",
+        ])
+        .current_dir(files.directory.join("work"))
+        .env("PI_CODING_AGENT_DIR", root.join("agent"))
+        .env("PI_OFFLINE", "1")
+        .env("MUNIMENT_EXTEND_MCP", &files.servers)
+        .env("MUNIMENT_MCP_POLL", &files.request)
+        .env_remove("BUN_BE_BUN")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().map_err(|_| "Pi cannot start.")?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("The MCP tool did not answer in time.".into());
+            }
+        }
+    }
+    let bytes = fs::read(&files.output)
+        .map_err(|_| "The MCP tool was not called. Test the server's connection.")?;
+    serde_json::from_slice(&bytes).map_err(|_| "The MCP tool's result could not be read.".into())
+}
+
 fn route(root: &Path, data: &Value) -> Result<Value, String> {
     use crate::model_router::{classify, config, usage};
     let state = inventory(root)?;
@@ -1034,5 +1250,62 @@ mod tests {
         let state = json!({"items":[{"id":"p","kind":"plugin","base":"/p","skills":[{"name":"a","path":"SKILL.md"}],"extensions":["index.ts"]}],"turns":{"a":{"selected":["p"]}}});
         assert_eq!(snapshot(&state, "b", json!({}))["extensions"], json!([]));
         assert_eq!(snapshot(&state, "b", json!({}))["skills"], json!([]));
+    }
+
+    #[test]
+    fn an_mcp_call_registers_only_its_server_exposed_directly_with_its_token_marker() {
+        let root = Extracted(
+            std::env::temp_dir().join(format!("extend-mcp-call-{}", uuid::Uuid::new_v4())),
+        );
+        fs::create_dir_all(root.0.join("extensions")).unwrap();
+        let inventory = json!({"items": [
+            {"id": "c1", "kind": "mcp", "name": "Salesforce CRM", "enabled": true,
+             "definition": {"url": "https://example.com/mcp", "bearerToken": true, "exposure": "codemode"},
+             "lastCheck": {"status": "connected", "tools": 2, "toolNames": ["query_leads", "query_accounts"]}},
+            {"id": "c2", "kind": "mcp", "name": "Calendar", "enabled": false,
+             "definition": {"command": "calendar"}, "lastCheck": {"toolNames": ["list_events"]}}
+        ]});
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            mcp_tools(&root.0),
+            vec![
+                crate::agent_extract::McpTool {
+                    server: "Salesforce CRM".into(),
+                    tool: "query_leads".into()
+                },
+                crate::agent_extract::McpTool {
+                    server: "Salesforce CRM".into(),
+                    tool: "query_accounts".into()
+                },
+            ]
+        );
+        for name in ["Salesforce CRM", "salesforce crm", "c1", "Salesforce-CRM"] {
+            let files =
+                prepare_mcp_call(&root.0, name, "query_leads", &json!({"status": "new"})).unwrap();
+            let servers: Value =
+                serde_json::from_slice(&fs::read(&files.servers).unwrap()).unwrap();
+            assert_eq!(
+                servers["mcpServers"],
+                json!({"Salesforce-CRM": {"url": "https://example.com/mcp", "bearerToken": "extend-c1", "exposure": "direct"}})
+            );
+            assert_eq!(servers["tokenFile"], json!(root.0.join(MCP_TOKENS)));
+            let request: Value =
+                serde_json::from_slice(&fs::read(&files.request).unwrap()).unwrap();
+            assert_eq!(request["server"], "Salesforce-CRM");
+            assert_eq!(request["args"], json!({"status": "new"}));
+            assert_eq!(
+                fs::read(&files.poll_extension).unwrap(),
+                include_bytes!("extend_mcp_poll.mjs")
+            );
+            let directory = files.directory.clone();
+            drop(files);
+            assert!(!directory.exists());
+        }
+        assert!(prepare_mcp_call(&root.0, "Calendar", "list_events", &json!({})).is_err());
+        assert!(prepare_mcp_call(&root.0, "Unknown", "x", &json!({})).is_err());
     }
 }

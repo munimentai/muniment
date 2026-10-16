@@ -1,0 +1,1 @@
+{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000ba","ok":true,"body":{"hook":{"certificate_sha256":"5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f","hook_id":"4f1c2b7a9d0e4c55b6a1f2e3d4c5b6a7","listening":true,"preset":"forgejo","urls":["https://192.0.2.20:7443/hooks/4f1c2b7a9d0e4c55b6a1f2e3d4c5b6a7"]}}}

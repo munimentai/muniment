@@ -24,9 +24,12 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | crate | muniment-server | It runs the runtime headless, with no keychain and no OS service registration. |
 | crate | muniment-search | It searches the web without a key and answers the SearXNG JSON format on loopback. |
 | module | account | It defines the session, device, pairing, and entitlement values attach carries. |
+| module | agent_extract | It proposes agent routines from saved instructions. |
+| module | agent_hooks | It verifies webhook deliveries and queues their agent runs. |
+| module | agent_poll | It polls MCP routines and evaluates their conditions. |
 | module | agent_routines | It defines agent routines, their triggers and cron schedules. |
 | module | agent_runs | It stores the durable queue of agent runs. |
-| module | agent_templates | It imports bounded public agent templates. |
+| module | agent_templates | It imports and exports agent templates, Grok Bot share pages included. |
 | module | agents | It stores persistent agents and their conversations. |
 | module | memory_files | It manages user profiles and recoverable memory files. |
 | module | models | It holds provider and model knowledge as data and renders Pi's `models.json`. |

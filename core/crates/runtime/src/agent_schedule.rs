@@ -10,6 +10,7 @@ use muniment_core::agent_runs::{
 };
 use muniment_core::agents::{self, Agent, AgentList};
 use muniment_core::run_start::RunStartBoundaries;
+use std::sync::atomic::Ordering;
 
 /// The note a run carries when the runtime cancels it after a long wait.
 pub const STUCK_CANCEL_REASON: &str =
@@ -57,6 +58,7 @@ impl RuntimeAttachState {
             );
         }
         self.fire_routines(&store, &listing, agent_runs::now())?;
+        self.start_mcp_polls(&listing);
         self.reconcile_runs(&store)?;
         self.dispatch_runs(&store, &listing, &boundaries)
     }
@@ -64,15 +66,61 @@ impl RuntimeAttachState {
     /// Whether this runtime runs an agent's routines: the agent names no
     /// primary machine, or names this one, and its routines are not paused.
     fn runs_routines_of(&self, agent: &Agent) -> bool {
-        if agent.paused_reason.is_some() {
-            return false;
+        let runtime_id = self
+            .remote_access()
+            .map(|access| access.runtime_info().runtime_id);
+        agents::runs_routines_here(agent, runtime_id.as_deref())
+    }
+
+    /// Polls the MCP routines that came due on a thread of their own, since
+    /// a tool call can take up to a minute. One poll pass runs at a time.
+    /// Runs it queues start on a later pass.
+    fn start_mcp_polls(&self, listing: &AgentList) {
+        let polls = listing.agents.iter().any(|agent| {
+            agent
+                .routines
+                .iter()
+                .any(|routine| matches!(routine.trigger, Trigger::Mcp(_)))
+        });
+        if !polls || self.mcp_polling().swap(true, Ordering::AcqRel) {
+            return;
         }
-        match &agent.primary_runtime {
-            None => true,
-            Some(primary) => self
-                .remote_access()
-                .is_some_and(|access| access.runtime_info().runtime_id == *primary),
-        }
+        let polling = self.mcp_polling();
+        let profile = self.agent_profile().to_path_buf();
+        let agents = listing.agents.clone();
+        let runtime_id = self
+            .remote_access()
+            .map(|access| access.runtime_info().runtime_id);
+        std::thread::spawn(move || {
+            let here = |agent: &Agent| agents::runs_routines_here(agent, runtime_id.as_deref());
+            if let Err(error) = muniment_core::agent_poll::poll_due(
+                &profile,
+                &agents,
+                &here,
+                agent_runs::now(),
+                &muniment_core::agent_poll::installed_call,
+            ) {
+                muniment_core::runtime_eprintln!("agent_schedule: mcp poll failed error={error}");
+            }
+            polling.store(false, Ordering::Release);
+        });
+    }
+
+    /// One pass over the due MCP routines through a caller-selected tool
+    /// call, on the caller's thread.
+    #[doc(hidden)]
+    pub fn poll_mcp_routines_with(
+        &self,
+        call: &muniment_core::agent_poll::McpCall,
+    ) -> Result<Vec<Run>, String> {
+        let listing = agents::list(self.agent_profile())?;
+        muniment_core::agent_poll::poll_due(
+            self.agent_profile(),
+            &listing.agents,
+            &|agent| self.runs_routines_of(agent),
+            agent_runs::now(),
+            call,
+        )
     }
 
     /// Queues one run for each cron routine that came due. A routine that
@@ -431,4 +479,17 @@ impl RuntimeAttachState {
             .map(drop)
             .map_err(|error| error.into_message())
     }
+}
+
+/// Refines an agent's routine proposals with a cheap model call on a thread
+/// of its own, once for each version of its instructions.
+pub(crate) fn refine_proposals(profile: &std::path::Path, agent_id: &str) {
+    let profile = profile.to_path_buf();
+    let agent_id = agent_id.to_owned();
+    std::thread::spawn(move || {
+        let model = muniment_core::memory_extract::extraction_model(profile.clone());
+        if let Err(error) = muniment_core::agent_extract::refine(&profile, &agent_id, &model) {
+            muniment_core::runtime_eprintln!("agent_schedule: proposals not refined error={error}");
+        }
+    });
 }

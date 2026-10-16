@@ -659,6 +659,21 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("routine-list", Operation::RoutineList),
         ("routine-save", Operation::RoutineSave),
         ("routine-delete", Operation::RoutineDelete),
+        ("agent-routine-proposals", Operation::AgentRoutineProposals),
+        (
+            "agent-routine-proposal-accept",
+            Operation::AgentRoutineProposalAccept,
+        ),
+        (
+            "agent-routine-proposal-dismiss",
+            Operation::AgentRoutineProposalDismiss,
+        ),
+        ("agent-import", Operation::AgentImport),
+        ("agent-import-commit", Operation::AgentImportCommit),
+        ("agent-export", Operation::AgentExport),
+        ("routine-webhook-create", Operation::RoutineWebhookCreate),
+        ("routine-webhook-rotate", Operation::RoutineWebhookRotate),
+        ("routine-webhook-info", Operation::RoutineWebhookInfo),
     ];
     for (index, (name, operation)) in operations.into_iter().enumerate() {
         let body = request_body(operation);
@@ -899,6 +914,61 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             body: json!({"routine": fixture_mcp_routine()}),
         },
     )?;
+    let mut accepted = fixture_proposal();
+    accepted["enabled"] = json!(true);
+    accepted
+        .as_object_mut()
+        .map(|routine| routine.remove("proposed"));
+    let mut created = fixture_agent()["routines"][1].clone();
+    created["trigger"]["secret_sha256"] = json!("9c".repeat(32));
+    for (name, request, body) in [
+        (
+            "response-agent-routine-proposals.json",
+            178,
+            json!({"proposals": [fixture_proposal()]}),
+        ),
+        (
+            "response-agent-routine-proposal-accept.json",
+            179,
+            json!({"routine": accepted}),
+        ),
+        ("response-agent-import.json", 181, fixture_import_preview()),
+        (
+            "response-agent-import-commit.json",
+            182,
+            json!({"agent": fixture_agent()}),
+        ),
+        (
+            "response-agent-export.json",
+            183,
+            json!({
+                "format": "grok_bot",
+                "file_name": "Lead-scout.grok-bot.md",
+                "content": "# Set up Lead scout in Grok Bot\n\n## Configuration\n\n```json\n{\"botName\": \"Lead scout\"}\n```\n"
+            }),
+        ),
+        (
+            "response-routine-webhook-create.json",
+            184,
+            json!({"routine": created, "secret": "3e".repeat(32), "hook": fixture_hook()}),
+        ),
+        (
+            "response-routine-webhook-info.json",
+            186,
+            json!({"hook": fixture_hook()}),
+        ),
+    ] {
+        insert(
+            &mut fixtures,
+            name,
+            &Response {
+                protocol: Protocol,
+                request_id: id(request)?,
+                ok: Success,
+                body,
+            },
+        )?;
+    }
     insert(
         &mut fixtures,
         "response-approval-present.json",
@@ -1204,7 +1274,102 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::RoutineDelete => {
             json!({"agent_id": FIXTURE_AGENT_ID, "routine_id": "new-leads"})
         }
+        Operation::AgentRoutineProposals => json!({"agent_id": FIXTURE_AGENT_ID}),
+        Operation::AgentRoutineProposalAccept | Operation::AgentRoutineProposalDismiss => {
+            json!({"agent_id": FIXTURE_AGENT_ID, "routine_id": FIXTURE_PROPOSAL_ID})
+        }
+        Operation::AgentImport => json!({"source": "https://x.ai/bot/rfAHsaFrz6xHBMtUpxDi5"}),
+        Operation::AgentImportCommit => json!({
+            "agent": fixture_import_preview()["agent"].clone(),
+            "memories": fixture_import_preview()["memories"].clone()
+        }),
+        Operation::AgentExport => json!({"id": FIXTURE_AGENT_ID, "format": "grok_bot"}),
+        Operation::RoutineWebhookCreate => json!({
+            "agent_id": FIXTURE_AGENT_ID,
+            "routine": {
+                "name": "Build finished",
+                "trigger": {"kind": "webhook", "preset": "forgejo"},
+                "prompt": "Summarize the build result."
+            }
+        }),
+        Operation::RoutineWebhookRotate | Operation::RoutineWebhookInfo => {
+            json!({"agent_id": FIXTURE_AGENT_ID, "routine_id": "build-hook"})
+        }
     }
+}
+
+const FIXTURE_PROPOSAL_ID: &str = "extract-3f9a1c0d5b7e2a64";
+
+/// A routine an agent's instructions proposed, waiting for the user.
+fn fixture_proposal() -> serde_json::Value {
+    json!({
+        "id": FIXTURE_PROPOSAL_ID,
+        "name": "Pull new leads from Salesforce",
+        "enabled": false,
+        "trigger": {"kind": "cron", "expr": "0 9 * * *", "tz": "America/New_York"},
+        "prompt": "Pull new leads from Salesforce. If x and y, do z. If that is not the case, reply with exactly NO_RESPONSE.",
+        "created_from": "instructions",
+        "last_fired_at": null,
+        "last_result": null,
+        "proposed": true
+    })
+}
+
+/// An import preview of a Grok Bot template.
+fn fixture_import_preview() -> serde_json::Value {
+    json!({
+        "agent": {
+            "id": "",
+            "name": "Dewey",
+            "label": "Mail assistant",
+            "instructions": "Draft replies for review. Never send.",
+            "avatar": null,
+            "template": {
+                "source": "grok",
+                "sourceUrl": "https://x.ai/bot/rfAHsaFrz6xHBMtUpxDi5",
+                "coverage": "provided",
+                "skills": [{"name": "Tone", "instructions": "Write plainly."}],
+                "plugins": ["Gmail"]
+            },
+            "projectId": null,
+            "schedule": null,
+            "skills": ["pack:skills/review/SKILL.md"],
+            "primary_runtime": null,
+            "routines": [{
+                "id": "import-5d41402abc4b2a76",
+                "name": "Morning inbox",
+                "enabled": false,
+                "trigger": {"kind": "cron", "expr": "0 8 * * 1-5", "tz": "America/New_York"},
+                "prompt": "Summarize the inbox.",
+                "created_from": "instructions",
+                "last_fired_at": null,
+                "last_result": null,
+                "proposed": true
+            }],
+            "paused_reason": null
+        },
+        "memories": [{"title": "Signature", "content": "Sign replies with the first name only."}],
+        "skills": {
+            "matched": [{"name": "Review", "id": "pack:skills/review/SKILL.md"}],
+            "proposals": [{"name": "Tone", "instructions": "Write plainly."}]
+        },
+        "tools": {"matched": [], "setup": [{"name": "Gmail"}]},
+        "routine_notes": [],
+        "source": "grok_json",
+        "coverage": "provided"
+    })
+}
+
+/// A webhook routine's hook: where it is reached and the certificate a
+/// sender pins.
+fn fixture_hook() -> serde_json::Value {
+    json!({
+        "hook_id": "4f1c2b7a9d0e4c55b6a1f2e3d4c5b6a7",
+        "preset": "forgejo",
+        "urls": ["https://192.0.2.20:7443/hooks/4f1c2b7a9d0e4c55b6a1f2e3d4c5b6a7"],
+        "certificate_sha256": "5f".repeat(32),
+        "listening": true
+    })
 }
 
 const FIXTURE_AGENT_ID: &str = "018f0000-0000-4000-8000-0000000000a1";
@@ -1638,12 +1803,19 @@ mod tests {
             "response-agent-runs.json",
             "response-routine-list.json",
             "response-routine-save.json",
+            "response-agent-routine-proposals.json",
+            "response-agent-routine-proposal-accept.json",
+            "response-agent-import.json",
+            "response-agent-import-commit.json",
+            "response-agent-export.json",
+            "response-routine-webhook-create.json",
+            "response-routine-webhook-info.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            141,
+            157,
             "every canonical fixture must be inventoried"
         );
     }

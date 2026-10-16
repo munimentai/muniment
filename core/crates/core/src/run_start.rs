@@ -524,6 +524,29 @@ pub trait RunAttachBoundaries {
     ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
+    /// Runs one webhook operation, such as `routine.webhook_create`, which
+    /// reads and writes hook secrets. `endpoints` names where hooks are reached.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn hook_operation(
+        &self,
+        _operation: crate::attach::Operation,
+        _body: serde_json::Value,
+        _endpoints: crate::agent_hooks::HookEndpoints,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    /// Receives one webhook delivery for the routines this runtime runs.
+    /// `runtime_id` is this runtime's id, when remote access is open.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn receive_webhook(
+        &self,
+        _runtime_id: Option<&str>,
+        _hook_id: &str,
+        _headers: &[(String, String)],
+        _body: &[u8],
+    ) -> Result<String, crate::agent_hooks::Refusal> {
+        Err(crate::agent_hooks::Refusal::NOT_FOUND)
+    }
 }
 
 pub trait RunStartBoundaries {
