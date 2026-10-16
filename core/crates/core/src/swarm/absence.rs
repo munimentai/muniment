@@ -72,6 +72,11 @@ pub(super) fn check(inner: &Inner) -> Result<(), String> {
     if (inner.now() - last).num_days() < ABSENCE_DAYS {
         return Ok(());
     }
+    // The pause is on record before any agent pauses, so a reader that sees
+    // a paused agent also sees the pause.
+    inner
+        .store
+        .set_meta("absence_paused_at", Some(&inner.now_text()))?;
     let mut paused = Vec::new();
     for mut agent in directory::local_agents(inner) {
         if !directory::runs_here(inner, &agent)
@@ -90,9 +95,6 @@ pub(super) fn check(inner: &Inner) -> Result<(), String> {
             ),
         }
     }
-    inner
-        .store
-        .set_meta("absence_paused_at", Some(&inner.now_text()))?;
     crate::runtime_eprintln!(
         "muniment-runtime: routines paused for absence agents={}",
         paused.len()

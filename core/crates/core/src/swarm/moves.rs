@@ -251,7 +251,11 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
     // Projects are folders of one machine.
     agent.project_id = None;
     agent.schedule = None;
-    let agent = agents::save(&inner.profile, agent)?;
+    if uuid::Uuid::parse_str(&agent.id).is_err() {
+        return Err("The agent definition is invalid.".into());
+    }
+    // The agent's files, conversations and threads land first, so a reader
+    // that finds the agent here finds everything it hands over.
     let sessions = session_root(inner);
     for session in &handover.sessions {
         if session.locator.contains(['/', '\\']) || !session.locator.ends_with(".jsonl") {
@@ -315,6 +319,7 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
     for thread in &handover.threads {
         sync::register_agent_thread(inner, &thread.thread_id, &agent.id)?;
     }
+    let agent = agents::save(&inner.profile, agent)?;
     let previous = directory::entry(inner, &agent.id);
     let entry = DirectoryEntry {
         agent_id: agent.id.clone(),
