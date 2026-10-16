@@ -9,8 +9,15 @@
 //!
 //! `pair`, `devices`, `revoke` and `info` manage remote access on the same
 //! state directory while `serve` runs in another process.
+//!
+//! `launch` runs `serve` under a launcher that installs the signed releases
+//! clients request, as `launcher.rs` describes.
 
 mod host;
+#[cfg(unix)]
+mod launcher;
+#[cfg(unix)]
+mod release;
 mod remote;
 
 use std::process::ExitCode;
@@ -20,6 +27,8 @@ usage: muniment-server [command]
 
 commands:
   serve                 run the runtime until SIGTERM or SIGINT (the default)
+  launch                run the runtime under a launcher that installs the
+                        signed releases paired clients request
   health                exit 0 when the runtime's attach endpoint answers
   prepare               install the pinned Pi and its extension packages,
                         then print the Pi executable's path
@@ -38,7 +47,14 @@ State lives in MUNIMENT_STATE_DIR, or ~/.muniment. MUNIMENT_PI_ROOT names
 the directory that holds the installed Pi. MUNIMENT_REMOTE_ACCESS (on or
 off), MUNIMENT_REMOTE_LISTEN (address:port) and MUNIMENT_REMOTE_ENDPOINTS
 (host:port,...) override the stored remote access settings.
-MUNIMENT_INSTALL_KIND=container names a container install.";
+MUNIMENT_INSTALL_KIND=container names a container install.
+
+The launcher keeps versions in <state>/runtime. MUNIMENT_UPDATE_GRACE_SECS
+(120) bounds the wait for running work before an update stops the runtime,
+MUNIMENT_UPDATE_SHUTDOWN_SECS (60) the stop itself, MUNIMENT_UPDATE_TRIAL_SECS
+(120) the new version's health check and MUNIMENT_UPDATE_RETRY_SECS (60) the
+first retry of a failed download. MUNIMENT_UPDATE_FEED overrides the release
+feed and MUNIMENT_UPDATE_PUBLIC_KEY the release signing key.";
 
 /// Docker reads 1 as unhealthy and reserves 2, so every failure exits 1.
 const FAILURE: u8 = 1;
@@ -51,6 +67,9 @@ fn main() -> ExitCode {
     if !takes_arguments && !rest.is_empty() {
         eprintln!("muniment-server: unexpected argument {}\n{USAGE}", rest[0]);
         return ExitCode::from(FAILURE);
+    }
+    if command == "launch" {
+        return launch();
     }
     let result = match command {
         "serve" => serve(),
@@ -79,6 +98,23 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(unix)]
+fn launch() -> ExitCode {
+    match launcher::launch() {
+        Ok(code) => ExitCode::from(code),
+        Err(message) => {
+            eprintln!("muniment-server: {message}");
+            ExitCode::from(FAILURE)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn launch() -> ExitCode {
+    eprintln!("muniment-server: launch runs on Unix only");
+    ExitCode::from(FAILURE)
+}
+
 /// Runs a remote access command on the state root, without adopting an
 /// earlier install's files: `serve` does that.
 fn with_state(command: impl FnOnce(&std::path::Path) -> Result<(), String>) -> Result<(), String> {
@@ -89,12 +125,20 @@ fn with_state(command: impl FnOnce(&std::path::Path) -> Result<(), String>) -> R
 
 #[cfg(target_os = "linux")]
 fn serve() -> Result<(), String> {
-    use muniment_core::attach::TerminationSignalWait;
-    use muniment_runtime_core::{adopt_state_directory, run_runtime, RuntimeDirectories};
+    use muniment_core::attach::{ReceivedSignal, TerminationSignalWait, UpdateCapability};
+    use muniment_runtime_core::{
+        adopt_state_directory, run_runtime_with_updates, RuntimeDirectories, RuntimeUpdateOptions,
+    };
 
     // The signal mask must be set before any thread starts, so every thread
-    // the runtime spawns leaves SIGTERM and SIGINT to this wait.
-    let termination = TerminationSignalWait::new().map_err(|error| error.to_string())?;
+    // the runtime spawns leaves SIGTERM, SIGINT and SIGUSR1 to this wait.
+    let termination =
+        TerminationSignalWait::with_update_drain().map_err(|error| error.to_string())?;
+    let capability = match std::env::var(launcher::CAPABILITY_VARIABLE).as_deref() {
+        Ok("launcher") => UpdateCapability::Launcher,
+        _ => UpdateCapability::Manual,
+    };
+    let grace = launcher::seconds(launcher::GRACE_VARIABLE, 120)?;
     let state = adopt_state_directory().map_err(|error| error.to_string())?;
     let endpoint = host::prepare_runtime_directory(&state)?;
     let remote = remote::route_options()?;
@@ -110,10 +154,18 @@ fn serve() -> Result<(), String> {
         remote::describe_for_log(&state)?
     );
     let (stop, stopped) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        if termination.wait().is_ok() {
-            eprintln!("muniment-server: stopping reason=signal");
-            let _ = stop.send(());
+    let (drain, drain_requested) = std::sync::mpsc::channel();
+    std::thread::spawn(move || loop {
+        match termination.next() {
+            Ok(ReceivedSignal::UpdateDrain) => {
+                eprintln!("muniment-server: update drain requested");
+                let _ = drain.send(());
+            }
+            Ok(ReceivedSignal::Terminate) | Err(_) => {
+                eprintln!("muniment-server: stopping reason=signal");
+                let _ = stop.send(());
+                return;
+            }
         }
     });
     // A headless runtime has no account anyone signs in to, so it serves its
@@ -127,10 +179,15 @@ fn serve() -> Result<(), String> {
         config: state.clone(),
         endpoint,
     };
-    run_runtime(
+    run_runtime_with_updates(
         host::headless_host(&state),
         &directories,
         Some(remote),
+        Some(RuntimeUpdateOptions {
+            capability,
+            drain: drain_requested,
+            grace,
+        }),
         stopped,
     )
     .map_err(|error| error.to_string())?;

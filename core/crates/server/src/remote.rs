@@ -327,6 +327,7 @@ pub fn info(state: &Path, args: &[String]) -> Result<(), String> {
             "endpoints": status.map(|status| status.endpoints).unwrap_or_default(),
         },
         "update_request": access.requested_update(),
+        "update_status": muniment_core::attach::read_update_status(&remote_directory(state)),
     });
     if json_output {
         return print_json(&body);
@@ -353,6 +354,12 @@ pub fn info(state: &Path, args: &[String]) -> Result<(), String> {
     }
     if let Some(version) = body["update_request"]["version"].as_str() {
         println!("update_requested={version}");
+    }
+    if let Some(state) = body["update_status"]["state"].as_str() {
+        println!("update_state={state}");
+        if let Some(error) = body["update_status"]["error"].as_str() {
+            println!("update_error={error}");
+        }
     }
     Ok(())
 }
