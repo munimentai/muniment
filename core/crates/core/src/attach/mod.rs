@@ -132,9 +132,9 @@ pub use presenter_session::*;
 pub use quiesce::*;
 pub use remote_access::{
     clear_update_request_for, is_newer_version, read_update_request, read_update_status,
-    update_timestamp, write_update_status, CreatedPairingLink, PairedDevice, PairingLinkRequest,
-    RemoteAccess, RemoteAccessOpenError, RemoteAccessOptions, RuntimeUpdateRequest,
-    MAX_OUTSTANDING_PAIRINGS, MAX_PAIRED_DEVICES, PAIRING_LINK_LIFETIME,
+    update_timestamp, write_update_status, CreatedPairingLink, OutboundLinks, PairedDevice,
+    PairingLinkRequest, RemoteAccess, RemoteAccessOpenError, RemoteAccessOptions,
+    RuntimeUpdateRequest, MAX_OUTSTANDING_PAIRINGS, MAX_PAIRED_DEVICES, PAIRING_LINK_LIFETIME,
 };
 pub use remote_identity::DEFAULT_RUNTIME_NAME;
 pub use remote_listener::{

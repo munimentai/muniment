@@ -40,6 +40,7 @@ impl RuntimeAttachState {
         &self,
         boundaries: crate::RuntimeAttachBoundaries,
     ) -> Result<(), String> {
+        let _pass = self.schedule_pass();
         let profile = self.agent_profile();
         if muniment_core::home::configured_home(profile)
             .map_err(|e| e.to_string())?

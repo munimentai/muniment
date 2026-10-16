@@ -80,8 +80,15 @@ fn the_run_fixtures_are_runs() {
     let page = fixture("response-agent-runs.json")["body"].clone();
     round_trip::<Run>(&page["runs"][0]);
     assert!(page["next_cursor"].is_string());
-    let event = fixture("event-agent-run-updated.json");
+    let mut event = fixture("event-agent-run-updated.json");
     assert_eq!(event["event"], "agent.run_updated");
+    // The event adds whether the change warrants a notification to the run.
+    let notify = event["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("notify")
+        .unwrap();
+    assert_eq!(notify, true);
     let waiting: Run = round_trip(&event["body"]);
     assert_eq!(waiting.status, RunStatus::WaitingInput);
     assert!(waiting.waiting_since.is_some());

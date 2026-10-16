@@ -659,7 +659,96 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("routine-list", Operation::RoutineList),
         ("routine-save", Operation::RoutineSave),
         ("routine-delete", Operation::RoutineDelete),
+        ("swarm-invite", Operation::SwarmInvite),
+        ("swarm-join", Operation::SwarmJoin),
+        ("swarm-leave", Operation::SwarmLeave),
+        ("swarm-members", Operation::SwarmMembers),
+        ("swarm-agents", Operation::SwarmAgents),
+        ("swarm-exchange", Operation::SwarmExchange),
+        ("swarm-resume", Operation::SwarmResume),
+        ("thread-post", Operation::ThreadPost),
+        ("agent-move", Operation::AgentMove),
+        ("agent-approvals", Operation::AgentApprovals),
+        ("agent-approval-answer", Operation::AgentApprovalAnswer),
+        ("group-create", Operation::GroupCreate),
+        ("group-list", Operation::GroupList),
+        ("group-update", Operation::GroupUpdate),
     ];
+    let request_of = |wanted: &str| -> io::Result<Id> {
+        let index = operations
+            .iter()
+            .position(|(name, _)| *name == wanted)
+            .expect("the operation has a request fixture");
+        id(100 + index as u128)
+    };
+    let swarm_responses = [
+        (
+            "swarm-invite",
+            json!({
+                "link": "muniment://pair?v=1&id=018f0000-0000-7000-8000-0000000000c1&name=Build+box&fp=8a0f0c5e2b1d4f6e9a7c3b5d1e2f4a6c8b0d2e4f6a8c0e2f4a6b8c0d2e4f6a8c&host=192.0.2.20%3A7443#00112233445566778899aabbccddeeff",
+                "expires_at": "2026-01-01T14:10:00Z",
+                "runtime_id": FIXTURE_RUNTIME_A
+            }),
+        ),
+        (
+            "swarm-join",
+            json!({"member": fixture_member(FIXTURE_RUNTIME_A, "Build box", false)}),
+        ),
+        ("swarm-leave", json!({"removed": true})),
+        (
+            "swarm-members",
+            json!({
+                "self": FIXTURE_RUNTIME_B,
+                "members": [
+                    fixture_member(FIXTURE_RUNTIME_B, "Laptop", true),
+                    fixture_member(FIXTURE_RUNTIME_A, "Build box", false)
+                ],
+                "absence": {"paused": false, "last_client_at": "2026-01-01T14:00:00Z", "paused_at": null}
+            }),
+        ),
+        (
+            "swarm-agents",
+            json!({"agents": [fixture_directory_entry()]}),
+        ),
+        ("swarm-exchange", fixture_exchange()),
+        ("swarm-resume", json!({"resumed": [FIXTURE_AGENT_ID]})),
+        (
+            "thread-post",
+            json!({
+                "message_id": "019965a0-0000-7000-8000-0000000000d1",
+                "thread_id": FIXTURE_THREAD_ID,
+                "origin_runtime": FIXTURE_RUNTIME_B,
+                "seq": 4
+            }),
+        ),
+        (
+            "agent-move",
+            json!({"status": "moved", "agent": fixture_directory_entry()}),
+        ),
+        (
+            "agent-approvals",
+            json!({"approvals": [fixture_approval("pending")]}),
+        ),
+        (
+            "agent-approval-answer",
+            json!({"status": "already_answered", "approval": fixture_approval("answered")}),
+        ),
+        ("group-create", json!({"group": fixture_group()})),
+        ("group-list", json!({"groups": [fixture_group()]})),
+        ("group-update", json!({"group": fixture_group()})),
+    ];
+    for (name, body) in swarm_responses {
+        insert(
+            &mut fixtures,
+            &format!("response-{name}.json"),
+            &Response {
+                protocol: Protocol,
+                request_id: request_of(name)?,
+                ok: Success,
+                body,
+            },
+        )?;
+    }
     for (index, (name, operation)) in operations.into_iter().enumerate() {
         let body = request_body(operation);
         let keyed = operation.requires_idempotency_key()
@@ -823,6 +912,18 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     )?;
     insert(
         &mut fixtures,
+        "request-run-chat-events-swarm.json",
+        &Request {
+            protocol: Protocol,
+            request_id: id(192)?,
+            operation: Operation::RunChatEvents,
+            capability: "fixture-capability".into(),
+            idempotency_key: None,
+            body: json!({"update_status": true, "agent_runs": true, "swarm": true}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
         "response-agent-list.json",
         &Response {
             protocol: Protocol,
@@ -969,6 +1070,9 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ),
         ("runtime-update-status", EventName::RuntimeUpdateStatus),
         ("agent-run-updated", EventName::AgentRunUpdated),
+        ("swarm-changed", EventName::SwarmChanged),
+        ("agent-approval-pending", EventName::AgentApprovalPending),
+        ("agent-approval-resolved", EventName::AgentApprovalResolved),
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
@@ -981,6 +1085,9 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 | EventName::RuntimeUpdateRequested
                 | EventName::RuntimeUpdateStatus
                 | EventName::AgentRunUpdated
+                | EventName::SwarmChanged
+                | EventName::AgentApprovalPending
+                | EventName::AgentApprovalResolved
         );
         insert(
             &mut fixtures,
@@ -1204,7 +1311,198 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::RoutineDelete => {
             json!({"agent_id": FIXTURE_AGENT_ID, "routine_id": "new-leads"})
         }
+        Operation::SwarmInvite => json!({"endpoints": ["192.0.2.20:7443"]}),
+        Operation::SwarmJoin => json!({
+            "link": "muniment://pair?v=1&id=018f0000-0000-7000-8000-0000000000c1&name=Build+box&fp=8a0f0c5e2b1d4f6e9a7c3b5d1e2f4a6c8b0d2e4f6a8c0e2f4a6b8c0d2e4f6a8c&host=192.0.2.20%3A7443#00112233445566778899aabbccddeeff"
+        }),
+        Operation::SwarmLeave => json!({"runtime_id": FIXTURE_RUNTIME_A}),
+        Operation::SwarmMembers | Operation::SwarmAgents | Operation::SwarmResume => json!({}),
+        Operation::SwarmExchange => fixture_exchange(),
+        Operation::ThreadPost => json!({
+            "thread_id": FIXTURE_THREAD_ID,
+            "text": "Check the west region first."
+        }),
+        Operation::AgentMove => {
+            json!({"id": FIXTURE_AGENT_ID, "to": FIXTURE_RUNTIME_B, "force": false})
+        }
+        Operation::AgentApprovals | Operation::GroupList => json!({}),
+        Operation::AgentApprovalAnswer => json!({
+            "approval_id": FIXTURE_APPROVAL_ID,
+            "answer": {"type": "confirm", "value": true}
+        }),
+        Operation::GroupCreate => json!({
+            "name": "Launch room",
+            "members": [FIXTURE_AGENT_ID, FIXTURE_AGENT_B],
+            "lead": FIXTURE_AGENT_ID,
+            "meeting_mode": true
+        }),
+        Operation::GroupUpdate => json!({
+            "group_id": FIXTURE_GROUP_ID,
+            "meeting_mode": false,
+            "debate_rounds": 1
+        }),
     }
+}
+
+const FIXTURE_RUNTIME_A: &str = "018f0000-0000-7000-8000-0000000000c1";
+const FIXTURE_RUNTIME_B: &str = "018f0000-0000-7000-8000-0000000000c2";
+const FIXTURE_AGENT_B: &str = "018f0000-0000-4000-8000-0000000000a2";
+const FIXTURE_THREAD_ID: &str = "019965a0-0000-7000-8000-0000000000e1";
+const FIXTURE_GROUP_ID: &str = "019965a0-0000-7000-8000-0000000000f1";
+const FIXTURE_APPROVAL_ID: &str =
+    "019965a0-0000-7000-8000-0000000000b3:019965a0-0000-7000-8000-0000000000b4";
+
+/// One swarm member as `swarm.members` reports it.
+fn fixture_member(runtime_id: &str, name: &str, this: bool) -> serde_json::Value {
+    json!({
+        "runtime_id": runtime_id,
+        "runtime_name": name,
+        "form_factor": if this { "laptop" } else { "server" },
+        "self": this,
+        "online": true,
+        "heartbeat_at": "2026-01-01T14:00:00Z",
+        "last_client_at": "2026-01-01T13:58:00Z",
+        "links": [if this { FIXTURE_RUNTIME_A } else { FIXTURE_RUNTIME_B }],
+        "link": if this { serde_json::Value::Null } else { json!({
+            "direction": "outbound",
+            "state": "connected",
+            "device_id": "018f0000-0000-4000-8000-0000000000d9",
+            "last_seen_at": "2026-01-01T14:00:00Z",
+            "last_error": null
+        }) }
+    })
+}
+
+/// One agent directory entry.
+fn fixture_directory_entry() -> serde_json::Value {
+    json!({
+        "agent_id": FIXTURE_AGENT_ID,
+        "name": "Lead scout",
+        "label": "Researcher",
+        "avatar": {"style": "muniment-v2", "seed": "scout"},
+        "primary_runtime": FIXTURE_RUNTIME_A,
+        "epoch": 2,
+        "updated_at": "2026-01-01T14:00:00Z",
+        "deleted": false
+    })
+}
+
+/// One pending or answered agent approval.
+fn fixture_approval(state: &str) -> serde_json::Value {
+    json!({
+        "approval_id": FIXTURE_APPROVAL_ID,
+        "runtime_id": FIXTURE_RUNTIME_A,
+        "run_id": "019965a0-0000-7000-8000-0000000000b3",
+        "gate_id": "019965a0-0000-7000-8000-0000000000b4",
+        "agent_id": FIXTURE_AGENT_ID,
+        "agent_name": "Lead scout",
+        "thread_id": FIXTURE_THREAD_ID,
+        "request": {
+            "gate_id": "019965a0-0000-7000-8000-0000000000b4",
+            "kind": "confirm",
+            "title": "Allow bash?",
+            "message": "git push origin main"
+        },
+        "state": state,
+        "created_at": "2026-01-01T14:01:00Z",
+        "answered_at": if state == "pending" { serde_json::Value::Null } else { json!("2026-01-01T14:01:30Z") },
+        "answered_by": if state == "pending" { serde_json::Value::Null } else { json!(FIXTURE_RUNTIME_B) }
+    })
+}
+
+/// One group chat.
+fn fixture_group() -> serde_json::Value {
+    json!({
+        "group_id": FIXTURE_GROUP_ID,
+        "name": "Launch room",
+        "members": [FIXTURE_AGENT_ID, FIXTURE_AGENT_B],
+        "lead": FIXTURE_AGENT_ID,
+        "meeting_mode": true,
+        "debate_rounds": 2,
+        "owner_runtime": FIXTURE_RUNTIME_B,
+        "thread_id": "019965a0-0000-7000-8000-0000000000f2",
+        "created_at": "2026-01-01T14:00:00Z",
+        "updated_at": "2026-01-01T14:00:00Z",
+        "deleted": false
+    })
+}
+
+/// One `swarm.exchange` body, which a request and its response share.
+fn fixture_exchange() -> serde_json::Value {
+    json!({
+        "from": {
+            "runtime_id": FIXTURE_RUNTIME_B,
+            "runtime_name": "Laptop",
+            "form_factor": "laptop",
+            "heartbeat_at": "2026-01-01T14:00:00Z",
+            "last_client_at": "2026-01-01T13:58:00Z",
+            "links": [FIXTURE_RUNTIME_A],
+            "updated_at": "2026-01-01T14:00:00Z"
+        },
+        "members": [],
+        "directory": [fixture_directory_entry()],
+        "groups": [fixture_group()],
+        "threads": [{
+            "thread_id": FIXTURE_THREAD_ID,
+            "kind": "agent",
+            "agent_id": FIXTURE_AGENT_ID,
+            "group_id": null,
+            "updated_at": "2026-01-01T14:00:00Z"
+        }],
+        "clocks": {FIXTURE_THREAD_ID: {FIXTURE_RUNTIME_A: 12, FIXTURE_RUNTIME_B: 3}},
+        "events": [{
+            "thread_id": FIXTURE_THREAD_ID,
+            "origin": FIXTURE_RUNTIME_B,
+            "seq": 4,
+            "kind": "thread",
+            "envelope": {
+                "event_id": "019965a0-0000-7000-8000-0000000000d1",
+                "thread_id": FIXTURE_THREAD_ID,
+                "thread_seq": 9,
+                "event_type": "thread.message.posted",
+                "event_version": 1,
+                "envelope_version": 1,
+                "recorded_at": "2026-01-01T14:00:00Z",
+                "payload_json": {
+                    "message_id": "019965a0-0000-7000-8000-0000000000d1",
+                    "author": {"kind": "user"},
+                    "text": "Check the west region first.",
+                    "deps": {FIXTURE_RUNTIME_A: 12, FIXTURE_RUNTIME_B: 3}
+                },
+                "provenance": {"source": "muniment-runtime", "source_version": "1.0.0"}
+            }
+        }],
+        "messages": [{
+            "message_id": "019965a0-0000-7000-8000-0000000000d2",
+            "kind": "agent_message",
+            "from_runtime": FIXTURE_RUNTIME_B,
+            "to_runtime": FIXTURE_RUNTIME_A,
+            "from_agent": FIXTURE_AGENT_B,
+            "to_agent": FIXTURE_AGENT_ID,
+            "hop": 1,
+            "created_at": "2026-01-01T14:00:00Z",
+            "body": {
+                "intent": "request",
+                "text": "List the three biggest open deals.",
+                "reply_to": null,
+                "from_name": "Deal desk",
+                "origin_run_id": "019965a0-0000-7000-8000-0000000000b5"
+            }
+        }],
+        "acks": [{
+            "message_id": "019965a0-0000-7000-8000-0000000000d0",
+            "status": "delivered",
+            "note": null,
+            "at": "2026-01-01T13:59:00Z"
+        }],
+        "notices": [],
+        "approvals": [fixture_approval("pending")],
+        "wants": [],
+        "blobs": [],
+        "client_seen_at": "2026-01-01T13:58:00Z",
+        "resumed_at": null,
+        "more": false
+    })
 }
 
 const FIXTURE_AGENT_ID: &str = "018f0000-0000-4000-8000-0000000000a1";
@@ -1426,8 +1724,12 @@ fn event_body(event: &EventName) -> serde_json::Value {
             run["status"] = json!("waiting_input");
             run["result_summary"] = json!(null);
             run["waiting_since"] = json!("2026-01-01T14:01:00Z");
+            run["notify"] = json!(true);
             run
         }
+        EventName::SwarmChanged => json!({"kind": "agents"}),
+        EventName::AgentApprovalPending => fixture_approval("pending"),
+        EventName::AgentApprovalResolved => fixture_approval("answered"),
         EventName::Unknown(name) => json!({"name": name.as_str(), "optional": true}),
     }
 }
@@ -1577,6 +1879,20 @@ mod tests {
             Operation::RoutineList,
             Operation::RoutineSave,
             Operation::RoutineDelete,
+            Operation::SwarmInvite,
+            Operation::SwarmJoin,
+            Operation::SwarmLeave,
+            Operation::SwarmMembers,
+            Operation::SwarmAgents,
+            Operation::SwarmExchange,
+            Operation::SwarmResume,
+            Operation::ThreadPost,
+            Operation::AgentMove,
+            Operation::AgentApprovals,
+            Operation::AgentApprovalAnswer,
+            Operation::GroupCreate,
+            Operation::GroupList,
+            Operation::GroupUpdate,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -1638,12 +1954,20 @@ mod tests {
             "response-agent-runs.json",
             "response-routine-list.json",
             "response-routine-save.json",
+            "event-swarm-changed.json",
+            "event-agent-approval-pending.json",
+            "event-agent-approval-resolved.json",
+            "request-run-chat-events-swarm.json",
+            "response-swarm-members.json",
+            "response-swarm-exchange.json",
+            "response-agent-approval-answer.json",
+            "response-group-create.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            141,
+            141 + 14 + 14 + 3 + 1,
             "every canonical fixture must be inventoried"
         );
     }

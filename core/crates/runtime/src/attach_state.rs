@@ -46,6 +46,10 @@ pub struct RuntimeAttachState {
     models: Arc<ModelService>,
     remote_access: Mutex<Option<RemoteAccess>>,
     remote_route: Mutex<Option<Arc<RemoteRoute>>>,
+    swarm: muniment_core::swarm::Swarm,
+    pub(crate) swarm_host: Arc<crate::swarm_host::RuntimeSwarmHost>,
+    /// Keeps one agent run queue pass at a time.
+    schedule_pass: Mutex<()>,
 }
 
 impl RuntimeAttachState {
@@ -77,6 +81,22 @@ impl RuntimeAttachState {
             &profile_directory,
             Arc::clone(&host.sign_in_page),
         ));
+        let active = RunRegistry::default();
+        let swarm_host = Arc::new(crate::swarm_host::RuntimeSwarmHost {
+            active: active.clone(),
+            approval: approval.clone(),
+            config_directory: config_directory.clone(),
+            host: host.clone(),
+            runtime_activity: runtime_activity.clone(),
+            state: Mutex::new(std::sync::Weak::new()),
+            kicking: AtomicBool::new(false),
+        });
+        let swarm = muniment_core::swarm::Swarm::open(
+            &profile_directory,
+            Arc::clone(&storage),
+            Arc::clone(&swarm_host) as Arc<dyn muniment_core::swarm::SwarmHost>,
+        )
+        .map_err(|_| ProtocolError::persistence_failed())?;
 
         Ok(Self {
             memory_runtime: Arc::new(
@@ -91,7 +111,7 @@ impl RuntimeAttachState {
             profile_directory,
             config_directory,
             storage,
-            active: RunRegistry::default(),
+            active,
             runtime: PiProcesses::default(),
             instance_id: uuid::Uuid::now_v7().to_string(),
             runtime_activity,
@@ -107,7 +127,29 @@ impl RuntimeAttachState {
             models,
             remote_access: Mutex::new(None),
             remote_route: Mutex::new(None),
+            swarm,
+            swarm_host,
+            schedule_pass: Mutex::new(()),
         })
+    }
+
+    /// The swarm this runtime belongs to.
+    pub fn swarm(&self) -> &muniment_core::swarm::Swarm {
+        &self.swarm
+    }
+
+    /// Lets the swarm start queued agent runs as soon as a message queues
+    /// one, instead of at the next pass.
+    pub fn bind_swarm(self: &Arc<Self>) {
+        self.swarm_host.bind(self);
+        self.swarm.ensure_worker();
+    }
+
+    /// Holds the agent run queue for one pass.
+    pub(crate) fn schedule_pass(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.schedule_pass
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Builds boundaries that share the runtime state.
@@ -130,6 +172,7 @@ impl RuntimeAttachState {
             self.chat_events.clone(),
             Arc::clone(&self.models),
         )
+        .with_swarm(self.swarm.clone())
     }
 
     /// Returns the model service shared by every attach connection.
@@ -163,6 +206,9 @@ impl RuntimeAttachState {
     ) -> Result<RemoteAccess, RemoteAccessOpenError> {
         let access = RemoteAccess::open(self.profile_directory.join("remote"), options)?;
         access.announce_on_local_route();
+        if let Err(error) = self.swarm.attach_access(access.clone()) {
+            muniment_core::runtime_eprintln!("muniment-runtime: swarm did not start: {error}");
+        }
         *self
             .remote_access
             .lock()
@@ -185,6 +231,7 @@ impl RuntimeAttachState {
             Some(state) => state.serve_remote_listener(listener, access, stop),
             None => Ok(()),
         });
+        self.bind_swarm();
         // A route started earlier releases its port before the new one binds.
         self.stop_remote_route();
         let route = Arc::new(RemoteRoute::new(access, options.overrides, serve));
@@ -290,6 +337,7 @@ impl RuntimeAttachState {
                 .clone()
                 .with_config_directory(self.config_directory.clone()),
             Arc::clone(&self.storage),
+            Some(self.swarm.clone()),
         )
     }
 
@@ -350,4 +398,10 @@ pub(crate) fn apply_recorded_retention(
         crate::service::apply_retention(Arc::clone(storage), max_age_seconds)
     })
     .map(|_| ())
+}
+
+impl Drop for RuntimeAttachState {
+    fn drop(&mut self) {
+        self.swarm.stop();
+    }
 }

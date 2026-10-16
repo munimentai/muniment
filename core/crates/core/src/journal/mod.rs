@@ -6,6 +6,7 @@ pub mod export;
 pub mod pi_translation;
 pub mod reconciliation;
 pub mod reducer;
+pub mod replica;
 pub mod retention;
 pub mod run_append;
 pub mod summaries;
@@ -2604,6 +2605,13 @@ fn validate_thread_envelope(event: &ThreadEventEnvelope) -> Result<(), JournalEr
             if payload.actor.trim().is_empty() || payload.reason.trim().is_empty() {
                 return Err(JournalError::InvalidEnvelope(
                     "thread.permission.policy.revoked payload is invalid".into(),
+                ));
+            }
+        }
+        replica::THREAD_MESSAGE_POSTED => {
+            if !replica::valid_posted_payload(&event.payload_json) {
+                return Err(JournalError::InvalidEnvelope(
+                    "thread.message.posted payload is invalid".into(),
                 ));
             }
         }

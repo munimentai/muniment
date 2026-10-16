@@ -67,9 +67,17 @@ fn session_from_binding(
         .get("locator")
         .and_then(serde_json::Value::as_str)
         .ok_or("Conversation history is unavailable.")?;
-    crate::sidecar::validate_pi_session(session_root, locator)
-        .map(|(locator, _)| Some(locator))
-        .map_err(|_| "Conversation history is unavailable. Start a new thread.".into())
+    // A session another swarm member bound, whose file did not reach this
+    // runtime, gives way to a new session; the thread keeps its history.
+    let replicated = binding
+        .provenance
+        .extra
+        .contains_key(crate::swarm::SWARM_ORIGIN);
+    match crate::sidecar::validate_pi_session(session_root, locator) {
+        Ok((locator, _)) => Ok(Some(locator)),
+        Err(_) if replicated => Ok(None),
+        Err(_) => Err("Conversation history is unavailable. Start a new thread.".into()),
+    }
 }
 
 pub struct PiRuntime {

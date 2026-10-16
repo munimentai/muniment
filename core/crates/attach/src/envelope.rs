@@ -438,6 +438,50 @@ pub enum Operation {
     /// Removes one routine of an agent.
     #[serde(rename = "routine.delete")]
     RoutineDelete,
+    /// Issues a one-time `swarm.peer` pairing link that another runtime
+    /// redeems with `swarm.join`.
+    #[serde(rename = "swarm.invite")]
+    SwarmInvite,
+    /// Redeems another runtime's `swarm.invite` link and keeps the link to it.
+    #[serde(rename = "swarm.join")]
+    SwarmJoin,
+    /// Drops the link to one swarm member.
+    #[serde(rename = "swarm.leave")]
+    SwarmLeave,
+    /// Lists the swarm's members with their links.
+    #[serde(rename = "swarm.members")]
+    SwarmMembers,
+    /// Lists the swarm's agent directory.
+    #[serde(rename = "swarm.agents")]
+    SwarmAgents,
+    /// Trades replication state with a linked runtime. A `swarm.peer`
+    /// device on the remote route only.
+    #[serde(rename = "swarm.exchange")]
+    SwarmExchange,
+    /// Resumes the routines an absence paused.
+    #[serde(rename = "swarm.resume")]
+    SwarmResume,
+    /// Appends a user message to an agent or group thread on any member.
+    #[serde(rename = "thread.post")]
+    ThreadPost,
+    /// Moves an agent to another primary runtime.
+    #[serde(rename = "agent.move")]
+    AgentMove,
+    /// Lists the swarm's pending agent approvals.
+    #[serde(rename = "agent.approvals")]
+    AgentApprovals,
+    /// Answers one pending agent approval. The first answer wins.
+    #[serde(rename = "agent.approval_answer")]
+    AgentApprovalAnswer,
+    /// Creates a group chat of two to six agents.
+    #[serde(rename = "group.create")]
+    GroupCreate,
+    /// Lists the swarm's group chats.
+    #[serde(rename = "group.list")]
+    GroupList,
+    /// Changes a group chat's name, members, lead or meeting mode.
+    #[serde(rename = "group.update")]
+    GroupUpdate,
 }
 
 impl Operation {
@@ -556,7 +600,43 @@ impl Operation {
             Self::RoutineList => "routine.list",
             Self::RoutineSave => "routine.save",
             Self::RoutineDelete => "routine.delete",
+            Self::SwarmInvite => "swarm.invite",
+            Self::SwarmJoin => "swarm.join",
+            Self::SwarmLeave => "swarm.leave",
+            Self::SwarmMembers => "swarm.members",
+            Self::SwarmAgents => "swarm.agents",
+            Self::SwarmExchange => "swarm.exchange",
+            Self::SwarmResume => "swarm.resume",
+            Self::ThreadPost => "thread.post",
+            Self::AgentMove => "agent.move",
+            Self::AgentApprovals => "agent.approvals",
+            Self::AgentApprovalAnswer => "agent.approval_answer",
+            Self::GroupCreate => "group.create",
+            Self::GroupList => "group.list",
+            Self::GroupUpdate => "group.update",
         }
+    }
+
+    /// Whether the swarm answers the operation: links, the directory, thread
+    /// posts, moves, approvals and group chats.
+    pub fn is_swarm_operation(self) -> bool {
+        matches!(
+            self,
+            Self::SwarmInvite
+                | Self::SwarmJoin
+                | Self::SwarmLeave
+                | Self::SwarmMembers
+                | Self::SwarmAgents
+                | Self::SwarmExchange
+                | Self::SwarmResume
+                | Self::ThreadPost
+                | Self::AgentMove
+                | Self::AgentApprovals
+                | Self::AgentApprovalAnswer
+                | Self::GroupCreate
+                | Self::GroupList
+                | Self::GroupUpdate
+        )
     }
 
     /// Whether the operation manages agents: reads, changes or runs them.
@@ -612,6 +692,17 @@ pub enum EventName {
     /// `agent_runs`. The body is the run.
     #[serde(rename = "agent.run_updated")]
     AgentRunUpdated,
+    /// The swarm's members, links, agent directory, groups or absence pause
+    /// changed, on a chat-event subscription that asked for `swarm`.
+    #[serde(rename = "swarm.changed")]
+    SwarmChanged,
+    /// An agent run on any swarm member waits at an approval, on a
+    /// chat-event subscription that asked for `swarm`.
+    #[serde(rename = "agent.approval_pending")]
+    AgentApprovalPending,
+    /// A pending agent approval was answered or closed.
+    #[serde(rename = "agent.approval_resolved")]
+    AgentApprovalResolved,
     #[serde(untagged)]
     Unknown(BoundedEventName),
 }

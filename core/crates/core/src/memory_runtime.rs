@@ -535,6 +535,13 @@ impl ApplicationMemoryRuntime {
                     }
                 }
             }
+            "agent-message" | "agent-handoff" => {
+                let arguments: serde_json::Value = serde_json::from_str(arguments)
+                    .map_err(|_| "The message arguments are invalid.")?;
+                crate::swarm::Swarm::for_profile(&self.config)
+                    .ok_or("Agent messaging is unavailable on this machine.")?
+                    .agent_tool(session, &thread, tool, arguments)
+            }
             _ => Err("The agent tool is unknown.".into()),
         }
     }
@@ -765,6 +772,8 @@ const AGENT_TOOLS: &str = r#"  const idSchema = {type:'object',properties:{id:{t
     ['routine-list', 'List routines', 'List the routines of an agent: what starts it on its own and when it last ran. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'}},additionalProperties:false}],
     ['routine-save', 'Save routine', 'Add or update a routine of an agent at the user request. A cron trigger is {kind:"cron", expr:"<minute> <hour> <day> <month> <weekday>", tz:"<IANA zone>"} and runs at most every five minutes. A webhook trigger is {kind:"webhook", preset:"generic"|"github"|"forgejo"}. An mcp trigger is {kind:"mcp", server, tool, args, every:{expr, tz}, condition}, where condition is {all:[...]}, {any:[...]} or {path:"/json/pointer", op:"eq|ne|gt|gte|lt|lte|contains|exists|changed|nonempty", value}. The prompt says what each run does; when nothing is worth reporting, the run replies NO_RESPONSE. Omit routine.id to add one. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'},routine:{type:'object',properties:{id:{type:'string'},name:{type:'string'},enabled:{type:'boolean'},trigger:{type:'object'},prompt:{type:'string'}},required:['name','trigger'],additionalProperties:false}},required:['routine'],additionalProperties:false}],
     ['routine-delete', 'Delete routine', 'Delete one routine of an agent at the user request. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'},routine_id:{type:'string'}},required:['routine_id'],additionalProperties:false}],
+    ['agent-message', 'Message agent', 'Send a message to another agent, on this machine or another paired machine, by its id or name. intent is request (asks it to do something), question (asks it something), result (answers an earlier message), status or fyi. For a request or question, the other agent\'s final answer comes back to this thread on its own as a result; do not wait for it in this reply. status and fyi need no reply. Each message passes one step of a chain capped at six agents.', {type:'object',properties:{to:{type:'string'},intent:{type:'string',enum:['request','question','result','status','fyi']},text:{type:'string'},reply_to:{type:'string',description:'The message_id this answers'}},required:['to','intent','text'],additionalProperties:false}],
+    ['agent-handoff', 'Hand off task', 'Hand a task over to another agent, which then owns it and reports in its own thread. Use when another agent is better placed to finish the work. A task cannot go straight back to the agent that handed it to you, and one reply hands off at most once.', {type:'object',properties:{to:{type:'string'},task:{type:'string'},context:{type:'string'}},required:['to','task'],additionalProperties:false}],
     ['browser', 'Use browser', 'Work toward a goal in the Muniment Browser tab, which the tool opens when it is closed. A fast decision model picks each click, scroll and dropdown value. It returns when it needs text for a field, needs the user to confirm a click that buys, sends, deletes or changes an account, is unsure, is blocked, or believes the goal is met. Then call again with the same goal and text {element, value}, or with click set to an element id: one the user confirmed, or one you chose from the returned elements. Ask the user before you click a consequential element. Check a done result against the page it returns. Never type a password. Keep each goal to one page or one form.', {type:'object',properties:{goal:{type:'string'},url:{type:'string',description:'An http or https address to open first'},text:{type:'object',properties:{element:{type:'string'},value:{type:'string'}},required:['element','value'],additionalProperties:false},click:{type:'string',description:'An element id to click first'}},required:['goal'],additionalProperties:false}]
   ]);
 "#;

@@ -182,6 +182,14 @@ pub struct Agent {
     /// Why the agent's routines are paused, such as `absence`. None runs them.
     #[serde(default, rename = "paused_reason")]
     pub paused_reason: Option<String>,
+    /// Counts the moves of the agent between primary runtimes. A runtime
+    /// that sees a higher epoch for an agent it runs steps down.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub epoch: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

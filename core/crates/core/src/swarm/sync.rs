@@ -1,0 +1,1237 @@
+//! Thread replication on the run journal.
+//!
+//! Each runtime indexes the journal events it wrote into a replicated thread
+//! as `(thread, origin = itself, seq)` in journal order, and the events it
+//! copied from another member under their own origin. An exchange carries
+//! the events a peer's clocks lack, oldest first; the receiver appends them to
+//! its journal under the same thread, run and event ids. A posted user
+//! message carries the clock its poster had seen, and the thread's primary
+//! consumes it once it holds every event that clock names.
+
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::PathBuf;
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rusqlite::{params, OptionalExtension};
+use serde_json::{json, Value};
+
+use super::store::sql;
+use super::{
+    directory, groups, BlobChunk, BlobWant, Clocks, Inner, ReplicaScope, ReplicatedEvent,
+    ThreadRegistration,
+};
+use crate::agent_runs::{NewRun, RunStore, RunTrigger, TriggerKind};
+use crate::journal::replica::{MAX_POSTED_TEXT_BYTES, THREAD_MESSAGE_POSTED};
+use crate::journal::{EventEnvelope, EventPayload, Provenance, ThreadEventEnvelope};
+use crate::run_events::SharedStorage;
+
+/// The thread event the primary appends once it consumed a posted message.
+pub const THREAD_MESSAGE_CONSUMED: &str = "thread.message.consumed";
+/// The thread events a member replicates. Creation and permission policies
+/// stay with the runtime that wrote them.
+const REPLICATED_THREAD_EVENTS: [&str; 4] = [
+    THREAD_MESSAGE_POSTED,
+    THREAD_MESSAGE_CONSUMED,
+    "thread.title.renamed",
+    "thread.deleted",
+];
+/// The provenance field that names the member an imported event came from.
+pub const SWARM_ORIGIN: &str = "swarm_origin";
+const MAX_ROWS_PER_ORIGIN: i64 = 400;
+const MAX_BLOB_CHUNK: usize = 192 * 1024;
+
+/// One index row: its sequence, kind, event id, run id and run sequence.
+type LogRow = (u64, String, String, Option<String>, Option<u64>);
+
+fn journal_error(error: impl std::fmt::Display) -> String {
+    format!("The journal failed: {error}")
+}
+
+fn storage_lock(
+    storage: &SharedStorage,
+) -> Result<std::sync::MutexGuard<'_, crate::run_events::ChatStorage>, String> {
+    storage
+        .lock()
+        .map_err(|_| "The journal is unavailable.".to_string())
+}
+
+pub(super) fn registrations(inner: &Inner) -> Result<Vec<ThreadRegistration>, String> {
+    inner.store.records("threads", "record")
+}
+
+pub(super) fn registration(inner: &Inner, thread_id: &str) -> Option<ThreadRegistration> {
+    inner
+        .store
+        .record("threads", "thread_id", "record", thread_id)
+        .ok()
+        .flatten()
+}
+
+fn ensure_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
+    if registration_valid(registration)
+        && self::registration(inner, &registration.thread_id).is_none()
+    {
+        inner.store.put_record(
+            "threads",
+            "thread_id",
+            "record",
+            &registration.thread_id,
+            registration,
+        )?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn registration_valid(registration: &ThreadRegistration) -> bool {
+    uuid::Uuid::parse_str(&registration.thread_id).is_ok()
+        && match registration.kind.as_str() {
+            "agent" => registration.agent_id.is_some(),
+            "group" => registration.group_id.is_some(),
+            _ => false,
+        }
+}
+
+/// Registers the threads of the agents and groups this runtime runs.
+pub(super) fn register_local(inner: &Inner) -> Result<(), String> {
+    let Some(self_id) = inner.runtime_id() else {
+        return Ok(());
+    };
+    let state = crate::agents::state(&inner.profile).unwrap_or_default();
+    let local = directory::local_agents(inner);
+    let mut added = false;
+    for (thread, agent_id) in &state.threads {
+        if local
+            .iter()
+            .any(|agent| &agent.id == agent_id && directory::runs_here(inner, agent))
+        {
+            added |= ensure_registration(
+                inner,
+                &ThreadRegistration {
+                    thread_id: thread.clone(),
+                    kind: "agent".into(),
+                    agent_id: Some(agent_id.clone()),
+                    group_id: None,
+                    updated_at: inner.now_text(),
+                },
+            )?;
+        }
+    }
+    for group in groups::all(inner)? {
+        if group.owner_runtime == self_id && !group.deleted {
+            added |= ensure_registration(
+                inner,
+                &ThreadRegistration {
+                    thread_id: group.thread_id.clone(),
+                    kind: "group".into(),
+                    agent_id: None,
+                    group_id: Some(group.group_id.clone()),
+                    updated_at: inner.now_text(),
+                },
+            )?;
+        }
+    }
+    if added {
+        inner.changed("threads");
+    }
+    Ok(())
+}
+
+pub(super) fn register_agent_thread(
+    inner: &Inner,
+    thread_id: &str,
+    agent_id: &str,
+) -> Result<(), String> {
+    ensure_registration(
+        inner,
+        &ThreadRegistration {
+            thread_id: thread_id.to_owned(),
+            kind: "agent".into(),
+            agent_id: Some(agent_id.to_owned()),
+            group_id: None,
+            updated_at: inner.now_text(),
+        },
+    )
+    .map(drop)
+}
+
+pub(super) fn merge_registrations(
+    inner: &Inner,
+    registrations: &[ThreadRegistration],
+) -> Result<(), String> {
+    for registration in registrations {
+        ensure_registration(inner, registration)?;
+    }
+    Ok(())
+}
+
+/// The runtime that writes run output into a registered thread.
+pub(super) fn thread_primary(inner: &Inner, registration: &ThreadRegistration) -> Option<String> {
+    match registration.kind.as_str() {
+        "agent" => directory::primary_of(inner, registration.agent_id.as_deref()?),
+        "group" => {
+            groups::get(inner, registration.group_id.as_deref()?).map(|group| group.owner_runtime)
+        }
+        _ => None,
+    }
+}
+
+/// The primary of a replicated thread that another member runs.
+pub(super) fn replica_primary(inner: &Inner, thread_id: &str) -> Option<String> {
+    let registration = registration(inner, thread_id)?;
+    let primary = thread_primary(inner, &registration)?;
+    (inner.runtime_id().as_deref() != Some(primary.as_str())).then_some(primary)
+}
+
+pub(super) fn clocks(inner: &Inner) -> Result<Clocks, String> {
+    let connection = inner.store.connect()?;
+    let mut statement = connection
+        .prepare("SELECT thread_id, origin, MAX(seq) FROM log GROUP BY thread_id, origin")
+        .map_err(sql)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })
+        .map_err(sql)?;
+    let mut clocks = Clocks::new();
+    for row in rows {
+        let (thread, origin, seq) = row.map_err(sql)?;
+        clocks.entry(thread).or_default().insert(origin, seq);
+    }
+    Ok(clocks)
+}
+
+pub(super) fn thread_clock(
+    inner: &Inner,
+    thread_id: &str,
+) -> Result<BTreeMap<String, u64>, String> {
+    Ok(clocks(inner)?.remove(thread_id).unwrap_or_default())
+}
+
+fn next_seq(
+    connection: &rusqlite::Connection,
+    thread_id: &str,
+    origin: &str,
+) -> Result<u64, String> {
+    connection
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM log WHERE thread_id=?1 AND origin=?2",
+            params![thread_id, origin],
+            |row| row.get(0),
+        )
+        .map_err(sql)
+}
+
+/// Indexes the events this runtime wrote into each registered thread.
+pub(super) fn scan_local(inner: &Inner) -> Result<(), String> {
+    let Some(self_id) = inner.runtime_id() else {
+        return Ok(());
+    };
+    for registration in registrations(inner)? {
+        scan_thread(inner, &self_id, &registration.thread_id)?;
+    }
+    Ok(())
+}
+
+fn origin_of(event: &EventEnvelope) -> Option<String> {
+    event
+        .provenance
+        .extra
+        .get(SWARM_ORIGIN)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Result<(), String> {
+    let mut connection = inner.store.connect()?;
+    let mark: u64 = connection
+        .query_row(
+            "SELECT scanned_seq FROM thread_marks WHERE thread_id=?1",
+            [thread_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql)?
+        .unwrap_or(1);
+    let known_runs: BTreeMap<String, (String, u64)> = {
+        let mut statement = connection
+            .prepare("SELECT run_id, origin, indexed_seq FROM runs WHERE thread_id=?1")
+            .map_err(sql)?;
+        let rows = statement
+            .query_map([thread_id], |row| {
+                Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
+            })
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    let mut new_runs = Vec::new();
+    let mut run_events: Vec<(String, Vec<EventEnvelope>)> = Vec::new();
+    let thread_events;
+    {
+        let mut storage = storage_lock(&inner.storage)?;
+        let journal = &mut storage.journal;
+        if !journal.thread_exists(thread_id).map_err(journal_error)? {
+            return Ok(());
+        }
+        for (run_id, last) in journal.thread_run_marks(thread_id).map_err(journal_error)? {
+            let (origin, indexed) = match known_runs.get(&run_id) {
+                Some(known) => known.clone(),
+                None => {
+                    let origin = journal
+                        .run_event(&run_id, 1)
+                        .map_err(journal_error)?
+                        .as_ref()
+                        .and_then(origin_of)
+                        .unwrap_or_else(|| self_id.to_owned());
+                    let indexed = if origin == self_id { 0 } else { last };
+                    new_runs.push((run_id.clone(), origin.clone(), indexed));
+                    (origin, indexed)
+                }
+            };
+            if origin == self_id && last > indexed {
+                run_events.push((
+                    run_id.clone(),
+                    journal
+                        .run_events_after(&run_id, indexed, 1000)
+                        .map_err(journal_error)?,
+                ));
+            }
+        }
+        thread_events = journal
+            .thread_events_after(thread_id, mark)
+            .map_err(journal_error)?;
+    }
+    let transaction = connection.transaction().map_err(sql)?;
+    for (run_id, origin, indexed) in new_runs {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO runs(run_id, thread_id, origin, indexed_seq) VALUES(?1, ?2, ?3, ?4)",
+                params![run_id, thread_id, origin, indexed],
+            )
+            .map_err(sql)?;
+    }
+    for (run_id, events) in run_events {
+        let mut last = None;
+        for event in events {
+            let seq = next_seq(&transaction, thread_id, self_id)?;
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO log(thread_id, origin, seq, kind, event_id, run_id, run_seq, event_type) \
+                     VALUES(?1, ?2, ?3, 'run', ?4, ?5, ?6, ?7)",
+                    params![thread_id, self_id, seq, event.event_id, run_id, event.run_seq, event.event_type],
+                )
+                .map_err(sql)?;
+            last = Some(event.run_seq);
+        }
+        if let Some(last) = last {
+            transaction
+                .execute(
+                    "UPDATE runs SET indexed_seq=?2 WHERE run_id=?1",
+                    params![run_id, last],
+                )
+                .map_err(sql)?;
+        }
+    }
+    let mut scanned = mark;
+    for event in thread_events {
+        scanned = scanned.max(event.thread_seq());
+        let imported = event.provenance.extra.contains_key(SWARM_ORIGIN);
+        if imported || !REPLICATED_THREAD_EVENTS.contains(&event.event_type.as_str()) {
+            continue;
+        }
+        let seq = next_seq(&transaction, thread_id, self_id)?;
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO log(thread_id, origin, seq, kind, event_id, run_id, run_seq, event_type) \
+                 VALUES(?1, ?2, ?3, 'thread', ?4, NULL, NULL, ?5)",
+                params![thread_id, self_id, seq, event.event_id(), event.event_type],
+            )
+            .map_err(sql)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO thread_marks(thread_id, scanned_seq) VALUES(?1, ?2) \
+             ON CONFLICT(thread_id) DO UPDATE SET scanned_seq=excluded.scanned_seq",
+            params![thread_id, scanned],
+        )
+        .map_err(sql)?;
+    transaction.commit().map_err(sql)
+}
+
+/// The events this runtime holds that `peer_clocks` lack, oldest first per
+/// origin, within `budget` bytes.
+pub(super) fn export(
+    inner: &Inner,
+    peer_clocks: Clocks,
+    budget: &mut usize,
+) -> Result<(Vec<ReplicatedEvent>, bool), String> {
+    let mine = clocks(inner)?;
+    let subject = inner.host.replica_scope().and_then(|scope| scope.subject);
+    let connection = inner.store.connect()?;
+    let mut events = Vec::new();
+    for (thread, origins) in mine {
+        for (origin, held) in origins {
+            let known = peer_clocks
+                .get(&thread)
+                .and_then(|clock| clock.get(&origin))
+                .copied()
+                .unwrap_or(0);
+            if held <= known {
+                continue;
+            }
+            let rows: Vec<LogRow> = {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT seq, kind, event_id, run_id, run_seq FROM log \
+                         WHERE thread_id=?1 AND origin=?2 AND seq>?3 ORDER BY seq LIMIT ?4",
+                    )
+                    .map_err(sql)?;
+                let rows = statement
+                    .query_map(params![thread, origin, known, MAX_ROWS_PER_ORIGIN], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    })
+                    .map_err(sql)?;
+                rows.collect::<Result<_, _>>().map_err(sql)?
+            };
+            for (seq, kind, event_id, run_id, run_seq) in rows {
+                let (envelope, prompt) = {
+                    let mut storage = storage_lock(&inner.storage)?;
+                    let journal = &mut storage.journal;
+                    match (kind.as_str(), run_id, run_seq) {
+                        ("run", Some(run_id), Some(run_seq)) => {
+                            let Some(event) =
+                                journal.run_event(&run_id, run_seq).map_err(journal_error)?
+                            else {
+                                break;
+                            };
+                            let prompt = (run_seq == 1)
+                                .then(|| {
+                                    crate::chat_prompt::load_prompt(&run_id, subject.as_deref())
+                                        .ok()
+                                        .flatten()
+                                })
+                                .flatten();
+                            (
+                                serde_json::to_value(event).map_err(|e| e.to_string())?,
+                                prompt,
+                            )
+                        }
+                        _ => {
+                            let Some(event) = journal
+                                .thread_event_by_id(&event_id)
+                                .map_err(journal_error)?
+                            else {
+                                break;
+                            };
+                            (
+                                serde_json::to_value(event).map_err(|e| e.to_string())?,
+                                None,
+                            )
+                        }
+                    }
+                };
+                let event = ReplicatedEvent {
+                    thread_id: thread.clone(),
+                    origin: origin.clone(),
+                    seq,
+                    kind,
+                    envelope,
+                    prompt,
+                };
+                let size = serde_json::to_vec(&event).map_or(usize::MAX, |bytes| bytes.len());
+                if size > *budget {
+                    return Ok((events, true));
+                }
+                *budget -= size;
+                events.push(event);
+            }
+        }
+    }
+    Ok((events, false))
+}
+
+fn local_provenance(scope: Option<&ReplicaScope>, attach_profile: &str) -> Provenance {
+    let mut extra = BTreeMap::new();
+    extra.insert("attach_profile".into(), Value::from(attach_profile));
+    Provenance {
+        source: "muniment-swarm".into(),
+        source_version: env!("CARGO_PKG_VERSION").into(),
+        actor_id: scope.and_then(|scope| scope.subject.clone()),
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra,
+    }
+}
+
+/// Creates the replica of a registered thread under its own id.
+fn ensure_thread(
+    inner: &Inner,
+    journal: &mut crate::journal::RunJournal,
+    thread_id: &str,
+    scope: Option<&ReplicaScope>,
+) -> Result<bool, String> {
+    if journal.thread_exists(thread_id).map_err(journal_error)? {
+        return Ok(true);
+    }
+    let Some(scope) = scope else {
+        return Ok(false);
+    };
+    journal
+        .create_thread_with_id(
+            thread_id,
+            &scope.workspace,
+            &inner.now_text(),
+            local_provenance(Some(scope), &scope.attach_profile),
+        )
+        .map_err(journal_error)?;
+    Ok(true)
+}
+
+fn note_blob(inner: &Inner, event: &EventEnvelope, thread_id: &str) -> Result<(), String> {
+    let (hash, total) = match &event.payload {
+        EventPayload::Cas { payload_cas } => (payload_cas.sha256.clone(), payload_cas.byte_length),
+        EventPayload::Attachment { attachment } => (
+            attachment.sha256().as_str().to_owned(),
+            attachment.byte_length(),
+        ),
+        EventPayload::Inline { .. } => return Ok(()),
+    };
+    let present = hash
+        .parse::<crate::cas::ContentHash>()
+        .ok()
+        .and_then(|parsed| {
+            storage_lock(&inner.storage)
+                .ok()
+                .and_then(|storage| storage.cas.has(&parsed).ok())
+        })
+        .unwrap_or(false);
+    if !present {
+        inner
+            .store
+            .connect()?
+            .execute(
+                "INSERT OR IGNORE INTO blobs(hash, thread_id, total) VALUES(?1, ?2, ?3)",
+                params![hash, thread_id, total],
+            )
+            .map_err(sql)?;
+    }
+    Ok(())
+}
+
+/// Appends the events a peer sent, in `(origin, seq)` order. An event whose
+/// predecessor is missing waits for a later exchange.
+pub(super) fn import(inner: &Inner, mut events: Vec<ReplicatedEvent>) -> Result<(), String> {
+    let Some(self_id) = inner.runtime_id() else {
+        return Ok(());
+    };
+    if events.is_empty() {
+        return Ok(());
+    }
+    events.sort_by(|a, b| (&a.thread_id, &a.origin, a.seq).cmp(&(&b.thread_id, &b.origin, b.seq)));
+    let scope = inner.host.replica_scope();
+    let connection = inner.store.connect()?;
+    let mut blocked: Vec<(String, String)> = Vec::new();
+    let mut imported = 0usize;
+    for event in events {
+        let key = (event.thread_id.clone(), event.origin.clone());
+        if event.origin == self_id
+            || blocked.contains(&key)
+            || registration(inner, &event.thread_id).is_none()
+        {
+            continue;
+        }
+        let expected = next_seq(&connection, &event.thread_id, &event.origin)?;
+        if event.seq < expected {
+            continue;
+        }
+        if event.seq > expected {
+            blocked.push(key);
+            continue;
+        }
+        let logged = match import_one(inner, &event, scope.as_ref()) {
+            Ok(Some(logged)) => logged,
+            Ok(None) => {
+                blocked.push(key);
+                continue;
+            }
+            Err(error) => {
+                crate::runtime_eprintln!(
+                    "muniment-runtime: swarm import failed thread_id={} origin={} seq={}: {error}",
+                    event.thread_id,
+                    event.origin,
+                    event.seq
+                );
+                blocked.push(key);
+                continue;
+            }
+        };
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO log(thread_id, origin, seq, kind, event_id, run_id, run_seq, event_type) \
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    event.thread_id,
+                    event.origin,
+                    event.seq,
+                    event.kind,
+                    logged.event_id,
+                    logged.run_id,
+                    logged.run_seq,
+                    logged.event_type
+                ],
+            )
+            .map_err(sql)?;
+        imported += 1;
+    }
+    if imported > 0 {
+        inner.changed("threads");
+    }
+    Ok(())
+}
+
+struct Logged {
+    event_id: String,
+    run_id: Option<String>,
+    run_seq: Option<u64>,
+    event_type: String,
+}
+
+/// Appends one event and answers what the index records, or `None` when it
+/// must wait.
+fn import_one(
+    inner: &Inner,
+    event: &ReplicatedEvent,
+    scope: Option<&ReplicaScope>,
+) -> Result<Option<Logged>, String> {
+    let mut storage = storage_lock(&inner.storage)?;
+    let journal = &mut storage.journal;
+    if !ensure_thread(inner, journal, &event.thread_id, scope)? {
+        return Ok(None);
+    }
+    let (_, thread_profile) = journal
+        .thread_scope(&event.thread_id)
+        .map_err(journal_error)?
+        .unwrap_or((None, None));
+    let thread_profile = thread_profile.unwrap_or_default();
+    match event.kind.as_str() {
+        "run" => {
+            let mut envelope: EventEnvelope = serde_json::from_value(event.envelope.clone())
+                .map_err(|error| format!("The run event is invalid: {error}"))?;
+            let logged = Logged {
+                event_id: envelope.event_id.clone(),
+                run_id: Some(envelope.run_id.clone()),
+                run_seq: Some(envelope.run_seq),
+                event_type: envelope.event_type.clone(),
+            };
+            if journal
+                .run_event_exists(&envelope.event_id)
+                .map_err(journal_error)?
+            {
+                return Ok(Some(logged));
+            }
+            let run_id = envelope.run_id.clone();
+            // The copy belongs to this runtime's owner and names its origin.
+            envelope.provenance.actor_id = scope.and_then(|scope| scope.subject.clone());
+            envelope
+                .provenance
+                .extra
+                .insert(SWARM_ORIGIN.into(), Value::from(event.origin.as_str()));
+            if envelope.run_seq == 1 {
+                let (workspace, _) = journal
+                    .thread_scope(&event.thread_id)
+                    .map_err(journal_error)?
+                    .unwrap_or((None, None));
+                let workspace = workspace.ok_or("The replica thread has no workspace.")?;
+                envelope.provenance.extra.insert(
+                    "attach_profile".into(),
+                    Value::from(thread_profile.as_str()),
+                );
+                journal
+                    .append_new_run_in_thread(&workspace, &event.thread_id, &envelope)
+                    .map_err(journal_error)?;
+                drop(storage);
+                if let Some(prompt) = &event.prompt {
+                    let subject = scope.and_then(|scope| scope.subject.clone());
+                    if let Err(error) =
+                        crate::chat_prompt::store_prompt(&run_id, prompt, subject.as_deref())
+                    {
+                        crate::runtime_eprintln!(
+                            "muniment-runtime: swarm prompt not stored run_id={run_id}: {error:?}"
+                        );
+                    }
+                }
+                inner
+                    .store
+                    .connect()?
+                    .execute(
+                        "INSERT INTO runs(run_id, thread_id, origin, indexed_seq) VALUES(?1, ?2, ?3, 1) \
+                         ON CONFLICT(run_id) DO UPDATE SET indexed_seq=1",
+                        params![run_id, event.thread_id, event.origin],
+                    )
+                    .map_err(sql)?;
+            } else {
+                let last = journal.last_run_seq(&run_id).map_err(journal_error)?;
+                if last + 1 != envelope.run_seq {
+                    return Ok(None);
+                }
+                journal
+                    .append_batch(last, std::slice::from_ref(&envelope))
+                    .map_err(journal_error)?;
+                drop(storage);
+                inner
+                    .store
+                    .connect()?
+                    .execute(
+                        "UPDATE runs SET indexed_seq=?2 WHERE run_id=?1",
+                        params![run_id, envelope.run_seq],
+                    )
+                    .map_err(sql)?;
+            }
+            note_blob(inner, &envelope, &event.thread_id)?;
+            Ok(Some(logged))
+        }
+        "thread" => {
+            let mut envelope: ThreadEventEnvelope = serde_json::from_value(event.envelope.clone())
+                .map_err(|error| format!("The thread event is invalid: {error}"))?;
+            if envelope.thread_id() != event.thread_id {
+                return Err("The thread event names another thread.".into());
+            }
+            envelope.provenance.extra.insert(
+                "attach_profile".into(),
+                Value::from(thread_profile.as_str()),
+            );
+            envelope
+                .provenance
+                .extra
+                .insert(SWARM_ORIGIN.into(), Value::from(event.origin.as_str()));
+            let stored = journal
+                .append_thread_event_with_id(envelope)
+                .map_err(journal_error)?;
+            Ok(Some(Logged {
+                event_id: stored.event_id().to_owned(),
+                run_id: None,
+                run_seq: None,
+                event_type: stored.event_type.clone(),
+            }))
+        }
+        _ => Err("The replicated event kind is unknown.".into()),
+    }
+}
+
+/// Appends a message to a registered thread with this runtime as its origin
+/// and answers its message id and sequence.
+pub(super) fn post(
+    inner: &Inner,
+    thread_id: &str,
+    author: Value,
+    text: &str,
+) -> Result<(String, u64), String> {
+    let self_id = inner
+        .runtime_id()
+        .ok_or("Turn on remote access to post to agent threads.")?;
+    if registration(inner, thread_id).is_none() {
+        return Err("This thread is not an agent or group thread.".into());
+    }
+    let text = text.trim();
+    if text.is_empty() || text.len() > MAX_POSTED_TEXT_BYTES {
+        return Err("Write a message under 64 KB.".into());
+    }
+    let deps = thread_clock(inner, thread_id)?;
+    let message_id = uuid::Uuid::now_v7().to_string();
+    let scope = inner.host.replica_scope();
+    {
+        let mut storage = storage_lock(&inner.storage)?;
+        let journal = &mut storage.journal;
+        if !ensure_thread(inner, journal, thread_id, scope.as_ref())? {
+            return Err("Open Muniment and connect a model before posting.".into());
+        }
+        let profile = journal
+            .thread_scope(thread_id)
+            .map_err(journal_error)?
+            .and_then(|(_, profile)| profile)
+            .unwrap_or_default();
+        let envelope = ThreadEventEnvelope::new(
+            &message_id,
+            thread_id,
+            THREAD_MESSAGE_POSTED,
+            &inner.now_text(),
+            json!({
+                "message_id": message_id,
+                "author": author,
+                "text": text,
+                "deps": deps,
+                "origin_runtime": self_id,
+            }),
+            local_provenance(scope.as_ref(), &profile),
+        );
+        journal
+            .append_thread_event_with_id(envelope)
+            .map_err(journal_error)?;
+    }
+    scan_thread(inner, &self_id, thread_id)?;
+    let seq: u64 = inner
+        .store
+        .connect()?
+        .query_row(
+            "SELECT seq FROM log WHERE event_id=?1",
+            [&message_id],
+            |row| row.get(0),
+        )
+        .map_err(sql)?;
+    inner.nudge();
+    Ok((message_id, seq))
+}
+
+/// Appends a thread event this runtime writes as the thread's primary.
+fn append_local(
+    inner: &Inner,
+    thread_id: &str,
+    event_type: &str,
+    payload: Value,
+) -> Result<(), String> {
+    let scope = inner.host.replica_scope();
+    let mut storage = storage_lock(&inner.storage)?;
+    let journal = &mut storage.journal;
+    if !ensure_thread(inner, journal, thread_id, scope.as_ref())? {
+        return Err("The thread is not on this runtime.".into());
+    }
+    let profile = journal
+        .thread_scope(thread_id)
+        .map_err(journal_error)?
+        .and_then(|(_, profile)| profile)
+        .unwrap_or_default();
+    let event_id = uuid::Uuid::now_v7().to_string();
+    journal
+        .append_thread_event_with_id(ThreadEventEnvelope::new(
+            &event_id,
+            thread_id,
+            event_type,
+            &inner.now_text(),
+            payload,
+            local_provenance(scope.as_ref(), &profile),
+        ))
+        .map_err(journal_error)?;
+    Ok(())
+}
+
+/// Posts a message an agent or this runtime writes, such as an agent's
+/// reply in a group or a delivery note.
+pub(super) fn post_as(
+    inner: &Inner,
+    thread_id: &str,
+    author: Value,
+    text: &str,
+) -> Result<(), String> {
+    let message_id = uuid::Uuid::now_v7().to_string();
+    let deps = thread_clock(inner, thread_id)?;
+    let mut text = text.trim().to_owned();
+    if text.is_empty() {
+        text = "(no reply)".into();
+    }
+    if text.len() > MAX_POSTED_TEXT_BYTES {
+        let mut end = MAX_POSTED_TEXT_BYTES - 3;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push('…');
+    }
+    append_local(
+        inner,
+        thread_id,
+        THREAD_MESSAGE_POSTED,
+        json!({
+            "message_id": message_id,
+            "author": author,
+            "text": text,
+            "deps": deps,
+            "origin_runtime": inner.runtime_id(),
+        }),
+    )?;
+    if let Some(self_id) = inner.runtime_id() {
+        scan_thread(inner, &self_id, thread_id)?;
+    }
+    inner.nudge();
+    Ok(())
+}
+
+/// `thread.post`: posts to an agent or group thread on any member, or to an
+/// agent that has no thread yet through its primary runtime.
+pub(super) fn post_operation(inner: &Inner, body: Value) -> Result<Value, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Body {
+        #[serde(default)]
+        thread_id: Option<String>,
+        #[serde(default)]
+        agent_id: Option<String>,
+        text: String,
+    }
+    let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
+    let _merge = super::lock(&inner.merge);
+    let origin = inner.runtime_id();
+    let thread = match (&body.thread_id, &body.agent_id) {
+        (Some(thread), _) => Some(thread.clone()),
+        (None, Some(agent)) => directory::entry(inner, agent)
+            .and_then(|entry| entry.primary_thread)
+            .filter(|thread| registration(inner, thread).is_some()),
+        (None, None) => return Err("Name the thread or the agent to post to.".into()),
+    };
+    match thread {
+        Some(thread) => {
+            let (message_id, seq) = post(inner, &thread, json!({"kind": "user"}), &body.text)?;
+            let kick = consume_posts(inner)?;
+            drop(_merge);
+            if kick {
+                inner.host.kick_runs();
+            }
+            Ok(json!({
+                "message_id": message_id,
+                "thread_id": thread,
+                "origin_runtime": origin,
+                "seq": seq,
+            }))
+        }
+        None => {
+            let agent = body.agent_id.unwrap_or_default();
+            let message_id = super::messaging::send_user_message(inner, &agent, &body.text)?;
+            drop(_merge);
+            inner.host.kick_runs();
+            Ok(json!({
+                "message_id": message_id,
+                "thread_id": null,
+                "origin_runtime": origin,
+                "seq": null,
+            }))
+        }
+    }
+}
+
+struct Pending {
+    origin: String,
+    seq: u64,
+    event_id: String,
+    recorded_at: String,
+    payload: Value,
+}
+
+/// Consumes the posted user messages of the threads this runtime is primary
+/// of, in causal order: a message waits until this runtime holds every event
+/// its poster had seen. Answers whether it queued runs.
+pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
+    let Some(self_id) = inner.runtime_id() else {
+        return Ok(false);
+    };
+    let mut kick = false;
+    for registration in registrations(inner)? {
+        if thread_primary(inner, &registration).as_deref() != Some(self_id.as_str()) {
+            continue;
+        }
+        let rows: Vec<(String, u64, String)> = {
+            let connection = inner.store.connect()?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT origin, seq, event_id FROM log l WHERE thread_id=?1 AND kind='thread' \
+                     AND event_type=?2 AND NOT EXISTS(SELECT 1 FROM consumed c WHERE c.event_id=l.event_id) \
+                     ORDER BY seq",
+                )
+                .map_err(sql)?;
+            let rows = statement
+                .query_map(
+                    params![registration.thread_id, THREAD_MESSAGE_POSTED],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(sql)?;
+            rows.collect::<Result<_, _>>().map_err(sql)?
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        let mut pending = Vec::new();
+        {
+            let mut storage = storage_lock(&inner.storage)?;
+            for (origin, seq, event_id) in rows {
+                if let Some(event) = storage
+                    .journal
+                    .thread_event_by_id(&event_id)
+                    .map_err(journal_error)?
+                {
+                    pending.push(Pending {
+                        origin,
+                        seq,
+                        event_id,
+                        recorded_at: event.recorded_at().to_owned(),
+                        payload: event.payload().clone(),
+                    });
+                }
+            }
+        }
+        let clock = thread_clock(inner, &registration.thread_id)?;
+        loop {
+            let ready = pending
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| {
+                    message.payload["deps"].as_object().is_none_or(|deps| {
+                        deps.iter().all(|(origin, seq)| {
+                            seq.as_u64().unwrap_or(0) <= clock.get(origin).copied().unwrap_or(0)
+                        })
+                    })
+                })
+                .min_by(|(_, a), (_, b)| {
+                    (&a.recorded_at, &a.origin, a.seq).cmp(&(&b.recorded_at, &b.origin, b.seq))
+                })
+                .map(|(index, _)| index);
+            let Some(index) = ready else {
+                break;
+            };
+            let message = pending.remove(index);
+            let user = message.payload["author"]["kind"] == "user";
+            let mut run_id = None;
+            if user {
+                match registration.kind.as_str() {
+                    "agent" => {
+                        let agent_id = registration.agent_id.clone().unwrap_or_default();
+                        let text = message.payload["text"].as_str().unwrap_or_default();
+                        match inner.host.steer(&registration.thread_id, text) {
+                            Some(steered) => run_id = Some(steered),
+                            None => {
+                                let run = RunStore::open(&inner.profile)?.enqueue(NewRun {
+                                    agent_id,
+                                    thread_id: Some(registration.thread_id.clone()),
+                                    trigger: RunTrigger {
+                                        kind: TriggerKind::Manual,
+                                        routine_id: None,
+                                        source: Some(format!("swarm:{}", message.origin)),
+                                    },
+                                    prompt: text.to_owned(),
+                                    hop: 0,
+                                    origin_run_id: None,
+                                })?;
+                                crate::agents::mirror_run(&inner.profile, &run)?;
+                                run_id = Some(run.id);
+                                kick = true;
+                            }
+                        }
+                    }
+                    "group" => {
+                        kick |= groups::route(
+                            inner,
+                            registration.group_id.as_deref().unwrap_or_default(),
+                            &message.payload,
+                        )?;
+                    }
+                    _ => {}
+                }
+            }
+            inner
+                .store
+                .connect()?
+                .execute(
+                    "INSERT OR IGNORE INTO consumed(event_id, thread_id, at) VALUES(?1, ?2, ?3)",
+                    params![message.event_id, registration.thread_id, inner.now_text()],
+                )
+                .map_err(sql)?;
+            if user {
+                append_local(
+                    inner,
+                    &registration.thread_id,
+                    THREAD_MESSAGE_CONSUMED,
+                    json!({
+                        "message_id": message.payload["message_id"],
+                        "run_id": run_id,
+                    }),
+                )?;
+                scan_thread(inner, &self_id, &registration.thread_id)?;
+            }
+        }
+    }
+    Ok(kick)
+}
+
+/// The messages posted to a thread, oldest first, each with whether its
+/// primary consumed it and the run that answered it.
+pub fn posted_messages(
+    storage: &SharedStorage,
+    thread_id: &str,
+    limit: usize,
+) -> Result<Vec<Value>, String> {
+    let events = storage_lock(storage)?
+        .journal
+        .thread_events_after(thread_id, 0)
+        .map_err(journal_error)?;
+    let mut posts: Vec<Value> = Vec::new();
+    let mut consumed: BTreeMap<String, Value> = BTreeMap::new();
+    for event in events {
+        let payload = event.payload();
+        match event.event_type.as_str() {
+            THREAD_MESSAGE_POSTED => posts.push(json!({
+                "message_id": payload["message_id"],
+                "author": payload["author"],
+                "text": payload["text"],
+                "origin_runtime": payload["origin_runtime"],
+                "posted_at": event.recorded_at(),
+                "consumed": false,
+                "run_id": null,
+            })),
+            THREAD_MESSAGE_CONSUMED => {
+                if let Some(id) = payload["message_id"].as_str() {
+                    consumed.insert(id.to_owned(), payload["run_id"].clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    for post in &mut posts {
+        if let Some(run_id) = post["message_id"].as_str().and_then(|id| consumed.get(id)) {
+            post["consumed"] = Value::Bool(true);
+            post["run_id"] = run_id.clone();
+        }
+    }
+    let excess = posts.len().saturating_sub(limit);
+    posts.drain(..excess);
+    Ok(posts)
+}
+
+fn blob_part(inner: &Inner, hash: &str) -> PathBuf {
+    inner
+        .profile
+        .join("swarm")
+        .join("blobs")
+        .join(format!("{hash}.part"))
+}
+
+/// Asks for the missing objects of one thread.
+pub(super) fn want_thread_blobs(inner: &Inner, thread_id: &str) -> Result<(), String> {
+    let changed = inner
+        .store
+        .connect()?
+        .execute(
+            "UPDATE blobs SET requested=1 WHERE thread_id=?1 AND done=0 AND requested=0",
+            [thread_id],
+        )
+        .map_err(sql)?;
+    if changed > 0 {
+        inner.nudge();
+    }
+    Ok(())
+}
+
+/// The object slices a peer asked for that this runtime holds, and this
+/// runtime's own requests.
+pub(super) fn blob_traffic(
+    inner: &Inner,
+    serve: &[BlobWant],
+    budget: &mut usize,
+) -> Result<(Vec<BlobChunk>, Vec<BlobWant>), String> {
+    let mut chunks = Vec::new();
+    for want in serve {
+        let Ok(hash) = want.hash.parse::<crate::cas::ContentHash>() else {
+            continue;
+        };
+        let bytes = storage_lock(&inner.storage)?
+            .cas
+            .get(&hash)
+            .map_err(|error| error.to_string())?;
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        let start = usize::try_from(want.offset).unwrap_or(usize::MAX);
+        if start >= bytes.len() {
+            continue;
+        }
+        let room = (*budget * 3 / 4).min(MAX_BLOB_CHUNK);
+        if room == 0 {
+            break;
+        }
+        let end = (start + room).min(bytes.len());
+        let data = STANDARD.encode(&bytes[start..end]);
+        *budget = budget.saturating_sub(data.len() + 256);
+        chunks.push(BlobChunk {
+            hash: want.hash.clone(),
+            offset: want.offset,
+            total: bytes.len() as u64,
+            data,
+        });
+    }
+    let wanted: Vec<String> = {
+        let connection = inner.store.connect()?;
+        let mut statement = connection
+            .prepare("SELECT hash FROM blobs WHERE requested=1 AND done=0 LIMIT 16")
+            .map_err(sql)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    let wants = wanted
+        .into_iter()
+        .map(|hash| BlobWant {
+            offset: std::fs::metadata(blob_part(inner, &hash)).map_or(0, |metadata| metadata.len()),
+            hash,
+        })
+        .collect();
+    Ok((chunks, wants))
+}
+
+/// Appends received object slices and stores each complete, verified object.
+pub(super) fn receive_blobs(inner: &Inner, chunks: Vec<BlobChunk>) -> Result<(), String> {
+    for chunk in chunks {
+        let wanted: Option<i64> = inner
+            .store
+            .connect()?
+            .query_row(
+                "SELECT done FROM blobs WHERE hash=?1",
+                [&chunk.hash],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        if wanted != Some(0) {
+            continue;
+        }
+        let path = blob_part(inner, &chunk.hash);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let held = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
+        if held != chunk.offset {
+            continue;
+        }
+        let data = STANDARD
+            .decode(chunk.data.as_bytes())
+            .map_err(|_| "A blob slice is invalid.".to_string())?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(&data))
+            .map_err(|error| error.to_string())?;
+        if held + data.len() as u64 >= chunk.total {
+            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+            let stored = storage_lock(&inner.storage)?
+                .cas
+                .put(&bytes)
+                .map_err(|error| error.to_string())?;
+            let _ = std::fs::remove_file(&path);
+            if stored.as_str() == chunk.hash {
+                inner
+                    .store
+                    .connect()?
+                    .execute("UPDATE blobs SET done=1 WHERE hash=?1", [&chunk.hash])
+                    .map_err(sql)?;
+            }
+        }
+    }
+    Ok(())
+}

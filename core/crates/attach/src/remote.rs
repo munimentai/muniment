@@ -26,13 +26,18 @@ pub const SCOPE_RUNTIME_UPDATE: &str = "runtime.update";
 pub const SCOPE_RUNTIME_ADMIN: &str = "runtime.admin";
 /// Creates, changes and deletes agents and their routines.
 pub const SCOPE_AGENTS_MANAGE: &str = "agents.manage";
+/// Lets another runtime of the same swarm replicate agent threads and the
+/// agent directory and deliver agent messages, and nothing else. No other
+/// scope grants it, and it grants no other scope.
+pub const SCOPE_SWARM_PEER: &str = "swarm.peer";
 /// Every scope a remote device can hold.
-pub const REMOTE_SCOPES: [&str; 5] = [
+pub const REMOTE_SCOPES: [&str; 6] = [
     SCOPE_THREAD_READ,
     SCOPE_RUN_WRITE,
     SCOPE_RUNTIME_UPDATE,
     SCOPE_RUNTIME_ADMIN,
     SCOPE_AGENTS_MANAGE,
+    SCOPE_SWARM_PEER,
 ];
 
 /// The scopes a pairing link grants when its creator names none. Updates

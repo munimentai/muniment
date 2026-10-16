@@ -55,6 +55,10 @@ pub struct HistoryRuntime<'a> {
 pub struct ChatThreadOpenPage {
     pub entries: Vec<HistoryEntry>,
     pub next_cursor: Option<String>,
+    /// The messages posted to a replicated agent or group thread, oldest
+    /// first, on the first page only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub posted: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +244,7 @@ pub fn chat_thread_open_page_without_prompts(
     Ok(ChatThreadOpenPage {
         entries,
         next_cursor: page.next_cursor,
+        posted: Vec::new(),
     })
 }
 

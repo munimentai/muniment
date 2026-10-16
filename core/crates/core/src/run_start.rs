@@ -524,6 +524,38 @@ pub trait RunAttachBoundaries {
     ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
+    /// Runs one swarm operation for the client `client`, and answers its body.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn swarm_operation(
+        &self,
+        _operation: crate::attach::Operation,
+        _body: serde_json::Value,
+        _client: Option<&str>,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    /// Trades replication state with the linked runtime that paired as
+    /// `device_id`.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn swarm_exchange(
+        &self,
+        _device_id: &str,
+        _body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    /// Subscribes to the swarm's client events: `swarm.changed` and the
+    /// approval events, each with its body.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn subscribe_swarm_events(
+        &self,
+    ) -> Result<std::sync::mpsc::Receiver<crate::swarm::ClientEvent>, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    /// Records that a client used this runtime, which keeps the swarm's
+    /// routines from an absence pause.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn note_client_activity(&self) {}
 }
 
 pub trait RunStartBoundaries {
