@@ -157,6 +157,12 @@
     }
   }
 
+  // A pair whose relay keys this desktop lacks is revoked and replaced by a new code.
+  async function pairAgain(pairId) {
+    await revokePair(pairId)
+    if (watching && !pairing.pair) await requestChallenge()
+  }
+
   function lastActive(value) {
     return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
   }
@@ -209,8 +215,9 @@
         </div>
       </div>
     {:else}
-      <Row title="Paired phone" meta={pairing.pair.mobile_device_id}>
+      <Row title="Paired phone" meta={pairing.pair.mobile_device_id} description={pairing.pair.remote_control === 'pair_again' ? 'This phone cannot open sessions from this desktop.' : ''}>
         {#snippet detail()}<time datetime={pairing.pair.created_at}>Paired {lastActive(pairing.pair.created_at)}</time>{/snippet}
+        {#if pairing.pair.remote_control === 'pair_again'}<Button disabled={revokePending} onclick={() => pairAgain(pairing.pair.pair_id)}>Pair again</Button>{/if}
         <Button onclick={() => { revoking = true; error = '' }}>Revoke phone</Button>
       </Row>
     {/if}

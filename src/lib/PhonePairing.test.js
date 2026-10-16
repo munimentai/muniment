@@ -410,6 +410,38 @@ describe('phone pairing', () => {
     expect(await screen.findByText('No phone is paired.')).toBeInTheDocument()
   })
 
+  it('offers Pair again when the phone cannot open sessions and shows a new code', async () => {
+    let pair = { ...phone, remote_control: 'pair_again' }
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'auth_pairing_status') return { pair }
+      if (command === 'auth_pairing_revoke') {
+        expect(args).toEqual({ pairId: phone.pair_id })
+        pair = null
+        return { revoked: true }
+      }
+      if (command === 'auth_pairing_challenge') return challengeResponse()
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    expect(await screen.findByText('This phone cannot open sessions from this desktop.')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Pair again' }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(invoke).toHaveBeenCalledWith('auth_pairing_revoke', { pairId: phone.pair_id })
+    expect(calls(invoke, 'auth_pairing_challenge')).toBe(1)
+    expect(await screen.findByRole('img', { name: 'Pairing code' })).toBeInTheDocument()
+  })
+
+  it('shows no Pair again while remote control works', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'auth_pairing_status') return { pair: { ...phone, remote_control: 'ready' } }
+      throw new Error(`unexpected command: ${command}`)
+    })
+    renderPanel(invoke)
+    expect(await screen.findByText(phone.mobile_device_id)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Pair again' })).not.toBeInTheDocument()
+  })
+
   it('revokes the pair and clears the authorized phone', async () => {
     let pair = phone
     const invoke = vi.fn(async (command, args) => {

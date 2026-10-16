@@ -54,6 +54,9 @@ refresh expiry. An existing unexpired installation is returned without a
 registration request; a missing, incomplete, or expired installation is
 registered before authorization.
 A failed keychain write publishes no partial installation locally.
+The relay keys of a phone pair live under the same service as one value per
+pair (`user: remote-control-relay-keys:<pair_id>`), and revoking the pair
+deletes it.
 Secret-bearing values use redacted `Debug` implementations and do not cross a
 Tauri command boundary.
 
