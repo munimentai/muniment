@@ -1609,23 +1609,64 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         operation: muniment_core::attach::Operation,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, ProtocolError> {
-        if muniment_core::home::configured_home(&self.profile_directory)
-            .ok()
-            .flatten()
-            .is_none()
-        {
-            return Err(ProtocolError::invalid_request_with_reason(
-                "Choose a Home folder before managing agents.",
-            ));
+        self.require_home()?;
+        let answer =
+            muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
+                .map_err(ProtocolError::invalid_request_with_reason)?;
+        // A saved agent's routine proposals are refined by a cheap model call
+        // in the background; the deterministic ones are already saved.
+        if matches!(operation.as_str(), "agent.save" | "agent.import_commit") {
+            if let Some(id) = answer["agent"]["id"].as_str() {
+                crate::agent_schedule::refine_proposals(&self.profile_directory, id);
+            }
         }
-        muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
-            .map_err(ProtocolError::invalid_request_with_reason)
+        Ok(answer)
     }
 
     fn subscribe_agent_runs(&self) -> Result<mpsc::Receiver<serde_json::Value>, ProtocolError> {
         Ok(muniment_core::agent_runs::subscribe(
             &self.profile_directory,
         ))
+    }
+
+    fn hook_operation(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: serde_json::Value,
+        endpoints: muniment_core::agent_hooks::HookEndpoints,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.require_home()?;
+        muniment_core::agent_hooks::operation(
+            &self.profile_directory,
+            &HookSecretStore(self.host.credentials.as_ref()),
+            &endpoints,
+            operation.as_str(),
+            body,
+        )
+        .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
+    fn receive_webhook(
+        &self,
+        runtime_id: Option<&str>,
+        hook_id: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<String, muniment_core::agent_hooks::Refusal> {
+        if self.require_home().is_err() {
+            return Err(muniment_core::agent_hooks::Refusal::NOT_FOUND);
+        }
+        muniment_core::agent_hooks::receive(
+            &self.profile_directory,
+            &HookSecretStore(self.host.credentials.as_ref()),
+            &muniment_core::agent_hooks::Delivery {
+                hook_id,
+                headers,
+                body,
+            },
+            &|agent| muniment_core::agents::runs_routines_here(agent, runtime_id),
+        )
+        .map(|run| run.id)
     }
 
     fn queue_attach_permission_answer(
@@ -1649,6 +1690,40 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .send(Some(committed_seq))
             .map_err(|_| RunStartError::Persistence("The permission answer was lost.".into()))?;
         Ok(resolved)
+    }
+}
+
+/// Hook secrets in the runtime's credential store, one entry per hook id.
+#[cfg(any(unix, target_os = "windows"))]
+struct HookSecretStore<'a>(&'a dyn crate::host::CredentialStore);
+
+#[cfg(any(unix, target_os = "windows"))]
+impl muniment_core::agent_hooks::HookSecrets for HookSecretStore<'_> {
+    fn read(&self, hook_id: &str) -> Option<String> {
+        self.0
+            .read(muniment_core::agent_hooks::SECRET_SERVICE, hook_id)
+            .filter(|secret| !secret.is_empty())
+    }
+
+    fn write(&self, hook_id: &str, secret: &str) -> Result<(), String> {
+        self.0
+            .write(muniment_core::agent_hooks::SECRET_SERVICE, hook_id, secret)
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl RuntimeAttachBoundaries {
+    fn require_home(&self) -> Result<(), ProtocolError> {
+        if muniment_core::home::configured_home(&self.profile_directory)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return Err(ProtocolError::invalid_request_with_reason(
+                "Choose a Home folder before managing agents.",
+            ));
+        }
+        Ok(())
     }
 }
 

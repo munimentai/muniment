@@ -39,6 +39,8 @@ pub const MAX_RUN_HISTORY: usize = 200;
 /// The most agent-to-agent steps one chain of runs takes.
 pub const MAX_HOPS: u32 = 6;
 const MAX_PAGE: usize = 100;
+/// How long a webhook delivery id is remembered, so a replay is refused.
+pub const DELIVERY_MEMORY_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_SUMMARY_CHARS: usize = 500;
 const STORE_FILE: &str = "agent-runs.sqlite3";
 
@@ -298,7 +300,13 @@ impl RunStore {
                     prompt TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS runs_agent ON runs(agent_id, id);
-                CREATE INDEX IF NOT EXISTS runs_status ON runs(status);",
+                CREATE INDEX IF NOT EXISTS runs_status ON runs(status);
+                CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                    hook_id TEXT NOT NULL,
+                    delivery_id TEXT NOT NULL,
+                    received_at INTEGER NOT NULL,
+                    PRIMARY KEY (hook_id, delivery_id)
+                );",
             )
             .map_err(|_| "Agent run history could not be opened.".to_string())?;
         Ok(store)
@@ -436,6 +444,27 @@ impl RunStore {
             .map_err(|_| "Agent run history could not be read.".to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|_| "Agent run history could not be read.".to_string())
+    }
+
+    /// Records a webhook delivery id. A delivery the hook already received
+    /// answers `false`. Ids older than [`DELIVERY_MEMORY_SECONDS`] are
+    /// forgotten.
+    pub fn record_delivery(&self, hook_id: &str, delivery_id: &str) -> Result<bool, String> {
+        let now = now();
+        let connection = self.connect()?;
+        connection
+            .execute(
+                "DELETE FROM webhook_deliveries WHERE received_at < ?1",
+                [now - DELIVERY_MEMORY_SECONDS],
+            )
+            .map_err(|_| "Webhook deliveries could not be read.".to_string())?;
+        let inserted = connection
+            .execute(
+                "INSERT OR IGNORE INTO webhook_deliveries (hook_id, delivery_id, received_at) VALUES (?1, ?2, ?3)",
+                params![hook_id, delivery_id, now],
+            )
+            .map_err(|_| "Webhook deliveries could not be saved.".to_string())?;
+        Ok(inserted == 1)
     }
 
     /// Leases a queued run for `owner` and counts the attempt. Another owner's

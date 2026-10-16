@@ -5,7 +5,7 @@
 //! unchanged, and its `schedule` reads as one cron routine.
 pub use crate::agent_routines::{
     Condition, ConditionAll, ConditionAny, ConditionLeaf, ConditionOp, CreatedFrom, CronSchedule,
-    McpTrigger, Routine, RoutineResult, Trigger, WebhookPreset, WebhookTrigger,
+    McpTrigger, PollRecord, Routine, RoutineResult, Trigger, WebhookPreset, WebhookTrigger,
 };
 use crate::agent_runs::{NewRun, Run, RunStatus, RunStore, RunTrigger, TriggerKind};
 pub use crate::permission_gate::{GateMode as PermissionMode, PolicyRequest};
@@ -200,7 +200,7 @@ pub struct RunState {
 }
 /// The runtime's record of one routine: when it fires next and how its
 /// last run went.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineState {
     /// Changes when the routine's trigger changes.
@@ -209,6 +209,12 @@ pub struct RoutineState {
     pub next_fire_at: Option<i64>,
     pub last_fired_at: Option<String>,
     pub last_result: Option<RoutineResult>,
+    /// The last poll of an MCP routine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_poll: Option<PollRecord>,
+    /// The value at each `changed` condition path on the last poll.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub condition_values: BTreeMap<String, serde_json::Value>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -224,6 +230,14 @@ pub struct State {
     /// Routine state by agent id, then routine id.
     #[serde(default)]
     pub routines: BTreeMap<String, BTreeMap<String, RoutineState>>,
+    /// The ids of routine proposals the user dismissed, by agent id, so a
+    /// later extraction does not propose them again.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dismissed_proposals: BTreeMap<String, Vec<String>>,
+    /// The SHA-256 of the instructions a model last read for proposals, by
+    /// agent id, so one version is read once.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refined_instructions: BTreeMap<String, String>,
 }
 /// An agent folder whose `agent.md` could not be loaded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,6 +501,7 @@ fn apply_routine_state(agent: &mut Agent, state: &State) {
         let saved = routines.and_then(|routines| routines.get(&routine.id));
         routine.last_fired_at = saved.and_then(|saved| saved.last_fired_at.clone());
         routine.last_result = saved.and_then(|saved| saved.last_result.clone());
+        routine.last_poll = saved.and_then(|saved| saved.last_poll.clone());
     }
 }
 /// Reads one agent with its routines' runtime state.
@@ -641,7 +656,32 @@ pub fn next_after<T: TimeZone>(
     }
     Err("The next schedule time could not be found.".into())
 }
-pub fn save(profile: &Path, mut agent: Agent) -> Result<Agent, String> {
+pub fn save(profile: &Path, agent: Agent) -> Result<Agent, String> {
+    let previous = (!agent.id.is_empty())
+        .then(|| get(profile, &agent.id).ok())
+        .flatten();
+    let extract = previous
+        .as_ref()
+        .is_none_or(|previous| previous.instructions.trim() != agent.instructions.trim());
+    let mut saved = save_definition(profile, agent, previous.as_ref())?;
+    if extract {
+        let proposals = crate::agent_extract::propose(
+            &saved.instructions,
+            &crate::agent_routines::local_time_zone(),
+            &crate::agent_extract::installed_tools(),
+        );
+        if let Some(applied) = crate::agent_extract::apply(profile, &saved.id, proposals)? {
+            saved = applied;
+        }
+    }
+    Ok(saved)
+}
+/// Saves an agent without proposing routines from its instructions.
+pub(crate) fn save_definition(
+    profile: &Path,
+    mut agent: Agent,
+    previous: Option<&Agent>,
+) -> Result<Agent, String> {
     apply_schedule(&mut agent)?;
     for routine in &mut agent.routines {
         if routine.id.is_empty() {
@@ -651,12 +691,47 @@ pub fn save(profile: &Path, mut agent: Agent) -> Result<Agent, String> {
             if hook.hook_id.is_empty() {
                 hook.hook_id = crate::agent_routines::new_id();
             }
+            // A client that edits a routine keeps the secret it never saw.
+            if hook.secret_sha256.is_none() {
+                hook.secret_sha256 = previous
+                    .into_iter()
+                    .flat_map(|previous| &previous.routines)
+                    .find_map(|existing| match &existing.trigger {
+                        Trigger::Webhook(old) if old.hook_id == hook.hook_id => {
+                            old.secret_sha256.clone()
+                        }
+                        _ => None,
+                    });
+            }
         }
-        // The runtime keeps fire times and results; a save never sets them.
+        // An enabled routine is no longer a proposal.
+        if routine.enabled {
+            routine.proposed = false;
+        }
+        // The runtime keeps fire times, results and polls; a save never sets them.
         routine.last_fired_at = None;
         routine.last_result = None;
+        routine.last_poll = None;
     }
     validate(&agent)?;
+    let hooks: Vec<&str> = agent
+        .routines
+        .iter()
+        .filter_map(|routine| match &routine.trigger {
+            Trigger::Webhook(hook) => Some(hook.hook_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !hooks.is_empty()
+        && list(profile)?.agents.iter().any(|other| {
+            other.id != agent.id
+                && other.routines.iter().any(|routine| {
+                    matches!(&routine.trigger, Trigger::Webhook(hook) if hooks.contains(&hook.hook_id.as_str()))
+                })
+        })
+    {
+        return Err("Another agent uses this webhook.".into());
+    }
     if let Some(project) = &agent.project_id {
         crate::projects::folder(profile, project)?;
     }
@@ -949,6 +1024,8 @@ pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(),
     state.primary_threads.remove(id);
     state.history.remove(id);
     state.routines.remove(id);
+    state.dismissed_proposals.remove(id);
+    state.refined_instructions.remove(id);
     persist_state(profile, &state)
 }
 /// The agent a thread belongs to, if any.
@@ -958,6 +1035,16 @@ pub fn thread_agent(profile: &Path, thread: &str) -> Result<Option<Agent>, Strin
         .get(thread)
         .map(|id| get(profile, id))
         .transpose()
+}
+/// Whether the runtime `runtime_id` runs an agent's routines: the agent
+/// names no primary machine, or names this one, and its routines are not
+/// paused.
+pub fn runs_routines_here(agent: &Agent, runtime_id: Option<&str>) -> bool {
+    agent.paused_reason.is_none()
+        && agent
+            .primary_runtime
+            .as_deref()
+            .is_none_or(|primary| runtime_id == Some(primary))
 }
 /// What one run of an agent's thread launches with.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1029,6 +1116,49 @@ pub fn delete_routine(profile: &Path, agent_id: &str, routine_id: &str) -> Resul
     }
     agent.schedule = None;
     save(profile, agent).map(drop)
+}
+/// Accepts a routine proposal: the routine is turned on and is a proposal no
+/// more. A webhook routine still needs a secret before deliveries count.
+pub fn accept_proposal(
+    profile: &Path,
+    agent_id: &str,
+    routine_id: &str,
+) -> Result<Routine, String> {
+    let mut agent = get(profile, agent_id)?;
+    let routine = agent
+        .routines
+        .iter_mut()
+        .find(|routine| routine.id == routine_id && routine.proposed)
+        .ok_or("The routine proposal was not found.")?;
+    routine.proposed = false;
+    routine.enabled = true;
+    let routine = routine.clone();
+    save_routine(profile, agent_id, routine)
+}
+/// Dismisses a routine proposal. A later extraction does not propose it again.
+pub fn dismiss_proposal(profile: &Path, agent_id: &str, routine_id: &str) -> Result<(), String> {
+    let agent = get(profile, agent_id)?;
+    if !agent
+        .routines
+        .iter()
+        .any(|routine| routine.id == routine_id && routine.proposed)
+    {
+        return Err("The routine proposal was not found.".into());
+    }
+    with_state(profile, |state| {
+        let dismissed = state
+            .dismissed_proposals
+            .entry(agent_id.to_owned())
+            .or_default();
+        if !dismissed.iter().any(|id| id == routine_id) {
+            dismissed.push(routine_id.to_owned());
+        }
+        // The list stays bounded; the oldest dismissals go first.
+        let excess = dismissed.len().saturating_sub(200);
+        dismissed.drain(..excess);
+        Ok(())
+    })?;
+    delete_routine(profile, agent_id, routine_id)
 }
 /// One agent's routines with their runtime state.
 pub fn routines(profile: &Path, agent_id: &str) -> Result<Vec<Routine>, String> {
@@ -1164,6 +1294,61 @@ pub fn operation(
             let request: DeleteRoutine = parse(body)?;
             delete_routine(profile, &request.agent_id, &request.routine_id)?;
             Ok(json!({}))
+        }
+        "agent.routine_proposals" => {
+            let request: ForAgent = parse(body)?;
+            let proposals: Vec<Routine> = routines(profile, &request.agent_id)?
+                .into_iter()
+                .filter(|routine| routine.proposed)
+                .collect();
+            Ok(json!({"proposals": proposals}))
+        }
+        "agent.routine_proposal_accept" => {
+            let request: DeleteRoutine = parse(body)?;
+            Ok(
+                json!({"routine": accept_proposal(profile, &request.agent_id, &request.routine_id)?}),
+            )
+        }
+        "agent.routine_proposal_dismiss" => {
+            let request: DeleteRoutine = parse(body)?;
+            dismiss_proposal(profile, &request.agent_id, &request.routine_id)?;
+            Ok(json!({}))
+        }
+        "agent.import" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Import {
+                source: String,
+            }
+            let request: Import = parse(body)?;
+            Ok(json!(crate::agent_templates::import(&request.source)?))
+        }
+        "agent.import_commit" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Commit {
+                agent: Agent,
+                #[serde(default)]
+                memories: Vec<crate::agent_templates::ImportedMemory>,
+            }
+            let request: Commit = parse(body)?;
+            let agent = crate::agent_templates::commit(profile, request.agent, &request.memories)?;
+            Ok(json!({"agent": agent}))
+        }
+        "agent.export" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Export {
+                id: String,
+                format: String,
+            }
+            let request: Export = parse(body)?;
+            crate::agent_templates::export(
+                profile,
+                &request.id,
+                &request.format,
+                &crate::agent_templates::Installed::local(),
+            )
         }
         _ => Err("The agent operation is unknown.".into()),
     }
@@ -1877,6 +2062,59 @@ mod tests {
         .unwrap_err()
         .contains("invalid"));
         assert!(operation(&profile, "agent.forget", serde_json::json!({})).is_err());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn routine_proposals_are_listed_accepted_and_dismissed_for_good() {
+        let (root_dir, profile) = profile();
+        let saved = operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": {"name": "Scout",
+                "instructions": "Check the inbox every morning at 8am. Post a recap every Friday at 5pm."}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        let proposals = operation(
+            &profile,
+            "agent.routine_proposals",
+            serde_json::json!({"agent_id": id}),
+        )
+        .unwrap();
+        let proposals = proposals["proposals"].as_array().unwrap().clone();
+        assert_eq!(proposals.len(), 2);
+        assert!(proposals
+            .iter()
+            .all(|routine| routine["proposed"] == true && routine["enabled"] == false));
+        let first = proposals[0]["id"].as_str().unwrap();
+        let second = proposals[1]["id"].as_str().unwrap();
+        let accepted = operation(
+            &profile,
+            "agent.routine_proposal_accept",
+            serde_json::json!({"agent_id": id, "routine_id": first}),
+        )
+        .unwrap();
+        assert_eq!(accepted["routine"]["enabled"], true);
+        assert!(accepted["routine"].get("proposed").is_none());
+        operation(
+            &profile,
+            "agent.routine_proposal_dismiss",
+            serde_json::json!({"agent_id": id, "routine_id": second}),
+        )
+        .unwrap();
+        // Saving the same instructions again proposes neither one again.
+        let mut agent = get(&profile, &id).unwrap();
+        agent.instructions.push_str(" Be brief.");
+        let agent = save(&profile, agent).unwrap();
+        assert_eq!(agent.routines.len(), 1);
+        assert!(agent.routines[0].enabled && !agent.routines[0].proposed);
+        assert!(operation(
+            &profile,
+            "agent.routine_proposal_accept",
+            serde_json::json!({"agent_id": id, "routine_id": second}),
+        )
+        .is_err());
         fs::remove_dir_all(root_dir).unwrap();
     }
 }

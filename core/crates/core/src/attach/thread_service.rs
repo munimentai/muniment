@@ -647,6 +647,17 @@ pub trait ThreadListService {
     ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
+
+    /// Receives one `POST /hooks/<hook_id>` delivery and answers the id of
+    /// the run it queued. Header names are lowercase.
+    fn receive_webhook(
+        &mut self,
+        _hook_id: &str,
+        _headers: &[(String, String)],
+        _body: &[u8],
+    ) -> Result<String, crate::agent_hooks::Refusal> {
+        Err(crate::agent_hooks::Refusal::NOT_FOUND)
+    }
 }
 
 impl<F> ThreadListService for F

@@ -438,6 +438,34 @@ pub enum Operation {
     /// Removes one routine of an agent.
     #[serde(rename = "routine.delete")]
     RoutineDelete,
+    /// Lists one agent's routine proposals: routines its instructions or an
+    /// import proposed, waiting to be accepted or dismissed.
+    #[serde(rename = "agent.routine_proposals")]
+    AgentRoutineProposals,
+    /// Accepts one routine proposal, which turns the routine on.
+    #[serde(rename = "agent.routine_proposal_accept")]
+    AgentRoutineProposalAccept,
+    /// Dismisses one routine proposal, so it is not proposed again.
+    #[serde(rename = "agent.routine_proposal_dismiss")]
+    AgentRoutineProposalDismiss,
+    /// Reads a template (a share link, JSON or Markdown) into an import preview.
+    #[serde(rename = "agent.import")]
+    AgentImport,
+    /// Saves an import preview as a new agent with its memories.
+    #[serde(rename = "agent.import_commit")]
+    AgentImportCommit,
+    /// Exports one agent as a Grok Bot setup or a Muniment agent file.
+    #[serde(rename = "agent.export")]
+    AgentExport,
+    /// Saves a webhook routine with a new secret, answered once.
+    #[serde(rename = "routine.webhook_create")]
+    RoutineWebhookCreate,
+    /// Replaces a webhook routine's secret, answered once.
+    #[serde(rename = "routine.webhook_rotate")]
+    RoutineWebhookRotate,
+    /// Reads where a webhook routine is reached.
+    #[serde(rename = "routine.webhook_info")]
+    RoutineWebhookInfo,
 }
 
 impl Operation {
@@ -556,6 +584,15 @@ impl Operation {
             Self::RoutineList => "routine.list",
             Self::RoutineSave => "routine.save",
             Self::RoutineDelete => "routine.delete",
+            Self::AgentRoutineProposals => "agent.routine_proposals",
+            Self::AgentRoutineProposalAccept => "agent.routine_proposal_accept",
+            Self::AgentRoutineProposalDismiss => "agent.routine_proposal_dismiss",
+            Self::AgentImport => "agent.import",
+            Self::AgentImportCommit => "agent.import_commit",
+            Self::AgentExport => "agent.export",
+            Self::RoutineWebhookCreate => "routine.webhook_create",
+            Self::RoutineWebhookRotate => "routine.webhook_rotate",
+            Self::RoutineWebhookInfo => "routine.webhook_info",
         }
     }
 
@@ -572,6 +609,15 @@ impl Operation {
                 | Self::RoutineList
                 | Self::RoutineSave
                 | Self::RoutineDelete
+                | Self::AgentRoutineProposals
+                | Self::AgentRoutineProposalAccept
+                | Self::AgentRoutineProposalDismiss
+                | Self::AgentImport
+                | Self::AgentImportCommit
+                | Self::AgentExport
+                | Self::RoutineWebhookCreate
+                | Self::RoutineWebhookRotate
+                | Self::RoutineWebhookInfo
         )
     }
 }

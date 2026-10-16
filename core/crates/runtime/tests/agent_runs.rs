@@ -353,6 +353,8 @@ fn a_routine_run_that_replies_no_response_posts_nothing() {
         created_from: agents::CreatedFrom::User,
         last_fired_at: None,
         last_result: None,
+        proposed: false,
+        last_poll: None,
     });
     let agent = agents::save(setup.profile(), agent).unwrap();
     setup.tick();

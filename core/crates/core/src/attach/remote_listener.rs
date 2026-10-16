@@ -441,7 +441,16 @@ fn serve_connection<S: ThreadListService>(
     }
     let mut stream = RemoteStream::new(tls);
     let deadline = Instant::now() + shared.config.first_frame_timeout;
-    let admitted = read_first_frame(&mut stream, deadline).and_then(|frame| {
+    let first = match read_first(&mut stream, deadline) {
+        Ok(First::Hook) => {
+            serve_hook(&mut stream, peer, shared);
+            stream.into_inner().close();
+            return;
+        }
+        Ok(First::Frame(frame)) => Ok(frame),
+        Err(error) => Err(error),
+    };
+    let admitted = first.and_then(|frame| {
         admit_remote_client(
             &mut stream,
             &frame,
@@ -485,10 +494,25 @@ fn serve_connection<S: ThreadListService>(
     stream.into_inner().close();
 }
 
+/// The first message on a connection: an attach frame, or an HTTP `POST`
+/// to a webhook, which starts with the bytes `POST`.
+enum First {
+    Frame(Vec<u8>),
+    Hook,
+}
+
+#[cfg(test)]
 fn read_first_frame(
     stream: &mut RemoteStream,
     deadline: Instant,
 ) -> Result<Vec<u8>, RemoteAdmissionError> {
+    match read_first(stream, deadline)? {
+        First::Frame(frame) => Ok(frame),
+        First::Hook => Err(RemoteAdmissionError::MalformedFrame),
+    }
+}
+
+fn read_first(stream: &mut RemoteStream, deadline: Instant) -> Result<First, RemoteAdmissionError> {
     let map = |error: io::Error| {
         if super::deadline_io::is_timeout(&error) {
             RemoteAdmissionError::Timeout
@@ -498,6 +522,11 @@ fn read_first_frame(
     };
     let mut prefix = [0_u8; 4];
     read_exact_before(stream, &mut prefix, deadline).map_err(map)?;
+    // An attach frame this long is refused below, so the prefix is free
+    // for the webhook route.
+    if &prefix == b"POST" {
+        return Ok(First::Hook);
+    }
     let length = u32::from_be_bytes(prefix) as usize;
     if length > MAX_HELLO_FRAME_LENGTH {
         write_protocol_error(stream, ProtocolError::payload_too_large(), deadline);
@@ -506,7 +535,153 @@ fn read_first_frame(
     let mut frame = vec![0_u8; 4 + length];
     frame[..4].copy_from_slice(&prefix);
     read_exact_before(stream, &mut frame[4..], deadline).map_err(map)?;
-    Ok(frame)
+    Ok(First::Frame(frame))
+}
+
+/// The largest request line and headers of a webhook delivery.
+const MAX_HOOK_HEADER_BYTES: usize = 16 * 1024;
+/// How long a webhook delivery may take to arrive in full.
+const HOOK_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A webhook request: the hook id and the lowercase headers, or the status
+/// that refuses it.
+fn read_hook_head(
+    stream: &mut RemoteStream,
+    deadline: Instant,
+) -> Result<(String, Vec<(String, String)>), u16> {
+    // `POST` was read already.
+    let mut head = b"POST".to_vec();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        if head.len() >= MAX_HOOK_HEADER_BYTES {
+            return Err(431);
+        }
+        read_exact_before(stream, &mut byte, deadline).map_err(|_| 408_u16)?;
+        head.push(byte[0]);
+    }
+    let head = std::str::from_utf8(&head).map_err(|_| 400_u16)?;
+    let mut lines = head.split("\r\n");
+    let request = lines.next().unwrap_or("");
+    let mut parts = request.split(' ');
+    let (Some("POST"), Some(target), Some(version)) = (parts.next(), parts.next(), parts.next())
+    else {
+        return Err(400);
+    };
+    if !version.starts_with("HTTP/1.") {
+        return Err(400);
+    }
+    let path = target.split('?').next().unwrap_or("");
+    let hook_id = path.strip_prefix("/hooks/").ok_or(404_u16)?;
+    if hook_id.is_empty()
+        || hook_id.len() > 64
+        || !hook_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(404);
+    }
+    let mut headers = Vec::new();
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line.split_once(':').ok_or(400_u16)?;
+        headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+    }
+    Ok((hook_id.to_owned(), headers))
+}
+
+fn reason(status: u16) -> &'static str {
+    match status {
+        202 => "Accepted",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        411 => "Length Required",
+        413 => "Payload Too Large",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        _ => "Service Unavailable",
+    }
+}
+
+fn write_hook_answer(stream: &mut RemoteStream, status: u16, body: &serde_json::Value) {
+    let body = body.to_string();
+    let answer = format!(
+        "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        reason(status),
+        body.len()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let _ = super::deadline_io::write_all_before(stream, answer.as_bytes(), deadline);
+}
+
+/// Serves one webhook delivery: reads the request with a size cap and a
+/// deadline, hands it to the service, and answers with a status. A refused
+/// credential counts toward the peer's backoff, as on the attach route.
+fn serve_hook<S: ThreadListService>(
+    stream: &mut RemoteStream,
+    peer: SocketAddr,
+    shared: &Shared<S>,
+) {
+    use crate::agent_hooks::{Refusal, MAX_PAYLOAD_BYTES};
+    let deadline = Instant::now() + HOOK_READ_TIMEOUT;
+    let refuse = |stream: &mut RemoteStream, status: u16, message: &str| {
+        write_hook_answer(stream, status, &serde_json::json!({"error": message}));
+    };
+    let (hook_id, headers) = match read_hook_head(stream, deadline) {
+        Ok(head) => head,
+        Err(status) => {
+            shared.backoff.record_failure(peer.ip(), Instant::now());
+            refuse(stream, status, "The request is not a webhook delivery.");
+            return;
+        }
+    };
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    if header("transfer-encoding").is_some() {
+        refuse(stream, 411, "Send the payload with a Content-Length.");
+        return;
+    }
+    let Some(length) = header("content-length").and_then(|value| value.parse::<usize>().ok())
+    else {
+        refuse(stream, 411, "Send the payload with a Content-Length.");
+        return;
+    };
+    if length > MAX_PAYLOAD_BYTES {
+        refuse(stream, 413, Refusal::TOO_LARGE.message);
+        return;
+    }
+    let mut body = vec![0_u8; length];
+    if read_exact_before(stream, &mut body, deadline).is_err() {
+        refuse(stream, 408, "The payload did not arrive in time.");
+        return;
+    }
+    let Some(mut service) = (shared.service_factory)() else {
+        refuse(stream, 503, Refusal::UNAVAILABLE.message);
+        return;
+    };
+    match service.receive_webhook(&hook_id, &headers, &body) {
+        Ok(run_id) => {
+            crate::runtime_eprintln!(
+                "muniment-runtime: webhook accepted peer={peer} hook_id={hook_id} run_id={run_id}"
+            );
+            write_hook_answer(stream, 202, &serde_json::json!({"run_id": run_id}));
+        }
+        Err(refusal) => {
+            if refusal.is_failed_attempt() {
+                shared.backoff.record_failure(peer.ip(), Instant::now());
+            }
+            crate::runtime_eprintln!(
+                "muniment-runtime: webhook refused peer={peer} hook_id={hook_id} status={}",
+                refusal.status
+            );
+            refuse(stream, refusal.status, refusal.message);
+        }
+    }
 }
 
 #[cfg(test)]
