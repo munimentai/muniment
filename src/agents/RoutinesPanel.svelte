@@ -22,11 +22,13 @@
   // The proposals come from core's live operation. The agent's own routines
   // hold them too, so a machine without the operation still shows them.
   async function loadProposals() {
+    const current = agent
+    if (!current) return
     try {
-      const answer = await agentRequest(tauri, agent.runtimeId, 'agent.routine_proposals', { agent_id: agent.id })
+      const answer = await agentRequest(tauri, current.runtimeId, 'agent.routine_proposals', { agent_id: current.id })
       proposals = answer?.proposals ?? []
     } catch {
-      proposals = (agent.routines ?? []).filter(isProposal)
+      proposals = (current.routines ?? []).filter(isProposal)
     }
   }
   // A save of the instructions changes the agent. Core's model pass adds its
