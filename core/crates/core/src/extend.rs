@@ -85,7 +85,7 @@ pub fn command(root: &Path, action: &str, mut data: Value) -> Result<Value, Stri
         .lock()
         .map_err(|_| "Extension settings are busy.")?;
     let executable = crate::sidecar::pi_install::acquire_pi(
-        &root.join("harness"),
+        &crate::chat_profile::ChatProfile::new(root).installed_pi_root(),
         &std::sync::atomic::AtomicBool::new(false),
     )
     .map_err(|_| "The local runtime could not be prepared. Try again.")?;
@@ -818,7 +818,7 @@ pub fn mcp_call(
 ) -> Result<Value, String> {
     let files = prepare_mcp_call(root, server, tool, args)?;
     let executable = crate::sidecar::pi_install::resolve_current_for(
-        &root.join("harness"),
+        &crate::chat_profile::ChatProfile::new(root).installed_pi_root(),
         crate::sidecar::pi_install::PI_SELECTED_ARTIFACT,
     )
     .map_err(|_| "The agent runtime is not installed.")?;
