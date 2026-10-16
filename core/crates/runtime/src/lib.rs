@@ -35,6 +35,8 @@ mod retention_schedule;
 pub mod service;
 mod sink;
 #[cfg(any(unix, target_os = "windows"))]
+mod swarm_host;
+#[cfg(any(unix, target_os = "windows"))]
 pub mod update;
 mod windows_attach_loop;
 

@@ -211,6 +211,10 @@ pub fn thread_page(
                 .is_some_and(|run| run.silent)
         });
     }
+    // Messages posted on swarm members show on the first page.
+    if cursor.is_none() {
+        page.posted = muniment_core::swarm::posted_messages(&storage, &thread_id, 100)?;
+    }
     // Each prompt is one keychain read. The journal lock is released first,
     // so a slow keychain never holds up a run's appends.
     load_page_prompts(&mut page, subject.as_deref()).map_err(journal_error)?;

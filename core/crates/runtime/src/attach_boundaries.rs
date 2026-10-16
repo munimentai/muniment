@@ -101,6 +101,7 @@ pub struct RuntimeAttachBoundaries {
     records: Arc<service::RecordRegistry>,
     contexts: ThreadContexts,
     models: Arc<ModelService>,
+    swarm: Option<muniment_core::swarm::Swarm>,
 }
 
 impl RuntimeAttachBoundaries {
@@ -186,7 +187,21 @@ impl RuntimeAttachBoundaries {
             records,
             contexts: ThreadContexts::new(),
             models,
+            swarm: None,
         }
+    }
+
+    /// Answers swarm operations through `swarm`.
+    pub fn with_swarm(mut self, swarm: muniment_core::swarm::Swarm) -> Self {
+        self.swarm = Some(swarm);
+        self
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn swarm(&self) -> Result<&muniment_core::swarm::Swarm, ProtocolError> {
+        self.swarm
+            .as_ref()
+            .ok_or_else(ProtocolError::unsupported_operation)
     }
 
     /// Replaces the production browser opener for tests and alternate hosts.
@@ -757,6 +772,14 @@ impl RuntimeAttachBoundaries {
                 "Enter a message before sending.".into(),
             ));
         }
+        // The primary of a replicated agent or group thread writes its runs.
+        if let (Some(thread), Some(swarm)) = (thread_id.as_deref(), &self.swarm) {
+            if swarm.is_replica_thread(thread).is_some() {
+                return Err(RunStartError::InvalidRequest(
+                    "This agent runs on another machine. Post the message with thread.post.".into(),
+                ));
+            }
+        }
         self.admit_run(thread_id.as_deref())?;
         let tokens = self.fresh_tokens()?;
         let grant = self.configure_run(
@@ -1320,6 +1343,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?
             .subject;
+        if let Some(swarm) = &self.swarm {
+            swarm.want_thread_blobs(&request.thread_id);
+        }
         service::thread_page(
             &self.profile_directory,
             Arc::clone(&self.storage),
@@ -1627,6 +1653,39 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         Ok(muniment_core::agent_runs::subscribe(
             &self.profile_directory,
         ))
+    }
+
+    fn swarm_operation(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: serde_json::Value,
+        client: Option<&str>,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.swarm()?
+            .operation(operation, body, client)
+            .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
+    fn swarm_exchange(
+        &self,
+        device_id: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.swarm()?
+            .exchange(device_id, body)
+            .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
+    fn subscribe_swarm_events(
+        &self,
+    ) -> Result<mpsc::Receiver<muniment_core::swarm::ClientEvent>, ProtocolError> {
+        Ok(self.swarm()?.subscribe())
+    }
+
+    fn note_client_activity(&self) {
+        if let Some(swarm) = &self.swarm {
+            swarm.note_client_activity();
+        }
     }
 
     fn hook_operation(

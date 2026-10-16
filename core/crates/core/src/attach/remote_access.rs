@@ -82,6 +82,22 @@ pub struct PairedDevice {
     pub scopes: BTreeSet<String>,
     pub created_at: String,
     pub last_seen_at: Option<String>,
+    /// `outbound` for a link this runtime keeps to another runtime, which
+    /// holds the device. A device paired to this runtime leaves it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    /// The other runtime of an outbound link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_id: Option<String>,
+}
+
+/// The links this runtime keeps to other runtimes, which the device list
+/// shows beside the devices paired to it and which a revoke drops.
+pub trait OutboundLinks: Send + Sync {
+    fn list(&self) -> Vec<PairedDevice>;
+    /// Drops the link whose device id is `device_id` and answers whether
+    /// one did.
+    fn revoke(&self, device_id: &str) -> bool;
 }
 
 /// A version a client asked the host to install.
@@ -176,6 +192,7 @@ struct Inner {
     revoked: Mutex<HashSet<String>>,
     update_subscribers: Mutex<Vec<mpsc::Sender<RuntimeUpdateRequest>>>,
     update_capability: Mutex<UpdateCapability>,
+    outbound: Mutex<Option<Arc<dyn OutboundLinks>>>,
     opened_at: String,
     clock: Box<Clock>,
 }
@@ -233,6 +250,7 @@ impl RemoteAccess {
                 revoked: Mutex::new(HashSet::new()),
                 update_subscribers: Mutex::new(Vec::new()),
                 update_capability: Mutex::new(update_capability),
+                outbound: Mutex::new(None),
                 opened_at,
                 clock,
             }),
@@ -368,9 +386,16 @@ impl RemoteAccess {
         })
     }
 
-    /// Lists the paired devices, oldest first.
+    /// Shows the links this runtime keeps to other runtimes in the device
+    /// list and lets a revoke drop them.
+    pub fn set_outbound_links(&self, links: Arc<dyn OutboundLinks>) {
+        *lock(&self.inner.outbound) = Some(links);
+    }
+
+    /// Lists the paired devices, oldest first, then the links this runtime
+    /// keeps to other runtimes.
     pub fn list_devices(&self) -> Result<Vec<PairedDevice>, ProtocolError> {
-        Ok(self
+        let mut devices: Vec<PairedDevice> = self
             .read_store()?
             .devices
             .into_iter()
@@ -381,8 +406,15 @@ impl RemoteAccess {
                 scopes: device.scopes,
                 created_at: device.created_at,
                 last_seen_at: device.last_seen_at,
+                direction: None,
+                runtime_id: None,
             })
-            .collect())
+            .collect();
+        let outbound = lock(&self.inner.outbound).clone();
+        if let Some(outbound) = outbound {
+            devices.extend(outbound.list());
+        }
+        Ok(devices)
     }
 
     /// Revokes a device and answers whether it was paired. Its live sessions
@@ -391,6 +423,10 @@ impl RemoteAccess {
     pub fn revoke_device(&self, device_id: &str) -> Result<bool, ProtocolError> {
         if Id::new(device_id).is_err() {
             return Err(ProtocolError::invalid_request());
+        }
+        let outbound = lock(&self.inner.outbound).clone();
+        if outbound.is_some_and(|outbound| outbound.revoke(device_id)) {
+            return Ok(true);
         }
         let removed = self.transact(|store, _| {
             let before = store.devices.len();

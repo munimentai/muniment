@@ -648,6 +648,35 @@ pub trait ThreadListService {
         Err(ProtocolError::unsupported_operation())
     }
 
+    /// Runs one swarm operation, such as `swarm.members` or `thread.post`,
+    /// and answers its body.
+    fn swarm_operation(
+        &mut self,
+        _operation: super::Operation,
+        _body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    /// Trades replication state with the linked runtime that paired as
+    /// `device_id`.
+    fn swarm_exchange(
+        &mut self,
+        _device_id: &str,
+        _body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    /// Subscribes to the swarm's client events.
+    fn subscribe_swarm_events(
+        &mut self,
+    ) -> Result<std::sync::mpsc::Receiver<crate::swarm::ClientEvent>, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    /// Records that a client used this runtime.
+    fn note_client_activity(&mut self) {}
     /// Receives one `POST /hooks/<hook_id>` delivery and answers the id of
     /// the run it queued. Header names are lowercase.
     fn receive_webhook(

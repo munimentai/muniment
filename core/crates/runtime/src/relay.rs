@@ -64,11 +64,39 @@ struct Runs {
     active: RunRegistry,
     chat_events: RuntimeChatEventBroadcast,
     storage: SharedStorage,
+    swarm: Option<muniment_core::swarm::Swarm>,
 }
 
 impl RelayRuntime for Runs {
+    /// This runtime's run events, and the approvals other swarm members hold.
     fn subscribe(&self) -> Option<ChatEventSubscription> {
-        Some(self.chat_events.subscribe())
+        let local = self.chat_events.subscribe();
+        let Some(swarm) = &self.swarm else {
+            return Some(local);
+        };
+        let remote = swarm.phone_events();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let running = Arc::clone(&open);
+        std::thread::spawn(move || {
+            while running.load(std::sync::atomic::Ordering::SeqCst) {
+                let event = match local.recv_timeout(Duration::from_millis(200)) {
+                    Ok(event) => Some(event),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                };
+                let delivered = event
+                    .into_iter()
+                    .chain(remote.try_iter())
+                    .all(|event| sender.send(event).is_ok());
+                if !delivered {
+                    return;
+                }
+            }
+        });
+        Some(ChatEventSubscription::new(receiver, move || {
+            open.store(false, std::sync::atomic::Ordering::SeqCst);
+        }))
     }
 
     fn stop(&self, run_id: &str) -> Result<(), String> {
@@ -93,6 +121,16 @@ impl RelayRuntime for Runs {
         gate_id: &str,
         answer: ChatPermissionAnswer,
     ) -> Result<(), String> {
+        // A gate another swarm member holds takes the answer through the swarm.
+        if !self.active.contains(run_id) {
+            if let Some(swarm) = &self.swarm {
+                let result = swarm.answer_gate(run_id, gate_id, &answer)?;
+                return match result["status"].as_str() {
+                    Some("answered") | Some("sent") => Ok(()),
+                    _ => Err("The approval was already answered.".into()),
+                };
+            }
+        }
         queue_permission_answer_with_commit(
             &self.active,
             None,
@@ -138,6 +176,7 @@ pub(crate) fn start(
     active: RunRegistry,
     chat_events: RuntimeChatEventBroadcast,
     storage: SharedStorage,
+    swarm: Option<muniment_core::swarm::Swarm>,
 ) -> Option<RelayPublisher> {
     host.account.cloud_api_base()?;
     let state_path = relay_state_path(&profile_directory);
@@ -151,6 +190,7 @@ pub(crate) fn start(
             active,
             chat_events,
             storage,
+            swarm,
         }),
         state_path,
     ))
@@ -175,6 +215,7 @@ mod tests {
             RunRegistry::default(),
             RuntimeChatEventBroadcast::default(),
             storage,
+            None,
         );
         assert!(publisher.is_none());
         std::fs::remove_dir_all(profile).unwrap();

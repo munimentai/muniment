@@ -116,6 +116,7 @@ pub mod agent_templates;
 pub mod agents;
 pub mod project_context;
 pub mod projects;
+pub mod swarm;
 pub mod workspace_names;
 
 pub use muniment_router::provider_models;

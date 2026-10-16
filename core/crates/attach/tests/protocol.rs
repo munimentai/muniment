@@ -1302,3 +1302,125 @@ fn admin_access_holds_agent_access() {
         SCOPE_RUNTIME_ADMIN
     ));
 }
+
+#[test]
+fn swarm_operations_and_events_have_canonical_fixtures() {
+    for (operation, name) in [
+        (Operation::SwarmInvite, "swarm.invite"),
+        (Operation::SwarmJoin, "swarm.join"),
+        (Operation::SwarmLeave, "swarm.leave"),
+        (Operation::SwarmMembers, "swarm.members"),
+        (Operation::SwarmAgents, "swarm.agents"),
+        (Operation::SwarmExchange, "swarm.exchange"),
+        (Operation::SwarmResume, "swarm.resume"),
+        (Operation::ThreadPost, "thread.post"),
+        (Operation::AgentMove, "agent.move"),
+        (Operation::AgentApprovals, "agent.approvals"),
+        (Operation::AgentApprovalAnswer, "agent.approval_answer"),
+        (Operation::GroupCreate, "group.create"),
+        (Operation::GroupList, "group.list"),
+        (Operation::GroupUpdate, "group.update"),
+    ] {
+        assert_eq!(operation.as_str(), name);
+        assert!(operation.is_swarm_operation());
+        assert!(!operation.is_agent_operation());
+        assert!(!operation.requires_idempotency_key());
+        let file = name.replace(['.', '_'], "-");
+        let Envelope::Request(request) =
+            serde_json::from_value(canonical_fixture(&format!("request-{file}.json"))).unwrap()
+        else {
+            panic!("expected request fixture");
+        };
+        assert_eq!(request.operation, operation);
+        assert!(request.body.is_object());
+        let Envelope::Response(response) =
+            serde_json::from_value(canonical_fixture(&format!("response-{file}.json"))).unwrap()
+        else {
+            panic!("expected response fixture");
+        };
+        assert_eq!(response.request_id, request.request_id);
+        assert!(response.body.is_object());
+    }
+    assert!(!Operation::AgentList.is_swarm_operation());
+    for (file, event) in [
+        ("event-swarm-changed.json", EventName::SwarmChanged),
+        (
+            "event-agent-approval-pending.json",
+            EventName::AgentApprovalPending,
+        ),
+        (
+            "event-agent-approval-resolved.json",
+            EventName::AgentApprovalResolved,
+        ),
+    ] {
+        let Envelope::Event(parsed) = serde_json::from_value(canonical_fixture(file)).unwrap()
+        else {
+            panic!("expected event fixture");
+        };
+        assert_eq!(parsed.event, event);
+        assert!(parsed.run_id.is_none() && parsed.run_seq.is_none());
+    }
+    let Envelope::Response(exchange) =
+        serde_json::from_value(canonical_fixture("response-swarm-exchange.json")).unwrap()
+    else {
+        panic!("expected response fixture");
+    };
+    for key in [
+        "from",
+        "members",
+        "directory",
+        "groups",
+        "threads",
+        "clocks",
+        "events",
+        "messages",
+        "acks",
+        "notices",
+        "approvals",
+        "wants",
+        "blobs",
+        "client_seen_at",
+        "resumed_at",
+        "more",
+    ] {
+        assert!(exchange.body.get(key).is_some(), "{key}");
+    }
+    let Envelope::Request(subscribe) =
+        serde_json::from_value(canonical_fixture("request-run-chat-events-swarm.json")).unwrap()
+    else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(subscribe.body["swarm"], true);
+    let Envelope::Event(run) =
+        serde_json::from_value(canonical_fixture("event-agent-run-updated.json")).unwrap()
+    else {
+        panic!("expected event fixture");
+    };
+    assert_eq!(run.body["notify"], true);
+}
+
+#[test]
+fn the_swarm_peer_scope_grants_and_is_granted_nothing_else() {
+    let scopes = |names: &[&str]| -> std::collections::BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    };
+    assert!(REMOTE_SCOPES.contains(&SCOPE_SWARM_PEER));
+    assert!(!default_pairing_scopes().contains(SCOPE_SWARM_PEER));
+    assert!(scopes_grant(&scopes(&[SCOPE_SWARM_PEER]), SCOPE_SWARM_PEER));
+    assert!(!scopes_grant(
+        &scopes(&[SCOPE_RUNTIME_ADMIN]),
+        SCOPE_SWARM_PEER
+    ));
+    for scope in [
+        SCOPE_THREAD_READ,
+        SCOPE_RUN_WRITE,
+        SCOPE_RUNTIME_UPDATE,
+        SCOPE_RUNTIME_ADMIN,
+        SCOPE_AGENTS_MANAGE,
+    ] {
+        assert!(
+            !scopes_grant(&scopes(&[SCOPE_SWARM_PEER]), scope),
+            "{scope}"
+        );
+    }
+}

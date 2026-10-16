@@ -1956,6 +1956,8 @@ fn coordinate_memory_search(
                     "routine-list",
                     "routine-save",
                     "routine-delete",
+                    "agent-message",
+                    "agent-handoff",
                     "creation-plan",
                     "artifact-publish",
                 ]

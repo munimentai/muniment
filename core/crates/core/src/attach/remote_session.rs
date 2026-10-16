@@ -13,7 +13,7 @@ use muniment_attach::{
     decode_frame, encode_frame, reconnect_welcome, DeviceCredential, Event, EventName,
     FirstMessage, Id, NegotiationError, Operation, ProtocolError, RemoteClientAuthorizedGrant,
     Request, VersionRange, MAX_FRAME_LENGTH, SCOPE_AGENTS_MANAGE, SCOPE_RUNTIME_ADMIN,
-    SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE, SCOPE_THREAD_READ,
+    SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE, SCOPE_SWARM_PEER, SCOPE_THREAD_READ,
 };
 use serde_json::Value;
 
@@ -48,6 +48,7 @@ pub(super) fn missing_scope_reason(scope: &str) -> &'static str {
         SCOPE_AGENTS_MANAGE => {
             "This device can use this machine's agents but cannot change them. Pair it again with agent access."
         }
+        SCOPE_SWARM_PEER => "Only a linked Muniment runtime can trade swarm state.",
         _ => "This device cannot read this machine's threads. Pair it again.",
     }
 }
@@ -67,6 +68,9 @@ pub enum RemoteRule {
     /// The request names a file on the runtime's own machine, which a
     /// remote device never reads. The reason tells its user why.
     Refused(&'static str),
+    /// A linked swarm runtime trades replication state. Only a device that
+    /// holds `swarm.peer` sends it, and no other scope grants it.
+    SwarmPeer,
 }
 
 /// The reader source that opens a file on the runtime's machine by path.
@@ -199,6 +203,20 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::AgentExport
         | Operation::RoutineWebhookCreate
         | Operation::RoutineWebhookRotate => RemoteRule::Scope(SCOPE_AGENTS_MANAGE),
+        Operation::SwarmExchange => RemoteRule::SwarmPeer,
+        // Linking runtimes pairs devices, which only the runtime's admin does.
+        Operation::SwarmInvite | Operation::SwarmJoin | Operation::SwarmLeave => {
+            RemoteRule::Scope(SCOPE_RUNTIME_ADMIN)
+        }
+        Operation::SwarmMembers
+        | Operation::SwarmAgents
+        | Operation::AgentApprovals
+        | Operation::GroupList => RemoteRule::Scope(SCOPE_THREAD_READ),
+        Operation::ThreadPost
+        | Operation::AgentApprovalAnswer
+        | Operation::GroupCreate
+        | Operation::GroupUpdate => RemoteRule::Scope(SCOPE_RUN_WRITE),
+        Operation::AgentMove | Operation::SwarmResume => RemoteRule::Scope(SCOPE_AGENTS_MANAGE),
     }
 }
 
@@ -522,6 +540,19 @@ impl<H: ThreadListService> DesktopSessionService for RemoteSession<'_, H> {
             }
             RemoteRule::RemoteAccess => {
                 dispatch_remote_operation(&self.access, &request, &self.scopes, &self.device_id)
+                    .map(|body| DesktopDispatchResult {
+                        body,
+                        events: Vec::new(),
+                    })
+                    .map_err(refuse)
+            }
+            RemoteRule::SwarmPeer if !self.scopes.contains(SCOPE_SWARM_PEER) => Err(refuse(
+                ProtocolError::unauthorized_with_reason(missing_scope_reason(SCOPE_SWARM_PEER)),
+            )),
+            RemoteRule::SwarmPeer => {
+                request.validate_idempotency_key().map_err(refuse)?;
+                self.service
+                    .swarm_exchange(&self.device_id, request.body)
                     .map(|body| DesktopDispatchResult {
                         body,
                         events: Vec::new(),

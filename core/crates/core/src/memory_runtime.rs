@@ -535,6 +535,13 @@ impl ApplicationMemoryRuntime {
                     }
                 }
             }
+            "agent-message" | "agent-handoff" => {
+                let arguments: serde_json::Value = serde_json::from_str(arguments)
+                    .map_err(|_| "The message arguments are invalid.")?;
+                crate::swarm::Swarm::for_profile(&self.config)
+                    .ok_or("Agent messaging is unavailable on this machine.")?
+                    .agent_tool(session, &thread, tool, arguments)
+            }
             _ => Err("The agent tool is unknown.".into()),
         }
     }
@@ -765,6 +772,8 @@ const AGENT_TOOLS: &str = r#"  const idSchema = {type:'object',properties:{id:{t
     ['routine-list', 'List routines', 'List the routines of an agent: what starts it on its own and when it last ran. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'}},additionalProperties:false}],
     ['routine-save', 'Save routine', 'Add or update a routine of an agent at the user request. A cron trigger is {kind:"cron", expr:"<minute> <hour> <day> <month> <weekday>", tz:"<IANA zone>"} and runs at most every five minutes. A webhook trigger is {kind:"webhook", preset:"generic"|"github"|"forgejo"}. An mcp trigger is {kind:"mcp", server, tool, args, every:{expr, tz}, condition}, where condition is {all:[...]}, {any:[...]} or {path:"/json/pointer", op:"eq|ne|gt|gte|lt|lte|contains|exists|changed|nonempty", value}. The prompt says what each run does; when nothing is worth reporting, the run replies NO_RESPONSE. Omit routine.id to add one. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'},routine:{type:'object',properties:{id:{type:'string'},name:{type:'string'},enabled:{type:'boolean'},trigger:{type:'object'},prompt:{type:'string'}},required:['name','trigger'],additionalProperties:false}},required:['routine'],additionalProperties:false}],
     ['routine-delete', 'Delete routine', 'Delete one routine of an agent at the user request. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'},routine_id:{type:'string'}},required:['routine_id'],additionalProperties:false}],
+    ['agent-message', 'Message agent', 'Send a message to another agent, on this machine or another paired machine, by its id or name. intent is request (asks it to do something), question (asks it something), result (answers an earlier message), status or fyi. For a request or question, the other agent\'s final answer comes back to this thread on its own as a result; do not wait for it in this reply. status and fyi need no reply. Each message passes one step of a chain capped at six agents.', {type:'object',properties:{to:{type:'string'},intent:{type:'string',enum:['request','question','result','status','fyi']},text:{type:'string'},reply_to:{type:'string',description:'The message_id this answers'}},required:['to','intent','text'],additionalProperties:false}],
+    ['agent-handoff', 'Hand off task', 'Hand a task over to another agent, which then owns it and reports in its own thread. Use when another agent is better placed to finish the work. A task cannot go straight back to the agent that handed it to you, and one reply hands off at most once.', {type:'object',properties:{to:{type:'string'},task:{type:'string'},context:{type:'string'}},required:['to','task'],additionalProperties:false}],
     ['browser', 'Use browser', 'Work toward a goal in the Muniment Browser tab, which the tool opens when it is closed. A fast decision model picks each click, scroll and dropdown value. It returns when it needs text for a field, needs the user to confirm a click that buys, sends, deletes or changes an account, is unsure, is blocked, or believes the goal is met. Then call again with the same goal and text {element, value}, or with click set to an element id: one the user confirmed, or one you chose from the returned elements. Ask the user before you click a consequential element. Check a done result against the page it returns. Never type a password. Keep each goal to one page or one form.', {type:'object',properties:{goal:{type:'string'},url:{type:'string',description:'An http or https address to open first'},text:{type:'object',properties:{element:{type:'string'},value:{type:'string'}},required:['element','value'],additionalProperties:false},click:{type:'string',description:'An element id to click first'}},required:['goal'],additionalProperties:false}]
   ]);
 "#;
@@ -905,6 +914,96 @@ mod tests {
         );
         crate::memory_files::fact_restore_in(&private, &home, &fact.id).unwrap();
         assert_eq!(crate::memory_files::facts_in(&home).unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    struct NoHost;
+
+    impl crate::swarm::SwarmHost for NoHost {
+        fn replica_scope(&self) -> Option<crate::swarm::ReplicaScope> {
+            None
+        }
+        fn steer(&self, _thread_id: &str, _text: &str) -> Option<String> {
+            None
+        }
+        fn answer_permission(
+            &self,
+            _run_id: &str,
+            _gate_id: &str,
+            _answer: crate::permission_gate::ChatPermissionAnswer,
+        ) -> Result<(), String> {
+            Err("No run is live.".into())
+        }
+        fn kick_runs(&self) {}
+    }
+
+    #[test]
+    fn the_message_tools_reach_an_agent_on_the_same_runtime() {
+        let root = std::env::temp_dir().join(format!("muniment-agent-message-{}", Uuid::new_v4()));
+        let config = root.join("config");
+        fs::create_dir_all(&config).unwrap();
+        crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(config.clone(), config.join("memory"));
+        let thread = "01900000-0000-7000-8000-000000000003";
+        runtime
+            .open_session(
+                "run-two",
+                thread,
+                ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters: 8192,
+                },
+            )
+            .unwrap();
+        let tool = |name: &str, arguments: serde_json::Value| {
+            runtime.agent_tool("run-two", name, &arguments.to_string())
+        };
+        tool(
+            "agent-save",
+            serde_json::json!({"name": "Planner", "instructions": "Plan the work."}),
+        )
+        .unwrap();
+        let analyst = crate::agents::save(
+            &config,
+            crate::agents::Agent {
+                name: "Analyst".into(),
+                instructions: "Analyze.".into(),
+                ..crate::agents::Agent::default()
+            },
+        )
+        .unwrap();
+        let message =
+            serde_json::json!({"to": "Analyst", "intent": "question", "text": "How many leads?"});
+        // Without a swarm the tools answer that messaging is unavailable.
+        assert_eq!(
+            tool("agent-message", message.clone()).unwrap_err(),
+            "Agent messaging is unavailable on this machine."
+        );
+        let storage = std::sync::Arc::new(std::sync::Mutex::new(crate::run_events::ChatStorage {
+            journal: crate::journal::RunJournal::open(config.join("runs.sqlite3")).unwrap(),
+            cas: crate::cas::LocalCas::open(&config.join("cas")).unwrap(),
+        }));
+        let swarm =
+            crate::swarm::Swarm::open(&config, storage, std::sync::Arc::new(NoHost)).unwrap();
+        let sent = tool("agent-message", message).unwrap();
+        assert_eq!(sent["delivered"], true);
+        assert_eq!(sent["hop"], 1);
+        let queued = crate::agent_runs::RunStore::open(&config)
+            .unwrap()
+            .latest(&analyst.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            queued.trigger.kind,
+            crate::agent_runs::TriggerKind::AgentMessage
+        );
+        assert!(queued.prompt.contains("intent=\"question\""));
+        let handed = tool(
+            "agent-handoff",
+            serde_json::json!({"to": analyst.id, "task": "Write the report."}),
+        )
+        .unwrap();
+        assert_eq!(handed["message_id"], "handoff:run-two");
+        drop(swarm);
         fs::remove_dir_all(root).unwrap();
     }
 

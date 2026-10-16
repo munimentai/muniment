@@ -40,6 +40,15 @@ pub enum SubscriptionEvent {
     /// An agent run changed; the body is the run. Only a subscription that
     /// asked for agent runs receives it.
     AgentRunUpdated(Value),
+    /// The swarm's members, links, directory, groups or absence pause
+    /// changed; the body names `kind`. Only a subscription that asked for
+    /// the swarm receives it.
+    SwarmChanged(Value),
+    /// An agent run on a swarm member waits at an approval; the body is the
+    /// approval.
+    ApprovalPending(Value),
+    /// A pending approval was answered or closed; the body is the approval.
+    ApprovalResolved(Value),
 }
 
 /// A connection-bound client for the peer-authorized desktop session.
@@ -566,7 +575,7 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        self.subscribe_chat_events_with(cursor, false, false)
+        self.subscribe_chat_events_with(cursor, false, false, false)
     }
 
     /// Subscribes like [`Self::subscribe_chat_events_after`] and also asks
@@ -577,13 +586,13 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        match self.subscribe_chat_events_with(cursor, true, false) {
+        match self.subscribe_chat_events_with(cursor, true, false, false) {
             Err(_)
                 if self
                     .last_request_error()
                     .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest) =>
             {
-                self.subscribe_chat_events_with(cursor, false, false)
+                self.subscribe_chat_events_with(cursor, false, false, false)
             }
             result => result,
         }
@@ -602,8 +611,27 @@ impl DesktopClient {
                 .last_request_error()
                 .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
         };
-        match self.subscribe_chat_events_with(cursor, true, true) {
+        match self.subscribe_chat_events_with(cursor, true, true, false) {
             Err(_) if refused(self) => self.subscribe_chat_events_with_update_status(cursor),
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_agent_runs`] and
+    /// also asks for the swarm's `swarm.changed`, `agent.approval_pending`
+    /// and `agent.approval_resolved` events. A runtime without a swarm
+    /// refuses the request, and the subscription then carries none.
+    pub fn subscribe_chat_events_with_swarm(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true, true) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_agent_runs(cursor),
             result => result,
         }
     }
@@ -613,6 +641,7 @@ impl DesktopClient {
         cursor: Option<u64>,
         update_status: bool,
         agent_runs: bool,
+        swarm: bool,
     ) -> Result<String, ClientError> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -626,6 +655,9 @@ impl DesktopClient {
         }
         if agent_runs {
             base.insert("agent_runs".into(), Value::Bool(true));
+        }
+        if swarm {
+            base.insert("swarm".into(), Value::Bool(true));
         }
         let response = match cursor {
             Some(cursor) => {
@@ -719,6 +751,9 @@ impl DesktopClient {
                         | EventName::RuntimeUpdateRequested
                         | EventName::RuntimeUpdateStatus
                         | EventName::AgentRunUpdated
+                        | EventName::SwarmChanged
+                        | EventName::AgentApprovalPending
+                        | EventName::AgentApprovalResolved
                 )
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -748,6 +783,25 @@ impl DesktopClient {
                     return Err(ClientError::UnexpectedMessage);
                 }
                 return Ok(SubscriptionEvent::AgentRunUpdated(event.body));
+            }
+            if event.event == EventName::SwarmChanged {
+                if !event.body["kind"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::SwarmChanged(event.body));
+            }
+            if matches!(
+                event.event,
+                EventName::AgentApprovalPending | EventName::AgentApprovalResolved
+            ) {
+                if !event.body["approval_id"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(if event.event == EventName::AgentApprovalPending {
+                    SubscriptionEvent::ApprovalPending(event.body)
+                } else {
+                    SubscriptionEvent::ApprovalResolved(event.body)
+                });
             }
             if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
                 if let Some(seq) = body.get("seq").and_then(Value::as_u64) {
@@ -1258,6 +1312,31 @@ impl DesktopClient {
             Operation::RoutineDelete,
             serde_json::json!({"agent_id": agent_id, "routine_id": routine_id}),
         )
+    }
+
+    /// Sends one swarm operation, such as `swarm.members` or `thread.post`,
+    /// with its body, and answers the runtime's body.
+    pub fn swarm_request(
+        &mut self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, ClientError> {
+        if !operation.is_swarm_operation() || !body.is_object() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let expected: &[&str] = match operation {
+            Operation::SwarmInvite => &["link"],
+            Operation::SwarmJoin => &["member"],
+            Operation::SwarmMembers => &["members"],
+            Operation::SwarmAgents => &["agents"],
+            Operation::ThreadPost => &["message_id"],
+            Operation::AgentMove | Operation::AgentApprovalAnswer => &["status"],
+            Operation::AgentApprovals => &["approvals"],
+            Operation::GroupCreate | Operation::GroupUpdate => &["group"],
+            Operation::GroupList => &["groups"],
+            _ => &[],
+        };
+        self.request_body(operation, None, body, expected)
     }
 
     fn request_body(

@@ -125,7 +125,9 @@ listener is off until the host binds it.
   deadlines, a 16 KiB first frame, and a growing hold on a peer address after
   repeated refusals.
 - Scopes are `thread.read`, `run.write`, `runtime.update`,
-  `runtime.admin` and `agents.manage`, which `runtime.admin` holds too. A link
+  `runtime.admin`, `agents.manage`, which `runtime.admin` holds too, and
+  `swarm.peer`, which a linked runtime holds alone and which reaches only
+  `swarm.exchange`. A link
   grants `thread.read`, `run.write` and `runtime.update` unless its creator
   names others, and a client can ask for fewer, never more. Only the local owner and `runtime.admin` devices create
   links, list devices and revoke other devices, and a device delegates only
@@ -382,11 +384,91 @@ carry the secret, and `routine.webhook_info` (`{"agent_id", "routine_id"}` →
 "listening"}`. Remotely the reads, `agent.routine_proposals` and
 `routine.webhook_info` take `thread.read`, `agent.run_now` takes
 `run.write`, and the changes, imports and exports take `agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
-also receives `agent.run_updated` events whose body is the changed `Run`. A
+also receives `agent.run_updated` events whose body is the changed `Run`
+with `notify`, true when the change warrants a notification: the run
+completed with a reply, failed, or waits for an answer. A run another swarm
+member reports carries its `runtime_id`. A
 runtime without the queue refuses the request, and
 `DesktopClient::subscribe_chat_events_with_agent_runs` then subscribes
 without it. The model reaches the same agents through the `agent-*` and
 `routine-list`, `routine-save` and `routine-delete` tools.
+
+### Swarm
+
+`muniment_core::swarm` links one owner's runtimes so their agents work
+together. Each runtime keeps its records in `<profile>/swarm.sqlite3` and the
+thread content in its run journal. The runtime supplies replica scope,
+steering, gate answers and run starts through `SwarmHost`.
+
+- **Links.** A `runtime.admin` client calls `swarm.invite` (`{"endpoints"?}`
+  → `{"link", "expires_at", "runtime_id"}`) on one runtime, which issues a
+  `swarm.peer` pairing link, and `swarm.join` (`{"link"}` → `{"member"}`) on
+  the other, which redeems it, saves the record under
+  `<profile>/swarm/links/` and dials with backoff from one second to a
+  minute. Data flows both ways in each `swarm.exchange`, so one reachable end
+  suffices. The answering runtime lists the link as a `swarm-peer` device, the
+  dialing one as an `outbound` device, and `remote.device_revoke` drops it on
+  either side; `swarm.leave` (`{"runtime_id"}`) drops every link to a member.
+- **Relay.** Members gossip to every linked member, which passes everything
+  on, so each member reaches every other through any chain of links.
+  `swarm.members` (`{}` → `{"self", "members", "absence"}`) lists each member
+  with `online` (heard from within a minute) and this runtime's `link` to it.
+- **Directory.** Each runtime describes the agents it runs as `{"agent_id",
+  "name", "label", "avatar", "primary_runtime", "epoch", "updated_at",
+  "deleted", "primary_thread"}`; the highest `epoch`, then the latest
+  `updated_at`, wins. `swarm.agents` answers it, and `swarm.changed` events
+  (`{"kind"}`) report changes to members, agents, groups, threads and the
+  absence pause.
+- **Threads.** Agent and group threads replicate as journal events with
+  `(origin, seq)`: the replica keeps the thread, run and event ids, so the
+  normal thread reads answer it on every member. Only the primary writes
+  runs; `run.submit` into a replica is refused. `thread.post`
+  (`{"thread_id"}` or `{"agent_id"}`, `"text"` → `{"message_id",
+  "thread_id", "origin_runtime", "seq"}`) appends a `thread.message.posted`
+  event with the poster's vector clock, and the primary consumes it in causal
+  order: it steers a live run or queues one, then appends
+  `thread.message.consumed`. `thread.history` lists posts in `posted`.
+  Attachments and stored payloads travel on demand when a member opens the
+  thread.
+- **Moves.** `agent.move` (`{"id", "to", "force"?}` → `{"status", "agent"}`)
+  raises the agent's `epoch` on its primary, which then fires none of its
+  routines, and hands the definition, memory folder, routine state, thread
+  clocks and saved conversations to the target, which takes over once its
+  replicas caught up. With `force`, the target takes the agent from the
+  directory's copy while the old primary is offline, and the old primary
+  steps down when it sees the higher epoch.
+- **Messaging.** The `agent-message` (`{"to", "intent", "text",
+  "reply_to"?}`) and `agent-handoff` (`{"to", "task", "context"?}`) tools
+  send through a durable outbox that every member relays until the target
+  acknowledges. The target wakes in its primary thread with an untrusted
+  `<agent_message>` or `<agent_handoff>` block. A request or question returns
+  the target's final reply as a `result`. Each step adds one hop, a user
+  message starts at zero, and a seventh step is refused. `messaging.allow` is
+  checked at send, a handoff's key is `handoff:<run id>`, and a handoff back
+  to the agent that sent the task is refused.
+- **Groups.** `group.create` (`{"name", "members", "lead"?,
+  "meeting_mode"?, "debate_rounds"?}`), `group.list` and `group.update` (`{"group_id", ...}`)
+  answer `{"group"}` or `{"groups"}`. A group holds two to six agents and its
+  creator's runtime owns its thread. `@everyone` wakes every member, `@Name`
+  the named ones, and no mention the first. A meeting runs a blind round, up
+  to two debate rounds and the lead's summary. Each agent works in its own
+  thread; only its reply, without credentials and with the start of a long
+  draft, reaches the group.
+- **Approvals.** A gate an agent run waits at reaches every member's clients
+  as `agent.approval_pending`, and the phone relay of any member shows it.
+  `agent.approvals` lists the pending ones and `agent.approval_answer`
+  (`{"approval_id", "answer"}` → `{"status": "answered"|"already_answered"|"sent",
+  "approval"}`) answers one; the member that runs the gate applies the first
+  answer. `agent.approval_resolved` follows.
+- **Absence.** When no client used any member for 14 days, each member sets
+  `paused_reason: "absence"` on the agents it runs. `swarm.resume` clears it
+  on every member.
+
+A chat-event subscription that sends `{"swarm": true}` receives
+`swarm.changed`, `agent.approval_pending` and `agent.approval_resolved`.
+Remotely, linking takes `runtime.admin`, the reads take `thread.read`,
+`thread.post`, group changes and answers take `run.write`, and `agent.move`
+and `swarm.resume` take `agents.manage`.
 
 ## Phone relay
 

@@ -1837,6 +1837,37 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
     ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
         self.boundaries.subscribe_agent_runs()
     }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn swarm_operation(
+        &mut self,
+        operation: super::Operation,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.boundaries
+            .swarm_operation(operation, body, self.client_identity.as_deref())
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn swarm_exchange(
+        &mut self,
+        device_id: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.boundaries.swarm_exchange(device_id, body)
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn subscribe_swarm_events(
+        &mut self,
+    ) -> Result<std::sync::mpsc::Receiver<crate::swarm::ClientEvent>, ProtocolError> {
+        self.boundaries.subscribe_swarm_events()
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn note_client_activity(&mut self) {
+        self.boundaries.note_client_activity();
+    }
 }
 
 fn attach_provenance(

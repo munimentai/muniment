@@ -141,6 +141,8 @@ pub(super) struct ActiveChatSubscription {
     /// Agent run changes, sent as `agent.run_updated` events when the
     /// subscriber asked for them.
     agent_runs: Option<std::sync::mpsc::Receiver<serde_json::Value>>,
+    /// The swarm's client events when the subscriber asked for them.
+    swarm: Option<std::sync::mpsc::Receiver<crate::swarm::ClientEvent>>,
 }
 
 /// How often a subscription rereads the update status, which a launcher in
@@ -204,12 +206,14 @@ impl<S: ThreadListService> DesktopSessionService for S {
                 events.extend(drain_update_events(subscription));
                 events.extend(drain_update_status(subscription));
                 events.extend(drain_agent_runs(subscription));
+                events.extend(drain_swarm(subscription));
                 let (chat, closed) = drain_chat_events(subscription, wait)?;
                 events.extend(chat);
                 events.extend(drain_model_events(subscription));
                 events.extend(drain_update_events(subscription));
                 events.extend(drain_update_status(subscription));
                 events.extend(drain_agent_runs(subscription));
+                events.extend(drain_swarm(subscription));
                 Ok((events, closed))
             })
     }
@@ -301,6 +305,26 @@ fn drain_agent_runs(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
             }),
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => subscription.agent_runs = None,
+        }
+    }
+    events
+}
+
+/// Takes the swarm's client events already queued.
+fn drain_swarm(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Some(receiver) = subscription.swarm.as_ref() {
+        match receiver.try_recv() {
+            Ok(event) => events.push(Event {
+                protocol: Protocol,
+                subscription_id: subscription.subscription_id.clone(),
+                event: event.name,
+                run_id: None,
+                run_seq: None,
+                body: event.body,
+            }),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => subscription.swarm = None,
         }
     }
     events
@@ -706,6 +730,21 @@ pub(super) fn dispatch_request<S: ThreadListService>(
         )?);
     }
     request.validate_idempotency_key()?;
+    if request.operation != Operation::SwarmExchange {
+        service.note_client_activity();
+    }
+    if request.operation.is_swarm_operation() {
+        // Only a linked runtime trades swarm state, over the remote route.
+        if request.operation == Operation::SwarmExchange || !request.body.is_object() {
+            return Err(if request.operation == Operation::SwarmExchange {
+                ProtocolError::unsupported_operation()
+            } else {
+                ProtocolError::invalid_request()
+            }
+            .into());
+        }
+        return bounded_response(service.swarm_operation(request.operation, request.body)?);
+    }
     if request.operation.is_agent_operation() {
         if !request.body.is_object() {
             return Err(ProtocolError::invalid_request().into());
@@ -946,6 +985,9 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             /// Also send `agent.run_updated` events.
             #[serde(default)]
             agent_runs: bool,
+            /// Also send `swarm.changed` and the agent approval events.
+            #[serde(default)]
+            swarm: bool,
         }
         let body: Body =
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
@@ -974,6 +1016,16 @@ pub(super) fn dispatch_request<S: ThreadListService>(
         } else {
             None
         };
+        // A runtime without a swarm refuses, so the client subscribes without.
+        let swarm = if body.swarm {
+            Some(
+                service
+                    .subscribe_swarm_events()
+                    .map_err(|_| ProtocolError::invalid_request())?,
+            )
+        } else {
+            None
+        };
         let mut subscription_random = [0u8; 16];
         getrandom::fill(&mut subscription_random)
             .map_err(|_| ProtocolError::persistence_failed())?;
@@ -987,6 +1039,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             update_events,
             update_status,
             agent_runs,
+            swarm,
         });
         return Ok(response_only(serde_json::json!({
             "subscription_id": subscription_id,

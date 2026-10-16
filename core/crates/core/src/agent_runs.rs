@@ -247,14 +247,36 @@ pub fn subscribe(profile: &Path) -> Receiver<Value> {
     receiver
 }
 
-fn publish(path: &Path, run: &Run) {
-    let Ok(body) = serde_json::to_value(run) else {
+/// Whether a run's change warrants a notification: it just completed with
+/// a reply, failed, or started to wait for an answer.
+pub fn warrants_notification(previous: Option<RunStatus>, run: &Run) -> bool {
+    previous != Some(run.status)
+        && match run.status {
+            RunStatus::Completed => !run.silent,
+            RunStatus::Failed | RunStatus::WaitingInput => true,
+            _ => false,
+        }
+}
+
+fn publish(path: &Path, run: &Run, notify: bool) {
+    let Ok(mut body) = serde_json::to_value(run) else {
         return;
     };
+    body["notify"] = Value::Bool(notify);
+    publish_body(path, body);
+}
+
+fn publish_body(path: &Path, body: Value) {
     SUBSCRIBERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|(store, sender)| store != path || sender.send(body.clone()).is_ok());
+}
+
+/// Sends a run another swarm member reported to this profile's subscribers,
+/// as the body of an `agent.run_updated` event.
+pub fn publish_remote(profile: &Path, body: Value) {
+    publish_body(&profile.join(STORE_FILE), body);
 }
 
 /// The run store of one profile.
@@ -382,7 +404,7 @@ impl RunStore {
                 ],
             )
             .map_err(|_| "The run could not be queued.".to_string())?;
-        publish(&self.path, &run);
+        publish(&self.path, &run, false);
         Ok(run)
     }
 
@@ -483,7 +505,7 @@ impl RunStore {
         }
         let run = self.get(id)?;
         if let Some(run) = &run {
-            publish(&self.path, run);
+            publish(&self.path, run, false);
         }
         Ok(run)
     }
@@ -491,9 +513,11 @@ impl RunStore {
     /// Saves every changed field of `run`, stamps its update time and tells
     /// subscribers. An unchanged run is not written.
     pub fn save(&self, run: &mut Run) -> Result<(), String> {
-        if self.get(&run.id)?.as_ref() == Some(run) {
+        let previous = self.get(&run.id)?;
+        if previous.as_ref() == Some(run) {
             return Ok(());
         }
+        let notify = warrants_notification(previous.map(|previous| previous.status), run);
         let now = now();
         run.updated_at = timestamp(now);
         if let Some(summary) = &run.result_summary {
@@ -523,7 +547,7 @@ impl RunStore {
         if !run.status.is_active() {
             prune(&connection, &run.agent_id)?;
         }
-        publish(&self.path, run);
+        publish(&self.path, run, notify);
         Ok(())
     }
 
@@ -620,7 +644,9 @@ mod tests {
         assert_eq!(leased.attempt, 1);
         assert_eq!(leased.lease_owner.as_deref(), Some("runtime-1"));
         assert!(store.lease(&run.id, "runtime-2").unwrap().is_none());
-        assert_eq!(events.try_recv().unwrap()["status"], "leased");
+        let leased_event = events.try_recv().unwrap();
+        assert_eq!(leased_event["status"], "leased");
+        assert_eq!(leased_event["notify"], false);
         let mut done = leased;
         done.status = RunStatus::Completed;
         done.result_summary = Some("x".repeat(900));
@@ -631,6 +657,7 @@ mod tests {
         assert_eq!(read.prompt, "Do the work.");
         let event = events.try_recv().unwrap();
         assert_eq!(event["status"], "completed");
+        assert_eq!(event["notify"], true);
         assert!(event.get("prompt").is_none());
         // An unchanged save writes nothing and sends nothing.
         let mut same = store.get(&run.id).unwrap().unwrap();
@@ -675,6 +702,35 @@ mod tests {
         assert_eq!(store.latest("agent-a").unwrap().unwrap().id, queued.id);
         store.delete_agent("agent-a").unwrap();
         assert!(store.latest("agent-a").unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_a_reply_a_failure_or_a_question_warrants_a_notification() {
+        let (root, store) = store();
+        let mut run = store
+            .enqueue(new_run("agent-a", TriggerKind::Cron))
+            .unwrap();
+        for (status, silent, expected) in [
+            (RunStatus::Running, false, false),
+            (RunStatus::WaitingInput, false, true),
+            (RunStatus::Completed, true, false),
+            (RunStatus::Failed, false, true),
+            (RunStatus::Cancelled, false, false),
+        ] {
+            let previous = run.status;
+            run.status = status;
+            run.silent = silent;
+            assert_eq!(
+                warrants_notification(Some(previous), &run),
+                expected,
+                "{status:?}"
+            );
+        }
+        run.status = RunStatus::Completed;
+        run.silent = false;
+        assert!(warrants_notification(Some(RunStatus::Running), &run));
+        assert!(!warrants_notification(Some(RunStatus::Completed), &run));
         std::fs::remove_dir_all(root).unwrap();
     }
 

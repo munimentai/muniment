@@ -427,6 +427,20 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::RoutineList
         | Operation::RoutineSave
         | Operation::RoutineDelete
+        | Operation::SwarmInvite
+        | Operation::SwarmJoin
+        | Operation::SwarmLeave
+        | Operation::SwarmMembers
+        | Operation::SwarmAgents
+        | Operation::SwarmExchange
+        | Operation::SwarmResume
+        | Operation::ThreadPost
+        | Operation::AgentMove
+        | Operation::AgentApprovals
+        | Operation::AgentApprovalAnswer
+        | Operation::GroupCreate
+        | Operation::GroupList
+        | Operation::GroupUpdate
         | Operation::AgentRoutineProposals
         | Operation::AgentRoutineProposalAccept
         | Operation::AgentRoutineProposalDismiss
