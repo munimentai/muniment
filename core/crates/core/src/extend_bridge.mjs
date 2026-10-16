@@ -272,7 +272,8 @@ try {
     const key = member ? `extend-${item.id}-${member}` : `extend-${item.id}`
     if (action === 'auth' && !definition.url) throw safe('Only a remote server signs in.')
     result = await checkServer(member ? key : data.serverName || key, definition, action === 'auth', key)
-    item.lastCheck = { status: result.status, tools: result.tools.length }; await write(state)
+    // Tool names let routines proposed from instructions name a tool to poll.
+    item.lastCheck = { status: result.status, tools: result.tools.length, toolNames: result.tools.map(tool => tool.name).slice(0, 200) }; await write(state)
   } else throw new Error('Unknown extension action.')
   process.stdout.write(`\nMUNIMENT_EXTEND_RESULT=${JSON.stringify({ ok: true, result })}\n`)
 } catch (error) {

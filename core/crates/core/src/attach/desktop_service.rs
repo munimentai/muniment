@@ -1795,7 +1795,40 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
         operation: super::Operation,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, ProtocolError> {
+        if crate::agent_hooks::is_hook_operation(operation.as_str()) {
+            let endpoints = crate::agent_hooks::HookEndpoints {
+                endpoints: self
+                    .remote_access
+                    .as_ref()
+                    .map(|access| access.advertised_endpoints())
+                    .unwrap_or_default(),
+                certificate_sha256: self
+                    .remote_access
+                    .as_ref()
+                    .map(|access| access.certificate_fingerprint().to_hex()),
+                listening: self
+                    .remote_route
+                    .as_ref()
+                    .is_some_and(|route| route.status().listening.is_some()),
+            };
+            return self.boundaries.hook_operation(operation, body, endpoints);
+        }
         self.boundaries.agent_operation(operation, body)
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn receive_webhook(
+        &mut self,
+        hook_id: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<String, crate::agent_hooks::Refusal> {
+        let runtime_id = self
+            .remote_access
+            .as_ref()
+            .map(|access| access.runtime_info().runtime_id);
+        self.boundaries
+            .receive_webhook(runtime_id.as_deref(), hook_id, headers, body)
     }
 
     #[cfg(any(unix, target_os = "windows"))]

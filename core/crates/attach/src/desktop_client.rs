@@ -1225,7 +1225,15 @@ impl DesktopClient {
             Operation::AgentRunNow => &["run"],
             Operation::AgentRuns => &["runs"],
             Operation::RoutineList => &["routines"],
-            Operation::RoutineSave => &["routine"],
+            Operation::RoutineSave | Operation::AgentRoutineProposalAccept => &["routine"],
+            Operation::AgentRoutineProposals => &["proposals"],
+            Operation::AgentImport => &["agent", "memories", "skills", "tools"],
+            Operation::AgentImportCommit => &["agent"],
+            Operation::AgentExport => &["format", "file_name", "content"],
+            Operation::RoutineWebhookCreate | Operation::RoutineWebhookRotate => {
+                &["routine", "secret", "hook"]
+            }
+            Operation::RoutineWebhookInfo => &["hook"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)

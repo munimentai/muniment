@@ -1209,6 +1209,21 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
         (Operation::RoutineList, "routine.list"),
         (Operation::RoutineSave, "routine.save"),
         (Operation::RoutineDelete, "routine.delete"),
+        (Operation::AgentRoutineProposals, "agent.routine_proposals"),
+        (
+            Operation::AgentRoutineProposalAccept,
+            "agent.routine_proposal_accept",
+        ),
+        (
+            Operation::AgentRoutineProposalDismiss,
+            "agent.routine_proposal_dismiss",
+        ),
+        (Operation::AgentImport, "agent.import"),
+        (Operation::AgentImportCommit, "agent.import_commit"),
+        (Operation::AgentExport, "agent.export"),
+        (Operation::RoutineWebhookCreate, "routine.webhook_create"),
+        (Operation::RoutineWebhookRotate, "routine.webhook_rotate"),
+        (Operation::RoutineWebhookInfo, "routine.webhook_info"),
     ] {
         assert_eq!(operation.as_str(), name);
         assert!(operation.is_agent_operation());
@@ -1237,6 +1252,30 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
     };
     assert!(response.body["agents"].is_array());
     assert!(response.body["errors"].is_array());
+    let response = |file: &str| {
+        let Envelope::Response(response) = serde_json::from_value(canonical_fixture(file)).unwrap()
+        else {
+            panic!("expected response fixture");
+        };
+        response.body
+    };
+    let proposals = response("response-agent-routine-proposals.json");
+    assert_eq!(proposals["proposals"][0]["proposed"], true);
+    assert_eq!(proposals["proposals"][0]["enabled"], false);
+    assert_eq!(proposals["proposals"][0]["created_from"], "instructions");
+    let preview = response("response-agent-import.json");
+    assert_eq!(preview["agent"]["routines"][0]["proposed"], true);
+    assert!(preview["skills"]["proposals"].is_array() && preview["tools"]["setup"].is_array());
+    let created = response("response-routine-webhook-create.json");
+    assert_eq!(created["secret"].as_str().unwrap().len(), 64);
+    assert!(created["hook"]["urls"][0]
+        .as_str()
+        .unwrap()
+        .ends_with(created["hook"]["hook_id"].as_str().unwrap()));
+    // Only the create and rotate answers carry the secret.
+    assert!(response("response-routine-webhook-info.json")
+        .get("secret")
+        .is_none());
 }
 
 #[test]

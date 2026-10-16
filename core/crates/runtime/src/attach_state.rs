@@ -50,6 +50,8 @@ pub struct RuntimeAttachState {
     pub(crate) swarm_host: Arc<crate::swarm_host::RuntimeSwarmHost>,
     /// Keeps one agent run queue pass at a time.
     schedule_pass: Mutex<()>,
+    /// Set while an MCP poll pass runs.
+    mcp_polling: Arc<AtomicBool>,
 }
 
 impl RuntimeAttachState {
@@ -130,6 +132,7 @@ impl RuntimeAttachState {
             swarm,
             swarm_host,
             schedule_pass: Mutex::new(()),
+            mcp_polling: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -363,6 +366,10 @@ impl RuntimeAttachState {
     /// This process's name as a lease owner in the agent run queue.
     pub(crate) fn instance_id(&self) -> &str {
         &self.instance_id
+    }
+
+    pub(crate) fn mcp_polling(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.mcp_polling)
     }
 
     pub(crate) fn agent_profile(&self) -> &Path {

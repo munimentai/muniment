@@ -9,9 +9,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use muniment_core::agent_runs::{NewRun, Run, RunStatus, RunStore, RunTrigger, TriggerKind};
-use muniment_core::agents::{
-    self, Agent, AgentMessaging, CronSchedule, MessagingAllow, Routine, Trigger,
-};
+use muniment_core::agents::{self, Agent, AgentMessaging, MessagingAllow, Routine};
 use muniment_core::attach::{
     connect_remote_runtime, pair_with_link, DesktopClient, ErrorCode, InstallKind, Operation,
     PairingLinkRequest, RemoteAccess, RemoteAccessOptions, RemoteClientOptions, RemoteListener,
@@ -951,11 +949,14 @@ fn group_chats_route_mentions_and_hold_meetings_across_members() {
         )
         .unwrap();
     assert_eq!(renamed["group"]["name"], "Cockpit");
-    assert!(wait(|| b.op(Operation::GroupList, json!({})).unwrap()["groups"]
+    assert!(wait(|| b.op(Operation::GroupList, json!({})).unwrap()
+        ["groups"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|listed| listed["group_id"] == group["group_id"] && listed["name"] == "Cockpit")));
+        .any(
+            |listed| listed["group_id"] == group["group_id"] && listed["name"] == "Cockpit"
+        )));
 
     // An @mention posted on B wakes only the named agent, on its machine.
     assert!(wait(|| b

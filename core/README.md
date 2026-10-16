@@ -14,7 +14,7 @@ issues or pull requests.
 | `muniment-core` | `crates/core` | Local runtime logic and storage contracts: the run journal, Pi sidecar supervision and install, memory, projects, attach server, on-device speech and voice. |
 | `muniment-models` | `crates/models` | Provider and model knowledge as data: the provider registry, local server kinds and their scan, provider and endpoint model discovery, context windows, the model catalog, and Pi's `models.json`. |
 | `muniment-router` | `crates/router` | The multi-account model router: account pools, routing policy, the loopback OpenAI-compatible server, the `muniment-router` server binary (`server` feature) and the `muniment-router-shadow` binary. |
-| `muniment-runtime-core` | `crates/runtime` | The platform-neutral runtime: attach serving and its accept loops, parallel runs, retention, the agent run queue and its cron routines, the company record and reader service, the model service that runs the model router and the web search server and writes provider settings, web search settings and credentials, and `run_runtime`, the entry a host without OS service registration runs. The host supplies cloud accounts, chat grants, credential storage, provider OAuth clients, the sign-in page and its executables through `RuntimeHost`. A host with a cloud account and a paired phone also gets the session relay publisher. The default `keyring` feature adds the keychain credential store and keychain prompt history. |
+| `muniment-runtime-core` | `crates/runtime` | The platform-neutral runtime: attach serving and its accept loops, parallel runs, retention, the agent run queue with its cron, webhook and MCP routines, the company record and reader service, the model service that runs the model router and the web search server and writes provider settings, web search settings and credentials, and `run_runtime`, the entry a host without OS service registration runs. The host supplies cloud accounts, chat grants, credential storage, provider OAuth clients, the sign-in page and its executables through `RuntimeHost`. A host with a cloud account and a paired phone also gets the session relay publisher. The default `keyring` feature adds the keychain credential store and keychain prompt history. |
 | `muniment-server` | `crates/server` | The headless runtime host: the `muniment-server` binary runs the runtime with no cloud account, no keychain and no OS service registration, for a container or a server. |
 | `muniment-pins` | `crates/pins` | Typed constants compiled from `pins/pins.toml`, plus the embedded package lockfile. |
 | `muniment-attach` | `crates/attach` | The reader and companion attach protocol and its client, with the pinned TLS transport, pairing links and device credentials of the remote route. |
@@ -267,13 +267,72 @@ only when the caller confirms it.
 
 A routine is `{"id", "name", "enabled", "trigger", "prompt",
 "created_from": "user"|"instructions"|"agent", "last_fired_at",
-"last_result"}`. Its trigger is `{"kind": "cron", "expr", "tz"}`, a
-five-field cron expression in an IANA time zone that runs at most every five
-minutes; `{"kind": "webhook", "hook_id", "preset": "github"|"forgejo"|"generic"}`;
-or `{"kind": "mcp", "server", "tool", "args", "every": {"expr", "tz"},
-"condition"}`, where a condition is `{"all": [...]}`, `{"any": [...]}` or
-`{"path": "/json/pointer", "op", "value"?}`. The runtime fires cron routines;
-webhook and MCP triggers are stored and checked here.
+"last_result", "proposed"?, "last_poll"?}`. Its trigger is `{"kind": "cron",
+"expr", "tz"}`, a five-field cron expression in an IANA time zone that runs
+at most every five minutes; `{"kind": "webhook", "hook_id", "preset":
+"github"|"forgejo"|"generic", "secret_sha256"?}`; or `{"kind": "mcp",
+"server", "tool", "args", "every": {"expr", "tz"}, "condition"}`, where a
+condition is `{"all": [...]}`, `{"any": [...]}` or `{"path":
+"/json/pointer", "op", "value"?}` and `op` is `eq`, `ne`, `gt`, `gte`, `lt`,
+`lte`, `contains`, `exists`, `changed` or `nonempty`.
+
+- **Cron.** The runtime's schedule loop queues a run when the routine comes
+  due. A routine missed while the runtime was off runs once.
+- **Webhook.** `POST /hooks/<hook_id>` on the remote-access listener, beside
+  the attach route, queues a run. The credential store keeps each hook's
+  secret under the service `ai.muniment.webhook`; the routine keeps only its
+  SHA-256. A delivery proves the secret with `Authorization: Bearer`, an
+  HMAC-SHA256 of the body in `X-Muniment-Signature`, or its preset's header:
+  `X-Hub-Signature-256` for `github`, `X-Forgejo-Signature` or
+  `X-Gitea-Signature` for `forgejo`. Payloads stop at 256 KB, each hook takes
+  30 deliveries a minute and holds 10 runs at most, and a delivery id
+  (`X-GitHub-Delivery`, `X-Forgejo-Delivery`, `X-Gitea-Delivery` or
+  `X-Muniment-Delivery`) is refused when it repeats within seven days. A
+  refused credential counts toward the peer's backoff. The listener answers
+  `202` with `{"run_id"}`, or `401`, `404`, `409`, `411`, `413` or `429`.
+  Senders pin the runtime's certificate, and senders on public addresses
+  reach the listener only while remote access allows public peers.
+- **MCP.** On its `every` schedule the runtime calls the tool with no model:
+  Pi's MCP client calls it with the server definition and token a chat turn
+  uses, through a provider extension that answers the one turn with that
+  tool call. The text result read as JSON, or else the server's structured
+  content or the text, must pass the condition. `changed` compares the value
+  at its path with the previous poll's, which the routine's state keeps, and
+  never holds on the first poll. `last_poll` is `{"at", "fired", "result"?,
+  "error"?, "failures", "retry_at"?}`; each failed poll doubles the wait
+  before the next, from one minute to six hours.
+
+A webhook payload or an MCP result reaches the run's prompt in an untrusted
+`<webhook_payload>` or `<mcp_result>` block, and the run asks before every
+write as any event-triggered run does.
+
+Saving an agent's instructions proposes routines. A deterministic reader
+turns clear schedule phrases ("every morning at 9am", "every weekday at
+8:30", "every 15 minutes", "on the 1st of every month") into cron routines
+in the computer's time zone; work that names an installed MCP server and one
+of its tools polls that tool with a `nonempty` condition, and an "if ..."
+clause stays in the prompt, whose run replies `NO_RESPONSE` when it does not
+hold. On the attach route a cheap model call (the memory pass's model)
+refines the proposals once per version of the instructions, with a strict
+JSON answer whose routines pass the same checks. Proposals are saved
+disabled with `"proposed": true` and `"created_from": "instructions"`; a
+dismissed one is not proposed again.
+
+### Templates
+
+`muniment_core::agent_templates` reads public Grok Bot share links (the
+page's serialized data, never its scripts), Grok Bot JSON, Markdown with a
+`# Name` heading or a fenced `json` configuration, and Muniment agent files
+(versions 1 to 3), all under 128 KB. A template's routines become disabled
+proposals: schedules become cron routines, GitHub, Forgejo and webhook
+events become webhook routines, and the rest are kept as notes. Its skills
+match installed skills by name, and the rest stay as reference text. Its
+plugins and tools match installed extensions or are listed for setup. Its
+memories become facts from outside the conversation in the agent's memory
+folder. `agent.export` writes a Grok Bot setup in Markdown or a Muniment
+agent file that imports without loss. An export holds no webhook secret or
+hook id, no primary machine, no private memory and nothing the secret
+scanner flags.
 
 ### Run queue
 
@@ -307,10 +366,24 @@ Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
 `agent.delete` (`{"id", "remove_memory"?}`), `agent.run_now` (`{"id",
 "prompt"?}` → `{"run"}`), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
 → `{"runs", "next_cursor"}`, newest first), `routine.list` (`{"agent_id"}`),
-`routine.save` (`{"agent_id", "routine"}` → `{"routine"}`) and
-`routine.delete` (`{"agent_id", "routine_id"}`). Remotely the reads take
-`thread.read`, `agent.run_now` takes `run.write`, and the changes take
-`agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
+`routine.save` (`{"agent_id", "routine"}` → `{"routine"}`),
+`routine.delete` (`{"agent_id", "routine_id"}`),
+`agent.routine_proposals` (`{"agent_id"}` → `{"proposals"}`),
+`agent.routine_proposal_accept` and `agent.routine_proposal_dismiss`
+(`{"agent_id", "routine_id"}`; accept answers `{"routine"}`),
+`agent.import` (`{"source"}`, a share link or a template's text →
+`{"agent", "memories", "skills": {"matched", "proposals"}, "tools":
+{"matched", "setup"}, "routine_notes", "source", "coverage"}`),
+`agent.import_commit` (`{"agent", "memories"?}` → `{"agent"}`),
+`agent.export` (`{"id", "format": "grok_bot"|"muniment"}` → `{"format",
+"file_name", "content"}`), `routine.webhook_create` (`{"agent_id",
+"routine"}`) and `routine.webhook_rotate` (`{"agent_id", "routine_id"}`),
+which answer `{"routine", "secret", "hook"}` and are the only answers that
+carry the secret, and `routine.webhook_info` (`{"agent_id", "routine_id"}` →
+`{"hook"}`). A hook is `{"hook_id", "preset", "urls", "certificate_sha256",
+"listening"}`. Remotely the reads, `agent.routine_proposals` and
+`routine.webhook_info` take `thread.read`, `agent.run_now` takes
+`run.write`, and the changes, imports and exports take `agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
 also receives `agent.run_updated` events whose body is the changed `Run`
 with `notify`, true when the change warrants a notification: the run
 completed with a reply, failed, or waits for an answer. A run another swarm
