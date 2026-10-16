@@ -89,6 +89,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `cfg_aliases` 0.1.1 — MIT
 - `cfg_aliases` 0.2.2 — MIT
 - `chacha20` 0.10.2 — MIT OR Apache-2.0
+- `chrono-tz` 0.10.4 — MIT OR Apache-2.0
 - `chrono` 0.4.45 — MIT OR Apache-2.0
 - `chunked_transfer` 1.5.0 — MIT OR Apache-2.0
 - `clap_builder` 4.6.7 — MIT OR Apache-2.0
@@ -117,6 +118,7 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `cpufeatures` 0.2.17 — MIT OR Apache-2.0
 - `cpufeatures` 0.3.1 — MIT OR Apache-2.0
 - `crc32fast` 1.5.2 — MIT OR Apache-2.0
+- `croner` 4.0.1 — MIT
 - `crossbeam-channel` 0.5.17 — MIT OR Apache-2.0
 - `crossbeam-utils` 0.8.23 — MIT OR Apache-2.0
 - `crypto-common` 0.1.7 — MIT OR Apache-2.0
@@ -127,8 +129,11 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `ctutils` 0.4.3 — Apache-2.0 OR MIT
 - `curve25519-dalek-derive` 0.1.1 — MIT/Apache-2.0
 - `curve25519-dalek` 5.0.0 — BSD-3-Clause
+- `darling_core` 0.20.11 — MIT
 - `darling_core` 0.24.1 — MIT
+- `darling_macro` 0.20.11 — MIT
 - `darling_macro` 0.24.1 — MIT
+- `darling` 0.20.11 — MIT
 - `darling` 0.24.1 — MIT
 - `dasp_sample` 0.11.0 — MIT OR Apache-2.0
 - `data-encoding` 2.11.1 — MIT
@@ -140,6 +145,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `der-parser` 10.0.0 — MIT OR Apache-2.0
 - `deranged` 0.5.9 — MIT OR Apache-2.0
 - `derive_arbitrary` 1.5.0 — MIT OR Apache-2.0
+- `derive_builder_core` 0.20.2 — MIT OR Apache-2.0
+- `derive_builder_macro` 0.20.2 — MIT OR Apache-2.0
+- `derive_builder` 0.20.2 — MIT OR Apache-2.0
 - `derive_more-impl` 2.1.1 — MIT
 - `derive_more` 2.1.1 — MIT
 - `digest` 0.10.7 — MIT OR Apache-2.0
@@ -391,7 +399,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `phf_codegen` 0.13.1 — MIT
 - `phf_generator` 0.13.1 — MIT
 - `phf_macros` 0.13.1 — MIT
+- `phf_shared` 0.12.1 — MIT
 - `phf_shared` 0.13.1 — MIT
+- `phf` 0.12.1 — MIT
 - `phf` 0.13.1 — MIT
 - `pico-args` 0.5.0 — MIT
 - `pin-project-internal` 1.1.13 — Apache-2.0 OR MIT
@@ -516,7 +526,9 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `string_cache_codegen` 0.6.1 — MIT OR Apache-2.0
 - `string_cache` 0.9.0 — MIT OR Apache-2.0
 - `strsim` 0.11.1 — MIT
+- `strum_macros` 0.27.2 — MIT
 - `strum_macros` 0.28.0 — MIT
+- `strum` 0.27.2 — MIT
 - `strum` 0.28.0 — MIT
 - `subtle` 2.6.1 — BSD-3-Clause
 - `svgtypes` 0.16.1 — Apache-2.0 OR MIT

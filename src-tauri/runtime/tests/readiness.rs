@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::RuntimeActivityRegistry;
@@ -69,9 +69,9 @@ fn run_starting_pi() {
     let profile = TemporaryProfile::new("signed-in-readiness", true);
     let artifact = stage_pi_stub(&profile.root);
     let storage = open_profile_storage(&profile.profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let (events_tx, events_rx) = mpsc::channel();
     let mut grant = fixture_grant();
     grant.model = Some("muniment-stub-chat".into());
@@ -79,7 +79,7 @@ fn run_starting_pi() {
         &desktop_host(),
         &profile.profile,
         Arc::clone(&storage),
-        Arc::clone(&runtime),
+        runtime.clone(),
         &activity,
         &profile.config,
         RUN_ID.into(),
@@ -91,7 +91,7 @@ fn run_starting_pi() {
         Some("user".into()),
         Vec::new(),
         grant,
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(Some(events_tx)),
         Some(artifact),
     )
@@ -122,10 +122,18 @@ fn run_starting_pi() {
         .recv_timeout(Duration::from_secs(36).saturating_sub(started.elapsed()))
         .expect("The runtime must release the run after the readiness rejection.");
     worker.join().unwrap();
-    assert!(active.lock().unwrap().is_none());
+    assert!(active.is_empty());
     assert!(!activity.snapshot().active_run);
+    let thread = storage
+        .lock()
+        .unwrap()
+        .journal
+        .run_thread_id(RUN_ID)
+        .unwrap()
+        .expect("The run must name its thread.");
     assert_eq!(
         runtime
+            .slot(&thread)
             .lock()
             .unwrap()
             .as_ref()
@@ -159,20 +167,19 @@ fn run_starting_pi() {
         Some("user".into()),
         Vec::new(),
         fixture_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         Some(artifact),
     )
     .unwrap();
-    active
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .cancelled
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    muniment_core::active_run::cancel_active_run(
+        &active,
+        "01900000-0000-7000-8000-000000000032",
+        None,
+    )
+    .unwrap();
     drive_prompt(next);
-    assert!(active.lock().unwrap().is_none());
+    assert!(active.is_empty());
     let (base_url, server) = spawn_server(200, r#"{"ok":true}"#.into());
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     assert!(!sign_out_session(&activity).signed_in);
