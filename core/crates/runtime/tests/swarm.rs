@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use muniment_core::agent_hooks::HookEndpoints;
 use muniment_core::agent_runs::{NewRun, Run, RunStatus, RunStore, RunTrigger, TriggerKind};
 use muniment_core::agents::{self, Agent, AgentMessaging, MessagingAllow, Routine};
 use muniment_core::attach::{
@@ -15,9 +16,11 @@ use muniment_core::attach::{
     PairingLinkRequest, RemoteAccess, RemoteAccessOptions, RemoteClientOptions, RemoteListener,
     RemoteListenerConfig, RemoteListenerError, RemoteRuntimeRecord, SubscriptionEvent,
 };
+use muniment_core::run_start::RunAttachBoundaries;
 use muniment_core::serde_json::{json, Value};
 use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
 use muniment_core::swarm::Swarm;
+use muniment_runtime_core::host::{CredentialStore, FileCredentialStore};
 use muniment_runtime_core::{RuntimeAttachState, RuntimeHost};
 
 mod common;
@@ -72,8 +75,14 @@ impl Member {
 
     fn open(&mut self) {
         let profile = &self.temporary.profile;
-        let state =
-            Arc::new(RuntimeAttachState::open(RuntimeHost::default(), profile, profile).unwrap());
+        // Each member keeps its own secrets, as separate machines do.
+        let host = RuntimeHost {
+            credentials: Arc::new(FileCredentialStore::new(
+                self.temporary.root.join("credentials"),
+            )),
+            ..RuntimeHost::default()
+        };
+        let state = Arc::new(RuntimeAttachState::open(host, profile, profile).unwrap());
         let access = state
             .open_remote_access(RemoteAccessOptions {
                 runtime_name: Some(self.name.into()),
@@ -714,6 +723,148 @@ fn a_move_fences_the_old_primary_and_a_forced_move_steps_it_down() {
         })),
         "A never stepped down"
     );
+}
+
+/// Delivers one webhook over the member's pinned TLS listener and answers
+/// the HTTP status and the JSON body.
+fn deliver(member: &Member, hook: &str, secret: &str, body: &[u8]) -> (u16, Value) {
+    use std::io::{Read, Write};
+    let mut stream = muniment_core::attach::connect_pinned(
+        &[member.address.unwrap().to_string()],
+        member.access().certificate_fingerprint(),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    let mut request = format!(
+        "POST /hooks/{hook} HTTP/1.1\r\nHost: runtime\r\nAuthorization: Bearer {secret}\r\n\
+         Content-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
+    stream.write_all(&request).unwrap();
+    let mut answer = Vec::new();
+    let _ = stream.read_to_end(&mut answer);
+    let text = String::from_utf8(answer).unwrap();
+    let status = text[9..12].parse().unwrap();
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("{}");
+    (
+        status,
+        muniment_core::serde_json::from_str(body).unwrap_or(Value::Null),
+    )
+}
+
+#[test]
+fn a_move_hands_over_webhook_secrets_and_the_mcp_servers_routines_call() {
+    let _environment = environment();
+    let a = Member::new("hand-a");
+    let b = Member::new("hand-b");
+    b.join(&a);
+    let watcher = a.agent("Watcher");
+    let created = a
+        .state()
+        .boundaries()
+        .hook_operation(
+            Operation::RoutineWebhookCreate,
+            json!({"agent_id": watcher.id, "routine": {"name": "Build finished",
+                "trigger": {"kind": "webhook", "preset": "generic"},
+                "prompt": "Summarize the build."}}),
+            HookEndpoints {
+                endpoints: a.access().advertised_endpoints(),
+                certificate_sha256: Some(a.access().certificate_fingerprint().to_hex()),
+                listening: true,
+            },
+        )
+        .unwrap();
+    let hook = created["hook"]["hook_id"].as_str().unwrap().to_owned();
+    let secret = created["secret"].as_str().unwrap().to_owned();
+    std::fs::create_dir_all(a.profile().join("extensions")).unwrap();
+    std::fs::write(
+        a.profile().join("extensions/inventory.json"),
+        json!({"items": [
+            {"id": "crm-1", "kind": "mcp", "name": "crm", "definition": {"url": "https://crm.example/mcp", "auth": "bearer"},
+             "lastCheck": {"status": "connected", "tools": 1, "toolNames": ["search_leads"]}},
+            {"id": "other-1", "kind": "mcp", "name": "other", "definition": {"url": "https://other.example/mcp"}}
+        ], "turns": {}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        a.profile().join("extensions/mcp-tokens.json"),
+        json!({"extend-crm-1": "crm-token", "extend-other-1": "other-token"}).to_string(),
+    )
+    .unwrap();
+    agents::save_routine(
+        a.profile(),
+        &watcher.id,
+        muniment_core::serde_json::from_value(json!({"id": "leads", "name": "Leads",
+            "prompt": "Summarize the leads.",
+            "trigger": {"kind": "mcp", "server": "crm", "tool": "search_leads", "args": {},
+                "every": {"expr": "*/5 * * * *", "tz": "UTC"},
+                "condition": {"path": "/total", "op": "gt", "value": 0}}}))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(wait(|| b
+        .directory()
+        .iter()
+        .any(|entry| entry["agent_id"] == watcher.id.as_str())));
+
+    let moved = a
+        .op(
+            Operation::AgentMove,
+            json!({"id": watcher.id, "to": b.runtime_id()}),
+        )
+        .unwrap();
+    assert_eq!(moved["status"], "moved");
+    assert!(
+        wait(|| agents::get(b.profile(), &watcher.id).is_ok_and(|agent| {
+            agent.primary_runtime.as_deref() == Some(b.runtime_id().as_str())
+        })),
+        "B never took the agent"
+    );
+    let b_secrets = FileCredentialStore::new(b.temporary.root.join("credentials"));
+    assert_eq!(
+        b_secrets.read(muniment_core::agent_hooks::SECRET_SERVICE, &hook),
+        Some(secret.clone())
+    );
+    let inventory = muniment_core::extend::inventory(b.profile()).unwrap();
+    let servers: Vec<&str> = inventory["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect();
+    assert_eq!(servers, ["crm"]);
+    assert_eq!(
+        muniment_core::serde_json::from_slice::<Value>(
+            &std::fs::read(b.profile().join("extensions/mcp-tokens.json")).unwrap()
+        )
+        .unwrap(),
+        json!({"extend-crm-1": "crm-token"})
+    );
+    let catalog = b
+        .client(Some(&["thread.read"]))
+        .agent_tool_catalog()
+        .unwrap();
+    assert_eq!(
+        catalog["mcp"],
+        json!([{"server": "crm", "tools": [{"name": "search_leads"}]}])
+    );
+
+    // The new primary takes the hook's deliveries with the same secret; the
+    // old one no longer does.
+    let (status, answer) = deliver(&b, &hook, &secret, br#"{"build":"failed"}"#);
+    assert_eq!(status, 202, "{answer}");
+    let run = b
+        .store()
+        .get(answer["run_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.trigger.kind, TriggerKind::Webhook);
+    assert_eq!(run.agent_id, watcher.id);
+    let (status, _) = deliver(&a, &hook, &secret, br#"{"build":"failed"}"#);
+    assert_ne!(status, 202);
 }
 
 fn has_prompt(runs: &[Run], text: &str) -> Option<Run> {

@@ -61,6 +61,39 @@ impl DesktopClientHolder {
         self.with_client(|client| client.request(operation, idempotency_key, body))
     }
 
+    /// Sends one request like [`Self::request`] and keeps the runtime's
+    /// protocol error, with its code, message and reason, with a refusal.
+    pub fn request_with_error(
+        &self,
+        operation: Operation,
+        idempotency_key: Option<Id>,
+        body: Value,
+    ) -> Result<Response, (ClientError, Option<crate::ProtocolError>)> {
+        Self::pairing_request(self, |client| {
+            client.request(operation, idempotency_key, body)
+        })
+    }
+
+    /// Sends one agent operation and keeps the runtime's protocol error with
+    /// a refusal, so a refused save shows the runtime's reason.
+    pub fn agent_request(
+        &self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, (ClientError, Option<crate::ProtocolError>)> {
+        Self::pairing_request(self, |client| client.agent_request(operation, body))
+    }
+
+    /// Sends one swarm operation and keeps the runtime's protocol error with
+    /// a refusal.
+    pub fn swarm_request(
+        &self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, (ClientError, Option<crate::ProtocolError>)> {
+        Self::pairing_request(self, |client| client.swarm_request(operation, body))
+    }
+
     pub fn create_thread(&self) -> Result<String, ClientError> {
         self.with_client(|client| client.create_thread())
     }
@@ -379,10 +412,10 @@ impl DesktopClientHolder {
     }
 
     /// Runs one request and keeps the runtime's protocol error with a failure.
-    fn pairing_request(
+    fn pairing_request<T>(
         holder: &Self,
-        step: impl FnOnce(&mut DesktopClient) -> Result<Value, ClientError>,
-    ) -> Result<Value, (ClientError, Option<crate::ProtocolError>)> {
+        step: impl FnOnce(&mut DesktopClient) -> Result<T, ClientError>,
+    ) -> Result<T, (ClientError, Option<crate::ProtocolError>)> {
         let mut failure = None;
         let result = holder.with_client(|client| {
             let result = step(client);
@@ -531,6 +564,78 @@ mod tests {
         );
         assert!(holder.inner.0.lock().unwrap().is_none());
         assert_eq!(holder.runtime_version(), None);
+    }
+
+    #[test]
+    fn agent_refusals_keep_the_runtimes_code_and_reason() {
+        use std::io::{Read, Write};
+
+        let holder = DesktopClientHolder::new();
+        let (stream, mut server) = UnixStream::pair().unwrap();
+        server.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+        *holder.inner.0.lock().unwrap() = Some(desktop_client_for_test(
+            Box::new(stream),
+            "1.0.0".into(),
+            IO_TIMEOUT,
+        ));
+        let worker = std::thread::spawn(move || {
+            for (operation, refused) in [
+                (Operation::RoutineSave, true),
+                (Operation::AgentThreads, false),
+                (Operation::SwarmMembers, true),
+            ] {
+                let mut prefix = [0; 4];
+                server.read_exact(&mut prefix).unwrap();
+                let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+                server.read_exact(&mut body).unwrap();
+                let request: crate::Request = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request.operation, operation);
+                let response = if refused {
+                    serde_json::json!({
+                        "protocol": "muniment.attach/1", "request_id": request.request_id,
+                        "ok": false, "error": crate::ProtocolError::invalid_request_with_reason(
+                            "A cron routine runs at most every five minutes."),
+                    })
+                } else {
+                    serde_json::json!({
+                        "protocol": "muniment.attach/1", "request_id": request.request_id,
+                        "ok": true, "body": {"threads": []},
+                    })
+                };
+                server
+                    .write_all(&crate::encode_frame(&response).unwrap())
+                    .unwrap();
+            }
+        });
+
+        let (error, refusal) = holder
+            .agent_request(
+                Operation::RoutineSave,
+                serde_json::json!({"agent_id": "a", "routine": {}}),
+            )
+            .unwrap_err();
+        assert_eq!(error, ClientError::RequestRejected);
+        let refusal = refusal.unwrap();
+        assert_eq!(refusal.code(), crate::ErrorCode::InvalidRequest);
+        assert_eq!(
+            refusal.details(),
+            Some(&crate::ErrorDetails::RequestReason {
+                reason: "A cron routine runs at most every five minutes.".into()
+            })
+        );
+        // The refusal keeps the connection, and a later success carries no
+        // stale reason.
+        assert_eq!(
+            holder
+                .agent_request(Operation::AgentThreads, serde_json::json!({"id": "a"}))
+                .unwrap(),
+            serde_json::json!({"threads": []})
+        );
+        let (_, refusal) = holder
+            .swarm_request(Operation::SwarmMembers, serde_json::json!({}))
+            .unwrap_err();
+        assert!(refusal.is_some());
+        worker.join().unwrap();
     }
 
     #[test]

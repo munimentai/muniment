@@ -381,8 +381,17 @@ Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
 which answer `{"routine", "secret", "hook"}` and are the only answers that
 carry the secret, and `routine.webhook_info` (`{"agent_id", "routine_id"}` →
 `{"hook"}`). A hook is `{"hook_id", "preset", "urls", "certificate_sha256",
-"listening"}`. Remotely the reads, `agent.routine_proposals` and
-`routine.webhook_info` take `thread.read`, `agent.run_now` takes
+"listening"}`. `agent.threads` (`{"id"}` → `{"threads"}`) lists every thread
+of one agent that the journal holds, newest first, as `{"thread_id",
+"title", "updated_at", "primary"}`. `agent.tool_catalog` (`{}` →
+`{"builtin", "mcp", "skills"}`) lists what an agent on this runtime can use:
+the built-in tools a launch offers as `{"id", "label", "read_only"}`, each
+enabled MCP server as `{"server", "tools": [{"name"}], "checked_at"?}` with
+the tools its last connection test listed, and each enabled skill as `{"id",
+"name", "description"}`, where `id` is what an agent's `skills` names.
+Remotely the reads, `agent.routine_proposals`, `agent.threads`,
+`agent.tool_catalog` and `routine.webhook_info` take `thread.read`,
+`agent.run_now` takes
 `run.write`, and the changes, imports and exports take `agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
 also receives `agent.run_updated` events whose body is the changed `Run`
 with `notify`, true when the change warrants a notification: the run
@@ -391,7 +400,10 @@ member reports carries its `runtime_id`. A
 runtime without the queue refuses the request, and
 `DesktopClient::subscribe_chat_events_with_agent_runs` then subscribes
 without it. The model reaches the same agents through the `agent-*` and
-`routine-list`, `routine-save` and `routine-delete` tools.
+`routine-list`, `routine-save` and `routine-delete` tools. A refused agent or
+swarm operation answers `invalid_request` with the reason in the error's
+`details`; `DesktopClientHolder::agent_request`, `swarm_request` and
+`request_with_error` return that `ProtocolError` beside the `ClientError`.
 
 ### Swarm
 
@@ -434,7 +446,10 @@ steering, gate answers and run starts through `SwarmHost`.
   raises the agent's `epoch` on its primary, which then fires none of its
   routines, and hands the definition, memory folder, routine state, thread
   clocks and saved conversations to the target, which takes over once its
-  replicas caught up. With `force`, the target takes the agent from the
+  replicas caught up. The hand-over also carries the secrets of the agent's
+  webhook routines, which the target keeps in its credential store, and the
+  saved MCP servers its MCP routines call, with their bearer tokens, which
+  the target adds unless it has a server of that id or name. With `force`, the target takes the agent from the
   directory's copy while the old primary is offline, and the old primary
   steps down when it sees the higher epoch.
 - **Messaging.** The `agent-message` (`{"to", "intent", "text",
@@ -575,7 +590,11 @@ catalog in force.
 SIGTERM or SIGINT. It builds `muniment-runtime-core` without its `keyring`
 feature, so it never opens a keychain: prompt history lives in files under the
 state root and secrets live in `FileCredentialStore`. State lives in the
-directory `MUNIMENT_STATE_DIR` names, or `~/.muniment`. The attach endpoint
+directory `MUNIMENT_STATE_DIR` names, or `~/.muniment`. Its Home, which
+holds agents, memory and projects, is the folder `home.json` in the state root
+names; `serve` saves `<state>/home` there when none is saved, so a container
+keeps its agents on its volume. It runs in local mode, whose `local`
+workspace is the one its threads and agent runs use. The attach endpoint
 sits under `XDG_RUNTIME_DIR`, or under `run` in the state root when that is
 unset. One instance holds the endpoint's instance lock. `muniment-server
 launch` runs `serve` under the launcher that installs requested updates, as

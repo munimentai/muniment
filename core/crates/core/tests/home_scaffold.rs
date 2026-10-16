@@ -1,4 +1,6 @@
-use muniment_core::home::{configured_home, confirm_home, scaffold_home};
+use muniment_core::home::{
+    configured_home, confirm_home, initialize_state_home, scaffold_home, STATE_HOME_NAME,
+};
 use std::{
     fs,
     path::PathBuf,
@@ -115,4 +117,21 @@ fn rejects_hidden_and_root_home_locations() {
     assert!(confirm_home(&config, PathBuf::from("/").as_path()).is_err());
     assert_eq!(configured_home(&config).unwrap(), None);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_headless_state_root_gets_its_own_home_once_and_keeps_a_saved_one() {
+    let state = temporary_directory("state-home");
+    let home = initialize_state_home(&state).unwrap();
+    assert_eq!(home, state.join(STATE_HOME_NAME));
+    assert_eq!(configured_home(&state).unwrap(), Some(home.clone()));
+    for directory in ["memory", "agents", "projects", "sessions"] {
+        assert!(home.join(directory).join("README.md").is_file());
+    }
+    // A Home saved later wins over the default on the next start.
+    let chosen = temporary_directory("state-home-chosen");
+    confirm_home(&state, &chosen).unwrap();
+    assert_eq!(initialize_state_home(&state).unwrap(), chosen);
+    fs::remove_dir_all(state).unwrap();
+    fs::remove_dir_all(chosen).unwrap();
 }

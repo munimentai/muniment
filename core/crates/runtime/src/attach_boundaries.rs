@@ -1635,7 +1635,33 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         operation: muniment_core::attach::Operation,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, ProtocolError> {
+        if operation == muniment_core::attach::Operation::AgentToolCatalog {
+            return muniment_core::agents::operation(
+                &self.profile_directory,
+                operation.as_str(),
+                body,
+            )
+            .map_err(ProtocolError::invalid_request_with_reason);
+        }
         self.require_home()?;
+        if operation == muniment_core::attach::Operation::AgentThreads {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Body {
+                id: String,
+            }
+            let body: Body =
+                serde_json::from_value(body).map_err(|_| ProtocolError::invalid_request())?;
+            let mut storage = self.storage.lock().map_err(|error| {
+                persistence_error("lock", error.to_string()).desktop_protocol_error()
+            })?;
+            return muniment_core::agents::threads(
+                &self.profile_directory,
+                &mut storage.journal,
+                &body.id,
+            )
+            .map_err(ProtocolError::invalid_request_with_reason);
+        }
         let answer =
             muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
                 .map_err(ProtocolError::invalid_request_with_reason)?;

@@ -1119,6 +1119,16 @@ pub fn initialize_default_home(config_dir: &Path) -> Result<PathBuf, HomeError> 
     })
 }
 
+/// The folder under the state directory that holds a headless install's Home.
+pub const STATE_HOME_NAME: &str = "home";
+
+/// Keeps a saved Home or publishes `<state>/home`, for an install no one
+/// opens a Documents folder on, such as a server or a container. The Home
+/// then lives on the state volume beside the rest of the runtime's state.
+pub fn initialize_state_home(state: &Path) -> Result<PathBuf, HomeError> {
+    initialize_home_with(state, || Ok(state.join(STATE_HOME_NAME)))
+}
+
 fn initialize_home_with(
     config_dir: &Path,
     default_home: impl FnOnce() -> Result<PathBuf, HomeError>,

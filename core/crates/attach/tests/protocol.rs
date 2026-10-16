@@ -1224,6 +1224,8 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
         (Operation::RoutineWebhookCreate, "routine.webhook_create"),
         (Operation::RoutineWebhookRotate, "routine.webhook_rotate"),
         (Operation::RoutineWebhookInfo, "routine.webhook_info"),
+        (Operation::AgentThreads, "agent.threads"),
+        (Operation::AgentToolCatalog, "agent.tool_catalog"),
     ] {
         assert_eq!(operation.as_str(), name);
         assert!(operation.is_agent_operation());
@@ -1272,6 +1274,13 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
         .as_str()
         .unwrap()
         .ends_with(created["hook"]["hook_id"].as_str().unwrap()));
+    let threads = response("response-agent-threads.json");
+    assert_eq!(threads["threads"][0]["primary"], true);
+    assert!(threads["threads"][1]["title"].is_string());
+    let catalog = response("response-agent-tool-catalog.json");
+    assert_eq!(catalog["builtin"][0]["read_only"], true);
+    assert!(catalog["mcp"][0]["tools"][0]["name"].is_string());
+    assert!(catalog["skills"][0]["id"].is_string());
     // Only the create and rotate answers carry the secret.
     assert!(response("response-routine-webhook-info.json")
         .get("secret")

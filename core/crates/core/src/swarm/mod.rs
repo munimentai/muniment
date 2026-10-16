@@ -78,6 +78,15 @@ pub trait SwarmHost: Send + Sync {
     ) -> Result<(), String>;
     /// Starts queued agent runs soon, without waiting for the next pass.
     fn kick_runs(&self);
+    /// The secret of this runtime's webhook `hook_id`, which a move hands to
+    /// the agent's new primary.
+    fn hook_secret(&self, _hook_id: &str) -> Option<String> {
+        None
+    }
+    /// Keeps the secret of a webhook another member handed over.
+    fn store_hook_secret(&self, _hook_id: &str, _secret: &str) -> Result<(), String> {
+        Err("This runtime keeps no webhook secrets.".into())
+    }
 }
 
 /// How long a member counts as online after its last heartbeat.
