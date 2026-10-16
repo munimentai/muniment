@@ -12,13 +12,15 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::thread_service::{ThreadListPage, ThreadListRequest, ThreadListService};
+use muniment_core::attach::write_update_status;
 use muniment_core::attach::{
     connect_pinned, connect_remote_runtime, decode_frame, encode_frame, pair_with_link,
     CertificateFingerprint, ClientError, ErrorCode, FailureBackoffPolicy, Id, InstallKind,
     Operation, PairingLink, PairingLinkRequest, ProtocolError, RemoteAccess, RemoteAccessOptions,
     RemoteClientOptions, RemoteConnectError, RemoteListener, RemoteListenerConfig,
-    RemoteRuntimeRecord, SignedWorkspaceApproval, SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE,
-    SCOPE_RUN_WRITE, SCOPE_THREAD_READ,
+    RemoteRuntimeRecord, RuntimeUpdateState, RuntimeUpdateStatus, SignedWorkspaceApproval,
+    UpdateCapability, SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE,
+    SCOPE_THREAD_READ,
 };
 use serde_json::{json, Value};
 
@@ -534,6 +536,80 @@ fn an_admin_update_request_is_recorded_for_the_host() {
     );
     runtime.access.clear_update_request().unwrap();
     assert_eq!(runtime.access.requested_update(), None);
+}
+
+#[test]
+fn runtime_info_reports_the_update_capability_and_status() {
+    let runtime = Runtime::start(|_| {});
+    let link = runtime.link(Some(&[SCOPE_THREAD_READ, SCOPE_RUNTIME_UPDATE]));
+    let (mut client, _) = pair_with_link(&link, &options(None)).unwrap();
+
+    // A container without a launcher installs nothing itself.
+    let info = client.read_runtime_info().unwrap();
+    assert_eq!(info["update_capability"], "manual");
+    assert_eq!(info["update_status"]["state"], "idle");
+    assert_eq!(info["update_status"]["target_version"], Value::Null);
+    assert_eq!(info["update_status"]["blockers"], json!([]));
+    assert!(info["update_status"]["updated_at"].is_string());
+    assert!(info["update_status"].get("error").is_none());
+
+    // A manual runtime reads a pending request as queued and ignores a
+    // status file an earlier launcher left.
+    let remote = runtime.directory.join("remote");
+    write_update_status(
+        &remote,
+        &RuntimeUpdateStatus {
+            state: RuntimeUpdateState::Failed,
+            target_version: Some("9.8.8".into()),
+            blockers: Vec::new(),
+            error: Some("old".into()),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        },
+    )
+    .unwrap();
+    client.request_runtime_update("9.9.0").unwrap();
+    let info = client.read_runtime_info().unwrap();
+    assert_eq!(info["update_status"]["state"], "queued");
+    assert_eq!(info["update_status"]["target_version"], "9.9.0");
+
+    // Under a launcher, the launcher's status wins.
+    runtime
+        .access
+        .set_update_capability(UpdateCapability::Launcher);
+    client.request_runtime_update("9.9.1").unwrap();
+    let info = client.read_runtime_info().unwrap();
+    assert_eq!(info["update_capability"], "launcher");
+    assert_eq!(info["update_status"]["state"], "queued");
+    assert_eq!(info["update_status"]["target_version"], "9.9.1");
+    runtime
+        .access
+        .set_update_status(
+            RuntimeUpdateState::Draining,
+            Some("9.9.1"),
+            vec!["active_run".into()],
+            None,
+        )
+        .unwrap();
+    let info = client.read_runtime_info().unwrap();
+    assert_eq!(info["update_status"]["state"], "draining");
+    assert_eq!(info["update_status"]["blockers"], json!(["active_run"]));
+    runtime
+        .access
+        .set_update_status(
+            RuntimeUpdateState::Failed,
+            Some("9.9.1"),
+            Vec::new(),
+            Some("Version 9.9.1 did not report healthy.".into()),
+        )
+        .unwrap();
+    runtime.access.clear_update_request().unwrap();
+    let info = client.read_runtime_info().unwrap();
+    assert_eq!(info["update_status"]["state"], "failed");
+    assert_eq!(
+        info["update_status"]["error"],
+        "Version 9.9.1 did not report healthy."
+    );
+    assert_eq!(info["update_request"], Value::Null);
 }
 
 #[test]

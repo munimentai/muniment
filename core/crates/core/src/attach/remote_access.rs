@@ -18,8 +18,9 @@ use fs2::FileExt;
 use muniment_attach::{
     default_pairing_scopes, is_lowercase_hex, is_valid_display_name, is_valid_endpoint,
     CertificateFingerprint, Id, InstallKind, Operation, PairingLink, ProtocolError, Request,
-    RuntimeInfo, DEVICE_SECRET_HEX_LENGTH, MAX_PAIRING_ENDPOINTS, PAIRING_SECRET_HEX_LENGTH,
-    REMOTE_SCOPES, SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE,
+    RuntimeInfo, RuntimeUpdateState, RuntimeUpdateStatus, UpdateCapability,
+    DEVICE_SECRET_HEX_LENGTH, MAX_PAIRING_ENDPOINTS, PAIRING_SECRET_HEX_LENGTH, REMOTE_SCOPES,
+    SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -37,6 +38,7 @@ pub const MAX_PAIRED_DEVICES: usize = 64;
 const ACCESS_FILE: &str = "access.json";
 const LOCK_FILE: &str = "access.lock";
 const UPDATE_FILE: &str = "runtime-update.json";
+const UPDATE_STATUS_FILE: &str = "update-status.json";
 const MAX_VERSION_LENGTH: usize = 64;
 
 /// The `requested_by` of the owner's local desktop route.
@@ -173,6 +175,8 @@ struct Inner {
     endpoints: Mutex<Vec<String>>,
     revoked: Mutex<HashSet<String>>,
     update_subscribers: Mutex<Vec<mpsc::Sender<RuntimeUpdateRequest>>>,
+    update_capability: Mutex<UpdateCapability>,
+    opened_at: String,
     clock: Box<Clock>,
 }
 
@@ -211,6 +215,13 @@ impl RemoteAccess {
         let server_config = identity
             .server_config()
             .map_err(|error| RemoteAccessOpenError(std::io::Error::other(error)))?;
+        // The desktop app updates its own runtime. A server or container
+        // updates itself only when its host says a launcher installs releases.
+        let update_capability = match options.install_kind {
+            InstallKind::Desktop => UpdateCapability::Desktop,
+            InstallKind::Server | InstallKind::Container => UpdateCapability::Manual,
+        };
+        let opened_at = timestamp(clock());
         let access = Self {
             inner: Arc::new(Inner {
                 directory,
@@ -221,6 +232,8 @@ impl RemoteAccess {
                 endpoints: Mutex::new(Vec::new()),
                 revoked: Mutex::new(HashSet::new()),
                 update_subscribers: Mutex::new(Vec::new()),
+                update_capability: Mutex::new(update_capability),
+                opened_at,
                 clock,
             }),
         };
@@ -428,6 +441,18 @@ impl RemoteAccess {
             .map_err(|_| ProtocolError::persistence_failed())?;
         lock(&self.inner.update_subscribers)
             .retain(|subscriber| subscriber.send(request.clone()).is_ok());
+        if self.update_capability() != UpdateCapability::Manual {
+            let queued = RuntimeUpdateStatus {
+                state: RuntimeUpdateState::Queued,
+                target_version: Some(request.version.clone()),
+                blockers: Vec::new(),
+                error: None,
+                updated_at: request.requested_at.clone(),
+            };
+            if let Err(error) = write_update_status(&self.inner.directory, &queued) {
+                crate::runtime_eprintln!("muniment-runtime: update status not saved: {error}");
+            }
+        }
         crate::runtime_eprintln!(
             "muniment-runtime: runtime update requested version={version} requested_by={requested_by}"
         );
@@ -458,6 +483,64 @@ impl RemoteAccess {
         let (sender, receiver) = mpsc::channel();
         lock(&self.inner.update_subscribers).push(sender);
         receiver
+    }
+
+    /// Sets who installs a requested version. A desktop install starts as
+    /// `desktop`, a server or container as `manual` until its host says a
+    /// launcher installs releases.
+    pub fn set_update_capability(&self, capability: UpdateCapability) {
+        *lock(&self.inner.update_capability) = capability;
+    }
+
+    pub fn update_capability(&self) -> UpdateCapability {
+        *lock(&self.inner.update_capability)
+    }
+
+    /// The update's current state. The updater's saved status wins while it
+    /// works or after it failed. Otherwise a pending request reads as
+    /// `queued`, and no request as `idle`. A `manual` runtime has no updater,
+    /// so a saved status counts for nothing.
+    pub fn update_status(&self) -> RuntimeUpdateStatus {
+        let stored = (self.update_capability() != UpdateCapability::Manual)
+            .then(|| read_update_status(&self.inner.directory))
+            .flatten();
+        match (stored, self.requested_update()) {
+            (Some(status), _) if status.state != RuntimeUpdateState::Idle => status,
+            (_, Some(request)) => RuntimeUpdateStatus {
+                state: RuntimeUpdateState::Queued,
+                target_version: Some(request.version),
+                blockers: Vec::new(),
+                error: None,
+                updated_at: request.requested_at,
+            },
+            (stored, None) => stored.unwrap_or_else(|| RuntimeUpdateStatus {
+                state: RuntimeUpdateState::Idle,
+                target_version: None,
+                blockers: Vec::new(),
+                error: None,
+                updated_at: self.inner.opened_at.clone(),
+            }),
+        }
+    }
+
+    /// Saves the update's state for `runtime.info` and the
+    /// `runtime.update_status` events of every subscribed session.
+    pub fn set_update_status(
+        &self,
+        state: RuntimeUpdateState,
+        target_version: Option<&str>,
+        blockers: Vec<String>,
+        error: Option<String>,
+    ) -> std::io::Result<RuntimeUpdateStatus> {
+        let status = RuntimeUpdateStatus {
+            state,
+            target_version: target_version.map(str::to_owned),
+            blockers,
+            error,
+            updated_at: timestamp((self.inner.clock)()),
+        };
+        write_update_status(&self.inner.directory, &status)?;
+        Ok(status)
     }
 
     /// Redeems a pairing secret once. Requested scopes narrow the link's
@@ -625,6 +708,8 @@ pub(super) fn dispatch_remote_operation(
                 .map_err(|_| ProtocolError::persistence_failed())?;
             info["certificate_sha256"] = json!(access.certificate_fingerprint().to_hex());
             info["update_request"] = json!(access.requested_update());
+            info["update_capability"] = json!(access.update_capability());
+            info["update_status"] = json!(access.update_status());
             Ok(info)
         }
         Operation::RemotePairingCreate => {
@@ -843,10 +928,52 @@ fn release_numbers(version: &str) -> Option<([u64; 3], bool)> {
     parts.next().is_none().then_some((numbers, pre_release))
 }
 
+/// The update request saved in the remote access directory, as a launcher
+/// outside the runtime process reads it.
+pub fn read_update_request(directory: &Path) -> Option<RuntimeUpdateRequest> {
+    read_private(&directory.join(UPDATE_FILE))
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+/// Removes the saved update request when it still names `version`, so a
+/// request for a later version that arrived meanwhile stays.
+pub fn clear_update_request_for(directory: &Path, version: &str) -> std::io::Result<()> {
+    let _lock = lock_file(directory, true)?;
+    if read_update_request(directory).is_some_and(|request| request.version == version) {
+        match std::fs::remove_file(directory.join(UPDATE_FILE)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The update status the updater saved in the remote access directory.
+pub fn read_update_status(directory: &Path) -> Option<RuntimeUpdateStatus> {
+    read_private(&directory.join(UPDATE_STATUS_FILE))
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+/// Saves an update status in the remote access directory.
+pub fn write_update_status(directory: &Path, status: &RuntimeUpdateStatus) -> std::io::Result<()> {
+    ensure_private_directory(directory)?;
+    let bytes = serde_json::to_vec(status).map_err(std::io::Error::other)?;
+    write_private(&directory.join(UPDATE_STATUS_FILE), &bytes)
+}
+
+/// The current time as an update status writes it.
+pub fn update_timestamp() -> String {
+    timestamp(Utc::now())
+}
+
 /// Whether `requested` is a later release than `current`, where a release
 /// follows its own pre-releases. A version that does not parse is never
 /// newer.
-fn is_newer_version(requested: &str, current: &str) -> bool {
+pub fn is_newer_version(requested: &str, current: &str) -> bool {
     match (release_numbers(requested), release_numbers(current)) {
         (Some((requested, requested_pre)), Some((current, current_pre))) => {
             requested > current || (requested == current && current_pre && !requested_pre)

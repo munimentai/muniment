@@ -135,6 +135,19 @@ pub(super) struct ActiveChatSubscription {
     /// Runtime update requests, sent as `runtime.update_requested` events on
     /// the same subscription.
     update_events: Option<std::sync::mpsc::Receiver<super::RuntimeUpdateRequest>>,
+    /// The runtime's update status, sent as `runtime.update_status` events
+    /// when the subscriber asked for them.
+    update_status: Option<UpdateStatusWatch>,
+}
+
+/// How often a subscription rereads the update status, which a launcher in
+/// another process may change.
+const UPDATE_STATUS_INTERVAL: Duration = Duration::from_secs(1);
+
+struct UpdateStatusWatch {
+    access: super::RemoteAccess,
+    last: Option<super::RuntimeUpdateStatus>,
+    next_check: Instant,
 }
 
 pub(super) struct DesktopSessionState {
@@ -186,10 +199,12 @@ impl<S: ThreadListService> DesktopSessionService for S {
             .map_or(Ok((Vec::new(), false)), |subscription| {
                 let mut events = drain_model_events(subscription);
                 events.extend(drain_update_events(subscription));
+                events.extend(drain_update_status(subscription));
                 let (chat, closed) = drain_chat_events(subscription, wait)?;
                 events.extend(chat);
                 events.extend(drain_model_events(subscription));
                 events.extend(drain_update_events(subscription));
+                events.extend(drain_update_status(subscription));
                 Ok((events, closed))
             })
     }
@@ -264,6 +279,35 @@ fn drain_update_events(subscription: &mut ActiveChatSubscription) -> Vec<Event> 
         }
     }
     events
+}
+
+/// Sends the update status when it changed since the last one sent. The
+/// first check sends the current status.
+fn drain_update_status(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
+    let Some(watch) = subscription.update_status.as_mut() else {
+        return Vec::new();
+    };
+    let now = Instant::now();
+    if now < watch.next_check {
+        return Vec::new();
+    }
+    watch.next_check = now + UPDATE_STATUS_INTERVAL;
+    let status = watch.access.update_status();
+    if watch.last.as_ref() == Some(&status) {
+        return Vec::new();
+    }
+    let Ok(body) = serde_json::to_value(&status) else {
+        return Vec::new();
+    };
+    watch.last = Some(status);
+    vec![Event {
+        protocol: Protocol,
+        subscription_id: subscription.subscription_id.clone(),
+        event: EventName::RuntimeUpdateStatus,
+        run_id: None,
+        run_seq: None,
+        body,
+    }]
 }
 
 /// Waits up to `wait` for the first chat event, then takes the events that
@@ -865,6 +909,9 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             /// The `seq` of the last chat event the client applied.
             #[serde(default)]
             cursor: Option<u64>,
+            /// Also send `runtime.update_status` events.
+            #[serde(default)]
+            update_status: bool,
         }
         let body: Body =
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
@@ -874,6 +921,14 @@ pub(super) fn dispatch_request<S: ThreadListService>(
         let update_events = service
             .remote_access()
             .map(|access| access.update_requests());
+        let update_status = service
+            .remote_access()
+            .filter(|_| body.update_status)
+            .map(|access| UpdateStatusWatch {
+                access,
+                last: None,
+                next_check: Instant::now(),
+            });
         let mut subscription_random = [0u8; 16];
         getrandom::fill(&mut subscription_random)
             .map_err(|_| ProtocolError::persistence_failed())?;
@@ -885,6 +940,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             receiver,
             model_events,
             update_events,
+            update_status,
         });
         return Ok(response_only(serde_json::json!({
             "subscription_id": subscription_id,

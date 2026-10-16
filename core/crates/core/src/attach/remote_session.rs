@@ -827,6 +827,100 @@ mod tests {
     }
 
     #[test]
+    fn update_status_reaches_local_and_remote_subscribers_that_ask() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-remote-status-{}", uuid::Uuid::now_v7()));
+        let access = access(&directory);
+        let info = dispatch(
+            &mut Owner(access.clone()),
+            request(Operation::RuntimeInfo, json!({})),
+        )
+        .unwrap();
+        assert_eq!(info["update_capability"], "desktop");
+        assert_eq!(info["update_status"]["state"], "idle");
+
+        let mut remote_owner = RoutedOwner::new(access.clone());
+        let mut session = RemoteSession {
+            service: &mut remote_owner,
+            access: access.clone(),
+            device_id: uuid::Uuid::now_v7().to_string(),
+            scopes: crate::attach::remote_access::all_scopes(),
+            expires: Instant::now() + Duration::from_secs(60),
+            idle: Duration::from_secs(60),
+            last_activity: Instant::now(),
+            next_device_check: Instant::now() + Duration::from_secs(60),
+        };
+        let mut remote_state = session.new_session_state();
+        session
+            .dispatch_request(
+                request(Operation::RunChatEvents, json!({"update_status": true})),
+                "",
+                provenance(),
+                &mut remote_state,
+            )
+            .map_err(|failure| failure.error)
+            .unwrap();
+        let mut status_events = |session: &mut RemoteSession<'_, RoutedOwner>| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let (events, _) = session
+                    .drain_chat_events(&mut remote_state, Duration::from_millis(50))
+                    .unwrap();
+                assert!(events
+                    .iter()
+                    .all(|event| event.event == EventName::RuntimeUpdateStatus));
+                if !events.is_empty() || Instant::now() > deadline {
+                    return events;
+                }
+            }
+        };
+        // The first status is the current one.
+        let events = status_events(&mut session);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].body["state"], "idle");
+
+        // A request reads as queued, and the remote device sees its status
+        // but not the request itself.
+        access.request_update("2.1.0", "local").unwrap();
+        let events = status_events(&mut session);
+        assert_eq!(events[0].body["state"], "queued");
+        assert_eq!(events[0].body["target_version"], "2.1.0");
+
+        access
+            .set_update_status(
+                crate::attach::RuntimeUpdateState::Draining,
+                Some("2.1.0"),
+                vec!["active_run".into()],
+                None,
+            )
+            .unwrap();
+        let events = status_events(&mut session);
+        assert_eq!(events[0].body["state"], "draining");
+        assert_eq!(events[0].body["blockers"], json!(["active_run"]));
+
+        // A subscriber that did not ask gets no status.
+        let mut owner = RoutedOwner::new(access.clone());
+        let mut state = owner.new_session_state();
+        owner
+            .dispatch_request(
+                request(Operation::RunChatEvents, json!({})),
+                "",
+                provenance(),
+                &mut state,
+            )
+            .map_err(|failure| failure.error)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let (events, _) = owner
+            .drain_chat_events(&mut state, Duration::from_millis(10))
+            .unwrap();
+        assert!(events
+            .iter()
+            .all(|event| event.event != EventName::RuntimeUpdateStatus));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn concurrent_redemptions_of_one_link_issue_one_device() {
         let directory =
             std::env::temp_dir().join(format!("muniment-remote-race-{}", uuid::Uuid::now_v7()));

@@ -34,6 +34,9 @@ pub enum SubscriptionEvent {
     /// A client asked the host to update the runtime: `version`,
     /// `requested_at` and `requested_by`. The local owner route only.
     RuntimeUpdateRequested(Value),
+    /// The runtime's update moved to a new state, a `RuntimeUpdateStatus`
+    /// body. Only a subscription that asked for update status receives it.
+    RuntimeUpdateStatus(Value),
 }
 
 /// A connection-bound client for the peer-authorized desktop session.
@@ -560,27 +563,60 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
+        self.subscribe_chat_events_with(cursor, false)
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_after`] and also asks
+    /// for `runtime.update_status` events, the first of them the current
+    /// status. A runtime that sends no update status refuses the request,
+    /// and the subscription then carries no status.
+    pub fn subscribe_chat_events_with_update_status(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        match self.subscribe_chat_events_with(cursor, true) {
+            Err(_)
+                if self
+                    .last_request_error()
+                    .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest) =>
+            {
+                self.subscribe_chat_events_with(cursor, false)
+            }
+            result => result,
+        }
+    }
+
+    fn subscribe_chat_events_with(
+        &mut self,
+        cursor: Option<u64>,
+        update_status: bool,
+    ) -> Result<String, ClientError> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Subscription {
             subscription_id: String,
         }
 
+        let mut base = serde_json::Map::new();
+        if update_status {
+            base.insert("update_status".into(), Value::Bool(true));
+        }
         let response = match cursor {
             Some(cursor) => {
-                let body = serde_json::json!({"cursor": cursor});
-                match self.snapshot_request(Operation::RunChatEvents, body) {
+                let mut body = base.clone();
+                body.insert("cursor".into(), cursor.into());
+                match self.snapshot_request(Operation::RunChatEvents, Value::Object(body)) {
                     Err(_)
                         if self.last_request_error().is_some_and(|error| {
                             error.code() == crate::ErrorCode::InvalidRequest
                         }) =>
                     {
-                        self.snapshot_request(Operation::RunChatEvents, serde_json::json!({}))?
+                        self.snapshot_request(Operation::RunChatEvents, Value::Object(base))?
                     }
                     response => response?,
                 }
             }
-            None => self.snapshot_request(Operation::RunChatEvents, serde_json::json!({}))?,
+            None => self.snapshot_request(Operation::RunChatEvents, Value::Object(base))?,
         };
         self.chat_cursor = cursor;
         let subscription: Subscription =
@@ -655,6 +691,7 @@ impl DesktopClient {
                     EventName::ChatEvent
                         | EventName::ModelsLogin
                         | EventName::RuntimeUpdateRequested
+                        | EventName::RuntimeUpdateStatus
                 )
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -672,6 +709,12 @@ impl DesktopClient {
                     return Err(ClientError::UnexpectedMessage);
                 }
                 return Ok(SubscriptionEvent::RuntimeUpdateRequested(event.body));
+            }
+            if event.event == EventName::RuntimeUpdateStatus {
+                if !event.body["state"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::RuntimeUpdateStatus(event.body));
             }
             if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
                 if let Some(seq) = body.get("seq").and_then(Value::as_u64) {

@@ -552,6 +552,10 @@ pub enum EventName {
     /// chat-event subscription.
     #[serde(rename = "runtime.update_requested")]
     RuntimeUpdateRequested,
+    /// The runtime's update moved to a new state, on a chat-event
+    /// subscription that asked for `update_status`.
+    #[serde(rename = "runtime.update_status")]
+    RuntimeUpdateStatus,
     #[serde(untagged)]
     Unknown(BoundedEventName),
 }
