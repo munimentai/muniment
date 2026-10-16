@@ -60,3 +60,13 @@ Run the contract tests from the repository root:
 cargo test --manifest-path src-tauri/integration/Cargo.toml --locked --lib remote_control_pairing
 cargo test --manifest-path src-tauri/runtime/Cargo.toml --locked --lib pairing
 ```
+
+The live relay test runs the desktop's pairing code and the runtime's relay
+publisher against a running cloud API, with a headless phone that scans the
+QR code. It needs Postgres, Redis and an account with a password:
+
+```sh
+MUNIMENT_RELAY_LIVE_API=http://127.0.0.1:58787 \
+MUNIMENT_RELAY_LIVE_EMAIL=<email> MUNIMENT_RELAY_LIVE_PASSWORD=<password> \
+cargo test --manifest-path src-tauri/integration/Cargo.toml --test relay_live -- --ignored
+```

@@ -33,6 +33,8 @@ libc = "0.2"
 quircs = "0.10"
 resvg = { version = "0.45", default-features = false }
 syn = { version = "2", features = ["full", "visit"] }
+# The headless phone of the live relay test.
+tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
