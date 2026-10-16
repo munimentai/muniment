@@ -113,8 +113,11 @@ them.
 | Delete confirm group | `.thread-delete-confirm` | Inline Delete and Cancel | `--surface`, `--radius-control`, `--ink`, `--text-12 --font-mono`, padding 5px 7px | Buttons: quiet, 24px floor, `font: inherit`. Hover: `--faint`. Disabled while `deletePending` |
 | Older threads | `.older-threads` | Loads the next page | Quiet, full width, `--muted`, margin-top 4px | Disabled while loading |
 | Settings control | `.side-action` | Foot control that expands the menu | Transparent, gap 9px, padding 7px 8px, `settings` icon at 18px in `--muted`, `--text-13`, `aria-keyshortcuts` and tooltip carry ⌘, or Ctrl+, | Hidden with the collapsed sidebar. The shortcut expands the sidebar with the menu open, and toggles the menu when the sidebar shows |
-| Activity row | `.activity-row` | Opens Activity | Side action with the `activity` icon | `.side-count`: mono `--text-12` chip, 1px `--border`, `--radius-chip`, counts runs that raised a notification since Activity last opened |
+| Activity row | `.activity-row` | Opens Activity | Side action with the `activity` icon | `.side-count`: mono `--text-12` chip, 1px `--border`, `--radius-chip`, counts runs that raised a notification since Activity last opened and approvals waiting |
 | Machine mark | `.machine-mark` in `MachineMark.svelte` | The machine an agent or run lives on | Shape icon at 12px and the name in `--muted`, `--text-12 --font-mono`. Icon only in a sidebar agent row | None |
+| Agent row marks | `.agent-offline`, `.agent-synced` | An agent whose primary machine does not answer, and a synced copy | `globe-off` at 12px in `--ochre`, `refresh-cw` at 12px in `--muted`, each with a visually hidden word | None |
+| Groups row | `aria-label="Groups group"` | Group chats, shown once a machine is in a swarm | Collection row with the `users` icon and a plus that opens New group | Each group row opens its thread |
+| Absence prompt | `.absence` in `AbsencePrompt.svelte` | Routines paused after 14 days without a client | `--surface`, 1px `--ochre`, `--radius-control`, `--text-12`, Resume routines and Not now | Busy while the resume runs. Not now hides it for the session |
 | Settings block | `.settings-block` | Foot of the sidebar | 1px `--border` top, padding-top 8px, `margin-top: auto` | None |
 
 ## Settings menu
@@ -365,3 +368,17 @@ label tracking, the 1.45 provenance line height, and every opacity.
 | `contrast.test.js` | `--ink`, `--muted`, and `--signal` clear 4.5:1 on `--paper`, `--surface`, and `--faint` in all four palettes |
 | `text-wrap.test.js` | `.provenance`, `.user-message`, `.response-prose`, `.tool-name`, `.permission-card p`, `.receipt-record dd`, and `.assistant-markdown` set `overflow-wrap: anywhere` |
 | `class-usage.test.js` | Every class in markup has a rule in its component or in base.css, and class expressions stay literal |
+
+## Agent swarm
+
+| Component | Selector | Purpose | Rest | States |
+| --- | --- | --- | --- | --- |
+| Agent dialog | `AgentDialog.svelte` | Shared shell of Move agent, New group and Import agent | Overlay panel, `PopupClose`, scrolling body, actions under a 1px `--border` | Escape, X and a click outside close it unless busy |
+| Agent message | `.agent-message` in `AgentMessage.svelte` | Another agent's message in a transcript | `--surface` card, 1px `--border`, `--radius-panel`, sender avatar at 20px, mono intent chip at `--radius-chip`, hop count in `--muted` mono | A handoff is a `.system-note` line with its context folded |
+| Silent run | `.silent-note` | A routine run that had nothing to say | `--muted`, `--text-12 --font-mono` | None |
+| Thread post | `.post` in `ThreadPost.svelte` | A group reply, a user post or a note from Muniment | Agent replies: avatar, name and time over plain text. User posts: the `faint` bubble. Notes: `--muted` `--text-13` | A meeting round opens with `.round`, a mono `--muted` label over a 1px `--border` |
+| Agent mentions | `#agent-mentions` in `AgentMentions.svelte` | The @ list in a group thread | Same panel as the file list, avatars at 16px, `@everyone` first with the `users` icon | Selected: `--faint` |
+| Approval | `.approval` in `ApprovalList.svelte` | A gate waiting on any member | Agent, machine mark and age, the request title, its inputs in a `--faint` mono block, then unified `Button`s | Deny uses the outline variant. A refused or late answer shows its line under the row |
+| Swarm member | `Row` in `SwarmSection.svelte` | One member on Settings → Machines | Shape icon, name, Online or Offline in mono meta, link line in `--muted` mono | Leave swarm on a machine this device administers, Unlink on one it does not reach |
+| Move warning | `.warning` in `MoveDialog.svelte` | A forced move off a primary that does not answer | 1px `--ochre`, `--radius-control`, `--text-13` | The move stays off until the confirm box is checked |
+| Webhook address | `WebhookPanel.svelte` | A webhook routine's URLs, certificate fingerprint and secret | Mono values on `--faint`, Copy buttons, the secret in a 1px `--ochre` box | A `.warning` names a machine that does not accept connections |

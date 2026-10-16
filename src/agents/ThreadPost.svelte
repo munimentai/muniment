@@ -6,17 +6,18 @@
   import { postAuthor } from './transcript.js'
   import { messageLocalTime } from '../lib/chat-state.js'
 
-  let { post, agents = [], section = null } = $props()
+  let { post, agents = [], section = null, waiting = true } = $props()
   const author = $derived(postAuthor(post, agents))
 </script>
 
+<div class="post">
 {#if section}<h3 class="round">{section}</h3>{/if}
 {#if author.kind === 'system'}
   <p class="system-note" role="note">{post.text}</p>
 {:else if author.kind === 'user'}
   <div class="user-post">
     <p class="bubble">{post.text}</p>
-    <span class="meta">{post.consumed ? '' : 'Waiting for the agent\'s machine · '}{messageLocalTime(post.posted_at)}</span>
+    <span class="meta">{waiting && !post.consumed ? 'Waiting for the agent\'s machine · ' : ''}{messageLocalTime(post.posted_at)}</span>
   </div>
 {:else}
   <article class="agent-post" aria-label={`Reply from ${author.name}`}>
@@ -24,8 +25,10 @@
     <p class="body">{post.text}</p>
   </article>
 {/if}
+</div>
 
 <style>
+  .post { display: grid; gap: 8px; margin: 0 0 16px; }
   .round { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font: var(--weight-regular, 400) var(--text-12) var(--font-mono); }
   .system-note { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .user-post { display: grid; justify-items: end; gap: 4px; }

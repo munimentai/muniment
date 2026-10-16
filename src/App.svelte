@@ -425,7 +425,7 @@
       const value = await listAgents(tauri, runtimeList)
       if (version !== agentListVersion) return
       agentListing = value
-      selectedAgent = agentThreads(value)[currentThreadId] ?? startingAgent ?? null
+      selectedAgent = { ...swarmThreads(swarm), ...agentThreads(value) }[currentThreadId] ?? startingAgent ?? null
     }
     catch (_) { /* The manager presents errors and retry state. */ }
   }
@@ -2775,7 +2775,7 @@
             {#if roster.length}
               <div class="agent-roster" aria-label="Saved agents">
                 {#each roster.filter(agent=>!catalogArchived('agent',agent)) as agent (`${agent.runtimeId}:${agent.id}`)}
-                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span>{#if showAgentMachines}<MachineMark machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} named={false} />{/if}{#if agent.online === false}<em class="agent-offline">Offline</em>{/if}{#if agent.replica}<span class="agent-synced"><LucideIcon name="refresh-cw" size={12} /><em class="visually-hidden">Synced copy</em></span>{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
+                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span>{#if showAgentMachines}<MachineMark machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} named={false} />{/if}{#if agent.online === false}<em class="agent-offline"><LucideIcon name="globe-off" size={12} /><span class="visually-hidden">Offline</span></em>{/if}{#if agent.replica}<span class="agent-synced"><LucideIcon name="refresh-cw" size={12} /><em class="visually-hidden">Synced copy</em></span>{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
                 {/each}
               </div>
             {/if}
@@ -2786,7 +2786,7 @@
             <section class="sidebar-collection" aria-label="Groups group">
               <ProjectRow name="Groups" label="Groups" icon="users" newLabel="New group" expanded={groupsExpanded} collapsible={swarm.groups.length > 0} disabled={switchLocked} ontoggle={() => groupsExpanded = !groupsExpanded} onactivate={() => groupsExpanded = !groupsExpanded} onnew={() => { groupCreateOpen = true }} />
               {#if groupsExpanded && swarm.groups.length}<div class="collection-children"><div class="agent-roster" aria-label="Group chats">
-                {#each swarm.groups as group (group.group_id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={group.thread_id === currentThreadId ? 'true' : undefined} disabled={switchLocked} onclick={() => openGroup(group).catch(error => { submitError = String(error) })}><LucideIcon name="users" /><span>{group.name}</span>{#if group.meeting_mode}<em class="agent-offline">Meeting</em>{/if}</button></div>{/each}
+                {#each swarm.groups as group (group.group_id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={group.thread_id === currentThreadId ? 'true' : undefined} disabled={switchLocked} onclick={() => openGroup(group).catch(error => { submitError = String(error) })}><LucideIcon name="users" /><span>{group.name}</span>{#if group.meeting_mode}<em class="visually-hidden">Meeting</em>{/if}</button></div>{/each}
               </div></div>{/if}
             </section>
             {/if}
@@ -2882,12 +2882,12 @@
           {/if}
           {#each transcriptItems as item (item.post ? `post:${item.post.message_id}` : messageKeys.get(item.message))}
             {#if item.post}
-              <ThreadPost post={item.post} agents={roster} section={postSections.get(item.post.message_id)} />
+              <ThreadPost post={item.post} agents={roster} section={postSections.get(item.post.message_id)} waiting={!threadGroup} />
             {:else}
             {@const message = item.message}
             {@const envelope = message.role === 'user' ? agentEnvelope(message.text) : null}
             {#if envelope}
-              <AgentMessage {envelope} agent={roster.find((agent) => agent.id === envelope.agentId) ?? null} sentAt={message.sentAt ?? ''} />
+              <div class="agent-turn"><AgentMessage {envelope} agent={roster.find((agent) => agent.id === envelope.agentId) ?? null} sentAt={message.sentAt ?? ''} /></div>
             {:else if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
                 {@const sent = promptFolders(message.text)}
@@ -3372,7 +3372,7 @@
 <style>
   .catalog-sidebar-row {display:flex;align-items:center;min-width:0;border-radius:var(--radius-control)}
   .catalog-sidebar-row .side-action {flex:1;min-width:0}
-  .agent-offline { flex: none; color: var(--muted); font: normal var(--text-12) var(--font-mono); }
+  .agent-offline { display: inline-flex; flex: none; color: var(--ochre); }
   .agent-synced { display: inline-flex; flex: none; color: var(--muted); }
   .catalog-sidebar-row :global(.catalog-actions) {opacity:0}
   .catalog-sidebar-row:hover :global(.catalog-actions), .catalog-sidebar-row:focus-within :global(.catalog-actions), .catalog-sidebar-row :global(.catalog-actions.opened) {opacity:1}
@@ -3682,6 +3682,7 @@
   .latest { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--ink); cursor: pointer; }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
+  .agent-turn { margin: 0 0 16px; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
   .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); }
   .user-turn:hover .message-actions, .user-turn:focus-within .message-actions { opacity: 1; }

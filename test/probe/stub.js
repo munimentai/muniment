@@ -1,4 +1,4 @@
-import { handleAgentRequest, probeAgentStores, probeExtensions } from './agents-fixture.js'
+import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
 
 export const historyFixtures = {
   agents: [],
@@ -365,8 +365,10 @@ export function buildProbeCommandTable(fixtureName) {
   // failed or ssh. Every other fixture holds this computer's runtime alone.
   const runtimesFixture = fixtureName === 'runtimes'
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
-  // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals
-  // or activity, with agents on three machines that all answer.
+  // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals,
+  // activity, machines, move, transcript, group-create, meeting, approvals,
+  // import or absence, with agents on three machines that all answer and a
+  // synced copy from a fourth.
   const agentsFixture = fixtureName === 'agents'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
   let runtimeList = probeRuntimes(agentsFixture ? 'agents' : runtimesState)
@@ -382,6 +384,8 @@ export function buildProbeCommandTable(fixtureName) {
         { threadId: 'thread-a3', title: 'Release editor', updatedAt: '2026-07-28T10:30:00Z', runtimeId: '018f0000-0000-7000-8000-000000000042' },
         { threadId: 'thread-a4', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
         { threadId: 'probe-box', title: 'Nightly test notes', updatedAt: '2026-07-27T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
+        { threadId: GROUP_THREAD, title: 'Launch room', updatedAt: '2026-07-28T11:30:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a5', title: 'Front desk', updatedAt: '2026-07-26T10:00:00Z', runtimeId: 'local' },
       ]
     : runtimesFixture
     ? [
@@ -413,7 +417,7 @@ export function buildProbeCommandTable(fixtureName) {
   ] : []
   let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
   let pendingChanges = memorySeed ? probePending(savedFacts) : []
-  const agentStores = probeAgentStores(agentsFixture)
+  const agentStores = probeAgentStores(agentsFixture, agentsState)
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
   const projectThreads = { 'probe-thread': 'project-lease', 'probe-archive': 'project-lease', 'probe-notes': 'project-research' }
@@ -578,7 +582,6 @@ export function buildProbeCommandTable(fixtureName) {
       if (payload.action === 'memory_fact_delete') { data.deleted.push(...data.facts.filter(item => item.id === payload.factId)); data.facts = data.facts.filter(item => item.id !== payload.factId); return null }
       if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
     }
-    if (command === 'agent_import_link') return { url: payload.url, html: await (await fetch('./fixtures/grok-template.html')).text() }
     if (command === 'agent_export_template') return true
     if (command === 'agent_request') return handleAgentRequest(agentStores, payload)
     if (command === 'agent_open') return null
@@ -632,6 +635,7 @@ export function buildProbeCommandTable(fixtureName) {
       }
     }
     if (command === 'chat_answer_permission') return null
+    if (command === 'chat_thread_open' && agentsFixture) return { entries: probeAgentHistory(payload.threadId), posted: probePosts(agentStores, payload.threadId), nextCursor: null }
     if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
     // Chat events leave out tool output bodies and applied diffs. These come from the run's record.
     if (command === 'chat_run_detail') {
@@ -897,7 +901,8 @@ function runtimesRendered() {
 }
 
 // The agents fixture opens the catalog, an agent's profile, one routine's
-// editor or Activity, as its state names.
+// editor, Activity, Settings → Machines, a dialog or a conversation, as its
+// state names.
 const AGENT_STATES = {
   list: { agent: null },
   profile: { agent: 'Lead scout' },
@@ -905,13 +910,32 @@ const AGENT_STATES = {
   webhook: { agent: 'Lead scout', routine: 'Build finished' },
   mcp: { agent: 'Lead scout', routine: 'New leads' },
   proposals: { agent: 'Inbox triage' },
+  move: { agent: 'Front desk' },
+  transcript: { agent: 'Inbox triage' },
   activity: { agent: null },
+  approvals: { agent: null },
+  machines: { agent: null },
+  'group-create': { agent: null },
+  meeting: { agent: null },
+  import: { agent: null },
+  absence: { agent: null },
+}
+
+const AGENT_SCREENS = {
+  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .agent-roster .machine-mark').length === 5 && !!document.querySelector('#sidebar .agent-synced'),
+  activity: () => document.querySelectorAll('[data-panel="activity"] .run').length >= 9,
+  approvals: () => document.querySelectorAll('[data-panel="activity"] .approval').length === 2,
+  machines: () => !!document.querySelector('.settings-runtimes [aria-label="Swarm member Office mini"]') && document.querySelector('.settings-runtimes')?.textContent.includes('retrying'),
+  'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
+  meeting: () => document.querySelector('.thread')?.textContent.includes('Debate round 1') && document.querySelectorAll('.thread .round').length === 3,
+  import: () => !!document.querySelector('[data-panel="import"] [aria-label="Skills"]'),
+  absence: () => !!document.querySelector('#sidebar [aria-label="Routines paused"]'),
+  transcript: () => !!document.querySelector('.thread [aria-label="Message from Lead scout"]') && !!document.querySelector('.thread .silent-note'),
+  move: () => !!document.querySelector('[data-panel="move"] [role="note"]') && !!document.querySelector('[data-panel="move"] input:checked'),
 }
 
 function agentsRendered() {
-  const marks = document.querySelectorAll('#sidebar .agent-roster .machine-mark').length
-  if (agentsState === 'list') return document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 4 && marks === 4
-  if (agentsState === 'activity') return document.querySelectorAll('[data-panel="activity"] .run').length >= 9
+  if (AGENT_SCREENS[agentsState]) return AGENT_SCREENS[agentsState]()
   const profile = document.querySelector('aside[aria-label="Agent profile"]')
   if (!profile?.textContent.includes(AGENT_STATES[agentsState].agent) || !profile.querySelector('[aria-label="Permissions"]')) return false
   if (agentsState === 'proposals') return profile.querySelectorAll('.proposal').length === 2
@@ -920,21 +944,67 @@ function agentsRendered() {
   const editor = document.querySelector('[data-panel="routine"]')
   if (!editor?.querySelector('input')?.value.includes(routine)) return false
   if (agentsState === 'mcp') return editor.querySelectorAll('[aria-label^="Check"]').length >= 2
+  if (agentsState === 'webhook') return !!editor.querySelector('[aria-label="Webhook address"] .secret code')
   return true
 }
 
+const buttonNamed = (root, name) => Array.from(root?.querySelectorAll('button') ?? []).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
+const probeImportRead = new WeakSet()
+let probeHistoryLoaded = false
+let probeGroupPicked = false
+
 function advanceAgentsFixture() {
   if (!agentsFixture || fixtureRendered()) return
+  // The first history load selects a thread, so the driver waits for it.
+  probeHistoryLoaded ||= !!document.querySelector('#sidebar .thread-row-title')
+  if (!probeHistoryLoaded) return
   const target = AGENT_STATES[agentsState] ?? AGENT_STATES.list
   const sidebarButton = (name) => Array.from(document.querySelectorAll('#sidebar button')).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
-  const expand = sidebarButton('Expand Agents')
-  if (expand) return expand.click()
-  if (agentsState === 'list') {
-    if (!document.querySelector('[data-panel="agents"]')) sidebarButton('Agents')?.click()
+  if (agentsState === 'absence') return
+  if (agentsState === 'machines') {
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    const machines = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Machines')
+    if (machines && machines.getAttribute('aria-current') !== 'true') machines.click()
     return
   }
-  if (agentsState === 'activity') {
-    if (!document.querySelector('[data-panel="activity"]')) sidebarButton('Activity')?.click()
+  if (agentsState === 'group-create' || agentsState === 'meeting') {
+    const dialog = document.querySelector('[data-panel="group"]')
+    if (dialog) {
+      if (probeGroupPicked) return
+      probeGroupPicked = true
+      const name = dialog.querySelector('input:not([type="checkbox"])')
+      typeInto(name, 'Pricing review')
+      for (const box of Array.from(dialog.querySelectorAll('input[type="checkbox"]')).slice(0, 3)) box.click()
+      return
+    }
+    const groups = document.querySelector('#sidebar [aria-label="Groups group"]')
+    if (!groups) return
+    if (agentsState === 'group-create') return buttonNamed(groups, 'New group')?.click()
+    return Array.from(groups.querySelectorAll('.agent-roster button')).find((button) => button.textContent.trim().startsWith('Launch room'))?.click()
+  }
+  const expand = sidebarButton('Expand Agents')
+  if (expand) return expand.click()
+  if (agentsState === 'list' || agentsState === 'import') {
+    const catalog = document.querySelector('[data-panel="agents"]')
+    if (!catalog) return sidebarButton('Agents')?.click()
+    if (agentsState !== 'import') return
+    const dialog = document.querySelector('[data-panel="import"]')
+    if (!dialog) return buttonNamed(catalog, 'Import agent')?.click()
+    // The dialog binds its fields once it mounts, so the link goes in a beat
+    // later. A catalog that mounts again opens a new dialog.
+    if (probeImportRead.has(dialog)) return
+    probeImportRead.add(dialog)
+    setTimeout(() => {
+      const current = document.querySelector('[data-panel="import"]')
+      const link = current?.querySelector('input.mono')
+      if (!link) return
+      typeInto(link, 'https://x.ai/bot/rfAHsaFrz6xHBMtUpxDi5')
+      setTimeout(() => buttonNamed(current, 'Preview')?.click(), 50)
+    }, 100)
+    return
+  }
+  if (agentsState === 'activity' || agentsState === 'approvals') {
+    if (!document.querySelector('[data-panel="activity"]')) document.querySelector('#sidebar .activity-row')?.click()
     return
   }
   const profile = document.querySelector('aside[aria-label="Agent profile"]')
@@ -943,9 +1013,20 @@ function advanceAgentsFixture() {
     if (row && !row.disabled) row.click()
     return
   }
-  if (target.routine && !document.querySelector('[data-panel="routine"]')) {
+  if (agentsState === 'move') {
+    const dialog = document.querySelector('[data-panel="move"]')
+    if (!dialog) return buttonNamed(profile.querySelector('[aria-label="Primary machine"]'), 'Move')?.click()
+    const force = Array.from(dialog.querySelectorAll('label')).find((label) => label.textContent.trim() === 'Force the move')?.querySelector('input')
+    if (force && !force.checked) force.click()
+    return
+  }
+  const editor = document.querySelector('[data-panel="routine"]')
+  if (target.routine && !editor) {
     Array.from(profile.querySelectorAll('.routine button')).find((button) => button.textContent.trim() === target.routine)?.click()
   }
+  // The webhook editor rotates the secret once, so it shows.
+  const rotate = agentsState === 'webhook' && buttonNamed(editor?.querySelector('[aria-label="Webhook address"]'), 'Rotate secret')
+  if (rotate && !rotate.disabled) rotate.click()
 }
 
 function fixtureRendered() {
@@ -1097,8 +1178,9 @@ function markReadyAfterFixtureRender() {
     void markProbeReady()
   })
   // A fixture can finish on a text change, such as a path or a scan count, or
-  // on a control that turns on once its settings load.
-  observer.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
+  // on a control that turns on once its settings load. Agent dialogs mount
+  // on the page body, so the agents fixture watches the whole body.
+  observer.observe(agentsFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {

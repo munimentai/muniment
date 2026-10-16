@@ -83,12 +83,12 @@
       {#snippet lead()}<LucideIcon name={kindIcon(machine)} />{/snippet}
       {#snippet detail()}
         {#if reached}
-          <p class="state">{directLinks(swarm.views[reached]).length ? `Links to ${directLinks(swarm.views[reached]).map((entry) => entry.runtime_name).join(', ')}` : 'Not linked'}</p>
+          <p class="state">{directLinks(swarm.views[reached]).length ? `Links to ${directLinks(swarm.views[reached]).map((entry) => memberMachine(swarm, entry.runtime_id, list).name).join(', ')}` : 'Not linked'}</p>
         {:else}
           {#each links as entry (entry.runtime)}<p class="state">{linkLabel(entry.link)}</p>{:else}<p class="state">{linkLabel(null)}</p>{/each}
         {/if}
       {/snippet}
-      {#if reached && directLinks(swarm.views[reached]).length}
+      {#if reached && managed.some((runtime) => runtime.id === reached) && directLinks(swarm.views[reached]).length}
         <Button variant="outline" disabled={!!busy} onclick={() => leave(reached)}>Leave swarm</Button>
       {:else if !reached && links.length}
         <Button variant="outline" disabled={!!busy} onclick={() => unlink(member.runtime_id, machine.name)}>Unlink</Button>
