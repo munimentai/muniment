@@ -44,11 +44,15 @@ impl AgentClient for DesktopClientHolder {
     }
 }
 
-/// The core attach operation a window names, when it manages agents.
+/// The core attach operation a window names, when it manages agents or the
+/// swarm. The exchange between linked runtimes is theirs alone.
 fn agent_operation(name: &str) -> Option<Operation> {
     serde_json::from_value::<Operation>(Value::String(name.to_owned()))
         .ok()
-        .filter(|operation| operation.is_agent_operation())
+        .filter(|operation| {
+            operation.is_agent_operation()
+                || (operation.is_swarm_operation() && *operation != Operation::SwarmExchange)
+        })
 }
 
 fn agent_error(error: ClientError) -> String {
@@ -87,8 +91,9 @@ fn forward<C: AgentClient>(
     client.agent_request(operation, body).map_err(agent_error)
 }
 
-/// Proxies one agent or routine operation to this computer's runtime or a
-/// paired runtime by id. The runtime owns agents, routines and runs.
+/// Proxies one agent, routine or swarm operation to this computer's runtime
+/// or a paired runtime by id. The runtime owns agents, routines, runs, links,
+/// groups and approvals.
 #[tauri::command]
 pub async fn agent_request(
     app: tauri::AppHandle,
@@ -126,41 +131,26 @@ pub fn agent_open(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .map_err(|_| "The agent folder could not be opened.".into())
 }
 
+/// Saves the file `agent.export` answered where the user picks. Core builds
+/// the content and its file name.
 #[tauri::command]
 pub async fn agent_export_template(
     app: tauri::AppHandle,
     content: String,
-    name: String,
-    format: Option<String>,
+    file_name: String,
 ) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
     if content.len() > 131072 {
         return Err("The template exceeds 128 KB.".into());
     }
-    let extension = if format.as_deref() == Some("markdown") {
-        "md"
-    } else {
-        "json"
-    };
-    let file_name: String = name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == ' ')
-        .take(80)
-        .collect();
+    let file_name = export_file_name(&file_name);
+    let extension = file_name.rsplit_once('.').map_or("md", |(_, extension)| extension).to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let selected = app
             .dialog()
             .file()
-            .set_file_name(format!(
-                "{}.agent.{}",
-                if file_name.is_empty() {
-                    "agent"
-                } else {
-                    &file_name
-                },
-                extension
-            ))
-            .add_filter("Agent template", &[extension])
+            .set_file_name(&file_name)
+            .add_filter("Agent template", &[extension.as_str()])
             .blocking_save_file();
         let Some(selected) = selected else {
             return Ok(false);
@@ -173,13 +163,20 @@ pub async fn agent_export_template(
     .map_err(|_| "The template export could not finish.".to_string())?
 }
 
-#[tauri::command]
-pub async fn agent_import_link(url: String) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        muniment_core::agent_templates::fetch_public_template(&url)
-    })
-    .await
-    .map_err(|_| "The template could not be loaded.".to_string())?
+/// A file name the save dialog can offer: letters, digits, dashes, spaces
+/// and dots, at most 120 characters, never empty or hidden.
+fn export_file_name(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | ' ' | '.' | '_'))
+        .take(120)
+        .collect();
+    let name = name.trim_start_matches('.').trim();
+    if name.is_empty() {
+        "agent.md".into()
+    } else {
+        name.into()
+    }
 }
 
 /// One agent's facts. The runtime owns the memory files, so each action
@@ -333,6 +330,86 @@ mod tests {
         );
         assert!(local.calls.borrow().is_empty());
         assert!(paired.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_export_file_name_stays_plain() {
+        assert_eq!(
+            export_file_name("Lead-scout.grok-bot.md"),
+            "Lead-scout.grok-bot.md"
+        );
+        assert_eq!(
+            export_file_name("../../etc/passwd"),
+            "etcpasswd"
+        );
+        assert_eq!(export_file_name("..."), "agent.md");
+        assert_eq!(export_file_name(""), "agent.md");
+    }
+
+    #[test]
+    fn every_swarm_operation_but_the_exchange_passes_through() {
+        for (name, operation) in [
+            ("swarm.invite", Operation::SwarmInvite),
+            ("swarm.join", Operation::SwarmJoin),
+            ("swarm.leave", Operation::SwarmLeave),
+            ("swarm.members", Operation::SwarmMembers),
+            ("swarm.agents", Operation::SwarmAgents),
+            ("swarm.resume", Operation::SwarmResume),
+            ("thread.post", Operation::ThreadPost),
+            ("agent.move", Operation::AgentMove),
+            ("agent.approvals", Operation::AgentApprovals),
+            ("agent.approval_answer", Operation::AgentApprovalAnswer),
+            ("group.create", Operation::GroupCreate),
+            ("group.list", Operation::GroupList),
+            ("group.update", Operation::GroupUpdate),
+            ("agent.routine_proposals", Operation::AgentRoutineProposals),
+            (
+                "agent.routine_proposal_accept",
+                Operation::AgentRoutineProposalAccept,
+            ),
+            (
+                "agent.routine_proposal_dismiss",
+                Operation::AgentRoutineProposalDismiss,
+            ),
+            ("agent.import", Operation::AgentImport),
+            ("agent.import_commit", Operation::AgentImportCommit),
+            ("agent.export", Operation::AgentExport),
+            ("routine.webhook_create", Operation::RoutineWebhookCreate),
+            ("routine.webhook_rotate", Operation::RoutineWebhookRotate),
+            ("routine.webhook_info", Operation::RoutineWebhookInfo),
+        ] {
+            assert_eq!(agent_operation(name), Some(operation), "{name}");
+        }
+        assert_eq!(agent_operation("swarm.exchange"), None);
+    }
+
+    #[test]
+    fn a_swarm_request_goes_to_the_runtime_it_names() {
+        let local = recorder("local");
+        let paired = recorder("box");
+        let body = serde_json::json!({"link": "muniment://pair?v=1"});
+        forward(
+            Some("box"),
+            "swarm.join",
+            body.clone(),
+            connect(&local, &paired),
+        )
+        .unwrap();
+        assert_eq!(
+            paired.calls.borrow().as_slice(),
+            [(Operation::SwarmJoin, body)]
+        );
+        assert_eq!(
+            forward(
+                None,
+                "swarm.exchange",
+                serde_json::json!({}),
+                connect(&local, &paired)
+            )
+            .unwrap_err(),
+            "The agent action is unknown."
+        );
+        assert!(local.calls.borrow().is_empty());
     }
 
     #[test]

@@ -148,7 +148,6 @@ const APP_COMMANDS: &[&str] = &[
     "agent_request",
     "agent_memory",
     "agent_export_template",
-    "agent_import_link",
     "agent_open",
     "memory_profile_read",
     "memory_profile_save",

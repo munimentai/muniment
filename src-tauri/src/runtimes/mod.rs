@@ -588,7 +588,7 @@ fn connector<R: tauri::Runtime>(
 
 /// Starts connections to the paired runtime `id` unless it has them. Its
 /// chat events reach the window while it is the active runtime, and its
-/// agent runs always do.
+/// agent runs, swarm changes and approvals always do.
 fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let attach = app.state::<AttachCompanionState>();
     if attach.has_remote(id) {
@@ -604,10 +604,11 @@ fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let supervisor = RemoteSupervisor::start(
         connector(app, registry, id),
         move |event| {
-            if let muniment_core::attach::SubscriptionEvent::AgentRunUpdated(run) = event {
-                crate::attach_service::deliver_agent_run(&event_app, &event_runtime, run);
+            let Some(event) =
+                crate::attach_service::deliver_agent_event(&event_app, &event_runtime, event)
+            else {
                 return;
-            }
+            };
             let active = event_app
                 .state::<AttachCompanionState>()
                 .remote_runtime_id();

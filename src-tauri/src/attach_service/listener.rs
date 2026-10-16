@@ -141,24 +141,39 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
         // route. The runtimes list takes each runtime's update status.
         SubscriptionEvent::RuntimeUpdateRequested(_)
         | SubscriptionEvent::RuntimeUpdateStatus(_) => {}
-        // Each runtime's agent runs reach the window whichever runtime is
-        // selected, through `deliver_agent_run`.
-        SubscriptionEvent::AgentRunUpdated(_) => {}
+        // Each runtime's agent and swarm events reach the window whichever
+        // runtime is selected, through `deliver_agent_event`.
+        SubscriptionEvent::AgentRunUpdated(_)
+        | SubscriptionEvent::SwarmChanged(_)
+        | SubscriptionEvent::ApprovalPending(_)
+        | SubscriptionEvent::ApprovalResolved(_) => {}
     }
 }
 
-/// Hands one runtime's changed agent run to the window as
-/// `agent-run-updated`, `{runtimeId, run}`, whichever runtime is selected.
+/// Hands one runtime's agent or swarm event to the window whichever runtime
+/// is selected: `agent-run-updated` `{runtimeId, run}`, `swarm-changed`
+/// `{runtimeId, change}`, and `agent-approval-pending` or
+/// `agent-approval-resolved` `{runtimeId, approval}`. Any other event comes
+/// back to the caller.
 #[cfg(any(unix, target_os = "windows"))]
-pub(crate) fn deliver_agent_run<R: tauri::Runtime>(
+pub(crate) fn deliver_agent_event<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     runtime_id: &str,
-    run: serde_json::Value,
-) {
-    let _ = app.emit(
-        "agent-run-updated",
-        serde_json::json!({"runtimeId": runtime_id, "run": run}),
-    );
+    event: SubscriptionEvent,
+) -> Option<SubscriptionEvent> {
+    let (name, field, body) = match event {
+        SubscriptionEvent::AgentRunUpdated(run) => ("agent-run-updated", "run", run),
+        SubscriptionEvent::SwarmChanged(change) => ("swarm-changed", "change", change),
+        SubscriptionEvent::ApprovalPending(approval) => {
+            ("agent-approval-pending", "approval", approval)
+        }
+        SubscriptionEvent::ApprovalResolved(approval) => {
+            ("agent-approval-resolved", "approval", approval)
+        }
+        event => return Some(event),
+    };
+    let _ = app.emit(name, serde_json::json!({"runtimeId": runtime_id, field: body}));
+    None
 }
 
 /// Hands a local runtime event to the window only while this computer's
@@ -170,10 +185,10 @@ fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: Subs
         crate::runtimes::update_requested(app, request);
     } else if let SubscriptionEvent::RuntimeUpdateStatus(status) = event {
         crate::runtimes::local_update_status(app, status);
-    } else if let SubscriptionEvent::AgentRunUpdated(run) = event {
-        deliver_agent_run(app, "local", run);
-    } else if !app.state::<AttachCompanionState>().remote_active() {
-        deliver_subscription_event(app, event);
+    } else if let Some(event) = deliver_agent_event(app, "local", event) {
+        if !app.state::<AttachCompanionState>().remote_active() {
+            deliver_subscription_event(app, event);
+        }
     }
 }
 
@@ -286,7 +301,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_with_agent_runs(cursor)?;
+                    client.subscribe_chat_events_with_swarm(cursor)?;
                     Ok(client)
                 })
             {
@@ -315,7 +330,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_with_agent_runs(cursor)?;
+                    client.subscribe_chat_events_with_swarm(cursor)?;
                     Ok(client)
                 })
             {
