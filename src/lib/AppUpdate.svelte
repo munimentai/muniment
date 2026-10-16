@@ -1,8 +1,13 @@
 <script>
+  // The update control: it appears once a verified update is downloaded.
+  // An install stops the replies this computer runs, so it first names how
+  // many and asks. They resume after the update.
   import { onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import ConfirmDialog from './ConfirmDialog.svelte'
+  import { interruptionCount, interruptionMessage } from './app-update.js'
   let { tauri, busy = false, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
-  let version = $state(null), installing = $state(false), error = $state('')
+  let version = $state(null), installing = $state(false), error = $state(''), stopping = $state(0)
   onMount(() => {
     let disposed = false, checking = false
     async function check() {
@@ -25,8 +30,18 @@
     if (busy || installing) return
     installing = true
     error = ''
+    const count = await interruptionCount(tauri)
+    if (count > 0) { stopping = count; return }
+    await proceed()
+  }
+  async function proceed() {
     try { await tauri.invoke('app_update_install') }
     catch (failure) { error = typeof failure === 'string' ? failure : 'The update could not be installed. Try again.'; installing = false }
+  }
+  async function decide(approve) {
+    stopping = 0
+    if (approve) await proceed()
+    else installing = false
   }
 </script>
 {#if version}
@@ -37,6 +52,11 @@
     {#if busy}<span id="update-busy-reason" hidden>Finish the current action before updating.</span>{/if}
     {#if error}<p role="alert">{error}</p>{/if}
   </div>
+{/if}
+{#if stopping}
+  <ConfirmDialog title="Install update {version}?" cancelLabel="Not now" confirmLabel="Install and restart" onDecision={decide}>
+    <p>{interruptionMessage(stopping)}</p>
+  </ConfirmDialog>
 {/if}
 <style>
   .update { position: relative; display: flex; }

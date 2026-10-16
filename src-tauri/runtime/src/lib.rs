@@ -10,6 +10,7 @@ pub mod install_lock;
 mod macos_activation;
 mod sign_in_page;
 mod start_record;
+pub mod update_drain;
 #[cfg(unix)]
 mod upgrade_watch;
 mod windows_activation;

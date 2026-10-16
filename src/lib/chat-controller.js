@@ -190,6 +190,7 @@ export function createChatController({
       phase: event.phase,
       text,
       promptStorageNotice: run.promptStorageNotice,
+      resumeNotice: run.resumeNotice,
       turnStarted: run.turnStarted,
       failureReason: run.failureReason,
       receipt: run.receipt,

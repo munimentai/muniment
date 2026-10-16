@@ -424,6 +424,7 @@ export function buildProbeCommandTable(fixtureName) {
   async function invoke(command, payload) {
     // `?update=0.3.0` offers that version as a ready update.
     if (command === 'app_update_prepare') return new URLSearchParams(location.search).get('update')
+    if (command === 'app_update_interruptions') return 0
     if (command === 'thread_context_usage') {
       const usage = contextUsage()
       return usage && { ...usage, provider: probeContext === 'unknown' ? 'ollama' : 'anthropic', model: probeContext === 'unknown' ? 'qwen3:8b' : 'claude-sonnet', autoCompact: true, compactAt: usage.contextWindow - 16384, compacting: false }
@@ -730,7 +731,11 @@ export function buildProbeCommandTable(fixtureName) {
       return { id: payload.id, name: runtime?.name ?? '', ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` }
     }
     if (command === 'runtime_update_all') {
-      return runtimeList.runtimes.filter((runtime) => runtime.updateOffered).map((runtime) => ({ id: runtime.id, name: runtime.name, ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` }))
+      const paired = runtimeList.runtimes.filter((runtime) => !runtime.local)
+      return {
+        results: paired.filter((runtime) => runtime.updateOffered && runtime.status === 'online').map((runtime) => ({ id: runtime.id, name: runtime.name, ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` })),
+        skipped: paired.filter((runtime) => !(runtime.updateOffered && runtime.status === 'online')).map((runtime) => ({ id: runtime.id, name: runtime.name, reason: runtime.status === 'online' ? 'current' : 'offline' })),
+      }
     }
     if (command === 'voice_input_devices') return ['MacBook Pro Microphone', 'USB Audio Device']
     if (command === 'parakeet_install_facts') return { totalDownloadBytes: 482_000_000, requiredFreeBytes: 1_100_000_000 }
@@ -813,7 +818,8 @@ function probeRuntimes(state) {
   const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const paired = [
     { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.2.0', status: 'offline', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null },
-    { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'runtime.admin', 'thread.read'], admin: true, updateOffered: true, sshHost: 'build-box' },
+    // The container reports the update it installs.
+    { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'runtime.admin', 'thread.read'], admin: true, behind: true, mayUpdate: true, updateOffered: true, updateTarget: '0.2.0', updateCapability: 'launcher', updateStatus: { state: 'installing', targetVersion: '0.2.0', blockers: [] }, sshHost: 'build-box' },
   ]
   const selected = state === 'remote' ? paired[1].id : 'local'
   return {

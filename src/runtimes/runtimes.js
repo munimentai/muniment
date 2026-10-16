@@ -71,8 +71,89 @@ export function updatableRuntimes(list) {
 
 // The version a row shows: mono, with the leading v.
 export function versionLabel(runtime) {
-  if (!runtime?.version) return ''
-  return runtime.version.startsWith('v') ? runtime.version : `v${runtime.version}`
+  return withV(runtime?.version)
+}
+
+function withV(version) {
+  if (!version) return ''
+  return version.startsWith('v') ? version : `v${version}`
+}
+
+// Whether version `a` is older than `b`, as semver orders them, or null when
+// either is not a version.
+export function olderVersion(a, b) {
+  const parse = (version) => String(version ?? '').trim().replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+.*)?$/)
+  const left = parse(a)
+  const right = parse(b)
+  if (!left || !right) return null
+  for (const index of [1, 2, 3]) {
+    if (Number(left[index]) !== Number(right[index])) return Number(left[index]) < Number(right[index])
+  }
+  if (!left[4] !== !right[4]) return !!left[4]
+  return (left[4] ?? '') < (right[4] ?? '')
+}
+
+// The work a draining runtime waits for, in plain words.
+const BLOCKERS = {
+  active_run: 'a reply in progress',
+  pending_permission_gate: 'a permission request',
+  authentication_operation: 'a sign-in',
+  session_refresh: 'a session refresh',
+  in_flight_external_effect: 'an action in progress',
+}
+
+export function blockersLine(blockers = []) {
+  const words = blockers.map((blocker) => BLOCKERS[blocker] ?? 'other work')
+  if (!words.length) return ''
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+  return `Waiting for ${list}.`
+}
+
+const PENDING = ['queued', 'downloading', 'draining', 'installing', 'restarting']
+
+// The update line of a machine row, from the state the runtime reports:
+// { text, tooltip } or null for a machine that shows only its version. The
+// app never says a machine updates unless the machine says so.
+export function updateLabel(runtime) {
+  const status = runtime?.updateStatus
+  const target = status?.targetVersion
+  // A status for a version the machine already runs is over.
+  const reached = !!target && olderVersion(runtime?.version, target) === false
+  if (status && !reached) {
+    switch (status.state) {
+      case 'queued': return { text: 'Update queued', tooltip: '' }
+      case 'downloading': return { text: target ? `Downloading ${withV(target)}` : 'Downloading update', tooltip: '' }
+      case 'draining': return { text: 'Finishing current work', tooltip: blockersLine(status.blockers) }
+      case 'installing':
+      case 'restarting': return { text: target ? `Updating to ${withV(target)}` : 'Updating', tooltip: '' }
+      case 'failed': return { text: 'Update failed', tooltip: status.error ?? '' }
+    }
+  }
+  if (runtime?.updateRequested) return { text: 'Update requested', tooltip: '' }
+  if (runtime?.behind && runtime?.updateCapability === 'manual' && runtime?.updateTarget) {
+    return { text: `${withV(runtime.updateTarget)} available, update manually`, tooltip: '' }
+  }
+  return null
+}
+
+// Whether the row menu offers Update: the machine is behind, answers, takes
+// requests from this device and installs releases itself, and no update for
+// it is on the way.
+export function canRequestUpdate(runtime) {
+  return !runtime?.local && !!runtime?.updateOffered && runtime?.status === 'online'
+    && !PENDING.includes(runtime?.updateStatus?.state)
+}
+
+// Why Update all left a machine alone.
+const SKIPS = {
+  offline: 'offline',
+  no_permission: 'no permission',
+  manual: 'manual install',
+  current: 'already current',
+}
+
+export function skipLabel(skip) {
+  return `${skip.name} (${SKIPS[skip.reason] ?? skip.reason})`
 }
 
 // Settings pages a paired runtime refuses: the cloud account and phone pairing

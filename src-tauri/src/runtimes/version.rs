@@ -39,23 +39,15 @@ pub(crate) fn may_update(scopes: &BTreeSet<String>) -> bool {
     scopes.contains(SCOPE_RUNTIME_UPDATE) || scopes.contains(SCOPE_RUNTIME_ADMIN)
 }
 
-/// Whether the app asks a runtime to update: it runs an older version than
-/// `target` and this device may ask.
-pub(crate) fn update_offered(
-    runtime_version: Option<&str>,
-    scopes: &BTreeSet<String>,
-    target: Option<&str>,
-) -> bool {
-    may_update(scopes)
-        && runtime_version
-            .zip(target)
-            .and_then(|(version, target)| is_older(version, target))
-            == Some(true)
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The next minor version after `version`.
+    pub(crate) fn bump(version: &str) -> String {
+        let parsed = parse(version).unwrap();
+        format!("{}.{}.0", parsed.major, parsed.minor + 1)
+    }
 
     #[test]
     fn versions_compare_as_semver() {
@@ -69,19 +61,13 @@ mod tests {
     }
 
     #[test]
-    fn an_update_needs_an_older_version_and_the_update_or_admin_scope() {
+    fn an_update_needs_the_update_or_admin_scope() {
         let admin = BTreeSet::from(["thread.read".to_owned(), "runtime.admin".to_owned()]);
         let reader = BTreeSet::from(["thread.read".to_owned(), "run.write".to_owned()]);
         let updater = BTreeSet::from(["thread.read".to_owned(), "runtime.update".to_owned()]);
-        assert!(update_offered(Some("0.1.0"), &updater, Some("0.2.0")));
-        assert!(!update_offered(Some("0.2.0"), &updater, Some("0.2.0")));
-        assert!(update_offered(Some("0.1.0"), &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("0.1.0"), &reader, Some("0.2.0")));
-        assert!(!update_offered(Some("0.2.0"), &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("0.3.0"), &admin, Some("0.2.0")));
-        assert!(!update_offered(None, &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("unknown"), &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("0.1.0"), &admin, None));
+        assert!(may_update(&updater));
+        assert!(may_update(&admin));
+        assert!(!may_update(&reader));
     }
 
     #[test]

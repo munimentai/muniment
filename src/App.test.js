@@ -6780,6 +6780,17 @@ it('does not offer another-model retry in a completed reply', async () => {
     expect(screen.getByPlaceholderText('Ask anything')).toBeEnabled()
   })
 
+  it('notes a reply that resumed after an update in one mono line', async () => {
+    localModeStatus = true
+    const resumeNotice = 'Muniment updated while this reply ran, so it resumed where it stopped.'
+    signedIn([{ runId: 'resumed-run', phase: 'complete', text: 'Finished reply', prompt: null, resumeNotice }])
+    const note = await screen.findByText('Resumed after update')
+    expect(note.closest('p')).toHaveClass('resume-notice')
+    expect(note).toHaveAttribute('data-tooltip', resumeNotice)
+    expect(appRules.get('.resume-notice')).toContain('var(--font-mono)')
+    expect(await screen.findByText('Finished reply')).toBeInTheDocument()
+  })
+
   it('keeps retry disabled when the failed run has no saved prompt', async () => {
     signedIn([{ runId: 'missing-prompt', phase: 'failed', text: '', failureReason: 'The provider refused access.' }])
     const error = await screen.findByText('The provider refused access.')

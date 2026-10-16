@@ -1,0 +1,1 @@
+{"protocol":"muniment.attach/1","subscription_id":"00000000000000000000000000000190","event":"runtime.update_status","body":{"blockers":["active_run"],"state":"draining","target_version":"0.2.0","updated_at":"2026-01-01T00:00:00Z"}}
