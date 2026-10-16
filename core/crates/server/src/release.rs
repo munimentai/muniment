@@ -19,7 +19,7 @@ use muniment_core::sha2::{Digest, Sha256};
 /// release job refuses to publish when this is empty or does not verify the
 /// release it signed. While it is empty, a launcher installs nothing unless
 /// `MUNIMENT_UPDATE_PUBLIC_KEY` names a key.
-pub const RELEASE_PUBLIC_KEY: &str = "";
+pub const RELEASE_PUBLIC_KEY: &str = "RWRhWqZZgdTwfIOji0I2jBTPsMHRQI8EGTROXXo9ZuRn2aUF1MPXd9XC";
 
 /// Overrides the release public key, for tests and for a mirror that signs
 /// its own releases.
