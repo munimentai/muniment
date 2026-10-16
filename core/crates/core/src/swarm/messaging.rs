@@ -600,6 +600,15 @@ pub(super) fn deliver_pending(inner: &Inner) -> Result<bool, String> {
             [&cutoff],
         )
         .map_err(sql)?;
+    // A relayed message no member acknowledged in a week stops travelling;
+    // its sender keeps its own copy and retries it.
+    let relay_cutoff = super::timestamp(inner.now() - chrono::Duration::days(7));
+    connection
+        .execute(
+            "DELETE FROM outbox WHERE relay=1 AND acked=0 AND created_at < ?1",
+            [&relay_cutoff],
+        )
+        .map_err(sql)?;
     Ok(kick)
 }
 
