@@ -113,6 +113,8 @@ them.
 | Delete confirm group | `.thread-delete-confirm` | Inline Delete and Cancel | `--surface`, `--radius-control`, `--ink`, `--text-12 --font-mono`, padding 5px 7px | Buttons: quiet, 24px floor, `font: inherit`. Hover: `--faint`. Disabled while `deletePending` |
 | Older threads | `.older-threads` | Loads the next page | Quiet, full width, `--muted`, margin-top 4px | Disabled while loading |
 | Settings control | `.side-action` | Foot control that expands the menu | Transparent, gap 9px, padding 7px 8px, `settings` icon at 18px in `--muted`, `--text-13`, `aria-keyshortcuts` and tooltip carry ⌘, or Ctrl+, | Hidden with the collapsed sidebar. The shortcut expands the sidebar with the menu open, and toggles the menu when the sidebar shows |
+| Activity row | `.activity-row` | Opens Activity | Side action with the `activity` icon | `.side-count`: mono `--text-12` chip, 1px `--border`, `--radius-chip`, counts runs that raised a notification since Activity last opened |
+| Machine mark | `.machine-mark` in `MachineMark.svelte` | The machine an agent or run lives on | Shape icon at 12px and the name in `--muted`, `--text-12 --font-mono`. Icon only in a sidebar agent row | None |
 | Settings block | `.settings-block` | Foot of the sidebar | 1px `--border` top, padding-top 8px, `margin-top: auto` | None |
 
 ## Settings menu

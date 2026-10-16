@@ -11,11 +11,16 @@
   import LucideIcon from './LucideIcon.svelte'
   import StarterRow from './StarterRow.svelte'
   import { creationStarters } from './creation-prompts.js'
-  import { scheduleLabel } from './agent-labels.js'
-  let {tauri, projects=[], onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, isArchived=()=>false, onaction=()=>{}}=$props()
+  import MachineMark from '../agents/MachineMark.svelte'
+  import { agentMachine, emptyListing, listAgents } from '../agents/agent-runtime.js'
+  import { triggerSummary } from '../agents/routine-labels.js'
+  import { pairedRuntimes } from '../runtimes/runtimes.js'
+  let {tauri, projects=[], onselect, oncreate, onchange=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, isArchived=()=>false, onaction=()=>{}}=$props()
   let archived = $state(false)
-  let listing=$state({agents:[],state:{runs:{},threads:{}}}), error=$state(''), loading=$state(true)
-  onMount(()=>{let alive=true;tauri.invoke('agent_list').then(value=>{if(alive){listing=value;onchange(value)}}).catch(e=>error=String(e)).finally(()=>loading=false);return()=>{alive=false}})
+  let listing=$state(emptyListing()), error=$state(''), loading=$state(true)
+  onMount(()=>{let alive=true;listAgents(tauri, runtimeList).then(value=>{if(alive){listing=value;onchange(value)}}).catch(e=>error=String(e?.message ?? e)).finally(()=>loading=false);return()=>{alive=false}})
+  // The card's note: the project and the first routine that is on.
+  const cardNote = (agent) => [projects.find(([id])=>id===agent.projectId)?.[1], (agent.routines ?? []).filter(routine=>routine.enabled).map(routine=>triggerSummary(routine.trigger))[0]].filter(Boolean).join(' · ') || 'Runs when you ask'
 </script>
 <section data-panel="agents" class="panel" aria-label="Agents">
   <h2 class="visually-hidden">Agents</h2>
@@ -34,16 +39,16 @@
       {#if !some}
         <ul class="benefits">
           <li><LucideIcon name="brain" />Keeps its own instructions and memory</li>
-          <li><LucideIcon name="clock" />Runs on a schedule you set</li>
+          <li><LucideIcon name="clock" />Runs on a schedule, a webhook or a tool check</li>
           <li><LucideIcon name="messages-square" />Works in a chat of its own</li>
         </ul>
       {/if}
     {/if}
     <CardGrid>
-      {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (agent.id)}
+      {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
         <CatalogCard onclick={()=>onselect(agent)}>
           {#snippet menu()}<CatalogActions name={agent.name} {archived} onaction={(action,name)=>onaction('agent',agent,action,name)}/>{/snippet}
-          <AgentAvatar {agent} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{[projects.find(([id])=>id===agent.projectId)?.[1], scheduleLabel(agent.schedule)].filter(Boolean).join(' · ') || 'Runs when you ask'}</small>
+          <AgentAvatar {agent} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{cardNote(agent)}</small>{#if pairedRuntimes(runtimeList).length}<div><MachineMark machine={agentMachine(runtimeList, agent)} /></div>{/if}
         </CatalogCard>
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}

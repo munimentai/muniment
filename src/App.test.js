@@ -3582,12 +3582,16 @@ describe('window chrome', () => {
   })
 })
 
+// The answer `agent_request` gives for `agent.list`, with each agent's primary thread.
+const agentListAnswer = (agents, primaryThreads = {}) => ({ agents, primary_threads: primaryThreads, latest_runs: {}, errors: [] })
+const isAgentList = (command, args) => command === 'agent_request' && args?.operation === 'agent.list'
+
 describe('agent poll', () => {
   it('skips the agent poll while the window is hidden and refreshes once when it shows', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     let hidden = false
     const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
-    const agentLists = () => invoke.mock.calls.filter(([command]) => command === 'agent_list').length
+    const agentLists = () => invoke.mock.calls.filter(([command, args]) => isAgentList(command, args)).length
     try {
       render(App)
       await screen.findByRole('button', { name: 'Agents', exact: true })
@@ -3612,7 +3616,7 @@ describe('sidebar collapse', () => {
   it('opens Files in the visible catalog, project, or agent context', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => {
-      if (command === 'agent_list') return {agents:[{id:'agent-1',name:'Scout',instructions:'Read sources.',projectId:null,schedule:null}],state:{runs:{},threads:{'agent-thread':'agent-1'}}}
+      if (isAgentList(command, args)) return agentListAnswer([{id:'agent-1',name:'Scout',instructions:'Read sources.',projectId:null,schedule:null}], {'agent-1':'agent-thread'})
       if (command === 'project_list') return {projects:{research:'Research'},threads:{}}
       if (command === 'workspace_folders') return [{label:'Context folder',path:'/context'}]
       if (command === 'workspace_list') return {path:args.path,entries:[]}
@@ -3644,8 +3648,8 @@ describe('sidebar collapse', () => {
 
   it('keeps saved agents outside project thread lists', async () => {
     const original = invoke.getMockImplementation()
-    invoke.mockImplementation(async (command, args) => command === 'agent_list'
-      ? { agents: [{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], state: { runs: {}, threads: {} } }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }])
       : original(command, args))
     render(App)
     const manager = await screen.findByRole('button', { name: 'Agents', exact: true })
@@ -3664,8 +3668,8 @@ describe('sidebar collapse', () => {
 
   it('opens the existing agent chat with one shared composer and restores a regular chat', async () => {
     const original = invoke.getMockImplementation()
-    invoke.mockImplementation(async (command, args) => command === 'agent_list'
-      ? { agents: [{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], state: { runs: {}, threads: { 'agent-thread': 'agent-1' } } }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], { 'agent-1': 'agent-thread' })
       : command === 'chat_thread_summaries' ? { summaries: [{ threadId: 'agent-thread', title: 'Hidden agent transcript', updatedAt: '2026-01-01T00:00:00Z' }, { threadId: 'ordinary-thread', title: 'Ordinary chat', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
       : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
     render(App)
@@ -3702,10 +3706,10 @@ describe('sidebar collapse', () => {
 
   it('creates the first agent chat once and keeps its project assignment', async () => {
     const original = invoke.getMockImplementation()
-    const listing = { agents: [{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: 'project-1', schedule: null }], state: { runs: {}, threads: {} } }
+    const listing = agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: 'project-1', schedule: null }])
     invoke.mockImplementation(async (command, args) => {
-      if (command === 'agent_list') return listing
-      if (command === 'chat_new_thread') { listing.state.threads['agent-thread'] = 'agent-1'; return 'agent-thread' }
+      if (isAgentList(command, args)) return listing
+      if (command === 'chat_new_thread') { listing.primary_threads['agent-1'] = 'agent-thread'; return 'agent-thread' }
       if (command === 'project_list') return { projects: { 'project-1': 'Research' }, threads: { 'agent-thread': 'project-1' } }
       return original(command, args)
     })
@@ -3747,7 +3751,7 @@ describe('sidebar collapse', () => {
     expect(currentThread).toHaveAttribute('tabindex', '-1')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action, #sidebar .sidebar-collection > .project-row > .project-title')).toHaveLength(4)
+    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action, #sidebar .sidebar-collection > .project-row > .project-title')).toHaveLength(5)
     expect(screen.getByRole('button', { name: 'Settings' })).toHaveTextContent('Settings')
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
     expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
@@ -5584,7 +5588,8 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    expect(eventUnlisten).toHaveBeenCalledTimes(8)
+    // Every event listener ends, the agent run updates among them.
+    expect(eventUnlisten).toHaveBeenCalledTimes(9)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
@@ -8018,7 +8023,7 @@ describe('dedicated creation chats', () => {
     invoke.mockImplementation((command,payload)=>{
       if(command==='creation_list') return Promise.resolve([])
       if(command==='artifact_list') return Promise.resolve([])
-      if(command==='agent_list') return Promise.resolve({agents:[],state:{threads:{},runs:{}}})
+      if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
       if(command==='chat_new_thread') return Promise.resolve('01900000-0000-7000-8000-000000000099')
       return original(command,payload)
     })
@@ -8042,7 +8047,7 @@ describe('dedicated creation chats', () => {
     invoke.mockImplementation((command,payload)=>{
       if(command==='creation_list') return Promise.resolve(plans)
       if(command==='artifact_list') return Promise.resolve([])
-      if(command==='agent_list') return Promise.resolve({agents:[],state:{threads:{},runs:{}}})
+      if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
       if(command==='chat_new_thread') return Promise.resolve(id)
       if(command==='creation_save') {plans=[payload.creation]; return Promise.resolve(payload.creation)}
       return original(command,payload)
@@ -8594,8 +8599,8 @@ describe('a run on another thread', () => {
 
   it('names a running agent chat by its agent and marks the agent row', async () => {
     const fallback = invoke.getMockImplementation()
-    invoke.mockImplementation((command, payload) => command === 'agent_list'
-      ? { agents: [{ id: 'agent-1', name: 'Morning Brief', instructions: 'Brief.', projectId: null, schedule: null }], state: { runs: {}, threads: { 'thread-1': 'agent-1' } } }
+    invoke.mockImplementation((command, payload) => isAgentList(command, payload)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Morning Brief', instructions: 'Brief.', projectId: null, schedule: null }], { 'agent-1': 'thread-1' })
       : fallback(command, payload))
     await renderRunning()
     await leaveForOtherThread()
@@ -8778,6 +8783,37 @@ describe('runtimes', () => {
     expect(pages).not.toContain('Account')
     expect(pages).toContain('Machines')
     expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
+  })
+
+  it('shows the agents of every paired machine with its shape and keeps that machine selected', async () => {
+    const fallback = invoke.getMockImplementation()
+    const list = listFor(buildBox.id)
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return list
+      if (isAgentList(command, payload)) return payload.runtime === buildBox.id
+        ? agentListAnswer([{ id: 'agent-box', name: 'Test triage', instructions: 'Triage.', projectId: null, schedule: null, routines: [] }])
+        : agentListAnswer([{ id: 'agent-local', name: 'Scout', instructions: 'Read.', projectId: null, schedule: null, routines: [] }])
+      if (command === 'chat_new_thread') return null
+      return fallback(command, payload)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await fireEvent.click(await screen.findByRole('button', { name: 'Expand Agents' }))
+    const roster = await screen.findByLabelText('Saved agents')
+    await waitFor(() => expect(within(roster).getByRole('button', { name: /^Test triage/ })).toBeInTheDocument())
+    // Each agent names its machine by shape and name.
+    const boxAgent = within(roster).getByRole('button', { name: /^Test triage/ })
+    expect(boxAgent.querySelector('[data-icon=container]')).not.toBeNull()
+    expect(boxAgent).toHaveTextContent('Build box')
+    expect(within(roster).getByRole('button', { name: /^Scout/ }).querySelector('[data-icon=monitor]')).not.toBeNull()
+    expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: buildBox.id, operation: 'agent.list', body: {} })
+    expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.list', body: {} })
+    // Opening Agents keeps the paired machine selected.
+    await fireEvent.click(screen.getByRole('button', { name: 'Agents', exact: true }))
+    const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    expect(await within(catalog).findByText('Test triage')).toBeInTheDocument()
+    expect(within(catalog).getByText('Scout')).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('runtime_select', expect.anything())
   })
 
   it('starts a new thread on this computer when the picked machine revoked this device', async () => {

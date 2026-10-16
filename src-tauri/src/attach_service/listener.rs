@@ -141,7 +141,24 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
         // route. The runtimes list takes each runtime's update status.
         SubscriptionEvent::RuntimeUpdateRequested(_)
         | SubscriptionEvent::RuntimeUpdateStatus(_) => {}
+        // Each runtime's agent runs reach the window whichever runtime is
+        // selected, through `deliver_agent_run`.
+        SubscriptionEvent::AgentRunUpdated(_) => {}
     }
+}
+
+/// Hands one runtime's changed agent run to the window as
+/// `agent-run-updated`, `{runtimeId, run}`, whichever runtime is selected.
+#[cfg(any(unix, target_os = "windows"))]
+pub(crate) fn deliver_agent_run<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    runtime_id: &str,
+    run: serde_json::Value,
+) {
+    let _ = app.emit(
+        "agent-run-updated",
+        serde_json::json!({"runtimeId": runtime_id, "run": run}),
+    );
 }
 
 /// Hands a local runtime event to the window only while this computer's
@@ -153,6 +170,8 @@ fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: Subs
         crate::runtimes::update_requested(app, request);
     } else if let SubscriptionEvent::RuntimeUpdateStatus(status) = event {
         crate::runtimes::local_update_status(app, status);
+    } else if let SubscriptionEvent::AgentRunUpdated(run) = event {
+        deliver_agent_run(app, "local", run);
     } else if !app.state::<AttachCompanionState>().remote_active() {
         deliver_subscription_event(app, event);
     }
@@ -267,7 +286,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_with_update_status(cursor)?;
+                    client.subscribe_chat_events_with_agent_runs(cursor)?;
                     Ok(client)
                 })
             {
@@ -296,7 +315,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_with_update_status(cursor)?;
+                    client.subscribe_chat_events_with_agent_runs(cursor)?;
                     Ok(client)
                 })
             {
