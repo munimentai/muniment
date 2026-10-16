@@ -3501,6 +3501,7 @@ dependencies = [
  "sha1",
  "sha2",
  "syn 2.0.119",
+ "tungstenite",
  "ureq 2.12.1",
  "url",
  "uuid",
