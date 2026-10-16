@@ -1,34 +1,21 @@
 import RECENCY from './model-recency.json'
 
-// A family whose newest release trails its provider's newest model by more than
-// this is a past generation, and none of its models leads the list.
+// A model released this long before its provider's newest one is past.
 const STALE_DAYS = 365
 const DAY_MS = 86400000
 
 const day = (date) => Date.parse(date.length === 7 ? `${date}-01` : date)
 
-// The models that lead a provider's list: the newest release of each family the
-// provider still ships, among the ids it serves. The snapshot comes from
-// models.dev by scripts/refresh-model-recency.py. An id the snapshot does not
-// know is newer than the snapshot, so it leads, and a provider the snapshot does
-// not know, such as a local or custom endpoint, leads with every model.
-export function leadingModels(catalogId, ids) {
+// The models a provider has moved past, among the ids it serves: the ones the
+// snapshot marks deprecated, and the ones released more than a year before the
+// provider's newest model. The snapshot comes from models.dev by
+// scripts/refresh-model-recency.py. An id or a provider the snapshot does not
+// know, such as a local or custom endpoint, is never past.
+export function pastModels(catalogId, ids) {
   const known = RECENCY[catalogId]
-  if (!known) return new Set(ids)
-  const dated = ids.filter((id) => known[id] && !known[id][2])
-  const newest = new Map()
-  for (const id of dated) {
-    const [family, date] = known[id]
-    const key = family || id
-    if (!newest.has(key) || day(date) > newest.get(key)) newest.set(key, day(date))
-  }
-  const latest = Math.max(...newest.values())
-  return new Set(ids.filter((id) => {
-    if (!known[id]) return true
-    const [family, date, deprecated] = known[id]
-    const top = newest.get(family || id)
-    return !deprecated && day(date) === top && latest - top <= STALE_DAYS * DAY_MS
-  }))
+  if (!known) return new Set()
+  const latest = Math.max(...ids.filter((id) => known[id]).map((id) => day(known[id][1])))
+  return new Set(ids.filter((id) => known[id] && (!!known[id][2] || latest - day(known[id][1]) > STALE_DAYS * DAY_MS)))
 }
 
 // Newest first: a model the snapshot does not know comes first, as newer than

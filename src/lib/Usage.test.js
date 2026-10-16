@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
-import Capacity from './Capacity.svelte'
+import Usage from './Usage.svelte'
 afterEach(cleanup)
 it('shows separate allowance meters and account exclusions', async () => {
   const invoke = vi.fn(async () => ({enabled:true,running:true,accounts:[
@@ -10,7 +10,7 @@ it('shows separate allowance meters and account exclusions', async () => {
     {id:'b',source:'account',label:'Personal',family:'anthropic',exclusion_reason:'Account is turned off.',windows:[]},
   ]}))
   const onclose = vi.fn()
-  render(Capacity,{tauri:{invoke},onclose,onmanage:vi.fn()})
+  render(Usage,{tauri:{invoke},onclose,onmanage:vi.fn()})
   await screen.findByText('OpenAI · Work')
   expect(screen.queryByText('API key')).not.toBeInTheDocument()
   expect(screen.getByText('Weekly')).toBeInTheDocument()
@@ -19,11 +19,11 @@ it('shows separate allowance meters and account exclusions', async () => {
   expect(screen.getByRole('meter')).toHaveAttribute('data-level','low')
   expect(screen.getByText('Account is turned off.')).toBeInTheDocument()
   expect(screen.getByText('Allowance unavailable')).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button',{name:'Close capacity'}))
+  await fireEvent.click(screen.getByRole('button',{name:'Close usage'}))
   expect(onclose).toHaveBeenCalledOnce()
 })
 it('shows when balancing is disabled', async () => {
-  render(Capacity,{tauri:{invoke:vi.fn(async()=>({enabled:false,accounts:[]}))},onclose:vi.fn(),onmanage:vi.fn()})
+  render(Usage,{tauri:{invoke:vi.fn(async()=>({enabled:false,accounts:[]}))},onclose:vi.fn(),onmanage:vi.fn()})
   expect(await screen.findByText('Account balancing is off.')).toBeInTheDocument()
 })
 it('skips the poll while the window is hidden and refreshes once when it shows', async () => {
@@ -32,7 +32,7 @@ it('skips the poll while the window is hidden and refreshes once when it shows',
   const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
   try {
     const invoke = vi.fn(async () => ({enabled:false,accounts:[]}))
-    render(Capacity,{tauri:{invoke},onclose:vi.fn(),onmanage:vi.fn()})
+    render(Usage,{tauri:{invoke},onclose:vi.fn(),onmanage:vi.fn()})
     await screen.findByText('Account balancing is off.')
     expect(invoke).toHaveBeenCalledTimes(1)
     hidden = true

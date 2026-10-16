@@ -1,20 +1,10 @@
 import { expect, it } from 'vitest'
-import { leadingModels, newestFirst } from './model-recency.js'
+import { newestFirst, pastModels } from './model-recency.js'
 
-it('leads with the newest model of each family the provider serves', () => {
-  const lead = leadingModels('anthropic', ['claude-opus-5-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-4-6'])
-  expect([...lead]).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5'])
-  // Among the models served, an older generation still leads its family.
-  expect([...leadingModels('anthropic', ['claude-opus-4-8', 'claude-opus-4-7'])]).toEqual(['claude-opus-4-8'])
-})
-
-it('leads with a model newer than the snapshot and every model of an unknown provider', () => {
-  expect([...leadingModels('anthropic', ['claude-opus-5-5', 'claude-opus-9'])]).toEqual(['claude-opus-5-5', 'claude-opus-9'])
-  expect([...leadingModels('ollama', ['llama3.2:3b', 'qwen3:8b'])]).toEqual(['llama3.2:3b', 'qwen3:8b'])
-})
-
-it('drops a family that has shipped nothing for a year behind the provider', () => {
-  expect([...leadingModels('openai', ['gpt-6.1-sol', 'gpt-4o'])]).toEqual(['gpt-6.1-sol'])
+it('marks deprecated models and families a year behind the provider as past', () => {
+  expect([...pastModels('openai', ['gpt-6.1-sol', 'gpt-4o', 'gpt-5.3-chat-latest', 'gpt-5.5'])]).toEqual(['gpt-4o', 'gpt-5.3-chat-latest'])
+  expect([...pastModels('anthropic', ['claude-opus-5-5', 'claude-opus-4-8', 'claude-opus-9'])]).toEqual([])
+  expect([...pastModels('ollama', ['llama3.2:3b', 'qwen3:8b'])]).toEqual([])
 })
 
 it('orders models newest first, with a model newer than the snapshot at the top', () => {

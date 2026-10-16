@@ -4,7 +4,8 @@
   import Toggle from './Toggle.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
-  import { pickerGroups } from './provider-catalog.js'
+  import { pickerGroups, routerHidden } from './provider-catalog.js'
+  import { modelLabel } from './model-label.js'
   import { serverDecisionModels } from './classifier-connections.js'
   let { tauri, settings, onsettings, inventory, oninventory, onconnect } = $props()
   let pending = $state(false)
@@ -57,6 +58,24 @@
     catch (e) { error = String(e?.message ?? e) }
     finally { pending = false }
   }
+  // A statement tells the decision model when a model should answer, so the
+  // statements show once a decision model is connected, one per model the
+  // router can pick.
+  const statements = $derived(inventory?.router_classifier ? (settings.options ?? []).filter(option => option.model && !routerHidden(inventory).includes(`${option.family}/${option.model}`)) : [])
+  let editing = $state('')
+  let statement = $state('')
+  let saving = $state(false)
+  async function saveStatement(route) {
+    saving = true; error = ''
+    try {
+      const routes = (settings.routes ?? []).filter(entry => entry.family !== route.family || entry.model !== route.model)
+      routes.push({ key: route.key, family: route.family, model: route.model, description: statement.trim() })
+      onsettings?.(await tauri.invoke('model_router_save_routes', { routes, fallback: settings.fallback, minConfidence: settings.min_confidence }))
+      editing = ''
+    }
+    catch (e) { error = String(e?.message ?? e) }
+    finally { saving = false }
+  }
   async function toggle(enabled) {
     pending = true; error = ''
     try {
@@ -97,6 +116,21 @@
       </Row>
     {/if}
   </Group>
+  {#if statements.length}
+    <Group heading="Routing statements" description="Each statement tells the decision model when its model should answer.">
+      {#each statements as route (route.key)}
+        <Row title={modelLabel(route.model)} description={editing === route.key ? '' : route.description} stacked={editing === route.key}>
+          {#if editing === route.key}
+            <div class="statement-edit">
+              <label for="model-statement">When should this model answer?</label>
+              <textarea id="model-statement" rows="3" bind:value={statement}></textarea>
+              <div class="actions"><Button disabled={saving} onclick={() => saveStatement(route)}>Save statement</Button><Button onclick={() => { editing = '' }}>Cancel</Button></div>
+            </div>
+          {:else}<Button aria-label={`Edit statement for ${modelLabel(route.model)}`} onclick={() => { editing = route.key; statement = route.description ?? '' }}>Edit</Button>{/if}
+        </Row>
+      {/each}
+    </Group>
+  {/if}
   {#if pending}<p role="status">Testing the decision model…</p>{/if}
   {#if !choices.length}
     <Group heading="Decision model">
@@ -110,5 +144,8 @@
 <style>
   .decisions { display: grid; gap: var(--page-gap); }
   .choice { width: 280px; max-width: 100%; }
+  .statement-edit { display: grid; gap: 8px; width: 100%; font-size: var(--text-13); }
+  textarea { width: 100%; box-sizing: border-box; resize: vertical; color: var(--ink); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; font: inherit; }
+  .actions { display: flex; gap: 8px; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
 </style>

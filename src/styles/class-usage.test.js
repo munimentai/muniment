@@ -11,6 +11,9 @@ const EXCEPTIONS = {
     'agent-roster': 'Sidebar tests check that agents appear outside project sections.',
     'sidebar-collection': 'App tests select collection sections in the sidebar.',
   },
+  'src/composer/ComposerMenuButton.svelte': {
+    'model-chip': 'End-to-end specs and the subscription probe select the model button.',
+  },
 }
 
 // Repo root: `npm test` runs vitest with `--root .`.

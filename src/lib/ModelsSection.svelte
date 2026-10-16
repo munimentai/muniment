@@ -9,13 +9,12 @@
   // Settings → Models, one screen: every connection is a named account under
   // its provider, key or subscription, with its allowance and usage on the
   // card, the provider's models once, the connector that adds a provider, and
-  // routing controls and one shared model catalog.
+  // routing controls. The composer's model picker shows and hides models.
   import { onDestroy, onMount, tick, untrack } from 'svelte'
   import SettingsTabs from './SettingsTabs.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import ModelRouterSection from './ModelRouterSection.svelte'
-  import ModelCatalog from './ModelCatalog.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
   import ClassifierEdit from './ClassifierEdit.svelte'
   import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
@@ -42,7 +41,6 @@
   })
   const INTROS = {
     accounts: 'Connect the accounts, keys and local servers your models run on.',
-    models: 'Choose the models the picker shows and routing can use.',
     routing: 'Decision models route each message to a model and assist chats with tools and the browser.',
   }
   function showTab(next) {
@@ -390,8 +388,8 @@
 </script>
 
 {#snippet tabAction()}
-  {#if tab === 'accounts'}<Button icon="plus" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>{/if}
-  {#if tab === 'models'}<Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>{/if}
+  {#if tab === 'accounts'}<Button icon="plus" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
+  <Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>{/if}
 {/snippet}
 
 <div class="models" data-settings-controls use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
@@ -402,7 +400,7 @@
       <PageHead intro={INTROS[tab]} actions={tab === 'routing' ? undefined : tabAction} />
     {:else}
       <div class="tabs-row">
-        <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'models',label:'Models',icon:'cpu'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />
+        <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />
         {#if tab !== 'routing'}<div class="tab-action">{@render tabAction()}</div>{/if}
       </div>
     {/if}
@@ -467,8 +465,6 @@
       </Group>
     {/if}
     </section>
-    {:else if tab === 'models'}
-    <ModelCatalog {tauri} {inventory} settings={router} onsettings={onRouterSettings} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {/if}
   {:else}
     <header class="connect-head">
