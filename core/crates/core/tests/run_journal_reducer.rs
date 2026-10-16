@@ -1048,3 +1048,45 @@ fn routing_stages_replay_and_reply_output_clears_the_wait() {
         project_chat(&events).unwrap()
     );
 }
+
+#[test]
+fn a_resume_notice_reaches_the_projection_and_the_chat_event() {
+    let events = stream(&[
+        ("run.started", json!({})),
+        (
+            "runtime.pi_session.bound",
+            json!({"run_id":RUN,"locator":"session.jsonl"}),
+        ),
+        ("run.needs_attention", json!({"reason":"interrupted"})),
+        ("run.resumed", json!({"notice": "Resumed after an update."})),
+        ("model.prompt.accepted", json!({})),
+    ]);
+    let projection = project_chat(&events).unwrap();
+    assert_eq!(
+        projection.resume_notice.as_deref(),
+        Some("Resumed after an update.")
+    );
+    let event = muniment_core::run_events::chat_event(RUN, projection, None, Vec::new());
+    assert_eq!(
+        serde_json::to_value(event).unwrap()["resumeNotice"],
+        "Resumed after an update."
+    );
+
+    // A resume without a notice adds no field.
+    let plain = stream(&[
+        ("run.started", json!({})),
+        (
+            "runtime.pi_session.bound",
+            json!({"run_id":RUN,"locator":"session.jsonl"}),
+        ),
+        ("run.needs_attention", json!({"reason":"interrupted"})),
+        ("run.resumed", json!({})),
+    ]);
+    let projection = project_chat(&plain).unwrap();
+    assert_eq!(projection.resume_notice, None);
+    let event = muniment_core::run_events::chat_event(RUN, projection, None, Vec::new());
+    assert!(serde_json::to_value(event)
+        .unwrap()
+        .get("resumeNotice")
+        .is_none());
+}

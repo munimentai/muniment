@@ -27,6 +27,7 @@ fn event() -> ChatEvent {
         turn_started: false,
         routing_stage: None,
         prompt_storage_notice: None,
+        resume_notice: None,
         failure_reason: None,
         receipt: None,
         tool_activity: Vec::new(),

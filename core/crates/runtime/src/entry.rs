@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muniment_core::attach::linux::{AttachFilesystem, AttachTransport};
-use muniment_core::attach::RemoteRouteOptions;
+use muniment_core::attach::{RemoteRouteOptions, UpdateCapability};
 
 use crate::host::RuntimeHost;
 use crate::retention_schedule::{start_retention_schedule, RetentionScheduleCommand};
@@ -23,6 +23,16 @@ pub struct RuntimeDirectories {
     pub config: PathBuf,
     /// The directory that holds the attach endpoint and its instance lock.
     pub endpoint: PathBuf,
+}
+
+/// How a host that a launcher updates runs the runtime.
+pub struct RuntimeUpdateOptions {
+    /// Who installs a requested version, as `runtime.info` reports it.
+    pub capability: UpdateCapability,
+    /// Fires when the launcher asks the runtime to drain for an update.
+    pub drain: Receiver<()>,
+    /// How long a drain waits for the runtime to go idle before it stops.
+    pub grace: Duration,
 }
 
 /// The reason the runtime could not serve.
@@ -57,6 +67,19 @@ pub fn run_runtime(
     remote: Option<RemoteRouteOptions>,
     stop: Receiver<()>,
 ) -> Result<(), RunRuntimeError> {
+    run_runtime_with_updates(host, directories, remote, None, stop)
+}
+
+/// Runs the runtime like [`run_runtime`]. With `updates`, `runtime.info`
+/// reports the update capability, a drain request drains the runtime and
+/// then stops it, and runs the last update interrupted resume.
+pub fn run_runtime_with_updates(
+    host: RuntimeHost,
+    directories: &RuntimeDirectories,
+    remote: Option<RemoteRouteOptions>,
+    updates: Option<RuntimeUpdateOptions>,
+    stop: Receiver<()>,
+) -> Result<(), RunRuntimeError> {
     let state = Arc::new(
         RuntimeAttachState::open(host, &directories.profile, &directories.config)
             .map_err(|_| RunRuntimeError::State)?,
@@ -73,6 +96,33 @@ pub fn run_runtime(
             .start_remote_route(remote)
             .map_err(|_| RunRuntimeError::RemoteAccess)?;
     }
+    let stop = match updates {
+        None => stop,
+        Some(updates) => {
+            if let Some(access) = state.remote_access() {
+                access.set_update_capability(updates.capability);
+            }
+            state.resume_after_update();
+            // A drain ends in a stop, so both the host's stop and the drain
+            // feed the listener's one stop channel.
+            let (merged, merged_stop) = mpsc::channel();
+            let host_stop = merged.clone();
+            std::thread::spawn(move || {
+                if stop.recv().is_ok() {
+                    let _ = host_stop.send(());
+                }
+            });
+            let drain_state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                if updates.drain.recv().is_ok() {
+                    drain_state.drain_for_update(updates.grace);
+                    muniment_core::runtime_eprintln!("muniment-runtime: stopping reason=update");
+                    let _ = merged.send(());
+                }
+            });
+            merged_stop
+        }
+    };
     let (commands, command_rx) = mpsc::channel();
     let retention =
         start_retention_schedule(Arc::clone(&state), RETENTION_INTERVAL, command_rx, None);

@@ -34,6 +34,8 @@ mod relay;
 mod retention_schedule;
 pub mod service;
 mod sink;
+#[cfg(any(unix, target_os = "windows"))]
+pub mod update;
 mod windows_attach_loop;
 
 pub use attach_boundaries::RuntimeAttachBoundaries;
@@ -49,7 +51,10 @@ pub use directories::{
     adopt_state_directory, config_directory, profile_directory, DirectoryUnavailableError,
 };
 #[cfg(target_os = "linux")]
-pub use entry::{run_runtime, RunRuntimeError, RuntimeDirectories};
+pub use entry::{
+    run_runtime, run_runtime_with_updates, RunRuntimeError, RuntimeDirectories,
+    RuntimeUpdateOptions,
+};
 pub use host::RuntimeHost;
 #[cfg(target_os = "macos")]
 pub use macos_attach_loop::MacosAttachAcceptor;
