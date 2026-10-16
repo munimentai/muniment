@@ -140,11 +140,20 @@ jobs:
 
   # Tags and publishes the next version after every check of a main push
   # passed. It shares the pins update's group, so tags stay in order.
+  #
+  # Before it tags, it builds the signed server archives the launcher
+  # installs: muniment-server for Linux x86_64 and aarch64, cross-compiled
+  # with cargo-zigbuild, SHA256SUMS over them and SHA256SUMS.minisig, signed
+  # with the MUNIMENT_RELEASE_SIGNING_KEY secret (and its optional
+  # MUNIMENT_RELEASE_SIGNING_PASSWORD). A release with no key, or a key the
+  # source's RELEASE_PUBLIC_KEY does not verify, fails before the tag.
   release:
     needs: [checks, router-server, router-image, runtime-image, macos, windows]
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
-    timeout-minutes: 30
+    timeout-minutes: 150
+    env:
+      CARGO_TARGET_DIR: /root/.cache/muniment-core/release
     concurrency:
       group: release
       cancel-in-progress: false
@@ -173,12 +182,41 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Tag and publish the next version
+      - name: Plan the next version
+        id: plan
         if: github.event_name == 'push'
+        run: echo "tag=$(python3 -B scripts/release.py --revision "$GITHUB_SHA" --print-tag)" >> "$GITHUB_OUTPUT"
+      - name: Build the server archives
+        if: github.event_name == 'push' && steps.plan.outputs.tag != ''
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          bash .forgejo/rust-toolchain.sh
+          bash .forgejo/zig-toolchain.sh
+          rm -rf dist
+          for arch in x86_64 aarch64; do
+            deploy/runtime/package.sh "${TAG#v}" "$arch" dist
+          done
+      - name: Sign the server archives
+        if: github.event_name == 'push' && steps.plan.outputs.tag != ''
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          MUNIMENT_RELEASE_SIGNING_KEY: ${{ secrets.MUNIMENT_RELEASE_SIGNING_KEY }}
+          MUNIMENT_RELEASE_SIGNING_PASSWORD: ${{ secrets.MUNIMENT_RELEASE_SIGNING_PASSWORD }}
+        run: |
+          command -v minisign >/dev/null || { apt-get update && apt-get install -y --no-install-recommends minisign; }
+          deploy/runtime/sign-release.sh "${TAG#v}" dist
+      - name: Tag and publish the next version
+        if: github.event_name == 'push' && steps.plan.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
           GH_HOST: github.com
-        run: python3 -B scripts/release.py --revision "$GITHUB_SHA" --publish --asset pins/pins.toml --asset pins/packages.bun.lock
+        run: |
+          assets=(--asset pins/pins.toml --asset pins/packages.bun.lock)
+          for file in dist/*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.minisig; do
+            assets+=(--asset "$file")
+          done
+          python3 -B scripts/release.py --revision "$GITHUB_SHA" --publish "${assets[@]}"
       - name: Plan the next version
         if: github.event_name == 'workflow_dispatch'
         env:

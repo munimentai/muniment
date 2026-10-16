@@ -22,10 +22,26 @@
 #       -v muniment-data:/data muniment-runtime
 #   docker exec <container> muniment-server pair
 #
+# The image runs `muniment-server launch`, a launcher that runs the server
+# and installs the signed releases paired clients request. It keeps the
+# installed versions in /data/runtime, so an update survives a new container
+# on the same volume, and it runs this image's own server when that is newer.
+# A container started with `serve` instead never updates itself.
+#
 # The remote-smoke target builds the client deploy/runtime/smoke.sh pairs with.
+#
+# With SERVER_STAGE=release-archive, the image takes the server from a signed
+# release archive instead of building it, one per platform of a
+# multi-platform build. The `server-release` build context names the
+# directory that holds the archives, which publish.sh has verified:
+#
+#   docker buildx build -f deploy/runtime/Containerfile --platform linux/arm64 \
+#       --build-arg SERVER_STAGE=release-archive --build-arg MUNIMENT_RUNTIME_VERSION=1.15.0 \
+#       --build-context server-release=dist .
 
 ARG RUST_IMAGE=rust:1-slim-trixie
 ARG RUNTIME_IMAGE=debian:trixie-slim
+ARG SERVER_STAGE=build
 
 FROM ${RUST_IMAGE} AS build
 # The release the runtime announces to paired devices, such as 1.13.1.
@@ -37,6 +53,22 @@ RUN cargo build --release --locked -p muniment-server --bin muniment-server \
     && strip target/release/muniment-server \
     && mkdir -p /opt/muniment/bin \
     && cp target/release/muniment-server target/release/*.so* /opt/muniment/bin/
+
+FROM ${RUST_IMAGE} AS release-archive
+ARG TARGETARCH
+ARG MUNIMENT_RUNTIME_VERSION
+COPY --from=server-release . /release/
+RUN case "$TARGETARCH" in \
+        amd64) arch=x86_64 ;; \
+        arm64) arch=aarch64 ;; \
+        *) echo "No release archive exists for $TARGETARCH." >&2; exit 1 ;; \
+    esac \
+    && mkdir -p /opt/muniment/bin \
+    && tar -xzf "/release/muniment-server-${MUNIMENT_RUNTIME_VERSION}-linux-$arch.tar.gz" \
+        -C /opt/muniment/bin \
+    && test "$(/opt/muniment/bin/muniment-server --version)" = "$MUNIMENT_RUNTIME_VERSION"
+
+FROM ${SERVER_STAGE} AS server
 # Pi and the packages install at the paths the image runs them from. The
 # packages are hard links into Bun's cache, so removing the cache keeps them.
 RUN MUNIMENT_STATE_DIR=/data MUNIMENT_PI_ROOT=/opt/muniment/harness HOME=/data \
@@ -57,18 +89,19 @@ FROM ${RUNTIME_IMAGE}
 LABEL org.opencontainers.image.source=https://github.com/munimentai/muniment-core \
       org.opencontainers.image.title=muniment-runtime
 # Pi's tools run shell commands, git and curl. tini reaps the processes they
-# leave behind and passes SIGTERM to the server.
+# leave behind and passes SIGTERM to the launcher, which passes it to the
+# server.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 65532 muniment \
     && useradd --uid 65532 --gid 65532 --home-dir /data --no-create-home \
         --shell /usr/sbin/nologin muniment
-COPY --from=build /opt/muniment/bin /opt/muniment/bin
+COPY --from=server /opt/muniment/bin /opt/muniment/bin
 # The runtime sets the Pi executable owner-only each time it resolves it, so
 # the runtime user owns the installed Pi.
-COPY --from=build --chown=65532:65532 /opt/muniment/harness /opt/muniment/harness
-COPY --from=build --chown=65532:65532 /data /data
+COPY --from=server --chown=65532:65532 /opt/muniment/harness /opt/muniment/harness
+COPY --from=server --chown=65532:65532 /data /data
 # A new named volume takes the mode of /data, and the state root is owner-only.
 RUN ln -s /opt/muniment/bin/muniment-server /usr/local/bin/muniment-server \
     && ln -s /opt/muniment/bin/pi /usr/local/bin/pi \
@@ -85,4 +118,4 @@ STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/muniment-server", "health"]
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/muniment-server"]
-CMD ["serve"]
+CMD ["launch"]
