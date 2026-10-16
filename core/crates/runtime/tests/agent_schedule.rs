@@ -39,6 +39,8 @@ fn queued_agent_runs_once_in_its_project_and_records_completion() {
         .unwrap();
     let accepted = agents::state(profile).unwrap().runs[&agent.id].clone();
     assert_eq!(accepted.status, "running", "{:?}", accepted.error);
+    // A "Run now" is labeled manual, not as a routine.
+    assert_eq!(accepted.trigger.as_deref(), Some("manual"));
     let thread = accepted.thread_id.as_ref().unwrap();
     assert_eq!(
         muniment_core::projects::workspace(profile, thread).unwrap(),
@@ -99,8 +101,20 @@ fn queued_agent_runs_once_in_its_project_and_records_completion() {
         },
     )
     .unwrap();
+    // The v1 schedule is the cron routine `schedule`. The first pass records
+    // its next fire time; a time in the past makes it due.
+    assert_eq!(scheduled.routines[0].id, "schedule");
+    state
+        .check_agent_schedules_with(state.boundaries().with_pi_artifact(artifact))
+        .unwrap();
     agents::with_state(profile, |current| {
-        current.runs.get_mut(&scheduled.id).unwrap().next_run = Some(agents::now() - 60);
+        current
+            .routines
+            .get_mut(&scheduled.id)
+            .unwrap()
+            .get_mut("schedule")
+            .unwrap()
+            .next_fire_at = Some(agents::now() - 60);
         Ok(())
     })
     .unwrap();
@@ -109,6 +123,7 @@ fn queued_agent_runs_once_in_its_project_and_records_completion() {
         .unwrap();
     let due = agents::state(profile).unwrap().runs[&scheduled.id].clone();
     assert_eq!(due.status, "running");
+    assert_eq!(due.trigger.as_deref(), Some("cron"));
     let session =
         muniment_core::projects::workspace(profile, due.thread_id.as_ref().unwrap()).unwrap();
     assert_eq!(session, agents::folder(profile, &scheduled.id).unwrap());

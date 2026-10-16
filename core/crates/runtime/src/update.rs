@@ -239,32 +239,49 @@ impl RuntimeAttachState {
         outcome
     }
 
-    /// Adds the active run to the resume ledger and answers how many runs it
-    /// recorded.
+    /// Adds every active run to the resume ledger and answers how many runs
+    /// it recorded.
     fn record_interrupted_runs(&self) -> usize {
-        let Some((run_id, workspace)) = self.active_run_identity() else {
+        let active = self.active_runs();
+        if active.is_empty() {
             return 0;
-        };
-        let thread_id = self
-            .agent_storage()
-            .lock()
-            .ok()
-            .and_then(|storage| storage.journal.run_thread_id(&run_id).ok().flatten());
-        let Some(thread_id) = thread_id else {
-            return 0;
-        };
-        let permission_gate = self.runtime_activity().snapshot().pending_permission_gate;
+        }
         let state = self.agent_profile();
         let mut ledger = read_resume_ledger(state);
-        ledger.interrupted.retain(|run| run.run_id != run_id);
-        ledger.interrupted.push(InterruptedRun {
-            run_id,
-            thread_id,
-            workspace,
-            permission_gate,
-        });
+        let mut recorded = 0;
+        let storage = self.agent_storage();
+        for run in active {
+            let (thread_id, permission_gate) = {
+                let Ok(mut storage) = storage.lock() else {
+                    continue;
+                };
+                let thread_id = run
+                    .thread_id
+                    .clone()
+                    .or_else(|| storage.journal.run_thread_id(&run.run_id).ok().flatten());
+                // A run that waits on a gate stays for its owner.
+                let permission_gate = storage
+                    .journal
+                    .events(&run.run_id)
+                    .ok()
+                    .and_then(|events| muniment_core::journal::reducer::project_chat(&events).ok())
+                    .is_some_and(|projection| projection.pending_permission.is_some());
+                (thread_id, permission_gate)
+            };
+            let Some(thread_id) = thread_id else {
+                continue;
+            };
+            ledger.interrupted.retain(|held| held.run_id != run.run_id);
+            ledger.interrupted.push(InterruptedRun {
+                run_id: run.run_id,
+                thread_id,
+                workspace: run.workspace,
+                permission_gate,
+            });
+            recorded += 1;
+        }
         match write_resume_ledger(state, &ledger) {
-            Ok(()) => 1,
+            Ok(()) => recorded,
             Err(error) => {
                 muniment_core::runtime_eprintln!(
                     "muniment-runtime: interrupted runs not recorded: {error}"
@@ -276,7 +293,8 @@ impl RuntimeAttachState {
 
     /// Resumes the runs the last update interrupted, on a thread of its own.
     /// It waits until the launcher commits this version, so a version that
-    /// fails its trial resumes nothing, and resumes one run at a time.
+    /// fails its trial resumes nothing, then resumes each run as soon as a
+    /// run place and its thread are free.
     pub fn resume_after_update(self: &Arc<Self>) {
         if read_resume_ledger(self.agent_profile())
             .interrupted
@@ -309,8 +327,8 @@ impl RuntimeAttachState {
         self.resume_interrupted_runs_with(self.boundaries());
     }
 
-    /// Resumes the runs the ledger names through `boundaries`, at once and
-    /// on the calling thread.
+    /// Resumes the runs the ledger names through `boundaries`, at once, and
+    /// returns when every resumed run has ended.
     #[doc(hidden)]
     pub fn resume_interrupted_runs_with(&self, boundaries: crate::RuntimeAttachBoundaries) {
         let profile = self.agent_profile().to_path_buf();
@@ -324,30 +342,58 @@ impl RuntimeAttachState {
             );
             return;
         }
+        let boundaries = Arc::new(boundaries);
+        let registry = self.run_registry();
+        let mut resumed = Vec::new();
         for (run, decision) in decisions {
-            let outcome = match decision {
-                ResumeDecision::SkipPermissionGate => "skipped_permission_gate".to_owned(),
-                ResumeDecision::SkipLimit => "skipped_limit".to_owned(),
+            let log = |outcome: &str| {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: update resume run_id={} thread_id={} outcome={outcome}",
+                    run.run_id,
+                    run.thread_id
+                );
+            };
+            match decision {
+                ResumeDecision::SkipPermissionGate => log("skipped_permission_gate"),
+                ResumeDecision::SkipLimit => log("skipped_limit"),
                 ResumeDecision::Resume => {
-                    if !wait_until(RESUME_WAIT, || self.active_run_identity().is_none()) {
-                        "skipped_busy".to_owned()
-                    } else {
-                        match boundaries.resume_run_with_notice(
+                    if !wait_until(RESUME_WAIT, || {
+                        registry.admits(Some(&run.thread_id)).is_ok()
+                    }) {
+                        log("skipped_busy");
+                        continue;
+                    }
+                    let boundaries = Arc::clone(&boundaries);
+                    let run_id = run.run_id.clone();
+                    let handle = std::thread::spawn(move || {
+                        let outcome = match boundaries.resume_run_with_notice(
                             &run.workspace,
                             &run.run_id,
                             Some(UPDATE_RESUME_NOTICE.to_owned()),
                         ) {
                             Ok(_) => "resumed".to_owned(),
                             Err(error) => format!("failed error={error:?}"),
-                        }
+                        };
+                        muniment_core::runtime_eprintln!(
+                            "muniment-runtime: update resume run_id={} thread_id={} outcome={outcome}",
+                            run.run_id,
+                            run.thread_id
+                        );
+                    });
+                    // The next resume waits until this one holds its place.
+                    let deadline = Instant::now() + RESUME_WAIT;
+                    while !registry.contains(&run_id)
+                        && !handle.is_finished()
+                        && Instant::now() < deadline
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
                     }
+                    resumed.push(handle);
                 }
-            };
-            muniment_core::runtime_eprintln!(
-                "muniment-runtime: update resume run_id={} thread_id={} outcome={outcome}",
-                run.run_id,
-                run.thread_id
-            );
+            }
+        }
+        for handle in resumed {
+            let _ = handle.join();
         }
     }
 }

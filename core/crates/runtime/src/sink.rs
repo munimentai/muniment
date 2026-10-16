@@ -451,6 +451,9 @@ pub struct RuntimeChatEventSink {
     workspace: String,
     earlier_models: Vec<String>,
     project_context: String,
+    /// The run this sink serves, when known. The agent run queue names the
+    /// trigger of its runs by this id.
+    run_id: Option<String>,
 }
 
 impl RuntimeChatEventSink {
@@ -503,7 +506,22 @@ impl RuntimeChatEventSink {
             workspace,
             earlier_models: Vec::new(),
             project_context: String::new(),
+            run_id: None,
         }
+    }
+
+    /// The run this sink serves.
+    pub fn with_run_id(mut self, run_id: &str) -> Self {
+        self.run_id = Some(run_id.to_owned());
+        self
+    }
+
+    fn profile_directory(&self) -> Result<PathBuf, PiLaunchError> {
+        self.profile
+            .pi_session_root()
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or(PiLaunchError::UnavailableSessionRoot)
     }
 
     pub fn with_pi_artifact(mut self, pi_artifact: PiArtifactDescriptor) -> Self {
@@ -587,7 +605,7 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
     }
 
     fn memory_agent_extension_path(&self) -> Option<PathBuf> {
-        Some(self.memory_runtime.agent_extension_path())
+        Some(self.memory_runtime.agent_extension_path(&self.thread_id))
     }
 
     fn project_context(&self) -> Option<&str> {
@@ -626,6 +644,38 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
 
     fn earlier_models(&self) -> Vec<String> {
         self.earlier_models.clone()
+    }
+
+    fn local_default_model(&self) -> Option<String> {
+        // An agent's model is a reference into the same provider/model the
+        // default names, so it resolves exactly as the default does.
+        self.agent_launch()
+            .and_then(|agent| agent.model)
+            .map(|model| format!("{}/{}", model.provider, model.id))
+            .or_else(|| {
+                muniment_core::state_root::state_directory()
+                    .map(|state| muniment_core::state_root::agent_directory(&state))
+                    .and_then(|agent| muniment_core::launch_facts::read_local_default_model(&agent))
+            })
+    }
+
+    fn agent_launch(&self) -> Option<muniment_core::agents::AgentLaunch> {
+        let profile = self.profile_directory().ok()?;
+        let trigger = self.run_id.as_deref().and_then(|run_id| {
+            muniment_core::agent_runs::RunStore::open(&profile)
+                .ok()?
+                .get(run_id)
+                .ok()
+                .flatten()
+                .map(|run| run.trigger.kind)
+        });
+        match muniment_core::agents::thread_launch(&profile, &self.thread_id, trigger) {
+            Ok(launch) => launch,
+            Err(error) => {
+                eprintln!("muniment-runtime: agent settings unreadable error={error}");
+                None
+            }
+        }
     }
 }
 

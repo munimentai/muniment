@@ -37,6 +37,9 @@ pub enum SubscriptionEvent {
     /// The runtime's update moved to a new state, a `RuntimeUpdateStatus`
     /// body. Only a subscription that asked for update status receives it.
     RuntimeUpdateStatus(Value),
+    /// An agent run changed; the body is the run. Only a subscription that
+    /// asked for agent runs receives it.
+    AgentRunUpdated(Value),
 }
 
 /// A connection-bound client for the peer-authorized desktop session.
@@ -563,7 +566,7 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        self.subscribe_chat_events_with(cursor, false)
+        self.subscribe_chat_events_with(cursor, false, false)
     }
 
     /// Subscribes like [`Self::subscribe_chat_events_after`] and also asks
@@ -574,14 +577,33 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        match self.subscribe_chat_events_with(cursor, true) {
+        match self.subscribe_chat_events_with(cursor, true, false) {
             Err(_)
                 if self
                     .last_request_error()
                     .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest) =>
             {
-                self.subscribe_chat_events_with(cursor, false)
+                self.subscribe_chat_events_with(cursor, false, false)
             }
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_update_status`]
+    /// and also asks for `agent.run_updated` events. A runtime without the
+    /// agent run queue refuses the request, and the subscription then
+    /// carries no agent runs.
+    pub fn subscribe_chat_events_with_agent_runs(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_update_status(cursor),
             result => result,
         }
     }
@@ -590,6 +612,7 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
         update_status: bool,
+        agent_runs: bool,
     ) -> Result<String, ClientError> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -600,6 +623,9 @@ impl DesktopClient {
         let mut base = serde_json::Map::new();
         if update_status {
             base.insert("update_status".into(), Value::Bool(true));
+        }
+        if agent_runs {
+            base.insert("agent_runs".into(), Value::Bool(true));
         }
         let response = match cursor {
             Some(cursor) => {
@@ -692,6 +718,7 @@ impl DesktopClient {
                         | EventName::ModelsLogin
                         | EventName::RuntimeUpdateRequested
                         | EventName::RuntimeUpdateStatus
+                        | EventName::AgentRunUpdated
                 )
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -715,6 +742,12 @@ impl DesktopClient {
                     return Err(ClientError::UnexpectedMessage);
                 }
                 return Ok(SubscriptionEvent::RuntimeUpdateStatus(event.body));
+            }
+            if event.event == EventName::AgentRunUpdated {
+                if !event.body["id"].is_string() || !event.body["status"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::AgentRunUpdated(event.body));
             }
             if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
                 if let Some(seq) = body.get("seq").and_then(Value::as_u64) {
@@ -1119,6 +1152,103 @@ impl DesktopClient {
             None,
             serde_json::json!({"version": version}),
             &["version", "requested_at"],
+        )
+    }
+
+    /// Sends one agent operation, such as `agent.list` or `routine.save`,
+    /// with its body, and answers the runtime's body.
+    pub fn agent_request(
+        &mut self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, ClientError> {
+        if !operation.is_agent_operation() || !body.is_object() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let expected: &[&str] = match operation {
+            Operation::AgentList => &["agents"],
+            Operation::AgentRead | Operation::AgentSave => &["agent"],
+            Operation::AgentRunNow => &["run"],
+            Operation::AgentRuns => &["runs"],
+            Operation::RoutineList => &["routines"],
+            Operation::RoutineSave => &["routine"],
+            _ => &[],
+        };
+        self.request_body(operation, None, body, expected)
+    }
+
+    /// Lists the runtime's agents with their routines and latest runs.
+    pub fn list_agents(&mut self) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentList, serde_json::json!({}))
+    }
+
+    pub fn read_agent(&mut self, id: &str) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentRead, serde_json::json!({"id": id}))
+    }
+
+    /// Creates an agent, or replaces the one its `id` names.
+    pub fn save_agent(&mut self, agent: Value) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentSave, serde_json::json!({"agent": agent}))
+    }
+
+    /// Removes an agent. `remove_memory` also removes its private memory,
+    /// which the user confirms first.
+    pub fn delete_agent(&mut self, id: &str, remove_memory: bool) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::AgentDelete,
+            serde_json::json!({"id": id, "remove_memory": remove_memory}),
+        )
+    }
+
+    /// Queues a manual run of an agent and answers the run.
+    pub fn run_agent_now(&mut self, id: &str, prompt: Option<&str>) -> Result<Value, ClientError> {
+        let mut body = serde_json::json!({"id": id});
+        if let Some(prompt) = prompt {
+            body["prompt"] = Value::String(prompt.to_owned());
+        }
+        self.agent_request(Operation::AgentRunNow, body)
+    }
+
+    /// One page of run history, newest first, for one agent or all agents.
+    pub fn agent_runs(
+        &mut self,
+        agent_id: Option<&str>,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Value, ClientError> {
+        let mut body = serde_json::json!({"limit": limit});
+        if let Some(agent_id) = agent_id {
+            body["agent_id"] = Value::String(agent_id.to_owned());
+        }
+        if let Some(cursor) = cursor {
+            body["cursor"] = Value::String(cursor.to_owned());
+        }
+        self.agent_request(Operation::AgentRuns, body)
+    }
+
+    pub fn list_routines(&mut self, agent_id: &str) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::RoutineList,
+            serde_json::json!({"agent_id": agent_id}),
+        )
+    }
+
+    /// Adds a routine, or replaces the one its `id` names.
+    pub fn save_routine(&mut self, agent_id: &str, routine: Value) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::RoutineSave,
+            serde_json::json!({"agent_id": agent_id, "routine": routine}),
+        )
+    }
+
+    pub fn delete_routine(
+        &mut self,
+        agent_id: &str,
+        routine_id: &str,
+    ) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::RoutineDelete,
+            serde_json::json!({"agent_id": agent_id, "routine_id": routine_id}),
         )
     }
 

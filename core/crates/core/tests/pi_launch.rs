@@ -1172,3 +1172,86 @@ fn the_decisions_extension_shares_each_connection_in_its_own_shape() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+struct AgentBoundaries {
+    root: PathBuf,
+    launch: muniment_core::agents::AgentLaunch,
+}
+
+impl PiLaunchBoundaries for AgentBoundaries {
+    fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+        Ok(self.root.clone())
+    }
+
+    fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn prepare_pi_settings(
+        &self,
+        _artifact: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+        _executable: &std::path::Path,
+    ) -> Result<(), PiLaunchError> {
+        Ok(())
+    }
+
+    fn local_default_model(&self) -> Option<String> {
+        Some("ollama/llama3.2:3b".into())
+    }
+
+    fn home_directory(&self) -> Option<PathBuf> {
+        Some(self.root.join("Home"))
+    }
+
+    fn agent_launch(&self) -> Option<muniment_core::agents::AgentLaunch> {
+        Some(self.launch.clone())
+    }
+}
+
+#[test]
+fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
+    use muniment_core::permission_gate::{GateMode, RunPermissions};
+    use muniment_core::pi_launch::{AGENT_PERMISSIONS_EXTENSION, AGENT_PERMISSIONS_EXTENSION_FILE};
+    let root = temporary_directory();
+    let mut boundaries = AgentBoundaries {
+        root: root.clone(),
+        launch: muniment_core::agents::AgentLaunch {
+            agent_id: "agent-1".into(),
+            model: None,
+            disabled_tools: vec!["bash".into(), "mcp__crm__delete".into()],
+            skills: Vec::new(),
+            permissions: Some(RunPermissions {
+                mode: GateMode::Ask,
+                ..RunPermissions::default()
+            }),
+        },
+    };
+    let pair = |config: &SidecarConfig, flag: &str| -> Vec<String> {
+        config
+            .args
+            .windows(2)
+            .filter(|args| args[0] == flag)
+            .map(|args| args[1].clone())
+            .collect()
+    };
+    let local =
+        pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)
+            .unwrap();
+    assert_eq!(
+        pair(&local, "--exclude-tools"),
+        [format!("{EXCLUDED_TOOLS},bash,mcp__crm__delete")]
+    );
+    let gate = root.join(AGENT_PERMISSIONS_EXTENSION_FILE);
+    assert!(pair(&local, "--extension").contains(&gate.to_string_lossy().into_owned()));
+    assert_eq!(
+        fs::read_to_string(&gate).unwrap(),
+        AGENT_PERMISSIONS_EXTENSION
+    );
+    // A profile that never asks loads no gate.
+    boundaries.launch.permissions = None;
+    let plain =
+        pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)
+            .unwrap();
+    assert!(!pair(&plain, "--extension").contains(&gate.to_string_lossy().into_owned()));
+    fs::remove_dir_all(root).unwrap();
+}

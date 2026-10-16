@@ -1,4 +1,14 @@
-//! Persistent agent definitions, thread membership and local schedules.
+//! Persistent agent definitions, thread membership, routines and run state.
+//!
+//! An agent is `<Home>/agents/<slug>/agent.md`: a JSON header in a fence and
+//! the instructions below it. Every v2 field is optional, so a v1 file loads
+//! unchanged, and its `schedule` reads as one cron routine.
+pub use crate::agent_routines::{
+    Condition, ConditionAll, ConditionAny, ConditionLeaf, ConditionOp, CreatedFrom, CronSchedule,
+    McpTrigger, Routine, RoutineResult, Trigger, WebhookPreset, WebhookTrigger,
+};
+use crate::agent_runs::{NewRun, Run, RunStatus, RunStore, RunTrigger, TriggerKind};
+pub use crate::permission_gate::{GateMode as PermissionMode, PolicyRequest};
 use chrono::{Datelike, TimeZone, Timelike};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -17,10 +27,122 @@ pub struct Schedule {
     pub time: String,
     pub weekday: u32,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Avatar {
     pub style: String,
     pub seed: String,
+}
+/// The model an agent's runs use. Without one, the agent uses the default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModel {
+    pub provider: String,
+    pub id: String,
+    /// A Pi thinking level, such as `medium`. None keeps the model's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+}
+/// The account's tools an agent leaves out. Built-in tools are on by default.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTools {
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+/// Which agents an agent may message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MessagingAllow {
+    Any,
+    Agents(Vec<String>),
+}
+impl Serialize for MessagingAllow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Any => serializer.serialize_str("any"),
+            Self::Agents(ids) => ids.serialize(serializer),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for MessagingAllow {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Name(String),
+            Agents(Vec<String>),
+        }
+        match Wire::deserialize(deserializer)? {
+            Wire::Name(name) if name == "any" => Ok(Self::Any),
+            Wire::Name(_) => Err(serde::de::Error::custom(
+                "messaging.allow is \"any\" or a list of agent ids",
+            )),
+            Wire::Agents(ids) => Ok(Self::Agents(ids)),
+        }
+    }
+}
+/// An agent's permission profile, in the thread permission policy's own
+/// terms: a gate mode and exact policy requests that hold in every thread
+/// the agent owns. An `ask_first` request asks even when an
+/// `always_allow` request, or a thread's own answer, allows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPermissions {
+    #[serde(default)]
+    pub mode: PermissionMode,
+    #[serde(default)]
+    pub always_allow: Vec<PolicyRequest>,
+    #[serde(default)]
+    pub ask_first: Vec<PolicyRequest>,
+}
+/// The most requests in each permission list.
+pub const MAX_PERMISSION_RULES: usize = 64;
+impl AgentPermissions {
+    /// The profile as pre-decided thread policies, oldest first.
+    pub fn policies(&self, agent_id: &str) -> Vec<crate::journal::ThreadPermissionPolicyDecided> {
+        use crate::journal::{ThreadPermissionAnswerSource, ThreadPermissionDecision};
+        let decided = |request: &PolicyRequest, decision: ThreadPermissionDecision| {
+            crate::journal::ThreadPermissionPolicyDecided {
+                policy_id: uuid::Uuid::now_v7().to_string(),
+                decision,
+                request_kind: request.request_kind.clone(),
+                resource: request.resource.clone(),
+                actor: format!("agent:{agent_id}"),
+                answer_source: ThreadPermissionAnswerSource::Native,
+                gate_id: None,
+            }
+        };
+        self.always_allow
+            .iter()
+            .map(|request| decided(request, ThreadPermissionDecision::Allow))
+            .chain(
+                self.ask_first
+                    .iter()
+                    .map(|request| decided(request, ThreadPermissionDecision::Ask)),
+            )
+            .collect()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for requests in [&self.always_allow, &self.ask_first] {
+            if requests.len() > MAX_PERMISSION_RULES {
+                return Err(format!(
+                    "Keep each permission list under {MAX_PERMISSION_RULES} entries."
+                ));
+            }
+            if !requests.iter().all(|request| {
+                crate::journal::thread_permission_policy::valid_policy_resource(
+                    &request.request_kind,
+                    &request.resource,
+                )
+            }) {
+                return Err(
+                    "A permission entry names an exact absolute path, command or tool.".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentMessaging {
+    pub allow: MessagingAllow,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,7 +160,28 @@ pub struct Agent {
     #[serde(default)]
     pub template: Option<serde_json::Value>,
     pub project_id: Option<String>,
+    /// The v1 schedule. It reads as the cron routine with id `schedule`, and
+    /// a save turns it into that routine.
     pub schedule: Option<Schedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<AgentModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<AgentTools>,
+    /// Installed skill ids the agent's runs load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<AgentPermissions>,
+    /// The runtime id of the agent's primary machine. None is this runtime.
+    #[serde(default, rename = "primary_runtime")]
+    pub primary_runtime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub messaging: Option<AgentMessaging>,
+    #[serde(default)]
+    pub routines: Vec<Routine>,
+    /// Why the agent's routines are paused, such as `absence`. None runs them.
+    #[serde(default, rename = "paused_reason")]
+    pub paused_reason: Option<String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +194,21 @@ pub struct RunState {
     pub run_id: Option<String>,
     pub status: String,
     pub error: Option<String>,
+    /// What started the run: `manual` or a trigger kind such as `cron`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+}
+/// The runtime's record of one routine: when it fires next and how its
+/// last run went.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineState {
+    /// Changes when the routine's trigger changes.
+    #[serde(default)]
+    pub key: String,
+    pub next_fire_at: Option<i64>,
+    pub last_fired_at: Option<String>,
+    pub last_result: Option<RoutineResult>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,13 +221,27 @@ pub struct State {
     pub threads: BTreeMap<String, String>,
     #[serde(default)]
     pub runs: BTreeMap<String, RunState>,
+    /// Routine state by agent id, then routine id.
+    #[serde(default)]
+    pub routines: BTreeMap<String, BTreeMap<String, RoutineState>>,
+}
+/// An agent folder whose `agent.md` could not be loaded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLoadError {
+    pub folder: String,
+    pub error: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentList {
     pub agents: Vec<Agent>,
     pub state: State,
+    /// Agent files that did not load. The other agents still list.
+    #[serde(default)]
+    pub errors: Vec<AgentLoadError>,
 }
+/// The most runs each agent's state history keeps.
+pub const MAX_STATE_HISTORY: usize = crate::agent_runs::MAX_RUN_HISTORY;
 
 fn lock(profile: &Path) -> Result<fs::File, String> {
     fs::create_dir_all(profile).map_err(|_| "Agent settings are unavailable.")?;
@@ -183,43 +355,145 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
         return Err("The agent identifier does not match its folder.".into());
     }
     agent.instructions = instructions.trim_end().into();
+    migrate(&mut agent)?;
     validate(&agent)?;
     Ok(agent)
 }
+/// Reads a v1 `schedule` as the cron routine it becomes, and fills the
+/// `schedule` a v1 client reads from that routine.
+fn migrate(agent: &mut Agent) -> Result<(), String> {
+    let existing = agent
+        .routines
+        .iter()
+        .position(|routine| routine.id == crate::agent_routines::SCHEDULE_ROUTINE_ID);
+    match (&agent.schedule, existing) {
+        (Some(schedule), None) => {
+            let routine = crate::agent_routines::schedule_routine(
+                schedule,
+                &crate::agent_routines::local_time_zone(),
+            )?;
+            agent.routines.insert(0, routine);
+        }
+        (None, Some(index)) => {
+            agent.schedule = crate::agent_routines::routine_schedule(&agent.routines[index]);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+/// Applies a client's v1 `schedule` to the `schedule` routine: a schedule
+/// that differs from the routine's replaces its trigger. A missing schedule
+/// changes nothing, so a client that edits only routines keeps them.
+fn apply_schedule(agent: &mut Agent) -> Result<(), String> {
+    let id = crate::agent_routines::SCHEDULE_ROUTINE_ID;
+    let routine_schedule = agent
+        .routines
+        .iter()
+        .find(|routine| routine.id == id)
+        .and_then(crate::agent_routines::routine_schedule);
+    let schedule_changed = |schedule: &Option<Schedule>| {
+        serde_json::to_value(schedule).ok() != serde_json::to_value(&routine_schedule).ok()
+    };
+    match agent.schedule.clone() {
+        Some(schedule) if schedule_changed(&Some(schedule.clone())) => {
+            let tz = agent
+                .routines
+                .iter()
+                .find(|routine| routine.id == id)
+                .and_then(|routine| match &routine.trigger {
+                    Trigger::Cron(cron) => Some(cron.tz.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(crate::agent_routines::local_time_zone);
+            let mut routine = crate::agent_routines::schedule_routine(&schedule, &tz)?;
+            if let Some(existing) = agent.routines.iter_mut().find(|routine| routine.id == id) {
+                routine.name = existing.name.clone();
+                routine.prompt = existing.prompt.clone();
+                *existing = routine;
+            } else {
+                agent.routines.insert(0, routine);
+            }
+        }
+        _ => {}
+    }
+    agent.schedule = agent
+        .routines
+        .iter()
+        .find(|routine| routine.id == id)
+        .and_then(crate::agent_routines::routine_schedule);
+    Ok(())
+}
+/// Lists every agent. A folder whose `agent.md` does not load is left out
+/// and named in `errors`.
 pub fn list(profile: &Path) -> Result<AgentList, String> {
     let mut agents = Vec::new();
+    let mut errors = Vec::new();
     for entry in fs::read_dir(root(profile)?).map_err(|_| "The agents could not be read.")? {
-        let entry = entry.map_err(|_| "An agent could not be read.")?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         let path = entry.path().join("agent.md");
-        if !entry.path().is_symlink() && path.is_file() {
-            let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            if let Some(metadata) = text
-                .strip_prefix("```json\n")
-                .and_then(|s| s.split_once("\n```\n\n").map(|(m, _)| m))
-            {
-                let agent: Agent = serde_json::from_str(metadata).map_err(|e| e.to_string())?;
-                crate::workspace_names::resolve(
-                    profile,
-                    &root(profile)?,
-                    &agent.id,
-                    Some(&agent.name),
-                    Some(&entry.path()),
-                )?;
-                agents.push(get(profile, &agent.id)?);
-            }
+        if entry.path().is_symlink() || !path.is_file() {
+            continue;
+        }
+        let folder = entry.file_name().to_string_lossy().into_owned();
+        match load_entry(profile, &entry.path(), &path) {
+            Ok(Some(agent)) => agents.push(agent),
+            Ok(None) => {}
+            Err(error) => errors.push(AgentLoadError { folder, error }),
         }
     }
     agents.sort_by(|a, b| a.name.cmp(&b.name));
+    errors.sort_by(|a, b| a.folder.cmp(&b.folder));
     with_state(profile, |state| {
         for agent in &agents {
             ensure_primary(state, &agent.id);
         }
         Ok(())
     })?;
+    let state = state(profile)?;
+    for agent in &mut agents {
+        apply_routine_state(agent, &state);
+    }
     Ok(AgentList {
         agents,
-        state: state(profile)?,
+        state,
+        errors,
     })
+}
+fn load_entry(profile: &Path, folder: &Path, path: &Path) -> Result<Option<Agent>, String> {
+    let text = fs::read_to_string(path).map_err(|_| "The agent file could not be read.")?;
+    let Some(metadata) = text
+        .strip_prefix("```json\n")
+        .and_then(|s| s.split_once("\n```\n\n").map(|(m, _)| m))
+    else {
+        return Err("The agent format is invalid.".into());
+    };
+    let agent: Agent =
+        serde_json::from_str(metadata).map_err(|_| "The agent settings are invalid.")?;
+    crate::workspace_names::resolve(
+        profile,
+        &root(profile)?,
+        &agent.id,
+        Some(&agent.name),
+        Some(folder),
+    )?;
+    get(profile, &agent.id).map(Some)
+}
+/// Fills each routine's last fire time and result from the runtime's state.
+fn apply_routine_state(agent: &mut Agent, state: &State) {
+    let routines = state.routines.get(&agent.id);
+    for routine in &mut agent.routines {
+        let saved = routines.and_then(|routines| routines.get(&routine.id));
+        routine.last_fired_at = saved.and_then(|saved| saved.last_fired_at.clone());
+        routine.last_result = saved.and_then(|saved| saved.last_result.clone());
+    }
+}
+/// Reads one agent with its routines' runtime state.
+pub fn read(profile: &Path, id: &str) -> Result<Agent, String> {
+    let mut agent = get(profile, id)?;
+    apply_routine_state(&mut agent, &state(profile)?);
+    Ok(agent)
 }
 fn validate(agent: &Agent) -> Result<(), String> {
     if agent.label.len() > 120 {
@@ -253,7 +527,81 @@ fn validate(agent: &Agent) -> Result<(), String> {
     if let Some(schedule) = &agent.schedule {
         validate_schedule(schedule)?;
     }
-    Ok(())
+    validate_v2(agent)
+}
+const MAX_SKILLS: usize = 32;
+const MAX_DISABLED_TOOLS: usize = 64;
+const MAX_MESSAGING_AGENTS: usize = 64;
+fn validate_v2(agent: &Agent) -> Result<(), String> {
+    let short = |text: &str, limit: usize| {
+        !text.trim().is_empty() && text.len() <= limit && !text.chars().any(char::is_control)
+    };
+    if let Some(model) = &agent.model {
+        // The same bounds the default model's provider and model take.
+        if !short(&model.provider, 128) || !short(&model.id, 512) {
+            return Err("Choose a model by its provider and id.".into());
+        }
+        if model
+            .thinking
+            .as_deref()
+            .is_some_and(|level| crate::engine::thinking_level(level).is_none())
+        {
+            return Err(
+                "Choose a thinking level: off, minimal, low, medium, high, xhigh or max.".into(),
+            );
+        }
+    }
+    if let Some(tools) = &agent.tools {
+        if tools.disabled.len() > MAX_DISABLED_TOOLS
+            || !tools.disabled.iter().all(|tool| {
+                tool.len() <= 128
+                    && !tool.is_empty()
+                    && tool.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
+                    })
+            })
+        {
+            return Err(format!(
+                "Turn off at most {MAX_DISABLED_TOOLS} tools by their names."
+            ));
+        }
+    }
+    if let Some(skills) = &agent.skills {
+        if skills.len() > MAX_SKILLS || !skills.iter().all(|skill| short(skill, 256)) {
+            return Err(format!("Select at most {MAX_SKILLS} installed skills."));
+        }
+    }
+    if let Some(permissions) = &agent.permissions {
+        permissions.validate()?;
+    }
+    if let Some(runtime) = &agent.primary_runtime {
+        if runtime.is_empty()
+            || runtime.len() > 64
+            || !runtime
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("The primary machine is not a runtime id.".into());
+        }
+    }
+    if let Some(AgentMessaging {
+        allow: MessagingAllow::Agents(ids),
+    }) = &agent.messaging
+    {
+        if ids.len() > MAX_MESSAGING_AGENTS
+            || ids.iter().any(|id| uuid::Uuid::parse_str(id).is_err())
+        {
+            return Err(format!(
+                "List at most {MAX_MESSAGING_AGENTS} agents by id that this agent may message."
+            ));
+        }
+    }
+    if let Some(reason) = &agent.paused_reason {
+        if !short(reason, 64) {
+            return Err("The pause reason is a short word such as absence.".into());
+        }
+    }
+    crate::agent_routines::validate_routines(&agent.routines)
 }
 fn validate_schedule(schedule: &Schedule) -> Result<(u32, u32), String> {
     let parsed = chrono::NaiveTime::parse_from_str(&schedule.time, "%H:%M")
@@ -294,6 +642,20 @@ pub fn next_after<T: TimeZone>(
     Err("The next schedule time could not be found.".into())
 }
 pub fn save(profile: &Path, mut agent: Agent) -> Result<Agent, String> {
+    apply_schedule(&mut agent)?;
+    for routine in &mut agent.routines {
+        if routine.id.is_empty() {
+            routine.id = crate::agent_routines::new_id();
+        }
+        if let Trigger::Webhook(hook) = &mut routine.trigger {
+            if hook.hook_id.is_empty() {
+                hook.hook_id = crate::agent_routines::new_id();
+            }
+        }
+        // The runtime keeps fire times and results; a save never sets them.
+        routine.last_fired_at = None;
+        routine.last_result = None;
+    }
     validate(&agent)?;
     if let Some(project) = &agent.project_id {
         crate::projects::folder(profile, project)?;
@@ -331,6 +693,8 @@ pub fn save(profile: &Path, mut agent: Agent) -> Result<Agent, String> {
     fs::create_dir_all(&directory).map_err(|_| "The agent folder could not be created.")?;
     let mut metadata = agent.clone();
     metadata.instructions.clear();
+    // The `schedule` routine holds the schedule. v1 readers rebuild it.
+    metadata.schedule = None;
     let text = format!(
         "```json\n{}\n```\n\n{}\n",
         serde_json::to_string_pretty(&metadata).map_err(|_| "The agent settings are invalid.")?,
@@ -346,14 +710,25 @@ pub fn save(profile: &Path, mut agent: Agent) -> Result<Agent, String> {
     }
     let run = state.runs.entry(agent.id.clone()).or_default();
     run.schedule_key = Some(schedule_key(&agent));
-    run.next_run = agent
-        .schedule
-        .as_ref()
-        .filter(|s| s.enabled)
-        .map(|s| next_after(s, chrono::Local::now()))
-        .transpose()?;
+    run.next_run = next_routine_fire(&agent, chrono::Utc::now());
+    let saved = state.routines.entry(agent.id.clone()).or_default();
+    saved.retain(|id, _| agent.routines.iter().any(|routine| &routine.id == id));
     persist_state(profile, &state)?;
+    apply_routine_state(&mut agent, &state);
     Ok(agent)
+}
+/// The earliest next fire of an agent's enabled cron routines.
+pub fn next_routine_fire(agent: &Agent, after: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    agent
+        .routines
+        .iter()
+        .filter(|routine| routine.enabled)
+        .filter_map(|routine| match &routine.trigger {
+            Trigger::Cron(schedule) => crate::agent_routines::next_cron_after(schedule, after).ok(),
+            _ => None,
+        })
+        .map(|time| time.timestamp())
+        .min()
 }
 pub fn assign(profile: &Path, thread: &str, id: &str) -> Result<(), String> {
     get(profile, id)?;
@@ -443,20 +818,83 @@ pub fn with_state<T>(
             }
         }
     }
+    for history in current.history.values_mut() {
+        let excess = history.len().saturating_sub(MAX_STATE_HISTORY);
+        history.drain(..excess);
+    }
     persist_state(profile, &current)?;
     Ok(result)
 }
+/// Queues a manual run of an agent: a person asked it to run now. An agent
+/// whose manual run still waits to start refuses a second one.
 pub fn queue_run(profile: &Path, id: &str) -> Result<(), String> {
+    run_now(profile, id, None, Some("desktop")).map(drop)
+}
+/// Queues a manual run with an optional prompt and answers the run.
+pub fn run_now(
+    profile: &Path,
+    id: &str,
+    prompt: Option<&str>,
+    source: Option<&str>,
+) -> Result<Run, String> {
     get(profile, id)?;
+    let prompt = prompt.map(str::trim).filter(|prompt| !prompt.is_empty());
+    if prompt.is_some_and(|prompt| prompt.len() > crate::agent_routines::MAX_ROUTINE_PROMPT_BYTES) {
+        return Err("Keep the run prompt under 16 KB.".into());
+    }
+    let store = RunStore::open(profile)?;
+    if store.active()?.iter().any(|run| {
+        run.agent_id == id
+            && run.trigger.kind == TriggerKind::Manual
+            && matches!(run.status, RunStatus::Queued | RunStatus::Leased)
+    }) {
+        return Err("This agent already has a pending run.".into());
+    }
+    let run = store.enqueue(NewRun {
+        agent_id: id.into(),
+        thread_id: None,
+        trigger: RunTrigger {
+            kind: TriggerKind::Manual,
+            routine_id: None,
+            source: source.map(str::to_owned),
+        },
+        prompt: prompt
+            .unwrap_or(crate::agent_routines::DEFAULT_ROUTINE_PROMPT)
+            .to_owned(),
+        hop: 0,
+        origin_run_id: None,
+    })?;
+    mirror_run(profile, &run)?;
+    Ok(run)
+}
+/// Records a run in the agent's v1 state, which the desktop's agent list reads.
+pub fn mirror_run(profile: &Path, run: &Run) -> Result<(), String> {
     with_state(profile, |state| {
-        let run = state.runs.entry(id.into()).or_default();
-        if matches!(run.status.as_str(), "queued" | "running" | "waiting") {
-            return Err("This agent already has a pending run.".into());
+        let entry = state.runs.entry(run.agent_id.clone()).or_default();
+        entry.run_id = Some(run.id.clone());
+        entry.thread_id = run.thread_id.clone().or(entry.thread_id.take());
+        entry.last_run = crate::agent_runs::seconds(&run.created_at);
+        entry.status = match run.status {
+            RunStatus::Leased | RunStatus::Running => "running",
+            RunStatus::WaitingInput => "waiting",
+            status => status.as_str(),
         }
-        run.run_id = None;
-        run.last_run = None;
-        run.status = "queued".into();
-        run.error = None;
+        .into();
+        entry.error = run.error.clone();
+        entry.trigger = Some(run.trigger.kind.as_str().into());
+        if let Some(routine_id) = &run.trigger.routine_id {
+            let saved = state
+                .routines
+                .entry(run.agent_id.clone())
+                .or_default()
+                .entry(routine_id.clone())
+                .or_default();
+            saved.last_result = Some(RoutineResult {
+                run_id: run.id.clone(),
+                status: run.status.as_str().into(),
+                silent: run.silent,
+            });
+        }
         Ok(())
     })
 }
@@ -476,26 +914,259 @@ pub fn update_run(profile: &Path, id: &str, run: RunState) -> Result<(), String>
     state.runs.insert(id.into(), run);
     persist_state(profile, &state)
 }
-/// Removing an agent keeps outputs and existing thread history.
+/// Removing an agent keeps outputs, its memory and existing thread history.
 pub fn delete(profile: &Path, id: &str) -> Result<(), String> {
+    delete_agent(profile, id, false)
+}
+/// Removes an agent, its routines and its run history. With
+/// `remove_memory`, its private memory folder goes too; the user confirms
+/// that first, since the memory cannot be recovered.
+pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
     let _lock = lock(profile)?;
-    let current = state(profile)?;
-    if current
-        .runs
-        .get(id)
-        .is_some_and(|run| matches!(run.status.as_str(), "queued" | "running" | "waiting"))
-    {
+    let store = RunStore::open(profile)?;
+    if store.active()?.iter().any(|run| run.agent_id == id) {
         return Err("Finish or cancel the agent run before deleting it.".into());
     }
     let directory = folder(profile, id)?;
+    let memory = profile.join("agent-memory");
+    if remove_memory && (memory.is_symlink() || memory.join(id).is_symlink()) {
+        return Err("The memory folder must not be a symbolic link.".into());
+    }
     fs::remove_file(directory.join("agent.md")).map_err(|_| "The agent could not be deleted.")?;
     let _ = fs::remove_dir(directory);
+    if remove_memory {
+        match fs::remove_dir_all(memory.join(id)) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err("The agent's memory could not be removed.".into())
+            }
+            _ => {}
+        }
+    }
+    store.delete_agent(id)?;
     let mut state = state(profile)?;
     state.threads.retain(|_, agent| agent != id);
     state.runs.remove(id);
     state.primary_threads.remove(id);
     state.history.remove(id);
+    state.routines.remove(id);
     persist_state(profile, &state)
+}
+/// The agent a thread belongs to, if any.
+pub fn thread_agent(profile: &Path, thread: &str) -> Result<Option<Agent>, String> {
+    state(profile)?
+        .threads
+        .get(thread)
+        .map(|id| get(profile, id))
+        .transpose()
+}
+/// What one run of an agent's thread launches with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentLaunch {
+    pub agent_id: String,
+    pub model: Option<AgentModel>,
+    pub disabled_tools: Vec<String>,
+    pub skills: Vec<String>,
+    /// None loads no permission gate.
+    pub permissions: Option<crate::permission_gate::RunPermissions>,
+}
+/// The launch settings of the agent that owns `thread`. `trigger` is what
+/// started the run, when the run queue started it.
+pub fn thread_launch(
+    profile: &Path,
+    thread: &str,
+    trigger: Option<TriggerKind>,
+) -> Result<Option<AgentLaunch>, String> {
+    let Some(agent) = thread_agent(profile, thread)? else {
+        return Ok(None);
+    };
+    let profile = agent.permissions.clone().unwrap_or_default();
+    let permissions = crate::permission_gate::RunPermissions {
+        mode: profile.mode,
+        event_triggered: trigger.is_some_and(TriggerKind::event_triggered),
+        policies: profile.policies(&agent.id),
+    };
+    Ok(Some(AgentLaunch {
+        agent_id: agent.id,
+        model: agent.model,
+        disabled_tools: agent.tools.map(|tools| tools.disabled).unwrap_or_default(),
+        skills: agent.skills.unwrap_or_default(),
+        permissions: permissions.gates().then_some(permissions),
+    }))
+}
+/// Adds or replaces one routine. An empty id adds a routine with a new id.
+pub fn save_routine(profile: &Path, agent_id: &str, routine: Routine) -> Result<Routine, String> {
+    crate::agent_routines::validate_routine(&routine)?;
+    let mut agent = get(profile, agent_id)?;
+    let id = if routine.id.is_empty() {
+        crate::agent_routines::new_id()
+    } else {
+        routine.id.clone()
+    };
+    let routine = Routine {
+        id: id.clone(),
+        ..routine
+    };
+    match agent.routines.iter_mut().find(|existing| existing.id == id) {
+        Some(existing) => *existing = routine,
+        None => agent.routines.push(routine),
+    }
+    // A routine edit wins over the v1 schedule the read filled in.
+    agent.schedule = None;
+    let agent = save(profile, agent)?;
+    agent
+        .routines
+        .into_iter()
+        .find(|routine| routine.id == id)
+        .ok_or_else(|| "The routine could not be saved.".into())
+}
+/// Removes one routine.
+pub fn delete_routine(profile: &Path, agent_id: &str, routine_id: &str) -> Result<(), String> {
+    let mut agent = get(profile, agent_id)?;
+    let before = agent.routines.len();
+    agent.routines.retain(|routine| routine.id != routine_id);
+    if agent.routines.len() == before {
+        return Err("The routine was not found.".into());
+    }
+    agent.schedule = None;
+    save(profile, agent).map(drop)
+}
+/// One agent's routines with their runtime state.
+pub fn routines(profile: &Path, agent_id: &str) -> Result<Vec<Routine>, String> {
+    read(profile, agent_id).map(|agent| agent.routines)
+}
+
+/// Answers one agent operation of the attach protocol, named by its wire
+/// name such as `agent.list`, and its body.
+pub fn operation(
+    profile: &Path,
+    operation: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    fn parse<T: serde::de::DeserializeOwned>(body: serde_json::Value) -> Result<T, String> {
+        serde_json::from_value(body).map_err(|_| "The request is invalid.".to_string())
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Empty {}
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ById {
+        id: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Save {
+        agent: Agent,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Delete {
+        id: String,
+        #[serde(default)]
+        remove_memory: bool,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RunNow {
+        id: String,
+        #[serde(default)]
+        prompt: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Runs {
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        cursor: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ForAgent {
+        agent_id: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SaveRoutine {
+        agent_id: String,
+        routine: Routine,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct DeleteRoutine {
+        agent_id: String,
+        routine_id: String,
+    }
+    match operation {
+        "agent.list" => {
+            parse::<Empty>(body)?;
+            let listing = list(profile)?;
+            let store = RunStore::open(profile)?;
+            let mut latest = serde_json::Map::new();
+            for agent in &listing.agents {
+                if let Some(run) = store.latest(&agent.id)? {
+                    latest.insert(agent.id.clone(), json!(run));
+                }
+            }
+            Ok(json!({
+                "agents": listing.agents,
+                "primary_threads": listing.state.primary_threads,
+                "latest_runs": latest,
+                "errors": listing.errors,
+            }))
+        }
+        "agent.read" => {
+            let request: ById = parse(body)?;
+            let agent = read(profile, &request.id)?;
+            let primary = state(profile)?.primary_threads.get(&agent.id).cloned();
+            Ok(json!({"agent": agent, "primary_thread_id": primary}))
+        }
+        "agent.save" => {
+            let request: Save = parse(body)?;
+            Ok(json!({"agent": save(profile, request.agent)?}))
+        }
+        "agent.delete" => {
+            let request: Delete = parse(body)?;
+            delete_agent(profile, &request.id, request.remove_memory)?;
+            Ok(json!({}))
+        }
+        "agent.run_now" => {
+            let request: RunNow = parse(body)?;
+            let run = run_now(
+                profile,
+                &request.id,
+                request.prompt.as_deref(),
+                Some("client"),
+            )?;
+            Ok(json!({"run": run}))
+        }
+        "agent.runs" => {
+            let request: Runs = parse(body)?;
+            let page = RunStore::open(profile)?.page(
+                request.agent_id.as_deref(),
+                request.limit.unwrap_or(50),
+                request.cursor.as_deref(),
+            )?;
+            Ok(json!(page))
+        }
+        "routine.list" => {
+            let request: ForAgent = parse(body)?;
+            Ok(json!({"routines": routines(profile, &request.agent_id)?}))
+        }
+        "routine.save" => {
+            let request: SaveRoutine = parse(body)?;
+            Ok(json!({"routine": save_routine(profile, &request.agent_id, request.routine)?}))
+        }
+        "routine.delete" => {
+            let request: DeleteRoutine = parse(body)?;
+            delete_routine(profile, &request.agent_id, &request.routine_id)?;
+            Ok(json!({}))
+        }
+        _ => Err("The agent operation is unknown.".into()),
+    }
 }
 
 #[cfg(test)]
@@ -824,5 +1495,388 @@ mod tests {
         assert!(list(&profile).unwrap().agents.is_empty());
         assert!(thread_instructions(&profile, "thread-a").unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn profile() -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        (root, profile)
+    }
+
+    fn write_header(profile: &Path, id: &str, header: serde_json::Value, instructions: &str) {
+        let folder = root(profile).unwrap().join(format!("Agent-{}", &id[..8]));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("agent.md"),
+            format!(
+                "```json\n{}\n```\n\n{instructions}\n",
+                serde_json::to_string_pretty(&header).unwrap()
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_v1_agent_loads_unchanged_and_its_schedule_reads_as_a_cron_routine() {
+        let (root_dir, profile) = profile();
+        let id = uuid::Uuid::new_v4().to_string();
+        write_header(
+            &profile,
+            &id,
+            serde_json::json!({
+                "id": id, "name": "Scout", "label": "", "instructions": "", "avatar": null,
+                "template": null, "projectId": null,
+                "schedule": {"enabled": true, "cadence": "weekly", "time": "07:45", "weekday": 2}
+            }),
+            "Find sources.",
+        );
+        // Listing finds the hand-written folder, as it finds a v1 one.
+        let listing = list(&profile).unwrap();
+        assert_eq!(listing.agents.len(), 1, "{:?}", listing.errors);
+        let agent = get(&profile, &id).unwrap();
+        assert_eq!(agent.instructions, "Find sources.");
+        assert_eq!(agent.routines.len(), 1);
+        let routine = &agent.routines[0];
+        assert_eq!(routine.id, crate::agent_routines::SCHEDULE_ROUTINE_ID);
+        let Trigger::Cron(cron) = &routine.trigger else {
+            panic!("a v1 schedule is a cron routine");
+        };
+        // v1 Wednesday is 2; cron Wednesday is 3.
+        assert_eq!(cron.expr, "45 7 * * 3");
+        assert_eq!(cron.tz, crate::agent_routines::local_time_zone());
+        assert!(routine.enabled);
+        assert_eq!(agent.schedule.as_ref().unwrap().time, "07:45");
+        assert!(agent.model.is_none() && agent.permissions.is_none());
+
+        // A save writes the routine and leaves the v1 schedule out of the file.
+        let saved = save(&profile, agent).unwrap();
+        let text = fs::read_to_string(folder(&profile, &id).unwrap().join("agent.md")).unwrap();
+        assert!(text.contains("\"routines\""));
+        assert!(text.contains("\"schedule\": null"));
+        assert_eq!(saved.schedule.as_ref().unwrap().weekday, 2);
+
+        // A v1 client that edits the schedule edits the routine.
+        let mut edited = get(&profile, &id).unwrap();
+        edited.schedule.as_mut().unwrap().time = "08:00".into();
+        edited.schedule.as_mut().unwrap().enabled = false;
+        let edited = save(&profile, edited).unwrap();
+        assert_eq!(edited.routines.len(), 1);
+        assert!(!edited.routines[0].enabled);
+        assert!(
+            matches!(&edited.routines[0].trigger, Trigger::Cron(cron) if cron.expr == "0 8 * * 3")
+        );
+        // A client that names no schedule keeps the routines it sends.
+        let mut v2 = get(&profile, &id).unwrap();
+        v2.schedule = None;
+        assert_eq!(save(&profile, v2).unwrap().routines.len(), 1);
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn v2_fields_round_trip_and_are_checked() {
+        let (root_dir, profile) = profile();
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "name": "Closer", "instructions": "Follow up on deals.",
+            "model": {"provider": "local", "id": "example-model", "thinking": "high"},
+            "tools": {"disabled": ["bash", "mcp__crm__delete"]},
+            "skills": ["review", "pack:skills/a/SKILL.md"],
+            "permissions": {"mode": "strict",
+                "always_allow": [{"request_kind": "path",
+                    "resource": {"type": "path", "path": "/work/notes.md", "operation": "read"}}],
+                "ask_first": [{"request_kind": "command",
+                    "resource": {"type": "command", "arguments": ["bash", "git push"], "working_directory": "/work"}}]},
+            "primary_runtime": "018f0000-0000-7000-8000-000000000095",
+            "messaging": {"allow": ["018f0000-0000-4000-8000-0000000000a1"]},
+            "routines": [{"name": "Hook", "trigger": {"kind": "webhook", "preset": "github"}}],
+            "paused_reason": "absence"
+        }))
+        .unwrap();
+        let saved = save(&profile, agent).unwrap();
+        let read = read(&profile, &saved.id).unwrap();
+        assert_eq!(
+            read.model.as_ref().unwrap().thinking.as_deref(),
+            Some("high")
+        );
+        assert_eq!(read.tools.as_ref().unwrap().disabled.len(), 2);
+        assert_eq!(
+            read.permissions.as_ref().unwrap().mode,
+            PermissionMode::Strict
+        );
+        assert_eq!(read.paused_reason.as_deref(), Some("absence"));
+        assert_eq!(
+            read.messaging,
+            Some(AgentMessaging {
+                allow: MessagingAllow::Agents(vec!["018f0000-0000-4000-8000-0000000000a1".into()])
+            })
+        );
+        let Trigger::Webhook(hook) = &read.routines[0].trigger else {
+            panic!("a webhook routine");
+        };
+        assert_eq!(hook.hook_id.len(), 32, "a save assigns the hook id");
+        assert!(!read.routines[0].id.is_empty());
+        let value = serde_json::to_value(&read).unwrap();
+        assert_eq!(
+            value["primary_runtime"],
+            "018f0000-0000-7000-8000-000000000095"
+        );
+        assert_eq!(value["paused_reason"], "absence");
+        assert_eq!(
+            value["permissions"]["always_allow"][0]["resource"]["operation"],
+            "read"
+        );
+        // The profile becomes pre-decided thread policies: allow, then ask.
+        let policies = read.permissions.as_ref().unwrap().policies(&read.id);
+        assert_eq!(policies.len(), 2);
+        assert_eq!(
+            policies[0].decision,
+            crate::journal::ThreadPermissionDecision::Allow
+        );
+        assert_eq!(
+            policies[1].decision,
+            crate::journal::ThreadPermissionDecision::Ask
+        );
+        assert_eq!(policies[1].actor, format!("agent:{}", read.id));
+        let any: AgentMessaging =
+            serde_json::from_value(serde_json::json!({"allow": "any"})).unwrap();
+        assert_eq!(any.allow, MessagingAllow::Any);
+        assert!(
+            serde_json::from_value::<AgentMessaging>(serde_json::json!({"allow": "some"})).is_err()
+        );
+        let invalid = |change: &dyn Fn(&mut Agent)| {
+            let mut agent = read.clone();
+            change(&mut agent);
+            save(&profile, agent).unwrap_err()
+        };
+        assert!(
+            invalid(&|a| a.model.as_mut().unwrap().thinking = Some("extreme".into()))
+                .contains("thinking level")
+        );
+        assert!(
+            invalid(&|a| a.tools.as_mut().unwrap().disabled = vec!["two words".into()])
+                .contains("tools")
+        );
+        assert!(invalid(&|a| a.skills = Some(vec!["x".into(); 33])).contains("skills"));
+        assert!(invalid(&|a| {
+            a.permissions.as_mut().unwrap().ask_first = vec![PolicyRequest {
+                request_kind: crate::journal::ThreadPermissionRequestKind::Path,
+                resource: crate::journal::ThreadPermissionResource::Path {
+                    path: "relative/../notes.md".into(),
+                    operation: "write".into(),
+                },
+            }]
+        })
+        .contains("exact absolute path"));
+        assert!(invalid(&|a| a.primary_runtime = Some("../etc".into())).contains("runtime id"));
+        assert!(invalid(&|a| {
+            a.messaging = Some(AgentMessaging {
+                allow: MessagingAllow::Agents(vec!["not-an-id".into()]),
+            })
+        })
+        .contains("message"));
+        assert!(
+            invalid(&|a| a.routines[0].trigger = Trigger::Cron(CronSchedule {
+                expr: "* * * * *".into(),
+                tz: "UTC".into()
+            }))
+            .contains("five minutes")
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn one_bad_agent_file_is_reported_and_the_rest_still_list() {
+        let (root_dir, profile) = profile();
+        let good = save(
+            &profile,
+            Agent {
+                name: "Good".into(),
+                instructions: "Work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let broken = root(&profile).unwrap().join("Broken");
+        fs::create_dir_all(&broken).unwrap();
+        fs::write(broken.join("agent.md"), "```json\n{not json\n```\n\nText\n").unwrap();
+        let unfenced = root(&profile).unwrap().join("Unfenced");
+        fs::create_dir_all(&unfenced).unwrap();
+        fs::write(unfenced.join("agent.md"), "no header\n").unwrap();
+        let invalid_id = uuid::Uuid::new_v4().to_string();
+        write_header(
+            &profile,
+            &invalid_id,
+            serde_json::json!({"id": invalid_id, "name": "Bad cron", "instructions": "x",
+                "projectId": null, "schedule": null,
+                "routines": [{"name": "Fast", "trigger": {"kind": "cron", "expr": "* * * * *", "tz": "UTC"}}]}),
+            "Runs too often.",
+        );
+        let listing = list(&profile).unwrap();
+        assert_eq!(listing.agents.len(), 1);
+        assert_eq!(listing.agents[0].id, good.id);
+        assert_eq!(listing.errors.len(), 3, "{:?}", listing.errors);
+        assert!(listing
+            .errors
+            .iter()
+            .any(|error| error.folder == "Broken"
+                && error.error == "The agent settings are invalid."));
+        assert!(listing
+            .errors
+            .iter()
+            .any(|error| error.error.contains("five minutes")));
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn run_history_keeps_the_last_200_runs() {
+        let (root_dir, profile) = profile();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "Busy".into(),
+                instructions: "Work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..(MAX_STATE_HISTORY + 20) {
+            with_state(&profile, |state| {
+                let run = state.runs.entry(agent.id.clone()).or_default();
+                run.run_id = Some(format!("run-{index:04}"));
+                run.status = "completed".into();
+                Ok(())
+            })
+            .unwrap();
+        }
+        let history = &state(&profile).unwrap().history[&agent.id];
+        assert_eq!(history.len(), MAX_STATE_HISTORY);
+        assert_eq!(history[0].run_id.as_deref(), Some("run-0020"));
+        assert_eq!(
+            history.last().unwrap().run_id.as_deref(),
+            Some(format!("run-{:04}", MAX_STATE_HISTORY + 19).as_str())
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn delete_removes_agent_memory_only_when_confirmed() {
+        let (root_dir, profile) = profile();
+        let make = |name: &str| {
+            let agent = save(
+                &profile,
+                Agent {
+                    name: name.into(),
+                    instructions: "Work.".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let (_, private) = memory_paths(&profile, &agent.id).unwrap();
+            fs::create_dir_all(&private).unwrap();
+            fs::write(private.join("fact.md"), "kept").unwrap();
+            (agent, private)
+        };
+        let (kept, kept_memory) = make("Kept");
+        delete(&profile, &kept.id).unwrap();
+        assert!(kept_memory.join("fact.md").exists());
+        let (removed, removed_memory) = make("Removed");
+        let queued = run_now(&profile, &removed.id, None, None).unwrap();
+        assert!(delete_agent(&profile, &removed.id, true)
+            .unwrap_err()
+            .contains("Finish or cancel"));
+        let store = RunStore::open(&profile).unwrap();
+        let mut cancelled = store.get(&queued.id).unwrap().unwrap();
+        cancelled.status = RunStatus::Cancelled;
+        store.save(&mut cancelled).unwrap();
+        delete_agent(&profile, &removed.id, true).unwrap();
+        assert!(!removed_memory.exists());
+        assert!(store.latest(&removed.id).unwrap().is_none());
+        assert!(list(&profile).unwrap().agents.is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn run_now_is_labeled_manual_and_refuses_a_second_pending_run() {
+        let (root_dir, profile) = profile();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "Runner".into(),
+                instructions: "Work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let run = run_now(&profile, &agent.id, Some("Check now."), Some("client")).unwrap();
+        assert_eq!(run.trigger.kind, TriggerKind::Manual);
+        assert_eq!(run.trigger.source.as_deref(), Some("client"));
+        assert_eq!(run.prompt, "Check now.");
+        assert!(queue_run(&profile, &agent.id).is_err());
+        let mirrored = &state(&profile).unwrap().runs[&agent.id];
+        assert_eq!(mirrored.trigger.as_deref(), Some("manual"));
+        assert_eq!(mirrored.status, "queued");
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn agent_operations_answer_the_wire_shapes() {
+        let (root_dir, profile) = profile();
+        let saved = operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": {"name": "Ops", "instructions": "Work.",
+                "permissions": {"mode": "ask"}}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        let listing = operation(&profile, "agent.list", serde_json::json!({})).unwrap();
+        assert_eq!(listing["agents"][0]["id"], id.as_str());
+        assert!(listing["errors"].as_array().unwrap().is_empty());
+        let routine = operation(
+            &profile,
+            "routine.save",
+            serde_json::json!({"agent_id": id, "routine": {"name": "Morning",
+                "trigger": {"kind": "cron", "expr": "0 9 * * *", "tz": "UTC"}}}),
+        )
+        .unwrap();
+        let routine_id = routine["routine"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            operation(
+                &profile,
+                "routine.list",
+                serde_json::json!({"agent_id": id})
+            )
+            .unwrap()["routines"][0]["id"],
+            routine_id.as_str()
+        );
+        let run = operation(&profile, "agent.run_now", serde_json::json!({"id": id})).unwrap();
+        assert_eq!(run["run"]["trigger"]["kind"], "manual");
+        assert_eq!(run["run"]["status"], "queued");
+        let page = operation(
+            &profile,
+            "agent.runs",
+            serde_json::json!({"agent_id": id, "limit": 10}),
+        )
+        .unwrap();
+        assert_eq!(page["runs"][0]["id"], run["run"]["id"]);
+        assert_eq!(page["next_cursor"], serde_json::json!(null));
+        let read = operation(&profile, "agent.read", serde_json::json!({"id": id})).unwrap();
+        assert_eq!(read["agent"]["routines"][0]["name"], "Morning");
+        operation(
+            &profile,
+            "routine.delete",
+            serde_json::json!({"agent_id": id, "routine_id": routine_id}),
+        )
+        .unwrap();
+        assert!(operation(
+            &profile,
+            "agent.read",
+            serde_json::json!({"id": id, "extra": 1})
+        )
+        .unwrap_err()
+        .contains("invalid"));
+        assert!(operation(&profile, "agent.forget", serde_json::json!({})).is_err());
+        fs::remove_dir_all(root_dir).unwrap();
     }
 }

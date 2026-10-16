@@ -1196,3 +1196,70 @@ fn every_update_state_and_capability_has_its_wire_name() {
         );
     }
 }
+
+#[test]
+fn agent_operations_and_their_event_have_canonical_fixtures() {
+    for (operation, name) in [
+        (Operation::AgentList, "agent.list"),
+        (Operation::AgentRead, "agent.read"),
+        (Operation::AgentSave, "agent.save"),
+        (Operation::AgentDelete, "agent.delete"),
+        (Operation::AgentRunNow, "agent.run_now"),
+        (Operation::AgentRuns, "agent.runs"),
+        (Operation::RoutineList, "routine.list"),
+        (Operation::RoutineSave, "routine.save"),
+        (Operation::RoutineDelete, "routine.delete"),
+    ] {
+        assert_eq!(operation.as_str(), name);
+        assert!(operation.is_agent_operation());
+        assert!(!operation.requires_idempotency_key());
+        let file = format!("request-{}.json", name.replace(['.', '_'], "-"));
+        let Envelope::Request(request) = serde_json::from_value(canonical_fixture(&file)).unwrap()
+        else {
+            panic!("expected request fixture");
+        };
+        assert_eq!(request.operation, operation);
+        assert!(request.body.is_object());
+    }
+    assert!(!Operation::RunSubmit.is_agent_operation());
+    let Envelope::Event(event) =
+        serde_json::from_value(canonical_fixture("event-agent-run-updated.json")).unwrap()
+    else {
+        panic!("expected event fixture");
+    };
+    assert_eq!(event.event, EventName::AgentRunUpdated);
+    assert!(event.run_id.is_none() && event.run_seq.is_none());
+    assert_eq!(event.body["status"], "waiting_input");
+    let Envelope::Response(response) =
+        serde_json::from_value(canonical_fixture("response-agent-list.json")).unwrap()
+    else {
+        panic!("expected response fixture");
+    };
+    assert!(response.body["agents"].is_array());
+    assert!(response.body["errors"].is_array());
+}
+
+#[test]
+fn admin_access_holds_agent_access() {
+    let scopes = |names: &[&str]| -> std::collections::BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    };
+    assert!(REMOTE_SCOPES.contains(&SCOPE_AGENTS_MANAGE));
+    assert!(!muniment_attach::default_pairing_scopes().contains(SCOPE_AGENTS_MANAGE));
+    assert!(scopes_grant(
+        &scopes(&[SCOPE_AGENTS_MANAGE]),
+        SCOPE_AGENTS_MANAGE
+    ));
+    assert!(scopes_grant(
+        &scopes(&[SCOPE_RUNTIME_ADMIN]),
+        SCOPE_AGENTS_MANAGE
+    ));
+    assert!(!scopes_grant(
+        &scopes(&[SCOPE_RUN_WRITE]),
+        SCOPE_AGENTS_MANAGE
+    ));
+    assert!(!scopes_grant(
+        &scopes(&[SCOPE_AGENTS_MANAGE]),
+        SCOPE_RUNTIME_ADMIN
+    ));
+}

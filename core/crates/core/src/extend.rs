@@ -375,15 +375,29 @@ fn take_turn(root: &Path, thread: &str) -> Result<Value, String> {
     Ok(state)
 }
 
+/// Loads one turn's capability snapshot into the launch. `agent_skills`
+/// are the skill and plugin ids the thread's agent selected; each turn picks
+/// them as an automatic pick does, so a plugin adds its skills and never its
+/// code.
 pub fn prepare(
     root: &Path,
     thread: &str,
+    agent_skills: &[String],
     config: &mut crate::sidecar::SidecarConfig,
     prompt: &mut String,
 ) -> Result<(), String> {
-    let state = take_turn(root, thread)?;
+    let mut state = take_turn(root, thread)?;
     if state["items"].as_array().is_none_or(Vec::is_empty) {
         return Ok(());
+    }
+    if !agent_skills.is_empty() {
+        let turn = &mut state["turns"][thread];
+        let mut picked = turn["automaticSelected"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        picked.extend(agent_skills.iter().map(|id| json!(id)));
+        turn["automaticSelected"] = Value::Array(picked);
     }
     // Pi reads the agent directory's `mcp.json` itself, so the turn adds only
     // the servers picked for it.
@@ -728,7 +742,7 @@ mod tests {
         )
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &mut config, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], &mut config, &mut String::new()).unwrap();
         let generated: Value =
             serde_json::from_slice(&fs::read(&config.env["MUNIMENT_EXTEND_MCP"]).unwrap()).unwrap();
         // Pi reads `record` from the agent directory, so the turn adds only `m`.
@@ -745,8 +759,55 @@ mod tests {
 
         // The selection is spent, so the next turn adds nothing.
         let mut next = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &mut next, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], &mut next, &mut String::new()).unwrap();
         assert!(next.args.is_empty() && !next.env.contains_key("MUNIMENT_EXTEND_MCP"));
+    }
+
+    #[test]
+    fn an_agent_picks_its_installed_skills_on_every_turn() {
+        let root = Extracted(
+            std::env::temp_dir().join(format!("extend-agent-skills-{}", uuid::Uuid::new_v4())),
+        );
+        let base = root.0.join("extensions/packages/kit");
+        fs::create_dir_all(base.join("review")).unwrap();
+        fs::create_dir_all(base.join("commands")).unwrap();
+        fs::write(base.join("review/SKILL.md"), "Review").unwrap();
+        fs::write(base.join("commands/ship.md"), "Ship it").unwrap();
+        let inventory = json!({"items": [
+            {"id": "k", "kind": "skill", "base": base, "skills": [
+                {"name": "review", "path": "review/SKILL.md"},
+                {"name": "ship", "path": "commands/ship.md"}
+            ]},
+            {"id": "p", "kind": "plugin", "base": base, "skills": [], "extensions": ["index.ts"]},
+            {"id": "off", "kind": "skill", "enabled": false, "base": base,
+                "skills": [{"name": "hidden", "path": "commands/ship.md"}]}
+        ], "turns": {}});
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let mut config = crate::sidecar::SidecarConfig::new("unused");
+            let mut prompt = String::new();
+            prepare(
+                &root.0,
+                "agent-thread",
+                &[
+                    "k:commands/ship.md".into(),
+                    "p".into(),
+                    "off".into(),
+                    "missing".into(),
+                ],
+                &mut config,
+                &mut prompt,
+            )
+            .unwrap();
+            assert!(prompt.contains("picked the skill \"ship\""));
+            assert!(!prompt.contains("\"review\"") && !prompt.contains("hidden"));
+            // A plugin the agent selects adds no code.
+            assert!(!config.args.iter().any(|arg| arg.ends_with("index.ts")));
+        }
     }
 
     #[test]
@@ -778,7 +839,7 @@ mod tests {
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
         let mut prompt = String::new();
-        prepare(&root.0, "chat", &mut config, &mut prompt).unwrap();
+        prepare(&root.0, "chat", &[], &mut config, &mut prompt).unwrap();
         let loaded: Vec<_> = config
             .args
             .chunks(2)

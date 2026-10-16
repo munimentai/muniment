@@ -14,7 +14,7 @@ issues or pull requests.
 | `muniment-core` | `crates/core` | Local runtime logic and storage contracts: the run journal, Pi sidecar supervision and install, memory, projects, attach server, on-device speech and voice. |
 | `muniment-models` | `crates/models` | Provider and model knowledge as data: the provider registry, local server kinds and their scan, provider and endpoint model discovery, context windows, the model catalog, and Pi's `models.json`. |
 | `muniment-router` | `crates/router` | The multi-account model router: account pools, routing policy, the loopback OpenAI-compatible server, the `muniment-router` server binary (`server` feature) and the `muniment-router-shadow` binary. |
-| `muniment-runtime-core` | `crates/runtime` | The platform-neutral runtime: attach serving and its accept loops, runs, retention and agent schedules, the company record and reader service, the model service that runs the model router and the web search server and writes provider settings, web search settings and credentials, and `run_runtime`, the entry a host without OS service registration runs. The host supplies cloud accounts, chat grants, credential storage, provider OAuth clients, the sign-in page and its executables through `RuntimeHost`. A host with a cloud account and a paired phone also gets the session relay publisher. The default `keyring` feature adds the keychain credential store and keychain prompt history. |
+| `muniment-runtime-core` | `crates/runtime` | The platform-neutral runtime: attach serving and its accept loops, parallel runs, retention, the agent run queue and its cron routines, the company record and reader service, the model service that runs the model router and the web search server and writes provider settings, web search settings and credentials, and `run_runtime`, the entry a host without OS service registration runs. The host supplies cloud accounts, chat grants, credential storage, provider OAuth clients, the sign-in page and its executables through `RuntimeHost`. A host with a cloud account and a paired phone also gets the session relay publisher. The default `keyring` feature adds the keychain credential store and keychain prompt history. |
 | `muniment-server` | `crates/server` | The headless runtime host: the `muniment-server` binary runs the runtime with no cloud account, no keychain and no OS service registration, for a container or a server. |
 | `muniment-pins` | `crates/pins` | Typed constants compiled from `pins/pins.toml`, plus the embedded package lockfile. |
 | `muniment-attach` | `crates/attach` | The reader and companion attach protocol and its client, with the pinned TLS transport, pairing links and device credentials of the remote route. |
@@ -124,10 +124,10 @@ listener is off until the host binds it.
   the route: TLS 1.3 only, a connection cap, handshake and first-frame
   deadlines, a 16 KiB first frame, and a growing hold on a peer address after
   repeated refusals.
-- Scopes are `thread.read`, `run.write`, `runtime.update` and
-  `runtime.admin`. A link grants `thread.read`, `run.write` and
-  `runtime.update` unless its creator names others, and a client can ask for
-  fewer, never more. Only the local owner and `runtime.admin` devices create
+- Scopes are `thread.read`, `run.write`, `runtime.update`,
+  `runtime.admin` and `agents.manage`, which `runtime.admin` holds too. A link
+  grants `thread.read`, `run.write` and `runtime.update` unless its creator
+  names others, and a client can ask for fewer, never more. Only the local owner and `runtime.admin` devices create
   links, list devices and revoke other devices, and a device delegates only
   scopes it holds. Any device may revoke itself. `runtime.update` or `runtime.admin` sends `runtime.update`.
 - `remote_rule` names what a remote client may send: the desktop client
@@ -227,6 +227,93 @@ the request as `invalid_request`, and
 `DesktopClient::subscribe_chat_events_with_update_status` then subscribes
 without it. A run the runtime resumed on its own carries `resumeNotice` in
 its chat events and thread history.
+
+## Agents
+
+An agent is `<Home>/agents/<folder>/agent.md`: a JSON header in a fence and
+the instructions below it. `muniment_core::agents` reads and writes it. The
+header's v2 fields are all optional, so a v1 file loads unchanged:
+
+- `model`: `{"provider", "id", "thinking"?}`, a reference to a model the
+  runtime already serves. A local run in the agent's thread starts with it in
+  place of the default model, and at its thinking level unless the run names
+  one. A cloud grant names its own model.
+- `tools`: `{"disabled": [tool names]}`, the Pi tool names, MCP tools
+  included, that the agent's runs exclude.
+- `skills`: installed skill and plugin ids from the extension inventory,
+  picked on every turn of the agent's thread as an automatic pick is.
+- `permissions`: `{"mode": "ask"|"auto"|"strict", "always_allow":
+  [request], "ask_first": [request]}`. A request is a thread permission
+  policy's `{"request_kind", "resource"}`: an exact absolute path and
+  operation, an exact command and working directory, or an exact tool name
+  and input. They hold in every thread of the agent as pre-decided allow and
+  ask policies beside the thread's own journaled policies. An ask policy
+  outranks every allow. A gate extension asks the runtime before each tool
+  call; `auto` runs what no policy settles, `ask` runs reads and asks about
+  the rest, `strict` asks about everything, and a run a webhook, an MCP poll
+  or another agent started asks before every write in `auto` too. Answering
+  "Allow for this thread" journals an allow policy in the thread.
+- `primary_runtime`, the runtime id that runs the agent's routines;
+  `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
+  `paused_reason`, which stops the routines while set.
+
+A v1 `schedule` reads as the cron routine `schedule`, and a client that
+edits `schedule` edits that routine. A folder whose `agent.md` does not load
+is left out of `list` and named in its `errors`. Each agent's state history
+keeps its last 200 runs. `delete_agent` removes the agent's private memory
+only when the caller confirms it.
+
+A routine is `{"id", "name", "enabled", "trigger", "prompt",
+"created_from": "user"|"instructions"|"agent", "last_fired_at",
+"last_result"}`. Its trigger is `{"kind": "cron", "expr", "tz"}`, a
+five-field cron expression in an IANA time zone that runs at most every five
+minutes; `{"kind": "webhook", "hook_id", "preset": "github"|"forgejo"|"generic"}`;
+or `{"kind": "mcp", "server", "tool", "args", "every": {"expr", "tz"},
+"condition"}`, where a condition is `{"all": [...]}`, `{"any": [...]}` or
+`{"path": "/json/pointer", "op", "value"?}`. The runtime fires cron routines;
+webhook and MCP triggers are stored and checked here.
+
+### Run queue
+
+Every run an agent makes without a user message is a `Run` in
+`<profile>/agent-runs.sqlite3` before it starts, under the id its journal run
+takes: `{"id", "agent_id", "thread_id", "trigger": {"kind", "routine_id"?,
+"source"?}, "status", "attempt", "lease_owner", "lease_expires_at", "hop",
+"origin_run_id", "created_at", "updated_at", "result_summary", "silent"}`.
+`status` is `queued`, `leased`, `running`, `waiting_input`, `completed`,
+`failed`, `cancelled` or `interrupted`, and a trigger kind is `manual`,
+`cron`, `webhook`, `mcp` or `agent_message`. The journal stays the record of
+a started run: every pass of the runtime's schedule loop reads each run's
+outcome from it, renews the leases of the runs it drives, queues again a run
+whose lease expired before it started (three attempts at most) and marks
+`interrupted` one that started and lost its driver. A run that waits for an
+answer gets `reminded_at` after four hours and is cancelled after 24. A
+routine run whose reply is exactly `NO_RESPONSE` completes with
+`"silent": true` and leaves no entry in its thread's history.
+
+The runtime drives up to `MUNIMENT_MAX_PARALLEL_RUNS` runs at once (3 by
+default, at most 16), chat replies included, each with its own Pi process and
+at most one in each thread. Queued agent runs start oldest first in their
+agent's primary thread when a place and the thread are free. An update drain
+records every live run, and the next start resumes each of them.
+
+### Agent operations
+
+Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
+"latest_runs", "errors"}`), `agent.read` (`{"id"}` → `{"agent",
+"primary_thread_id"}`), `agent.save` (`{"agent"}` → `{"agent"}`),
+`agent.delete` (`{"id", "remove_memory"?}`), `agent.run_now` (`{"id",
+"prompt"?}` → `{"run"}`), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
+→ `{"runs", "next_cursor"}`, newest first), `routine.list` (`{"agent_id"}`),
+`routine.save` (`{"agent_id", "routine"}` → `{"routine"}`) and
+`routine.delete` (`{"agent_id", "routine_id"}`). Remotely the reads take
+`thread.read`, `agent.run_now` takes `run.write`, and the changes take
+`agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
+also receives `agent.run_updated` events whose body is the changed `Run`. A
+runtime without the queue refuses the request, and
+`DesktopClient::subscribe_chat_events_with_agent_runs` then subscribes
+without it. The model reaches the same agents through the `agent-*` and
+`routine-list`, `routine-save` and `routine-delete` tools.
 
 ## Phone relay
 

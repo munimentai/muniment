@@ -508,12 +508,43 @@ pub trait RunAttachBoundaries {
         gate_id: &str,
         answer: ChatPermissionAnswer,
     ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError>;
+    /// Runs one agent operation and answers its body.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn agent_operation(
+        &self,
+        _operation: crate::attach::Operation,
+        _body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+    /// Subscribes to agent run changes, each a run's JSON.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn subscribe_agent_runs(
+        &self,
+    ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
 }
 
 pub trait RunStartBoundaries {
     fn mark_active_run(&self) -> RuntimeActivityGuard;
 
     fn active_run_exists(&self) -> bool;
+    /// Whether a run in `thread`, or in a new thread, may start now. A host
+    /// that runs one reply at a time refuses while any run is active.
+    fn admit_run(&self, _thread: Option<&str>) -> Result<(), RunStartError> {
+        if self.active_run_exists() {
+            return Err(RunStartError::InvalidRequest(
+                "A reply is already in progress.".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Places an installed run in its thread, which another live run in the
+    /// thread refuses.
+    fn bind_run_thread(&self, _run_id: &str, _thread: &str) -> Result<(), RunStartError> {
+        Ok(())
+    }
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError>;
     fn configure_run(
         &self,
@@ -623,11 +654,7 @@ pub fn prepare_desktop_run(
             "Enter a message before sending.".into(),
         ));
     }
-    if boundaries.active_run_exists() {
-        return Err(RunStartError::InvalidRequest(
-            "A reply is already in progress.".into(),
-        ));
-    }
+    boundaries.admit_run(request.thread_id.as_deref())?;
 
     let tokens = boundaries.fresh_tokens()?;
     let run_id = new_run_id();
@@ -649,6 +676,12 @@ pub fn prepare_desktop_run(
         boundaries.clear_active_run(&run_id);
         return Err(error);
     }
+    if let Some(thread) = request.thread_id.as_deref() {
+        if let Err(error) = boundaries.bind_run_thread(&run_id, thread) {
+            boundaries.clear_active_run(&run_id);
+            return Err(error);
+        }
+    }
     let prepared = match boundaries.prepare_run(
         &run_id,
         &prompt,
@@ -664,7 +697,11 @@ pub fn prepare_desktop_run(
             return Err(error);
         }
     };
-    let thread_id = match boundaries.run_thread_id(&run_id) {
+    let thread_id = match boundaries.run_thread_id(&run_id).and_then(|thread_id| {
+        boundaries
+            .bind_run_thread(&run_id, &thread_id)
+            .map(|()| thread_id)
+    }) {
         Ok(thread_id) => thread_id,
         Err(error) => {
             let failed_launch = RunStartLaunch {

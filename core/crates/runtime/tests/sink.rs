@@ -210,7 +210,7 @@ fn drives_pi_launch_config_over_the_profile_directory() {
     let pi_install = profile.profile.join("pi-install");
     fs::create_dir(&pi_install).unwrap();
     let memory_runtime = memory_runtime(&profile);
-    let extension = memory_runtime.agent_extension_path();
+    let extension = memory_runtime.agent_extension_path("thread-1");
     fs::create_dir_all(extension.parent().unwrap()).unwrap();
     fs::write(&extension, "export default function () {}\n").unwrap();
     let sink = RuntimeChatEventSink::with_subscriber(

@@ -1,4 +1,4 @@
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::serde_json::{self, Value};
@@ -27,9 +27,9 @@ fn a_prompt_sets_its_thinking_level_before_pi_hears_it_and_only_when_it_changes(
     std::env::set_var("PI_RESUME_STUB_REASONING", "1");
     std::env::set_var("PI_RESUME_STUB_REQUESTS", &requests);
     let storage = open_profile_storage(&temporary.profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let session_thread = SessionThread::default();
     let mut thread_id = None;
 
@@ -41,7 +41,7 @@ fn a_prompt_sets_its_thinking_level_before_pi_hears_it_and_only_when_it_changes(
             &RuntimeHost::default(),
             &temporary.profile,
             Arc::clone(&storage),
-            Arc::clone(&runtime),
+            runtime.clone(),
             &activity,
             &temporary.config,
             format!("018f0000-0000-7000-8000-{index:012}"),
@@ -53,7 +53,7 @@ fn a_prompt_sets_its_thinking_level_before_pi_hears_it_and_only_when_it_changes(
             None,
             Vec::new(),
             local_grant(),
-            Arc::clone(&active),
+            active.clone(),
             RuntimeChatEventTarget::Subscriber(Some(sender)),
             Some(descriptor),
         )

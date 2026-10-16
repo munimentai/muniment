@@ -1788,6 +1788,22 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
     ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
         self.boundaries.subscribe_model_events()
     }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn agent_operation(
+        &mut self,
+        operation: super::Operation,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        self.boundaries.agent_operation(operation, body)
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn subscribe_agent_runs(
+        &mut self,
+    ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
+        self.boundaries.subscribe_agent_runs()
+    }
 }
 
 fn attach_provenance(

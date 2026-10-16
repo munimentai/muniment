@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use crate::active_run::RunRegistry;
 use crate::attachment::{prepare_pi_images, AttachmentDeliveryError};
 use crate::chat_launch::ChatGrant;
 use crate::engine::{AgentEngine, ContextUsage, OpenError, PiOpen, PiRpcEngine};
@@ -12,7 +13,6 @@ use crate::journal::reducer::ChatProjector;
 use crate::journal::{pi_translation::model_stream_delta_payload, split_model_stream_delta};
 use crate::pi_launch::{pi_launch_config, PiLaunchBoundaries, PiLaunchError};
 use crate::run_events::{append_emit, ChatEventSink, SharedStorage};
-use crate::run_start::ActiveRun;
 use crate::sidecar::pi_chat::{PiChatEvent, PiImageContent, PromptCommand};
 use crate::sidecar::{PiRpcTransport, PiRpcWiring, PiSessionLocator, SidecarSupervisor};
 
@@ -77,6 +77,77 @@ pub struct PiRuntime {
     pub wiring: PiRpcWiring,
 }
 
+/// The engine processes of a runtime, one slot per thread. A run takes its
+/// thread's slot for its whole length, so runs in different threads drive
+/// different processes at once. After a run, its process idles in the slot
+/// for the thread's next read or run. The least recently used idle slots go
+/// once more than `idle` are kept.
+/// One thread's process slot.
+pub type PiProcessSlot = Arc<Mutex<Option<PiRuntime>>>;
+
+#[derive(Clone)]
+pub struct PiProcesses {
+    slots: Arc<Mutex<Vec<(String, PiProcessSlot)>>>,
+    idle: usize,
+}
+
+impl Default for PiProcesses {
+    fn default() -> Self {
+        Self::with_idle_limit(crate::agent_runs::max_parallel_runs() + 1)
+    }
+}
+
+impl PiProcesses {
+    pub fn with_idle_limit(idle: usize) -> Self {
+        Self {
+            slots: Arc::new(Mutex::new(Vec::new())),
+            idle: idle.max(1),
+        }
+    }
+
+    /// The slot of one thread's process.
+    pub fn slot(&self, thread: &str) -> PiProcessSlot {
+        let mut slots = self
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = match slots.iter().position(|(held, _)| held == thread) {
+            Some(index) => slots.remove(index).1,
+            None => Arc::new(Mutex::new(None)),
+        };
+        slots.push((thread.to_owned(), Arc::clone(&slot)));
+        let mut index = 0;
+        while slots.len() > self.idle && index + 1 < slots.len() {
+            // A slot a run holds stays; its process ends with the run's next start.
+            let idle = slots[index]
+                .1
+                .try_lock()
+                .map(|mut process| {
+                    *process = None;
+                })
+                .is_ok();
+            if idle {
+                slots.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        slot
+    }
+
+    /// How many thread slots are kept now.
+    pub fn len(&self) -> usize {
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Opens a thread's saved conversation for a read, such as its context
 /// usage. The launch is the one a reply in that thread starts with.
 pub fn open_thread_conversation(
@@ -110,17 +181,16 @@ pub fn open_thread_conversation(
 }
 
 /// Reads a thread's context usage from the process that holds its saved
-/// conversation: the active run's when the run is in this thread, the idle
-/// process the last run left when it holds this conversation, or a process
-/// this read starts. A started process stays in the runtime's slot for the
-/// next read, unless a run in another thread holds the slot. A thread with no
-/// saved conversation answers `None`.
+/// conversation: the active run's when a run is in this thread, the idle
+/// process the thread's last run left when it holds this conversation, or a
+/// process this read starts. A started process stays in the thread's slot
+/// for the next read. A thread with no saved conversation answers `None`.
 #[allow(clippy::too_many_arguments)]
 pub fn thread_context_usage(
     app: &impl PiLaunchBoundaries,
     storage: &SharedStorage,
-    runtime: &Mutex<Option<PiRuntime>>,
-    active: &Mutex<Option<ActiveRun>>,
+    processes: &PiProcesses,
+    active: &RunRegistry,
     thread_id: &str,
     subject: Option<&str>,
     grant: impl FnOnce() -> Result<ChatGrant, String>,
@@ -129,29 +199,17 @@ pub fn thread_context_usage(
         .pi_session_root()
         .map_err(|_| "Conversation history is unavailable.".to_string())?;
     let engine = PiRpcEngine::new(Some(session_root.clone()));
-    let active_transport = {
-        let active = active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        active.as_ref().and_then(|run| {
-            let in_thread = storage
-                .lock()
-                .ok()?
-                .journal
-                .run_thread_id(&run.id)
-                .ok()
-                .flatten()
-                .is_some_and(|thread| thread == thread_id);
-            in_thread
-                .then(|| {
-                    run.transport
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clone()
-                })
-                .flatten()
-        })
-    };
+    let active_transport = active.thread_run(thread_id).and_then(|run_id| {
+        active
+            .with_run(&run_id, None, |run| {
+                run.transport
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+            .ok()
+            .flatten()
+    });
     if let Some(transport) = active_transport {
         return engine.context_usage(&transport).map(Some);
     }
@@ -163,7 +221,8 @@ pub fn thread_context_usage(
             .session_locator(&session_root, RPC_TIMEOUT.min(Duration::from_secs(5)))
             .is_ok_and(|held| held == locator)
     };
-    match runtime.try_lock() {
+    let runtime = processes.slot(thread_id);
+    let usage = match runtime.try_lock() {
         Ok(mut slot) => {
             if let Some(transport) = slot
                 .as_ref()
@@ -183,7 +242,8 @@ pub fn thread_context_usage(
             engine.stop(&mut process);
             usage
         }
-    }
+    };
+    usage
 }
 
 pub struct ResumeAttempt {
@@ -410,6 +470,22 @@ mod tests {
         STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
             .unwrap()
+    }
+
+    #[test]
+    fn each_thread_has_its_own_process_slot_and_idle_slots_are_bounded() {
+        let processes = PiProcesses::with_idle_limit(2);
+        let first = processes.slot("thread-a");
+        assert!(Arc::ptr_eq(&first, &processes.slot("thread-a")));
+        assert!(!Arc::ptr_eq(&first, &processes.slot("thread-b")));
+        // A slot a run holds is never evicted; the oldest idle one goes.
+        let held = first.lock().unwrap();
+        processes.slot("thread-c");
+        assert_eq!(processes.len(), 2);
+        drop(held);
+        assert!(Arc::ptr_eq(&first, &processes.slot("thread-a")));
+        processes.slot("thread-d");
+        assert_eq!(processes.len(), 2);
     }
 
     #[test]

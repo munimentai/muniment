@@ -23,9 +23,9 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
     let temporary = TemporaryProfile::new("refused-prompt-store", true);
     let descriptor = stage_pi_stub(&temporary.root);
     let storage = open_profile_storage(&temporary.profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let session_thread = SessionThread::default();
     let mut thread_id = None;
     let captured = temporary.root.join("captured-prompts");
@@ -45,7 +45,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
             &RuntimeHost::default(),
             &temporary.profile,
             Arc::clone(&storage),
-            Arc::clone(&runtime),
+            runtime.clone(),
             &activity,
             &temporary.config,
             run_id.clone(),
@@ -57,7 +57,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
             None,
             Vec::new(),
             local_grant(),
-            Arc::clone(&active),
+            active.clone(),
             RuntimeChatEventTarget::Subscriber(Some(sender)),
             Some(descriptor),
         )
@@ -67,7 +67,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
         }
         thread_id = Some(accepted.thread_id);
         assert_eq!(accepted.committed_seq, 1);
-        assert_eq!(active.lock().unwrap().as_ref().unwrap().id, run_id);
+        assert_eq!(active.identities()[0].run_id, run_id);
         let journal_events = storage.lock().unwrap().journal.events(&run_id).unwrap();
         assert_eq!(journal_events[0].event_type, "run.started");
         assert_eq!(journal_events.len(), 1);
@@ -95,7 +95,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
             .filter(|event| event.delta.is_none())
             .all(|event| event.prompt_storage_notice.as_deref() == Some(&notice)));
         assert_eq!(delivered.last().unwrap().phase, "complete");
-        assert!(active.lock().unwrap().is_none());
+        assert!(active.is_empty());
         assert!(!activity.snapshot().active_run);
         assert!(std::fs::read_to_string(&captured)
             .unwrap()
@@ -107,7 +107,7 @@ fn refused_keyring_starts_local_runs_and_preserves_the_notice_after_reopen() {
     let page = thread_page(
         &temporary.profile,
         Arc::clone(&reopened),
-        &std::sync::Mutex::new(None),
+        &muniment_core::active_run::RunRegistry::default(),
         None,
         thread_id.unwrap(),
         10,
@@ -211,7 +211,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
     );
     let temporary = TemporaryProfile::new("refused-prompt-attachment", true);
     let storage = open_profile_storage(&temporary.profile).unwrap();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let activity = RuntimeActivityRegistry::new();
     let path = temporary.root.join("attachment.txt");
     std::fs::write(&path, b"content").unwrap();
@@ -220,7 +220,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
         &RuntimeHost::default(),
         &temporary.profile,
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        muniment_core::pi_execution::PiProcesses::default(),
         &activity,
         &temporary.config,
         run_id.into(),
@@ -236,7 +236,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
             byte_length: 100,
         }],
         local_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         None,
     );
@@ -272,7 +272,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
     let page = thread_page(
         &temporary.profile,
         Arc::clone(&reopened),
-        &std::sync::Mutex::new(None),
+        &muniment_core::active_run::RunRegistry::default(),
         None,
         thread_id,
         10,
@@ -290,7 +290,7 @@ fn an_attachment_failure_after_a_keyring_failure_keeps_both_causes() {
     assert_eq!(retention.deleted_runs.len(), 1);
     assert_eq!(retention.deleted_runs[0].run_id, run_id);
     assert!(!retention.deleted_runs[0].prompt_stored);
-    assert!(active.lock().unwrap().is_none());
+    assert!(active.is_empty());
     assert!(!activity.snapshot().active_run);
 }
 
@@ -306,14 +306,14 @@ fn an_invalid_thread_does_not_touch_the_prompt_store() {
     );
     let temporary = TemporaryProfile::new("refused-prompt-invalid-thread", true);
     let storage = open_profile_storage(&temporary.profile).unwrap();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let activity = RuntimeActivityRegistry::new();
     let run_id = "018f0000-0000-7000-8000-000000000099";
     let result = accept_prompt(
         &RuntimeHost::default(),
         &temporary.profile,
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        muniment_core::pi_execution::PiProcesses::default(),
         &activity,
         &temporary.config,
         run_id.into(),
@@ -325,7 +325,7 @@ fn an_invalid_thread_does_not_touch_the_prompt_store() {
         None,
         Vec::new(),
         local_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         None,
     );
@@ -338,6 +338,6 @@ fn an_invalid_thread_does_not_touch_the_prompt_store() {
         .events(run_id)
         .unwrap()
         .is_empty());
-    assert!(active.lock().unwrap().is_none());
+    assert!(active.is_empty());
     assert!(!activity.snapshot().active_run);
 }

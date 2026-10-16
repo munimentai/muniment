@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use muniment_core::active_run::{ActiveIdentity, RunRegistry};
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::attach::ApprovalCoordinator;
 use muniment_core::attach::{
@@ -12,8 +13,7 @@ use muniment_core::attach::{
     RemoteRouteOptions, RemoteServe, RuntimeActivityRegistry, SignedWorkspaceApproval,
 };
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
-use muniment_core::pi_execution::PiRuntime;
-use muniment_core::run_start::ActiveRun;
+use muniment_core::pi_execution::PiProcesses;
 use muniment_core::session_thread::SessionThread;
 
 use crate::host::RuntimeHost;
@@ -28,8 +28,10 @@ pub struct RuntimeAttachState {
     profile_directory: PathBuf,
     config_directory: PathBuf,
     storage: muniment_core::run_events::SharedStorage,
-    active: Arc<Mutex<Option<ActiveRun>>>,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    active: RunRegistry,
+    runtime: PiProcesses,
+    /// This process's lease owner name in the agent run queue.
+    instance_id: String,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
     drain_state: DrainState,
@@ -89,8 +91,9 @@ impl RuntimeAttachState {
             profile_directory,
             config_directory,
             storage,
-            active: Arc::new(Mutex::new(None)),
-            runtime: Arc::new(Mutex::new(None)),
+            active: RunRegistry::default(),
+            runtime: PiProcesses::default(),
+            instance_id: uuid::Uuid::now_v7().to_string(),
             runtime_activity,
             drain_state,
             host,
@@ -111,10 +114,10 @@ impl RuntimeAttachState {
     pub fn boundaries(&self) -> RuntimeAttachBoundaries {
         RuntimeAttachBoundaries::new_with_sign_in(
             Arc::clone(&self.storage),
-            Arc::clone(&self.active),
+            self.active.clone(),
             self.profile_directory.clone(),
             self.config_directory.clone(),
-            Arc::clone(&self.runtime),
+            self.runtime.clone(),
             Arc::clone(&self.memory_runtime),
             self.runtime_activity.clone(),
             self.host.clone(),
@@ -282,7 +285,7 @@ impl RuntimeAttachState {
             &self.host,
             self.runtime_activity.clone(),
             self.profile_directory.clone(),
-            Arc::clone(&self.active),
+            self.active.clone(),
             self.chat_events
                 .clone()
                 .with_config_directory(self.config_directory.clone()),
@@ -299,13 +302,19 @@ impl RuntimeAttachState {
         self.drain_state.clone()
     }
 
-    /// The id and workspace of the run in progress, if any.
-    pub(crate) fn active_run_identity(&self) -> Option<(String, String)> {
-        self.active
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|run| (run.id.clone(), run.workspace.clone()))
+    /// The runs in progress, in the order they started.
+    pub(crate) fn active_runs(&self) -> Vec<ActiveIdentity> {
+        self.active.identities()
+    }
+
+    /// The runs this runtime drives now.
+    pub fn run_registry(&self) -> RunRegistry {
+        self.active.clone()
+    }
+
+    /// This process's name as a lease owner in the agent run queue.
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     pub(crate) fn agent_profile(&self) -> &Path {

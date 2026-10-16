@@ -24,7 +24,13 @@ use muniment_core::attach::{
 };
 use serde_json::{json, Value};
 
-struct TestService;
+/// The served runtime. With a profile it answers agent operations from that
+/// profile's agents and run queue.
+#[derive(Default)]
+struct TestService {
+    profile: Option<PathBuf>,
+    chat: Option<Sender<muniment_core::run_events::ChatEvent>>,
+}
 
 impl ThreadListService for TestService {
     fn list_threads(
@@ -36,6 +42,37 @@ impl ThreadListService for TestService {
             threads: vec![],
             next_cursor: None,
         })
+    }
+
+    fn subscribe_chat_events(
+        &mut self,
+    ) -> Result<muniment_core::run_events::ChatEventSubscription, ProtocolError> {
+        let (sender, receiver) = mpsc::channel();
+        self.chat = Some(sender);
+        Ok(muniment_core::run_events::ChatEventSubscription::detached(
+            receiver,
+        ))
+    }
+
+    fn agent_operation(
+        &mut self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, ProtocolError> {
+        let profile = self
+            .profile
+            .as_ref()
+            .ok_or_else(ProtocolError::unsupported_operation)?;
+        muniment_core::agents::operation(profile, operation.as_str(), body)
+            .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
+    fn subscribe_agent_runs(&mut self) -> Result<mpsc::Receiver<Value>, ProtocolError> {
+        let profile = self
+            .profile
+            .as_ref()
+            .ok_or_else(ProtocolError::unsupported_operation)?;
+        Ok(muniment_core::agent_runs::subscribe(profile))
     }
 }
 
@@ -50,6 +87,13 @@ struct Runtime {
 
 impl Runtime {
     fn start(configure: impl FnOnce(&mut RemoteListenerConfig)) -> Self {
+        Self::start_with_profile(None, configure)
+    }
+
+    fn start_with_profile(
+        profile: Option<PathBuf>,
+        configure: impl FnOnce(&mut RemoteListenerConfig),
+    ) -> Self {
         let directory =
             std::env::temp_dir().join(format!("muniment-remote-attach-{}", uuid::Uuid::now_v7()));
         let clock = Arc::new(AtomicI64::new(0));
@@ -68,7 +112,12 @@ impl Runtime {
                 .serve(
                     served,
                     SignedWorkspaceApproval::default(),
-                    || Ok::<_, ()>(TestService),
+                    move || {
+                        Ok::<_, ()>(TestService {
+                            profile: profile.clone(),
+                            chat: None,
+                        })
+                    },
                     stopped,
                 )
                 .unwrap();
@@ -698,4 +747,99 @@ fn a_client_pairs_reconnects_reads_and_is_revoked_over_loopback() {
             | ClientError::DesktopUnavailable
             | ClientError::UnexpectedMessage)
     ));
+}
+
+#[test]
+fn a_paired_device_manages_agents_within_its_scopes_and_hears_their_runs() {
+    use muniment_core::attach::{SubscriptionEvent, SCOPE_AGENTS_MANAGE};
+    let root =
+        std::env::temp_dir().join(format!("muniment-remote-agents-{}", uuid::Uuid::now_v7()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("home")).unwrap();
+    let runtime = Runtime::start_with_profile(Some(profile.clone()), |_| {});
+    let pair = |scopes: &[&str]| {
+        pair_with_link(&runtime.link(Some(scopes)), &options(Some(scopes)))
+            .unwrap()
+            .0
+    };
+    let agent = json!({
+        "name": "Remote scout",
+        "instructions": "Watch the inbox.",
+        "permissions": {"mode": "ask"}
+    });
+
+    // Reading needs only thread access; changing an agent needs agent access.
+    let mut reader = pair(&[SCOPE_THREAD_READ]);
+    assert_eq!(reader.list_agents().unwrap()["agents"], json!([]));
+    assert!(reader.save_agent(agent.clone()).is_err());
+    assert_eq!(error_code(&reader), Some(ErrorCode::Unauthorized));
+    assert!(reader
+        .last_request_error()
+        .unwrap()
+        .to_string()
+        .contains("agent access"));
+
+    let mut manager = pair(&[SCOPE_THREAD_READ, SCOPE_AGENTS_MANAGE]);
+    let saved = manager.save_agent(agent.clone()).unwrap();
+    let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+    let routine = manager
+        .save_routine(
+            &id,
+            json!({"name": "Morning", "trigger": {"kind": "cron", "expr": "0 9 * * *", "tz": "UTC"}}),
+        )
+        .unwrap();
+    assert_eq!(routine["routine"]["trigger"]["kind"], "cron");
+    assert!(manager
+        .save_routine(
+            &id,
+            json!({"name": "Fast", "trigger": {"kind": "cron", "expr": "* * * * *", "tz": "UTC"}}),
+        )
+        .is_err());
+    assert!(manager
+        .last_request_error()
+        .unwrap()
+        .to_string()
+        .contains("five minutes"));
+    assert_eq!(
+        manager.list_routines(&id).unwrap()["routines"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Starting a run takes run access.
+    assert!(manager.run_agent_now(&id, None).is_err());
+    assert_eq!(error_code(&manager), Some(ErrorCode::Unauthorized));
+
+    // Admin access holds agent access.
+    let mut admin = pair(&[SCOPE_THREAD_READ, SCOPE_RUNTIME_ADMIN]);
+    let mut renamed = admin.read_agent(&id).unwrap()["agent"].clone();
+    renamed["name"] = json!("Inbox scout");
+    assert_eq!(
+        admin.save_agent(renamed).unwrap()["agent"]["name"],
+        "Inbox scout"
+    );
+
+    let mut runner = pair(&[SCOPE_THREAD_READ, SCOPE_RUN_WRITE]);
+    runner.subscribe_chat_events_with_agent_runs(None).unwrap();
+    let mut other = pair(&[SCOPE_THREAD_READ, SCOPE_RUN_WRITE]);
+    let run = other.run_agent_now(&id, Some("Check now.")).unwrap()["run"].clone();
+    assert_eq!(run["trigger"]["kind"], "manual");
+    let event = loop {
+        match runner.read_subscription_event().unwrap() {
+            SubscriptionEvent::AgentRunUpdated(body) => break body,
+            _ => continue,
+        }
+    };
+    assert_eq!(event["id"], run["id"]);
+    assert_eq!(event["status"], "queued");
+    let history = other.agent_runs(Some(&id), 10, None).unwrap();
+    assert_eq!(history["runs"][0]["id"], run["id"]);
+    assert!(
+        manager.delete_agent(&id, false).is_err(),
+        "a queued run blocks the delete"
+    );
+    drop(runtime);
+    std::fs::remove_dir_all(root).unwrap();
 }

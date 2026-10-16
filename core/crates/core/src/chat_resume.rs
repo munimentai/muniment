@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::account::TokenSet;
+use crate::active_run::RunRegistry;
 use crate::attach::RuntimeActivityRegistry;
 use crate::chat_coordinate::coordinate;
 use crate::chat_launch::ChatGrant;
@@ -49,7 +50,7 @@ pub struct ResumeLaunch<S> {
     pub runtime: Arc<Mutex<Option<PiRuntime>>>,
     pub runtime_activity: RuntimeActivityRegistry,
     pub memory_runtime: Arc<ApplicationMemoryRuntime>,
-    pub active: Arc<Mutex<Option<ActiveRun>>>,
+    pub active: RunRegistry,
     pub run_id: String,
     pub tokens: TokenSet,
     pub grant: ChatGrant,
@@ -63,13 +64,13 @@ pub struct ResumeLaunch<S> {
 
 pub fn install_resume_run(
     memory_runtime: &ApplicationMemoryRuntime,
-    active: &Mutex<Option<ActiveRun>>,
+    active: &RunRegistry,
     run: ActiveRun,
     thread_id: &str,
     minimum_cacheable_prefix_characters: usize,
 ) -> Result<(), String> {
     let run_id = run.id.clone();
-    install_active_run(active, run)?;
+    active.install(run, Some(thread_id))?;
     if memory_runtime
         .open_session(
             &run_id,
@@ -111,24 +112,14 @@ pub fn run_resume<S: ChatEventSink + PiLaunchBoundaries>(launch: ResumeLaunch<S>
     clear_active_run(&launch.active, &launch.run_id);
 }
 
-pub fn install_active_run(active: &Mutex<Option<ActiveRun>>, run: ActiveRun) -> Result<(), String> {
-    let mut active = active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if active.is_some() {
-        return Err("A reply is already in progress.".into());
-    }
-    *active = Some(run);
-    Ok(())
+/// Adds a run whose thread is not known yet. The registry refuses it when
+/// every run place is taken.
+pub fn install_active_run(active: &RunRegistry, run: ActiveRun) -> Result<(), String> {
+    active.install(run, None)
 }
 
-pub fn clear_active_run(active: &Mutex<Option<ActiveRun>>, run_id: &str) {
-    let mut active = active
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if active.as_ref().is_some_and(|current| current.id == run_id) {
-        *active = None;
-    }
+pub fn clear_active_run(active: &RunRegistry, run_id: &str) {
+    active.clear(run_id);
 }
 
 pub fn resumable_context(
@@ -357,7 +348,7 @@ mod tests {
     #[test]
     fn active_run_marks_runtime_activity_for_its_lifetime() {
         let activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
+        let active = RunRegistry::with_limit(1);
         assert!(!activity.snapshot().active_run);
 
         install_active_run(&active, inactive_run("run-1", &activity)).unwrap();
@@ -370,7 +361,7 @@ mod tests {
     #[test]
     fn sequential_active_runs_clear_runtime_activity() {
         let activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
+        let active = RunRegistry::with_limit(1);
 
         for run_id in ["run-1", "run-2"] {
             install_active_run(&active, inactive_run(run_id, &activity)).unwrap();
@@ -382,13 +373,13 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_active_run_installs_allow_exactly_one_run() {
-        let active = Arc::new(Mutex::new(None));
+    fn concurrent_active_run_installs_fill_the_last_place_once() {
+        let active = RunRegistry::with_limit(1);
         let activity = RuntimeActivityRegistry::new();
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let handles: Vec<_> = (0..2)
             .map(|index| {
-                let active = Arc::clone(&active);
+                let active = active.clone();
                 let activity = activity.clone();
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
@@ -407,7 +398,7 @@ mod tests {
             .iter()
             .filter_map(|result| result.as_ref().err().map(String::as_str))
             .collect();
-        assert_eq!(errors, ["A reply is already in progress."]);
+        assert_eq!(errors, [crate::active_run::capacity_message(1).as_str()]);
     }
 
     #[test]
@@ -418,7 +409,7 @@ mod tests {
         std::fs::write(root.join("config/home.json"), "invalid json").unwrap();
         let memory = ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
         let activity = RuntimeActivityRegistry::new();
-        let active = Mutex::new(None);
+        let active = RunRegistry::with_limit(1);
 
         let error = install_resume_run(
             &memory,
@@ -430,7 +421,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, "This reply cannot be resumed.");
-        assert!(active.lock().unwrap().is_none());
+        assert!(active.is_empty());
         assert!(!activity.snapshot().active_run);
         assert!(memory
             .dispatch_tool_call("run-1", "memory-search", br#"{"query":"saffron"}"#)

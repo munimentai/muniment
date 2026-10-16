@@ -411,6 +411,33 @@ pub enum Operation {
     /// match. The local owner route only.
     #[serde(rename = "remote.settings_save")]
     RemoteSettingsSave,
+    /// Lists the runtime's agents with their routines and latest runs.
+    #[serde(rename = "agent.list")]
+    AgentList,
+    /// Reads one agent.
+    #[serde(rename = "agent.read")]
+    AgentRead,
+    /// Creates or replaces one agent.
+    #[serde(rename = "agent.save")]
+    AgentSave,
+    /// Removes one agent, and its memory when the caller confirms it.
+    #[serde(rename = "agent.delete")]
+    AgentDelete,
+    /// Queues a manual run of one agent.
+    #[serde(rename = "agent.run_now")]
+    AgentRunNow,
+    /// Reads one page of agent run history, newest first.
+    #[serde(rename = "agent.runs")]
+    AgentRuns,
+    /// Lists one agent's routines.
+    #[serde(rename = "routine.list")]
+    RoutineList,
+    /// Adds or replaces one routine of an agent.
+    #[serde(rename = "routine.save")]
+    RoutineSave,
+    /// Removes one routine of an agent.
+    #[serde(rename = "routine.delete")]
+    RoutineDelete,
 }
 
 impl Operation {
@@ -520,7 +547,32 @@ impl Operation {
             Self::ModelsVault => "models.vault",
             Self::RemoteSettings => "remote.settings",
             Self::RemoteSettingsSave => "remote.settings_save",
+            Self::AgentList => "agent.list",
+            Self::AgentRead => "agent.read",
+            Self::AgentSave => "agent.save",
+            Self::AgentDelete => "agent.delete",
+            Self::AgentRunNow => "agent.run_now",
+            Self::AgentRuns => "agent.runs",
+            Self::RoutineList => "routine.list",
+            Self::RoutineSave => "routine.save",
+            Self::RoutineDelete => "routine.delete",
         }
+    }
+
+    /// Whether the operation manages agents: reads, changes or runs them.
+    pub fn is_agent_operation(self) -> bool {
+        matches!(
+            self,
+            Self::AgentList
+                | Self::AgentRead
+                | Self::AgentSave
+                | Self::AgentDelete
+                | Self::AgentRunNow
+                | Self::AgentRuns
+                | Self::RoutineList
+                | Self::RoutineSave
+                | Self::RoutineDelete
+        )
     }
 }
 
@@ -556,6 +608,10 @@ pub enum EventName {
     /// subscription that asked for `update_status`.
     #[serde(rename = "runtime.update_status")]
     RuntimeUpdateStatus,
+    /// An agent run changed, on a chat-event subscription that asked for
+    /// `agent_runs`. The body is the run.
+    #[serde(rename = "agent.run_updated")]
+    AgentRunUpdated,
     #[serde(untagged)]
     Unknown(BoundedEventName),
 }

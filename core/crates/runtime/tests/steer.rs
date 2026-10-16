@@ -35,15 +35,15 @@ fn queued_message_reaches_a_live_runtime_run(
     std::env::set_var("PI_RESUME_STUB_STEER_CAPTURE", &steer_capture);
 
     let storage = open_profile_storage(&profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let runtime_activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::clone(&active),
+        active.clone(),
         profile.clone(),
         config.clone(),
-        Arc::clone(&runtime),
+        runtime.clone(),
         Arc::new(ApplicationMemoryRuntime::new(
             config.clone(),
             profile.join("memory"),
@@ -61,7 +61,7 @@ fn queued_message_reaches_a_live_runtime_run(
                 &RuntimeHost::default(),
                 &profile,
                 Arc::clone(&storage),
-                Arc::clone(&runtime),
+                runtime.clone(),
                 &runtime_activity,
                 &config,
                 run_id.into(),
@@ -73,7 +73,7 @@ fn queued_message_reaches_a_live_runtime_run(
                 Some("owner".into()),
                 Vec::new(),
                 fixture_grant(),
-                Arc::clone(&active),
+                active.clone(),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )

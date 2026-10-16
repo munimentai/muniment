@@ -457,6 +457,15 @@ fn coordinate_work(
     if let Some(token) = grant.native_access_token.take() {
         access_token = token;
     }
+    // An agent's thread runs at the agent's thinking level unless the run asks for one.
+    let agent_launch = app.agent_launch();
+    let thinking_level = thinking_level.or_else(|| {
+        agent_launch
+            .as_ref()
+            .and_then(|agent| agent.model.as_ref())
+            .and_then(|model| model.thinking.clone())
+    });
+    let agent_permissions = agent_launch.and_then(|agent| agent.permissions);
     let run_started = Instant::now();
     let mut diagnostics = RunDiagnostics::new(&run_id);
     let mut resume_attempt = ResumeAttempt::new(resume_result);
@@ -1514,6 +1523,18 @@ fn coordinate_work(
                 if coordinate_browser(&app, &adapter, &transport, &cancelled, &event) {
                     continue;
                 }
+                if coordinate_agent_permission(
+                    &app,
+                    &journal,
+                    &adapter,
+                    &transport,
+                    &agent_permissions,
+                    &run_id,
+                    subject.as_deref(),
+                    &event,
+                ) {
+                    continue;
+                }
                 if coordinate_memory_search(
                     &app,
                     &memory_runtime,
@@ -1772,6 +1793,125 @@ fn coordinate_browser(
     true
 }
 
+/// Answers the agent permission gate's questions. A check decides one tool
+/// call from the agent's pre-decided policies, the thread's own journaled
+/// policies and the run's gate mode. "Allow for this thread" journals an
+/// allow policy for the exact request in the run's thread (ADR 0025). A call
+/// the policies do not settle then asks the user through the ordinary gate
+/// the extension opens.
+#[allow(clippy::too_many_arguments)]
+fn coordinate_agent_permission(
+    app: &(impl ChatEventSink + PiLaunchBoundaries),
+    journal: &SharedStorage,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    permissions: &Option<crate::permission_gate::RunPermissions>,
+    run_id: &str,
+    subject: Option<&str>,
+    event: &PiChatEvent,
+) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Call {
+        tool: String,
+        #[serde(default)]
+        input: serde_json::Value,
+        #[serde(default)]
+        read_only: bool,
+    }
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    let ExtensionUiDialog::Editor { title, prefill } = &request.dialog else {
+        return false;
+    };
+    if !matches!(
+        title.as_str(),
+        "muniment:permission-check" | "muniment:permission-allow"
+    ) {
+        return false;
+    }
+    let working_directory = app
+        .project_directory()
+        .ok()
+        .flatten()
+        .or_else(|| app.home_directory())
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let answer = (|| {
+        let call: Call = serde_json::from_str(prefill.as_deref().unwrap_or_default())
+            .map_err(|_| "The permission check is invalid.".to_string())?;
+        let policy_request =
+            crate::permission_gate::tool_request(&call.tool, &call.input, &working_directory);
+        let Some(permissions) = permissions else {
+            return Ok(json!({"decision": "allow"}));
+        };
+        let mut storage = journal
+            .lock()
+            .map_err(|_| "Conversation history is busy.".to_string())?;
+        let thread = storage
+            .journal
+            .run_thread_id(run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or("The run has no thread.")?;
+        if title == "muniment:permission-allow" {
+            let (source, version) = app.provenance();
+            let provenance = crate::journal::Provenance {
+                source: source.to_owned(),
+                source_version: version.to_owned(),
+                actor_id: subject.map(str::to_owned),
+                device_id: None,
+                rpc_request_id: None,
+                capability_versions: None,
+                extra: Default::default(),
+            };
+            let decided = crate::journal::ThreadPermissionPolicyDecided {
+                policy_id: uuid::Uuid::now_v7().to_string(),
+                decision: crate::journal::ThreadPermissionDecision::Allow,
+                request_kind: policy_request.request_kind,
+                resource: policy_request.resource,
+                actor: subject.unwrap_or("owner").to_owned(),
+                answer_source: crate::journal::ThreadPermissionAnswerSource::Native,
+                gate_id: None,
+            };
+            let last = storage
+                .journal
+                .last_thread_seq(&thread)
+                .map_err(|error| error.to_string())?;
+            storage
+                .journal
+                .append_thread_permission_policy_decided(
+                    last,
+                    &thread,
+                    &decided,
+                    &crate::run_start::accepted_time_now(),
+                    &provenance,
+                )
+                .map_err(|error| error.to_string())?;
+            return Ok(json!({"saved": true}));
+        }
+        // A thread policy that cannot be read leaves the call to ask.
+        let thread_policies = storage
+            .journal
+            .active_thread_permission_policies(&thread)
+            .unwrap_or_default();
+        drop(storage);
+        let decision = crate::permission_gate::decide_tool_call(
+            permissions,
+            &thread_policies,
+            &policy_request,
+            &call.tool,
+            call.read_only,
+        );
+        serde_json::to_value(decision).map_err(|_| "The permission check failed.".to_string())
+    })()
+    .unwrap_or_else(|error| json!({"error": error}));
+    let _ = adapter.answer_extension_ui(
+        transport,
+        request,
+        ExtensionUiAnswer::Editor(answer.to_string()),
+    );
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn coordinate_memory_search(
     sink: &impl ChatEventSink,
@@ -1813,6 +1953,9 @@ fn coordinate_memory_search(
                     "agent-read",
                     "agent-save",
                     "agent-run",
+                    "routine-list",
+                    "routine-save",
+                    "routine-delete",
                     "creation-plan",
                     "artifact-publish",
                 ]

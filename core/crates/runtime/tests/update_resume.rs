@@ -79,8 +79,14 @@ fn interrupted_run(profile: &std::path::Path, run_id: &str) -> String {
     thread_id
 }
 
+/// The tests change process-wide stub settings, so they run one at a time.
+static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn an_interrupted_run_resumes_after_an_update_with_a_notice() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     common::use_test_prompt_store();
     let temporary = TemporaryProfile::new("update-resume", false);
     let profile = temporary.profile.clone();
@@ -157,6 +163,139 @@ fn an_interrupted_run_resumes_after_an_update_with_a_notice() {
     // The gated run stays interrupted for its owner.
     let gated = storage.lock().unwrap().journal.events(gated_run).unwrap();
     assert_eq!(gated.last().unwrap().event_type, "run.needs_attention");
+    drop(storage);
+    drop(state);
+    std::env::remove_var("MUNIMENT_PI_ROOT");
+}
+
+#[test]
+fn a_drain_records_every_live_run_and_the_restart_resumes_each_one() {
+    use muniment_core::run_start::RunAttachBoundaries;
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    common::use_test_prompt_store();
+    let temporary = TemporaryProfile::new("update-resume-many", false);
+    let profile = temporary.profile.clone();
+    fs::write(
+        profile.join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    let artifact = stage_pi_stub(&profile);
+
+    // Three replies in three threads are live when the update drains.
+    std::env::set_var(
+        "PI_RESUME_STUB_STEER_CAPTURE",
+        temporary.root.join("steer.json"),
+    );
+    let state = std::sync::Arc::new(
+        RuntimeAttachState::open(RuntimeHost::default(), &profile, &profile).unwrap(),
+    );
+    let boundaries = state.boundaries().with_pi_artifact(artifact);
+    let live: Vec<String> = (0..3)
+        .map(|index| {
+            boundaries
+                .submit_run(
+                    "local",
+                    format!("Hold reply {index}."),
+                    Vec::new(),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .run_id
+        })
+        .collect();
+    let registry = state.run_registry();
+    assert_eq!(registry.len(), 3);
+    // A fourth reply waits for a free place, and a thread replies once at a time.
+    let refused = boundaries
+        .submit_run("local", "One more.".into(), Vec::new(), None, None)
+        .unwrap_err()
+        .into_message();
+    assert!(refused.contains("already running 3 replies"), "{refused}");
+    let busy_thread = registry.identities()[0].thread_id.clone().unwrap();
+    let refused = boundaries
+        .submit_run(
+            "local",
+            "Again.".into(),
+            Vec::new(),
+            Some(busy_thread),
+            None,
+        )
+        .unwrap_err()
+        .into_message();
+    assert_eq!(refused, muniment_core::active_run::THREAD_BUSY);
+    let outcome = state.drain_for_update(Duration::from_millis(200));
+    assert!(matches!(
+        outcome,
+        muniment_runtime_core::update::DrainOutcome::TimedOut { .. }
+    ));
+    let ledger = read_resume_ledger(&profile);
+    let mut recorded: Vec<&str> = ledger
+        .interrupted
+        .iter()
+        .map(|run| run.run_id.as_str())
+        .collect();
+    recorded.sort();
+    let mut expected: Vec<&str> = live.iter().map(String::as_str).collect();
+    expected.sort();
+    assert_eq!(recorded, expected);
+    let threads: std::collections::BTreeSet<_> = ledger
+        .interrupted
+        .iter()
+        .map(|run| &run.thread_id)
+        .collect();
+    assert_eq!(threads.len(), 3);
+    assert!(ledger.interrupted.iter().all(|run| !run.permission_gate));
+    for run in &live {
+        muniment_core::active_run::cancel_active_run(&registry, run, None).unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !registry.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(registry.is_empty());
+    drop(boundaries);
+    drop(state);
+    std::env::remove_var("PI_RESUME_STUB_STEER_CAPTURE");
+
+    // After the restart, every interrupted run resumes, each in its thread.
+    let runs = [
+        "018f0000-0000-7000-8000-000000000301",
+        "018f0000-0000-7000-8000-000000000302",
+        "018f0000-0000-7000-8000-000000000303",
+    ];
+    let interrupted: Vec<InterruptedRun> = runs
+        .iter()
+        .map(|run_id| InterruptedRun {
+            run_id: (*run_id).into(),
+            thread_id: interrupted_run(&profile, run_id),
+            workspace: "local".into(),
+            permission_gate: false,
+        })
+        .collect();
+    write_resume_ledger(
+        &profile,
+        &ResumeLedger {
+            interrupted,
+            ..ResumeLedger::default()
+        },
+    )
+    .unwrap();
+    let state = RuntimeAttachState::open(RuntimeHost::default(), &profile, &profile).unwrap();
+    state.resume_interrupted_runs_with(state.boundaries().with_pi_artifact(artifact));
+    let storage = open_profile_storage(&profile).unwrap();
+    for run_id in runs {
+        let events = storage.lock().unwrap().journal.events(run_id).unwrap();
+        assert!(
+            events.iter().any(|event| event.event_type == "run.resumed"),
+            "{run_id} resumed"
+        );
+        assert_eq!(events.last().unwrap().event_type, "run.completed");
+    }
+    assert!(read_resume_ledger(&profile).interrupted.is_empty());
     drop(storage);
     drop(state);
     std::env::remove_var("MUNIMENT_PI_ROOT");
