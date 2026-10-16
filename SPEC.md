@@ -125,7 +125,7 @@ docs, and a change to what an outside user sees updates it, law 12.
 
 **Other runtimes.** The app keeps its own runtime and attaches to one selected runtime at a time: this computer, another desktop, or a `muniment-server` host or container. Settings → Runtimes pairs one from its one-time `muniment://pair` link, pasted or read over SSH from `<command> pair --json`, with no account, and keeps its device credential in an owner-only file under `~/.muniment/runtimes/`.
 An SSH runtime attaches through `ssh -N -L` to a loopback port, which opens with the attach and closes when the app leaves the runtime or quits. Threads, models, memory, search and context come from the selected runtime, and a thread stays on the runtime that holds it. The cloud account, phone pairing, extensions and Storage stay with this computer, so Account hides and those pages say so.
-Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Update asks an older runtime, where this device holds `runtime.admin`, to install the app's version, and Update all asks every such runtime. Remove first revokes the device there when it holds that scope. The composer attaches no local file while a paired runtime is selected.
+Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Update asks an older runtime, where this device holds `runtime.admin`, to install the app's version, and Update all asks every such runtime. Remove first revokes the device there when it holds that scope. The composer attaches no local file while a paired runtime is selected. The composer's machine menu marks a machine that answers with a green globe and one that does not with a red slashed globe, and picking one that does not answer opens Settings → Machines.
 This computer turns pairing on and off, off by default, sets the listen port and the addresses links name, creates a one-time link with its QR code, and lists and revokes paired devices. An update request to this computer's runtime runs the app updater, which installs once runtime work is idle, and the app clears the request once it runs that version.
 
 **Updates.** The in-app updater reads the public stable release feed, sends
@@ -173,10 +173,10 @@ provider answers it reads `Connect a model`, and the chip and Send open the prov
 Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
-**Settings → Models is one component on three pages.** Model providers, Model list
+**Settings → Models is one component on two pages.** Model providers
 and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
-in account details. One searchable model list holds visibility and, once a decision model is connected, routing
-statements. Each provider leads with the newest model of each family, dated from models.dev, and the models the user turned on. Older models fold under Other models and stay out of the picker until turned on. A sample routing test shows the choice and fallback cause without
+in account details. Decision models holds the routing statements once a decision model is connected. The chip's picker shows each provider's
+current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns
 and lands in the same file, or in the router's pool when the router pools
@@ -370,7 +370,7 @@ onboarding spec proves the connect question, the Home picker and More providers.
     writes back to a source.
 14. **Monetization, launch and publicity are maintainer-only.**
 
-Settings loads on demand. Its sidebar groups pages under Models, Extend, Preferences, Personal and Workspace. Storage distinguishes the workspace from managed extensions.
+Settings loads on demand. Its sidebar groups pages under Models, Extend, which ends with Machines, Preferences, Personal, which ends with Storage, and Workspace, which holds Companies. Storage distinguishes the workspace from managed extensions.
 ## Workspace panels
 
 The title bar menu opens Browser, Files and Terminal in a shared tab panel.

@@ -5,7 +5,7 @@
   import { featureFlags } from './feature-flags.js'
   import { settingsGroups, settingsPage } from './lib/settings-sections.js'
   import MachinePicker from './runtimes/MachinePicker.svelte'
-  import { activeRuntime, LOCAL_RUNTIME_ID, remoteSelected, statusHint, statusLabel, statusTone } from './runtimes/runtimes.js'
+  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel, statusTone } from './runtimes/runtimes.js'
   import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
@@ -41,11 +41,12 @@
   import ThinkingPicker from './lib/ThinkingPicker.svelte'
   import { modelThinking, thinkingLabel, withThinkingLevel } from './lib/thinking-level.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
-  import Capacity from './lib/Capacity.svelte'
+  import Usage from './lib/Usage.svelte'
+  import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
-  import { currentModel, currentModelAvailable, modelChipLabel, routerHidden } from './lib/provider-catalog.js'
+  import { currentModel, currentModelAvailable, modelChipLabel, modelKey, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -127,9 +128,9 @@
     void accountCache(tauri).read().then(settings => {
       if (!disposed) {
         hasSubscriptions = (settings?.accounts ?? []).some(account => account.source === 'account')
-        if (!hasSubscriptions) capacityOpen = false
+        if (!hasSubscriptions) usageOpen = false
       }
-    }).catch(() => { if (!disposed) { hasSubscriptions = false; capacityOpen = false } })
+    }).catch(() => { if (!disposed) { hasSubscriptions = false; usageOpen = false } })
     return () => { disposed = true }
   })
   // The router leaves the models the picker hides out of the running, so a
@@ -147,13 +148,15 @@
   let inventoryRequestVersion = 0
   let pickerOpen = $state(false)
   let thinkingOpen = $state(false)
-  let capacityOpen = $state(false)
+  let usageOpen = $state(false)
+  let machineOpen = $state(false)
   let contextOpen = $state(false)
   $effect(() => {
     const panel = event => {
       pickerOpen = event.detail === 'model'
       thinkingOpen = event.detail === 'thinking'
-      capacityOpen = event.detail === 'capacity'
+      usageOpen = event.detail === 'usage'
+      machineOpen = event.detail === 'machine'
       contextOpen = event.detail === 'context'
       if (event.detail !== 'speech') speechInstallDismissed = true
       if (event.detail !== 'mentions') mention = null
@@ -507,6 +510,28 @@
     if (!pickerOpen && needsModel()) openModelProviders()
     else if (pickerOpen) closePicker()
     else openComposerPanel('model')
+  }
+
+  // A picker row moves its model between the current list and Legacy models.
+  // A hidden model also leaves the router's running, and hiding the saved
+  // default moves the runtime's choice to the row the picker now leads with.
+  async function setModelShown(model, shown) {
+    const key = modelKey(model.provider, model.choice)
+    try {
+      await tauri.invoke('local_mode_set_model_hidden', { provider: model.provider, model: model.choice, hidden: !shown })
+      const next = { ...inventory, hidden: (inventory?.hidden ?? []).filter(entry => entry !== key), shown: (inventory?.shown ?? []).filter(entry => entry !== key) }
+      next[shown ? 'shown' : 'hidden'].push(key)
+      inventory = next
+      if (!shown && modelKey(next.default_provider, next.default_model) === key) {
+        const fallback = currentModel(next)
+        if (fallback) {
+          await tauri.invoke('local_mode_set_default_model', { provider: fallback.provider, model: fallback.model })
+          inventory = { ...inventory, default_provider: fallback.provider, default_model: fallback.model }
+        }
+      }
+    } catch (_) {
+      accountStatus = 'Muniment could not save the model list. Try again.'
+    }
   }
 
   function closeThinking() {
@@ -2150,7 +2175,7 @@
         settingsShortcutPressed()
         return
       }
-      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || capacityOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
+      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || usageOpen || machineOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
       if (event.key === 'Escape' && projectsOpen) { projectsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && artifactsOpen) { artifactsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && agentsOpen) { agentsOpen = false; event.preventDefault() }
@@ -2387,6 +2412,15 @@
   {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={statusTone(machine)} aria-hidden="true"></i><span class="machine-name">{machine.name}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
+<!-- A row's meta line: once a machine is paired, the machine the thread lives
+     on, by its shape and name, then how long ago the thread last changed. -->
+{#snippet rowMeta(summary)}
+  {@const machine = pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
+  <span class="thread-row-meta">{#if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<span class="visually-hidden">, {statusLabel(machine)}</span>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+{/snippet}
+
+{#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
+
 {#snippet rowMark(selected, running = false)}
   {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} variant="action" /></span>{:else}<span class:run-mark={running} aria-hidden={running ? 'true' : undefined}></span>{/if}
 {/snippet}
@@ -2407,10 +2441,10 @@
                     </form>
                   {:else if current && !(agentsOpen || artifactsOpen || projectsOpen)}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-title">{rowTitle}</div>{@render machineBadge(summary)}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></div>
+                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
                   {:else}
                     {@const running = summary.threadId === backgroundRun?.threadId}
-                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-title">{rowTitle}</div>{@render machineBadge(summary)}{#if running}<span class="visually-hidden">Running</span>{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></button>
+                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div>{#if running}<span class="visually-hidden">Running</span>{/if}</button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -2829,10 +2863,10 @@
             <button type="button" onclick={() => { retryReview = null; draft = ''; pickerOpen = false }}>Cancel retry</button>
           </section>
         {/if}
-        {#if hasSubscriptions && capacityOpen}<Capacity {tauri} onmanage={openModelSettings} onclose={() => capacityOpen = false} />{/if}
+        {#if hasSubscriptions && usageOpen}<Usage {tauri} onmanage={openModelSettings} onclose={() => usageOpen = false} />{/if}
         {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
-          <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
+          <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onvisibility={setModelShown} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
         {/if}
         {#if thinkingOpen && chipThinking}
           <ThinkingPicker levels={chipThinking.levels} current={chipThinking.level} onchoose={chooseThinkingLevel} onclose={closeThinking} />
@@ -2926,9 +2960,19 @@
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
             <MachinePicker list={runtimeList} locked={threadMachine} disabled={switchLocked || !!active} onselect={selectRuntime} onmanage={() => openSettings('runtimes')} />
             {#if auth.name === 'local'}
-              <button type="button" class="quiet model-chip" bind:this={modelChip} aria-haspopup="dialog" aria-expanded={pickerOpen} onclick={togglePicker}>{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}<span class="model-chip-label">{modelSourceLabel}</span><LucideIcon name={pickerOpen ? 'chevron-up' : 'chevron-right'} variant="action" size={12} /></button>
-              {#if chipThinking}<button type="button" class="quiet thinking-trigger" bind:this={thinkingChip} aria-label={`Thinking level: ${thinkingLabel(chipThinking.level)}`} aria-haspopup="menu" aria-expanded={thinkingOpen} onclick={() => openComposerPanel(thinkingOpen ? null : 'thinking')}><LucideIcon name="brain" size={14} /><span class="model-chip-label">{thinkingLabel(chipThinking.level)}</span></button>{/if}
-              {#if hasSubscriptions}<button type="button" class="quiet capacity-trigger" aria-haspopup="dialog" aria-expanded={capacityOpen} onclick={() => openComposerPanel(capacityOpen ? null : 'capacity')}><LucideIcon name="gauge" size={14} /><span class="model-chip-label">Capacity</span></button>{/if}
+              <ComposerMenuButton menu="model" open={pickerOpen} chevrons haspopup="dialog" label={`Model: ${modelSourceLabel}`} text={modelSourceLabel} compact={chipModel ? null : unconnectedModelIcon} bind:element={modelChip} onclick={togglePicker}>
+                {#snippet icon()}{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}{/snippet}
+              </ComposerMenuButton>
+              {#if chipThinking}
+                <ComposerMenuButton menu="thinking" open={thinkingOpen} label={`Thinking level: ${thinkingLabel(chipThinking.level)}`} text={thinkingLabel(chipThinking.level)} bind:element={thinkingChip} onclick={() => openComposerPanel(thinkingOpen ? null : 'thinking')}>
+                  {#snippet icon()}<LucideIcon name="brain" size={14} />{/snippet}
+                </ComposerMenuButton>
+              {/if}
+              {#if hasSubscriptions}
+                <ComposerMenuButton menu="usage" open={usageOpen} haspopup="dialog" label="Usage" text="Usage" onclick={() => openComposerPanel(usageOpen ? null : 'usage')}>
+                  {#snippet icon()}<LucideIcon name="gauge" size={14} />{/snippet}
+                </ComposerMenuButton>
+              {/if}
             {/if}
             {#if compacting || contextOpen || contextMeterShown(contextUsage)}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
             {#if threadSwitching}
@@ -3305,28 +3349,29 @@
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
   .thread-record { position: relative; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); user-select: none; -webkit-user-select: none; }
-  button.thread-row:hover:not([aria-disabled="true"]) { background: var(--faint); }
+  /* Hover is a lighter wash than the open thread's faint row, as a selection is darker, so the three never look alike. */
+  button.thread-row:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--faint) 55%, transparent); }
   /* A selected row reads darker than the open thread's faint row, so a selection and the open thread never look alike. */
   .thread-row.selected { background: color-mix(in srgb, var(--ink) 14%, var(--surface)); }
-  /* The row's delete control shows while the pointer or focus rests on the row, in the time's place. */
+  /* The row's actions control shows at its right end while the pointer or focus rests on the row. */
   .thread-actions { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
   .thread-record:hover .thread-actions, .thread-record:focus-within .thread-actions { opacity: 1; pointer-events: auto; }
-  .thread-record:hover .thread-row time, .thread-record:focus-within .thread-row time { visibility: hidden; }
+  .thread-record:hover .thread-row-body, .thread-record:focus-within .thread-row-body { padding-right: 22px; }
   .thread-actions:hover:not(:disabled) { color: var(--ink); background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
-  /* The time always shows: the title takes the rest of the row and fades at its end. */
-  .thread-row time { flex: none; margin-left: auto; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
+  /* Inbox rows: a small muted meta line over the title, which fades at its end. The title leads in reading order, so a row's name starts with it. */
+  .thread-row-body { flex: 1 1 auto; display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; }
+  .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; }
+  .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
+  .thread-row time { flex: none; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
-  .thread-row > span.machine-badge, .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .machine-dot { flex: none; width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--border); }
   .machine-dot[data-tone="ink"] { background: var(--ink); }
   .machine-dot[data-tone="caution"] { background: var(--ochre); }
   .machine-dot[data-tone="critical"] { background: var(--oxide); }
   .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
-  .thread-row:has(.machine-badge) .thread-row-title { min-width: 56px; }
-  /* A thread on another machine shows its machine where the date sits. */
-  .thread-row:has(.machine-badge) time { display: none; }
   .thread-row-title[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .title-thread-actions { flex: none; }
@@ -3382,7 +3427,6 @@
   .artifact-empty p { margin: 0; color: var(--muted); }
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
-  .capacity-trigger, .thinking-trigger { color: var(--muted); }
   .collection-children { padding-left: 16px; }
 
   .workspace.sidebar-resizing .thread-panel { transition: none; }
@@ -3507,12 +3551,6 @@
   .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
   .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
-  /* The composer controls share the plus button's box: 4px padding, a 24px minimum, the control radius. */
-  .model-chip { color: var(--ink); }
-  .model-chip, .capacity-trigger, .thinking-trigger { flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); font: var(--text-12) var(--font-mono); white-space: nowrap; }
-  .model-chip:hover:not(:disabled), .capacity-trigger:hover:not(:disabled), .thinking-trigger:hover:not(:disabled) { background: var(--faint); }
-  /* The label's line box holds the mono descenders the clip would take off a g or a p. */
-  .model-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
   .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }

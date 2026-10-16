@@ -776,7 +776,7 @@ for (const mode of ['success', 'wrong-selection', 'failed-reply', 'lost-context'
       head: { append() {} }, createElement: () => ({}),
       querySelector: selector => selector.startsWith('textarea') ?
         (mode === 'onboarding-only' && selector === 'textarea#composer-message' ? null : composer) : selector === '.model-chip'
-        ? { click: () => { picker = true } } : picker ? {} : null,
+        ? { click: () => { picker = true } } : picker && selector.endsWith('input[type="search"]') ? { dispatchEvent() {} } : picker ? {} : null,
       querySelectorAll: selector => selector === '.response' ? responses() : selector === 'button' ? [send]
         : models.map((model, index) => ({ dataset: { provider: 'muniment-router', model: `${model.family}/${model.id}` },
           click: () => { selected = index; picker = false } })),

@@ -90,6 +90,8 @@
       if (index > 0) {
         const chip = await wait(() => document.querySelector('.model-chip'))
         chip.click()
+        // The picker shows one provider at a time, and a search lists every provider's rows.
+        setValue(await wait(() => document.querySelector('[data-panel="model-picker"] input[type="search"]')), model.id)
         const row = await wait(() => [...document.querySelectorAll('.picker-row')].find(row =>
           row.dataset.provider === 'muniment-router' && row.dataset.model === `${model.family}/${model.id}`))
         row.click()

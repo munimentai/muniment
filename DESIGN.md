@@ -58,7 +58,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    `--signal`. Otherwise `--signal` appears only on the mark's thinking
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
-   polish flash, the enabled state of the Models show switch, and workflow-run
+   polish flash, the green globe of a machine that answers in the machine menu, and workflow-run
    indicators. Settings tabs, selected capability filters, verified updates, enabled extension switches and the Confirm check on an unconfirmed memory row use the theme signal.
    Other buttons, links, selection, icons at rest and badges are ink on paper.
    `src/styles/signal-allowlist.test.js` enforces the list.
@@ -121,7 +121,7 @@ control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
-controls and Linux keeps its decorations. The sidebar is dense: 28px rows,
+controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small mono meta line over its title, the machine's shape and name once a machine is paired, then the time ago. Hover is a lighter wash than the open thread,
 New thread leads the sidebar, followed by Agents and title search, with no static Threads heading. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use, and a paired runtime hides Agents, Artifacts and Projects.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
@@ -129,20 +129,20 @@ Pins and archives persist on the device. Projects group ordinary chats and autom
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
-then Models, Extend, Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory) and Workspace (Storage, Runtimes). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
+then Models, Extend (ending with Machines), Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory, Storage) and Workspace (Companies). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Back to threads or Escape returns focus to the opener.
 Companies lists each company as a row with Open, Rename and Delete, where Delete asks once and names it, and New company last, then Sources and the sample company,
 which open the record panel, and Backups. Account leads with the signed-in card, Sign out and the plan tiers. Memory carries Recall, the saved facts and Export.
-Model providers, Model list and Decision models are three pages of one component. Account
+Model providers and Decision models are two pages of one component. Account
 rows span the page, with allowances visible and usage in details.
-A searchable model list holds visibility and routing statements. Each provider leads with the newest model of each family and the models turned on.
-The rest fold under Other models and stay out of the picker until turned on. Connect
+Decision models holds the routing statements. Connect
 account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
-opens a picker over the shown models with Model providers at its foot. The
+opens a picker: a column of full-color provider marks, each named on hover, the picked provider's current generation, Legacy models folded under one row,
+a search over every model, and Model providers at its foot. The
 sidebar is resizable by its divider and collapses to nothing: no rail. Each divider
 shows Lucide's vertical ellipsis as its grip, and on hover, focus or drag its gap fills with `border` that fades out at both ends.
 The mark appears on the launch screen and in the thinking state, never in
@@ -151,8 +151,8 @@ Both share one geometry, a one-pixel frame and a 35px title band, so a switch mo
 and draws the thread and rail as `surface` cards clipped `--card-ring` inside their boxes with a hairline. Frameless fills it with `border` seams, a sidebar panel a step toward `ink`, and flat panels. The update control is a circular
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
-The composer band is one mono row under the composer. The plus,
-model selector, thinking level, capacity control and context meter share their height and spacing. The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A window no source knows shows no meter. The model picker shows each window in mono and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
+The composer band is one mono row under the composer. The plus, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level and usage menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine and model. A narrow composer keeps each to its icon with a hover label.
+The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A window no source knows shows no meter. The model picker shows no window and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
 opens with Add files and folders. Voice sits beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
 text, and the same button with a filled stop square while a reply is in flight. Enter sends. A
@@ -224,7 +224,7 @@ A sliders icon reveals filters. Custom opens a dialog and attempts to load the s
 Package review separates instructions, MCP servers and executable code.
 Icon notices live in the bundled third-party notices, outside the catalog.
 
-The composer plus sits first at the left and matches the model and capacity controls. The Agents, Artifacts and Projects rows reveal a plus on hover that creates one.
+The composer plus sits first at the left and matches the composer menu buttons. The Agents, Artifacts and Projects rows reveal a plus on hover that creates one.
 It has a background only on hover or keyboard focus.
 Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
 The paperclip opens the OS picker directly. macOS accepts multiple files and folders together. Attachment chips are one 28px row: icon, name with extension, hover-only X. Folder paths reach local tools. All composer panels share one

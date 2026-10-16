@@ -59,3 +59,23 @@ it('turns assistance on with its own decision model apart from routing',async()=
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_set_assist',{enabled:true,id:'clef'}))
  expect(invoke).not.toHaveBeenCalledWith('model_router_select_classifier',expect.anything())
 })
+it('edits a routing statement once a decision model is connected', async () => {
+ const option={key:'muniment-router/openai/gpt-6.1-sol',family:'openai',model:'gpt-6.1-sol',description:'Short answers'}
+ const settings={enabled:true,options:[option],routes:[],accounts:[],classifier_connections:[],fallback:null,min_confidence:0.6}
+ const inventory=(classifier)=>({providers:[{id:'muniment-router',name:'Router',source:'router',models:[]}],router_classifier:classifier,router_models:[{id:'openai/gpt-6.1-sol',family:'openai',model:'gpt-6.1-sol',accounts:1}],hidden:[],default_provider:'muniment-router',default_model:'auto'})
+ const view=render(ModelRouterSection,{tauri:{invoke:vi.fn()},settings,onsettings:vi.fn(),inventory:inventory(null)})
+ expect(screen.queryByRole('heading',{name:'Routing statements'})).toBeNull()
+ view.unmount()
+ const saved={...settings,routes:[{key:option.key,family:'openai',model:'gpt-6.1-sol',description:'Code reviews'}]}
+ const invoke=vi.fn(async()=>saved)
+ const onsettings=vi.fn()
+ render(ModelRouterSection,{tauri:{invoke},settings,onsettings,inventory:inventory('jev-latest')})
+ expect(screen.getByRole('heading',{name:'Routing statements'})).toBeInTheDocument()
+ expect(screen.getByText('Short answers')).toBeInTheDocument()
+ await fireEvent.click(screen.getByRole('button',{name:'Edit statement for GPT 6.1 Sol'}))
+ await fireEvent.input(screen.getByLabelText('When should this model answer?'),{target:{value:' Code reviews '}})
+ await fireEvent.click(screen.getByRole('button',{name:'Save statement'}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_save_routes',{routes:saved.routes,fallback:null,minConfidence:0.6}))
+ expect(onsettings).toHaveBeenCalledWith(saved)
+ await waitFor(()=>expect(screen.queryByLabelText('When should this model answer?')).toBeNull())
+})

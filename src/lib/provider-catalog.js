@@ -1,5 +1,6 @@
 import { modelLabel } from './model-label.js'
-import { leadingModels, newestFirst } from './model-recency.js'
+import { newestFirst, pastModels } from './model-recency.js'
+import { currentGeneration } from './model-generation.js'
 import { isDecisionModel } from './classifier-connections.js'
 import { registry } from './model-registry.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
@@ -102,10 +103,12 @@ export function familyName(family) {
 // names the provider and the choice a pick saves, so a row the router serves
 // saves the router's own id.
 //
-// A model is shown when it leads its provider's list, the newest of its family,
-// or when the user turned it on, unless the user turned it off. The saved
-// default stays shown, so the chip always names a row. With `all`, every row
-// comes back, each marked with whether it leads and whether it is shown.
+// A model is shown when it leads its provider's list, the current generation
+// of its family that the provider has not moved past, or when the user turned
+// it on, unless the user turned it off. The saved default stays shown, so the
+// chip always names a row. With `all`, every row comes back, each marked with
+// whether it leads and whether it is shown, and the picker folds the rest
+// under Legacy models.
 //
 // The router's models sit under their provider, each model once: a model the
 // provider also serves directly is one row, and it takes the router's route
@@ -174,11 +177,13 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       const order = newestFirst(groupCatalogId(group.id), group.models.map((model) => model.id))
       group.models.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
     }
-    const leading = group.classifier ? null : leadingModels(groupCatalogId(group.id), group.models.map((model) => model.id))
+    const ids = group.models.map((model) => model.id)
+    const current = group.classifier ? null : currentGeneration(ids)
+    const past = group.classifier ? null : pastModels(groupCatalogId(group.id), ids)
     for (const model of group.models) {
       const saved = (inventory.default_provider === model.provider && inventory.default_model === model.choice)
         || (inventory.default_provider === group.id && inventory.default_model === model.id)
-      model.lead = !leading || leading.has(model.id)
+      model.lead = !current || (current.has(model.id) && !past.has(model.id))
       model.shown = !model.off && (model.lead || saved || turnedOn.has(modelKey(model.provider, model.choice)) || turnedOn.has(modelKey(group.id, model.id)))
     }
   }
@@ -190,7 +195,7 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
         .map(({ off, lead, shown, ...model }) => all ? { ...model, lead, shown } : model),
     }))
     // The router heading stays in the picker for its Manage link while routing is off.
-    .filter((group) => group.models.length > 0 || (group.manage && !needle && !all))
+    .filter((group) => group.models.length > 0 || (group.manage && !needle))
 }
 
 // The router models the picker hides, as the router's sorted `family/model`

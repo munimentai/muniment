@@ -20,7 +20,7 @@
       try {
         const next = await tauri.invoke('model_router_settings')
         if (!disposed) { settings = next; error = '' }
-      } catch (_) { if (!disposed) error = 'Account capacity could not be read.' }
+      } catch (_) { if (!disposed) error = 'Account usage could not be read.' }
     }
     // A hidden window skips the poll and refreshes once when it shows again.
     const poll = () => { if (!document.hidden) void refresh() }
@@ -30,9 +30,9 @@
     return () => { disposed = true; clearInterval(timer); document.removeEventListener('visibilitychange', poll) }
   })
 </script>
-<div data-panel="capacity" use:panelScroll data-panel-variant="overlay" data-composer-panel class="capacity" role="dialog" aria-label="Account capacity">
-  <header><strong>Capacity</strong><PopupClose label="Close capacity" onclick={onclose} /></header>
-  {#if error}<p role="alert">{error}</p>{:else if !settings}<p role="status">Reading account capacity…</p>{:else}
+<div data-panel="usage" use:panelScroll data-panel-variant="overlay" data-composer-panel class="usage" role="dialog" aria-label="Account usage">
+  <header><strong>Usage</strong><PopupClose label="Close usage" onclick={onclose} /></header>
+  {#if error}<p role="alert">{error}</p>{:else if !settings}<p role="status">Reading account usage…</p>{:else}
     {#if !settings.enabled}<p>Account balancing is off.</p>{:else if !settings.running}<p>The account router is not running.</p>{/if}
     <div class="accounts">
     {#each (settings.accounts ?? []).filter(account => account.source === 'account') as account (account.id)}
@@ -53,7 +53,7 @@
   <footer><button onclick={() => { onclose(); onmanage() }}>Account details</button></footer>
 </div>
 <style>
-  .capacity { width: 100%; box-sizing: border-box; max-height: 60vh; overflow-y: auto; padding: var(--panel-control-inset); font: var(--text-12) var(--font-human); }
+  .usage { width: 100%; box-sizing: border-box; max-height: 60vh; overflow-y: auto; padding: var(--panel-control-inset); font: var(--text-12) var(--font-human); }
   header, .amount, h3 { display: flex; align-items: center; gap: 8px; }
   header, .amount { justify-content: space-between; }
   .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin: 12px 0; }

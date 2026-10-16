@@ -158,19 +158,33 @@ describe('machine picker', () => {
     render(MachinePicker, { list: runtimeList(undefined, 'local'), onselect, onmanage })
     const toggle = screen.getByRole('button', { name: 'Machine: This computer. Choose a machine' })
     await fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(toggle.querySelector('[data-icon=chevrons-down-up]')).not.toBeNull()
+    // The menu is a composer panel, so it opens above the composer like the others.
     const menu = screen.getByRole('menu', { name: 'Machines' })
+    expect(menu).toHaveAttribute('data-composer-panel')
     const items = within(menu).getAllByRole('menuitemradio')
-    expect(items.map((item) => item.textContent.trim().replace(/\s+/g, ' '))).toEqual(['This computer Online', 'Studio Offline', 'Build box Online'])
+    // A globe marks each machine's state in place of a word: green while it answers, red with a slash when it does not.
+    expect(items.map((item) => item.textContent.trim())).toEqual(['This computer', 'Studio', 'Build box'])
+    expect(within(items[0]).getByRole('img', { name: 'Online' }).querySelector('[data-icon=globe]')).not.toBeNull()
+    expect(within(items[1]).getByRole('img', { name: 'Offline' }).querySelector('[data-icon=globe-off]')).not.toBeNull()
+    expect(within(items[2]).getByRole('img', { name: 'Online' })).toHaveClass('online')
     expect(items[0]).toHaveAttribute('aria-checked', 'true')
-    // An offline machine takes no new thread.
-    expect(items[1]).toBeDisabled()
     await fireEvent.click(items[2])
     expect(onselect).toHaveBeenCalledWith(expect.objectContaining({ id: buildBox.id }))
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(toggle.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
+
+    // An offline machine takes no new thread, so it opens Settings → Machines.
+    await fireEvent.click(toggle)
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Studio Offline' }))
+    expect(onselect).toHaveBeenCalledOnce()
+    expect(onmanage).toHaveBeenCalledOnce()
     expect(screen.queryByRole('menu')).toBeNull()
 
     await fireEvent.click(toggle)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Add a machine' }))
-    expect(onmanage).toHaveBeenCalledOnce()
+    expect(onmanage).toHaveBeenCalledTimes(2)
   })
 
   it('shows the machine an open thread lives on without a menu', () => {

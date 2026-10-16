@@ -1484,12 +1484,13 @@ describe('workspace composer entry', () => {
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Model list', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Machines', 'Companies'])
+    // Machines closes Extend under the network mark, and Storage closes Personal.
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Machines', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    expect(within(nav).getByRole('button', { name: 'Machines' }).querySelector('[data-icon=network]')).not.toBeNull()
     expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Model list' }))
-    expect(await within(dialog).findByRole('button', { name: 'Refresh models' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Refresh models' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Appearance' }))
     expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
     expect(within(dialog).queryByText('Summarize older messages to make room. Full history stays saved.')).not.toBeInTheDocument()
@@ -1706,11 +1707,9 @@ describe('workspace composer entry', () => {
     const dialog = await openSettings()
     // The startup read seeds the page, so the list shows while the fresh read runs.
     expect(within(dialog).getByRole('region', { name: 'Ollama' })).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', {name:'Model list'}))
-    expect(within(dialog).getByText('Llama 3.2:3B')).toBeInTheDocument()
     expect(reads).toBe(2)
-    fresh.resolve({ ...held, providers: [{ ...ollama, models: [...ollama.models, { id: 'granite4.2:3b', context: '128K', max_out: '16.4K', thinking: false, images: false }] }] })
-    expect(await within(dialog).findByText('Granite 4.2:3B')).toBeInTheDocument()
+    fresh.resolve({ ...held, providers: [ollama, { id: 'lmstudio', name: 'LM Studio', source: 'local', base_url: 'http://localhost:1234/v1', models: [{ id: 'granite4.2:3b' }] }] })
+    expect(await within(dialog).findByRole('region', { name: 'LM Studio' })).toBeInTheDocument()
   })
 
   it.each([false, true])('disables the endpoint form until a save settles with failure %s', async (fails) => {
@@ -3452,6 +3451,26 @@ describe('thread name', () => {
 
   it('reserves the current-thread dot width in every row', () => {
     expect(appRules.get('.thread-row > span')).toMatch(/flex:\s*0 0 5px/)
+  })
+
+  it('puts the time on a meta line over the title and names no machine while this computer is the only one', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
+    render(App)
+    const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
+    const meta = row.querySelector('.thread-row-meta')
+    expect(meta.querySelector('time[datetime="2026-07-28T11:55:00Z"]')).not.toBeNull()
+    expect(meta).not.toHaveTextContent('This computer')
+    expect(meta.querySelector('.lucide')).toBeNull()
+    // The title leads the reading order, and the meta line draws above it.
+    expect(row.querySelector('.thread-row-body').firstElementChild).toHaveClass('thread-row-title')
+    expect(appRules.get('.thread-row-body')).toMatch(/flex-direction:\s*column-reverse/)
+  })
+
+  it('draws a hovered row lighter than the open thread and a selection darker', () => {
+    const hover = appRules.get('button.thread-row:hover:not([aria-disabled="true"])')
+    expect(hover).toMatch(/background:\s*color-mix\(in srgb, var\(--faint\) 55%, transparent\)/)
+    expect(appRules.get('.active-thread')).toMatch(/background:\s*var\(--faint\)/)
+    expect(appRules.get('.thread-row.selected')).toMatch(/color-mix\(in srgb, var\(--ink\) 14%, var\(--surface\)\)/)
   })
 })
 
@@ -5302,7 +5321,7 @@ describe('voice dictation', () => {
     ['its close control', async (card) => { await fireEvent.click(within(card).getByRole('button', { name: 'Close voice dictation' })) }],
     ['Escape', async () => { await fireEvent.keyDown(document, { key: 'Escape' }) }],
     ['outside click', async () => { await fireEvent.pointerDown(screen.getByRole('button', {name:'Projects',exact:true})) }],
-    ['another composer panel', async () => { window.dispatchEvent(new CustomEvent('muniment:composer-panel',{detail:'capacity'})); await tick() }],
+    ['another composer panel', async () => { window.dispatchEvent(new CustomEvent('muniment:composer-panel',{detail:'usage'})); await tick() }],
   ])('closes the speech model install card with %s and reopens it from Voice', async (_, close) => {
     invoke.mockImplementation(async (command) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -8118,22 +8137,100 @@ it('keeps one composer panel open and dismisses it with Escape or an outside cli
   invoke.mockImplementation((command,args) => command === 'model_router_settings' ? Promise.resolve({accounts:[{id:'subscription',source:'account',family:'anthropic',label:'Anthropic'}]}) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
   render(App)
   await findWorkspaceComposer()
-  await fireEvent.click(await screen.findByRole('button',{name:'Capacity',exact:true}))
-  expect(screen.getByRole('dialog',{name:'Account capacity'})).toBeInTheDocument()
-  expect(document.querySelector('.model-chip [data-icon=chevron-right]')).not.toBeNull()
+  await fireEvent.click(await screen.findByRole('button',{name:'Usage',exact:true}))
+  expect(screen.getByRole('dialog',{name:'Account usage'})).toBeInTheDocument()
+  expect(document.querySelector('.model-chip [data-icon=chevrons-up-down]')).not.toBeNull()
   await fireEvent.click(document.querySelector('.model-chip'))
-  expect(document.querySelector('.model-chip [data-icon=chevron-up]')).not.toBeNull()
-  expect(screen.queryByRole('dialog',{name:'Account capacity'})).not.toBeInTheDocument()
+  expect(document.querySelector('.model-chip [data-icon=chevrons-down-up]')).not.toBeNull()
+  expect(screen.queryByRole('dialog',{name:'Account usage'})).not.toBeInTheDocument()
   expect(screen.getByRole('dialog',{name:'Model'})).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button',{name:'Capacity',exact:true}))
+  await fireEvent.click(screen.getByRole('button',{name:'Usage',exact:true}))
   expect(screen.queryByRole('dialog',{name:'Model'})).not.toBeInTheDocument()
   await fireEvent.keyDown(document,{key:'Escape'})
-  expect(screen.queryByRole('dialog',{name:'Account capacity'})).not.toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button',{name:'Capacity',exact:true}))
+  expect(screen.queryByRole('dialog',{name:'Account usage'})).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button',{name:'Usage',exact:true}))
   await fireEvent.pointerDown(screen.getByRole('button',{name:'Projects',exact:true}))
-  expect(screen.queryByRole('dialog',{name:'Account capacity'})).not.toBeInTheDocument()
+  expect(screen.queryByRole('dialog',{name:'Account usage'})).not.toBeInTheDocument()
 })
 
+
+it('draws the machine, model, thinking level and usage menus with one shared button', async () => {
+  localModeStatus = true
+  threadSummaryResult = []
+  const reasoning = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [
+    { id: 'gpt-5.5', context: '400K', thinking: true, thinking_levels: ['low', 'medium', 'high'], thinking_default: 'medium' },
+  ] }], default_provider: 'openai', default_model: 'gpt-5.5', hidden: [] }
+  const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [
+    { id: 'local', name: 'This computer', kind: 'local', status: 'online', local: true, active: true, scopes: [] },
+    { id: 'box', name: 'Build box', kind: 'container', status: 'online', local: false, active: false, scopes: ['run.write'] },
+  ] }
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command,args) => command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null})
+    : command === 'local_mode_provider_inventory' ? Promise.resolve(reasoning)
+      : command === 'model_router_settings' ? Promise.resolve({accounts:[{id:'subscription',source:'account',family:'openai',label:'OpenAI'}]})
+        : command === 'runtime_list' ? Promise.resolve(machines)
+          : original(command,args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  const buttons = {
+    machine: await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }),
+    model: await screen.findByRole('button', { name: 'Model: GPT 5.5' }),
+    thinking: await screen.findByRole('button', { name: 'Thinking level: Medium' }),
+    usage: await screen.findByRole('button', { name: 'Usage', exact: true }),
+  }
+  const panels = { machine: () => screen.queryByRole('menu', { name: 'Machines' }), model: () => screen.queryByRole('dialog', { name: 'Model' }), thinking: () => screen.queryByRole('menu', { name: 'Thinking level' }), usage: () => screen.queryByRole('dialog', { name: 'Account usage' }) }
+  // Every menu button is the one shared button, so none can drift from the others.
+  for (const [menu, button] of Object.entries(buttons)) {
+    expect(button, menu).toHaveClass('composer-menu-button')
+    expect(button, menu).toHaveAttribute('data-menu', menu)
+    expect(button, menu).not.toHaveAttribute('data-open')
+  }
+  expect(document.querySelectorAll('.composer-row button[aria-haspopup]:not([aria-label="Extensions"]):not(.context-trigger)')).toHaveLength(4)
+  expect(buttons.machine.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
+  expect(buttons.model.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
+  // Opening one menu marks its button open and closes every other menu.
+  for (const [menu, button] of Object.entries(buttons)) {
+    await fireEvent.click(button)
+    await waitFor(() => expect(panels[menu](), menu).not.toBeNull())
+    for (const [other, otherButton] of Object.entries(buttons)) {
+      expect(otherButton.getAttribute('data-open'), `${menu} open, ${other}`).toBe(other === menu ? 'true' : null)
+      expect(otherButton, `${menu} open, ${other}`).toHaveAttribute('aria-expanded', String(other === menu))
+      if (other !== menu) expect(panels[other](), `${menu} open, ${other}`).toBeNull()
+    }
+  }
+  expect(buttons.usage.querySelector('[data-icon=gauge]')).not.toBeNull()
+  await fireEvent.click(buttons.machine)
+  expect(buttons.machine.querySelector('[data-icon=chevrons-down-up]')).not.toBeNull()
+  // A narrow composer keeps the network mark for the machine, the provider mark for the model and the gauge for usage.
+  expect(buttons.machine.querySelector('.narrow [data-icon=network]')).not.toBeNull()
+  expect(buttons.model.querySelector('.icon .logo')).not.toBeNull()
+  expect(buttons.machine).toHaveAttribute('data-tooltip', 'Machine: This computer. Choose a machine')
+})
+
+it('hides a model from the picker and moves a hidden saved default to the row the picker leads with', async () => {
+  localModeStatus = true
+  threadSummaryResult = []
+  const served = { providers: [{ id: 'anthropic', name: 'Anthropic', source: 'key', base_url: null, models: [{ id: 'claude-opus-5-5' }, { id: 'claude-sonnet-5-5' }, { id: 'claude-opus-4-8' }] }], default_provider: 'anthropic', default_model: 'claude-opus-5-5', hidden: [], shown: [] }
+  const original = invoke.getMockImplementation()
+  invoke.mockImplementation((command,args) => command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null})
+    : command === 'local_mode_provider_inventory' ? Promise.resolve(served)
+      : command === 'local_mode_set_model_hidden' || command === 'local_mode_set_default_model' ? Promise.resolve(null)
+        : original(command,args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  await fireEvent.click(await screen.findByRole('button', { name: 'Model: Claude Opus 5.5' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Hide Claude Opus 5.5' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_set_default_model', { provider: 'anthropic', model: 'claude-sonnet-5-5' }))
+  expect(invoke).toHaveBeenCalledWith('local_mode_set_model_hidden', { provider: 'anthropic', model: 'claude-opus-5-5', hidden: true })
+  expect(await screen.findByRole('button', { name: 'Model: Claude Sonnet 5.5' })).toBeInTheDocument()
+  // The hidden model waits under Legacy models, and Show brings an older one back to the current list.
+  const legacy = screen.getByRole('button', { name: /Legacy models/ })
+  expect(legacy).toHaveTextContent('2 models')
+  await fireEvent.click(legacy)
+  await fireEvent.click(screen.getByRole('button', { name: 'Show Claude Opus 4.8' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_set_model_hidden', { provider: 'anthropic', model: 'claude-opus-4-8', hidden: false }))
+  await waitFor(() => expect(screen.getByRole('button', { name: /Legacy models/ })).toHaveTextContent('1 model'))
+})
 
 it('offers the chip model thinking levels, saves a choice and sends it with the prompt', async () => {
   localModeStatus = true
@@ -8179,14 +8276,14 @@ it('shows no thinking control for a model without reasoning', async () => {
   expect(screen.queryByRole('button', { name: /^Thinking level/ })).not.toBeInTheDocument()
 })
 
-it.each([[], [{id:'api',source:'key',family:'openai'}]])('hides composer capacity without subscriptions: %j', async (accounts) => {
+it.each([[], [{id:'api',source:'key',family:'openai'}]])('hides composer usage without subscriptions: %j', async (accounts) => {
   localModeStatus = true
   const original = invoke.getMockImplementation()
   invoke.mockImplementation((command,args) => command === 'model_router_settings' ? Promise.resolve({accounts}) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
   render(App)
   await findWorkspaceComposer()
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
-  expect(screen.queryByRole('button',{name:'Capacity',exact:true})).not.toBeInTheDocument()
+  expect(screen.queryByRole('button',{name:'Usage',exact:true})).not.toBeInTheDocument()
 })
 
 it('renames, archives, restores and deletes a pending artifact through its catalog menu',async()=>{
@@ -8635,11 +8732,13 @@ describe('runtimes', () => {
     })
     render(App)
     await findWorkspaceComposer()
-    // A thread on a paired machine names it in the sidebar.
+    // Once a machine is paired, every row's meta line names its machine by shape and name, with no border and no dot.
     expect(await screen.findByText('Remote work')).toBeInTheDocument()
-    const remoteRow = screen.getByText('Remote work').closest('.thread-row')
-    expect(remoteRow.querySelector('.machine-badge')).toHaveTextContent('Build box, Online')
-    expect(screen.getByText('Local work').closest('.thread-row').querySelector('.machine-badge')).toBeNull()
+    const remoteMeta = screen.getByText('Remote work').closest('.thread-row').querySelector('.thread-row-meta')
+    expect(remoteMeta).toHaveTextContent('Build box')
+    expect(remoteMeta.querySelector('[data-icon=container]')).not.toBeNull()
+    expect(remoteMeta.querySelector('.machine-dot, .machine-badge')).toBeNull()
+    expect(screen.getByText('Local work').closest('.thread-row').querySelector('.thread-row-meta')).toHaveTextContent('This computer')
 
     // The newest thread opens first, and New thread waits for it.
     await waitFor(async () => {
