@@ -480,8 +480,9 @@ The desktop's Pi carries four items:
    for Anthropic through the Claude Code sign-in. They give Pi web search and
    fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
    `bg_result`. They render into `settings.json` as
-   `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` needs an
-   Anthropic `claude-haiku` model and a Bright Data zone of type `serp`.
+   `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` searches
+   through core's built-in keyless engine on loopback, then Exa without a key,
+   in the order the search settings set.
 2. **Pi's MCP support and codemode.** The record server's three tools reach the
    model directly. The user's servers run through `codemode`, a script that calls
    tools and decision models and returns only what the model needs. Extend's
