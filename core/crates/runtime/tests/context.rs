@@ -58,15 +58,15 @@ fn a_thread_reports_its_context_and_compacts_through_the_runtime() {
     let descriptor = stage_pi_stub(&temporary_root);
 
     let storage = open_profile_storage(&profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let runtime_activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::clone(&active),
+        active.clone(),
         profile.clone(),
         config.clone(),
-        Arc::clone(&runtime),
+        runtime.clone(),
         Arc::new(ApplicationMemoryRuntime::new(
             config.clone(),
             profile.join("memory"),
@@ -103,7 +103,7 @@ fn a_thread_reports_its_context_and_compacts_through_the_runtime() {
         &RuntimeHost::default(),
         &profile,
         Arc::clone(&storage),
-        Arc::clone(&runtime),
+        runtime.clone(),
         &runtime_activity,
         &config,
         RUN_ID.into(),
@@ -115,7 +115,7 @@ fn a_thread_reports_its_context_and_compacts_through_the_runtime() {
         None,
         Vec::new(),
         local_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
     )
@@ -137,15 +137,20 @@ fn a_thread_reports_its_context_and_compacts_through_the_runtime() {
     assert!(!usage.estimated);
 
     // A reply in flight in this thread refuses the compaction.
-    *active.lock().unwrap() = Some(ActiveRun {
-        id: RUN_ID.into(),
-        workspace: "local".into(),
-        cancelled: Arc::new(AtomicBool::new(false)),
-        transport: Arc::new(Mutex::new(None)),
-        adapter: Arc::new(Mutex::new(None)),
-        permission_answers: Arc::new(Mutex::new(VecDeque::new())),
-        _activity: runtime_activity.mark_active_run(),
-    });
+    active
+        .install(
+            ActiveRun {
+                id: RUN_ID.into(),
+                workspace: "local".into(),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                transport: Arc::new(Mutex::new(None)),
+                adapter: Arc::new(Mutex::new(None)),
+                permission_answers: Arc::new(Mutex::new(VecDeque::new())),
+                _activity: runtime_activity.mark_active_run(),
+            },
+            Some(&thread),
+        )
+        .unwrap();
     assert_eq!(
         reason(
             boundaries
@@ -154,7 +159,7 @@ fn a_thread_reports_its_context_and_compacts_through_the_runtime() {
         ),
         "This thread is replying. Compact it after the reply finishes."
     );
-    *active.lock().unwrap() = None;
+    active.clear(RUN_ID);
 
     let empty = boundaries
         .create_thread(
@@ -217,7 +222,7 @@ fn a_thread_reports_its_context_and_compacts_through_the_runtime() {
         Some(thread.as_str())
     );
 
-    if let Some(mut runtime) = runtime.lock().unwrap().take() {
+    if let Some(mut runtime) = runtime.slot(&thread).lock().unwrap().take() {
         let _ = runtime.supervisor.shutdown();
     }
     drop(events);

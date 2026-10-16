@@ -86,8 +86,8 @@ fn a_manual_compaction_runs_in_its_thread_and_the_usage_read_answers_its_estimat
         journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),
         cas: LocalCas::open(&root.join("cas")).unwrap(),
     }));
-    let runtime = Arc::new(Mutex::new(None));
-    let active = Mutex::new(None);
+    let processes = muniment_core::pi_execution::PiProcesses::default();
+    let active = muniment_core::active_run::RunRegistry::default();
 
     // A thread with no saved conversation has no usage and nothing to compact.
     let first = uuid::Uuid::now_v7().to_string();
@@ -114,11 +114,12 @@ fn a_manual_compaction_runs_in_its_thread_and_the_usage_read_answers_its_estimat
         .run_thread_id(&first)
         .unwrap()
         .unwrap();
+    let runtime = processes.slot(&thread);
     assert_eq!(
         muniment_core::pi_execution::thread_context_usage(
             &Boundary(root.clone()),
             &storage,
-            &runtime,
+            &processes,
             &active,
             &thread,
             Some("owner"),
@@ -154,7 +155,7 @@ fn a_manual_compaction_runs_in_its_thread_and_the_usage_read_answers_its_estimat
     let usage = muniment_core::pi_execution::thread_context_usage(
         &Boundary(root.clone()),
         &storage,
-        &runtime,
+        &processes,
         &active,
         &thread,
         Some("owner"),
@@ -249,7 +250,7 @@ fn a_manual_compaction_runs_in_its_thread_and_the_usage_read_answers_its_estimat
     let usage = muniment_core::pi_execution::thread_context_usage(
         &Boundary(root.clone()),
         &storage,
-        &runtime,
+        &processes,
         &active,
         &thread,
         Some("owner"),

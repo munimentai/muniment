@@ -418,6 +418,15 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::ModelsShare
         | Operation::ModelsShareBundle
         | Operation::ModelsVault
+        | Operation::AgentList
+        | Operation::AgentRead
+        | Operation::AgentSave
+        | Operation::AgentDelete
+        | Operation::AgentRunNow
+        | Operation::AgentRuns
+        | Operation::RoutineList
+        | Operation::RoutineSave
+        | Operation::RoutineDelete
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }

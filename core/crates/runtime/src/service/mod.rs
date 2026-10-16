@@ -16,8 +16,8 @@ pub use run::{
     run_prompt, ConfigureRunError, PromptAcceptance, PromptLaunch,
 };
 pub use threads::{
-    apply_retention, create_thread, delete_thread, rename_thread, select_thread, stream_run,
-    subscribe_run_commits, thread_page, thread_summaries,
+    apply_retention, create_owned_thread, create_thread, delete_thread, rename_thread,
+    select_thread, stream_run, subscribe_run_commits, thread_page, thread_summaries,
 };
 #[cfg(any(unix, target_os = "windows"))]
 pub use workspace::open_companion_registry;

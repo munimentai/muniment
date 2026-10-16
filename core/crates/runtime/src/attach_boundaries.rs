@@ -7,11 +7,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 #[cfg(any(unix, target_os = "windows"))]
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 #[cfg(any(unix, target_os = "windows"))]
 use std::time::Duration;
 
 use muniment_core::account::TokenSet;
+use muniment_core::active_run::RunRegistry;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::active_run::{ChatDelivery, ChatQueueRequest};
 #[cfg(any(unix, target_os = "windows"))]
@@ -51,7 +52,7 @@ use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::permission_gate::ChatPermissionAnswer;
-use muniment_core::pi_execution::PiRuntime;
+use muniment_core::pi_execution::PiProcesses;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
     append_prepared_run_persistence_failure, prepare_opened_run_with_prompt_storage,
@@ -81,10 +82,10 @@ const ATTACH_PERMISSION_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg_attr(not(any(unix, target_os = "windows")), allow(dead_code))]
 pub struct RuntimeAttachBoundaries {
     storage: SharedStorage,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     profile_directory: PathBuf,
     config_directory: PathBuf,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime: PiProcesses,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
     host: RuntimeHost,
@@ -106,10 +107,10 @@ impl RuntimeAttachBoundaries {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         storage: SharedStorage,
-        active: Arc<Mutex<Option<ActiveRun>>>,
+        active: RunRegistry,
         profile_directory: PathBuf,
         config_directory: PathBuf,
-        runtime: Arc<Mutex<Option<PiRuntime>>>,
+        runtime: PiProcesses,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
         runtime_activity: RuntimeActivityRegistry,
         host: RuntimeHost,
@@ -144,10 +145,10 @@ impl RuntimeAttachBoundaries {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_sign_in(
         storage: SharedStorage,
-        active: Arc<Mutex<Option<ActiveRun>>>,
+        active: RunRegistry,
         profile_directory: PathBuf,
         config_directory: PathBuf,
-        runtime: Arc<Mutex<Option<PiRuntime>>>,
+        runtime: PiProcesses,
         memory_runtime: Arc<ApplicationMemoryRuntime>,
         runtime_activity: RuntimeActivityRegistry,
         host: RuntimeHost,
@@ -308,10 +309,19 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
     }
 
     fn active_run_exists(&self) -> bool {
+        !self.active.is_empty()
+    }
+
+    fn admit_run(&self, thread: Option<&str>) -> Result<(), RunStartError> {
         self.active
-            .lock()
-            .map(|active| active.is_some())
-            .unwrap_or(true)
+            .admits(thread)
+            .map_err(RunStartError::InvalidRequest)
+    }
+
+    fn bind_run_thread(&self, run_id: &str, thread: &str) -> Result<(), RunStartError> {
+        self.active
+            .bind_thread(run_id, thread)
+            .map_err(RunStartError::InvalidRequest)
     }
 
     fn fresh_tokens(&self) -> Result<TokenSet, RunStartError> {
@@ -492,12 +502,8 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
     }
 
     fn cancel_run(&self, workspace: &str, run_id: &str) -> Result<(), RunStartError> {
-        service::cancel_run(
-            Arc::clone(&self.active),
-            workspace.to_owned(),
-            run_id.to_owned(),
-        )
-        .map_err(RunStartError::InvalidRequest)
+        service::cancel_run(self.active.clone(), workspace.to_owned(), run_id.to_owned())
+            .map_err(RunStartError::InvalidRequest)
     }
 
     fn clear_active_run(&self, run_id: &str) {
@@ -515,10 +521,10 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
         };
         let profile_directory = self.profile_directory.clone();
         let storage = Arc::clone(&self.storage);
-        let runtime = Arc::clone(&self.runtime);
+        let runtime = self.runtime.slot(&thread_id);
         let runtime_activity = self.runtime_activity.clone();
         let memory_runtime = Arc::clone(&self.memory_runtime);
-        let active = Arc::clone(&self.active);
+        let active = self.active.clone();
         let chat_events = self.chat_events.clone();
         let pi_artifact = self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT);
         let host = self.host.clone();
@@ -556,7 +562,8 @@ impl RunStartBoundaries for RuntimeAttachBoundaries {
                 .with_host(&host)
                 .with_pi_artifact(pi_artifact)
                 .with_earlier_models(earlier_models)
-                .with_project_context(project_context),
+                .with_project_context(project_context)
+                .with_run_id(&launch.run_id),
                 storage,
                 runtime,
                 runtime_activity,
@@ -654,42 +661,47 @@ impl RuntimeAttachBoundaries {
         run_id: &str,
         notice: Option<String>,
     ) -> Result<AttachResumeAccepted, RunStartError> {
-        if self.active_run_exists() {
-            return Err(RunStartError::InvalidRequest(
-                "A reply is already in progress.".into(),
-            ));
-        }
         let workspace = if self.local_mode() {
             "local"
         } else {
             workspace
         };
-        let belongs_to_workspace = self
-            .storage
-            .lock()
-            .map_err(|error| persistence_error("lock", error.to_string()))?
-            .journal
-            .run_belongs_to_workspace(run_id, workspace)
-            .map_err(|error| persistence_error("journal", error))?;
+        let (belongs_to_workspace, thread) = {
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|error| persistence_error("lock", error.to_string()))?;
+            (
+                storage
+                    .journal
+                    .run_belongs_to_workspace(run_id, workspace)
+                    .map_err(|error| persistence_error("journal", error))?,
+                storage
+                    .journal
+                    .run_thread_id(run_id)
+                    .map_err(|error| persistence_error("journal", error))?,
+            )
+        };
         if !belongs_to_workspace {
             return Err(RunStartError::InvalidRequest(
                 "The run was not found or is inaccessible.".into(),
             ));
         }
+        self.admit_run(thread.as_deref())?;
         let tokens = self.fresh_tokens()?;
         let grant = self.configure_run(run_id, "", &tokens, Some(workspace))?;
         service::resume_run_with_notice(
             &self.host,
             &self.profile_directory,
             Arc::clone(&self.storage),
-            Arc::clone(&self.runtime),
+            self.runtime.clone(),
             &self.runtime_activity,
             &self.config_directory,
             run_id.to_owned(),
             tokens.access_token,
             tokens.subject,
             grant,
-            Arc::clone(&self.active),
+            self.active.clone(),
             RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
             notice,
@@ -726,9 +738,13 @@ impl RuntimeAttachBoundaries {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
-impl RunAttachBoundaries for RuntimeAttachBoundaries {
-    fn submit_run(
+impl RuntimeAttachBoundaries {
+    /// Accepts a prompt as the run `run_id` and drives it on its own thread.
+    /// The agent run queue names the run, so its record and the journal share
+    /// one id.
+    pub fn submit_run_with_id(
         &self,
+        run_id: String,
         workspace: &str,
         text: String,
         files: Vec<SelectedFile>,
@@ -741,13 +757,8 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 "Enter a message before sending.".into(),
             ));
         }
-        if self.active_run_exists() {
-            return Err(RunStartError::InvalidRequest(
-                "A reply is already in progress.".into(),
-            ));
-        }
+        self.admit_run(thread_id.as_deref())?;
         let tokens = self.fresh_tokens()?;
-        let run_id = new_run_id();
         let grant = self.configure_run(
             &run_id,
             &prompt,
@@ -759,7 +770,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             &self.host,
             &self.profile_directory,
             Arc::clone(&self.storage),
-            Arc::clone(&self.runtime),
+            self.runtime.clone(),
             &self.runtime_activity,
             &self.config_directory,
             run_id,
@@ -771,7 +782,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             tokens.subject,
             files,
             grant,
-            Arc::clone(&self.active),
+            self.active.clone(),
             RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
         )
@@ -789,6 +800,27 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             committed_seq: accepted.committed_seq,
             accepted_at: accepted.accepted_at,
         })
+    }
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+impl RunAttachBoundaries for RuntimeAttachBoundaries {
+    fn submit_run(
+        &self,
+        workspace: &str,
+        text: String,
+        files: Vec<SelectedFile>,
+        thread_id: Option<String>,
+        thinking_level: Option<String>,
+    ) -> Result<AttachPromptAccepted, RunStartError> {
+        self.submit_run_with_id(
+            new_run_id(),
+            workspace,
+            text,
+            files,
+            thread_id,
+            thinking_level,
+        )
     }
 
     fn resume_run(
@@ -812,7 +844,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             workspace
         };
         service::queue_run_message(
-            Arc::clone(&self.active),
+            self.active.clone(),
             ChatQueueRequest {
                 run_id: run_id.to_owned(),
                 workspace: Some(workspace.to_owned()),
@@ -848,14 +880,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         .with_pi_artifact(self.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT));
         let chat_grants = Arc::clone(&self.host.chat_grants);
         let storage = Arc::clone(&self.storage);
-        let runtime = Arc::clone(&self.runtime);
-        let active = Arc::clone(&self.active);
+        let processes = self.runtime.clone();
+        let active = self.active.clone();
         let thread = thread_id.to_owned();
         Ok(self.contexts.read(thread_id, move || {
             muniment_core::pi_execution::thread_context_usage(
                 &app,
                 &storage,
-                &runtime,
+                &processes,
                 &active,
                 &thread,
                 tokens.subject.as_deref(),
@@ -885,20 +917,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 "This thread is already compacting.",
             ));
         }
-        let active_thread = self
-            .active
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?
-            .as_ref()
-            .map(|run| run.id.clone());
-        if let Some(run_id) = active_thread {
-            let replying = self.run_thread_id(&run_id).ok().as_deref() == Some(thread_id);
-            return Err(ProtocolError::invalid_request_with_reason(if replying {
-                "This thread is replying. Compact it after the reply finishes."
-            } else {
-                "A reply is already in progress."
-            }));
+        if self.active.thread_run(thread_id).is_some() {
+            return Err(ProtocolError::invalid_request_with_reason(
+                "This thread is replying. Compact it after the reply finishes.",
+            ));
         }
+        self.active
+            .admits(Some(thread_id))
+            .map_err(ProtocolError::invalid_request_with_reason)?;
         let tokens = self
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?;
@@ -934,7 +960,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             &self.host,
             &self.profile_directory,
             Arc::clone(&self.storage),
-            Arc::clone(&self.runtime),
+            self.runtime.clone(),
             &self.runtime_activity,
             &self.config_directory,
             run_id.clone(),
@@ -944,7 +970,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             tokens.access_token,
             tokens.subject,
             grant,
-            Arc::clone(&self.active),
+            self.active.clone(),
             RuntimeChatEventTarget::Broadcast(self.chat_events.clone()),
             self.pi_artifact,
         )
@@ -1578,6 +1604,30 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         Ok(self.models.subscribe())
     }
 
+    fn agent_operation(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        if muniment_core::home::configured_home(&self.profile_directory)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return Err(ProtocolError::invalid_request_with_reason(
+                "Choose a Home folder before managing agents.",
+            ));
+        }
+        muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
+            .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
+    fn subscribe_agent_runs(&self) -> Result<mpsc::Receiver<serde_json::Value>, ProtocolError> {
+        Ok(muniment_core::agent_runs::subscribe(
+            &self.profile_directory,
+        ))
+    }
+
     fn queue_attach_permission_answer(
         &self,
         workspace: &str,
@@ -1586,7 +1636,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         answer: ChatPermissionAnswer,
     ) -> Result<std::sync::mpsc::Receiver<Option<u64>>, RunStartError> {
         let committed_seq = service::answer_permission(
-            Arc::clone(&self.active),
+            self.active.clone(),
             workspace.to_owned(),
             run_id.to_owned(),
             gate_id.to_owned(),

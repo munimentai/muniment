@@ -2,12 +2,12 @@
 //! `muniment_core::relay_publisher` drives.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatDelivery,
-    ChatQueueRequest,
+    ChatQueueRequest, RunRegistry,
 };
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::journal::EventPayload;
@@ -17,7 +17,6 @@ use muniment_core::relay_publisher::{
     relay_state_path, RelayAccount, RelayConnection, RelayPublisher, RelayRuntime,
 };
 use muniment_core::run_events::{ChatEventSubscription, SharedStorage};
-use muniment_core::run_start::ActiveRun;
 use muniment_core::serde_json;
 
 use crate::host::RuntimeHost;
@@ -62,7 +61,7 @@ impl RelayAccount for Account {
 }
 
 struct Runs {
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     chat_events: RuntimeChatEventBroadcast,
     storage: SharedStorage,
 }
@@ -136,7 +135,7 @@ pub(crate) fn start(
     host: &RuntimeHost,
     runtime_activity: RuntimeActivityRegistry,
     profile_directory: PathBuf,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     chat_events: RuntimeChatEventBroadcast,
     storage: SharedStorage,
 ) -> Option<RelayPublisher> {
@@ -173,7 +172,7 @@ mod tests {
             &RuntimeHost::default(),
             RuntimeActivityRegistry::default(),
             profile.clone(),
-            Arc::new(Mutex::new(None)),
+            RunRegistry::default(),
             RuntimeChatEventBroadcast::default(),
             storage,
         );

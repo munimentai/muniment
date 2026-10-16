@@ -1,6 +1,7 @@
 //! Thread and run stream service operations.
 
 use super::runtime_provenance;
+use muniment_core::active_run::RunRegistry;
 use muniment_core::attach::desktop_service_message::RunStreamPage;
 use muniment_core::attach::thread_service::ThreadListService;
 use muniment_core::attach::ProtocolError;
@@ -14,13 +15,11 @@ use muniment_core::journal::thread_mutation::{
 use muniment_core::journal::thread_summaries::ThreadSummaryPage;
 use muniment_core::owned_threads::chat_thread_summaries_page;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
-use muniment_core::run_start::ActiveRun;
 use muniment_core::thread_history::{
     chat_thread_open_page_without_prompts, load_page_prompts, ChatThreadOpenPage, HistoryRuntime,
 };
 use muniment_core::thread_ownership::subject_owns_first_run;
 use std::path::Path;
-use std::sync::Mutex;
 
 fn lock_error(error: impl std::fmt::Display) -> String {
     format!("Conversation history lock failed: {error}")
@@ -99,6 +98,23 @@ pub fn create_thread(
     create_thread_now(&mut storage.journal, &workspace, provenance).map_err(journal_error)
 }
 
+/// Creates a thread that `owner` owns, as the subject a run in it records.
+pub fn create_owned_thread(
+    storage: SharedStorage,
+    workspace: String,
+    attach_profile: String,
+    owner: Option<String>,
+    runtime_version: &str,
+) -> Result<String, String> {
+    let mut provenance = runtime_provenance(runtime_version);
+    provenance.actor_id = owner;
+    provenance
+        .extra
+        .insert("attach_profile".into(), attach_profile.into());
+    let mut storage = storage.lock().map_err(lock_error)?;
+    create_thread_now(&mut storage.journal, &workspace, provenance).map_err(journal_error)
+}
+
 /// Renames one thread owned by one subject.
 pub fn rename_thread(
     storage: SharedStorage,
@@ -159,7 +175,7 @@ pub fn apply_retention(
 pub fn thread_page(
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
-    active: &Mutex<Option<ActiveRun>>,
+    active: &RunRegistry,
     subject: Option<String>,
     thread_id: String,
     limit: usize,
@@ -168,8 +184,7 @@ pub fn thread_page(
     let profile_directory = profile_directory.as_ref();
     let profile = ChatProfile::new(profile_directory);
     let mut page = {
-        // Keep ownership stable until the journal snapshot completes.
-        let active = active.lock().map_err(lock_error)?;
+        let active_run_id = active.thread_run(&thread_id);
         let mut storage = storage.lock().map_err(lock_error)?;
         let ChatStorage { journal, cas } = &mut *storage;
         chat_thread_open_page_without_prompts(
@@ -178,7 +193,7 @@ pub fn thread_page(
             subject.as_deref(),
             HistoryRuntime {
                 session_root: &profile.pi_session_root(),
-                active_run_id: active.as_ref().map(|run| run.id.as_str()),
+                active_run_id: active_run_id.as_deref(),
             },
             &thread_id,
             limit,
@@ -186,6 +201,16 @@ pub fn thread_page(
         )
         .map_err(journal_error)?
     };
+    // A routine run that replied with the silent reply posts nothing.
+    if let Ok(runs) = muniment_core::agent_runs::RunStore::open(profile_directory) {
+        page.entries.retain(|entry| {
+            !runs
+                .get(&entry.run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|run| run.silent)
+        });
+    }
     // Each prompt is one keychain read. The journal lock is released first,
     // so a slow keychain never holds up a run's appends.
     load_page_prompts(&mut page, subject.as_deref()).map_err(journal_error)?;

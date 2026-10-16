@@ -38,6 +38,8 @@ mod sink;
 pub mod update;
 mod windows_attach_loop;
 
+#[cfg(any(unix, target_os = "windows"))]
+pub use agent_schedule::STUCK_CANCEL_REASON;
 pub use attach_boundaries::RuntimeAttachBoundaries;
 #[cfg(target_os = "linux")]
 pub use attach_listener::{

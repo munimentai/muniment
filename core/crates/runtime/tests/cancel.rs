@@ -27,9 +27,9 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
 
     let run_id = "018f0000-0000-7000-8000-000000000113";
     let storage = open_profile_storage(&profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let runtime_activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let (subscriber, events) = mpsc::channel();
     std::thread::scope(|scope| {
         let run = scope.spawn(|| {
@@ -37,7 +37,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 &RuntimeHost::default(),
                 &profile,
                 Arc::clone(&storage),
-                Arc::clone(&runtime),
+                runtime.clone(),
                 &runtime_activity,
                 &config,
                 run_id.into(),
@@ -49,7 +49,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 Some("owner".into()),
                 Vec::new(),
                 fixture_grant(),
-                Arc::clone(&active),
+                active.clone(),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )
@@ -58,14 +58,14 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
             events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
             "thinking"
         );
-        cancel_run(Arc::clone(&active), "workspace-a".into(), run_id.into()).unwrap();
+        cancel_run(active.clone(), "workspace-a".into(), run_id.into()).unwrap();
         run.join().unwrap().unwrap();
     });
 
     let captured = fs::read_to_string(abort_capture).unwrap();
     assert!(captured.contains(r#""type":"abort""#));
     assert_eq!(
-        cancel_run(Arc::clone(&active), "workspace-a".into(), run_id.into()),
+        cancel_run(active.clone(), "workspace-a".into(), run_id.into()),
         Err("That reply is no longer active.".into())
     );
     let journal_events = storage.lock().unwrap().journal.events(run_id).unwrap();

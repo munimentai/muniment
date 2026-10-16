@@ -374,6 +374,16 @@ fn pi_resume(args: Vec<String>) {
                             "title":"muniment:memory-save", "prefill":fact
                         })
                     );
+                } else if let Ok(request) = std::env::var("PI_RESUME_STUB_EDITOR_REQUEST") {
+                    // A bridge request such as the agent permission check.
+                    let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"editor-1", "method":"editor",
+                            "title":request["title"], "prefill":request["prefill"].to_string()
+                        })
+                    );
                 } else if let Ok(query) = std::env::var("PI_RESUME_STUB_MEMORY_QUERY") {
                     println!(
                         "{}",
@@ -384,9 +394,11 @@ fn pi_resume(args: Vec<String>) {
                         })
                     );
                 } else {
+                    let reply = std::env::var("PI_RESUME_STUB_REPLY")
+                        .unwrap_or_else(|_| " resumed".to_owned());
                     println!(
                         "{}",
-                        serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":" resumed"}})
+                        serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":reply}})
                     );
                     if std::env::var_os("PI_RESUME_STUB_TOOL_EVENTS").is_some() {
                         println!(
@@ -440,6 +452,14 @@ fn pi_resume(args: Vec<String>) {
                 }
             }
             "extension_ui_response" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_EDITOR_CAPTURE") {
+                    let mut capture = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(capture, "{request}").unwrap();
+                }
                 if let Ok(path) = std::env::var("PI_RESUME_STUB_PERMISSION_CAPTURE") {
                     let mut capture = fs::OpenOptions::new()
                         .create(true)

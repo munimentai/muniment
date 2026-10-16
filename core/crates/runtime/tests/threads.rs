@@ -112,7 +112,7 @@ fn creates_a_thread_for_a_run_and_rejects_invalid_inputs_without_events() {
     let page = thread_page(
         &profile,
         Arc::clone(&storage),
-        &std::sync::Mutex::new(None),
+        &muniment_core::active_run::RunRegistry::default(),
         Some("owner".into()),
         thread_id,
         10,
@@ -145,15 +145,21 @@ fn thread_history_uses_runtime_ownership_for_an_open_effect() {
         storage.journal.append(1, &event).unwrap();
     }
     let activity = muniment_core::attach::RuntimeActivityRegistry::default();
-    let active = std::sync::Mutex::new(Some(muniment_core::run_start::ActiveRun {
-        id: run_id.into(),
-        workspace: "workspace-a".into(),
-        cancelled: Default::default(),
-        transport: Default::default(),
-        adapter: Default::default(),
-        permission_answers: Default::default(),
-        _activity: activity.mark_active_run(),
-    }));
+    let active = muniment_core::active_run::RunRegistry::default();
+    active
+        .install(
+            muniment_core::run_start::ActiveRun {
+                id: run_id.into(),
+                workspace: "workspace-a".into(),
+                cancelled: Default::default(),
+                transport: Default::default(),
+                adapter: Default::default(),
+                permission_answers: Default::default(),
+                _activity: activity.mark_active_run(),
+            },
+            Some(&thread_id),
+        )
+        .unwrap();
     let read = || {
         thread_page(
             &temporary.profile,
@@ -205,7 +211,7 @@ fn lists_threads_and_opens_the_selected_thread() {
     let page = thread_page(
         &profile,
         Arc::clone(&storage),
-        &std::sync::Mutex::new(None),
+        &muniment_core::active_run::RunRegistry::default(),
         Some("owner".into()),
         first_thread,
         10,
@@ -264,7 +270,7 @@ fn thread_operations_report_the_poisoned_storage_lock() {
         thread_page(
             &profile.profile,
             Arc::clone(&storage),
-            &std::sync::Mutex::new(None),
+            &muniment_core::active_run::RunRegistry::default(),
             None,
             "thread".into(),
             10,
@@ -294,7 +300,7 @@ fn history_and_ownership_keep_the_underlying_journal_error() {
     let history = thread_page(
         &profile.profile,
         Arc::clone(&storage),
-        &std::sync::Mutex::new(None),
+        &muniment_core::active_run::RunRegistry::default(),
         Some("owner".into()),
         thread_id,
         10,
@@ -330,7 +336,7 @@ fn rejects_a_thread_owned_by_another_subject() {
     let error = thread_page(
         &profile,
         storage,
-        &std::sync::Mutex::new(None),
+        &muniment_core::active_run::RunRegistry::default(),
         Some("other".into()),
         thread_id,
         10,

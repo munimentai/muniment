@@ -3,6 +3,7 @@
 use muniment_core::account::TokenSet;
 use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatQueueRequest,
+    RunRegistry,
 };
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::chat_coordinate::{coordinate, coordinate_compaction};
@@ -11,15 +12,15 @@ use muniment_core::chat_launch::{
 };
 use muniment_core::chat_profile::ChatProfile;
 use muniment_core::chat_resume::{
-    clear_active_run, install_active_run, install_resume_run, resumable_context,
-    run_resume as drive_resume, ResumeLaunch,
+    clear_active_run, install_resume_run, resumable_context, run_resume as drive_resume,
+    ResumeLaunch,
 };
 use muniment_core::chat_view::{chat_attachments, ChatAttachment};
 use muniment_core::engine::CompactionOutcome;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
-use muniment_core::pi_execution::PiRuntime;
+use muniment_core::pi_execution::{PiProcesses, PiRuntime};
 use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{
     prepare_opened_run_with_prompt_storage, record_persistence_failure, OpenSelectedFile,
@@ -52,7 +53,7 @@ pub struct PromptLaunch {
     runtime: Arc<Mutex<Option<PiRuntime>>>,
     memory_runtime: Arc<ApplicationMemoryRuntime>,
     runtime_activity: RuntimeActivityRegistry,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     run_id: String,
     thread_id: String,
     prompt: String,
@@ -101,7 +102,7 @@ pub fn accept_prompt(
     host: &RuntimeHost,
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    processes: PiProcesses,
     runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
@@ -113,7 +114,7 @@ pub fn accept_prompt(
     subject: Option<String>,
     files: Vec<OpenSelectedFile>,
     grant: ChatGrant,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
@@ -121,7 +122,7 @@ pub fn accept_prompt(
         host,
         profile_directory.as_ref(),
         storage,
-        runtime,
+        processes,
         runtime_activity,
         config_directory.as_ref(),
         run_id,
@@ -147,7 +148,7 @@ pub fn accept_compaction(
     host: &RuntimeHost,
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    processes: PiProcesses,
     runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
@@ -157,7 +158,7 @@ pub fn accept_compaction(
     access_token: String,
     subject: Option<String>,
     grant: ChatGrant,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<PromptLaunch, String> {
@@ -165,7 +166,7 @@ pub fn accept_compaction(
         host,
         profile_directory.as_ref(),
         storage,
-        runtime,
+        processes,
         runtime_activity,
         config_directory.as_ref(),
         run_id,
@@ -190,7 +191,7 @@ fn accept_run(
     host: &RuntimeHost,
     profile_directory: &Path,
     storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    processes: PiProcesses,
     runtime_activity: &RuntimeActivityRegistry,
     config_directory: &Path,
     run_id: String,
@@ -203,7 +204,7 @@ fn accept_run(
     subject: Option<String>,
     files: Vec<OpenSelectedFile>,
     grant: ChatGrant,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
@@ -215,8 +216,7 @@ fn accept_run(
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
-    install_active_run(
-        &active,
+    active.install(
         ActiveRun {
             id: run_id.clone(),
             workspace: grant.workspace.clone(),
@@ -226,6 +226,7 @@ fn accept_run(
             permission_answers: Arc::clone(&permission_answers),
             _activity: runtime_activity.mark_active_run(),
         },
+        thread_id.as_deref(),
     )?;
     let setup = (|| {
         let mut notice = None;
@@ -317,6 +318,21 @@ fn accept_run(
                 }
             }
         };
+        if let Err(error) = active.bind_thread(&run_id, &thread_id) {
+            let mut storage = storage
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            record_persistence_failure(
+                &mut storage.journal,
+                &mut prepared.1,
+                &run_id,
+                prepared.0,
+                subject.as_deref(),
+                "muniment-runtime",
+                host.runtime_version,
+            );
+            return Err(error);
+        }
         if let Err(error) = memory_runtime.open_session(
             &run_id,
             &thread_id,
@@ -369,7 +385,7 @@ fn accept_run(
     let launch = PromptLaunch {
         profile_directory: profile_directory.to_path_buf(),
         storage,
-        runtime,
+        runtime: processes.slot(&thread_id),
         memory_runtime,
         runtime_activity: runtime_activity.clone(),
         active,
@@ -412,7 +428,8 @@ pub fn drive_prompt(launch: PromptLaunch) {
             launch.grant.workspace.clone(),
         )
         .with_host(&launch.host)
-        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT)),
+        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT))
+        .with_run_id(&launch.run_id),
         launch.storage,
         launch.runtime,
         launch.runtime_activity,
@@ -447,7 +464,8 @@ pub fn drive_compaction(launch: PromptLaunch) -> Result<CompactionOutcome, Strin
             launch.grant.workspace.clone(),
         )
         .with_host(&launch.host)
-        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT)),
+        .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT))
+        .with_run_id(&launch.run_id),
         launch.storage,
         launch.runtime,
         launch.runtime_activity,
@@ -477,7 +495,7 @@ pub fn run_prompt(
     host: &RuntimeHost,
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    processes: PiProcesses,
     runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
@@ -489,7 +507,7 @@ pub fn run_prompt(
     subject: Option<String>,
     files: Vec<OpenSelectedFile>,
     grant: ChatGrant,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
@@ -497,7 +515,7 @@ pub fn run_prompt(
         host,
         profile_directory,
         storage,
-        runtime,
+        processes,
         runtime_activity,
         config_directory,
         run_id,
@@ -518,25 +536,18 @@ pub fn run_prompt(
 }
 
 /// Queues a message for the active run.
-pub fn queue_run_message(
-    active: Arc<Mutex<Option<ActiveRun>>>,
-    request: ChatQueueRequest,
-) -> Result<(), String> {
+pub fn queue_run_message(active: RunRegistry, request: ChatQueueRequest) -> Result<(), String> {
     queue_message(&active, request)
 }
 
 /// Cancels the active run in one workspace.
-pub fn cancel_run(
-    active: Arc<Mutex<Option<ActiveRun>>>,
-    workspace: String,
-    run_id: String,
-) -> Result<(), String> {
+pub fn cancel_run(active: RunRegistry, workspace: String, run_id: String) -> Result<(), String> {
     cancel_active_run(&active, &run_id, Some(&workspace))
 }
 
 /// Answers one permission gate and returns its committed run sequence.
 pub fn answer_permission(
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     workspace: String,
     run_id: String,
     gate_id: String,
@@ -557,14 +568,14 @@ pub fn resume_run(
     host: &RuntimeHost,
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    processes: PiProcesses,
     runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
     access_token: String,
     subject: Option<String>,
     grant: ChatGrant,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(), String> {
@@ -572,7 +583,7 @@ pub fn resume_run(
         host,
         profile_directory,
         storage,
-        runtime,
+        processes,
         runtime_activity,
         config_directory,
         run_id,
@@ -593,14 +604,14 @@ pub fn resume_run_with_notice(
     host: &RuntimeHost,
     profile_directory: impl AsRef<Path>,
     storage: SharedStorage,
-    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    processes: PiProcesses,
     runtime_activity: &RuntimeActivityRegistry,
     config_directory: impl AsRef<Path>,
     run_id: String,
     access_token: String,
     subject: Option<String>,
     grant: ChatGrant,
-    active: Arc<Mutex<Option<ActiveRun>>>,
+    active: RunRegistry,
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
     notice: Option<String>,
@@ -649,6 +660,7 @@ pub fn resume_run_with_notice(
         grant.minimum_cacheable_prefix_characters,
     )?;
     let (attempt, result) = std::sync::mpsc::channel();
+    let runtime = processes.slot(&thread_id);
     drive_resume(ResumeLaunch {
         sink: RuntimeChatEventSink::with_target(
             profile_directory,
@@ -658,7 +670,8 @@ pub fn resume_run_with_notice(
             grant.workspace.clone(),
         )
         .with_host(host)
-        .with_pi_artifact(pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT)),
+        .with_pi_artifact(pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT))
+        .with_run_id(&run_id),
         storage,
         runtime,
         runtime_activity: runtime_activity.clone(),

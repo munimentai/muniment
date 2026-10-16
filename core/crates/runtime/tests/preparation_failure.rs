@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_core::journal::EventPayload;
@@ -17,7 +17,7 @@ fn memory_session_failure_ends_the_prepared_run() {
     let config = temporary_profile.config.clone();
     std::fs::write(config.join("home.json"), "invalid json").unwrap();
     let storage = open_profile_storage(&profile).unwrap();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let runtime_activity = RuntimeActivityRegistry::new();
     let run_id = "018f0000-0000-7000-8000-000000000001";
 
@@ -25,7 +25,7 @@ fn memory_session_failure_ends_the_prepared_run() {
         &RuntimeHost::default(),
         &profile,
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        muniment_core::pi_execution::PiProcesses::default(),
         &runtime_activity,
         &config,
         run_id.into(),
@@ -37,7 +37,7 @@ fn memory_session_failure_ends_the_prepared_run() {
         Some("owner".into()),
         Vec::new(),
         fixture_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         None,
     );
@@ -52,7 +52,7 @@ fn memory_session_failure_ends_the_prepared_run() {
         std::fs::read_to_string(config.join("home.json")).unwrap(),
         "invalid json"
     );
-    assert!(active.lock().unwrap().is_none());
+    assert!(active.is_empty());
     let events = storage.lock().unwrap().journal.events(run_id).unwrap();
     let failed = events.last().unwrap();
     assert_eq!(failed.run_seq, 2);

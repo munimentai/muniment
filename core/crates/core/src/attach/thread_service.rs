@@ -629,6 +629,24 @@ pub trait ThreadListService {
     ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
+
+    /// Runs one agent operation, such as `agent.list` or `routine.save`, and
+    /// answers its body.
+    fn agent_operation(
+        &mut self,
+        _operation: super::Operation,
+        _body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
+    /// Subscribes to agent run changes, each the body of an
+    /// `agent.run_updated` event.
+    fn subscribe_agent_runs(
+        &mut self,
+    ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
 }
 
 impl<F> ThreadListService for F

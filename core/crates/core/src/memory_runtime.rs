@@ -172,6 +172,13 @@ impl ApplicationMemoryRuntime {
     }
 
     fn write_agent_extension(&self, session: &str) -> Result<(), MemoryIndexError> {
+        let thread = self
+            .contexts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session)
+            .map(|(thread, _)| thread.clone())
+            .ok_or(MemoryIndexError::InvalidToolArguments)?;
         let definition = self
             .tool_definition_for_turn(session)
             .ok_or(MemoryIndexError::InvalidToolArguments)?;
@@ -240,15 +247,29 @@ impl ApplicationMemoryRuntime {
             let _ = std::fs::remove_file(&temporary);
             return Err(MemoryIndexError::Io(error));
         }
-        if let Err(error) = replace_extension(&temporary, &self.agent_extension_path()) {
+        if let Err(error) = replace_extension(&temporary, &self.agent_extension_path(&thread)) {
             let _ = std::fs::remove_file(&temporary);
             return Err(MemoryIndexError::Io(error));
         }
         Ok(())
     }
 
-    pub fn agent_extension_path(&self) -> PathBuf {
-        self.database_root.join("memory-search-extension.js")
+    /// The tool extension one thread's runs load. Each thread has its own
+    /// file, so runs in different threads at once never replace each other's.
+    pub fn agent_extension_path(&self, thread: &str) -> PathBuf {
+        let name: String = thread
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(80)
+            .collect();
+        self.database_root
+            .join(format!("memory-search-extension-{name}.js"))
     }
 
     pub fn open_session_for_home(
@@ -428,6 +449,7 @@ impl ApplicationMemoryRuntime {
                 Ok(
                     serde_json::json!({"agents": listing.agents.into_iter().map(|a| serde_json::json!({
                     "id": a.id, "name": a.name, "projectId": a.project_id, "schedule": a.schedule,
+                    "routines": a.routines, "paused_reason": a.paused_reason,
                     "run": listing.state.runs.get(&a.id),
                 })).collect::<Vec<_>>(), "projects": crate::projects::list(&self.config)?.projects}),
                 )
@@ -435,11 +457,12 @@ impl ApplicationMemoryRuntime {
             "agent-read" => {
                 let id: Id = serde_json::from_str(arguments)
                     .map_err(|_| "The agent arguments are invalid.")?;
-                Ok(serde_json::json!({"agent": crate::agents::get(&self.config, &id.id)?}))
+                Ok(serde_json::json!({"agent": crate::agents::read(&self.config, &id.id)?}))
             }
             "agent-save" => {
-                let agent: crate::agents::Agent = serde_json::from_str(arguments)
+                let arguments: serde_json::Value = serde_json::from_str(arguments)
                     .map_err(|_| "The agent arguments are invalid.")?;
+                let agent = merge_agent(&self.config, arguments)?;
                 let creating = agent.id.is_empty();
                 let agent = crate::agents::save(&self.config, agent)?;
                 if creating {
@@ -464,8 +487,53 @@ impl ApplicationMemoryRuntime {
             "agent-run" => {
                 let id: Id = serde_json::from_str(arguments)
                     .map_err(|_| "The agent arguments are invalid.")?;
-                crate::agents::queue_run(&self.config, &id.id)?;
-                Ok(serde_json::json!({"queued": true, "id": id.id}))
+                let run = crate::agents::run_now(&self.config, &id.id, None, Some("agent"))?;
+                Ok(serde_json::json!({"queued": true, "id": id.id, "run": run}))
+            }
+            "routine-list" | "routine-save" | "routine-delete" => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct RoutineArguments {
+                    #[serde(default)]
+                    agent_id: Option<String>,
+                    #[serde(default)]
+                    routine: Option<crate::agents::Routine>,
+                    #[serde(default)]
+                    routine_id: Option<String>,
+                }
+                let request: RoutineArguments = serde_json::from_str(arguments)
+                    .map_err(|_| "The routine arguments are invalid.")?;
+                let agent_id = match request.agent_id {
+                    Some(agent_id) => agent_id,
+                    None => crate::agents::state(&self.config)?
+                        .threads
+                        .get(&thread)
+                        .cloned()
+                        .ok_or("Name the agent: this thread belongs to no agent.")?,
+                };
+                match tool {
+                    "routine-list" => Ok(serde_json::json!({
+                        "agent_id": agent_id,
+                        "routines": crate::agents::routines(&self.config, &agent_id)?,
+                    })),
+                    "routine-save" => {
+                        let mut routine = request.routine.ok_or("Give the routine to save.")?;
+                        // A routine the agent writes is the agent's, whatever it claims.
+                        routine.created_from = crate::agents::CreatedFrom::Agent;
+                        let routine =
+                            crate::agents::save_routine(&self.config, &agent_id, routine)?;
+                        Ok(
+                            serde_json::json!({"saved": true, "agent_id": agent_id, "routine": routine}),
+                        )
+                    }
+                    _ => {
+                        let routine_id = request.routine_id.ok_or("Name the routine to delete.")?;
+                        crate::agents::delete_routine(&self.config, &agent_id, &routine_id)?;
+                        Ok(
+                            serde_json::json!({"deleted": true, "agent_id": agent_id, "routine_id": routine_id}),
+                        )
+                    }
+                }
             }
             _ => Err("The agent tool is unknown.".into()),
         }
@@ -648,19 +716,55 @@ const EDITOR_TOOLS: &str = r#"  function registerEditorTools(definitions) {
 "#;
 
 /// Agent, artifact and browser tools. Every chat has them whatever the recall settings.
+/// The agent an `agent-save` call describes: the saved agent with each
+/// field the call names replaced, so a field the model leaves out keeps its
+/// value. A call without an id creates an agent from its fields alone.
+fn merge_agent(
+    profile: &std::path::Path,
+    arguments: serde_json::Value,
+) -> Result<crate::agents::Agent, String> {
+    let serde_json::Value::Object(fields) = arguments else {
+        return Err("The agent arguments are invalid.".into());
+    };
+    let id = fields
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let mut merged = if id.is_empty() {
+        serde_json::Map::new()
+    } else {
+        match serde_json::to_value(crate::agents::get(profile, &id)?) {
+            Ok(serde_json::Value::Object(saved)) => saved,
+            _ => return Err("The agent could not be read.".into()),
+        }
+    };
+    for (key, value) in fields {
+        merged.insert(key, value);
+    }
+    serde_json::from_value(serde_json::Value::Object(merged))
+        .map_err(|_| "The agent arguments are invalid.".into())
+}
+
 const AGENT_TOOLS: &str = r#"  const idSchema = {type:'object',properties:{id:{type:'string'}},required:['id'],additionalProperties:false};
   registerEditorTools([
     ['creation-plan', 'Set creation goal', 'Set or refine this chat thread as an agent or artifact with a user-approved goal and specified output. Use before building, and update when the user changes the goal. This saves metadata, not the output.', {type:'object',properties:{kind:{type:'string',enum:['agent','artifact']},goal:{type:'string'},output:{type:'string'}},required:['kind','goal','output'],additionalProperties:false}],
     ['artifact-publish', 'Publish artifact locally', 'Register an HTML artifact created in this chat. First write and verify a self-contained HTML file inside this thread workspace. Publishing adds it to Muniment Artifacts and its dedicated chat. It does not upload or make a public website. Use the same path to update an artifact.', {type:'object',properties:{path:{type:'string'},name:{type:'string',description:'A concise name in one to three words. Keep the goal and details out of the name.'}},required:['path'],additionalProperties:false}],
-    ['agent-list', 'List agents', 'List saved agents, their schedules and run state, and available project IDs.', {type:'object',properties:{},additionalProperties:false}],
+    ['agent-list', 'List agents', 'List saved agents, their routines and run state, and available project IDs.', {type:'object',properties:{},additionalProperties:false}],
     ['agent-read', 'Read agent', 'Read an agent definition before editing it.', idSchema],
-    ['agent-save', 'Save agent', 'Create or update a persistent agent at the user request. Omit id to create. Read an existing agent before updating and preserve fields the user did not ask to change. Instructions describe its task and expected output. Set schedule only when the user requests scheduled work. Times use this computer time zone. Use a listed project ID or null for session files.', {
+    ['agent-save', 'Save agent', 'Create or update a persistent agent at the user request. Omit id to create. With an id, only the fields you pass change; the others keep their saved values. Instructions describe its task and expected output. Add routines only when the user requests scheduled or triggered work, with routine-save. Use a listed project ID or null for session files.', {
       type:'object', properties: {
         id:{type:'string'}, name:{type:'string',description:'A concise name in one to three words. Keep the task and instructions out of the name.'}, label:{type:'string',description:'Short job title'}, avatar:{type:['object','null'],properties:{style:{type:'string',enum:['muniment-v1','muniment-v2']},seed:{type:'string'}}}, template:{type:['object','null'],description:'Preserve reviewed imported template context when editing'}, instructions:{type:'string',description:'Persistent description and instructions'}, projectId:{type:['string','null']},
-        schedule:{type:['object','null'],properties:{enabled:{type:'boolean'},cadence:{type:'string',enum:['daily','weekdays','weekly']},time:{type:'string',description:'24-hour HH:MM in the host time zone'},weekday:{type:'integer',minimum:0,maximum:6,description:'Monday=0, Sunday=6'}},required:['enabled','cadence','time','weekday'],additionalProperties:false}
+        model:{type:['object','null'],description:'The model the agent runs on. Null uses the default.',properties:{provider:{type:'string'},id:{type:'string'},thinking:{type:'string',enum:['off','minimal','low','medium','high','xhigh','max']}},required:['provider','id'],additionalProperties:false},
+        tools:{type:['object','null'],properties:{disabled:{type:'array',items:{type:'string'},description:'Tool names this agent may not use'}},additionalProperties:false},
+        skills:{type:['array','null'],items:{type:'string'},description:'Installed skill ids the agent loads'},
+        permissions:{type:['object','null'],properties:{mode:{type:'string',enum:['ask','auto','strict']},always_allow:{type:'array',items:{type:'string'}},ask_first:{type:'array',items:{type:'string'}}},additionalProperties:false,description:'Rules are tool names or tool(pattern), such as bash(git *). Ask first wins over always allow.'}
       },required:['name','instructions'],additionalProperties:false
     }],
-    ['agent-run', 'Run agent', 'Queue one run of a saved agent when the user asks to run it. It waits for the current reply to end and uses the same permission checks. This performs real work.', idSchema],
+    ['agent-run', 'Run agent', 'Queue one run of a saved agent now, when the user asks to run it. It runs in the agent thread once a run place is free and uses the agent permission checks. This performs real work.', idSchema],
+    ['routine-list', 'List routines', 'List the routines of an agent: what starts it on its own and when it last ran. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'}},additionalProperties:false}],
+    ['routine-save', 'Save routine', 'Add or update a routine of an agent at the user request. A cron trigger is {kind:"cron", expr:"<minute> <hour> <day> <month> <weekday>", tz:"<IANA zone>"} and runs at most every five minutes. A webhook trigger is {kind:"webhook", preset:"generic"|"github"|"forgejo"}. An mcp trigger is {kind:"mcp", server, tool, args, every:{expr, tz}, condition}, where condition is {all:[...]}, {any:[...]} or {path:"/json/pointer", op:"eq|ne|gt|gte|lt|lte|contains|exists|changed|nonempty", value}. The prompt says what each run does; when nothing is worth reporting, the run replies NO_RESPONSE. Omit routine.id to add one. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'},routine:{type:'object',properties:{id:{type:'string'},name:{type:'string'},enabled:{type:'boolean'},trigger:{type:'object'},prompt:{type:'string'}},required:['name','trigger'],additionalProperties:false}},required:['routine'],additionalProperties:false}],
+    ['routine-delete', 'Delete routine', 'Delete one routine of an agent at the user request. Omit agent_id for this thread agent.', {type:'object',properties:{agent_id:{type:'string'},routine_id:{type:'string'}},required:['routine_id'],additionalProperties:false}],
     ['browser', 'Use browser', 'Work toward a goal in the Muniment Browser tab, which the tool opens when it is closed. A fast decision model picks each click, scroll and dropdown value. It returns when it needs text for a field, needs the user to confirm a click that buys, sends, deletes or changes an account, is unsure, is blocked, or believes the goal is met. Then call again with the same goal and text {element, value}, or with click set to an element id: one the user confirmed, or one you chose from the returned elements. Ask the user before you click a consequential element. Check a done result against the page it returns. Never type a password. Keep each goal to one page or one form.', {type:'object',properties:{goal:{type:'string'},url:{type:'string',description:'An http or https address to open first'},text:{type:'object',properties:{element:{type:'string'},value:{type:'string'}},required:['element','value'],additionalProperties:false},click:{type:'string',description:'An element id to click first'}},required:['goal'],additionalProperties:false}]
   ]);
 "#;
@@ -805,6 +909,131 @@ mod tests {
     }
 
     #[test]
+    fn routine_tools_validate_and_store_every_trigger_kind() {
+        let root = std::env::temp_dir().join(format!("muniment-routines-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("private");
+        muniment_core::home::confirm_home(&config, &root.join("muniment")).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(config.clone(), config.join("memory"));
+        let thread = "01900000-0000-7000-8000-000000000002";
+        runtime
+            .open_session(
+                "run-one",
+                thread,
+                ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters: 8192,
+                },
+            )
+            .unwrap();
+        let tool = |name: &str, arguments: serde_json::Value| {
+            runtime.agent_tool("run-one", name, &arguments.to_string())
+        };
+        // A thread with no agent names one.
+        assert_eq!(
+            tool("routine-list", serde_json::json!({})).unwrap_err(),
+            "Name the agent: this thread belongs to no agent."
+        );
+        let saved = tool(
+            "agent-save",
+            serde_json::json!({"name": "Lead scout", "instructions": "Find leads.",
+                "model": {"provider": "local", "id": "example-model"}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        // A routine the agent writes is the agent's, whatever origin it names.
+        let cron = tool(
+            "routine-save",
+            serde_json::json!({"routine": {"name": "Morning", "created_from": "user",
+                "trigger": {"kind": "cron", "expr": "0 9 * * 1-5", "tz": "America/New_York"},
+                "prompt": "Pull new leads."}}),
+        )
+        .unwrap();
+        assert_eq!(cron["agent_id"], id.as_str());
+        assert_eq!(cron["routine"]["created_from"], "agent");
+        for (trigger, error) in [
+            (
+                serde_json::json!({"kind": "cron", "expr": "*/2 * * * *", "tz": "UTC"}),
+                "five minutes",
+            ),
+            (
+                serde_json::json!({"kind": "cron", "expr": "0 9 * * *", "tz": "Nowhere"}),
+                "time zone",
+            ),
+            (
+                serde_json::json!({"kind": "cron", "expr": "0 9 * *", "tz": "UTC"}),
+                "five fields",
+            ),
+            (
+                serde_json::json!({"kind": "webhook", "hook_id": "no/slash"}),
+                "webhook id",
+            ),
+            (
+                serde_json::json!({"kind": "mcp", "server": "crm", "tool": "leads", "args": {},
+                "every": {"expr": "0 * * * *", "tz": "UTC"},
+                "condition": {"path": "count", "op": "gt", "value": 1}}),
+                "JSON pointer",
+            ),
+        ] {
+            let refused = tool(
+                "routine-save",
+                serde_json::json!({"agent_id": id, "routine": {"name": "Bad", "trigger": trigger}}),
+            )
+            .unwrap_err();
+            assert!(refused.contains(error), "{refused}");
+        }
+        let hook = tool(
+            "routine-save",
+            serde_json::json!({"agent_id": id, "routine": {"name": "Build hook", "enabled": false,
+                "trigger": {"kind": "webhook", "preset": "github"}}}),
+        )
+        .unwrap();
+        assert_eq!(hook["routine"]["trigger"]["preset"], "github");
+        assert_eq!(
+            hook["routine"]["trigger"]["hook_id"]
+                .as_str()
+                .unwrap()
+                .len(),
+            32
+        );
+        let poll = tool(
+            "routine-save",
+            serde_json::json!({"routine": {"name": "Big deals",
+                "trigger": {"kind": "mcp", "server": "crm", "tool": "deals", "args": {"stage": "won"},
+                    "every": {"expr": "*/15 * * * *", "tz": "UTC"},
+                    "condition": {"any": [{"path": "/total", "op": "gte", "value": 10000},
+                        {"path": "/items", "op": "changed"}]}}}}),
+        )
+        .unwrap();
+        let listed = tool("routine-list", serde_json::json!({})).unwrap();
+        assert_eq!(listed["routines"].as_array().unwrap().len(), 3);
+        // An agent edit through the tool keeps what it does not name.
+        tool(
+            "agent-save",
+            serde_json::json!({"id": id, "name": "Lead scout", "instructions": "Find warm leads."}),
+        )
+        .unwrap();
+        let agent = crate::agents::get(&config, &id).unwrap();
+        assert_eq!(agent.instructions, "Find warm leads.");
+        assert_eq!(agent.routines.len(), 3);
+        assert_eq!(agent.model.unwrap().id, "example-model");
+        tool(
+            "routine-delete",
+            serde_json::json!({"routine_id": poll["routine"]["id"]}),
+        )
+        .unwrap();
+        assert_eq!(crate::agents::get(&config, &id).unwrap().routines.len(), 2);
+        assert!(tool(
+            "routine-delete",
+            serde_json::json!({"routine_id": "missing"})
+        )
+        .is_err());
+        let run = tool("agent-run", serde_json::json!({"id": id})).unwrap();
+        assert_eq!(run["run"]["trigger"]["kind"], "manual");
+        assert_eq!(run["run"]["trigger"]["source"], "agent");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn chat_tools_and_manual_edits_share_agent_and_memory_files() {
         let root = std::env::temp_dir().join(format!("muniment-harness-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -904,7 +1133,7 @@ mod tests {
             root.join("cache/index.sqlite3"),
         );
         runtime.write_agent_extension("session-1").unwrap();
-        let source = fs::read_to_string(runtime.agent_extension_path()).unwrap();
+        let source = fs::read_to_string(runtime.agent_extension_path("thread-1")).unwrap();
         assert!(source.contains("pi.registerTool"));
         assert!(source.contains("memory-search"));
         assert!(source.contains("text: JSON.stringify(result)"));
@@ -916,7 +1145,7 @@ mod tests {
         // Parse the whole generated file as an ES module, where every binding uses strict mode.
         let output = std::process::Command::new("node")
             .args(["--check", "--input-type=module"])
-            .stdin(fs::File::open(runtime.agent_extension_path()).unwrap())
+            .stdin(fs::File::open(runtime.agent_extension_path("thread-1")).unwrap())
             .output()
             .expect("Node.js must be available to parse the memory search extension");
         assert!(
@@ -976,7 +1205,7 @@ mod tests {
                             capability(),
                         )
                         .unwrap();
-                    let path = runtime.agent_extension_path();
+                    let path = runtime.agent_extension_path("01900000-0000-7000-8000-000000000001");
                     let source = fs::read_to_string(&path).unwrap();
                     let has = |needle: &str| source.contains(needle);
                     assert_eq!(has("muniment:memory-search"), use_memories, "{settings:?}");
@@ -1046,7 +1275,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 "#;
         let output = std::process::Command::new("node")
             .args(["--input-type=module", "-e", script])
-            .arg(runtime.agent_extension_path())
+            .arg(runtime.agent_extension_path("01900000-0000-7000-8000-000000000001"))
             .output()
             .expect("Node.js must be available to run the agent extension");
         assert!(
@@ -1258,7 +1487,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         runtime.build_session_with_timeout("session-1", std::time::Duration::ZERO);
         runtime.write_agent_extension("session-1").unwrap();
 
-        assert!(runtime.agent_extension_path().exists());
+        assert!(runtime.agent_extension_path("thread-1").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1387,7 +1616,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             root.join("cache/index.sqlite3"),
         );
         runtime.write_agent_extension("session-1").unwrap();
-        let expected = fs::read(runtime.agent_extension_path()).unwrap();
+        let expected = fs::read(runtime.agent_extension_path("thread-1")).unwrap();
         let barrier = Arc::new(Barrier::new(3));
         let completed = Arc::new(AtomicUsize::new(0));
         let writers: Vec<_> = (0..2)
@@ -1407,12 +1636,18 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 
         barrier.wait();
         while completed.load(Ordering::Acquire) < 2 {
-            assert_eq!(fs::read(runtime.agent_extension_path()).unwrap(), expected);
+            assert_eq!(
+                fs::read(runtime.agent_extension_path("thread-1")).unwrap(),
+                expected
+            );
         }
         for writer in writers {
             writer.join().unwrap();
         }
-        assert_eq!(fs::read(runtime.agent_extension_path()).unwrap(), expected);
+        assert_eq!(
+            fs::read(runtime.agent_extension_path("thread-1")).unwrap(),
+            expected
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

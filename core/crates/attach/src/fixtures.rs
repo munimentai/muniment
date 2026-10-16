@@ -650,6 +650,15 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("models-share", Operation::ModelsShare),
         ("models-share-bundle", Operation::ModelsShareBundle),
         ("models-vault", Operation::ModelsVault),
+        ("agent-list", Operation::AgentList),
+        ("agent-read", Operation::AgentRead),
+        ("agent-save", Operation::AgentSave),
+        ("agent-delete", Operation::AgentDelete),
+        ("agent-run-now", Operation::AgentRunNow),
+        ("agent-runs", Operation::AgentRuns),
+        ("routine-list", Operation::RoutineList),
+        ("routine-save", Operation::RoutineSave),
+        ("routine-delete", Operation::RoutineDelete),
     ];
     for (index, (name, operation)) in operations.into_iter().enumerate() {
         let body = request_body(operation);
@@ -802,6 +811,96 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     )?;
     insert(
         &mut fixtures,
+        "request-run-chat-events-agent-runs.json",
+        &Request {
+            protocol: Protocol,
+            request_id: id(178)?,
+            operation: Operation::RunChatEvents,
+            capability: "fixture-capability".into(),
+            idempotency_key: None,
+            body: json!({"update_status": true, "agent_runs": true}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-agent-list.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(169)?,
+            ok: Success,
+            body: json!({
+                "agents": [fixture_agent()],
+                "primary_threads": {FIXTURE_AGENT_ID: "00000000000000000000000000000192"},
+                "latest_runs": {FIXTURE_AGENT_ID: fixture_run()},
+                "errors": [{"folder": "Broken-agent", "error": "The agent settings are invalid."}]
+            }),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-agent-read.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(170)?,
+            ok: Success,
+            body: json!({
+                "agent": fixture_agent(),
+                "primary_thread_id": "00000000000000000000000000000192"
+            }),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-agent-save.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(171)?,
+            ok: Success,
+            body: json!({"agent": fixture_agent()}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-agent-run-now.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(173)?,
+            ok: Success,
+            body: json!({"run": fixture_run()}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-agent-runs.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(174)?,
+            ok: Success,
+            body: json!({"runs": [fixture_run()], "next_cursor": "019965a0-0000-7000-8000-0000000000b1"}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-routine-list.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(175)?,
+            ok: Success,
+            body: json!({"routines": fixture_agent()["routines"].clone()}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "response-routine-save.json",
+        &Response {
+            protocol: Protocol,
+            request_id: id(176)?,
+            ok: Success,
+            body: json!({"routine": fixture_mcp_routine()}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
         "response-approval-present.json",
         &Response {
             protocol: Protocol,
@@ -869,6 +968,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             EventName::RuntimeUpdateRequested,
         ),
         ("runtime-update-status", EventName::RuntimeUpdateStatus),
+        ("agent-run-updated", EventName::AgentRunUpdated),
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
@@ -880,6 +980,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 | EventName::ModelsLogin
                 | EventName::RuntimeUpdateRequested
                 | EventName::RuntimeUpdateStatus
+                | EventName::AgentRunUpdated
         );
         insert(
             &mut fixtures,
@@ -1088,7 +1189,121 @@ fn request_body(operation: Operation) -> serde_json::Value {
             "listen": "0.0.0.0:7443",
             "endpoints": ["192.0.2.20:7443"]
         }),
+        Operation::AgentList => json!({}),
+        Operation::AgentRead => json!({"id": FIXTURE_AGENT_ID}),
+        Operation::AgentSave => json!({"agent": fixture_agent()}),
+        Operation::AgentDelete => json!({"id": FIXTURE_AGENT_ID, "remove_memory": false}),
+        Operation::AgentRunNow => {
+            json!({"id": FIXTURE_AGENT_ID, "prompt": "Check the new leads now."})
+        }
+        Operation::AgentRuns => json!({"agent_id": FIXTURE_AGENT_ID, "limit": 50}),
+        Operation::RoutineList => json!({"agent_id": FIXTURE_AGENT_ID}),
+        Operation::RoutineSave => {
+            json!({"agent_id": FIXTURE_AGENT_ID, "routine": fixture_mcp_routine()})
+        }
+        Operation::RoutineDelete => {
+            json!({"agent_id": FIXTURE_AGENT_ID, "routine_id": "new-leads"})
+        }
     }
+}
+
+const FIXTURE_AGENT_ID: &str = "018f0000-0000-4000-8000-0000000000a1";
+
+/// A v2 agent as the agent operations carry it.
+fn fixture_agent() -> serde_json::Value {
+    json!({
+        "id": FIXTURE_AGENT_ID,
+        "name": "Lead scout",
+        "label": "Researcher",
+        "instructions": "Find new leads and summarize them.",
+        "avatar": {"style": "muniment-v2", "seed": "scout"},
+        "template": null,
+        "projectId": null,
+        "schedule": {"enabled": true, "cadence": "weekdays", "time": "09:00", "weekday": 0},
+        "model": {"provider": "local", "id": "example-model", "thinking": "medium"},
+        "tools": {"disabled": ["powershell"]},
+        "skills": ["review"],
+        "permissions": {
+            "mode": "ask",
+            "always_allow": [{
+                "request_kind": "command",
+                "resource": {"type": "command", "arguments": ["bash", "git status"], "working_directory": "/work/agents/Lead-scout"}
+            }],
+            "ask_first": [{
+                "request_kind": "tool",
+                "resource": {"type": "tool", "name": "mcp__crm__delete_lead", "input": {"id": "lead-1"}}
+            }]
+        },
+        "primary_runtime": null,
+        "messaging": {"allow": "any"},
+        "routines": [{
+            "id": "schedule",
+            "name": "Schedule",
+            "enabled": true,
+            "trigger": {"kind": "cron", "expr": "0 9 * * 1-5", "tz": "America/New_York"},
+            "prompt": "",
+            "created_from": "user",
+            "last_fired_at": "2026-01-01T14:00:00Z",
+            "last_result": {"run_id": "019965a0-0000-7000-8000-0000000000b2", "status": "completed", "silent": false}
+        }, {
+            "id": "build-hook",
+            "name": "Build finished",
+            "enabled": true,
+            "trigger": {"kind": "webhook", "hook_id": "4f1c2b7a9d0e4c55b6a1f2e3d4c5b6a7", "preset": "forgejo"},
+            "prompt": "Summarize the build result.",
+            "created_from": "user",
+            "last_fired_at": null,
+            "last_result": null
+        }],
+        "paused_reason": null
+    })
+}
+
+/// An MCP routine that waits for a condition on a tool's result.
+fn fixture_mcp_routine() -> serde_json::Value {
+    json!({
+        "id": "new-leads",
+        "name": "New leads",
+        "enabled": false,
+        "trigger": {
+            "kind": "mcp",
+            "server": "crm",
+            "tool": "search_leads",
+            "args": {"status": "new"},
+            "every": {"expr": "0 9 * * *", "tz": "America/New_York"},
+            "condition": {"all": [
+                {"path": "/total", "op": "gt", "value": 0},
+                {"any": [
+                    {"path": "/items/0/region", "op": "eq", "value": "west"},
+                    {"path": "/items", "op": "changed"}
+                ]}
+            ]}
+        },
+        "prompt": "Pull the new leads and draft a summary.",
+        "created_from": "instructions",
+        "last_fired_at": null,
+        "last_result": null
+    })
+}
+
+/// A run record as the run queue reports it.
+fn fixture_run() -> serde_json::Value {
+    json!({
+        "id": "019965a0-0000-7000-8000-0000000000b2",
+        "agent_id": FIXTURE_AGENT_ID,
+        "thread_id": "00000000000000000000000000000192",
+        "trigger": {"kind": "cron", "routine_id": "schedule"},
+        "status": "completed",
+        "attempt": 1,
+        "lease_owner": null,
+        "lease_expires_at": null,
+        "hop": 0,
+        "origin_run_id": null,
+        "created_at": "2026-01-01T14:00:00Z",
+        "updated_at": "2026-01-01T14:02:10Z",
+        "result_summary": "Three new leads. The summary is in leads.md.",
+        "silent": false
+    })
 }
 
 fn error_fixture(code: crate::ErrorCode) -> (&'static str, ProtocolError) {
@@ -1206,6 +1421,13 @@ fn event_body(event: &EventName) -> serde_json::Value {
             "blockers": ["active_run"],
             "updated_at": "2026-01-01T00:00:00Z"
         }),
+        EventName::AgentRunUpdated => {
+            let mut run = fixture_run();
+            run["status"] = json!("waiting_input");
+            run["result_summary"] = json!(null);
+            run["waiting_since"] = json!("2026-01-01T14:01:00Z");
+            run
+        }
         EventName::Unknown(name) => json!({"name": name.as_str(), "optional": true}),
     }
 }
@@ -1346,6 +1568,15 @@ mod tests {
             Operation::ModelsVault,
             Operation::RemoteSettings,
             Operation::RemoteSettingsSave,
+            Operation::AgentList,
+            Operation::AgentRead,
+            Operation::AgentSave,
+            Operation::AgentDelete,
+            Operation::AgentRunNow,
+            Operation::AgentRuns,
+            Operation::RoutineList,
+            Operation::RoutineSave,
+            Operation::RoutineDelete,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -1398,12 +1629,21 @@ mod tests {
             "event-runtime-update-status.json",
             "request-run-chat-events-update-status.json",
             "response-runtime-info.json",
+            "event-agent-run-updated.json",
+            "request-run-chat-events-agent-runs.json",
+            "response-agent-list.json",
+            "response-agent-read.json",
+            "response-agent-save.json",
+            "response-agent-run-now.json",
+            "response-agent-runs.json",
+            "response-routine-list.json",
+            "response-routine-save.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            123,
+            141,
             "every canonical fixture must be inventoried"
         );
     }

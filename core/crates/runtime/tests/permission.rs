@@ -35,11 +35,12 @@ fn inactive_run() -> ActiveRun {
 
 #[test]
 fn permission_answer_reports_rejection_and_timeout() {
-    let active = Arc::new(Mutex::new(Some(inactive_run())));
+    let active = muniment_core::active_run::RunRegistry::default();
+    active.install(inactive_run(), None).unwrap();
     std::thread::scope(|scope| {
         let answer = scope.spawn(|| {
             answer_permission(
-                Arc::clone(&active),
+                active.clone(),
                 "workspace-a".into(),
                 "run-1".into(),
                 "gate-1".into(),
@@ -49,15 +50,14 @@ fn permission_answer_reports_rejection_and_timeout() {
         });
         loop {
             let sender = active
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .permission_answers
-                .lock()
-                .unwrap()
-                .pop_front()
-                .and_then(|answer| answer.resolved);
+                .with_run("run-1", None, |run| {
+                    run.permission_answers
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .and_then(|answer| answer.resolved)
+                })
+                .unwrap();
             if let Some(sender) = sender {
                 sender.send(None).unwrap();
                 break;
@@ -100,15 +100,15 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
 
     let run_id = "018f0000-0000-7000-8000-000000000113";
     let storage = open_profile_storage(&profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = muniment_core::pi_execution::PiProcesses::default();
     let runtime_activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = muniment_core::active_run::RunRegistry::default();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::clone(&active),
+        active.clone(),
         profile.clone(),
         config.clone(),
-        Arc::clone(&runtime),
+        runtime.clone(),
         Arc::new(ApplicationMemoryRuntime::new(
             config.clone(),
             profile.join("memory"),
@@ -126,7 +126,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 &RuntimeHost::default(),
                 &profile,
                 Arc::clone(&storage),
-                Arc::clone(&runtime),
+                runtime.clone(),
                 &runtime_activity,
                 &config,
                 run_id.into(),
@@ -138,7 +138,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 Some("owner".into()),
                 Vec::new(),
                 fixture_grant(),
-                Arc::clone(&active),
+                active.clone(),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )

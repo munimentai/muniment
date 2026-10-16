@@ -107,6 +107,8 @@ pub use muniment_attach::{
     write_scaffold_file_if_missing,
 };
 
+pub mod agent_routines;
+pub mod agent_runs;
 pub mod agent_templates;
 pub mod agents;
 pub mod project_context;

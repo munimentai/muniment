@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use muniment_attach::{
     decode_frame, encode_frame, reconnect_welcome, DeviceCredential, Event, EventName,
     FirstMessage, Id, NegotiationError, Operation, ProtocolError, RemoteClientAuthorizedGrant,
-    Request, VersionRange, MAX_FRAME_LENGTH, SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE,
-    SCOPE_RUN_WRITE, SCOPE_THREAD_READ,
+    Request, VersionRange, MAX_FRAME_LENGTH, SCOPE_AGENTS_MANAGE, SCOPE_RUNTIME_ADMIN,
+    SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE, SCOPE_THREAD_READ,
 };
 use serde_json::Value;
 
@@ -45,6 +45,9 @@ pub(super) fn missing_scope_reason(scope: &str) -> &'static str {
             "This device can read this machine's threads but cannot start runs. Pair it again with run access."
         }
         SCOPE_RUNTIME_UPDATE => "This device cannot update this machine. Pair it again with update access.",
+        SCOPE_AGENTS_MANAGE => {
+            "This device can use this machine's agents but cannot change them. Pair it again with agent access."
+        }
         _ => "This device cannot read this machine's threads. Pair it again.",
     }
 }
@@ -176,6 +179,17 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::RuntimeUpdate
         | Operation::ModelsShare => RemoteRule::RemoteAccess,
         Operation::ModelsShareBundle | Operation::ModelsVault => RemoteRule::Excluded,
+        Operation::AgentList
+        | Operation::AgentRead
+        | Operation::AgentRuns
+        | Operation::RoutineList => RemoteRule::Scope(SCOPE_THREAD_READ),
+        Operation::AgentRunNow => RemoteRule::Scope(SCOPE_RUN_WRITE),
+        // A saved agent and its routines act on their own later, so changing
+        // them takes its own scope, which `runtime.admin` grants too.
+        Operation::AgentSave
+        | Operation::AgentDelete
+        | Operation::RoutineSave
+        | Operation::RoutineDelete => RemoteRule::Scope(SCOPE_AGENTS_MANAGE),
     }
 }
 
@@ -492,9 +506,11 @@ impl<H: ThreadListService> DesktopSessionService for RemoteSession<'_, H> {
             RemoteRule::Refused(reason) => {
                 Err(refuse(ProtocolError::invalid_request_with_reason(reason)))
             }
-            RemoteRule::Scope(scope) if !self.scopes.contains(scope) => Err(refuse(
-                ProtocolError::unauthorized_with_reason(missing_scope_reason(scope)),
-            )),
+            RemoteRule::Scope(scope) if !muniment_attach::scopes_grant(&self.scopes, scope) => {
+                Err(refuse(ProtocolError::unauthorized_with_reason(
+                    missing_scope_reason(scope),
+                )))
+            }
             RemoteRule::RemoteAccess => {
                 dispatch_remote_operation(&self.access, &request, &self.scopes, &self.device_id)
                     .map(|body| DesktopDispatchResult {

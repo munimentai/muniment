@@ -138,6 +138,9 @@ pub(super) struct ActiveChatSubscription {
     /// The runtime's update status, sent as `runtime.update_status` events
     /// when the subscriber asked for them.
     update_status: Option<UpdateStatusWatch>,
+    /// Agent run changes, sent as `agent.run_updated` events when the
+    /// subscriber asked for them.
+    agent_runs: Option<std::sync::mpsc::Receiver<serde_json::Value>>,
 }
 
 /// How often a subscription rereads the update status, which a launcher in
@@ -200,11 +203,13 @@ impl<S: ThreadListService> DesktopSessionService for S {
                 let mut events = drain_model_events(subscription);
                 events.extend(drain_update_events(subscription));
                 events.extend(drain_update_status(subscription));
+                events.extend(drain_agent_runs(subscription));
                 let (chat, closed) = drain_chat_events(subscription, wait)?;
                 events.extend(chat);
                 events.extend(drain_model_events(subscription));
                 events.extend(drain_update_events(subscription));
                 events.extend(drain_update_status(subscription));
+                events.extend(drain_agent_runs(subscription));
                 Ok((events, closed))
             })
     }
@@ -276,6 +281,26 @@ fn drain_update_events(subscription: &mut ActiveChatSubscription) -> Vec<Event> 
             }
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => subscription.update_events = None,
+        }
+    }
+    events
+}
+
+/// Takes the agent run changes already queued.
+fn drain_agent_runs(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Some(receiver) = subscription.agent_runs.as_ref() {
+        match receiver.try_recv() {
+            Ok(body) => events.push(Event {
+                protocol: Protocol,
+                subscription_id: subscription.subscription_id.clone(),
+                event: EventName::AgentRunUpdated,
+                run_id: None,
+                run_seq: None,
+                body,
+            }),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => subscription.agent_runs = None,
         }
     }
     events
@@ -681,6 +706,12 @@ pub(super) fn dispatch_request<S: ThreadListService>(
         )?);
     }
     request.validate_idempotency_key()?;
+    if request.operation.is_agent_operation() {
+        if !request.body.is_object() {
+            return Err(ProtocolError::invalid_request().into());
+        }
+        return bounded_response(service.agent_operation(request.operation, request.body)?);
+    }
     if request.operation == Operation::ModelsRequest {
         let model_request = super::ModelRequest::from_body(&request.body)
             .ok_or_else(ProtocolError::invalid_request)?;
@@ -912,6 +943,9 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             /// Also send `runtime.update_status` events.
             #[serde(default)]
             update_status: bool,
+            /// Also send `agent.run_updated` events.
+            #[serde(default)]
+            agent_runs: bool,
         }
         let body: Body =
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
@@ -929,6 +963,17 @@ pub(super) fn dispatch_request<S: ThreadListService>(
                 last: None,
                 next_check: Instant::now(),
             });
+        // A runtime without the agent run queue refuses the request, so the
+        // client knows to subscribe without agent runs.
+        let agent_runs = if body.agent_runs {
+            Some(
+                service
+                    .subscribe_agent_runs()
+                    .map_err(|_| ProtocolError::invalid_request())?,
+            )
+        } else {
+            None
+        };
         let mut subscription_random = [0u8; 16];
         getrandom::fill(&mut subscription_random)
             .map_err(|_| ProtocolError::persistence_failed())?;
@@ -941,6 +986,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             model_events,
             update_events,
             update_status,
+            agent_runs,
         });
         return Ok(response_only(serde_json::json!({
             "subscription_id": subscription_id,

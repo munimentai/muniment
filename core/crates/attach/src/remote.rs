@@ -22,24 +22,33 @@ pub const SCOPE_RUN_WRITE: &str = "run.write";
 /// decides what it installs.
 pub const SCOPE_RUNTIME_UPDATE: &str = "runtime.update";
 /// Pairs and revokes devices, changes model accounts and requests updates.
+/// It also holds every scope below it, such as `agents.manage`.
 pub const SCOPE_RUNTIME_ADMIN: &str = "runtime.admin";
+/// Creates, changes and deletes agents and their routines.
+pub const SCOPE_AGENTS_MANAGE: &str = "agents.manage";
 /// Every scope a remote device can hold.
-pub const REMOTE_SCOPES: [&str; 4] = [
+pub const REMOTE_SCOPES: [&str; 5] = [
     SCOPE_THREAD_READ,
     SCOPE_RUN_WRITE,
     SCOPE_RUNTIME_UPDATE,
     SCOPE_RUNTIME_ADMIN,
+    SCOPE_AGENTS_MANAGE,
 ];
 
 /// The scopes a pairing link grants when its creator names none. Updates
-/// stay automatic, and pairing management stays out unless the creator
-/// delegates it.
+/// stay automatic, and pairing and agent management stay out unless the
+/// creator delegates them.
 pub fn default_pairing_scopes() -> BTreeSet<String> {
     BTreeSet::from([
         SCOPE_THREAD_READ.to_owned(),
         SCOPE_RUN_WRITE.to_owned(),
         SCOPE_RUNTIME_UPDATE.to_owned(),
     ])
+}
+
+/// Whether `scopes` grant `scope`. `runtime.admin` grants `agents.manage`.
+pub fn scopes_grant(scopes: &BTreeSet<String>, scope: &str) -> bool {
+    scopes.contains(scope) || (scope == SCOPE_AGENTS_MANAGE && scopes.contains(SCOPE_RUNTIME_ADMIN))
 }
 
 /// The URI scheme of a pairing link.

@@ -2633,36 +2633,10 @@ fn validate_policy_id(policy_id: &str) -> Result<(), JournalError> {
     Ok(())
 }
 
-fn canonical_absolute_path(value: &str) -> bool {
-    let path = Path::new(value);
-    !value.is_empty()
-        && path.is_absolute()
-        && !path
-            .components()
-            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
-}
-
 fn validate_decided_policy(payload: &ThreadPermissionPolicyDecided) -> Result<(), JournalError> {
     validate_policy_id(&payload.policy_id)?;
-    let resource_valid = match (&payload.request_kind, &payload.resource) {
-        (ThreadPermissionRequestKind::Path, ThreadPermissionResource::Path { path, operation }) => {
-            canonical_absolute_path(path) && !operation.trim().is_empty()
-        }
-        (
-            ThreadPermissionRequestKind::Command,
-            ThreadPermissionResource::Command {
-                arguments,
-                working_directory,
-            },
-        ) => {
-            arguments
-                .first()
-                .is_some_and(|argument| !argument.is_empty())
-                && arguments.iter().all(|argument| !argument.contains('\0'))
-                && canonical_absolute_path(working_directory)
-        }
-        _ => false,
-    };
+    let resource_valid =
+        thread_permission_policy::valid_policy_resource(&payload.request_kind, &payload.resource);
     if payload.actor.trim().is_empty()
         || payload
             .gate_id
