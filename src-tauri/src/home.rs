@@ -201,7 +201,7 @@ fn confirm_import_with_hook(
 /// The Home-relative path of one imported file. It depends on the source
 /// alone, so a second import of the same file finds the first copy.
 pub(crate) fn import_destination(folder: &str, entry: &ExtractedEntry) -> String {
-    let digest = format!("{:x}", Sha256::digest(entry.source_provenance.as_bytes()));
+    let digest = hex::encode(Sha256::digest(entry.source_provenance.as_bytes()));
     format!(
         "memory/imports/{}/{}-{}.md",
         import_slug(folder),

@@ -135,7 +135,7 @@ impl<'ast> Visit<'ast> for DesktopBoundary {
         if item
             .trait_
             .as_ref()
-            .is_some_and(|(_, path, _)| path.segments.last().unwrap().ident == "PiLaunchBoundaries")
+            .is_some_and(|(path, _)| path.segments.last().unwrap().ident == "PiLaunchBoundaries")
         {
             self.launch_boundaries += 1;
             for required in ["renew_chat_grant", "inspect_chat_session"] {

@@ -52,7 +52,7 @@ fn try_play(tone: Tone) -> Option<()> {
     let device = cpal::default_host().default_output_device()?;
     let supported = device.default_output_config().ok()?;
     let config = supported.config();
-    let rate = config.sample_rate.0 as f32;
+    let rate = config.sample_rate as f32;
     let channels = usize::from(config.channels.max(1));
     let total = (rate * TONE_LENGTH.as_secs_f32()) as usize;
     let mut index = 0;
@@ -64,7 +64,7 @@ fn try_play(tone: Tone) -> Option<()> {
     };
     let stream = match supported.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(
-            &config,
+            config,
             move |data: &mut [f32], _| {
                 for frame in data.chunks_mut(channels) {
                     frame.fill(next());
@@ -74,7 +74,7 @@ fn try_play(tone: Tone) -> Option<()> {
             None,
         ),
         cpal::SampleFormat::I16 => device.build_output_stream(
-            &config,
+            config,
             move |data: &mut [i16], _| {
                 for frame in data.chunks_mut(channels) {
                     frame.fill((next() * f32::from(i16::MAX)) as i16);

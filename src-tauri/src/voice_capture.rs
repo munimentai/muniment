@@ -163,9 +163,11 @@ impl VoiceCaptureState {
         let host = cpal::default_host();
         let device = input
             .and_then(|name| {
-                host.input_devices()
-                    .ok()?
-                    .find(|device| device.name().is_ok_and(|candidate| candidate == name))
+                host.input_devices().ok()?.find(|device| {
+                    device
+                        .description()
+                        .is_ok_and(|candidate| candidate.name() == name)
+                })
             })
             .or_else(|| host.default_input_device())
             .ok_or(VoiceCaptureError::NoInputDevice)?;
@@ -173,12 +175,9 @@ impl VoiceCaptureState {
             .default_input_config()
             .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
         let config = supported.config();
-        let (producer, consumer) = bounded_pcm_channel(
-            config.channels,
-            config.sample_rate.0,
-            QUEUE_CAPACITY_SAMPLES,
-        )
-        .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
+        let (producer, consumer) =
+            bounded_pcm_channel(config.channels, config.sample_rate, QUEUE_CAPACITY_SAMPLES)
+                .map_err(|_| VoiceCaptureError::UnsupportedConfig)?;
         let stream = Self::build_stream(
             &device,
             &config,
@@ -203,7 +202,7 @@ impl VoiceCaptureState {
             cpal::SampleFormat::F32 => {
                 let mut producer = producer;
                 device.build_input_stream(
-                    config,
+                    *config,
                     move |data, _| producer.push_f32(data),
                     on_error,
                     None,
@@ -212,7 +211,7 @@ impl VoiceCaptureState {
             cpal::SampleFormat::I16 => {
                 let mut producer = producer;
                 device.build_input_stream(
-                    config,
+                    *config,
                     move |data, _| producer.push_i16(data),
                     on_error,
                     None,
@@ -221,7 +220,7 @@ impl VoiceCaptureState {
             cpal::SampleFormat::U16 => {
                 let mut producer = producer;
                 device.build_input_stream(
-                    config,
+                    *config,
                     move |data, _| producer.push_u16(data),
                     on_error,
                     None,
@@ -280,7 +279,9 @@ pub async fn voice_input_devices() -> Vec<String> {
     let Ok(devices) = cpal::default_host().input_devices() else {
         return Vec::new();
     };
-    let mut names: Vec<String> = devices.filter_map(|device| device.name().ok()).collect();
+    let mut names: Vec<String> = devices
+        .filter_map(|device| Some(device.description().ok()?.name().to_owned()))
+        .collect();
     names.dedup();
     names
 }

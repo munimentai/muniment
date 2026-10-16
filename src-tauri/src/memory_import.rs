@@ -240,9 +240,9 @@ fn import_assistant(
         }
         entries.push(ExtractedEntry {
             source_provenance: format!(
-                "{}:v1:{:x}:{}",
+                "{}:v1:{}:{}",
                 assistant.id,
-                Sha256::digest(text.as_bytes()),
+                hex::encode(Sha256::digest(text.as_bytes())),
                 candidate.source_name
             ),
             source_name: candidate.source_name.clone(),
@@ -624,7 +624,7 @@ mod tests {
                 .join(&copies[0]),
         )
         .unwrap();
-        let digest = format!("{:x}", Sha256::digest(b"Prefer short answers.\n"));
+        let digest = hex::encode(Sha256::digest(b"Prefer short answers.\n"));
         assert_eq!(
             copied,
             format!(

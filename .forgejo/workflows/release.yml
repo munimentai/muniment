@@ -72,8 +72,8 @@ jobs:
         env:
           RCODESIGN_VERSION: 0.29.0
           RCODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
-          SEVENZIP_VERSION: "2501"
-          SEVENZIP_SHA256: 4ca3b7c6f2f67866b92622818b58233dc70367be2f36b498eb0bdeaaa44b53f4
+          SEVENZIP_VERSION: "2604"
+          SEVENZIP_SHA256: fc0327ba27e89bd086cf426dff17d77de582953cdbbc10a6576540a06853ffcd
         run: |
           set -euo pipefail
           sudo=
