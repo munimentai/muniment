@@ -334,6 +334,15 @@ Each entry gives the crate name, exact version, and license expression from `car
 - `mio` 1.2.4 — MIT
 - `moxcms` 0.8.1 — BSD-3-Clause OR Apache-2.0
 - `muda` 0.20.0 — Apache-2.0 OR MIT
+- `muniment-atomic-file` 0.0.1 — FSL-1.1-ALv2
+- `muniment-attach` 0.0.1 — FSL-1.1-ALv2
+- `muniment-code-diff` 0.0.1 — FSL-1.1-ALv2
+- `muniment-core` 0.0.1 — FSL-1.1-ALv2
+- `muniment-models` 0.0.1 — FSL-1.1-ALv2
+- `muniment-pins` 0.0.1 — FSL-1.1-ALv2
+- `muniment-router` 0.0.1 — FSL-1.1-ALv2
+- `muniment-runtime-core` 0.0.1 — FSL-1.1-ALv2
+- `muniment-search` 0.0.1 — FSL-1.1-ALv2
 - `ndk-context` 0.1.1 — MIT OR Apache-2.0
 - `ndk-sys` 0.6.0+11769913 — MIT OR Apache-2.0
 - `ndk` 0.9.0 — MIT OR Apache-2.0
