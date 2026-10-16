@@ -197,7 +197,16 @@ impl Member {
             self.name,
             run.id
         );
-        self.store().get(&run.id).unwrap().unwrap()
+        let run = self.store().get(&run.id).unwrap().unwrap();
+        assert_eq!(
+            run.status,
+            RunStatus::Completed,
+            "{} run {} ended with {:?}",
+            self.name,
+            run.id,
+            run.error
+        );
+        run
     }
 
     fn primary_thread(&self, agent_id: &str) -> String {
