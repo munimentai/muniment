@@ -72,14 +72,37 @@ its scopes and when it was last seen, with Revoke.
 
 ## Updates
 
-A runtime that runs an older version than the app shows Update when this
-device holds the `runtime.admin` scope there. Update sends the runtime an
-update request for the app's version. Update all sends it to every such
-runtime. A runtime without that scope shows its version only.
+A paired desktop updates to the app's version. A server or container updates to
+the core release the app bundles. The app asks a runtime that runs an older
+version to update each time it connects, at most once every ten minutes, when
+this device holds the `runtime.update` or `runtime.admin` scope there. It does
+not ask a runtime that installs by hand, or ask again for a version the runtime
+failed to install.
 
-When a paired client asks this computer's runtime to update, the app checks its
-release feed, downloads the verified update, and installs it once no reply is
-running. The app clears the request once it runs the requested version.
+Each row shows the update state the runtime reports:
+
+| State | Shown |
+| --- | --- |
+| Queued | Update queued |
+| Downloading | Downloading vX |
+| Draining | Finishing current work, with what it waits for in a tooltip |
+| Installing or restarting | Updating to vX |
+| Failed | Update failed, with the error in a tooltip |
+| Behind, installs by hand | vX available, update manually |
+
+A request the runtime has not acted on shows Update requested. A runtime that
+reports no update state shows its version only.
+
+Update in a row's menu asks that runtime. Update all asks every runtime that is
+behind and online, lists the runtimes it skips as offline, no permission, manual
+install or already current, and updates this computer last.
+
+When a paired client asks this computer's runtime to update, or a paired desktop
+runs a newer app, the app checks its release feed and downloads the verified
+update. It waits up to two minutes for running replies, then installs. Replies
+it stops resume after the restart, marked Resumed after update. When you
+install an update yourself, the app names the replies it stops and asks first.
+The app clears the request once it runs the requested version.
 
 ## Remove
 

@@ -136,6 +136,7 @@ platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Back to threads or Escape returns focus to the opener.
 Companies lists each company as a row with Open, Rename and Delete, where Delete asks once and names it, and New company last, then Sources and the sample company,
 which open the record panel, and Backups. Account leads with the signed-in card, Sign out and the plan tiers. Memory carries Recall, the saved facts and Export.
+Machines lists this computer first, then each paired machine with its version and one state line: the update state the machine reports in place of Online while it answers, with blockers or the error in a tooltip. The Machines heading carries Update all, a unified `Button`, and each paired row's menu leads with Update when the machine takes a request. Update all reports the machines it asked and one line of skips with their reasons.
 Model providers and Decision models are two pages of one component. Account
 rows span the page, with allowances visible and usage in details.
 Decision models holds the routing statements. Connect
