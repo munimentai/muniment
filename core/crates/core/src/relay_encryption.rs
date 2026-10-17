@@ -1022,6 +1022,49 @@ fn parse_plaintext<C: for<'de> Deserialize<'de>>(
     Ok((counter, plaintext.content))
 }
 
+/// Derives one AES-256-GCM key from an X25519 shared secret with
+/// HKDF-SHA256 under `salt` and `info`, refusing the all-zero secret.
+pub fn derive_key(
+    shared: &[u8; 32],
+    salt: &[u8],
+    info: &[u8],
+) -> Result<DirectionKey, RelayCryptoError> {
+    if shared.iter().all(|byte| *byte == 0) {
+        return Err(RelayCryptoError::Agreement);
+    }
+    let mut key = [0; KEY_LENGTH];
+    hkdf::Salt::new(hkdf::HKDF_SHA256, salt)
+        .extract(shared)
+        .expand(&[info], KeyLength)
+        .and_then(|okm| okm.fill(&mut key))
+        .map_err(|_| RelayCryptoError::Agreement)?;
+    Ok(DirectionKey(key))
+}
+
+/// Seals plaintext bytes under `header` with a fresh nonce, for a sealed
+/// payload outside the relay's events and commands.
+pub fn seal_fresh<H: Serialize + Clone>(
+    key: &DirectionKey,
+    header: &H,
+    plaintext: &[u8],
+) -> Result<Sealed<H>, RelayCryptoError> {
+    Ok(seal_bytes(
+        key,
+        header,
+        plaintext,
+        random::<NONCE_LENGTH>()?,
+    ))
+}
+
+/// Opens a payload [`seal_fresh`] sealed. It authenticates only when the key
+/// and the header both match.
+pub fn open_sealed<H: Serialize>(
+    key: &DirectionKey,
+    sealed: &Sealed<H>,
+) -> Result<Zeroizing<Vec<u8>>, RelayCryptoError> {
+    open_bytes(key, sealed)
+}
+
 /// An opened event: the sender's counter and the content.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenedEvent {

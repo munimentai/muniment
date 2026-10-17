@@ -1329,7 +1329,8 @@ fn note_blob(inner: &Inner, event: &EventEnvelope, thread_id: &str) -> Result<()
     if !present {
         // A member that keeps every attachment offline asks at once; others
         // ask as a client opens the thread.
-        let requested = super::fleet::offline(inner).attachments == super::fleet::ATTACHMENTS_ALL;
+        let requested =
+            super::bootstrap::offline(inner).attachments == super::bootstrap::ATTACHMENTS_ALL;
         inner
             .store
             .connect()?

@@ -540,8 +540,8 @@ together. Each runtime keeps its records in `<profile>/swarm.sqlite3` and the
 thread content in its run journal. The runtime supplies replica scope,
 steering, gate answers and run starts through `SwarmHost`.
 
-- **Links.** A `runtime.admin` client calls `swarm.invite` (`{"endpoints"?}`
-  → `{"link", "expires_at", "runtime_id"}`) on one runtime, which issues a
+- **Links.** A `runtime.admin` client calls `swarm.invite` (`{"endpoints"?,
+  "role"?}` → `{"link", "expires_at", "runtime_id", "role"}`) on one runtime, which issues a
   `swarm.peer` pairing link, and `swarm.join` (`{"link"}` → `{"member"}`) on
   the other, which redeems it, saves the record under
   `<profile>/swarm/links/` and dials with backoff from one second to a
@@ -679,6 +679,35 @@ steering, gate answers and run starts through `SwarmHost`.
 - **Absence.** When no client used any member for 14 days, each member sets
   `paused_reason: "absence"` on the agents it runs. `swarm.resume` clears it
   on every member.
+- **Fleet keys and roster.** Each member keeps an X25519 fleet key in its
+  credential store and states it in `MemberRecord.fleet`, a card signed with
+  its P-256 identity key. A join adds signed `roster` entries: the inviter
+  vouches for the joiner with the invitation's `role` (`full`, the default,
+  or `worker`), after the joiner presents the hash of the invitation secret
+  as `admission`, and the joiner vouches for the inviter it pinned. A member
+  trusts itself and each member a trusted full member vouched for.
+  `swarm.leave` and revoking a linked device append a signed removal.
+  `swarm.members` shows each member's `fleet`: `{"trusted", "role",
+  "removed"}`. A worker cannot invite. Stage S5 enforces roles; the roster
+  records them, and `Swarm::recipient_set` names the full members and the
+  workers that run the agents a secret serves.
+- **Sealed secrets.** An owner seals each version of a secret to each full
+  member's fleet key (X25519, HKDF-SHA256, AES-256-GCM) and signs it. The
+  exchange carries `sealed` with `sealed_have`, only to a full member over
+  its pinned link or admitted device. Classes: `models:<owner>` (the bundle
+  `models.share` sends, applied as the device `swarm:<owner>`), `mcp:<owner>`
+  (MCP bearer tokens), `vault:<issuer>:<member>` (a model vault machine
+  token) and `handover:<owner>:<sign-in>`. `fleet.credentials`
+  (`{"share_models"?}` → `{"share_models", "role", "removed", "secrets",
+  "audit"}`) turns sharing on and lists the secrets and the local fleet log.
+  The owner reseals about once a minute, so a rotating sign-in travels as a
+  lease the owner refreshes before the lease margin. `fleet.hold_sign_in`
+  (`{"account": "pi:<provider>"|"router:<id>"}` → `{"status": "requested"|"held",
+  "holder"}`) moves the refresher: the holder seals the sign-in with its
+  refresh token to the caller and drops it. A desktop that holds the model
+  vault issues each full member its own machine token. A removal makes each
+  member reseal without the removed one, drop its bundle, revoke its vault
+  token and log the connections it held.
 - **Forwarded actions.** A client that calls a forwardable operation on an
   item another member owns gets `{"forwarded": true, "op_id", "state"}`
   with the keys that operation's answer always has; an approval answer
@@ -719,10 +748,11 @@ back to the swarm events alone on a runtime that refuses the flag. With
 `"fleet": true` as well it receives `fleet.op_updated`, and
 `DesktopClient::subscribe_chat_events_with_fleet` falls back to the live
 swarm events.
-Remotely, linking and `fleet.offline_set` take `runtime.admin`, the reads,
-`fleet.op_status`, `fleet.sync_status` and `thread.history_fetch` take
-`thread.read`, `thread.post`, group changes and answers take `run.write`, and
-`agent.move` and `swarm.resume` take `agents.manage`.
+Remotely, linking, `fleet.offline_set` and the fleet credential operations
+take `runtime.admin`, the reads, `fleet.op_status`, `fleet.sync_status` and
+`thread.history_fetch` take `thread.read`, `thread.post`, group changes and
+answers take `run.write`, and `agent.move` and `swarm.resume` take
+`agents.manage`.
 
 ## Phone relay
 

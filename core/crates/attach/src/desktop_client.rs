@@ -1490,6 +1490,8 @@ impl DesktopClient {
             Operation::FleetSyncStatus => &["state", "classes"],
             Operation::FleetOfflineSet => &["offline"],
             Operation::ThreadHistoryFetch => &["status"],
+            Operation::FleetHoldSignIn => &["status"],
+            Operation::FleetCredentials => &["share_models"],
             Operation::FleetOpStatus => &["op"],
             _ => &[],
         };

@@ -1,1 +1,0 @@
-{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000c5","operation":"agent.approval_answer","capability":"fixture-capability","body":{"answer":{"type":"confirm","value":true},"approval_id":"019965a0-0000-7000-8000-0000000000b3:019965a0-0000-7000-8000-0000000000b4"}}

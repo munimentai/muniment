@@ -247,6 +247,57 @@ The route does not defend against a stolen device credential before its
 revocation, or against an operator who publishes the listener on a public
 address with `allow_public` set.
 
+### Fleet keys and sealed credentials
+
+Linked runtimes share model connections, MCP tokens and model vault tokens
+as sealed secrets. Each member keeps an X25519 fleet key in its credential
+store. Its member record carries a card with the public key and its
+certificate digest, signed with its P-256 identity key, the key behind its
+pinned TLS certificate.
+
+A signed roster decides who receives secrets. `swarm.invite {role}` records a
+`full` or `worker` role for the invitation. The joiner presents the hash of
+the invitation secret it redeemed, over the device that redemption created.
+The inviter then signs an entry with the joiner's card and that role. The
+joiner signs an entry for the inviter whose certificate it pinned. A member
+trusts itself and each member that a trusted full member's entry names.
+Entries signed by a worker, by an unknown key, or with a changed body count
+for nothing. A forged member record, or a replay of another member's card
+from a different device, therefore receives no sealed secret.
+`swarm.leave` and the revocation of a linked device append a signed removal.
+A removal also voids every entry the removed member signed, and the remover
+first signs fresh entries for members that only the removed one vouched for.
+
+An owner seals each version of a secret to each full member's fleet key. The
+scheme derives a key per recipient with X25519 from a fresh ephemeral key,
+then HKDF-SHA256, and encrypts with AES-256-GCM. Each copy authenticates a
+header that names the secret, its version, its owner and its recipient. The
+owner signs the whole secret. Members keep the newest signed version. A
+member sends sealed secrets only to a full member over a channel that proves
+that member: its own pinned outbound link, or the device the member was
+admitted through. A relay holds copies it cannot open. Secrets never enter
+the journal or the replicated records. Workers receive no sealed secret until
+role enforcement scopes what they may hold.
+
+A sign-in whose provider rotates refresh tokens has one refresher. Without
+the model vault, that is the machine that signed in. It reseals a fresh lease
+without the refresh token before the lease margin. `fleet.hold_sign_in` moves
+the refresher: the holder removes the sign-in from its own store under the
+refresh lock, seals it to the new holder alone, and stops refreshing it. With
+the model vault, a desktop with its own account session issues one machine
+token per full member. A removal makes every member reseal without the
+removed member, drop what it shared, and revoke the vault token issued for
+it. Each member logs the connections the removed member held, so the owner
+can rotate them at the provider.
+
+These measures do not take back what a removed member already opened: it
+keeps the leases and keys it held until they expire or the owner rotates
+them. A member that holds a valid device credential and the matching fleet
+key can read every secret sealed to it. Roster clocks come from the signers,
+so a full member that turns hostile can backdate an entry before its own
+removal arrives. A linked device can fill the roster with entries that fail
+verification, up to a cap of 4,096 entries.
+
 ### Router gateway
 
 `muniment-router serve` binds loopback unless its operator sets `listen`. The

@@ -127,6 +127,85 @@ impl RemoteIdentity {
         config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
         Ok(Arc::new(config))
     }
+
+    /// A signer with this identity's key, which signs the runtime's fleet
+    /// statements.
+    pub(super) fn signer(&self) -> io::Result<IdentitySigner> {
+        IdentitySigner::from_pkcs8(&self.key, self.fingerprint.to_hex())
+    }
+}
+
+/// Signs with a runtime's P-256 identity key, the key behind its pinned TLS
+/// certificate. Other members check its signatures against the public key
+/// the fleet roster names for the runtime.
+pub struct IdentitySigner {
+    pair: ring::signature::EcdsaKeyPair,
+    certificate_sha256: String,
+}
+
+impl std::fmt::Debug for IdentitySigner {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IdentitySigner")
+            .field("certificate_sha256", &self.certificate_sha256)
+            .finish_non_exhaustive()
+    }
+}
+
+impl IdentitySigner {
+    fn from_pkcs8(key: &[u8], certificate_sha256: String) -> io::Result<Self> {
+        let pair = ring::signature::EcdsaKeyPair::from_pkcs8(
+            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            key,
+            &ring::rand::SystemRandom::new(),
+        )
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        Ok(Self {
+            pair,
+            certificate_sha256,
+        })
+    }
+
+    /// A signer with a new key and a made-up certificate digest, for tests
+    /// that run members without a listener.
+    #[doc(hidden)]
+    pub fn generate() -> Self {
+        let rng = ring::rand::SystemRandom::new();
+        let key = ring::signature::EcdsaKeyPair::generate_pkcs8(
+            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            &rng,
+        )
+        .expect("the system random source works");
+        let digest = CertificateFingerprint::of_certificate(key.as_ref()).to_hex();
+        Self::from_pkcs8(key.as_ref(), digest).expect("a generated key parses")
+    }
+
+    /// The uncompressed public key point.
+    pub fn public_key(&self) -> &[u8] {
+        use ring::signature::KeyPair as _;
+        self.pair.public_key().as_ref()
+    }
+
+    /// The SHA-256 of the runtime's certificate, in lowercase hex.
+    pub fn certificate_sha256(&self) -> &str {
+        &self.certificate_sha256
+    }
+
+    /// A fixed-length ECDSA P-256 SHA-256 signature of `message`.
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, String> {
+        self.pair
+            .sign(&ring::rand::SystemRandom::new(), message)
+            .map(|signature| signature.as_ref().to_vec())
+            .map_err(|_| "The identity key could not sign.".to_owned())
+    }
+}
+
+/// Whether `signature` is the identity key `public_key`'s signature of
+/// `message`.
+pub fn verify_identity_signature(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_FIXED, public_key)
+        .verify(message, signature)
+        .is_ok()
 }
 
 /// Creates `directory` and, on Unix, makes it readable by its owner only.
@@ -239,6 +318,32 @@ mod tests {
                 0o600
             );
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_signer_signs_with_the_certificate_key() {
+        let directory = directory("signer");
+        let identity = RemoteIdentity::load_or_create(&directory, None).unwrap();
+        let signer = identity.signer().unwrap();
+        assert_eq!(signer.certificate_sha256(), identity.fingerprint.to_hex());
+        let signature = signer.sign(b"statement").unwrap();
+        assert!(verify_identity_signature(
+            signer.public_key(),
+            b"statement",
+            &signature
+        ));
+        assert!(!verify_identity_signature(
+            signer.public_key(),
+            b"other",
+            &signature
+        ));
+        let other = IdentitySigner::generate();
+        assert!(!verify_identity_signature(
+            other.public_key(),
+            b"statement",
+            &signature
+        ));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
