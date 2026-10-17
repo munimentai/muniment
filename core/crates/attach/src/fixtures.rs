@@ -706,6 +706,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("thread-plan", Operation::ThreadPlan),
         ("thread-plan-answer", Operation::ThreadPlanAnswer),
         ("fleet-op-status", Operation::FleetOpStatus),
+        ("fleet-hold-sign-in", Operation::FleetHoldSignIn),
+        ("fleet-credentials", Operation::FleetCredentials),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -768,6 +770,32 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ),
         ("swarm-exchange", fixture_exchange()),
         ("swarm-resume", json!({"resumed": [FIXTURE_AGENT_ID]})),
+        (
+            "fleet-hold-sign-in",
+            json!({"status": "requested", "holder": FIXTURE_RUNTIME_A}),
+        ),
+        (
+            "fleet-credentials",
+            json!({
+                "share_models": true,
+                "role": "full",
+                "removed": false,
+                "secrets": [{
+                    "secret_id": format!("models:{FIXTURE_RUNTIME_A}"),
+                    "class": "models",
+                    "owner": FIXTURE_RUNTIME_A,
+                    "version": 3,
+                    "for_this_runtime": true,
+                    "keys": ["pi:anthropic", "router:work"]
+                }],
+                "audit": [{
+                    "at": "2026-01-01T14:00:00Z",
+                    "kind": "revoked",
+                    "runtime_id": FIXTURE_RUNTIME_B,
+                    "record": {"keys": ["pi:anthropic"]}
+                }]
+            }),
+        ),
         (
             "thread-post",
             json!({
@@ -1610,6 +1638,8 @@ fn request_body(operation: Operation) -> serde_json::Value {
         }),
         Operation::SwarmLeave => json!({"runtime_id": FIXTURE_RUNTIME_A}),
         Operation::SwarmMembers | Operation::SwarmAgents | Operation::SwarmResume => json!({}),
+        Operation::FleetHoldSignIn => json!({"account": "router:work"}),
+        Operation::FleetCredentials => json!({"share_models": true}),
         Operation::SwarmExchange => fixture_exchange(),
         Operation::ThreadPost => json!({
             "thread_id": FIXTURE_THREAD_ID,
@@ -2563,6 +2593,8 @@ mod tests {
             Operation::SwarmAgents,
             Operation::SwarmExchange,
             Operation::SwarmResume,
+            Operation::FleetHoldSignIn,
+            Operation::FleetCredentials,
             Operation::ThreadPost,
             Operation::AgentMove,
             Operation::AgentApprovals,
@@ -2675,6 +2707,8 @@ mod tests {
             "response-thread-plan-answer.json",
             "request-agent-approval-answer-plan.json",
             "event-agent-approval-pending-plan.json",
+            "response-fleet-hold-sign-in.json",
+            "response-fleet-credentials.json",
             "response-fleet-op-status.json",
             "event-fleet-op-updated.json",
             "request-run-chat-events-fleet.json",
@@ -2683,7 +2717,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4,
             "every canonical fixture must be inventoried"
         );
     }

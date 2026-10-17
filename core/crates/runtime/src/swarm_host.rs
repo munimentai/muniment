@@ -129,6 +129,14 @@ impl SwarmHost for RuntimeSwarmHost {
             .write(muniment_core::agent_hooks::SECRET_SERVICE, hook_id, secret)
     }
 
+    fn credentials(&self) -> Option<Arc<dyn crate::host::CredentialStore>> {
+        Some(Arc::clone(&self.host.credentials))
+    }
+
+    fn cloud_session(&self) -> Option<muniment_core::shared_models::CloudSession> {
+        crate::host::cloud_session(&self.host, &self.runtime_activity)
+    }
+
     fn run_forwarded(&self, action: &Forwarded) -> Result<serde_json::Value, String> {
         let state = self
             .state

@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use super::store::sql;
 use super::{lock, parse_time, Exchange, Inner, MemberRecord, ONLINE_SECONDS};
-use crate::attach::{PairedDevice, PairingLinkRequest};
+use crate::attach::{PairedDevice, PairingLinkRequest, RemoteAccess};
 
 /// The client kind a linked runtime names itself with.
 pub const PEER_KIND: &str = "swarm-peer";
@@ -300,6 +300,7 @@ fn run(
 /// Runs one exchange over `client` and answers whether either side left
 /// items out.
 fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Result<bool, String> {
+    super::fleet::note_pinned(peer);
     let request = inner.build_exchange(peer)?;
     let sent_more = request.more;
     let body = serde_json::to_value(&request).map_err(|error| error.to_string())?;
@@ -315,6 +316,13 @@ fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Resul
         .map_err(|error| format!("The exchange answer is invalid: {error}"))?;
     if answer.from.runtime_id != peer {
         return Err("A different runtime answered the link.".into());
+    }
+    // The answer came over this link's pinned certificate, so this runtime
+    // vouches for the card it carries.
+    if answer.from.fleet.is_some() {
+        if let Ok(record) = RemoteRuntimeRecord::load(&record_path(inner, peer)) {
+            super::fleet::vouch_for_link(inner, peer, &answer.from, &record.fingerprint.to_hex())?;
+        }
     }
     let more = answer.more;
     let name = answer.from.runtime_name.clone();
@@ -388,6 +396,7 @@ pub(super) fn answer_exchange(
     if bound.as_deref().is_some_and(|bound| bound != peer) {
         return Err("This link belongs to another runtime.".into());
     }
+    super::fleet::note_device(&peer, device_id);
     let name = exchange.from.runtime_name.clone();
     set_peer(
         inner,
@@ -408,6 +417,7 @@ pub(super) fn answer_exchange(
 
 /// This runtime's own member record.
 pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
+    let fleet = super::fleet::card(inner);
     let identity = lock(&inner.identity);
     let identity = identity
         .as_ref()
@@ -425,6 +435,17 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
         .collect();
     links.sort();
     links.dedup();
+    let mut capabilities = if inner.legacy() {
+        Vec::new()
+    } else {
+        vec![
+            super::STORE_CAPABILITY.to_owned(),
+            super::OPS_CAPABILITY.to_owned(),
+        ]
+    };
+    if fleet.is_some() {
+        capabilities.push(super::fleet::CAPABILITY.to_owned());
+    }
     Ok(MemberRecord {
         runtime_id: identity.runtime_id.clone(),
         runtime_name: identity.runtime_name.clone(),
@@ -433,14 +454,13 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
         last_client_at: inner.store.meta("last_client_at")?,
         links,
         updated_at: super::timestamp(now),
-        capabilities: if inner.legacy() {
-            Vec::new()
-        } else {
-            vec![
-                super::STORE_CAPABILITY.to_owned(),
-                super::OPS_CAPABILITY.to_owned(),
-            ]
-        },
+        capabilities,
+        fleet,
+        endpoints: identity
+            .access
+            .as_ref()
+            .map(RemoteAccess::advertised_endpoints)
+            .unwrap_or_default(),
     })
 }
 
@@ -562,6 +582,7 @@ pub(super) fn members_view(inner: &Inner) -> Result<Value, String> {
             "last_client_at": record.last_client_at,
             "links": record.links,
             "link": link,
+            "fleet": super::fleet::member_view(inner, &record.runtime_id),
         }));
     }
     // A link whose other end never answered still shows.
@@ -606,8 +627,17 @@ pub(super) fn invite(inner: &Inner, body: Value) -> Result<Value, String> {
     struct Body {
         #[serde(default)]
         endpoints: Option<Vec<String>>,
+        #[serde(default)]
+        role: Option<String>,
     }
     let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
+    let role = match body.role.as_deref() {
+        None => super::fleet::Role::Full,
+        Some(role) => super::fleet::Role::parse(role).ok_or("The role is full or worker.")?,
+    };
+    if !super::fleet::may_invite(inner)? {
+        return Err("A worker cannot invite runtimes.".into());
+    }
     let access = inner
         .access()
         .ok_or("Turn on remote access before linking runtimes.")?;
@@ -617,10 +647,12 @@ pub(super) fn invite(inner: &Inner, body: Value) -> Result<Value, String> {
             endpoints: body.endpoints,
         })
         .map_err(|error| error.to_string())?;
+    super::fleet::note_invite(inner, &created.link.secret, role, &created.expires_at)?;
     Ok(json!({
         "link": created.link.to_uri(),
         "expires_at": created.expires_at,
         "runtime_id": access.runtime_info().runtime_id,
+        "role": role.as_str(),
     }))
 }
 
@@ -646,6 +678,7 @@ pub(super) fn join(inner: &Arc<Inner>, body: Value) -> Result<Value, String> {
         return Err("The invitation does not link runtimes.".into());
     }
     let runtime_id = record.runtime_id.as_str().to_owned();
+    super::fleet::note_join(inner, &runtime_id, &link.secret)?;
     std::fs::create_dir_all(links_directory(inner))
         .map_err(|error| format!("The link could not be saved: {error}"))?;
     record
@@ -713,8 +746,25 @@ pub(super) fn leave_runtime(inner: &Inner, runtime_id: &str) -> Result<bool, Str
     inner
         .store
         .set_meta(&format!("peer_store:{runtime_id}"), None)?;
+    end_membership(inner, runtime_id);
     inner.changed("members");
     Ok(removed)
+}
+
+/// Appends a signed roster removal of a member this runtime dropped, and
+/// carries out what it means here: resealed secrets, a dropped bundle and
+/// a revoked model vault token.
+fn end_membership(inner: &Inner, runtime_id: &str) {
+    if super::fleet::keys(inner).is_err() {
+        return;
+    }
+    let ended = super::fleet::remove_member(inner, runtime_id)
+        .and_then(|_| super::credentials::settle(inner));
+    if let Err(error) = ended {
+        crate::runtime_eprintln!(
+            "muniment-runtime: swarm member {runtime_id} stayed in the fleet roster: {error}"
+        );
+    }
 }
 
 /// `swarm.leave`.
@@ -768,5 +818,22 @@ impl crate::attach::OutboundLinks for OutboundHook {
                 .map(|peer| peer.runtime_id)
         });
         runtime.is_some_and(|runtime| leave_runtime(&inner, &runtime).unwrap_or(false))
+    }
+
+    fn revoked_inbound(&self, device_id: &str) {
+        let Some(inner) = self.0.upgrade() else {
+            return;
+        };
+        let runtime = peers(&inner).ok().and_then(|peers| {
+            peers
+                .into_iter()
+                .find(|peer| {
+                    peer.direction == "inbound" && peer.device_id.as_deref() == Some(device_id)
+                })
+                .map(|peer| peer.runtime_id)
+        });
+        if let Some(runtime) = runtime {
+            end_membership(&inner, &runtime);
+        }
     }
 }

@@ -10,6 +10,10 @@
 //! and reads the vault's leases itself. Turning sharing off sends each
 //! machine an empty bundle, and turning MuniCloud off takes the connections
 //! back from the vault.
+//!
+//! Runtimes linked into a fleet also share their connections as sealed
+//! secrets, which the runtime turns on with `fleet.credentials`. A machine
+//! that receives one connection both ways keeps the copy that came first.
 
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};

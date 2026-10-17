@@ -151,6 +151,12 @@ impl RecordStore {
         lock(&self.clock).last()
     }
 
+    /// A new clock reading for a write outside the records, such as a
+    /// roster entry.
+    pub(super) fn tick(&self, now: DateTime<Utc>) -> Hlc {
+        lock(&self.clock).tick(now.timestamp_millis())
+    }
+
     pub(super) fn subscribe(&self) -> Receiver<RecordChange> {
         let (sender, receiver) = mpsc::channel();
         lock(&self.subscribers).push(sender);

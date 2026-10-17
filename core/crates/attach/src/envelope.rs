@@ -461,6 +461,14 @@ pub enum Operation {
     /// Resumes the routines an absence paused.
     #[serde(rename = "swarm.resume")]
     SwarmResume,
+    /// Makes this runtime the one that refreshes a shared sign-in. The
+    /// member that holds it hands the refresh token over, sealed.
+    #[serde(rename = "fleet.hold_sign_in")]
+    FleetHoldSignIn,
+    /// Shows the fleet's sealed credentials and turns sharing this
+    /// runtime's model connections with the fleet on or off.
+    #[serde(rename = "fleet.credentials")]
+    FleetCredentials,
     /// Appends a user message to an agent or group thread on any member.
     #[serde(rename = "thread.post")]
     ThreadPost,
@@ -675,6 +683,8 @@ impl Operation {
             Self::SwarmAgents => "swarm.agents",
             Self::SwarmExchange => "swarm.exchange",
             Self::SwarmResume => "swarm.resume",
+            Self::FleetHoldSignIn => "fleet.hold_sign_in",
+            Self::FleetCredentials => "fleet.credentials",
             Self::ThreadPost => "thread.post",
             Self::AgentMove => "agent.move",
             Self::AgentApprovals => "agent.approvals",
@@ -718,6 +728,8 @@ impl Operation {
                 | Self::SwarmAgents
                 | Self::SwarmExchange
                 | Self::SwarmResume
+                | Self::FleetHoldSignIn
+                | Self::FleetCredentials
                 | Self::ThreadPost
                 | Self::AgentMove
                 | Self::AgentApprovals
