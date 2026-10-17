@@ -39,6 +39,12 @@ pub struct RedactedThreadSummary {
     pub thread_id: String,
     pub title: String,
     pub updated_at: String,
+    /// The swarm member that runs the thread, which the runtime fills in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_runtime: Option<String>,
+    /// Another member runs the thread and this runtime holds a replica.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replica: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -790,6 +796,8 @@ impl ThreadListService for RunJournal {
                     thread_id: summary.thread_id,
                     title: summary.title,
                     updated_at: summary.updated_at,
+                    owner_runtime: summary.owner_runtime,
+                    replica: summary.replica,
                 })
                 .collect(),
             next_cursor: page.next_cursor,
