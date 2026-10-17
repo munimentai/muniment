@@ -128,16 +128,16 @@ impl Node {
             .map(|bytes| bytes.map(|bytes| serde_json::from_slice(&bytes).unwrap()))
     }
 
+    /// The audit entries of `kind` this member wrote, oldest first.
     fn audit(&self, kind: &str) -> Vec<Value> {
-        let connection = self.inner().store.connect().unwrap();
-        let mut statement = connection
-            .prepare("SELECT record FROM fleet_audit WHERE kind=?1 ORDER BY seq")
-            .unwrap();
-        let rows = statement
-            .query_map([kind], |row| row.get::<_, String>(0))
-            .unwrap();
-        rows.map(|row| serde_json::from_str(&row.unwrap()).unwrap())
-            .collect()
+        let mut entries: Vec<Value> = audit::entries(self.inner())
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.kind == kind && entry.actor_runtime == self.id)
+            .map(|entry| entry.record)
+            .collect();
+        entries.reverse();
+        entries
     }
 }
 
@@ -424,6 +424,8 @@ fn a_desktop_issues_each_full_member_a_vault_token_and_revokes_it_with_the_membe
     let w = Node::new("w");
     join(&b, &a, Role::Full);
     join(&w, &a, Role::Worker);
+    // B uses connections the vault manages, so it takes a token.
+    credentials::credentials_operation(b.inner(), json!({"use_vault": true})).unwrap();
     a.write_auth(json!({"openai": api_key("sk-from-a")}));
     shared_models::upload_to_vault(&a.agent(), &session, 0).unwrap();
     a.share();
@@ -547,4 +549,238 @@ fn hold_sign_in_moves_the_refresh_token_to_the_new_holder_alone() {
         "held"
     );
     assert_eq!(a.audit("hold_moved").len(), 1);
+}
+
+/// An op message `from` forwards to `to` for its actor.
+fn op_message(from: &Node, to: &Node, operation: &str, body: Value) -> Message {
+    Message {
+        message_id: uuid::Uuid::now_v7().to_string(),
+        kind: "op".into(),
+        from_runtime: from.id.clone(),
+        to_runtime: Some(to.id.clone()),
+        from_agent: None,
+        to_agent: None,
+        hop: 0,
+        created_at: to.inner().now_text(),
+        body: json!({
+            "operation": operation,
+            "body": body,
+            "actor_device": "local",
+            "actor_scopes": ["thread.read", "run.write", "agents.manage", "runtime.admin"],
+            "idempotency_key": uuid::Uuid::now_v7().to_string(),
+        }),
+    }
+}
+
+#[test]
+fn an_owner_refuses_admin_actions_from_a_worker_and_logs_every_action() {
+    let a = Node::new("a");
+    let b = Node::new("b");
+    let w = Node::new("w");
+    join(&b, &a, Role::Full);
+    join(&w, &a, Role::Worker);
+    let agent = uuid::Uuid::now_v7().to_string();
+    let routine = json!({"agent_id": agent, "routine": {"name": "Nightly"}});
+    let from_worker = op_message(&w, &a, "routine.save", routine.clone());
+    let post_from_worker = op_message(
+        &w,
+        &a,
+        "thread.post",
+        json!({"thread_id": uuid::Uuid::now_v7().to_string(), "text": "Hi."}),
+    );
+    let from_full = op_message(&b, &a, "routine.save", routine);
+    {
+        let _merge = lock(&a.inner().merge);
+        messaging::receive(
+            a.inner(),
+            vec![
+                from_worker.clone(),
+                post_from_worker.clone(),
+                from_full.clone(),
+            ],
+        )
+        .unwrap();
+    }
+    ops::execute_pending(a.inner()).unwrap();
+    let ack = |message: &Message| -> Ack {
+        a.inner()
+            .store
+            .record("acks", "message_id", "ack", &message.message_id)
+            .unwrap()
+            .unwrap()
+    };
+    // The worker's role lacks agents.manage, whatever scopes its actor claims.
+    let refused = ack(&from_worker);
+    assert_eq!(refused.status, "refused");
+    assert!(refused.note.unwrap().contains("agents.manage"));
+    // A post needs run.write, which a worker passes on; this host runs no
+    // forwarded actions, so it fails there rather than at the scope check.
+    assert!(!ack(&post_from_worker)
+        .note
+        .unwrap_or_default()
+        .contains("scope"));
+    assert!(!ack(&from_full).note.unwrap_or_default().contains("scope"));
+
+    // Every action is in A's audit log with its actor, origin and result.
+    let logged = a.audit("op");
+    assert_eq!(logged.len(), 3);
+    let worker_entry = logged
+        .iter()
+        .find(|entry| entry["op_id"] == from_worker.message_id.as_str())
+        .unwrap();
+    assert_eq!(worker_entry["origin"], w.id.as_str());
+    assert_eq!(worker_entry["actor_device"], "local");
+    assert_eq!(worker_entry["result"], "refused");
+
+    // The log replicates to the full member and never to the worker.
+    settle_links(&[(&b, &a), (&w, &a)]);
+    let entries = |node: &Node| audit::entries(node.inner()).unwrap();
+    assert!(entries(&b)
+        .iter()
+        .any(|entry| entry.actor_runtime == a.id && entry.kind == "op"));
+    assert!(entries(&w).iter().all(|entry| entry.actor_runtime == w.id));
+
+    // No member rewrites another's entry: a row that replaces one of A's,
+    // or claims A's key under another origin, changes nothing on B.
+    let held = entries(&b)
+        .into_iter()
+        .find(|entry| entry.actor_runtime == a.id)
+        .unwrap();
+    let row = |origin: &str, seq: u64| RecordRow {
+        class: audit::CLASS.into(),
+        key: held.id.clone(),
+        field: "entry".into(),
+        value: Some(json!({"at": held.at, "kind": "forged", "runtime_id": null, "record": {}})),
+        clock: Hlc::at(i64::MAX / 4),
+        origin: origin.to_owned(),
+        seq,
+        rank: 0,
+        deleted: false,
+    };
+    let changed = b
+        .inner()
+        .records
+        .merge(
+            b.inner().now(),
+            vec![row(&a.id, 1_000_000), row(&w.id, 1_000_000)],
+        )
+        .unwrap();
+    assert!(changed.is_empty());
+    let after = entries(&b)
+        .into_iter()
+        .find(|entry| entry.id == held.id)
+        .unwrap();
+    assert_eq!(after.kind, held.kind);
+}
+
+#[test]
+fn seven_full_members_sync_and_seal_without_the_model_vault() {
+    let token = format!("mvt_{}", "c".repeat(64));
+    let (base, heard) = shared_models::tests::vault_stub_recording(vec![
+        (
+            "PUT /v1/model-vault",
+            json!({"contract_version": shared_models::VAULT_CONTRACT, "connections": 1, "held": []}),
+        ),
+        (
+            "POST /v1/model-vault/machine-tokens",
+            json!({"contract_version": shared_models::VAULT_CONTRACT, "pairing_id": "p", "token": token, "limit": 5, "count": 5}),
+        ),
+    ]);
+    let session = CloudSession {
+        base_url: base,
+        bearer: "native".into(),
+    };
+    // A desktop that holds the vault, and six more full members in a chain
+    // and a star, none of which uses a connection the vault manages.
+    let a = Node::with_session("desktop", Some(session.clone()));
+    let others: Vec<Node> = (0..6)
+        .map(|index| Node::new(&format!("m{index}")))
+        .collect();
+    join(&others[0], &a, Role::Full);
+    for index in 1..6 {
+        join(&others[index], &others[index / 2], Role::Full);
+    }
+    a.write_auth(json!({"openai": api_key("sk-from-a")}));
+    shared_models::upload_to_vault(&a.agent(), &session, 0).unwrap();
+    a.share();
+    let links: Vec<(&Node, &Node)> = std::iter::once((&others[0], &a))
+        .chain((1..6).map(|index| (&others[index], &others[index / 2])))
+        .collect();
+    settle_links(&links);
+    a.pass();
+    settle_links(&links);
+    settle_links(&links);
+
+    let models = a.sealed(&format!("models:{}", a.id)).unwrap();
+    assert_eq!(models.recipients.len(), 6);
+    for node in &others {
+        assert_eq!(node.view().members.len(), 7, "{} trusts too few", node.id);
+        assert_eq!(node.auth()["openai"]["key"], "sk-from-a");
+    }
+    // No member asked for a vault token, so none counts toward the limit.
+    assert!(!heard
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(route, _)| route == "POST /v1/model-vault/machine-tokens"));
+}
+
+#[test]
+fn a_member_the_vault_refuses_takes_the_vaults_connections_as_leases() {
+    let (base, heard) = shared_models::tests::vault_stub_recording(vec![
+        (
+            "PUT /v1/model-vault",
+            json!({"contract_version": shared_models::VAULT_CONTRACT, "connections": 1, "held": []}),
+        ),
+        (
+            "POST /v1/model-vault/machine-tokens",
+            json!({"error": "The account reached its limit of 5 paired machines."}),
+        ),
+    ]);
+    let session = CloudSession {
+        base_url: base,
+        bearer: "native".into(),
+    };
+    let a = Node::with_session("desktop", Some(session.clone()));
+    let b = Node::new("b");
+    join(&b, &a, Role::Full);
+    credentials::credentials_operation(b.inner(), json!({"use_vault": true})).unwrap();
+    a.write_auth(json!({"openai": api_key("sk-from-a")}));
+    shared_models::upload_to_vault(&a.agent(), &session, 0).unwrap();
+    // The vault leases A a sign-in it manages.
+    shared_models::apply(
+        &a.agent(),
+        shared_models::CLOUD_DEVICE,
+        "MuniCloud",
+        shared_models::Bundle {
+            pi: json!({"anthropic": {"type": "oauth", "access": "vault-access", "refresh": "vault-refresh", "expires": i64::MAX / 2}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    a.share();
+    settle_links(&[(&b, &a)]);
+    a.pass();
+    settle_links(&[(&b, &a)]);
+    a.pass();
+    settle_links(&[(&b, &a)]);
+
+    assert!(heard
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(route, _)| route == "POST /v1/model-vault/machine-tokens"));
+    let answer = credentials::credentials_operation(a.inner(), json!({})).unwrap();
+    assert_eq!(answer["vault"][0]["runtime_id"], b.id.as_str());
+    assert_eq!(answer["vault"][0]["state"], "leases");
+    assert_eq!(a.audit("vault_token_refused").len(), 1);
+    // B holds the swarm's connection and the vault's sign-in as a lease,
+    // without its refresh token.
+    let auth = b.auth();
+    assert_eq!(auth["openai"]["key"], "sk-from-a");
+    assert_eq!(auth["anthropic"]["access"], "vault-access");
+    assert!(auth["anthropic"].get("refresh").is_none());
 }

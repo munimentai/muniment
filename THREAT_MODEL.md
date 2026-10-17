@@ -276,16 +276,31 @@ owner signs the whole secret. Members keep the newest signed version. A
 member sends sealed secrets only to a full member over a channel that proves
 that member: its own pinned outbound link, or the device the member was
 admitted through. A relay holds copies it cannot open. Secrets never enter
-the journal or the replicated records. Workers receive no sealed secret until
-role enforcement scopes what they may hold.
+the journal or the replicated records. A worker receives only the secrets
+sealed to it: leases of the connections its own agents name, without refresh
+tokens.
+
+Every member is full unless an invitation or `swarm.set_role` makes it a
+worker. One module filters every exchange in both directions. A worker holds
+the content of the agents it runs and the fleet's metadata, nothing of other
+threads, and no audit record. It relays nothing: members take from it only
+what it wrote about its own agents, and its forwarded actions lose
+`agents.manage` and `runtime.admin`. A device whose channel does not prove a
+roster place, such as one that replays a worker's card, gets the roster
+alone. A demoted member drops what a worker may not hold, and owners reseal
+without it. The append-only `audit` class records seals, forwarded actions,
+role changes, removals and snapshots on every full member; a member cannot
+rewrite another's entries. A worker that turns hostile keeps what it already
+held.
 
 A sign-in whose provider rotates refresh tokens has one refresher. Without
 the model vault, that is the machine that signed in. It reseals a fresh lease
 without the refresh token before the lease margin. `fleet.hold_sign_in` moves
 the refresher: the holder removes the sign-in from its own store under the
 refresh lock, seals it to the new holder alone, and stops refreshing it. With
-the model vault, a desktop with its own account session issues one machine
-token per full member. A removal makes every member reseal without the
+the model vault, a desktop with its own account session issues a machine
+token only to a full member that uses connections the vault manages. Swarm
+membership and sealed secrets have no member limit. A removal makes every member reseal without the
 removed member, drop what it shared, and revoke the vault token issued for
 it. Each member logs the connections the removed member held, so the owner
 can rotate them at the provider.

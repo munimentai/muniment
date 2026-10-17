@@ -448,6 +448,18 @@ pub trait ThreadListService {
         Err(ProtocolError::unsupported_operation())
     }
 
+    /// Creates a thread under the id another fleet member chose for it.
+    fn create_thread_with_id(
+        &mut self,
+        _workspace: &str,
+        _thread_id: &super::Id,
+        _request_id: &super::Id,
+        _idempotency_key: &super::Id,
+        _provenance: CompanionProvenance,
+    ) -> Result<ThreadCreateAccepted, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
+
     fn rename_thread(
         &mut self,
         _workspace: &str,

@@ -541,6 +541,96 @@ pub fn bundle(agent: &Path, now_ms: i64) -> Result<Bundle, String> {
     collect(agent, now_ms, Audience::Peer)
 }
 
+/// A lease out of `bundle` for a machine that runs agents on the Pi
+/// providers `providers`, and on the router when `router` is set: those
+/// connections alone, each without a refresh token, so the machine uses a
+/// sign-in until it expires and never refreshes it.
+pub fn lease(bundle: Bundle, providers: &BTreeSet<String>, router: bool) -> Bundle {
+    let pi = bundle
+        .pi
+        .into_iter()
+        .filter(|(provider, _)| providers.contains(provider))
+        .map(|(provider, mut entry)| {
+            if let Some(entry) = entry.as_object_mut() {
+                entry.remove("refresh");
+            }
+            (provider, entry)
+        })
+        .collect();
+    let router = if router {
+        bundle
+            .router
+            .into_iter()
+            .map(|mut account| {
+                if let Credential::Subscription { refresh, .. } = &mut account.credential {
+                    *refresh = None;
+                }
+                account
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Bundle {
+        pi,
+        router,
+        cloud: None,
+    }
+}
+
+/// The connections the model vault leases this computer, as a lease for a
+/// machine the vault refused a machine token, such as at the account's
+/// pairing limit: each without a refresh token.
+pub fn cloud_lease(agent: &Path) -> Result<Bundle, String> {
+    const READ_ERROR: &str =
+        "This computer cannot read its model connections. Check folder access.";
+    let record = {
+        let record_path = agent.join(RECORD_FILE);
+        let _record_lock = pi_models::lock(&record_path).map_err(|_| READ_ERROR.to_string())?;
+        read_record(&record_path)?
+    };
+    let Some(share) = record.devices.get(CLOUD_DEVICE) else {
+        return Ok(Bundle::default());
+    };
+    let auth =
+        pi_models::read_json(&agent.join("auth.json")).map_err(|_| READ_ERROR.to_string())?;
+    let mut pi = Map::new();
+    for (provider, digest) in &share.pi {
+        if let Some(entry) = auth.get(provider) {
+            if entry_digest(entry) == *digest {
+                pi.insert(provider.clone(), entry.clone());
+            }
+        }
+    }
+    let prefix = format!("{SHARED_ACCOUNT_PREFIX}{CLOUD_DEVICE}:");
+    let router = config::load(agent)
+        .map_err(|_| READ_ERROR.to_string())?
+        .accounts
+        .into_iter()
+        .filter_map(|mut account| {
+            let id = account.id.strip_prefix(&prefix)?.to_owned();
+            share
+                .router
+                .iter()
+                .any(|held| *held == account.id || *held == id)
+                .then(|| {
+                    account.id = id;
+                    account
+                })
+        })
+        .collect();
+    let all: BTreeSet<String> = pi.keys().cloned().collect();
+    Ok(lease(
+        Bundle {
+            pi,
+            router,
+            cloud: None,
+        },
+        &all,
+        true,
+    ))
+}
+
 /// The bundle this computer uploads to the model vault: its own connections
 /// with the refresh token of each sign-in the vault renews or may copy, and
 /// the sign-ins the vault already holds, without theirs.

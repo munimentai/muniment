@@ -1506,6 +1506,8 @@ impl DesktopClient {
             Operation::ThreadHistoryFetch => &["status"],
             Operation::FleetHoldSignIn => &["status"],
             Operation::FleetCredentials => &["share_models"],
+            Operation::SwarmSetRole => &["role"],
+            Operation::FleetAudit => &["entries"],
             Operation::FleetOpStatus | Operation::FleetOpCancel => &["op"],
             Operation::FleetOps => &["ops"],
             _ => &[],

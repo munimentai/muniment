@@ -273,6 +273,75 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency>
         };
         serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
     }
+
+    /// Creates a thread, under `thread_id` when another fleet member chose
+    /// it, once per idempotency key.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn create_thread_as(
+        &mut self,
+        workspace: &str,
+        thread_id: Option<&Id>,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<ThreadCreateAccepted, ProtocolError> {
+        let canonical_input = match thread_id {
+            Some(thread_id) => json!({"workspace": workspace, "thread_id": thread_id.as_str()}),
+            None => json!({"workspace": workspace}),
+        };
+        let ledger_request = AttachRequest {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation: Operation::ThreadCreate,
+            capability: String::new(),
+            idempotency_key: Some(idempotency_key.clone()),
+            body: canonical_input.clone(),
+        };
+        let mut extra = BTreeMap::new();
+        extra.insert("attach_profile".into(), json!(&companion.profile));
+        extra.insert("companion_kind".into(), json!(companion.companion_kind));
+        extra.insert(
+            "companion_version".into(),
+            json!(companion.companion_version),
+        );
+        extra.insert("peer_uid".into(), json!(companion.peer_uid));
+        extra.insert("peer_pid".into(), json!(companion.peer_pid));
+        extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
+        let provenance = Provenance {
+            source: "muniment-attach".into(),
+            source_version: env!("CARGO_PKG_VERSION").into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: Some(request_id.as_str().to_owned()),
+            capability_versions: None,
+            extra,
+        };
+        let outcome = self.idempotency.execute(
+            &companion.profile,
+            self.client_identity.as_deref().unwrap_or_default(),
+            &ledger_request,
+            &canonical_input,
+            || Ok(()),
+            || {
+                let thread_id = match thread_id {
+                    Some(thread_id) => self.boundaries.create_thread_with_id(
+                        thread_id.as_str(),
+                        workspace,
+                        provenance,
+                    )?,
+                    None => self.boundaries.create_thread(workspace, provenance)?,
+                };
+                Ok(CommittedResult {
+                    body: json!({"thread_id": thread_id}),
+                    cursor: None,
+                })
+            },
+        )?;
+        let committed = match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
+        };
+        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+    }
 }
 
 impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> ThreadListService
@@ -1054,52 +1123,25 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
         idempotency_key: &Id,
         companion: CompanionProvenance,
     ) -> Result<ThreadCreateAccepted, ProtocolError> {
-        let canonical_input = json!({"workspace": workspace});
-        let ledger_request = AttachRequest {
-            protocol: Protocol,
-            request_id: request_id.clone(),
-            operation: Operation::ThreadCreate,
-            capability: String::new(),
-            idempotency_key: Some(idempotency_key.clone()),
-            body: canonical_input.clone(),
-        };
-        let mut extra = BTreeMap::new();
-        extra.insert("attach_profile".into(), json!(&companion.profile));
-        extra.insert("companion_kind".into(), json!(companion.companion_kind));
-        extra.insert(
-            "companion_version".into(),
-            json!(companion.companion_version),
-        );
-        extra.insert("peer_uid".into(), json!(companion.peer_uid));
-        extra.insert("peer_pid".into(), json!(companion.peer_pid));
-        extra.insert("idempotency_key".into(), json!(idempotency_key.as_str()));
-        let provenance = Provenance {
-            source: "muniment-attach".into(),
-            source_version: env!("CARGO_PKG_VERSION").into(),
-            actor_id: None,
-            device_id: None,
-            rpc_request_id: Some(request_id.as_str().to_owned()),
-            capability_versions: None,
-            extra,
-        };
-        let outcome = self.idempotency.execute(
-            &companion.profile,
-            self.client_identity.as_deref().unwrap_or_default(),
-            &ledger_request,
-            &canonical_input,
-            || Ok(()),
-            || {
-                let thread_id = self.boundaries.create_thread(workspace, provenance)?;
-                Ok(CommittedResult {
-                    body: json!({"thread_id": thread_id}),
-                    cursor: None,
-                })
-            },
-        )?;
-        let committed = match outcome {
-            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => result,
-        };
-        serde_json::from_value(committed.body).map_err(|_| ProtocolError::persistence_failed())
+        self.create_thread_as(workspace, None, request_id, idempotency_key, companion)
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn create_thread_with_id(
+        &mut self,
+        workspace: &str,
+        thread_id: &Id,
+        request_id: &Id,
+        idempotency_key: &Id,
+        companion: CompanionProvenance,
+    ) -> Result<ThreadCreateAccepted, ProtocolError> {
+        self.create_thread_as(
+            workspace,
+            Some(thread_id),
+            request_id,
+            idempotency_key,
+            companion,
+        )
     }
 
     #[cfg(any(unix, target_os = "windows"))]
