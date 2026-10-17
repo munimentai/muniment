@@ -1228,7 +1228,7 @@ mod tests {
         let (_root, profile) = profile();
         let agent: crate::agents::Agent = serde_json::from_value(json!({
             "name": "Closer", "label": "Sales", "instructions": "Follow up on deals.",
-            "avatar": {"style": "boxbot", "seed": "closer"},
+            "avatar": {"style": "muniment", "seed": "closer"},
             "template": {"custom": "keep"},
             "model": {"provider": "local", "id": "example-model", "thinking": "high"},
             "tools": {"disabled": ["bash"]},

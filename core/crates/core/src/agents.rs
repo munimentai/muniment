@@ -35,7 +35,7 @@ pub struct Avatar {
     pub seed: String,
 }
 /// The avatar styles an agent may carry. New agents get the first.
-pub const AVATAR_STYLES: [&str; 3] = ["boxbot", "muniment-v1", "muniment-v2"];
+pub const AVATAR_STYLES: [&str; 3] = ["muniment", "muniment-v1", "muniment-v2"];
 impl Avatar {
     pub fn is_valid(&self) -> bool {
         AVATAR_STYLES.contains(&self.style.as_str())
@@ -1793,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn new_agents_draw_as_boxbot_and_saved_avatar_styles_keep_their_seed() {
+    fn new_agents_get_the_muniment_style_and_saved_avatar_styles_keep_their_seed() {
         let (root_dir, profile) = profile();
         let created = save(
             &profile,
@@ -1805,7 +1805,7 @@ mod tests {
         )
         .unwrap();
         let avatar = created.avatar.clone().unwrap();
-        assert_eq!(avatar.style, "boxbot");
+        assert_eq!(avatar.style, "muniment");
         assert!(avatar.seed.starts_with("legacy-"));
         for style in AVATAR_STYLES {
             let mut agent = created.clone();
