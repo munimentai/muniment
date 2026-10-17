@@ -14,6 +14,21 @@ static WRITE: Mutex<()> = Mutex::new(());
 pub struct Catalog {
     pub projects: BTreeMap<String, String>,
     pub threads: BTreeMap<String, String>,
+    /// Projects another swarm member owns, by id. Their files stay on the
+    /// owner.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote: BTreeMap<String, RemoteProject>,
+}
+
+/// A project whose folder is on another swarm member.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteProject {
+    pub name: String,
+    pub owner_runtime: String,
+    /// The folder on the owner.
+    #[serde(default)]
+    pub path: String,
 }
 
 fn read(profile: &Path) -> Result<Catalog, String> {
@@ -212,11 +227,32 @@ pub fn unassign(profile: &Path, thread: &str) -> Result<(), String> {
     save(profile, &catalog)
 }
 pub fn thread_folder(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
-    read(profile)?
+    let catalog = read(profile)?;
+    catalog
         .threads
         .get(thread)
+        .filter(|id| !catalog.remote.contains_key(*id))
         .map(|id| folder(profile, id))
         .transpose()
+}
+
+/// The catalog as saved, with projects whose folder is missing.
+pub(crate) fn saved(profile: &Path) -> Result<Catalog, String> {
+    let _guard = WRITE.lock().map_err(|_| "The project catalog is busy.")?;
+    read(profile)
+}
+
+/// Changes the saved catalog under the catalog lock.
+pub(crate) fn update(
+    profile: &Path,
+    change: impl FnOnce(&mut Catalog) -> bool,
+) -> Result<(), String> {
+    let _guard = WRITE.lock().map_err(|_| "The project catalog is busy.")?;
+    let mut catalog = read(profile)?;
+    if change(&mut catalog) {
+        save(profile, &catalog)?;
+    }
+    Ok(())
 }
 
 /// Resolves every thread to its project or its own visible output folder.
@@ -236,7 +272,13 @@ pub fn workspace_with_config(
         }
         return crate::agents::folder(config, id);
     }
-    if let Some(project) = read(profile)?.threads.get(thread) {
+    let catalog = read(profile)?;
+    // A thread in another member's project works in its own folder here.
+    if let Some(project) = catalog
+        .threads
+        .get(thread)
+        .filter(|project| !catalog.remote.contains_key(*project))
+    {
         let folder = folder_with_config(profile, config, project)?;
         migrate_workspace_metadata(&folder)?;
         return Ok(folder);

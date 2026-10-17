@@ -2,7 +2,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::Path, time::Duration};
 
-const RECORD_FILE: &str = "thread-retention.json";
+pub const RECORD_FILE: &str = "thread-retention.json";
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 pub const RETENTION_CHECK_INTERVAL: Duration = Duration::from_secs(SECONDS_PER_DAY);
 
