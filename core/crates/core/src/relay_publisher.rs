@@ -10,14 +10,19 @@
 //!
 //! The host supplies the account through [`RelayAccount`] and the runtime
 //! through [`RelayRuntime`], so a host without a cloud starts no publisher.
+//!
+//! A runtime that serves the pair's control session also registers it, one
+//! long-lived session per pair, answers the phone's sealed requests in sealed
+//! response pages, and forwards the fleet's live events on it, so the phone
+//! reads and acts on every machine of the fleet through this runtime.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::TryRecvError;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -35,11 +40,17 @@ use crate::chat_view::{ChatPendingPermission, ChatToolActivity};
 use crate::journal::reducer::PermissionRequest;
 use crate::permission_gate::ChatPermissionAnswer;
 use crate::relay_encryption::{
-    self, canonical_json, open_command, seal_event, AnswerDecision, CommandContent,
-    CommandEnvelope, EventContent, EventHeader, GateDecision, GateWindow, Phase, RelayCryptoError,
-    RelayKeys, ReplayWindow, SendCounter,
+    self, canonical_json, open_command, open_request, seal_control, seal_event, AnswerDecision,
+    CommandContent, CommandEnvelope, ControlContent, ControlHeader, EventContent, EventHeader,
+    GateDecision, GateWindow, Phase, RelayCryptoError, RelayKeys, ReplayWindow, RequestContent,
+    SealedRequest, SendCounter,
 };
 use crate::run_events::{ChatEvent, ChatEventSubscription};
+use crate::swarm::ClientEvent;
+
+mod control;
+
+pub use control::{control_session_id, RequestError, FORWARDED_EVENTS, PHONE_OPERATIONS};
 
 /// The relay protocol every envelope names.
 pub const RELAY_PROTOCOL: &str = "muniment.session-relay/1";
@@ -62,6 +73,9 @@ const MAX_DELTA_BYTES: usize = 16 * 1024;
 
 /// How many applied receipts the publisher keeps to answer a repeated command.
 const RECENT_RECEIPTS: usize = 64;
+
+/// How many phone requests run at once. A request past it is answered busy.
+const MAX_REQUESTS_IN_FLIGHT: usize = 8;
 
 /// A cloud connection the account answers: the API base and a fresh bearer.
 #[derive(Clone)]
@@ -116,6 +130,30 @@ pub trait RelayRuntime: Send + Sync {
         let _ = (run_id, gate_id);
         None
     }
+
+    /// Whether the runtime serves the pair's control session.
+    fn serves_control(&self) -> bool {
+        false
+    }
+
+    /// Runs one attach operation for the paired phone with the phone's
+    /// scopes. `request_id` is the phone's request id, which an action that
+    /// needs one takes as its idempotency key.
+    fn request(
+        &self,
+        operation: muniment_attach::Operation,
+        body: Value,
+        request_id: &str,
+    ) -> Result<Value, RequestError> {
+        let _ = (operation, body, request_id);
+        Err(RequestError::unsupported())
+    }
+
+    /// The fleet's live events, of which the phone follows those in
+    /// [`FORWARDED_EVENTS`].
+    fn fleet_events(&self) -> Option<Receiver<ClientEvent>> {
+        None
+    }
 }
 
 /// How often the publisher polls and how long it waits.
@@ -157,6 +195,9 @@ struct RelayState {
     commands: ReplayWindow,
     /// A command failed to authenticate, so the owner pairs again.
     key_mismatch: bool,
+    /// The reserved high-water mark of the control session's event sequence.
+    #[serde(default)]
+    control_reserved: u64,
 }
 
 /// The path of the relay state under a profile.
@@ -226,6 +267,8 @@ impl RelayPublisher {
             stop: Arc::clone(&stop),
             runs: BTreeMap::new(),
             receipts: VecDeque::new(),
+            answers: mpsc::channel(),
+            in_flight: Arc::new(AtomicUsize::new(0)),
         };
         let thread = std::thread::Builder::new()
             .name("muniment-relay".into())
@@ -294,6 +337,23 @@ struct Publisher {
     runs: BTreeMap<String, RunRelay>,
     /// The latest applied receipts by command id.
     receipts: VecDeque<(String, Value)>,
+    /// Answers of phone requests that ran off the socket thread, waiting to
+    /// be sealed.
+    answers: (Sender<Answered>, Receiver<Answered>),
+    /// How many phone requests run now.
+    in_flight: Arc<AtomicUsize>,
+}
+
+/// One phone request's answer.
+struct Answered {
+    request_id: String,
+    result: Result<Value, RequestError>,
+}
+
+/// The pair's control session on one connection.
+struct Control {
+    session_id: String,
+    sequence: SendCounter,
 }
 
 /// The open connection and the pair's sealing state.
@@ -304,6 +364,7 @@ struct Link {
     state: RelayState,
     counter: SendCounter,
     state_path: PathBuf,
+    control: Option<Control>,
 }
 
 impl Publisher {
@@ -368,6 +429,10 @@ impl Publisher {
             .set_read_timeout(Some(self.timing.read_tick))
             .map_err(|error| error.to_string())?;
         let state = load_state(&self.state_path, &keys.pair_id);
+        let control = self.runtime.serves_control().then(|| Control {
+            session_id: control_session_id(&keys.pair_id),
+            sequence: SendCounter::resume(state.control_reserved),
+        });
         let mut link = Link {
             socket,
             identity,
@@ -375,6 +440,7 @@ impl Publisher {
             keys,
             state,
             state_path: self.state_path.clone(),
+            control,
         };
         for run in self.runs.values_mut() {
             run.registered = false;
@@ -383,6 +449,12 @@ impl Publisher {
             .runtime
             .subscribe()
             .ok_or("the runtime has no event stream")?;
+        let fleet = if link.control.is_some() {
+            link.register_control()?;
+            self.runtime.fleet_events()
+        } else {
+            None
+        };
         let mut heard = Instant::now();
         let mut checked = Instant::now();
         loop {
@@ -425,6 +497,16 @@ impl Publisher {
                             .ok_or("the runtime has no event stream")?;
                         break;
                     }
+                }
+            }
+            while let Ok(answered) = self.answers.1.try_recv() {
+                for page in control::pages(&answered.request_id, answered.result) {
+                    link.control_event(false, page)?;
+                }
+            }
+            for event in fleet.iter().flat_map(Receiver::try_iter) {
+                if let Some((name, wake)) = control::forwarded(&event.name) {
+                    link.control_event(wake, control::event(&name, event.body))?;
                 }
             }
             match link.socket.flush() {
@@ -472,6 +554,7 @@ impl Publisher {
             "command.interrupt" | "command.steer" | "command.follow_up" | "permission.answer" => {
                 self.command(link, &message)?;
             }
+            "control.request" => self.request(link, &message)?,
             "protocol.error" => {
                 let code = message["payload"]["code"].as_str().unwrap_or("unknown");
                 crate::runtime_eprintln!("muniment-runtime: relay refused a message: {code}");
@@ -614,6 +697,92 @@ impl Publisher {
             self.receipts.pop_front();
         }
         link.send("command.receipt", Some(&session_id), payload)
+    }
+
+    /// Opens one phone request on the control session and runs it off the
+    /// socket thread. Its answer is sealed on a later turn.
+    fn request(&mut self, link: &mut Link, message: &Value) -> Result<(), String> {
+        let Some(control) = link.control.as_ref() else {
+            return Ok(());
+        };
+        let message_id = message["message_id"].as_str().unwrap_or_default();
+        if message["session_id"] != control.session_id.as_str()
+            || !relay_encryption::valid_id(message_id)
+        {
+            return Ok(());
+        }
+        let request_id = message_id.to_owned();
+        let refuse = |link: &mut Link, code: &str, text: &str| {
+            for page in control::pages(&request_id, Err(RequestError::new(code, text))) {
+                link.control_event(false, page)?;
+            }
+            Ok(())
+        };
+        let Ok(sealed) = serde_json::from_value::<SealedRequest>(message["payload"].clone()) else {
+            return refuse(link, "invalid_request", "The request could not be read.");
+        };
+        let session_id = control.session_id.clone();
+        let opened = match open_request(
+            &link.keys.phone_to_desktop,
+            &sealed,
+            &session_id,
+            message_id,
+        ) {
+            Ok(opened) => opened,
+            Err(error) => {
+                if error == RelayCryptoError::AuthenticationFailed {
+                    link.state.key_mismatch = true;
+                    let _ = save_state(&link.state_path, &link.state);
+                }
+                return refuse(link, "invalid_request", "The request could not be opened.");
+            }
+        };
+        // Requests and commands share the phone's counter, so one window
+        // drops a replay of either.
+        if !link.state.commands.accept(opened.counter) {
+            return Ok(());
+        }
+        save_state(&link.state_path, &link.state)?;
+        let header = &sealed.header;
+        let parse = |value: &str| DateTime::parse_from_rfc3339(value).ok();
+        match (parse(&header.created_at), parse(&header.expires_at)) {
+            (Some(created), Some(expires))
+                if expires > created
+                    && (expires - created).num_seconds()
+                        <= relay_encryption::MAX_REQUEST_LIFETIME_SECONDS =>
+            {
+                if expires <= Utc::now() {
+                    return refuse(link, "expired", "The request expired before it arrived.");
+                }
+            }
+            _ => return refuse(link, "invalid_request", "The request times are invalid."),
+        }
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_REQUESTS_IN_FLIGHT {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            return refuse(link, "unavailable", "This machine is busy. Try again.");
+        }
+        let RequestContent::Request {
+            operation, body, ..
+        } = opened.content;
+        let runtime = Arc::clone(&self.runtime);
+        let answers = self.answers.0.clone();
+        let in_flight = Arc::clone(&self.in_flight);
+        let answered_id = request_id.clone();
+        let spawned = std::thread::Builder::new()
+            .name("muniment-relay-request".into())
+            .spawn(move || {
+                let result = control::answer(runtime.as_ref(), &operation, body, &answered_id);
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                let _ = answers.send(Answered {
+                    request_id: answered_id,
+                    result,
+                });
+            });
+        if spawned.is_err() {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            return refuse(link, "unavailable", "This machine is busy. Try again.");
+        }
+        Ok(())
     }
 
     /// Publishes what one runtime event changed.
@@ -763,6 +932,54 @@ impl Link {
         self.socket
             .send(Message::text(envelope.to_string()))
             .map_err(|error| error.to_string())
+    }
+
+    /// Registers the pair's control session.
+    fn register_control(&mut self) -> Result<(), String> {
+        let Some(control) = self.control.as_ref() else {
+            return Ok(());
+        };
+        let session_id = control.session_id.clone();
+        self.send(
+            "session.register",
+            Some(&session_id),
+            json!({"channel": "control", "client_protocols": [RELAY_PROTOCOL]}),
+        )
+    }
+
+    /// Seals one event on the control session. `wake` asks the relay to
+    /// wake the phone.
+    fn control_event(&mut self, wake: bool, content: ControlContent) -> Result<(), String> {
+        let path = self.state_path.clone();
+        let Some(control) = self.control.as_mut() else {
+            return Ok(());
+        };
+        let state = &mut self.state;
+        let sequence = control
+            .sequence
+            .next(|reserved| {
+                state.control_reserved = reserved;
+                save_state(&path, state).map_err(PublishError::State)
+            })
+            .map_err(|error| error.to_string())?;
+        let session_id = control.session_id.clone();
+        let header = ControlHeader::new(
+            &session_id,
+            sequence,
+            wake,
+            &relay_encryption::timestamp(Utc::now()),
+        );
+        let counter = self
+            .counter
+            .next(|reserved| {
+                state.send_reserved = reserved;
+                save_state(&path, state).map_err(PublishError::State)
+            })
+            .map_err(|error| error.to_string())?;
+        let sealed = seal_control(&self.keys.desktop_to_phone, &header, counter, &content)
+            .map_err(|error| error.to_string())?;
+        let payload = serde_json::to_value(&sealed).map_err(|error| error.to_string())?;
+        self.send("session.event", Some(&session_id), payload)
     }
 
     fn register(&mut self, run: &RunRelay) -> Result<(), String> {

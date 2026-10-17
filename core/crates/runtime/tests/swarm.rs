@@ -21,7 +21,9 @@ use muniment_core::run_start::RunAttachBoundaries;
 use muniment_core::serde_json::{json, Value};
 use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
 use muniment_core::swarm::{FleetActor, Swarm};
-use muniment_runtime_core::host::{CredentialStore, FileCredentialStore};
+use muniment_runtime_core::host::{
+    AccountService, AccountSession, CredentialStore, FileCredentialStore,
+};
 use muniment_runtime_core::{RuntimeAttachState, RuntimeHost};
 
 mod common;
@@ -47,10 +49,16 @@ struct Member {
     stop: Option<mpsc::Sender<()>>,
     server: Option<std::thread::JoinHandle<Result<(), RemoteListenerError>>>,
     artifact: PiArtifactDescriptor,
+    account: Option<Arc<dyn AccountService>>,
 }
 
 impl Member {
     fn new(name: &'static str) -> Self {
+        Self::with_account(name, None)
+    }
+
+    /// A member whose host signs in with `account`, as a desktop host does.
+    fn with_account(name: &'static str, account: Option<Arc<dyn AccountService>>) -> Self {
         let temporary = TemporaryProfile::new(&format!("swarm-{name}"), false);
         let profile = temporary.profile.clone();
         muniment_core::home::confirm_home(&profile, &temporary.root.join("home")).unwrap();
@@ -70,6 +78,7 @@ impl Member {
             stop: None,
             server: None,
             artifact,
+            account,
         };
         member.open();
         member
@@ -78,12 +87,15 @@ impl Member {
     fn open(&mut self) {
         let profile = &self.temporary.profile;
         // Each member keeps its own secrets, as separate machines do.
-        let host = RuntimeHost {
+        let mut host = RuntimeHost {
             credentials: Arc::new(FileCredentialStore::new(
                 self.temporary.root.join("credentials"),
             )),
             ..RuntimeHost::default()
         };
+        if let Some(account) = &self.account {
+            host.account = Arc::clone(account);
+        }
         let state = Arc::new(RuntimeAttachState::open(host, profile, profile).unwrap());
         let access = state
             .open_remote_access(RemoteAccessOptions {
@@ -1767,6 +1779,68 @@ fn line(a: &Member, b: &Member, c: &Member) -> (Agent, String) {
 }
 
 #[test]
+fn the_phones_requests_read_the_fleet_and_reach_an_items_owner_with_its_scopes() {
+    let _environment = environment();
+    let a = Member::new("phone-a");
+    let b = Member::new("phone-b");
+    let c = Member::new("phone-c");
+    let (scout, thread) = line(&a, &b, &c);
+
+    // C serves the paired phone: its reads answer from C's replicas.
+    let members = c
+        .state()
+        .phone_request(Operation::SwarmMembers, json!({}), "req_members_0001")
+        .unwrap();
+    assert_eq!(members["members"].as_array().unwrap().len(), 3);
+    let agents = c
+        .state()
+        .phone_request(Operation::SwarmAgents, json!({}), "req_agents_00001")
+        .unwrap();
+    assert!(agents["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|agent| agent["agent_id"] == scout.id.as_str()
+            && agent["primary_runtime"] == a.runtime_id()));
+
+    // A post to A's thread goes to A as a forwarded action and runs there.
+    let text = "Sent from the phone.";
+    let posted = c
+        .state()
+        .phone_request(
+            Operation::ThreadPost,
+            json!({"thread_id": thread, "text": text}),
+            "req_post_0000001",
+        )
+        .unwrap();
+    assert_eq!(posted["forwarded"], true, "{posted}");
+    assert!(
+        wait(|| {
+            a.tick();
+            prompted(&a, &scout.id, text) == 1
+        }),
+        "A never ran the phone's post"
+    );
+
+    // An action past the phone's scopes, or one only the runtime's owner
+    // makes, is refused before it travels.
+    let refused = c
+        .state()
+        .phone_request(
+            Operation::AgentDelete,
+            json!({"id": scout.id}),
+            "req_delete_00001",
+        )
+        .unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::Unauthorized);
+    let excluded = c
+        .state()
+        .phone_request(Operation::PairingStatus, json!({}), "req_pairing_0001")
+        .unwrap_err();
+    assert_eq!(excluded.code(), ErrorCode::UnsupportedOperation);
+}
+
+#[test]
 fn an_action_on_another_members_item_reaches_its_owner_through_a_relay_once() {
     let _environment = environment();
     let a = Member::new("fleet-a");
@@ -2068,4 +2142,155 @@ fn a_stop_from_another_member_cancels_the_owners_live_run() {
         a.store().get(&run.id).unwrap().unwrap().status
     );
     std::env::remove_var("PI_RESUME_STUB_PERMISSION_CAPTURE");
+}
+
+/// The desktop account of the live control session test: the relay keys,
+/// access token and pair that the phone probe wrote after it paired both
+/// sides with a local cloud.
+struct ProbeAccount {
+    api: String,
+    file: std::path::PathBuf,
+}
+
+impl ProbeAccount {
+    fn read(&self) -> Option<Value> {
+        muniment_core::serde_json::from_slice(&std::fs::read(&self.file).ok()?).ok()
+    }
+}
+
+impl AccountService for ProbeAccount {
+    fn session(
+        &self,
+        _runtime_activity: &muniment_core::attach::RuntimeActivityRegistry,
+    ) -> Result<AccountSession, String> {
+        Ok(AccountSession {
+            tokens: self.read().map(|paired| muniment_core::account::TokenSet {
+                access_token: paired["access_token"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                refresh_token: None,
+                expires_at: None,
+                subject: None,
+            }),
+            entitlement_snapshot: None,
+        })
+    }
+
+    fn cloud_api_base(&self) -> Option<String> {
+        Some(self.api.clone())
+    }
+
+    fn pairing_status(
+        &self,
+        _access_token: &str,
+        _profile_directory: &std::path::Path,
+    ) -> Result<muniment_core::account::PairingStatusView, muniment_core::attach::ProtocolError>
+    {
+        let paired = self
+            .read()
+            .ok_or_else(muniment_core::attach::ProtocolError::unauthorized)?;
+        muniment_core::serde_json::from_value(json!({"pair": {
+            "pair_id": paired["pair_id"],
+            "mobile_device_id": paired["mobile_device_id"],
+            "created_at": paired["created_at"],
+        }}))
+        .map_err(|_| muniment_core::attach::ProtocolError::invalid_request())
+    }
+
+    fn relay_keys(
+        &self,
+        _profile_directory: &std::path::Path,
+    ) -> Option<muniment_core::relay_encryption::RelayKeys> {
+        use muniment_core::relay_encryption::{DirectionKey, RelayKeys};
+        let paired = self.read()?;
+        Some(RelayKeys {
+            pair_id: paired["pair_id"].as_str()?.to_owned(),
+            desktop_to_phone: DirectionKey::decode(paired["desktop_to_phone"].as_str()?).ok()?,
+            phone_to_desktop: DirectionKey::decode(paired["phone_to_desktop"].as_str()?).ok()?,
+        })
+    }
+}
+
+/// The desktop side of the phone probe: two members, Studio and Box, with an
+/// agent and a thread on each, and Studio's relay publisher on a local cloud.
+/// Run it with the probe that pairs, reads the fleet and acts on it:
+///
+/// ```sh
+/// MUNIMENT_RELAY_CONTROL_API=http://127.0.0.1:58787 \
+/// MUNIMENT_RELAY_CONTROL_DIR=/tmp/control-probe \
+/// cargo test -p muniment-runtime-core --test swarm a_phone_probe -- --ignored --nocapture
+/// ```
+///
+/// The probe writes `desktop.json` with the pair, reads `fleet.json`, and
+/// writes `done.json` with the text it posted to Box's thread.
+#[test]
+#[ignore = "needs a local cloud API and the phone probe"]
+fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session() {
+    let (Ok(api), Ok(directory)) = (
+        std::env::var("MUNIMENT_RELAY_CONTROL_API"),
+        std::env::var("MUNIMENT_RELAY_CONTROL_DIR"),
+    ) else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    let _environment = environment();
+    let studio = Member::with_account(
+        "Studio",
+        Some(Arc::new(ProbeAccount {
+            api,
+            file: directory.join("desktop.json"),
+        })),
+    );
+    let boxed = Member::new("Box");
+    boxed.join(&studio);
+    let scout = boxed.agent("Scout");
+    boxed.run_to_end(&scout.id, "Find leads.");
+    let ledger = studio.agent("Ledger");
+    studio.run_to_end(&ledger.id, "Balance the books.");
+    let scout_thread = boxed.primary_thread(&scout.id);
+    assert!(wait(|| {
+        studio.tick();
+        boxed.tick();
+        studio.swarm().is_replica_thread(&scout_thread) == Some(boxed.runtime_id())
+    }));
+    studio.state().use_pi_artifact(studio.artifact);
+    let (stop, commands) = mpsc::channel();
+    let schedule = muniment_runtime_core::start_retention_schedule(
+        Arc::clone(studio.state()),
+        Duration::from_secs(3600),
+        commands,
+        None,
+    );
+    std::fs::write(
+        directory.join("fleet.json"),
+        json!({
+            "studio": studio.runtime_id(), "box": boxed.runtime_id(),
+            "scout": scout.id, "scout_thread": scout_thread,
+            "ledger": ledger.id, "ledger_thread": studio.primary_thread(&ledger.id),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let done = directory.join("done.json");
+    let deadline = Instant::now() + Duration::from_secs(600);
+    while !done.exists() {
+        assert!(Instant::now() < deadline, "the probe never finished");
+        studio.tick();
+        boxed.tick();
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let report: Value =
+        muniment_core::serde_json::from_slice(&std::fs::read(&done).unwrap()).unwrap();
+    let posted = report["posted"].as_str().unwrap().to_owned();
+    assert!(
+        wait(|| {
+            boxed.tick();
+            prompted(&boxed, &scout.id, &posted) == 1
+        }),
+        "Box never ran the phone's post"
+    );
+    stop.send(muniment_runtime_core::RetentionScheduleCommand::Stop)
+        .unwrap();
+    schedule.join().unwrap();
 }
