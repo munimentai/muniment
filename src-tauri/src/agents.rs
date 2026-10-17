@@ -143,7 +143,11 @@ pub async fn agent_request(
 
 /// The `thread.create` body that starts a thread on the fleet member
 /// `runtime_id` with its first message. Core validates the rest.
-fn offload_body(runtime_id: &str, text: &str, permission_mode: Option<&str>) -> Result<Value, String> {
+fn offload_body(
+    runtime_id: &str,
+    text: &str,
+    permission_mode: Option<&str>,
+) -> Result<Value, String> {
     if runtime_id.trim().is_empty() {
         return Err("Choose a machine for the thread.".into());
     }
@@ -208,7 +212,10 @@ pub async fn agent_export_template(
         return Err("The template exceeds 128 KB.".into());
     }
     let file_name = export_file_name(&file_name);
-    let extension = file_name.rsplit_once('.').map_or("md", |(_, extension)| extension).to_owned();
+    let extension = file_name
+        .rsplit_once('.')
+        .map_or("md", |(_, extension)| extension)
+        .to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let selected = app
             .dialog()
@@ -476,10 +483,7 @@ mod tests {
             export_file_name("Lead-scout.grok-bot.md"),
             "Lead-scout.grok-bot.md"
         );
-        assert_eq!(
-            export_file_name("../../etc/passwd"),
-            "etcpasswd"
-        );
+        assert_eq!(export_file_name("../../etc/passwd"), "etcpasswd");
         assert_eq!(export_file_name("..."), "agent.md");
         assert_eq!(export_file_name(""), "agent.md");
     }
