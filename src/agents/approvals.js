@@ -9,6 +9,11 @@ export const ANSWER_LABELS = {
   allow_thread: 'Allow for this thread',
   always_allow_agent: 'Always allow for this agent',
   deny: 'Deny',
+  // A plan approval's answers: approve it into a mode, or keep planning.
+  plan_manual: 'Approve, then ask before changes',
+  plan_edit_auto: 'Approve and edit automatically',
+  plan_auto: 'Approve with auto review',
+  plan_keep: 'Keep planning',
 }
 const ORDER = Object.keys(ANSWER_LABELS)
 
@@ -23,7 +28,7 @@ const DENY = 'Deny'
 export function approvalChoices(approval) {
   if (Array.isArray(approval?.answers) && approval.answers.length) {
     return ORDER.filter((id) => approval.answers.includes(id))
-      .map((id) => ({ label: ANSWER_LABELS[id], answer: id, ...(id === 'deny' ? { tone: 'deny' } : {}) }))
+      .map((id) => ({ label: ANSWER_LABELS[id], answer: id, ...(id === 'deny' || id === 'plan_keep' ? { tone: 'deny' } : {}) }))
   }
   const request = approval?.request
   if (request?.kind === 'confirm') {
@@ -94,4 +99,20 @@ export function approvalOutcome(status) {
 // The pending approvals that belong in one thread's transcript.
 export function threadApprovals(approvals = [], threadId) {
   return threadId ? approvals.filter((approval) => approval.thread_id === threadId) : []
+}
+
+// The title of the gate a submitted plan opens.
+export const PLAN_GATE_TITLE = 'Approve this plan?'
+
+export function isPlanGate(gate) {
+  return gate?.kind === 'select' && gate.title === PLAN_GATE_TITLE
+}
+
+// The answers a composer thread's select gate shows beside its Deny control.
+// A thread without an agent never offers "Always allow for this agent", and
+// a gate whose options name Deny answers Deny with that option.
+export function composerGateOptions(gate, hasAgent = false) {
+  const options = (gate?.options ?? []).filter((option) => hasAgent || option !== ANSWER_LABELS.always_allow_agent)
+  const deny = options.includes(DENY) ? { type: 'select', value: DENY } : { type: 'cancelled' }
+  return { options: options.filter((option) => option !== DENY), deny }
 }

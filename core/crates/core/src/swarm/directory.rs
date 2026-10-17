@@ -43,6 +43,7 @@ fn definition(agent: &Agent) -> Option<Value> {
             if let Some(routine) = routine.as_object_mut() {
                 routine.remove("last_fired_at");
                 routine.remove("last_result");
+                routine.remove("next_fire_at");
             }
         }
     }

@@ -2,11 +2,10 @@
 // permission policy request, `{ request_kind, resource }`, and the runtime
 // matches it exactly.
 
-export const MODES = [
-  ['ask', 'Ask', 'Asks before any change that no rule allows.'],
-  ['auto', 'Automatic', 'Runs allowed work without asking. Event runs still ask before changes.'],
-  ['strict', 'Strict', 'Asks before every tool call that no rule allows.'],
-]
+// The rule lists of an agent and of the runtime's global rules, in the order
+// the gate reads them: a deny rule wins over ask first, and ask first over
+// always allow.
+export const RULE_LISTS = [['deny', 'Deny'], ['ask_first', 'Ask first'], ['always_allow', 'Always allow']]
 
 export const RULE_KINDS = [['command', 'Command'], ['path', 'File'], ['tool', 'Tool']]
 export const PATH_OPERATIONS = ['read', 'write', 'edit', 'ls', 'find', 'grep']

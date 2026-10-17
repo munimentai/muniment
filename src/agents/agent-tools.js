@@ -25,15 +25,6 @@ export async function loadToolCatalog(tauri, runtime) {
   }
 }
 
-// The tool toggles: the machine's built-in tools, then any id the agent
-// turns off that the catalog does not list, so it can be turned on again.
-export function agentTools(agent, catalog = emptyCatalog()) {
-  const listed = catalog.builtin.map((tool) => ({ ...tool, known: true }))
-  const known = new Set(listed.map((tool) => tool.id))
-  const extra = (agent?.tools?.disabled ?? []).filter((id) => !known.has(id)).map((id) => ({ id, label: id, readOnly: false, known: false }))
-  return [...listed, ...extra]
-}
-
 // The agent's `tools` after one tool turns on or off.
 export function toggleTool(agent, id, enabled) {
   const disabled = new Set(agent?.tools?.disabled ?? [])

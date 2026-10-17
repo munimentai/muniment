@@ -46,3 +46,21 @@ it('folds a long input behind Show all and names a refusal', async () => {
   await fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
   expect(await screen.findByRole('status')).toHaveTextContent('That machine is offline. Try again when it answers.')
 })
+
+it('shows why the gate asks', () => {
+  render(ApprovalCard, { tauri: { invoke: vi.fn() }, approval: pending })
+  expect(pending.reason).toBeTruthy()
+  expect(screen.getByRole('article')).toHaveTextContent(pending.reason)
+})
+
+it('shows a plan with the four plan answers and approves it into a mode', async () => {
+  const plan = { ...JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/event-agent-approval-pending-plan.json'), 'utf8')).body, runtimeId: 'box' }
+  const invoke = vi.fn(async () => ({ status: 'answered', approval: { ...plan, state: 'answered' } }))
+  render(ApprovalCard, { tauri: { invoke }, approval: plan })
+  expect(screen.getByRole('region', { name: 'Plan' })).toHaveTextContent('Add a `--dry-run` flag to the export script.')
+  expect(screen.getByRole('article')).toHaveTextContent('Approve this plan?')
+  expect(screen.getByRole('article')).not.toHaveTextContent('plan_submit')
+  expect(buttons()).toEqual(['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'])
+  await fireEvent.click(screen.getByRole('button', { name: 'Approve and edit automatically' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.approval_answer', body: { approval_id: plan.approval_id, answer: 'plan_edit_auto' } }))
+})

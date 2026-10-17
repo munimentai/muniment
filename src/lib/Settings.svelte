@@ -17,6 +17,7 @@
   const AccountSettings = () => import('./AccountSettings.svelte')
   const CompaniesSection = () => import('./CompaniesSection.svelte')
   const ContextSettings = () => import('../activity/ContextSettings.svelte')
+  const PermissionSettings = () => import('./PermissionSettings.svelte')
   const LanguageSection = () => import('./LanguageSection.svelte')
   const SearchSection = () => import('./SearchSection.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
@@ -49,6 +50,8 @@
     // The selected paired runtime, or null while this computer's runtime is selected.
     remoteRuntime = null,
     runtimeSwitchDisabled = false,
+    // Called after a permission setting saves, so the composer reads the modes again.
+    onpermissions = () => {},
   } = $props()
 
   const sections = $derived(settingsSections({ remote: !!remoteRuntime }))
@@ -100,6 +103,8 @@
       <SettingsSection load={Appearance} properties={{tauri}} />
     {:else if section === 'context'}
       <SettingsSection load={ContextSettings} properties={{tauri}} />
+    {:else if section === 'permissions'}
+      {#key remoteRuntime?.id ?? 'local'}<SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: remoteRuntime?.name ?? 'this computer', onsaved: onpermissions}} />{/key}
     {:else if section === 'voice'}
       <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
     {:else if section === 'search'}

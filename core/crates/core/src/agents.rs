@@ -488,7 +488,8 @@ fn load_entry(profile: &Path, folder: &Path, path: &Path) -> Result<Option<Agent
     )?;
     get(profile, &agent.id).map(Some)
 }
-/// Fills each routine's last fire time and result from the runtime's state.
+/// Fills each routine's last fire time, result, poll and next fire time
+/// from the runtime's state.
 fn apply_routine_state(agent: &mut Agent, state: &State) {
     let routines = state.routines.get(&agent.id);
     for routine in &mut agent.routines {
@@ -496,6 +497,7 @@ fn apply_routine_state(agent: &mut Agent, state: &State) {
         routine.last_fired_at = saved.and_then(|saved| saved.last_fired_at.clone());
         routine.last_result = saved.and_then(|saved| saved.last_result.clone());
         routine.last_poll = saved.and_then(|saved| saved.last_poll.clone());
+        routine.next_fire_at = saved.and_then(|saved| saved.next_fire_at);
     }
 }
 /// Reads one agent with its routines' runtime state.
@@ -717,6 +719,7 @@ pub(crate) fn save_definition(
         routine.last_fired_at = None;
         routine.last_result = None;
         routine.last_poll = None;
+        routine.next_fire_at = None;
     }
     validate(&agent)?;
     let hooks: Vec<&str> = agent
@@ -2185,6 +2188,37 @@ mod tests {
             )
             .unwrap()["routines"][0]["id"],
             routine_id.as_str()
+        );
+        // The listing carries when each routine fires next, and a save of the
+        // listed agent keeps it out of the agent file.
+        with_state(&profile, |state| {
+            state
+                .routines
+                .entry(id.clone())
+                .or_default()
+                .entry(routine_id.clone())
+                .or_default()
+                .next_fire_at = Some(1_900_000_000);
+            Ok(())
+        })
+        .unwrap();
+        let listed = operation(&profile, "agent.list", serde_json::json!({})).unwrap();
+        assert_eq!(
+            listed["agents"][0]["routines"][0]["next_fire_at"],
+            1_900_000_000
+        );
+        let read = operation(&profile, "agent.read", serde_json::json!({"id": id})).unwrap();
+        assert_eq!(read["agent"]["routines"][0]["next_fire_at"], 1_900_000_000);
+        operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": read["agent"].clone()}),
+        )
+        .unwrap();
+        assert!(
+            !fs::read_to_string(folder(&profile, &id).unwrap().join("agent.md"))
+                .unwrap()
+                .contains("next_fire_at")
         );
         let run = operation(&profile, "agent.run_now", serde_json::json!({"id": id})).unwrap();
         assert_eq!(run["run"]["trigger"]["kind"], "manual");

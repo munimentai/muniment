@@ -505,6 +505,7 @@ fn portable_routine(routine: &mut crate::agent_routines::Routine) {
     routine.last_fired_at = None;
     routine.last_result = None;
     routine.last_poll = None;
+    routine.next_fire_at = None;
     if let crate::agent_routines::Trigger::Webhook(hook) = &mut routine.trigger {
         hook.hook_id.clear();
         hook.secret_sha256 = None;
@@ -704,6 +705,7 @@ fn map_routines(
             last_result: None,
             proposed: true,
             last_poll: None,
+            next_fire_at: None,
         };
         portable_routine(&mut routine);
         routine.proposed = true;

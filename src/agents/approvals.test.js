@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { approvalChoices, approvalOutcome, approvalSummary, longInput, ruleInputs, threadApprovals } from './approvals.js'
+import { approvalChoices, approvalOutcome, approvalSummary, composerGateOptions, isPlanGate, longInput, ruleInputs, threadApprovals } from './approvals.js'
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
 const pending = fixture('response-agent-approvals.json').approvals[0]
@@ -73,4 +73,13 @@ it('says when another device answered first or the answer is on its way', () => 
   expect(approvalOutcome('answered')).toBe('')
   expect(approvalOutcome('already_answered')).toBe('Another device answered this first. Its answer stands.')
   expect(approvalOutcome('sent')).toBe('Answer sent. The machine applies it when it answers.')
+})
+
+it('shows a composer gate without the agent-only answer and answers Deny with its option', () => {
+  const gate = { kind: 'select', title: 'Allow bash `rm old.csv`?', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] }
+  expect(composerGateOptions(gate)).toEqual({ options: ['Allow once', 'Allow for this thread'], deny: { type: 'select', value: 'Deny' } })
+  expect(composerGateOptions(gate, true).options).toContain('Always allow for this agent')
+  expect(composerGateOptions({ kind: 'select', title: 'Export target', options: ['PDF', 'Word'] })).toEqual({ options: ['PDF', 'Word'], deny: { type: 'cancelled' } })
+  expect(isPlanGate({ kind: 'select', title: 'Approve this plan?', options: [] })).toBe(true)
+  expect(isPlanGate(gate)).toBe(false)
 })

@@ -5,7 +5,7 @@
   import CardGrid from './ui/CardGrid.svelte'
   import CatalogCard from './ui/CatalogCard.svelte'
   import Button from './ui/Button.svelte'
-  import {onMount} from 'svelte'
+  import {onMount, untrack} from 'svelte'
   import CatalogActions from './CatalogActions.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import StarterRow from './StarterRow.svelte'
@@ -14,6 +14,7 @@
   import AgentImport from '../agents/AgentImport.svelte'
   import { agentMachine, agentRuntimes, emptyListing, listAgents } from '../agents/agent-runtime.js'
   import { exportAgent } from '../agents/import.js'
+  import { loadModes } from '../agents/permission-modes.js'
   // `onselect` opens the agent's chat and `onprofile` its profile alone.
   let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onmanagemodels=()=>{}}=$props()
   let archived = $state(false)
@@ -31,6 +32,19 @@
     listing = value
     onchange(value)
   }
+  // Each machine's permission modes, read once per machine the cards name.
+  // A machine that lists none maps to null.
+  let modes = $state({})
+  $effect(() => {
+    const runtimes = (agents ?? listing.agents).filter((agent) => !agent.replica && agent.online !== false).map((agent) => agent.runtimeId ?? 'local')
+    untrack(() => {
+      for (const runtime of new Set(runtimes)) {
+        if (runtime in modes) continue
+        modes[runtime] = undefined
+        void loadModes(tauri, runtime).then((value) => { if (alive) modes[runtime] = value })
+      }
+    })
+  })
   // The card menu opens the profile and exports here; the rest is the catalog's.
   async function cardAction(agent, action, name) {
     if (action === 'profile') return onprofile(agent)
@@ -63,7 +77,7 @@
     {/if}
     <CardGrid min={340} rows={300}>
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
-        <AgentCard {agent} {tauri} {inventory} {archived} machine={machineOf(agent)} latestRun={(latestRuns ?? listing.latestRuns)[agent.id] ?? null}
+        <AgentCard {agent} {tauri} {inventory} {archived} modes={agent.replica || agent.online === false ? null : modes[agent.runtimeId ?? 'local']} machine={machineOf(agent)} latestRun={(latestRuns ?? listing.latestRuns)[agent.id] ?? null}
           onchat={onselect} {onprofile} {onrun} {onmanagemodels} onchange={refresh} onaction={(action,name)=>cardAction(agent,action,name)} />
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}

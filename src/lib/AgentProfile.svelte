@@ -1,20 +1,22 @@
 <script>
   import { panelScroll } from './panel-scroll.js'
   import Toggle from './Toggle.svelte'
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
   import MemorySection from './MemorySection.svelte'
   import ModelPicker from './ModelPicker.svelte'
   import Button from './ui/Button.svelte'
+  import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import { newAvatar } from './agent-avatar.js'
   import { runActive, runStatusLabel, templateNote, whenLabel } from './agent-labels.js'
   import { thinkingLabel } from './thinking-level.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
-  import { agentTools, emptyCatalog, missingSkills, toggleTool } from '../agents/agent-tools.js'
+  import { emptyCatalog, missingSkills, toggleTool } from '../agents/agent-tools.js'
+  import { findMode, loadModes } from '../agents/permission-modes.js'
   import { activityLabel, activityState } from '../agents/activity.js'
   import ReplayList from '../agents/ReplayList.svelte'
-  import { MODES, PATH_OPERATIONS, RULE_KINDS, SHELLS, emptyRuleForm, ruleFromForm, ruleLabel } from '../agents/permission-rules.js'
+  import PermissionRules from '../agents/PermissionRules.svelte'
   import MachineMark from '../agents/MachineMark.svelte'
   import RoutinesPanel from '../agents/RoutinesPanel.svelte'
   import RunList from '../agents/RunList.svelte'
@@ -39,13 +41,24 @@
   let removeMemory = $state(false)
   let memoryOpen = $state(false)
   let modelOpen = $state(false)
-  let ruleForm = $state(null)
   let moving = $state(false)
   let notice = $state('')
   let panel
   const local = $derived((agent.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID)
   const others = $derived(agents.filter((entry) => entry.id !== agent.id))
-  const permissions = $derived(agent.permissions ?? { mode: 'ask', always_allow: [], ask_first: [] })
+  const permissions = $derived(agent.permissions ?? { always_allow: [], ask_first: [] })
+  // Core's `permission.modes` from the agent's machine: undefined while it
+  // loads, null when the machine lists none. An agent saves a mode only
+  // once one is chosen, and follows the machine's default until then.
+  let modes = $state(undefined)
+  onMount(() => {
+    if (agent.replica) return
+    let alive = true
+    void loadModes(tauri, agent.runtimeId).then((value) => { if (alive) modes = value })
+    return () => { alive = false }
+  })
+  const shownMode = $derived(findMode(modes, permissions.mode ?? modes?.default_agent_mode))
+  let disabledTool = $state('')
   const allowList = $derived(agent.messaging?.allow ?? 'any')
   const primary = $derived(agent.primaryMachine ?? agentMachine(runtimeList, { runtimeId: agent.runtimeId }))
   const movable = $derived((swarm?.members?.length ?? 0) > 1)
@@ -90,16 +103,16 @@
     modelOpen = false
     void change({ model: { provider, id: choice, ...(agent.model?.thinking ? { thinking: agent.model.thinking } : {}) } })
   }
-  function addRule(event) {
-    event.preventDefault()
-    let request
-    try { request = ruleFromForm(ruleForm) } catch (e) { error = e.message; return }
-    const list = ruleForm.list
-    ruleForm = null
-    void change({ permissions: { ...permissions, [list]: [...(permissions[list] ?? []), request] } })
+  function chooseMode(id) {
+    const { mode: _saved, ...rules } = permissions
+    void change({ permissions: id ? { ...rules, mode: id } : rules })
   }
-  function removeRule(list, index) {
-    void change({ permissions: { ...permissions, [list]: permissions[list].filter((_, at) => at !== index) } })
+  function disableTool(event) {
+    event.preventDefault()
+    const id = disabledTool.trim()
+    if (!id) return
+    disabledTool = ''
+    void change({ tools: toggleTool(agent, id, false) })
   }
   function allowAgent(id, allowed) {
     const current = allowList === 'any' ? [] : allowList
@@ -150,12 +163,6 @@
       {#if agent.model}<label class="inline">Thinking<select aria-label="Thinking" value={agent.model.thinking ?? ''} disabled={busy} onchange={(event) => change({ model: { provider: agent.model.provider, id: agent.model.id, ...(event.currentTarget.value ? { thinking: event.currentTarget.value } : {}) } })}><option value="">Model default</option>{#each thinkingLevels as level (level)}<option value={level}>{thinkingLabel(level)}</option>{/each}</select></label>{/if}
     </section>
 
-    <section class="field" aria-label="Tools">
-      <div class="field-heading"><h3>Tools</h3></div>
-      {#if catalog.error}<p class="muted">{primary.name} did not list its tools. {catalog.error}</p>{:else if !catalog.loaded}<p class="muted">Loading tools…</p>{/if}
-      <ul class="toggles">{#each agentTools(agent, catalog) as tool (tool.id)}<li><span>{tool.label}<span class="record id">{tool.id}{tool.readOnly ? ' · read only' : ''}{tool.known ? '' : ' · not on this machine'}</span></span><Toggle checked={!(agent.tools?.disabled ?? []).includes(tool.id)} label={`${tool.label} on`} disabled={busy} onchange={(on) => change({ tools: toggleTool(agent, tool.id, on) })} /></li>{/each}</ul>
-    </section>
-
     <section class="field" aria-label="Skills">
       <div class="field-heading"><h3>Skills</h3></div>
       {#if catalog.skills.length}
@@ -166,34 +173,33 @@
 
     <section class="field" aria-label="Permissions">
       <div class="field-heading"><h3>Permissions</h3></div>
-      <label class="inline">Mode<select aria-label="Permission mode" value={permissions.mode} disabled={busy} onchange={(event) => change({ permissions: { ...permissions, mode: event.currentTarget.value } })}>{#each MODES as [mode, label] (mode)}<option value={mode}>{label}</option>{/each}</select></label>
-      <small>{MODES.find(([mode]) => mode === permissions.mode)?.[2]}</small>
-      {#each [['always_allow', 'Always allow'], ['ask_first', 'Ask first']] as [list, heading] (list)}
-        <h4>{heading}</h4>
-        <ul class="rules" aria-label={heading}>
-          {#each permissions[list] ?? [] as request, index (index)}<li><span class="record">{ruleLabel(request)}</span><button class="quiet icon" aria-label={`Remove ${heading.toLowerCase()} rule ${index + 1}`} disabled={busy} onclick={() => removeRule(list, index)}><LucideIcon name="x" size={14} /></button></li>{:else}<li class="muted">None</li>{/each}
-        </ul>
-      {/each}
-      {#if ruleForm}
-        <form class="rule-form" aria-label="New permission rule" onsubmit={addRule}>
-          <label>List<select bind:value={ruleForm.list}><option value="always_allow">Always allow</option><option value="ask_first">Ask first</option></select></label>
-          <label>Kind<select bind:value={ruleForm.kind}>{#each RULE_KINDS as [kind, label] (kind)}<option value={kind}>{label}</option>{/each}</select></label>
-          {#if ruleForm.kind === 'command'}
-            <label>Shell<select bind:value={ruleForm.shell}>{#each SHELLS as shell (shell)}<option value={shell}>{shell}</option>{/each}</select></label>
-            <label>Command<input class="record" bind:value={ruleForm.command} spellcheck="false" /></label>
-            <label>Folder<input class="record" bind:value={ruleForm.directory} placeholder="/full/path" spellcheck="false" /></label>
-          {:else if ruleForm.kind === 'path'}
-            <label>Action<select bind:value={ruleForm.operation}>{#each PATH_OPERATIONS as operation (operation)}<option value={operation}>{operation}</option>{/each}</select></label>
-            <label>Path<input class="record" bind:value={ruleForm.path} placeholder="/full/path" spellcheck="false" /></label>
-          {:else}
-            <label>Tool<input class="record" bind:value={ruleForm.name} placeholder="mcp__server__tool" spellcheck="false" /></label>
-            <label>Input<textarea class="record" rows="2" bind:value={ruleForm.input} spellcheck="false"></textarea></label>
-          {/if}
-          <small>Rules match exactly. A rule in Ask first wins over Always allow.</small>
-          <div class="actions"><button disabled={busy}>Add rule</button><button type="button" onclick={() => { ruleForm = null }}>Cancel</button></div>
-        </form>
-      {:else}<div class="actions"><button disabled={busy} onclick={() => { ruleForm = { ...emptyRuleForm(), list: 'always_allow' } }}>Add rule</button></div>{/if}
+      {#if modes === undefined}<p class="muted" role="status">Loading modes…</p>
+      {:else if !modes}<p class="muted">Update {primary.name} to choose a mode.</p>
+      {:else}
+        <label class="inline">Mode<select aria-label="Permission mode" value={permissions.mode ?? ''} disabled={busy} onchange={(event) => chooseMode(event.currentTarget.value)}>
+          <option value="">Default: {findMode(modes, modes.default_agent_mode)?.title ?? modes.default_agent_mode}</option>
+          {#each modes.modes as mode (mode.id)}<option value={mode.id} disabled={mode.available === false && mode.id !== permissions.mode}>{mode.title}</option>{/each}
+        </select></label>
+        {#if shownMode}<small>{shownMode.available === false && shownMode.reason ? shownMode.reason : shownMode.description}</small>{/if}
+      {/if}
+      <PermissionRules rules={permissions} {busy} onsave={(list, requests) => change({ permissions: { ...permissions, [list]: requests } })} />
     </section>
+
+    <details class="field advanced">
+      <DisclosureSummary>Advanced</DisclosureSummary>
+      <section class="advanced-body" aria-label="Disabled tools">
+        <h4>Disabled tools (deprecated)</h4>
+        <small>Modes and rules replace this list. These tools stay hidden from the agent.</small>
+        <ul class="rules" aria-label="Disabled tools">
+          {#each agent.tools?.disabled ?? [] as id (id)}<li><span class="record">{id}</span><button class="quiet icon" aria-label={`Turn ${id} on again`} disabled={busy} onclick={() => change({ tools: toggleTool(agent, id, true) })}><LucideIcon name="x" size={14} /></button></li>{:else}<li class="muted">None</li>{/each}
+        </ul>
+        <form class="inline" aria-label="Disable a tool" onsubmit={disableTool}>
+          <input class="record" aria-label="Tool id" list={`agent-${agent.id}-tools`} bind:value={disabledTool} placeholder="bash" spellcheck="false" />
+          <datalist id={`agent-${agent.id}-tools`}>{#each catalog.builtin as tool (tool.id)}<option value={tool.id}>{tool.label}</option>{/each}</datalist>
+          <button disabled={busy || !disabledTool.trim()}>Disable</button>
+        </form>
+      </section>
+    </details>
 
     <section class="field" aria-label="Messaging">
       <div class="field-heading"><h3>Messages to other agents</h3></div>
@@ -292,7 +298,6 @@
   .model-anchor { position: relative; display: grid; }
   .model-popover { position: absolute; top: calc(100% + 6px); right: 0; left: 0; z-index: 5; }
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
-  .id { margin-left: 6px; color: var(--muted); }
   .muted { color: var(--muted); font-size: var(--text-12); }
   .machine { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
@@ -306,10 +311,10 @@
   .offline { color: var(--ochre); font: var(--text-12) var(--font-mono); }
   .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-  .toggles li, .rules li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font-size: var(--text-13); }
-  .rules li .record { min-width: 0; overflow-wrap: anywhere; }
+  .rules li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font-size: var(--text-13); }
   .nested { padding-left: 22px; }
-  .rule-form { padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-control); }
+  .advanced-body { display: grid; gap: 6px; padding-top: 6px; }
+  .advanced form.inline { grid-template-columns: 1fr auto; }
   small { color: var(--muted); line-height: 1.5; }
   [role="alert"] { margin-top: 8px; color: var(--oxide); font-size: var(--text-12); }
   @media (hover: none) { .edit { opacity: 1; } }
