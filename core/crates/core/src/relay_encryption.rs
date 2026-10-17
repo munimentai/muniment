@@ -36,6 +36,19 @@ pub const MAX_COMMAND_TEXT_BYTES: usize = 16 * 1024;
 /// safe up to this count.
 pub const MAX_MESSAGES_PER_KEY: u64 = 1 << 32;
 
+/// The most bytes one control session event's sealed plaintext holds, so the
+/// sealed event stays under [`MAX_SEALED_EVENT_BYTES`] after base64.
+pub const MAX_CONTROL_PLAINTEXT_BYTES: usize = 48_000;
+
+/// The most pages one control response spans.
+pub const MAX_RESPONSE_PAGES: u32 = 96;
+
+/// The most bytes a request's sealed plaintext holds, as for a command.
+pub const MAX_REQUEST_PLAINTEXT_BYTES: usize = 18_416;
+
+/// The longest a request stays valid after it was made.
+pub const MAX_REQUEST_LIFETIME_SECONDS: i64 = 60;
+
 const PROOF_LABEL: &str = "muniment.relay-encryption/1 mobile-agreement";
 const INFO_LABEL: &str = "muniment.relay-encryption/1 ";
 const NONCE_LENGTH: usize = 12;
@@ -672,6 +685,146 @@ impl CommandHeader {
     }
 }
 
+/// The plaintext header of a sealed request on a pair's control session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestHeader {
+    pub contract_version: String,
+    pub header_type: String,
+    pub request_id: String,
+    pub session_id: String,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+impl RequestHeader {
+    pub fn new(request_id: &str, session_id: &str, created_at: &str, expires_at: &str) -> Self {
+        Self {
+            contract_version: CONTRACT_VERSION.to_owned(),
+            header_type: "request".to_owned(),
+            request_id: request_id.to_owned(),
+            session_id: session_id.to_owned(),
+            created_at: created_at.to_owned(),
+            expires_at: expires_at.to_owned(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), RelayCryptoError> {
+        let valid = self.contract_version == CONTRACT_VERSION
+            && self.header_type == "request"
+            && valid_id(&self.request_id)
+            && valid_id(&self.session_id)
+            && valid_timestamp(&self.created_at)
+            && valid_timestamp(&self.expires_at);
+        valid.then_some(()).ok_or(RelayCryptoError::Malformed)
+    }
+}
+
+/// The plaintext header of a sealed event on a pair's control session.
+/// `wake` asks the relay for a push hint that carries no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlHeader {
+    pub contract_version: String,
+    pub header_type: String,
+    pub session_id: String,
+    pub sequence: String,
+    pub wake: bool,
+    pub occurred_at: String,
+}
+
+impl ControlHeader {
+    pub fn new(session_id: &str, sequence: u64, wake: bool, occurred_at: &str) -> Self {
+        Self {
+            contract_version: CONTRACT_VERSION.to_owned(),
+            header_type: "control".to_owned(),
+            session_id: session_id.to_owned(),
+            sequence: sequence.to_string(),
+            wake,
+            occurred_at: occurred_at.to_owned(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), RelayCryptoError> {
+        let valid = self.contract_version == CONTRACT_VERSION
+            && self.header_type == "control"
+            && valid_id(&self.session_id)
+            && valid_positive(&self.sequence)
+            && valid_timestamp(&self.occurred_at);
+        valid.then_some(()).ok_or(RelayCryptoError::Malformed)
+    }
+}
+
+/// The sealed content of a request: one operation the paired runtime runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RequestContent {
+    Request {
+        request_id: String,
+        operation: String,
+        body: Value,
+    },
+}
+
+impl RequestContent {
+    fn validate(&self) -> Result<(), RelayCryptoError> {
+        let Self::Request {
+            request_id,
+            operation,
+            body,
+        } = self;
+        let valid = valid_id(request_id)
+            && (1..=64).contains(&operation.len())
+            && operation
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'.' || byte == b'_')
+            && body.is_object();
+        valid.then_some(()).ok_or(RelayCryptoError::Malformed)
+    }
+}
+
+/// The sealed content of a control session event: one page of a response
+/// or one live event.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ControlContent {
+    /// Page `page` of `pages` of a response: the next characters of the JSON
+    /// text of `{"ok": true, "result"}` or `{"ok": false, "error"}`.
+    Response {
+        request_id: String,
+        page: u32,
+        pages: u32,
+        body: String,
+    },
+    /// A live event with its body, or null when the body would not fit a page.
+    Event {
+        event: String,
+        #[serde(deserialize_with = "required_nullable")]
+        body: Option<Value>,
+    },
+}
+
+impl ControlContent {
+    fn validate(&self) -> Result<(), RelayCryptoError> {
+        let valid = match self {
+            Self::Response {
+                request_id,
+                page,
+                pages,
+                ..
+            } => valid_id(request_id) && (1..=MAX_RESPONSE_PAGES).contains(pages) && page < pages,
+            Self::Event { event, body } => {
+                (1..=64).contains(&event.len())
+                    && event
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte == b'.' || byte == b'_')
+                    && body.as_ref().is_none_or(Value::is_object)
+            }
+        };
+        valid.then_some(()).ok_or(RelayCryptoError::Malformed)
+    }
+}
+
 /// How a permission gate closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -826,6 +979,8 @@ pub struct Sealed<H> {
 
 pub type SealedEvent = Sealed<EventHeader>;
 pub type SealedCommand = Sealed<CommandHeader>;
+pub type SealedRequest = Sealed<RequestHeader>;
+pub type SealedControl = Sealed<ControlHeader>;
 
 /// Serializes a JSON value with object members sorted by key at every depth
 /// and no whitespace, as the ECMAScript `JSON.stringify` of a sorted object.
@@ -967,6 +1122,104 @@ pub fn seal_command(
         &plaintext_bytes(counter, content),
         random::<NONCE_LENGTH>()?,
     ))
+}
+
+/// Seals one control session event with a fresh nonce. A response page
+/// whose sealed plaintext passes [`MAX_CONTROL_PLAINTEXT_BYTES`] is refused.
+pub fn seal_control(
+    key: &DirectionKey,
+    header: &ControlHeader,
+    counter: u64,
+    content: &ControlContent,
+) -> Result<SealedControl, RelayCryptoError> {
+    header.validate()?;
+    content.validate()?;
+    check_counter(counter)?;
+    let plaintext = plaintext_bytes(counter, content);
+    if plaintext.len() > MAX_CONTROL_PLAINTEXT_BYTES {
+        return Err(RelayCryptoError::Malformed);
+    }
+    let sealed = seal_bytes(key, header, &plaintext, random::<NONCE_LENGTH>()?);
+    let size = serde_json::to_vec(&sealed).map_or(usize::MAX, |bytes| bytes.len());
+    if size > MAX_SEALED_EVENT_BYTES {
+        return Err(RelayCryptoError::Malformed);
+    }
+    Ok(sealed)
+}
+
+/// Seals one request with a fresh nonce, as the phone does.
+pub fn seal_request(
+    key: &DirectionKey,
+    header: &RequestHeader,
+    counter: u64,
+    content: &RequestContent,
+) -> Result<SealedRequest, RelayCryptoError> {
+    header.validate()?;
+    content.validate()?;
+    check_counter(counter)?;
+    let plaintext = plaintext_bytes(counter, content);
+    if plaintext.len() > MAX_REQUEST_PLAINTEXT_BYTES {
+        return Err(RelayCryptoError::Malformed);
+    }
+    Ok(seal_bytes(
+        key,
+        header,
+        &plaintext,
+        random::<NONCE_LENGTH>()?,
+    ))
+}
+
+/// An opened request: the sender's counter and the content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenedRequest {
+    pub counter: u64,
+    pub content: RequestContent,
+}
+
+/// Opens one request the relay delivered as the envelope `message_id` on the
+/// control session `session_id`, and checks its binding. The caller still
+/// checks the counter and the expiry.
+pub fn open_request(
+    key: &DirectionKey,
+    sealed: &SealedRequest,
+    session_id: &str,
+    message_id: &str,
+) -> Result<OpenedRequest, RelayCryptoError> {
+    sealed.header.validate()?;
+    let bytes = open_bytes(key, sealed)?;
+    let (counter, content) = parse_plaintext::<RequestContent>(&bytes)?;
+    content.validate()?;
+    let RequestContent::Request { request_id, .. } = &content;
+    if sealed.header.session_id != session_id
+        || sealed.header.request_id != message_id
+        || *request_id != sealed.header.request_id
+    {
+        return Err(RelayCryptoError::BindingMismatch);
+    }
+    Ok(OpenedRequest { counter, content })
+}
+
+/// An opened control session event: the sender's counter and the content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenedControl {
+    pub counter: u64,
+    pub content: ControlContent,
+}
+
+/// Opens one control session event, as the phone does.
+pub fn open_control(
+    key: &DirectionKey,
+    sealed: &SealedControl,
+    envelope_session_id: &str,
+) -> Result<OpenedControl, RelayCryptoError> {
+    sealed.header.validate()?;
+    let bytes = open_bytes(key, sealed)?;
+    let (counter, content) = parse_plaintext::<ControlContent>(&bytes)?;
+    content.validate()?;
+    if sealed.header.session_id != envelope_session_id {
+        return Err(RelayCryptoError::BindingMismatch);
+    }
+    Ok(OpenedControl { counter, content })
 }
 
 fn check_counter(counter: u64) -> Result<(), RelayCryptoError> {
