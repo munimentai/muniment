@@ -651,31 +651,72 @@ steering, gate answers and run starts through `SwarmHost`.
   trusts itself and each member a trusted full member vouched for.
   `swarm.leave` and revoking a linked device append a signed removal.
   `swarm.members` shows each member's `fleet`: `{"trusted", "role",
-  "removed"}`. A worker cannot invite. Stage S5 enforces roles; the roster
-  records them, and `Swarm::recipient_set` names the full members and the
-  workers that run the agents a secret serves.
+  "removed"}`. Every member, a container among them, is `full` unless an
+  invitation or `swarm.set_role` (`{"runtime_id", "role"}` →
+  `{"runtime_id", "role", "previous", "changed"}`, `runtime.admin`) makes it
+  a `worker`, a restriction for a host the owner does not fully trust.
+- **Roles.** `swarm::roles` filters every exchange once as it leaves and
+  once as it arrives, for every record class, thread, message and secret.
+  A worker holds the directory fields, threads, messages, approvals and
+  run notices of the agents it runs, the leases sealed to it, and the
+  fleet's metadata: members, the roster and each agent's directory entry.
+  A record class the module does not name stays with full members. A
+  worker is a leaf: it sends only what it wrote, and a full member takes
+  from it only what it wrote about its own agents, never a deletion of one
+  or another primary for it. Its forwarded actions lose `agents.manage`
+  and `runtime.admin`, and it receives only the acknowledgements of its
+  own messages. A peer with no proven place in the roster gets the roster
+  alone. An exchange to a worker carries `record_floor`, the record numbers
+  through which it holds all it may hold, and every exchange carries
+  `record_base`, the receiver's numbers the delta started from, so a member
+  that forgot rows takes them again. A promoted member forgets its record
+  numbers and takes every class afresh; a demoted one drops the records,
+  thread copies and shared connections a worker may not hold, and owners
+  reseal without it. A worker cannot invite.
 - **Sealed secrets.** An owner seals each version of a secret to each full
   member's fleet key (X25519, HKDF-SHA256, AES-256-GCM) and signs it. The
   exchange carries `sealed` with `sealed_have`, only to a full member over
   its pinned link or admitted device. Classes: `models:<owner>` (the bundle
   `models.share` sends, applied as the device `swarm:<owner>`), `mcp:<owner>`
   (MCP bearer tokens), `vault:<issuer>:<member>` (a model vault machine
-  token) and `handover:<owner>:<sign-in>`. `fleet.credentials`
-  (`{"share_models"?}` → `{"share_models", "role", "removed", "secrets",
-  "audit"}`) turns sharing on and lists the secrets and the local fleet log.
+  token), `handover:<owner>:<sign-in>` and `lease:<owner>:<member>`: to a
+  worker, the connections its agents' models name, and to a member the
+  model vault refused a machine token, the vault's connections, each
+  without a refresh token. `fleet.credentials` (`{"share_models"?,
+  "use_vault"?}` → `{"share_models", "use_vault", "role", "removed",
+  "secrets", "audit", "vault"}`) turns sharing on, says whether this member
+  uses connections the vault manages, and lists the secrets, recent audit
+  entries and each member's vault state (`token`, or `leases` with the
+  refusal).
   The owner reseals about once a minute, so a rotating sign-in travels as a
   lease the owner refreshes before the lease margin. `fleet.hold_sign_in`
   (`{"account": "pi:<provider>"|"router:<id>"}` → `{"status": "requested"|"held",
   "holder"}`) moves the refresher: the holder seals the sign-in with its
   refresh token to the caller and drops it. A desktop that holds the model
-  vault issues each full member its own machine token. A removal makes each
+  vault issues a machine token only to a full member that names `vault/1`
+  (`use_vault`); every other connection reaches members sealed over the
+  swarm, which no pairing limit caps. When the vault refuses a token, as at
+  the account's pairing limit, the member takes the vault's connections as
+  a lease and the desktop asks again an hour later. A removal makes each
   member reseal without the removed one, drop its bundle, revoke its vault
   token and log the connections it held.
+- **Audit.** The record class `audit` is append-only and replicates to
+  full members alone. Each member logs each secret it sealed with its
+  recipients, each forwarded action it ran (`op`: actor device, origin and
+  result), each role change it signed, each removal with the connections
+  the member held, each vault token issued, refused or revoked, and each
+  snapshot it served. An entry's key starts with its writer, and no member
+  replaces one it holds. `fleet.audit` (`{"since"?, "limit"?}` →
+  `{"entries": [{"id", "at", "kind", "actor_runtime", "runtime_id",
+  "record"}], "more"}`, `runtime.admin`) reads it newest first.
 - **Forwarded actions.** A client that calls a forwardable operation on an
   item another member owns gets `{"forwarded": true, "op_id", "state"}`
   with the keys that operation's answer always has; an approval answer
   still waits up to 8 seconds for its status. The forwardable operations
-  are `thread.post` (agent and group posts, which steer a live run),
+  are `thread.create` with a `runtime_id` (the member creates the thread
+  under the `thread_id` the answer names and runs its first `text` with its
+  `permission_mode`), `thread.post` (agent and group posts, which steer a
+  live run),
   `run.steer`, `run.follow_up`, `run.cancel`, `thread.permission_mode_set`,
   `thread.plan_answer`, `agent.approval_answer`, `agent.run_now`,
   `agent.save`, `routine.save`, `routine.delete` and
