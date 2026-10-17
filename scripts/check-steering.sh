@@ -67,6 +67,8 @@ else
   check_cap "$repo/SPEC.md" 600
   check_cap "$repo/DESIGN.md" 250
   check_cap "$repo/AGENTS.md" 120
+  for f in AGENTS.md README.md; do check_history "$repo/core/$f"; done
+  check_cap "$repo/core/AGENTS.md" 120
 fi
 
 if [ "$fail" -eq 0 ]; then echo "check: clean"; fi

@@ -6,6 +6,28 @@ adds cloud availability with paid accounts. The Tauri shell, Rust runtime,
 Pi sidecar and on-device voice stack serve the desktop without a Muniment account.
 `SPEC.md` defines current behavior.
 
+## Repository layout
+
+- `core/` is the shared Rust core: its own Cargo workspace (`core/Cargo.toml`)
+  with the crates under `core/crates/`, the runtime pins in `core/pins/`, and the
+  protocol fixtures in `core/protocol-fixtures/`. `core/AGENTS.md` holds its rules.
+- `src-tauri/` is the desktop's Cargo workspace: the Tauri app plus the
+  `integration`, `cli`, `acp` and `runtime` crates. It builds the core crates by path.
+- `src/` is the desktop UI. `browser-control/`, `scripts/` and `test/` serve the desktop.
+
+Core owns the product logic: runtime, runs, storage, routing, models, pins and
+protocols. The desktop is the UI layer and the platform host. Put a behavior in
+core when another host needs it, and keep the desktop code to the window, the UI
+and the host services that core reaches through its ports.
+
+## Portable boundary
+
+No core crate may depend on Tauri, on a `src-tauri` crate, or on a desktop-only
+module, and no file under `core/` names `src-tauri`. Desktop behavior reaches core
+through port-owned values and traits. `core/docs/core-boundary.md` lists every core
+crate and module, and `scripts/check-core-boundary.sh` enforces it. Run that check
+when you add an import between modules or crates.
+
 ## Local work and optional features
 
 Local desktop work uses local commits. Do not push without an explicit request.
@@ -36,11 +58,27 @@ repairs; a full run proves the final candidate before stable promotion. A merge
 does not finish the release: installed behavior, distribution and live download
 links must pass. Stable releases reuse the exact verified packages.
 
-The format check fails CI when formatting would create any diff. For focused Rust checks, use `src-tauri/Cargo.toml` and each changed package name.
+The format check fails CI when formatting would create any diff. For focused Rust checks, use `src-tauri/Cargo.toml` and each changed package name. For core, run the checks in `core/AGENTS.md`.
 
 ## Windows code
 
 Windows-specific code CANNOT be compiled or tested in the agent's Linux checkout. The Desktop compile preflight on CI is the only Windows check. Re-read every changed `#[cfg(windows)]` code path by hand before pushing. Never assume a green local build covers that code.
+
+## Releases
+
+Two tag namespaces share this repository. `core-vX.Y.Z` tags are core releases:
+the release job reads the commits that touch `core/` and tags the next version
+from their prefixes. Core releases carry the pins, the signed server archives and
+the update feed of headless runtimes, and are never marked latest. `vX.Y.Z` tags
+are desktop releases, which a maintainer dispatches as described in `README.md`.
+
+## Commits
+
+Use conventional prefixes, scoped by path: `feat(core):` or `fix(core):` for a
+change under `core/`, and an unscoped or `(desktop)` prefix for the rest. `feat:`
+is minor, `fix:` and `perf:` are patch, and `!` or a `BREAKING CHANGE:` trailer is
+major. Keep core and desktop changes in separate commits, so a desktop change
+never bumps the core version.
 
 ## CI logs
 
@@ -48,14 +86,15 @@ CI runs the workflows in `.forgejo/workflows/`. A maintainer dispatches the nigh
 
 ## Steering files
 
-This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`, and
-`DESIGN.md`. `docs/` holds technical documentation about the
-app, such as `docs/core-boundary.md`. Decision records are not kept in this
+This repo's steering files are `AGENTS.md`, `README.md`, `SPEC.md`,
+`DESIGN.md`, `core/AGENTS.md` and `core/README.md`. `docs/` holds technical
+documentation about the app, and `core/docs/` about the core, such as
+`core/docs/core-boundary.md`. Decision records are not kept in this
 repository. Steering files and `docs/` describe the app, not product or business
 decisions. They are instruction, not record: present tense, stating what is. No dates, ticket ids, commit shas, or
 pull request numbers. No history phrases: "decided", "superseded", "previously", "no longer".
 No ledger file under any name: no open-items,
 build-history, decision-log, handoff, journal, notes, or todo file. Caps:
-`SPEC.md` 600 lines, `DESIGN.md` 250, `AGENTS.md` 120. Issues track work and git holds history.
+`SPEC.md` 600 lines, `DESIGN.md` 250, `AGENTS.md` and `core/AGENTS.md` 120. Issues track work and git holds history.
 `CONTRIBUTING.md`, `SECURITY.md` and `LICENSE.md` define public participation,
 private vulnerability reporting and licensing.

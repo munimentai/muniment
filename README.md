@@ -91,9 +91,20 @@ Once Homebrew accepts the cask, install with:
 brew install --cask muniment
 ```
 
+## Repository layout
+
+- `core/` is the shared Rust core: runtime, model router, pins, protocols and the
+  headless servers. [core/README.md](core/README.md) describes its crates.
+- `src-tauri/` is the desktop's Rust workspace. It builds the core crates by path.
+- `src/` is the desktop UI. `scripts/` and `test/` hold the desktop's tooling and tests.
+
+Core holds the logic that every host shares. The desktop is the UI layer on top of it.
+
 ## Releases
 
-GitHub Releases on `munimentai/muniment` host every download. The CI workflows in `.forgejo/workflows/` build and publish them.
+GitHub Releases on `munimentai/muniment` host every download. Desktop releases use
+`vX.Y.Z` tags. Core releases use `core-vX.Y.Z` tags, carry the pins and the signed
+server archives, and are never marked latest. The CI workflows in `.forgejo/workflows/` build and publish them.
 Only a maintainer dispatch of `main` runs a release job. Each job checks this in its first step and fails before any credential is read.
 
 1. Dispatch `nightly.yml` on `main`. It signs the three platform builds, uploads them to the `nightly` pre-release, and runs the installed checks.
@@ -118,4 +129,4 @@ Third-party components retain their own licenses.
 `npm run check:agent-dependencies` checks Claude Code, Pi, and extension pins against current releases and Pi peer ranges.
 Updates require the focused regression tests and the native CI and installed nightly checks.
 `npm run test:agent-runtime` checks extension loading, selected models, streamed completion, and cache usage against a local fixture.
-Set `PI_TEST_BINARY` to the verified Pi executable and `PI_TEST_PACKAGES` to an isolated frozen install of `pins/packages.bun.lock` from the `muniment-core` release tag.
+Set `PI_TEST_BINARY` to the verified Pi executable and `PI_TEST_PACKAGES` to an isolated frozen install of `core/pins/packages.bun.lock`.

@@ -29,6 +29,18 @@ Run `npm test`, `npm run lint:copy`, and `scripts/check-steering.sh .`.
 For runtime changes, also run the Rust checks in [AGENTS.md](AGENTS.md).
 A successful macOS build does not verify Windows or Linux.
 
+## Core
+
+`core/` holds the shared Rust core and its own Cargo workspace.
+Read [core/README.md](core/README.md) for its crates and [core/AGENTS.md](core/AGENTS.md) for its rules.
+Core holds the logic. The desktop is the UI layer, so put shared behavior in core.
+No core crate may depend on Tauri or on desktop code.
+Run `scripts/check-core-boundary.sh` after you add an import between modules or crates.
+From `core/`, run `cargo fmt --all --check` and `cargo test -p <crate> -- --test-threads=1`.
+Change pins only with `muniment-pins bump`, then run `muniment-pins compat`.
+Scope core commits with `(core)`, such as `fix(core):`, and keep them apart from desktop commits.
+A commit under `core/` can cut a `core-v*` release, so pick its prefix with care.
+
 ## Contributions and license
 
 Contributions use [LICENSE.md](LICENSE.md), FSL-1.1-ALv2, under the
