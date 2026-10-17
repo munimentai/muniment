@@ -628,6 +628,9 @@ pub struct ProjectedAttachment {
     pub byte_length: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    /// The content hash of the bytes, which `blob.read` takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -690,6 +693,7 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
                     display_name: attachment.display_name().to_owned(),
                     byte_length: attachment.byte_length(),
                     media_type: attachment.media_type().map(str::to_owned),
+                    sha256: Some(attachment.sha256().as_str().to_owned()),
                 });
             }
             "model.stream.delta" => chat.text.push_str(&field(event, "text")?),
@@ -865,6 +869,7 @@ impl ChatProjector {
                     display_name: attachment.display_name().to_owned(),
                     byte_length: attachment.byte_length(),
                     media_type: attachment.media_type().map(str::to_owned),
+                    sha256: Some(attachment.sha256().as_str().to_owned()),
                 });
             }
             "model.prompt.accepted" => self.chat.prompt_accepted = true,

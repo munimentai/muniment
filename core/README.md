@@ -777,6 +777,9 @@ steering, gate answers and run starts through `SwarmHost`.
   KiB at most), which fetches it over the content-store want path. A want
   is answered in 48 KiB slices, as many as the exchange budget holds, so
   each slice's base64 fits the longest string an attach frame carries.
+  A thread attachment in `thread.history` and the run events carries its
+  content hash as `sha256`, and `blob.read` takes it on the member that
+  runs the thread and on every replica.
   `fleet.pins` (`{}`) and `fleet.pin_set` (`{"pins"?: [{"class", "key",
   "pinned"}], "offline"?: {"artifacts"?, "budget_bytes"?, "prefetch"?}}`)
   answer `{"pins", "offline", "usage"}`. A pin names `artifact` or

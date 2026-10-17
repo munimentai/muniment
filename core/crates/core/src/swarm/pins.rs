@@ -375,11 +375,22 @@ fn readable(inner: &Inner, hash: &str) -> Result<bool, String> {
         )
         .optional()
         .map_err(sql)?;
-    Ok(known.is_some())
+    if known.is_some() {
+        return Ok(true);
+    }
+    // An attachment of a thread this machine runs is in its journal only.
+    let Ok(parsed) = hash.parse::<ContentHash>() else {
+        return Ok(false);
+    };
+    storage_lock(&inner.storage)?
+        .journal
+        .names_attachment(&parsed)
+        .map_err(|error| error.to_string())
 }
 
 /// `blob.read {hash, offset?}`: up to 256 KiB of a blob the fleet's records
-/// or threads name, from `offset`. A blob this machine lacks is fetched,
+/// or threads name, such as an artifact or a thread attachment, from
+/// `offset`. A blob this machine lacks is fetched,
 /// and the answer says `fetching` until it arrives.
 pub(super) fn read_operation(inner: &Inner, body: Value) -> Result<Value, String> {
     #[derive(Deserialize)]

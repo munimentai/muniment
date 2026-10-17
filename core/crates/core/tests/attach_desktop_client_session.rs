@@ -190,6 +190,9 @@ impl ThreadListService for RunControlService {
                 display_name: "main.rs".into(),
                 byte_length: 128,
                 media_type: Some("text/rust".into()),
+                sha256: Some(
+                    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+                ),
             }],
             committed_seq: 1,
             accepted_at: "2026-08-16T00:00:00Z".into(),
@@ -355,6 +358,7 @@ fn desktop_run_submit_rejects_invalid_accepted_attachments() {
                 display_name: " \t".into(),
                 byte_length: 128,
                 media_type: Some("text/rust".into()),
+                sha256: None,
             }],
         ),
         (
@@ -363,6 +367,7 @@ fn desktop_run_submit_rejects_invalid_accepted_attachments() {
                 display_name: "main.rs".into(),
                 byte_length: 128,
                 media_type: Some(" \t".into()),
+                sha256: None,
             }],
         ),
     ];

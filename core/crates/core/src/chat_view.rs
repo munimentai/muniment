@@ -139,6 +139,9 @@ pub struct ChatAttachment {
     pub byte_length: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    /// The content hash of the bytes, which `blob.read` takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 pub fn chat_attachments(attachments: &[ProjectedAttachment]) -> Vec<ChatAttachment> {
@@ -148,6 +151,7 @@ pub fn chat_attachments(attachments: &[ProjectedAttachment]) -> Vec<ChatAttachme
             display_name: attachment.display_name.clone(),
             byte_length: attachment.byte_length,
             media_type: attachment.media_type.clone(),
+            sha256: attachment.sha256.clone(),
         })
         .collect()
 }

@@ -2349,6 +2349,7 @@ mod tests {
                         display_name: file.path.to_string_lossy().into_owned(),
                         byte_length: 1,
                         media_type: None,
+                        sha256: None,
                     })
                     .collect(),
                 committed_seq: 1,
