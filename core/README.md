@@ -774,7 +774,9 @@ steering, gate answers and run starts through `SwarmHost`.
   when `artifacts` is `all` and the member prefetches, and reads any other
   through `blob.read` (`{"hash", "offset"?}` → `{"hash", "status":
   "fetching"}`, or `"held"` with `"offset", "total", "data", "done"`, 256
-  KiB at most), which fetches it over the content-store want path.
+  KiB at most), which fetches it over the content-store want path. A want
+  is answered in 48 KiB slices, as many as the exchange budget holds, so
+  each slice's base64 fits the longest string an attach frame carries.
   `fleet.pins` (`{}`) and `fleet.pin_set` (`{"pins"?: [{"class", "key",
   "pinned"}], "offline"?: {"artifacts"?, "budget_bytes"?, "prefetch"?}}`)
   answer `{"pins", "offline", "usage"}`. A pin names `artifact` or
@@ -788,8 +790,9 @@ steering, gate answers and run starts through `SwarmHost`.
   still waits up to 8 seconds for its status. The forwardable operations
   are `thread.create` with a `runtime_id` (the member creates the thread
   under the `thread_id` the answer names and runs its first `text` with its
-  `permission_mode`), `thread.post` (agent and group posts, which steer a
-  live run),
+  `permission_mode`; a runtime outside a fleet refuses it rather than
+  start the thread itself), `thread.post` (agent and group posts, which
+  steer a live run),
   `run.steer`, `run.follow_up`, `run.cancel`, `thread.permission_mode_set`,
   `thread.plan_answer`, `agent.approval_answer`, `agent.run_now`,
   `agent.save`, `routine.save`, `routine.delete` and
@@ -919,7 +922,13 @@ their plaintext headers.
   answers its directory entry with `remote: true`), `agent.run_now`,
   `agent.approvals`, `agent.approval_answer`, `run.cancel`, `run.steer`,
   `blob.read`, `fleet.op_status`, `fleet.sync_status` and `preferences.get`;
-  one this runtime's protocol lacks answers `unsupported_operation`. Answers
+  one this runtime's protocol lacks answers `unsupported_operation`. A
+  `thread.create` with another member's `runtime_id` starts the thread and
+  its first run on that member under an id this runtime picks, and the
+  phone follows it with `fleet.op_status`. An action that takes an
+  idempotency key gets a UUID made from the request id, so a repeat of the
+  request names the same action. A `blob.read` chunk of 256 KiB answers in
+  several pages. Answers
   and live events travel as sealed control events (header type `control`:
   `session_id`, `sequence`, `wake`, `occurred_at`). An answer is
   `{"type": "response", "request_id", "page", "pages", "body"}` pages, each

@@ -340,10 +340,17 @@ pub(super) fn route(
     if !is_forwardable(operation) {
         return Ok(None);
     }
-    let Some(own) = inner.runtime_id() else {
+    let Some(item) = item_of(operation, body) else {
         return Ok(None);
     };
-    let Some(item) = item_of(operation, body) else {
+    let Some(own) = inner.runtime_id() else {
+        // A thread meant for a named machine never starts here in its place.
+        if item.kind == "runtime" {
+            return Err(
+                "This machine is not in a fleet yet, so it cannot start a thread on another machine."
+                    .into(),
+            );
+        }
         return Ok(None);
     };
     let Some(owner) = owner_of(inner, &item) else {
