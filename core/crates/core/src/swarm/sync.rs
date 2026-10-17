@@ -16,6 +16,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
+use super::records::RecordChange;
 use super::store::sql;
 use super::{
     directory, groups, BlobChunk, BlobWant, Clocks, Inner, ReplicaScope, ReplicatedEvent,
@@ -95,7 +96,23 @@ fn announce_post(inner: &Inner, thread_id: &str, payload: &Value, posted_at: &st
     );
 }
 
+/// The record class of thread registrations, kept in the `threads` table
+/// that the replication reads.
+pub(super) const CLASS: &str = "thread";
+const REGISTRATION: &str = "registration";
+
+/// Registers a thread this runtime runs or learned of from an older member,
+/// and writes its record so `store/1` members learn of it too.
 fn ensure_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
+    if !keep_registration(inner, registration)? {
+        return Ok(false);
+    }
+    put_registration(inner, registration)?;
+    Ok(true)
+}
+
+/// Keeps a registration in the `threads` table unless one is held.
+fn keep_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
     if registration_valid(registration)
         && self::registration(inner, &registration.thread_id).is_none()
     {
@@ -109,6 +126,54 @@ fn ensure_registration(inner: &Inner, registration: &ThreadRegistration) -> Resu
         return Ok(true);
     }
     Ok(false)
+}
+
+fn put_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<(), String> {
+    let Ok(origin) = inner.origin() else {
+        return Ok(());
+    };
+    let value = serde_json::to_value(registration).map_err(|error| error.to_string())?;
+    inner.records.put(
+        &origin,
+        inner.now(),
+        CLASS,
+        &registration.thread_id,
+        REGISTRATION,
+        value,
+        0,
+    )?;
+    Ok(())
+}
+
+/// Registers the threads another member's records name. Answers whether
+/// any was new.
+pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool, String> {
+    let mut added = false;
+    for change in changes
+        .iter()
+        .filter(|change| change.class == CLASS && !change.local && !change.deleted)
+    {
+        let registration = inner
+            .records
+            .get(CLASS, &change.key)?
+            .and_then(|record| record.value(REGISTRATION).cloned())
+            .and_then(|value| serde_json::from_value::<ThreadRegistration>(value).ok())
+            .filter(|registration| registration.thread_id == change.key);
+        if let Some(registration) = registration {
+            added |= keep_registration(inner, &registration)?;
+        }
+    }
+    Ok(added)
+}
+
+/// Writes a record for each registration a store held before records.
+pub(super) fn migrate(inner: &Inner) -> Result<(), String> {
+    for registration in registrations(inner)? {
+        if inner.records.get(CLASS, &registration.thread_id)?.is_none() {
+            put_registration(inner, &registration)?;
+        }
+    }
+    Ok(())
 }
 
 fn registration_valid(registration: &ThreadRegistration) -> bool {
@@ -238,6 +303,64 @@ pub(super) fn thread_clock(
     thread_id: &str,
 ) -> Result<BTreeMap<String, u64>, String> {
     Ok(clocks(inner)?.remove(thread_id).unwrap_or_default())
+}
+
+/// The clocks of the threads whose version is past `base`, in version
+/// order, within `budget` bytes: the clocks, the version they reach and
+/// whether no later version is left.
+pub(super) fn clock_delta(
+    inner: &Inner,
+    base: u64,
+    budget: &mut usize,
+) -> Result<(Clocks, u64, bool), String> {
+    let connection = inner.store.connect()?;
+    let mut statement = connection
+        .prepare("SELECT thread_id, version FROM thread_versions WHERE version>?1 ORDER BY version")
+        .map_err(sql)?;
+    let mut rows = statement.query([base as i64]).map_err(sql)?;
+    let mut origins = connection
+        .prepare("SELECT origin, MAX(seq) FROM log WHERE thread_id=?1 GROUP BY origin")
+        .map_err(sql)?;
+    let mut clocks = Clocks::new();
+    let mut mark = base;
+    while let Some(row) = rows.next().map_err(sql)? {
+        let thread: String = row.get(0).map_err(sql)?;
+        let version = row.get::<_, i64>(1).map_err(sql)? as u64;
+        let clock: BTreeMap<String, u64> = origins
+            .query_map([&thread], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(sql)?
+            .collect::<Result<_, _>>()
+            .map_err(sql)?;
+        let size = thread.len() + 8 + clock.keys().map(|origin| origin.len() + 16).sum::<usize>();
+        if size > *budget {
+            return Ok((clocks, mark, false));
+        }
+        *budget -= size;
+        clocks.insert(thread, clock);
+        mark = version;
+    }
+    Ok((clocks, mark, true))
+}
+
+/// The highest thread version this runtime numbered.
+pub(super) fn clock_version(inner: &Inner) -> Result<u64, String> {
+    inner
+        .store
+        .connect()?
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM thread_versions",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|version| version as u64)
+        .map_err(sql)
+}
+
+/// A hash of every thread clock, which a peer compares with its copy.
+pub(super) fn clock_digest(clocks: &Clocks) -> String {
+    use sha2::Digest;
+    let bytes = serde_json::to_vec(clocks).unwrap_or_default();
+    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 fn next_seq(
@@ -394,7 +517,7 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
 /// origin, within `budget` bytes.
 pub(super) fn export(
     inner: &Inner,
-    peer_clocks: Clocks,
+    peer_clocks: &Clocks,
     budget: &mut usize,
 ) -> Result<(Vec<ReplicatedEvent>, bool), String> {
     let mine = clocks(inner)?;
@@ -974,7 +1097,24 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
         return Ok(false);
     };
     let mut kick = false;
-    for registration in registrations(inner)? {
+    // Only threads with a posted message not yet consumed have work.
+    let waiting: Vec<String> = {
+        let connection = inner.store.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT thread_id FROM log l WHERE kind='thread' AND event_type=?1 \
+                 AND NOT EXISTS(SELECT 1 FROM consumed c WHERE c.event_id=l.event_id)",
+            )
+            .map_err(sql)?;
+        let rows = statement
+            .query_map([THREAD_MESSAGE_POSTED], |row| row.get(0))
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    for registration in waiting
+        .iter()
+        .filter_map(|thread| registration(inner, thread))
+    {
         if thread_primary(inner, &registration).as_deref() != Some(self_id.as_str()) {
             continue;
         }

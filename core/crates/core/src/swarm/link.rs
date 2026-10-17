@@ -300,8 +300,7 @@ fn run(
 /// Runs one exchange over `client` and answers whether either side left
 /// items out.
 fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Result<bool, String> {
-    let known = lock(&inner.peer_clocks).get(peer).cloned();
-    let request = inner.build_exchange(peer, known.as_ref())?;
+    let request = inner.build_exchange(peer)?;
     let sent_more = request.more;
     let body = serde_json::to_value(&request).map_err(|error| error.to_string())?;
     let response = client
@@ -398,11 +397,10 @@ pub(super) fn answer_exchange(
         "connected",
         None,
     )?;
-    let clocks = exchange.clocks.clone();
     if inner.merge_exchange(&peer, exchange)? {
         inner.host.kick_runs();
     }
-    let answer = inner.build_exchange(&peer, Some(&clocks))?;
+    let answer = inner.build_exchange(&peer)?;
     serde_json::to_value(answer).map_err(|error| error.to_string())
 }
 
@@ -433,7 +431,19 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
         last_client_at: inner.store.meta("last_client_at")?,
         links,
         updated_at: super::timestamp(now),
+        capabilities: if inner.legacy() {
+            Vec::new()
+        } else {
+            vec![super::STORE_CAPABILITY.to_owned()]
+        },
     })
+}
+
+/// Whether a member was last heard of longer ago than a tombstone lasts, so
+/// it must take a fresh snapshot when it returns.
+fn stale(inner: &Inner, record: &MemberRecord) -> bool {
+    parse_time(&record.heartbeat_at)
+        .is_some_and(|seen| (inner.now() - seen).num_days() >= super::TOMBSTONE_DAYS)
 }
 
 /// Every member record this runtime knows, its own first.
@@ -542,6 +552,7 @@ pub(super) fn members_view(inner: &Inner) -> Result<Value, String> {
             "form_factor": record.form_factor,
             "self": this,
             "online": online(inner, &record.runtime_id),
+            "stale": !this && stale(inner, &record),
             "heartbeat_at": record.heartbeat_at,
             "last_client_at": record.last_client_at,
             "links": record.links,
@@ -561,6 +572,7 @@ pub(super) fn members_view(inner: &Inner) -> Result<Value, String> {
                 "form_factor": null,
                 "self": false,
                 "online": false,
+                "stale": false,
                 "heartbeat_at": null,
                 "last_client_at": null,
                 "links": [],
@@ -578,6 +590,7 @@ pub(super) fn members_view(inner: &Inner) -> Result<Value, String> {
         "self": self_id,
         "members": members,
         "absence": super::absence::view(inner)?,
+        "sync": inner.sync_view()?,
     }))
 }
 
@@ -691,6 +704,10 @@ pub(super) fn leave_runtime(inner: &Inner, runtime_id: &str) -> Result<bool, Str
     connection
         .execute("DELETE FROM members WHERE runtime_id=?1", [runtime_id])
         .map_err(sql)?;
+    lock(&inner.peers).remove(runtime_id);
+    inner
+        .store
+        .set_meta(&format!("peer_store:{runtime_id}"), None)?;
     inner.changed("members");
     Ok(removed)
 }
