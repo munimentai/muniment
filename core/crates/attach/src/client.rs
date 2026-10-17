@@ -387,6 +387,12 @@ pub struct RedactedThreadSummary {
     pub thread_id: String,
     pub title: String,
     pub updated_at: String,
+    /// The swarm member that runs the thread.
+    #[serde(default)]
+    pub owner_runtime: Option<String>,
+    /// Another member runs the thread and this runtime holds a replica.
+    #[serde(default)]
+    pub replica: bool,
 }
 
 #[derive(Clone, Eq, PartialEq, serde::Deserialize)]

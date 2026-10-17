@@ -148,7 +148,8 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
         | SubscriptionEvent::ApprovalPending(_)
         | SubscriptionEvent::ApprovalResolved(_)
         | SubscriptionEvent::AgentActivity(_)
-        | SubscriptionEvent::GroupPosted(_) => {}
+        | SubscriptionEvent::GroupPosted(_)
+        | SubscriptionEvent::FleetSyncChanged(_) => {}
     }
 }
 
@@ -156,8 +157,9 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
 /// is selected: `agent-run-updated` `{runtimeId, run}`, `swarm-changed`
 /// `{runtimeId, change}`, `agent-approval-pending` or
 /// `agent-approval-resolved` `{runtimeId, approval}`, `agent-activity`
-/// `{runtimeId, update}` and `group-posted` `{runtimeId, posted}`. Any other
-/// event comes back to the caller.
+/// `{runtimeId, update}`, `group-posted` `{runtimeId, posted}` and
+/// `fleet-sync-changed` `{runtimeId, status}`. Any other event comes back to
+/// the caller.
 #[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn deliver_agent_event<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -175,6 +177,7 @@ pub(crate) fn deliver_agent_event<R: tauri::Runtime>(
         }
         SubscriptionEvent::AgentActivity(update) => ("agent-activity", "update", update),
         SubscriptionEvent::GroupPosted(posted) => ("group-posted", "posted", posted),
+        SubscriptionEvent::FleetSyncChanged(status) => ("fleet-sync-changed", "status", status),
         event => return Some(event),
     };
     let _ = app.emit(name, serde_json::json!({"runtimeId": runtime_id, field: body}));

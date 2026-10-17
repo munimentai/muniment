@@ -705,6 +705,9 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ),
         ("thread-plan", Operation::ThreadPlan),
         ("thread-plan-answer", Operation::ThreadPlanAnswer),
+        ("fleet-sync-status", Operation::FleetSyncStatus),
+        ("fleet-offline-set", Operation::FleetOfflineSet),
+        ("thread-history-fetch", Operation::ThreadHistoryFetch),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -774,6 +777,22 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 "thread_id": FIXTURE_THREAD_ID,
                 "origin_runtime": FIXTURE_RUNTIME_B,
                 "seq": 4
+            }),
+        ),
+        ("fleet-sync-status", fixture_sync_status()),
+        (
+            "fleet-offline-set",
+            json!({"offline": {"thread_days": 90, "attachments": "open"}}),
+        ),
+        (
+            "thread-history-fetch",
+            json!({
+                "thread_id": "019965a0-0000-7000-8000-0000000000e2",
+                "owner_runtime": FIXTURE_RUNTIME_A,
+                "status": "fetching",
+                "held_events": 0,
+                "total_events": 48,
+                "before": null
             }),
         ),
         (
@@ -1341,6 +1360,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("agent-approval-resolved", EventName::AgentApprovalResolved),
         ("agent-activity", EventName::AgentActivity),
         ("group-posted", EventName::GroupPosted),
+        ("fleet-sync-changed", EventName::FleetSyncChanged),
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
@@ -1358,6 +1378,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 | EventName::AgentApprovalResolved
                 | EventName::AgentActivity
                 | EventName::GroupPosted
+                | EventName::FleetSyncChanged
         );
         insert(
             &mut fixtures,
@@ -1592,6 +1613,11 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::ThreadPost => json!({
             "thread_id": FIXTURE_THREAD_ID,
             "text": "Check the west region first."
+        }),
+        Operation::FleetSyncStatus => json!({}),
+        Operation::FleetOfflineSet => json!({"thread_days": 90}),
+        Operation::ThreadHistoryFetch => json!({
+            "thread_id": "019965a0-0000-7000-8000-0000000000e2"
         }),
         Operation::AgentMove => {
             json!({"id": FIXTURE_AGENT_ID, "to": FIXTURE_RUNTIME_B, "force": false})
@@ -1876,6 +1902,24 @@ fn fixture_replay_run() -> serde_json::Value {
 }
 
 /// One group chat.
+/// A runtime part way through its bootstrap: the records arrived, thread
+/// history is still on its way.
+fn fixture_sync_status() -> serde_json::Value {
+    json!({
+        "state": "bootstrapping",
+        "classes": [
+            {"class": "agent", "held": 6, "total": 6, "percent": 100},
+            {"class": "group", "held": 9, "total": 9, "percent": 100},
+            {"class": "thread", "held": 412, "total": 412, "percent": 100},
+            {"class": "history", "held": 37, "total": 120, "percent": 30}
+        ],
+        "last_sync_at": "2026-01-01T14:00:00Z",
+        "snapshot_needed_at": null,
+        "bootstrapped_at": null,
+        "offline": {"thread_days": 30, "attachments": "open"}
+    })
+}
+
 fn fixture_group() -> serde_json::Value {
     json!({
         "group_id": FIXTURE_GROUP_ID,
@@ -2303,6 +2347,7 @@ fn event_body(event: &EventName) -> serde_json::Value {
             run
         }
         EventName::SwarmChanged => json!({"kind": "agents"}),
+        EventName::FleetSyncChanged => fixture_sync_status(),
         EventName::AgentApprovalPending => fixture_approval("pending"),
         EventName::AgentApprovalResolved => fixture_approval("answered"),
         EventName::AgentActivity => json!({
@@ -2486,6 +2531,9 @@ mod tests {
             Operation::SwarmExchange,
             Operation::SwarmResume,
             Operation::ThreadPost,
+            Operation::FleetSyncStatus,
+            Operation::FleetOfflineSet,
+            Operation::ThreadHistoryFetch,
             Operation::AgentMove,
             Operation::AgentApprovals,
             Operation::AgentApprovalAnswer,
@@ -2585,6 +2633,9 @@ mod tests {
             "response-agent-replay.json",
             "event-agent-activity.json",
             "event-group-posted.json",
+            "event-fleet-sync-changed.json",
+            "response-fleet-sync-status.json",
+            "response-thread-history-fetch.json",
             "request-run-chat-events-swarm-live.json",
             "request-agent-approval-answer-always.json",
             "response-permission-modes.json",
