@@ -393,11 +393,7 @@ fn map_template(
     }
     let avatar = serde_json::from_value::<crate::agents::Avatar>(source["avatar"].clone())
         .ok()
-        .filter(|avatar| {
-            matches!(avatar.style.as_str(), "muniment-v1" | "muniment-v2")
-                && !avatar.seed.is_empty()
-                && avatar.seed.len() <= 128
-        });
+        .filter(crate::agents::Avatar::is_valid);
     let mut agent = crate::agents::Agent {
         name: name.to_owned(),
         label: label.to_owned(),
@@ -1232,7 +1228,7 @@ mod tests {
         let (_root, profile) = profile();
         let agent: crate::agents::Agent = serde_json::from_value(json!({
             "name": "Closer", "label": "Sales", "instructions": "Follow up on deals.",
-            "avatar": {"style": "muniment-v2", "seed": "closer"},
+            "avatar": {"style": "boxbot", "seed": "closer"},
             "template": {"custom": "keep"},
             "model": {"provider": "local", "id": "example-model", "thinking": "high"},
             "tools": {"disabled": ["bash"]},

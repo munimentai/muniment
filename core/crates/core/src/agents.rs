@@ -27,10 +27,21 @@ pub struct Schedule {
     pub time: String,
     pub weekday: u32,
 }
+/// How a client draws an agent: a style id and the seed it draws from. Core keeps
+/// no drawing; every style a client knows draws from the same seed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Avatar {
     pub style: String,
     pub seed: String,
+}
+/// The avatar styles an agent may carry. New agents get the first.
+pub const AVATAR_STYLES: [&str; 3] = ["boxbot", "muniment-v1", "muniment-v2"];
+impl Avatar {
+    pub fn is_valid(&self) -> bool {
+        AVATAR_STYLES.contains(&self.style.as_str())
+            && !self.seed.is_empty()
+            && self.seed.len() <= 128
+    }
 }
 /// The model an agent's runs use. Without one, the agent uses the default.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,10 +534,7 @@ fn validate(agent: &Agent) -> Result<(), String> {
         return Err("Keep the job title under 120 bytes.".into());
     }
     if let Some(avatar) = &agent.avatar {
-        if !matches!(avatar.style.as_str(), "muniment-v1" | "muniment-v2")
-            || avatar.seed.is_empty()
-            || avatar.seed.len() > 128
-        {
+        if !avatar.is_valid() {
             return Err("Choose a valid agent avatar.".into());
         }
     }
@@ -751,7 +759,7 @@ pub(crate) fn save_definition(
     if agent.avatar.is_none() {
         agent.avatar = Some(Avatar {
             style: if creating {
-                "muniment-v2"
+                AVATAR_STYLES[0]
             } else {
                 "muniment-v1"
             }
@@ -1782,6 +1790,42 @@ mod tests {
         assert!(list(&profile).unwrap().agents.is_empty());
         assert!(thread_instructions(&profile, "thread-a").unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_agents_draw_as_boxbot_and_saved_avatar_styles_keep_their_seed() {
+        let (root_dir, profile) = profile();
+        let created = save(
+            &profile,
+            Agent {
+                name: "Scout".into(),
+                instructions: "Read sources.".into(),
+                ..Agent::default()
+            },
+        )
+        .unwrap();
+        let avatar = created.avatar.clone().unwrap();
+        assert_eq!(avatar.style, "boxbot");
+        assert!(avatar.seed.starts_with("legacy-"));
+        for style in AVATAR_STYLES {
+            let mut agent = created.clone();
+            agent.avatar = Some(Avatar {
+                style: style.into(),
+                seed: "scout".into(),
+            });
+            let saved = save(&profile, agent).unwrap();
+            assert_eq!(get(&profile, &saved.id).unwrap().avatar, saved.avatar);
+        }
+        let mut agent = created.clone();
+        agent.avatar = Some(Avatar {
+            style: "painted".into(),
+            seed: "scout".into(),
+        });
+        assert_eq!(
+            save(&profile, agent).unwrap_err(),
+            "Choose a valid agent avatar."
+        );
+        fs::remove_dir_all(root_dir).unwrap();
     }
 
     fn profile() -> (PathBuf, PathBuf) {
