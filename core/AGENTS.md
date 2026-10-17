@@ -4,7 +4,7 @@ The root `AGENTS.md` covers the repository: layout, commits, releases and
 steering files. This file adds the rules for `core/`, the shared Rust core.
 
 The desktop workspace builds the core crates by path. Headless hosts run
-the router server (`muniment-router serve`) or the runtime server
+the router gateway (`muniment-router serve`) or the runtime server
 (`muniment-server serve`) from a `core-v*` release and read its `pins.toml`.
 `README.md` describes each crate. `docs/` holds technical documentation about
 the core, such as `docs/core-boundary.md`, which the boundary check reads.

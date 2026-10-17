@@ -654,17 +654,18 @@ their plaintext headers.
   window live in `remote-control-relay.json` under the profile, and the host
   keeps the keys.
 
-## Router server
+## Router gateway
 
-`muniment-router serve` runs the router as a network server for headless agent
-runs. It builds only with
-the `server` feature, so the desktop never compiles Postgres, OpenBao or the
-run-token code. `deploy/router/Containerfile` builds a non-root image whose
-health check runs `muniment-router health`.
+`muniment-router serve` runs the router gateway: the router as a network
+server for headless agent runs. The code lives in `muniment_router::gateway`.
+It builds only with the `server` feature, so the desktop never compiles
+Postgres, the trace exporter or the run-token code.
+`deploy/router/Containerfile` builds a non-root image whose health check runs
+`muniment-router health`.
 
 Settings come from a TOML file (`--config` or `MUNIMENT_ROUTER_CONFIG`), and a
-`MUNIMENT_ROUTER_*` variable overrides each one: `openbao.role_id` is
-`MUNIMENT_ROUTER_OPENBAO_ROLE_ID`.
+`MUNIMENT_ROUTER_*` variable overrides each one, with each section joined by
+an underscore: `otlp.endpoint` is `MUNIMENT_ROUTER_OTLP_ENDPOINT`.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -673,10 +674,7 @@ Settings come from a TOML file (`--config` or `MUNIMENT_ROUTER_CONFIG`), and a
 | `run_token_signing_key` | required | HMAC-SHA256 key for run tokens: 64 hex characters, or 32 bytes of text. |
 | `database_url` | | Postgres store. Migrations run at start. |
 | `state_dir` | | The desktop's JSON files instead of Postgres, for development. |
-| `openbao.address`, `.mount`, `.prefix` | `secret`, `muniment-router/accounts` | KV v2 secret per account at `<mount>/data/<prefix>/<account id>`. |
-| `openbao.token` or `.role_id` and `.secret_id` | | Token or AppRole login (`openbao.approle_mount`, default `approle`). |
-| `openbao.cache_ttl_s` | `60` | How long a read credential is reused. |
-| `openbao.tls_pin_sha256` | | SHA-256 of a self-signed OpenBao certificate to trust instead of the OS store. |
+| `credentials_dir` | | The credential store directory for account credentials on a Postgres store. |
 | `catalog`, `catalog_poll_s` | embedded, `5` | Catalog file, reloaded when its contents change. |
 | `policy_mode` | `adaptive` | `current`, `strong`, `ratchet` or `adaptive`. |
 | `classifier.kind` | `none` | `typesafe`, `endpoint` or `pooled`, with `base_url`, `api_key`, `model`, `family`. |
@@ -684,7 +682,10 @@ Settings come from a TOML file (`--config` or `MUNIMENT_ROUTER_CONFIG`), and a
 | `quota_probe_interval_s` | `900` | Subscription quota probes. `0` turns them off. |
 | `drain_timeout_s` | `100` | How long SIGTERM waits for open streams. |
 | `metrics` | `true` | Serve `/metrics`. |
-| `langfuse.host`, `.public_key`, `.secret_key` | | Langfuse ingestion. Off unless all three are set. A key that starts with `PLACEHOLDER` counts as unset. |
+| `otlp.endpoint` | | OTLP/HTTP base URL. Spans go to `<endpoint>/v1/traces`. Tracing is off without it. |
+| `otlp.traces_endpoint` | | Full traces URL, over `otlp.endpoint`. |
+| `otlp.headers` | | `name=value,name=value` sent with each export, values percent-encoded. |
+| `otlp.service_name` | `muniment-router` | The `service.name` resource attribute. |
 
 Endpoints: `POST /v1/runs`, `GET` and `DELETE /v1/runs/{run_id}` and
 `POST /v1/outcomes` take the admin token. A run's usage carries `last_status`,
@@ -694,12 +695,8 @@ the router answered it with an error: the status, one of `budget_exhausted`,
 `rate_limited` or `auth` (or null), and the RFC 3339 time. A later request
 the router answers without an error sets all three back to null. `POST /v1/chat/completions` and
 `GET /v1/models` take a run token and read the `x-muniment-task` and
-`x-muniment-validation-failures` headers. With Langfuse on, each chat
-completion becomes one generation with its model, usage, cost, latency, run id,
-task id and role. It joins the trace that the `x-muniment-trace` header names,
-or the task's own trace when the header is absent. A background thread posts
-the generations in batches, so Langfuse never delays a turn. `budget_usd` on
-`POST /v1/runs` is optional. A run's turn reserves its uncached cost estimate
+`x-muniment-validation-failures` headers, and the trace headers under
+[Traces](#traces). `budget_usd` on `POST /v1/runs` is optional. A run's turn reserves its uncached cost estimate
 before it goes upstream and settles the priced cost after, and the run's usage
 records the spend either way. A run without `budget_usd` is never refused on
 spend. A run with one gets 402 with
@@ -711,7 +708,7 @@ desktop keeps `policy.offline_only` (loopback endpoints only) and its own
 `policy.task_budget_usd`. `GET /healthz` and `GET /metrics` take no token.
 
 `muniment-router accounts list|add-key|login|import-pi-auth|set-weight|disable|enable|remove|probe`
-manages the pool in the configured store and secret source. `muniment-router
+manages the pool in the configured store and credential store. `muniment-router
 catalog check <file>` checks a catalog file.
 
 The catalog (`crates/models/catalog.toml`) is a list of `[[model]]` tables with
@@ -719,6 +716,52 @@ The catalog (`crates/models/catalog.toml`) is a list of `[[model]]` tables with
 `output` in US dollars per million tokens, `context` (`400K`, `1M`),
 `strengths` and `limits`. A file that fails the check keeps the last good
 catalog in force.
+
+### Account credentials
+
+A gateway on `state_dir` keeps each credential inside its account record, as
+the desktop does. A gateway on Postgres keeps them in the credential store the
+runtime uses on a host without a keychain, `FileCredentialStore` in
+`muniment_router::credentials`: the secret named by the account id under the
+service `ai.muniment.router.accounts`, in the file
+`<credentials_dir>/ai.muniment.router.accounts/<account id>`, mode 0600. The
+secret is the credential JSON, `{"type":"api_key","key":…}` or
+`{"type":"subscription",…}`. The variable
+`MUNIMENT_SECRET_AI_MUNIMENT_ROUTER_ACCOUNTS_<ACCOUNT ID>` (upper case, every
+other character as `_`) overrides the file, and the store then refuses to
+rotate that credential. Without `credentials_dir` the gateway reads the
+variables alone.
+
+Add accounts with `muniment-router accounts`, which writes the account record
+to the store and its credential to the credential store. A deployment that
+provisions credentials from elsewhere writes those files before the gateway
+starts, or sets the variables for keys that never rotate.
+
+### Traces
+
+With an OTLP endpoint set, each chat completion becomes one client span,
+exported over OTLP/HTTP in its JSON encoding. The standard
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_SERVICE_NAME` variables fill the `otlp`
+settings, below the gateway's own `MUNIMENT_ROUTER_OTLP_*` variables and above
+the file. `OTEL_SDK_DISABLED=true` turns export off.
+
+Spans follow the OpenTelemetry GenAI semantic conventions. The span is named
+`chat <model>` and carries `gen_ai.operation.name` (`chat`),
+`gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`,
+`gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`,
+`gen_ai.usage.cache_read.input_tokens`,
+`gen_ai.usage.cache_creation.input_tokens`, `http.response.status_code` and,
+on a failure, `error.type` with an error status. The run adds
+`muniment.run.id`, `muniment.task.id`, `muniment.repo`, `muniment.role`,
+`muniment.account`, `muniment.attempts` and `muniment.cost_usd`.
+
+A span joins the trace of a valid W3C `traceparent` header, under its span.
+Without one it joins the trace that the `x-muniment-trace` header names: a
+32-character hex id as is, any other id through the first 16 bytes of its
+SHA-256. Without either it joins the task's own trace, the first 16 bytes of
+the SHA-256 of the task id. A background thread posts the spans in batches,
+so a slow or missing collector never delays a turn.
 
 ## Runtime server
 
@@ -907,8 +950,7 @@ scripts/check-core-boundary.sh
 ```
 
 The router's Postgres tests run when `MUNIMENT_ROUTER_TEST_DATABASE_URL` names a
-database they may create schemas in. The OpenBao integration test runs when
-`MUNIMENT_ROUTER_TEST_OPENBAO_ADDR` and `MUNIMENT_ROUTER_TEST_OPENBAO_TOKEN` are set.
+database they may create schemas in.
 
 `muniment-core` links `sherpa-onnx`. Its build script downloads the prebuilt
 shared libraries on first build. `third-party/` holds the ONNX Runtime

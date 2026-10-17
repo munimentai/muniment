@@ -4,8 +4,9 @@
 //! snapshots, the policy sessions, and the server's run records and
 //! outcomes. A [`SecretSource`] holds each account's credential. The desktop
 //! keeps both in the agent directory, in the files the router has always
-//! written: [`FileStore`] and [`FileSecrets`]. A server host keeps account
-//! state in a database and credentials in a secret manager.
+//! written: [`FileStore`] and [`FileSecrets`]. The router gateway keeps account
+//! state in a database and credentials in the host's credential store, through
+//! [`StoredSecrets`].
 
 use std::collections::BTreeMap;
 use std::io;
@@ -16,6 +17,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::config::{self, Account, Credential, RouterConfig};
+use super::credentials::CredentialStore;
 use super::policy::Sessions;
 use super::quota::{self, Quota, QuotaStore};
 use super::usage::{self, Ledger};
@@ -661,6 +663,67 @@ impl SecretSource for FileSecrets {
     }
 }
 
+/// The credential store service that holds router account credentials.
+pub const ACCOUNT_SERVICE: &str = "ai.muniment.router.accounts";
+
+/// Account credentials in a host's [`CredentialStore`]: the secret named by
+/// the account id under [`ACCOUNT_SERVICE`], holding the credential as the
+/// router serializes it, `{"type":"api_key","key":…}` or
+/// `{"type":"subscription",…}`.
+pub struct StoredSecrets {
+    store: Arc<dyn CredentialStore>,
+    /// Serializes this process's rotations, so two refreshes of one account
+    /// never overwrite each other.
+    swapping: Mutex<()>,
+}
+
+impl StoredSecrets {
+    pub fn new(store: Arc<dyn CredentialStore>) -> Self {
+        Self {
+            store,
+            swapping: Mutex::new(()),
+        }
+    }
+}
+
+impl SecretSource for StoredSecrets {
+    fn read(&self, id: &str) -> Result<Option<Credential>, String> {
+        self.store
+            .read(ACCOUNT_SERVICE, id)
+            .map(|text| {
+                serde_json::from_str(&text)
+                    .map_err(|_| format!("The stored secret for {id} is not a credential."))
+            })
+            .transpose()
+    }
+
+    fn write(&self, id: &str, credential: &Credential) -> Result<(), String> {
+        let text = serde_json::to_string(credential).map_err(|error| error.to_string())?;
+        self.store.write(ACCOUNT_SERVICE, id, &text)
+    }
+
+    fn remove(&self, id: &str) -> Result<(), String> {
+        self.store.remove(ACCOUNT_SERVICE, id)
+    }
+
+    fn swap(
+        &self,
+        id: &str,
+        previous: &Credential,
+        next: &Credential,
+    ) -> Result<Credential, String> {
+        let _held = self.swapping.lock().unwrap_or_else(|e| e.into_inner());
+        match self.read(id)? {
+            Some(current) if &current != previous => Ok(current),
+            Some(_) => {
+                self.write(id, next)?;
+                Ok(next.clone())
+            }
+            None => Err("The account was removed.".into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,5 +886,41 @@ mod tests {
         assert_eq!(usage.requests, 1);
         assert_eq!(usage.cache_read_tokens, 4);
         assert_eq!(usage.models["openai/a"], 1);
+    }
+
+    #[test]
+    fn stored_secrets_keep_each_credential_in_the_credential_store() {
+        let root = tempdir();
+        let files = Arc::new(crate::credentials::FileCredentialStore::new(
+            root.join("credentials"),
+        ));
+        let secrets = StoredSecrets::new(files.clone());
+        let old = Credential::ApiKey { key: "k1".into() };
+        let new = Credential::ApiKey { key: "k2".into() };
+        assert_eq!(secrets.read("a1").unwrap(), None);
+        secrets.write("a1", &old).unwrap();
+        assert_eq!(
+            files.read(ACCOUNT_SERVICE, "a1").as_deref(),
+            Some(r#"{"type":"api_key","key":"k1"}"#)
+        );
+        assert!(root
+            .join("credentials")
+            .join(ACCOUNT_SERVICE)
+            .join("a1")
+            .is_file());
+        assert_eq!(secrets.swap("a1", &old, &new).unwrap(), new);
+        // A holder of the old credential gets the newer one back.
+        assert_eq!(
+            secrets
+                .swap("a1", &old, &Credential::ApiKey { key: "k3".into() })
+                .unwrap(),
+            new
+        );
+        secrets.remove("a1").unwrap();
+        assert_eq!(secrets.read("a1").unwrap(), None);
+        assert!(secrets.swap("a1", &new, &old).is_err());
+        files.write(ACCOUNT_SERVICE, "bad", "not json").unwrap();
+        assert!(secrets.read("bad").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -840,7 +840,7 @@ pub(crate) mod tests {
         let run = RunRecord {
             run_id: "r1".into(),
             task_id: "t1".into(),
-            repo: "factory/app".into(),
+            repo: "acme/app".into(),
             role: "implementer".into(),
             budget_usd: Some(2.0),
             created_ms: 1,
@@ -914,7 +914,7 @@ pub(crate) mod tests {
         }
 
         store.record_outcome("r1", "unit_tests", true, 70).unwrap();
-        for (role, repo) in success_scopes("implementer", "factory/app") {
+        for (role, repo) in success_scopes("implementer", "acme/app") {
             store
                 .observe_success(("openai/gpt-5.6-sol", role, repo), true, 1.0, 70, 1_000)
                 .unwrap();
@@ -931,7 +931,7 @@ pub(crate) mod tests {
                 1_000,
             )
             .unwrap();
-        let stats = store.success_stats("implementer", "factory/app").unwrap();
+        let stats = store.success_stats("implementer", "acme/app").unwrap();
         assert_eq!(stats.len(), 3);
         let stat = stats[&("openai/gpt-5.6-sol".into(), ANY.into(), ANY.into())];
         assert!((stat.trials - 1.5).abs() < 1e-9);

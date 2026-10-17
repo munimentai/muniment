@@ -50,7 +50,7 @@ impl Default for RestartPolicy {
 
 /// The prefix of the variables a runtime host reads secrets from. A sidecar
 /// never inherits one, so the agent and the tools it runs cannot read them.
-pub const SECRET_VARIABLE_PREFIX: &str = "MUNIMENT_SECRET_";
+pub const SECRET_VARIABLE_PREFIX: &str = crate::model_router::credentials::VARIABLE_PREFIX;
 
 #[derive(Debug, Clone)]
 pub struct SidecarConfig {

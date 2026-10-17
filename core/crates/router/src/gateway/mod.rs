@@ -1,7 +1,7 @@
-//! The factory router server: run tokens, budgets, outcomes and metrics in
+//! The router gateway: run tokens, budgets, outcomes, metrics and traces in
 //! front of the same routing the desktop uses.
 //!
-//! The server answers the factory's API. An admin token creates a run and
+//! The gateway serves headless agent runs. An admin token creates a run and
 //! gets back a signed run token bound to the run's task, repository, role,
 //! optional budget and expiry. Every model call carries a run token. The
 //! server reserves the call's uncached cost estimate before it goes upstream
@@ -11,9 +11,8 @@
 //! role and repository, and policy reads it at task boundaries.
 
 pub mod accounts;
-pub mod langfuse;
 pub mod metrics;
-pub mod openbao;
+pub mod otlp;
 pub mod postgres;
 pub mod settings;
 pub mod token;
@@ -46,32 +45,14 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// The secret source of a server with no secret manager configured: every
-/// account reads as having no credential, so none takes a turn.
-pub struct NoSecrets;
-
-impl store::SecretSource for NoSecrets {
-    fn read(&self, _id: &str) -> Result<Option<crate::config::Credential>, String> {
-        Ok(None)
-    }
-
-    fn write(&self, _id: &str, _credential: &crate::config::Credential) -> Result<(), String> {
-        Err("No secret source is configured. Set MUNIMENT_ROUTER_OPENBAO_ADDRESS.".into())
-    }
-
-    fn remove(&self, _id: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
-
 /// What the server needs beyond the routing state.
 pub struct Options {
     pub admin_token: String,
     pub signing_key: SigningKey,
     pub success: SuccessWindow,
     pub metrics: bool,
-    /// Where each chat completion goes as a Langfuse generation.
-    pub langfuse: Option<langfuse::Langfuse>,
+    /// Where each chat completion goes as an OTLP span.
+    pub otlp: Option<otlp::Exporter>,
 }
 
 /// Budget held by turns in flight, per run, and what this process has seen
@@ -188,8 +169,8 @@ impl Handle {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        if let Some(langfuse) = &self.server.options.langfuse {
-            langfuse.flush(until.saturating_duration_since(Instant::now()));
+        if let Some(otlp) = &self.server.options.otlp {
+            otlp.flush(until.saturating_duration_since(Instant::now()));
         }
         true
     }
@@ -479,9 +460,13 @@ fn handle(
             let started = chrono::Utc::now();
             let attempts = chat(head, reader, out, server, &run);
             record_failure(server, &run, out);
-            if let Some(langfuse) = &server.options.langfuse {
-                let trace = langfuse::trace_header(head.header("x-muniment-trace"));
-                trace_generation(langfuse, &run, trace, started, &attempts, out);
+            if let Some(otlp) = &server.options.otlp {
+                let parent = otlp::parent(
+                    head.header("traceparent"),
+                    head.header("x-muniment-trace"),
+                    &run.task_id,
+                );
+                trace_turn(otlp, &run, &parent, started, &attempts, out);
             }
         }
         _ => server::respond(
@@ -558,66 +543,71 @@ fn chat(
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Sends one turn to Langfuse as a generation in `trace`, or in the task's
-/// own trace when the request named none.
-fn trace_generation(
-    langfuse: &langfuse::Langfuse,
+/// Sends one turn as an OTLP client span under `parent`, with the GenAI
+/// semantic convention attributes and the run's own.
+fn trace_turn(
+    exporter: &otlp::Exporter,
     run: &RunRecord,
-    trace: Option<String>,
+    parent: &otlp::Parent,
     started: chrono::DateTime<chrono::Utc>,
     attempts: &[Attempt],
     out: &Recorder<'_>,
 ) {
     let ended = chrono::Utc::now();
-    let trace_id = match trace {
-        Some(trace) => trace,
-        None => {
-            let trace = langfuse::task_trace_id(&run.task_id);
-            langfuse.send(langfuse::event(
-                "trace-create",
-                json!({"id": trace, "metadata": {"task_id": run.task_id, "repo": run.repo}}),
-            ));
-            trace
-        }
-    };
-    let time =
-        |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let served = attempts.iter().rev().find(|attempt| attempt.served);
     let last = served.or(attempts.last());
     let failure = out.failure();
-    let mut body = json!({
-        "id": uuid::Uuid::new_v4().to_string(),
-        "traceId": trace_id,
-        "name": format!("{} chat completion", run.role),
-        "startTime": time(started),
-        "endTime": time(ended),
-        "model": last.map(|attempt| format!("{}/{}", attempt.route.family, attempt.route.model)),
-        "costDetails": {"total": attempts.iter().map(|attempt| attempt.cost_usd).sum::<f64>()},
-        "metadata": {
-            "run_id": run.run_id,
-            "task_id": run.task_id,
-            "repo": run.repo,
-            "role": run.role,
-            "account": last.map(|attempt| attempt.account.clone()),
-            "attempts": attempts.len(),
-            "latency_ms": ended.timestamp_millis() - started.timestamp_millis(),
-            "status": out.status,
-        },
-        "level": if failure.is_some() { "ERROR" } else { "DEFAULT" },
+    let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+    let mut attributes = vec![
+        otlp::string("gen_ai.operation.name", "chat"),
+        otlp::string("muniment.run.id", &run.run_id),
+        otlp::string("muniment.task.id", &run.task_id),
+        otlp::string("muniment.repo", &run.repo),
+        otlp::string("muniment.role", &run.role),
+        otlp::int("muniment.attempts", attempts.len() as i64),
+        otlp::double(
+            "muniment.cost_usd",
+            attempts.iter().map(|attempt| attempt.cost_usd).sum::<f64>(),
+        ),
+    ];
+    if let Some(attempt) = last {
+        attributes.push(otlp::string("gen_ai.provider.name", &attempt.route.family));
+        attributes.push(otlp::string("gen_ai.request.model", &attempt.route.model));
+        attributes.push(otlp::string("muniment.account", &attempt.account));
+    }
+    if let Some(attempt) = served {
+        attributes.push(otlp::string("gen_ai.response.model", &attempt.route.model));
+        if let Some(tokens) = attempt.tokens {
+            attributes.extend([
+                otlp::int("gen_ai.usage.input_tokens", count(tokens.input)),
+                otlp::int("gen_ai.usage.output_tokens", count(tokens.output)),
+                otlp::int(
+                    "gen_ai.usage.cache_read.input_tokens",
+                    count(tokens.cache_read),
+                ),
+                otlp::int(
+                    "gen_ai.usage.cache_creation.input_tokens",
+                    count(tokens.cache_write),
+                ),
+            ]);
+        }
+    }
+    if let Some(status) = out.status {
+        attributes.push(otlp::int("http.response.status_code", i64::from(status)));
+    }
+    let error = failure.map(|(status, kind)| {
+        let kind = failure_type(status, kind.as_deref())
+            .map(str::to_owned)
+            .or(kind)
+            .unwrap_or_else(|| "error".into());
+        attributes.push(otlp::string("error.type", &kind));
+        format!("{status} {kind}")
     });
-    if let Some(tokens) = served.and_then(|attempt| attempt.tokens) {
-        body["usageDetails"] = json!({
-            "input": tokens.input,
-            "output": tokens.output,
-            "cache_read_input_tokens": tokens.cache_read,
-            "cache_creation_input_tokens": tokens.cache_write,
-        });
-    }
-    if let Some((status, kind)) = failure {
-        let kind = failure_type(status, kind.as_deref()).or(kind.as_deref());
-        body["statusMessage"] = json!(format!("{status} {}", kind.unwrap_or("error")));
-    }
-    langfuse.send(langfuse::event("generation-create", body));
+    let name = match last {
+        Some(attempt) => format!("chat {}", attempt.route.model),
+        None => "chat".into(),
+    };
+    exporter.send(otlp::span(parent, &name, started, ended, attributes, error));
 }
 
 /// The failure type a run reports for an answer of `status` whose body named

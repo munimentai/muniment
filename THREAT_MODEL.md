@@ -247,7 +247,7 @@ The route does not defend against a stolen device credential before its
 revocation, or against an operator who publishes the listener on a public
 address with `allow_public` set.
 
-### Router server
+### Router gateway
 
 `muniment-router serve` binds loopback unless its operator sets `listen`. The
 admin token, 16 characters or more, guards run creation, run revocation and
@@ -258,8 +258,14 @@ claims against the stored run, so a revoked run stops at once. An admin token
 routes no model turn, and a run token creates no run. `/healthz` and `/metrics`
 take no token. The metrics carry counts, costs and account labels but no secrets
 or prompt content, so the listener stays off untrusted networks. Provider credentials live in
-the configured secret store or state directory, never in the request path.
-A leaked signing key lets its holder mint run tokens until the key changes.
+the host credential store or state directory, never in the request path.
+On a Postgres store the gateway keeps each credential in the owner-only files
+of `FileCredentialStore` under `credentials_dir`, or reads it from a
+`MUNIMENT_SECRET_*` variable, so anyone who can read that directory or the
+process environment holds those credentials. Exported OTLP spans carry run,
+task, model, token and account labels but no prompt content, and the OTLP
+headers may hold the collector's credentials. A leaked signing key lets its holder mint run tokens
+until the key changes.
 
 ### Release signing key
 
