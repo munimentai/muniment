@@ -557,6 +557,18 @@ pub trait RunAttachBoundaries {
     /// routines from an absence pause.
     #[cfg(any(unix, target_os = "windows"))]
     fn note_client_activity(&self) {}
+    /// Sends an action on an item another swarm member owns to that member,
+    /// and answers the forwarding answer. `None` runs it here.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn fleet_route(
+        &self,
+        _operation: crate::attach::Operation,
+        _body: &serde_json::Value,
+        _actor: &crate::swarm::FleetActor,
+        _idempotency_key: Option<&str>,
+    ) -> Result<Option<serde_json::Value>, ProtocolError> {
+        Ok(None)
+    }
     /// Runs one webhook operation, such as `routine.webhook_create`, which
     /// reads and writes hook secrets. `endpoints` names where hooks are reached.
     #[cfg(any(unix, target_os = "windows"))]

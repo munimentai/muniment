@@ -104,6 +104,7 @@ pub use deadline_io::{read_exact_before, write_all_before, DeadlineStream, Reada
 pub use desktop_admission::*;
 #[cfg(target_os = "linux")]
 pub use desktop_client_admission::*;
+pub use desktop_dispatch::dispatch_forwarded;
 pub use desktop_service::*;
 pub use desktop_session::AttachSessionError;
 pub use handoff::*;

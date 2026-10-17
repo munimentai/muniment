@@ -280,7 +280,7 @@ pub(super) fn new_message(
     }
 }
 
-fn enqueue(inner: &Inner, message: &Message, relay: bool) -> Result<(), String> {
+pub(super) fn enqueue(inner: &Inner, message: &Message, relay: bool) -> Result<(), String> {
     inner
         .store
         .connect()?
@@ -304,7 +304,7 @@ fn outbox_message(inner: &Inner, message_id: &str) -> Result<Option<Message>, St
         .record("outbox", "message_id", "message", message_id)
 }
 
-fn readdress(inner: &Inner, message: &Message, to_runtime: &str) -> Result<(), String> {
+pub(super) fn readdress(inner: &Inner, message: &Message, to_runtime: &str) -> Result<(), String> {
     let mut message = message.clone();
     message.to_runtime = Some(to_runtime.to_owned());
     let connection = inner.store.connect()?;
@@ -421,6 +421,7 @@ fn ack(inner: &Inner, message: &Message, status: &str, note: Option<String>) -> 
         status: status.into(),
         note,
         at: inner.now_text(),
+        result: None,
     }
 }
 
@@ -435,6 +436,11 @@ pub(super) fn deliver(inner: &Inner, message: &Message) -> Result<(Option<Ack>, 
     if let Some(stored) = stored {
         record_ack(inner, &stored)?;
         return Ok((Some(stored), false));
+    }
+    if message.kind == super::ops::KIND {
+        // The worker runs it outside the merge and acknowledges it then.
+        super::ops::accept(inner, message)?;
+        return Ok((None, false));
     }
     let mut kick = false;
     let mut run_id = None;
@@ -505,20 +511,31 @@ pub(super) fn deliver(inner: &Inner, message: &Message) -> Result<(Option<Ack>, 
         Ok(()) => ack(inner, message, "delivered", None),
         Err(note) => ack(inner, message, "refused", Some(note)),
     };
+    finish(inner, &message.message_id, &ack, run_id.as_deref())?;
+    Ok((Some(ack), kick))
+}
+
+/// Keeps a delivered message's acknowledgement, which every later copy of
+/// the message answers, and sends it back through the swarm.
+pub(super) fn finish(
+    inner: &Inner,
+    message_id: &str,
+    ack: &Ack,
+    run_id: Option<&str>,
+) -> Result<(), String> {
     inner
         .store
         .connect()?
         .execute(
             "INSERT OR IGNORE INTO inbox(message_id, ack, run_id) VALUES(?1, ?2, ?3)",
             params![
-                message.message_id,
-                serde_json::to_string(&ack).map_err(|error| error.to_string())?,
+                message_id,
+                serde_json::to_string(ack).map_err(|error| error.to_string())?,
                 run_id
             ],
         )
         .map_err(sql)?;
-    record_ack(inner, &ack)?;
-    Ok((Some(ack), kick))
+    record_ack(inner, ack)
 }
 
 fn record_ack(inner: &Inner, ack: &Ack) -> Result<(), String> {
@@ -682,6 +699,7 @@ pub(super) fn merge_acks(inner: &Inner, acks: Vec<Ack>) -> Result<(), String> {
             continue;
         }
         record_ack(inner, &ack)?;
+        super::ops::on_ack(inner, &ack)?;
         if ack.status != "refused" {
             continue;
         }

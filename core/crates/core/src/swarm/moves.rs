@@ -247,6 +247,7 @@ fn hand_over(inner: &Inner, agent_id: &str, to: &str) -> Result<DirectoryEntry, 
         updated_at: String::new(),
         deleted: false,
         primary_thread: None,
+        move_suggested: false,
         definition: None,
         activity: None,
     });
@@ -386,6 +387,7 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
         ),
         deleted: false,
         primary_thread: handover.primary_thread.clone(),
+        move_suggested: false,
         definition: serde_json::to_value(&agent).ok(),
         activity: None,
     };

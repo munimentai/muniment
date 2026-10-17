@@ -2,7 +2,7 @@
 //! Runtimes linked into a swarm over loopback: links and their revocation,
 //! the agent directory and groups on replicated records, thread replication
 //! on the journal, moves, agent messaging, group chats, approvals across
-//! members and the absence pause.
+//! members, the absence pause and actions forwarded to an item's owner.
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -20,7 +20,7 @@ use muniment_core::attach::{
 use muniment_core::run_start::RunAttachBoundaries;
 use muniment_core::serde_json::{json, Value};
 use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
-use muniment_core::swarm::Swarm;
+use muniment_core::swarm::{FleetActor, Swarm};
 use muniment_runtime_core::host::{CredentialStore, FileCredentialStore};
 use muniment_runtime_core::{RuntimeAttachState, RuntimeHost};
 
@@ -1570,4 +1570,380 @@ fn a_swarm_without_clients_for_14_days_pauses_routines_until_resumed() {
         a.op(Operation::SwarmMembers, json!({})).unwrap()["absence"]["paused"],
         false
     );
+}
+
+fn scopes(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+/// Whether `member` counts `runtime_id` as online.
+fn online_on(member: &Member, runtime_id: &str) -> bool {
+    member
+        .members()
+        .iter()
+        .any(|entry| entry["runtime_id"] == runtime_id && entry["online"] == true)
+}
+
+/// How many of an agent's runs on `member` took `prompt`.
+fn prompted(member: &Member, agent_id: &str, prompt: &str) -> usize {
+    member
+        .runs(agent_id)
+        .iter()
+        .filter(|run| run.prompt == prompt)
+        .count()
+}
+
+/// The `fleet.op_updated` bodies a client of `member` receives.
+fn fleet_events(member: &Member) -> Arc<Mutex<Vec<Value>>> {
+    let mut watcher = member.client(None);
+    watcher.subscribe_chat_events_with_fleet(None).unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    std::thread::spawn(move || {
+        while let Ok(event) = watcher.read_subscription_event() {
+            if let SubscriptionEvent::FleetOpUpdated(body) = event {
+                sink.lock().unwrap().push(body);
+            }
+        }
+    });
+    events
+}
+
+fn op_states(events: &Mutex<Vec<Value>>, op_id: &str) -> Vec<String> {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event["op_id"] == op_id)
+        .map(|event| event["state"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn op_status(client: &mut DesktopClient, op_id: &str) -> Value {
+    client
+        .swarm_request(Operation::FleetOpStatus, json!({"op_id": op_id}))
+        .unwrap()["op"]
+        .clone()
+}
+
+/// Three members in a line, so C reaches A only through B, with an agent on
+/// A that ran once. Answers the agent and its primary thread.
+fn line(a: &Member, b: &Member, c: &Member) -> (Agent, String) {
+    b.join(a);
+    c.join(b);
+    let scout = a.agent("Scout");
+    a.run_to_end(&scout.id, "Find leads.");
+    let thread = a.primary_thread(&scout.id);
+    assert!(
+        wait(
+            || c.swarm().is_replica_thread(&thread) == Some(a.runtime_id())
+                && online_on(c, &a.runtime_id())
+        ),
+        "C never learned of A's thread"
+    );
+    (scout, thread)
+}
+
+#[test]
+fn an_action_on_another_members_item_reaches_its_owner_through_a_relay_once() {
+    let _environment = environment();
+    let a = Member::new("fleet-a");
+    let b = Member::new("fleet-b");
+    let c = Member::new("fleet-c");
+    let (scout, thread) = line(&a, &b, &c);
+    let events = fleet_events(&c);
+
+    // A device paired to C posts to A's thread; C's core sends it on.
+    let mut device = c.client(None);
+    let west = "Check the west region.";
+    let posted = device
+        .swarm_request(
+            Operation::ThreadPost,
+            json!({"thread_id": thread, "text": west}),
+        )
+        .unwrap();
+    assert_eq!(posted["forwarded"], true, "{posted}");
+    let op_id = posted["op_id"].as_str().unwrap().to_owned();
+    assert_eq!(posted["message_id"], op_id.as_str());
+    assert!(
+        wait(|| {
+            a.tick();
+            prompted(&a, &scout.id, west) == 1
+        }),
+        "A never applied the post: {}",
+        op_status(&mut device, &op_id)
+    );
+    assert!(wait(|| op_status(&mut device, &op_id)["state"] == "applied"));
+    let op = op_status(&mut device, &op_id);
+    assert_eq!(op["operation"], "thread.post");
+    assert_eq!(op["owner_runtime"], a.runtime_id());
+    assert_eq!(op["item"], json!({"kind": "thread", "id": thread}));
+    assert_eq!(op["result"]["origin_runtime"], a.runtime_id());
+    // The outbox resent the op until A's acknowledgement came back; A ran
+    // it once.
+    for _ in 0..5 {
+        a.tick();
+        c.swarm().sync_now();
+    }
+    assert_eq!(prompted(&a, &scout.id, west), 1);
+
+    // C's clients saw it queued, then sent, then applied.
+    assert!(wait(|| op_states(&events, &op_id)
+        .last()
+        .map(String::as_str)
+        == Some("applied")));
+    let states = op_states(&events, &op_id);
+    let at = |state: &str| states.iter().position(|seen| seen == state).unwrap();
+    assert_eq!(states[0], "queued", "{states:?}");
+    assert!(
+        at("queued") < at("sent") && at("sent") < at("applied"),
+        "{states:?}"
+    );
+
+    // A repeat of one idempotency key is one op, applied once.
+    let east = json!({"thread_id": thread, "text": "Then the east region."});
+    let first = c
+        .swarm()
+        .route(
+            Operation::ThreadPost,
+            &east,
+            &FleetActor::phone(),
+            Some("east-1"),
+        )
+        .unwrap()
+        .unwrap();
+    let again = c
+        .swarm()
+        .route(
+            Operation::ThreadPost,
+            &east,
+            &FleetActor::phone(),
+            Some("east-1"),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(first["op_id"], again["op_id"]);
+    assert!(wait(|| {
+        a.tick();
+        prompted(&a, &scout.id, "Then the east region.") == 1
+    }));
+
+    // Running A's agent from C runs it on A.
+    let ran = device
+        .agent_request(
+            Operation::AgentRunNow,
+            json!({"id": scout.id, "prompt": "Run it from C."}),
+        )
+        .unwrap();
+    assert_eq!(ran["forwarded"], true, "{ran}");
+    assert!(wait(|| {
+        a.tick();
+        prompted(&a, &scout.id, "Run it from C.") == 1
+    }));
+    assert!(c.runs(&scout.id).is_empty());
+
+    // The owner checks the scopes the actor and its member share: a
+    // read-only actor's post is refused on A.
+    let viewer = FleetActor::new("viewer", scopes(&["thread.read"]));
+    let refused = c
+        .swarm()
+        .route(
+            Operation::ThreadPost,
+            &json!({"thread_id": thread, "text": "Read only."}),
+            &viewer,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+    let refused_id = refused["op_id"].as_str().unwrap().to_owned();
+    assert!(wait(
+        || op_status(&mut device, &refused_id)["state"] == "failed"
+    ));
+    assert!(op_status(&mut device, &refused_id)["error"]
+        .as_str()
+        .unwrap()
+        .contains("run.write"));
+    assert_eq!(prompted(&a, &scout.id, "Read only."), 0);
+    // A device paired without run access is refused on C itself.
+    let mut reader = c.client(Some(&["thread.read"]));
+    assert!(reader
+        .swarm_request(
+            Operation::ThreadPost,
+            json!({"thread_id": thread, "text": "Read only."}),
+        )
+        .is_err());
+    // An operation off the allowlist stays on C, which does not hold the
+    // agent, so A's agent survives.
+    let mut manager = c.client(Some(&["thread.read", "run.write", "agents.manage"]));
+    assert!(manager
+        .agent_request(
+            Operation::AgentDelete,
+            json!({"id": scout.id, "remove_memory": false}),
+        )
+        .is_err());
+    assert!(agents::get(a.profile(), &scout.id).is_ok());
+}
+
+#[test]
+fn an_action_for_an_offline_owner_queues_until_the_owner_returns() {
+    let _environment = environment();
+    let mut a = Member::new("fleet-off-a");
+    let b = Member::new("fleet-off-b");
+    let c = Member::new("fleet-off-c");
+    let (scout, thread) = line(&a, &b, &c);
+    let events = fleet_events(&c);
+    a.offline();
+    for member in [&a, &b, &c] {
+        member
+            .swarm()
+            .advance_clock(muniment_core::chrono::Duration::minutes(2));
+    }
+    assert!(wait(|| !online_on(&c, &a.runtime_id())));
+
+    let mut device = c.client(None);
+    let text = "Post while A is away.";
+    let posted = device
+        .swarm_request(
+            Operation::ThreadPost,
+            json!({"thread_id": thread, "text": text}),
+        )
+        .unwrap();
+    let op_id = posted["op_id"].as_str().unwrap().to_owned();
+    let queued = op_status(&mut device, &op_id);
+    assert_eq!(queued["state"], "queued", "{queued}");
+    assert_eq!(queued["reason"]["code"], "owner_offline");
+    let reason = queued["reason"]["text"].as_str().unwrap();
+    assert!(reason.starts_with("fleet-off-a is offline."), "{reason}");
+    let last_seen = queued["reason"]["last_seen_at"].as_str().unwrap();
+    assert!(reason.contains(last_seen), "{reason}");
+    assert!(wait(|| op_states(&events, &op_id)
+        .first()
+        .map(String::as_str)
+        == Some("queued")));
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(op_status(&mut device, &op_id)["state"], "queued");
+    assert_eq!(prompted(&a, &scout.id, text), 0);
+
+    a.listen();
+    assert!(
+        wait(|| {
+            a.tick();
+            prompted(&a, &scout.id, text) == 1
+        }),
+        "A never applied the queued post"
+    );
+    assert!(wait(|| op_status(&mut device, &op_id)["state"] == "applied"));
+    assert!(wait(|| op_states(&events, &op_id)
+        .last()
+        .map(String::as_str)
+        == Some("applied")));
+}
+
+#[test]
+fn an_agent_away_a_day_offers_a_move_and_its_queued_actions_expire_in_7_days() {
+    let _environment = environment();
+    let mut a = Member::new("away-a");
+    let b = Member::new("away-b");
+    b.join(&a);
+    let scout = a.agent("Scout");
+    a.run_to_end(&scout.id, "Find leads.");
+    let thread = a.primary_thread(&scout.id);
+    assert!(wait(|| b.swarm().is_replica_thread(&thread)
+        == Some(a.runtime_id())
+        && online_on(&b, &a.runtime_id())));
+    let suggested = |member: &Member| {
+        member
+            .directory()
+            .iter()
+            .find(|entry| entry["agent_id"] == scout.id.as_str())
+            .map(|entry| entry["move_suggested"] == true)
+    };
+    assert_eq!(suggested(&b), Some(false));
+    a.offline();
+    b.swarm()
+        .advance_clock(muniment_core::chrono::Duration::hours(23));
+    assert_eq!(suggested(&b), Some(false));
+    let text = "Post that never arrives.";
+    let op_id = b
+        .swarm()
+        .route(
+            Operation::ThreadPost,
+            &json!({"thread_id": thread, "text": text}),
+            &FleetActor::phone(),
+            None,
+        )
+        .unwrap()
+        .unwrap()["op_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let status = |member: &Member| {
+        member
+            .op(Operation::FleetOpStatus, json!({"op_id": op_id}))
+            .unwrap()["op"]
+            .clone()
+    };
+    assert_eq!(status(&b)["state"], "queued");
+
+    // A day without A: B offers to take the agent. A runs it, so A does not.
+    b.swarm()
+        .advance_clock(muniment_core::chrono::Duration::hours(2));
+    assert_eq!(suggested(&b), Some(true));
+    assert_eq!(suggested(&a), Some(false));
+
+    // A week without A: the post fails and stops travelling.
+    b.swarm()
+        .advance_clock(muniment_core::chrono::Duration::days(7));
+    assert!(wait(|| status(&b)["state"] == "failed"));
+    assert_eq!(status(&b)["reason"]["code"], "expired");
+    a.listen();
+    assert!(wait(|| b
+        .members()
+        .iter()
+        .any(|entry| entry["runtime_id"] == a.runtime_id().as_str()
+            && entry["link"]["state"] == "connected")));
+    b.swarm().sync_now();
+    for _ in 0..3 {
+        a.tick();
+        b.swarm().sync_now();
+    }
+    assert_eq!(prompted(&a, &scout.id, text), 0);
+}
+
+#[test]
+fn a_stop_from_another_member_cancels_the_owners_live_run() {
+    let _environment = environment();
+    let a = Member::new("stop-a");
+    let b = Member::new("stop-b");
+    let c = Member::new("stop-c");
+    let (scout, _thread) = line(&a, &b, &c);
+    let capture = a.temporary.root.join("permission.jsonl");
+    std::env::set_var("PI_RESUME_STUB_PERMISSION_CAPTURE", &capture);
+    let run = agents::run_now(a.profile(), &scout.id, Some("Deploy."), Some("test")).unwrap();
+    assert!(
+        wait(|| {
+            a.tick();
+            c.op(Operation::AgentApprovals, json!({})).unwrap()["approvals"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 1
+        }),
+        "C never saw A's run wait"
+    );
+    // A device on C stops the run that waits on A.
+    let mut device = c.client(None);
+    assert!(
+        wait(|| device.run_cancel(&run.id).is_ok()),
+        "C never sent the stop"
+    );
+    assert!(
+        wait(|| {
+            a.tick();
+            a.store().get(&run.id).unwrap().unwrap().status == RunStatus::Cancelled
+        }),
+        "A's run never stopped: {:?}",
+        a.store().get(&run.id).unwrap().unwrap().status
+    );
+    std::env::remove_var("PI_RESUME_STUB_PERMISSION_CAPTURE");
 }

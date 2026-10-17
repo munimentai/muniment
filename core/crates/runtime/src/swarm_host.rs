@@ -1,6 +1,7 @@
 //! What the runtime does for its swarm: the scope replica threads take,
-//! steering a live run, answering a run's gate, and starting queued agent
-//! runs soon after a message queues one.
+//! steering a live run, answering a run's gate, starting queued agent runs
+//! soon after a message queues one, and running actions other members
+//! forwarded through the runtime's own request dispatch.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,9 +11,14 @@ use std::time::Duration;
 use muniment_core::active_run::{
     queue_message, queue_permission_answer_with_commit, ChatDelivery, ChatQueueRequest, RunRegistry,
 };
-use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
+use muniment_core::attach::desktop_service_message::CompanionProvenance;
+use muniment_core::attach::{
+    ErrorDetails, Id, Protocol, ProtocolError, Request, RuntimeActivityRegistry,
+    SignedWorkspaceApproval,
+};
 use muniment_core::permission_gate::ChatPermissionAnswer;
-use muniment_core::swarm::{ReplicaScope, SwarmHost};
+use muniment_core::serde_json;
+use muniment_core::swarm::{Forwarded, ReplicaScope, SwarmHost};
 
 use crate::host::RuntimeHost;
 use crate::RuntimeAttachState;
@@ -26,16 +32,29 @@ pub(crate) struct RuntimeSwarmHost {
     pub(crate) host: RuntimeHost,
     pub(crate) runtime_activity: RuntimeActivityRegistry,
     pub(crate) state: Mutex<Weak<RuntimeAttachState>>,
+    /// Whether the host starts queued agent runs itself.
+    pub(crate) kicks: AtomicBool,
     pub(crate) kicking: AtomicBool,
 }
 
 impl RuntimeSwarmHost {
-    /// Lets the host start agent runs through the runtime state.
+    /// Lets the host run forwarded actions through the runtime state.
     pub(crate) fn bind(&self, state: &Arc<RuntimeAttachState>) {
         *self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::downgrade(state);
+    }
+}
+
+/// The reason a request failed, as a sentence.
+fn error_text(error: &ProtocolError) -> String {
+    match error.details() {
+        Some(ErrorDetails::RequestReason { reason }) => reason.clone(),
+        _ => serde_json::to_value(error.message())
+            .ok()
+            .and_then(|message| message.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "The action failed.".into()),
     }
 }
 
@@ -118,7 +137,58 @@ impl SwarmHost for RuntimeSwarmHost {
         crate::host::cloud_session(&self.host, &self.runtime_activity)
     }
 
+    fn run_forwarded(&self, action: &Forwarded) -> Result<serde_json::Value, String> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade()
+            .ok_or("The runtime is stopping.")?;
+        crate::attach_boundaries::record_local_workspace_approval(
+            &self.approval,
+            &self.config_directory,
+        );
+        let approval = self
+            .approval
+            .approval()
+            .ok_or("Open Muniment on this machine before you act on it from another one.")?;
+        let mut service = state
+            .forwarded_service(&action.from_runtime)
+            .map_err(|error| error_text(&error))?;
+        let invalid = |_| "The action is invalid.".to_string();
+        let request = Request {
+            protocol: Protocol,
+            request_id: Id::new(uuid::Uuid::new_v4().to_string()).map_err(invalid)?,
+            operation: action.operation,
+            capability: String::new(),
+            idempotency_key: action
+                .operation
+                .requires_idempotency_key()
+                .then(|| Id::new(action.idempotency_key.clone()))
+                .transpose()
+                .map_err(invalid)?,
+            body: action.body.clone(),
+        };
+        let provenance = CompanionProvenance {
+            profile: approval.profile,
+            companion_kind: muniment_core::swarm::PEER_KIND.into(),
+            companion_version: state.runtime_version().into(),
+            peer_uid: 0,
+            peer_pid: 0,
+        };
+        muniment_core::attach::dispatch_forwarded(
+            &mut service,
+            request,
+            &approval.workspace,
+            provenance,
+        )
+        .map_err(|error| error_text(&error))
+    }
+
     fn kick_runs(&self) {
+        if !self.kicks.load(Ordering::SeqCst) {
+            return;
+        }
         let state = self
             .state
             .lock()

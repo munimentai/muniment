@@ -326,6 +326,7 @@ fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Resul
     }
     let more = answer.more;
     let name = answer.from.runtime_name.clone();
+    super::ops::note_handed(inner, &request.messages);
     let kick = inner.merge_exchange(peer, answer)?;
     set_peer(
         inner,
@@ -410,6 +411,7 @@ pub(super) fn answer_exchange(
         inner.host.kick_runs();
     }
     let answer = inner.build_exchange(&peer)?;
+    super::ops::note_handed(inner, &answer.messages);
     serde_json::to_value(answer).map_err(|error| error.to_string())
 }
 
@@ -436,7 +438,10 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
     let mut capabilities = if inner.legacy() {
         Vec::new()
     } else {
-        vec![super::STORE_CAPABILITY.to_owned()]
+        vec![
+            super::STORE_CAPABILITY.to_owned(),
+            super::OPS_CAPABILITY.to_owned(),
+        ]
     };
     if fleet.is_some() {
         capabilities.push(super::fleet::CAPABILITY.to_owned());

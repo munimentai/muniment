@@ -374,9 +374,9 @@ fn serve_chat_events(connector: &Connector, deliver: impl Fn(SubscriptionEvent))
         if let Some(mut client) = connector.attempt() {
             observe_update_info(connector, &mut client);
             // An older runtime refuses the update status, the agent runs,
-            // the swarm or its live events, and the subscription then carries
-            // what it accepts.
-            if client.subscribe_chat_events_with_swarm_live(cursor).is_ok() {
+            // the swarm, its live events or forwarded actions, and the
+            // subscription then carries what it accepts.
+            if client.subscribe_chat_events_with_fleet(cursor).is_ok() {
                 while let Ok(event) = client.read_subscription_event() {
                     if connector.control.stopped() {
                         return;

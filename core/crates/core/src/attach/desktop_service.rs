@@ -1872,6 +1872,18 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
     fn note_client_activity(&mut self) {
         self.boundaries.note_client_activity();
     }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn fleet_route(
+        &mut self,
+        operation: super::Operation,
+        body: &serde_json::Value,
+        actor: &crate::swarm::FleetActor,
+        idempotency_key: Option<&str>,
+    ) -> Result<Option<serde_json::Value>, ProtocolError> {
+        self.boundaries
+            .fleet_route(operation, body, actor, idempotency_key)
+    }
 }
 
 fn attach_provenance(

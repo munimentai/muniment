@@ -9,7 +9,7 @@ use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatDelivery,
     ChatQueueRequest, RunRegistry,
 };
-use muniment_core::attach::RuntimeActivityRegistry;
+use muniment_core::attach::{Operation, RuntimeActivityRegistry};
 use muniment_core::journal::EventPayload;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::relay_encryption::{GateDecision, RelayKeys};
@@ -17,7 +17,8 @@ use muniment_core::relay_publisher::{
     relay_state_path, RelayAccount, RelayConnection, RelayPublisher, RelayRuntime,
 };
 use muniment_core::run_events::{ChatEventSubscription, SharedStorage};
-use muniment_core::serde_json;
+use muniment_core::serde_json::{self, json, Value};
+use muniment_core::swarm::FleetActor;
 
 use crate::host::RuntimeHost;
 use crate::RuntimeChatEventBroadcast;
@@ -67,6 +68,26 @@ struct Runs {
     swarm: Option<muniment_core::swarm::Swarm>,
 }
 
+impl Runs {
+    /// Sends the phone's action on a run another swarm member runs to that
+    /// member, the way any client's action reaches it. Answers whether it
+    /// went.
+    fn forward(&self, operation: Operation, body: Value) -> Result<bool, String> {
+        if body["run_id"]
+            .as_str()
+            .is_some_and(|run_id| self.active.contains(run_id))
+        {
+            return Ok(false);
+        }
+        let Some(swarm) = &self.swarm else {
+            return Ok(false);
+        };
+        Ok(swarm
+            .route(operation, &body, &FleetActor::phone(), None)?
+            .is_some())
+    }
+}
+
 impl RelayRuntime for Runs {
     /// This runtime's run events, and the approvals other swarm members hold.
     fn subscribe(&self) -> Option<ChatEventSubscription> {
@@ -100,10 +121,20 @@ impl RelayRuntime for Runs {
     }
 
     fn stop(&self, run_id: &str) -> Result<(), String> {
+        if self.forward(Operation::RunCancel, json!({"run_id": run_id}))? {
+            return Ok(());
+        }
         cancel_active_run(&self.active, run_id, None)
     }
 
     fn queue(&self, run_id: &str, delivery: ChatDelivery, text: &str) -> Result<(), String> {
+        let operation = match delivery {
+            ChatDelivery::Steer => Operation::RunSteer,
+            ChatDelivery::FollowUp => Operation::RunFollowUp,
+        };
+        if self.forward(operation, json!({"run_id": run_id, "text": text}))? {
+            return Ok(());
+        }
         queue_message(
             &self.active,
             ChatQueueRequest {
