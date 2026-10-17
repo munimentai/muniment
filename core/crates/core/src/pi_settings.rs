@@ -289,6 +289,12 @@ pub fn lock_auth(path: &Path) -> io::Result<SettingsLock> {
     lock_with_stale(path, Duration::from_secs(30), AUTH_LOCK_STALE)
 }
 
+/// Takes the lock Pi takes on `file` before it refreshes an MCP sign-in,
+/// with Pi's 20-second stale threshold.
+pub fn lock_mcp_refresh(file: &Path) -> io::Result<SettingsLock> {
+    lock_with_stale(file, Duration::from_secs(25), Duration::from_secs(20))
+}
+
 fn lock_settings_with_timeout(path: &Path, timeout: Duration) -> io::Result<SettingsLock> {
     lock_with_stale(path, timeout, LOCK_STALE)
 }

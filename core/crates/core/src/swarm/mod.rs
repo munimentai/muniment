@@ -38,6 +38,7 @@ mod groups;
 mod hlc;
 mod keys;
 mod link;
+mod mcp_oauth;
 mod messaging;
 mod moves;
 mod ops;

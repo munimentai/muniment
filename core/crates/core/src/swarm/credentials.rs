@@ -141,9 +141,15 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
         names,
     )?;
     let tokens = own_mcp_tokens(inner)?;
-    let names: Vec<String> = tokens.keys().map(|key| format!("mcp:{key}")).collect();
+    let oauth = super::mcp_oauth::own_leases(&agent, &received_oauth(inner)?, now_ms);
+    let names: Vec<String> = tokens
+        .keys()
+        .map(|key| format!("mcp:{key}"))
+        .chain(oauth.keys().map(|key| format!("mcp-oauth:{key}")))
+        .collect();
     let plaintext = Zeroizing::new(
-        serde_json::to_vec(&json!({"tokens": tokens})).map_err(|error| error.to_string())?,
+        serde_json::to_vec(&json!({"tokens": tokens, "oauth": oauth}))
+            .map_err(|error| error.to_string())?,
     );
     reseal(inner, &keys, &mcp_id, "mcp", &recipients, &plaintext, names)?;
     let (own_keys, names) = super::keys::own(&inner.profile, &received_written(inner, "keys:")?)?;
@@ -249,6 +255,19 @@ fn own_mcp_tokens(inner: &Inner) -> Result<serde_json::Map<String, Value>, Strin
         }
     }
     Ok(tokens)
+}
+
+/// The MCP sign-in leases other members' secrets wrote here.
+fn received_oauth(inner: &Inner) -> Result<BTreeMap<String, String>, String> {
+    let mut written = BTreeMap::new();
+    for state in opened_states(inner, "mcp:")? {
+        if let Ok(slots) =
+            serde_json::from_value::<BTreeMap<String, String>>(state["oauth_written"].clone())
+        {
+            written.extend(slots);
+        }
+    }
+    Ok(written)
 }
 
 fn member_record(inner: &Inner, runtime_id: &str) -> Option<MemberRecord> {
@@ -621,17 +640,28 @@ fn apply_mcp(inner: &Inner, keys: &Keys, self_id: &str, owner: &str) -> Result<(
     let Some(secret) = fleet::sealed(inner, &secret_id)? else {
         return Ok(());
     };
-    let tokens = open_json(keys, self_id, &secret)?
+    let opened_value = open_json(keys, self_id, &secret)?;
+    let tokens = opened_value
+        .as_ref()
         .and_then(|value| value["tokens"].as_object().cloned())
         .unwrap_or_default();
+    let leases = opened_value
+        .as_ref()
+        .and_then(|value| value["oauth"].as_object().cloned())
+        .unwrap_or_default();
     let written = share_mcp(inner, &secret_id, &tokens)?;
-    let names: Vec<String> = tokens.keys().map(|key| format!("mcp:{key}")).collect();
+    let oauth_written = share_oauth(inner, &secret_id, &leases)?;
+    let names: Vec<String> = tokens
+        .keys()
+        .map(|key| format!("mcp:{key}"))
+        .chain(leases.keys().map(|key| format!("mcp-oauth:{key}")))
+        .collect();
     mark_opened(
         inner,
         &secret_id,
         secret.version,
         owner,
-        &json!({"keys": names, "written": written}),
+        &json!({"keys": names, "written": written, "oauth_written": oauth_written}),
     )?;
     fleet::audit(
         inner,
@@ -657,6 +687,19 @@ fn share_mcp(
         .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())
         .unwrap_or_default();
     crate::extend::share_mcp_tokens(&inner.profile, &previous, tokens)
+}
+
+/// Replaces the MCP sign-in leases `secret_id` wrote here with `leases`.
+fn share_oauth(
+    inner: &Inner,
+    secret_id: &str,
+    leases: &serde_json::Map<String, Value>,
+) -> Result<BTreeMap<String, String>, String> {
+    let previous: BTreeMap<String, String> = opened(inner)?
+        .remove(secret_id)
+        .and_then(|(_, state)| serde_json::from_value(state["oauth_written"].clone()).ok())
+        .unwrap_or_default();
+    super::mcp_oauth::apply(&agent_directory(inner), &previous, leases)
 }
 
 /// Keeps a sign-in another member handed to this runtime as its own, so
@@ -748,6 +791,7 @@ fn drop_owner(inner: &Inner, owner: &str) -> Result<(), String> {
         );
     }
     share_mcp(inner, &format!("mcp:{owner}"), &serde_json::Map::new())?;
+    share_oauth(inner, &format!("mcp:{owner}"), &serde_json::Map::new())?;
     let previous: BTreeMap<String, String> = opened(inner)?
         .remove(&format!("keys:{owner}"))
         .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())

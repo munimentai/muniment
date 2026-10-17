@@ -598,3 +598,118 @@ fn a_secret_for_an_agent_reaches_the_worker_that_runs_it_only_in_the_recipient_s
     let recipients: Vec<String> = sealed.recipients.keys().cloned().collect();
     assert_eq!(recipients, full);
 }
+
+/// An authorization server that rotates refresh tokens and refuses a spent
+/// one. Answers its token URL and the refresh tokens it was sent.
+fn token_server() -> (String, Arc<Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/token", listener.local_addr().unwrap());
+    let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = Arc::clone(&heard);
+    std::thread::spawn(move || {
+        let mut current = "rt0".to_owned();
+        let mut issued = 0;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut line, mut length) = (String::new(), 0);
+            reader.read_line(&mut line).unwrap();
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body = String::from_utf8(body).unwrap();
+            let token = body
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("refresh_token="))
+                .unwrap_or_default()
+                .to_owned();
+            assert!(body.contains("client_id=cid") && body.contains("client_secret=shh"));
+            log.lock().unwrap().push(token.clone());
+            let (status, answer) = if token == current {
+                issued += 1;
+                current = format!("rt{issued}");
+                (
+                    "200 OK",
+                    json!({"access_token": format!("at{issued}"), "token_type": "Bearer",
+                           "expires_in": 3600, "refresh_token": current}),
+                )
+            } else {
+                ("400 Bad Request", json!({"error": "invalid_grant"}))
+            };
+            let text = answer.to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    (url, heard)
+}
+
+fn mcp_auth(node: &Node) -> serde_json::Map<String, Value> {
+    muniment_models::pi_models::read_json(&node.agent().join("mcp-auth.json")).unwrap()
+}
+
+#[test]
+fn mcp_sign_ins_reach_members_as_leases_and_their_owner_alone_refreshes() {
+    let (a, b, c) = fleet();
+    let (url, heard) = token_server();
+    let key = "mcp__Context|https://mcp.example.com/mcp";
+    let now = chrono::Utc::now().timestamp_millis();
+    a.write_auth(json!({}));
+    muniment_models::pi_models::write_json(
+        &a.agent().join("mcp-auth.json"),
+        json!({key: {
+            "serverUrl": "https://mcp.example.com/mcp",
+            "tokens": {"access_token": "at0", "token_type": "Bearer", "expires_in": 3600,
+                       "refresh_token": "rt0"},
+            // Ten minutes left: inside the lease margin.
+            "tokensExpireAt": now + 10 * 60_000,
+            "clientInformation": {"client_id": "cid", "client_secret": "shh"},
+            "discovery": {"authorizationServerMetadata": {"token_endpoint": url}},
+            "codeVerifier": "verifier",
+        }})
+        .as_object()
+        .unwrap(),
+    )
+    .unwrap();
+    a.share();
+    sync(&a, &b, &c);
+    pass_all(&[&a, &b, &c]);
+    sync(&a, &b, &c);
+    pass_all(&[&a, &b, &c]);
+    sync(&a, &b, &c);
+
+    // A refreshed once and keeps the new refresh token.
+    assert_eq!(*heard.lock().unwrap(), vec!["rt0".to_owned()]);
+    let own = mcp_auth(&a)[key].clone();
+    assert_eq!(own["tokens"]["access_token"], "at1");
+    assert_eq!(own["tokens"]["refresh_token"], "rt1");
+    for node in [&b, &c] {
+        let lease = mcp_auth(node)[key].clone();
+        assert_eq!(lease["tokens"]["access_token"], "at1");
+        assert!(lease["tokens"].get("refresh_token").is_none(), "{lease}");
+        assert!(lease["clientInformation"].get("client_secret").is_none());
+        assert!(lease.get("codeVerifier").is_none());
+        assert_eq!(lease["tokensExpireAt"], own["tokensExpireAt"]);
+    }
+    // A stops sharing: the leases go.
+    credentials::credentials_operation(a.inner(), json!({"share_models": false})).unwrap();
+    a.pass();
+    sync(&a, &b, &c);
+    for node in [&b, &c] {
+        assert!(!mcp_auth(node).contains_key(key));
+    }
+    assert_eq!(heard.lock().unwrap().len(), 1);
+}
