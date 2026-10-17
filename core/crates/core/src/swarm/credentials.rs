@@ -11,6 +11,9 @@
 //!   owner keeps refreshing what it signed in to.
 //! - **handover** (`handover:<owner>:<sign-in>`): a sign-in with its refresh
 //!   token, which `fleet.hold_sign_in` moves to a new refresher.
+//! - **lease** (`lease:<owner>:<worker>`): for a member the roster makes a
+//!   worker, the owner's connections that the agents it runs name, each
+//!   without a refresh token, sealed to that worker alone.
 //!
 //! A removal in the roster makes every member reseal without the removed
 //! member, drop its bundle, revoke the vault token issued for it, and log
@@ -30,8 +33,30 @@ use super::store::sql;
 use super::{lock, Inner, MemberRecord, Message, SealedSecret};
 use crate::shared_models::{self, Bundle, CloudLink};
 
+/// The capability a member names when it uses connections the model vault
+/// manages, and so takes a vault machine token.
+pub(super) const VAULT_CAPABILITY: &str = "vault/1";
+
+/// Whether this runtime uses connections the model vault manages.
+pub(super) fn uses_vault(inner: &Inner) -> Result<bool, String> {
+    Ok(inner.store.meta("fleet_use_vault")?.as_deref() == Some("1"))
+}
+
+/// Whether a member names [`VAULT_CAPABILITY`].
+fn wants_vault(inner: &Inner, runtime_id: &str) -> bool {
+    member_record(inner, runtime_id).is_some_and(|record| {
+        record
+            .capabilities
+            .iter()
+            .any(|capability| capability == VAULT_CAPABILITY)
+    })
+}
+
 /// How often the worker reseals this runtime's own secrets.
 const PASS_INTERVAL: Duration = Duration::from_secs(60);
+/// How long a member the model vault refused a token waits before this
+/// runtime asks for one again.
+const VAULT_RETRY: chrono::Duration = chrono::Duration::hours(1);
 
 /// When the last reseal pass ran, and whether one runs or is due.
 #[derive(Default)]
@@ -123,6 +148,7 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
         withdraw(inner, &keys, &models_id, "models")?;
         withdraw(inner, &keys, &mcp_id, "mcp")?;
         withdraw(inner, &keys, &keys_id, "keys")?;
+        seal_leases(inner, &keys, &view, &Bundle::default(), &agent)?;
         return Ok(());
     }
     let now_ms = inner.now().timestamp_millis();
@@ -165,7 +191,130 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
         &plaintext,
         names,
     )?;
-    issue_vault_tokens(inner, &keys, &view, &agent)
+    issue_vault_tokens(inner, &keys, &view, &agent)?;
+    seal_leases(inner, &keys, &view, &bundle, &agent)
+}
+
+/// The Pi providers the agents name, and whether one runs on the router or
+/// on no model of its own.
+fn providers_of(inner: &Inner, agents: &[String]) -> (BTreeSet<String>, bool) {
+    let mut providers = BTreeSet::new();
+    let mut router = false;
+    for agent in agents {
+        let provider = super::directory::entry(inner, agent)
+            .and_then(|entry| entry.definition)
+            .and_then(|definition| definition["model"]["provider"].as_str().map(str::to_owned));
+        match provider {
+            Some(provider) if provider != muniment_models::registry::ROUTER_PROVIDER => {
+                providers.insert(provider);
+            }
+            _ => router = true,
+        }
+    }
+    (providers, router)
+}
+
+/// Whether the model vault refused `member` a machine token, so it takes
+/// the vault's connections as leases from this runtime.
+fn vault_refused(inner: &Inner, member: &str) -> Result<bool, String> {
+    let issued: Option<String> = inner
+        .store
+        .connect()?
+        .query_row(
+            "SELECT pairing_id FROM fleet_vault WHERE runtime_id=?1",
+            [member],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql)?;
+    Ok(issued.is_none()
+        && wants_vault(inner, member)
+        && inner
+            .store
+            .meta(&format!("fleet_vault_refused:{member}"))?
+            .is_some())
+}
+
+/// Seals each lease this runtime owes: to each worker, the connections the
+/// agents it runs name; to each full member the model vault refused a
+/// machine token, the connections the vault leases this runtime. Withdraws
+/// a lease no member is owed any more.
+fn seal_leases(
+    inner: &Inner,
+    keys: &Keys,
+    view: &View,
+    bundle: &Bundle,
+    agent_dir: &std::path::Path,
+) -> Result<(), String> {
+    let agents: Vec<String> = super::directory::all(inner)?
+        .into_iter()
+        .filter(|entry| !entry.deleted)
+        .map(|entry| entry.agent_id)
+        .collect();
+    let mut owed: BTreeMap<String, Bundle> = BTreeMap::new();
+    // While sharing is off this runtime owes no lease and withdraws those
+    // it sealed.
+    let workers = if sharing(inner)? {
+        fleet::recipient_set(inner, &agents)?.workers
+    } else {
+        Vec::new()
+    };
+    for worker in workers {
+        let runs: Vec<String> = agents
+            .iter()
+            .filter(|agent| {
+                super::directory::primary_of(inner, agent).as_deref() == Some(worker.as_str())
+            })
+            .cloned()
+            .collect();
+        let (providers, router) = providers_of(inner, &runs);
+        owed.insert(
+            worker,
+            shared_models::lease(bundle.clone(), &providers, router),
+        );
+    }
+    if sharing(inner)? {
+        for member in view.full_recipients() {
+            if vault_refused(inner, &member)? {
+                owed.insert(member, shared_models::cloud_lease(agent_dir)?);
+            }
+        }
+    }
+    let owed_to: Vec<String> = owed.keys().cloned().collect();
+    let prefix = format!("lease:{}:", view.self_id);
+    for (worker, lease) in owed {
+        let Some(recipient) = fleet_pub(view, &worker) else {
+            continue;
+        };
+        let names = shared_models::connection_names(&lease);
+        let plaintext = Zeroizing::new(
+            serde_json::to_vec(&json!({"bundle": lease})).map_err(|error| error.to_string())?,
+        );
+        reseal(
+            inner,
+            keys,
+            &format!("{prefix}{worker}"),
+            "lease",
+            &[recipient],
+            &plaintext,
+            names,
+        )?;
+    }
+    let held: Vec<String> = {
+        let connection = inner.store.connect()?;
+        let mut statement = connection
+            .prepare("SELECT secret_id FROM fleet_own WHERE secret_id LIKE 'lease:%'")
+            .map_err(sql)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    for secret_id in held {
+        let worker = secret_id.strip_prefix(&prefix).unwrap_or_default();
+        if !owed_to.iter().any(|held| held == worker) {
+            withdraw(inner, keys, &secret_id, "lease")?;
+        }
+    }
+    Ok(())
 }
 
 fn own_digest(inner: &Inner, secret_id: &str) -> Result<Option<String>, String> {
@@ -323,7 +472,27 @@ fn issue_vault_tokens(
     let Some(session) = inner.host.cloud_session() else {
         return Ok(());
     };
-    for member in view.full_recipients() {
+    // Only a member that uses connections the vault manages takes a token,
+    // which counts toward the account's pairing limit; everything else
+    // reaches members sealed over the swarm, without limit.
+    let issued: Vec<String> = {
+        let connection = inner.store.connect()?;
+        let mut statement = connection
+            .prepare("SELECT runtime_id FROM fleet_vault")
+            .map_err(sql)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    for member in issued {
+        if view.trusts(&member) && !wants_vault(inner, &member) {
+            revoke_vault_token(inner, &view.self_id, &member)?;
+        }
+    }
+    for member in view
+        .full_recipients()
+        .into_iter()
+        .filter(|member| wants_vault(inner, member))
+    {
         let issued: Option<String> = inner
             .store
             .connect()?
@@ -340,16 +509,46 @@ fn issue_vault_tokens(
         let Some(recipient) = fleet_pub(view, &member) else {
             continue;
         };
+        let refused_key = format!("fleet_vault_refused:{member}");
+        let refused: Option<Value> = inner
+            .store
+            .meta(&refused_key)?
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let retry_due = refused.as_ref().is_none_or(|refused| {
+            refused["at"]
+                .as_str()
+                .and_then(super::parse_time)
+                .is_none_or(|at| inner.now() - at >= VAULT_RETRY)
+        });
+        if !retry_due {
+            continue;
+        }
         let (link, pairing_id) =
             match shared_models::issue_machine_token(&session, &machine(inner, view, &member)) {
                 Ok(issued) => issued,
                 Err(error) => {
+                    // The account's pairing limit, or another refusal: the
+                    // member keeps the leases this runtime seals it, and
+                    // the token is asked for again later.
                     crate::runtime_eprintln!(
                         "muniment-runtime: model vault token for {member} failed: {error}"
                     );
+                    if refused.is_none() {
+                        fleet::audit(
+                            inner,
+                            "vault_token_refused",
+                            Some(&member),
+                            json!({"error": error}),
+                        )?;
+                    }
+                    inner.store.set_meta(
+                        &refused_key,
+                        Some(&json!({"at": inner.now_text(), "error": error}).to_string()),
+                    )?;
                     continue;
                 }
             };
+        inner.store.set_meta(&refused_key, None)?;
         inner
             .store
             .connect()?
@@ -378,6 +577,41 @@ fn issue_vault_tokens(
         )?;
     }
     Ok(())
+}
+
+/// How each full member reaches the model vault through this runtime: its
+/// own machine token, or leases from this runtime while the account's
+/// pairing limit or another refusal keeps it from one.
+fn vault_states(inner: &Inner, view: &View) -> Result<Vec<Value>, String> {
+    let mut states = Vec::new();
+    for member in view.full_recipients() {
+        let issued: Option<String> = inner
+            .store
+            .connect()?
+            .query_row(
+                "SELECT issued_at FROM fleet_vault WHERE runtime_id=?1",
+                [&member],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        let refused: Option<Value> = inner
+            .store
+            .meta(&format!("fleet_vault_refused:{member}"))?
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let state = match (&issued, &refused) {
+            (Some(at), _) => json!({"runtime_id": member, "state": "token", "issued_at": at}),
+            (None, Some(refused)) => json!({
+                "runtime_id": member,
+                "state": "leases",
+                "reason": refused["error"],
+                "since": refused["at"],
+            }),
+            (None, None) => continue,
+        };
+        states.push(state);
+    }
+    Ok(states)
 }
 
 /// What this runtime applied from each sealed secret: its version and state.
@@ -473,6 +707,7 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
         return Ok(());
     };
     act_on_removals(inner, &view)?;
+    act_on_roles(inner, &view)?;
     let self_id = view.self_id.clone();
     let opened = opened(inner)?;
     let mut models = BTreeSet::new();
@@ -495,6 +730,9 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
                 models.insert(secret.owner.clone());
             }
             "vault" if secret.secret_id == format!("vault:{}:{self_id}", secret.owner) => {
+                models.insert(secret.owner.clone());
+            }
+            "lease" if secret.secret_id == format!("lease:{}:{self_id}", secret.owner) => {
                 models.insert(secret.owner.clone());
             }
             "mcp" => {
@@ -582,11 +820,23 @@ fn apply_models(inner: &Inner, keys: &Keys, view: &View, owner: &str) -> Result<
     let self_id = &view.self_id;
     let models = fleet::sealed(inner, &format!("models:{owner}"))?;
     let vault = fleet::sealed(inner, &format!("vault:{owner}:{self_id}"))?;
+    let lease = fleet::sealed(inner, &format!("lease:{owner}:{self_id}"))?;
     let mut bundle = Bundle::default();
-    if let Some(secret) = &models {
+    // A full member takes the owner's connections, and a lease adds what it
+    // holds besides: a worker's scoped connections, or the vault's
+    // connections when the vault refused this runtime a token.
+    for secret in models.iter().chain(lease.iter()) {
         if let Some(value) = open_json(keys, self_id, secret)? {
-            bundle = serde_json::from_value(value["bundle"].clone())
+            let part: Bundle = serde_json::from_value(value["bundle"].clone())
                 .map_err(|_| "The shared connections are not valid.")?;
+            for (provider, entry) in part.pi {
+                bundle.pi.entry(provider).or_insert(entry);
+            }
+            for account in part.router {
+                if !bundle.router.iter().any(|held| held.id == account.id) {
+                    bundle.router.push(account);
+                }
+            }
         }
     }
     if let Some(secret) = &vault {
@@ -608,7 +858,7 @@ fn apply_models(inner: &Inner, keys: &Keys, view: &View, owner: &str) -> Result<
         Ok(_) => json!({"keys": names}),
         Err(error) => json!({"keys": names, "error": error}),
     };
-    for secret in models.iter().chain(vault.iter()) {
+    for secret in models.iter().chain(vault.iter()).chain(lease.iter()) {
         mark_opened(inner, &secret.secret_id, secret.version, owner, &state)?;
         fleet::audit(
             inner,
@@ -782,6 +1032,60 @@ fn act_on_removals(inner: &Inner, view: &View) -> Result<(), String> {
     Ok(())
 }
 
+/// Acts once on each role change the roster shows: the member's sync
+/// starts over, so what it may hold now travels to it, and this runtime
+/// reseals. A change of this runtime's own role takes the records the new
+/// role holds afresh and drops what it may no longer hold.
+fn act_on_roles(inner: &Inner, view: &View) -> Result<(), String> {
+    let current: BTreeMap<String, String> = view
+        .members
+        .iter()
+        .map(|(id, member)| (id.clone(), member.role.as_str().to_owned()))
+        .collect();
+    let known: Option<BTreeMap<String, String>> = inner
+        .store
+        .meta("fleet_roles")?
+        .and_then(|text| serde_json::from_str(&text).ok());
+    if known.as_ref() == Some(&current) {
+        return Ok(());
+    }
+    for (id, role) in &current {
+        let before = known.as_ref().and_then(|known| known.get(id));
+        if before.is_none_or(|before| before == role) {
+            continue;
+        }
+        if *id == view.self_id {
+            let role = Role::parse(role).unwrap_or(Role::Worker);
+            if role == Role::Worker {
+                // What full members shared here goes; the leases sealed to
+                // this runtime arrive in its place.
+                let owners: BTreeSet<String> = opened(inner)?
+                    .keys()
+                    .filter_map(|id| id.split(':').nth(1).map(str::to_owned))
+                    .chain(
+                        fleet::sealed_rows(inner)?
+                            .into_iter()
+                            .map(|secret| secret.owner),
+                    )
+                    .filter(|owner| *owner != view.self_id)
+                    .collect();
+                for owner in owners {
+                    drop_owner(inner, &owner)?;
+                }
+            }
+            super::roles::change_own_role(inner, role)?;
+        } else {
+            inner.forget_peer(id);
+        }
+    }
+    inner.store.set_meta(
+        "fleet_roles",
+        Some(&serde_json::to_string(&current).map_err(|error| error.to_string())?),
+    )?;
+    mark_dirty(inner);
+    Ok(())
+}
+
 /// Removes what `owner` shared here and the secrets it sealed.
 fn drop_owner(inner: &Inner, owner: &str) -> Result<(), String> {
     let agent = agent_directory(inner);
@@ -851,16 +1155,12 @@ fn revoke_vault_token(inner: &Inner, self_id: &str, member: &str) -> Result<(), 
 /// whose recipients named it, and the secrets this runtime cannot read that
 /// named it.
 fn held_keys(inner: &Inner, member: &str) -> Result<Vec<String>, String> {
-    let connection = inner.store.connect()?;
-    let mut statement = connection
-        .prepare("SELECT record FROM fleet_audit WHERE kind IN ('sealed', 'opened')")
-        .map_err(sql)?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sql)?;
     let mut keys = BTreeSet::new();
-    for row in rows {
-        let record: Value = serde_json::from_str(&row.map_err(sql)?).unwrap_or(Value::Null);
+    for entry in super::audit::entries(inner)? {
+        if !matches!(entry.kind.as_str(), "sealed" | "opened") {
+            continue;
+        }
+        let record = entry.record;
         let named = record["recipients"]
             .as_array()
             .is_some_and(|recipients| recipients.iter().any(|id| id == member));
@@ -995,8 +1295,16 @@ pub(super) fn credentials_operation(inner: &Inner, body: Value) -> Result<Value,
     struct Body {
         #[serde(default)]
         share_models: Option<bool>,
+        #[serde(default)]
+        use_vault: Option<bool>,
     }
     let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
+    if let Some(use_vault) = body.use_vault {
+        inner
+            .store
+            .set_meta("fleet_use_vault", Some(if use_vault { "1" } else { "0" }))?;
+        inner.nudge();
+    }
     if let Some(share) = body.share_models {
         inner
             .store
@@ -1023,41 +1331,28 @@ pub(super) fn credentials_operation(inner: &Inner, body: Value) -> Result<Value,
             })
         })
         .collect();
-    let audit: Vec<Value> = {
-        let connection = inner.store.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT at, kind, runtime_id, record FROM fleet_audit ORDER BY seq DESC LIMIT 50",
-            )
-            .map_err(sql)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
+    let audit: Vec<Value> = super::audit::entries(inner)?
+        .into_iter()
+        .take(50)
+        .map(|entry| {
+            json!({
+                "at": entry.at,
+                "kind": entry.kind,
+                "runtime_id": entry.runtime_id,
+                "actor_runtime": entry.actor_runtime,
+                "record": entry.record,
             })
-            .map_err(sql)?;
-        let mut audit = Vec::new();
-        for row in rows {
-            let (at, kind, runtime_id, record) = row.map_err(sql)?;
-            audit.push(json!({
-                "at": at,
-                "kind": kind,
-                "runtime_id": runtime_id,
-                "record": serde_json::from_str::<Value>(&record).unwrap_or(Value::Null),
-            }));
-        }
-        audit
-    };
+        })
+        .collect();
+    let vault = vault_states(inner, &view)?;
     Ok(json!({
         "share_models": sharing(inner)?,
+        "use_vault": uses_vault(inner)?,
         "role": view.role(&view.self_id).map(Role::as_str),
         "removed": view.self_removed(),
         "secrets": secrets,
         "accounts": super::accounts::view(inner),
         "audit": audit,
+        "vault": vault,
     }))
 }

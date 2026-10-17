@@ -481,6 +481,13 @@ pub enum Operation {
     /// from the fleet when this machine lacks it.
     #[serde(rename = "blob.read")]
     BlobRead,
+    /// Gives a fleet member another role, `full` or `worker`, with a
+    /// signed roster entry.
+    #[serde(rename = "swarm.set_role")]
+    SwarmSetRole,
+    /// Reads the fleet's audit log, newest first.
+    #[serde(rename = "fleet.audit")]
+    FleetAudit,
     /// Appends a user message to an agent, group or ordinary thread on any
     /// member.
     #[serde(rename = "thread.post")]
@@ -732,6 +739,8 @@ impl Operation {
             Self::FleetPins => "fleet.pins",
             Self::FleetPinSet => "fleet.pin_set",
             Self::BlobRead => "blob.read",
+            Self::SwarmSetRole => "swarm.set_role",
+            Self::FleetAudit => "fleet.audit",
             Self::ThreadPost => "thread.post",
             Self::FleetSyncStatus => "fleet.sync_status",
             Self::FleetOfflineSet => "fleet.offline_set",
@@ -788,6 +797,8 @@ impl Operation {
                 | Self::FleetPins
                 | Self::FleetPinSet
                 | Self::BlobRead
+                | Self::SwarmSetRole
+                | Self::FleetAudit
                 | Self::ThreadPost
                 | Self::FleetSyncStatus
                 | Self::FleetOfflineSet

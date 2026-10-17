@@ -498,6 +498,21 @@ fn forget_thread(inner: &Inner, thread_id: &str) -> Result<bool, String> {
 }
 
 /// Deletes this runtime's copy of a thread `owner` runs.
+/// Drops this runtime's copy of a thread `owner` runs: its registration
+/// and index here, and the thread in the journal.
+pub(super) fn drop_replica(inner: &Inner, thread_id: &str, owner: &str) -> Result<(), String> {
+    let connection = inner.store.connect()?;
+    for table in ["threads", "log", "thread_marks", "thread_versions", "blobs"] {
+        connection
+            .execute(
+                &format!("DELETE FROM {table} WHERE thread_id=?1"),
+                [thread_id],
+            )
+            .map_err(sql)?;
+    }
+    delete_copy(inner, thread_id, owner)
+}
+
 pub(super) fn delete_copy(inner: &Inner, thread_id: &str, owner: &str) -> Result<(), String> {
     let scope = inner.host.replica_scope();
     let mut storage = storage_lock(&inner.storage)?;
@@ -1108,8 +1123,9 @@ pub(super) fn pin(inner: &Inner, thread_id: &str) -> Result<bool, String> {
     Ok(added > 0)
 }
 
-/// The events this runtime holds that the peer's clocks lack, oldest first
-/// per origin, within `budget` bytes. `peer_clock` answers the peer's clock
+/// The events this runtime holds that the peer's clocks lack, of the
+/// threads and origins `allow` passes, oldest first per origin, within
+/// `budget` bytes. `peer_clock` answers the peer's clock
 /// of one thread. It looks at the threads whose clock changed since `state`
 /// last looked and at those the peer still lacked, so an idle exchange
 /// reads no clocks. `state` is `None` for an older member, whose full
@@ -1120,6 +1136,7 @@ pub(super) fn export(
     peer_clock: &dyn Fn(&str) -> Option<BTreeMap<String, u64>>,
     state: Option<&mut ExportState>,
     budget: &mut usize,
+    allow: &dyn Fn(&str, &str) -> bool,
 ) -> Result<(Vec<ReplicatedEvent>, bool), String> {
     let mut fresh = ExportState::default();
     let state = state.unwrap_or(&mut fresh);
@@ -1150,7 +1167,10 @@ pub(super) fn export(
             lagging.insert(thread);
             continue;
         }
-        let mine = clock_of(&connection, &thread)?;
+        let mine: BTreeMap<String, u64> = clock_of(&connection, &thread)?
+            .into_iter()
+            .filter(|(origin, _)| allow(&thread, origin))
+            .collect();
         let theirs = peer_clock(&thread).unwrap_or_default();
         let known = |origin: &str| theirs.get(origin).copied().unwrap_or(0);
         if mine.iter().all(|(origin, held)| *held <= known(origin))

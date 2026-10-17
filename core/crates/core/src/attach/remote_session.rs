@@ -227,7 +227,9 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::SwarmLeave
         | Operation::FleetHoldSignIn
         | Operation::FleetCredentials
-        | Operation::FleetPinSet => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
+        | Operation::FleetPinSet
+        | Operation::SwarmSetRole
+        | Operation::FleetAudit => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
         Operation::SwarmMembers
         | Operation::SwarmAgents
         | Operation::AgentApprovals

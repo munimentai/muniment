@@ -716,6 +716,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("preferences-import", Operation::PreferencesImport),
         ("fleet-op-cancel", Operation::FleetOpCancel),
         ("fleet-ops", Operation::FleetOps),
+        ("swarm-set-role", Operation::SwarmSetRole),
+        ("fleet-audit", Operation::FleetAudit),
         ("fleet-pins", Operation::FleetPins),
         ("fleet-pin-set", Operation::FleetPinSet),
         ("blob-read", Operation::BlobRead),
@@ -817,8 +819,38 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                     "at": "2026-01-01T14:00:00Z",
                     "kind": "revoked",
                     "runtime_id": FIXTURE_RUNTIME_B,
+                    "actor_runtime": FIXTURE_RUNTIME_A,
                     "record": {"keys": ["pi:anthropic"]}
+                }],
+                "vault": [{
+                    "runtime_id": FIXTURE_RUNTIME_B,
+                    "state": "leases",
+                    "reason": "The account reached its limit of 5 paired machines.",
+                    "since": "2026-01-01T13:00:00Z"
                 }]
+            }),
+        ),
+        (
+            "swarm-set-role",
+            json!({
+                "runtime_id": FIXTURE_RUNTIME_B,
+                "role": "worker",
+                "previous": "full",
+                "changed": true
+            }),
+        ),
+        (
+            "fleet-audit",
+            json!({
+                "entries": [{
+                    "id": format!("{FIXTURE_RUNTIME_A}:018f0000-0000-7000-8000-0000000000e1"),
+                    "at": "2026-01-01T14:00:00Z",
+                    "kind": "role_changed",
+                    "actor_runtime": FIXTURE_RUNTIME_A,
+                    "runtime_id": FIXTURE_RUNTIME_B,
+                    "record": {"from": "full", "to": "worker"}
+                }],
+                "more": false
             }),
         ),
         (
@@ -1727,6 +1759,8 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::SwarmMembers | Operation::SwarmAgents | Operation::SwarmResume => json!({}),
         Operation::FleetHoldSignIn => json!({"account": "router:work"}),
         Operation::FleetCredentials => json!({"share_models": true}),
+        Operation::SwarmSetRole => json!({"runtime_id": FIXTURE_RUNTIME_B, "role": "worker"}),
+        Operation::FleetAudit => json!({"since": "2026-01-01T00:00:00Z", "limit": 50}),
         Operation::FleetPins => json!({}),
         Operation::FleetPinSet => json!({
             "pins": [{"class": "extension", "key": "*", "pinned": true}],
@@ -2762,6 +2796,8 @@ mod tests {
             Operation::SwarmResume,
             Operation::FleetHoldSignIn,
             Operation::FleetCredentials,
+            Operation::SwarmSetRole,
+            Operation::FleetAudit,
             Operation::FleetPins,
             Operation::FleetPinSet,
             Operation::BlobRead,
@@ -2890,6 +2926,8 @@ mod tests {
             "event-agent-approval-pending-plan.json",
             "response-fleet-hold-sign-in.json",
             "response-fleet-credentials.json",
+            "response-swarm-set-role.json",
+            "response-fleet-audit.json",
             "response-fleet-pins.json",
             "request-fleet-pin-set.json",
             "response-blob-read.json",
@@ -2908,7 +2946,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 6,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6,
             "every canonical fixture must be inventoried"
         );
     }

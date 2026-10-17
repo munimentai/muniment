@@ -1388,6 +1388,8 @@ fn swarm_operations_and_events_have_canonical_fixtures() {
         (Operation::FleetPins, "fleet.pins"),
         (Operation::FleetPinSet, "fleet.pin_set"),
         (Operation::BlobRead, "blob.read"),
+        (Operation::SwarmSetRole, "swarm.set_role"),
+        (Operation::FleetAudit, "fleet.audit"),
         (Operation::ThreadPost, "thread.post"),
         (Operation::AgentMove, "agent.move"),
         (Operation::AgentApprovals, "agent.approvals"),

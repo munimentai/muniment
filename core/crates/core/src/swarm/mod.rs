@@ -38,6 +38,7 @@ mod absence;
 mod accounts;
 mod approvals;
 mod artifacts;
+mod audit;
 mod bootstrap;
 mod credentials;
 mod directory;
@@ -53,6 +54,7 @@ mod moves;
 mod ops;
 mod pins;
 mod records;
+mod roles;
 mod store;
 mod sync;
 pub mod wire;
@@ -81,6 +83,7 @@ use crate::attach::RemoteAccess;
 use crate::permission_gate::ChatPermissionAnswer;
 use crate::run_events::SharedStorage;
 
+pub use audit::{AuditEntry, MAX_AUDIT_LIMIT};
 pub use bootstrap::{OfflineSettings, OFFLINE_DAYS};
 pub use fleet::{RecipientSet, Role};
 pub use hlc::Hlc;
@@ -182,7 +185,7 @@ const LOG_EXCHANGE_BYTES: usize = 64 * 1024;
 const CLASSES_INTERVAL: Duration = Duration::from_secs(5);
 /// The record classes the swarm keeps itself, which [`Records`] does not
 /// write.
-const SWARM_CLASSES: [&str; 3] = [directory::CLASS, groups::CLASS, sync::CLASS];
+const SWARM_CLASSES: [&str; 4] = [directory::CLASS, groups::CLASS, sync::CLASS, audit::CLASS];
 
 /// The swarm of one runtime.
 #[derive(Clone)]
@@ -277,6 +280,11 @@ struct PeerSync {
     /// The content-store objects the peer asked for in its last exchange.
     wants: Vec<BlobWant>,
     stats: PeerStats,
+    /// The peer said which records it holds.
+    record_vv_heard: bool,
+    /// This runtime logged that it serves the peer a snapshot, and the peer
+    /// has not caught up since.
+    snapshot_logged: bool,
     /// Where the export of events to the peer stands.
     export: sync::ExportState,
     /// The export epoch `export` belongs to.
@@ -575,6 +583,8 @@ impl Swarm {
             Operation::FleetPins => pins::pins_operation(inner, body),
             Operation::FleetPinSet => pins::pin_set_operation(inner, body),
             Operation::BlobRead => pins::read_operation(inner, body),
+            Operation::FleetAudit => audit::operation(inner, body),
+            Operation::SwarmSetRole => link::set_role(inner, body),
             Operation::ThreadPost => sync::post_operation(inner, body),
             Operation::AgentMove => moves::move_operation(inner, body),
             Operation::AgentApprovals => {
@@ -1120,6 +1130,8 @@ impl Inner {
         let from = link::self_record(self)?;
         let wire = self.wire_for(peer)?;
         let now = self.now();
+        let access = roles::peer_access(self, peer)?;
+        let leaf = roles::leaf(self)?;
         let epoch = self.export_epoch.load(Ordering::SeqCst);
         let (peer_vv, acked, held_mark, clocks_ready, digest_due, serve, mut export) = {
             let mut peers = lock(&self.peers);
@@ -1144,16 +1156,39 @@ impl Inner {
         let approvals = approvals::recent(self)?;
         let mut budget = EXCHANGE_BUDGET
             .saturating_sub(json_bytes(&acks) + json_bytes(&notices) + json_bytes(&approvals));
-        let (messages, more_messages) = messaging::outgoing(self, peer, &mut budget)?;
-        let (records, record_vv, more_records, snapshot) = if wire == Wire::Full {
-            (Vec::new(), None, false, None)
+        let (messages, more_messages) =
+            messaging::outgoing(self, access.message_target(), &mut budget)?;
+        let record_base = (wire != Wire::Full && !peer_vv.is_empty()).then(|| peer_vv.clone());
+        let (records, record_vv, more_records, snapshot, record_floor) = if wire == Wire::Full {
+            (Vec::new(), None, false, None, None)
         } else {
-            let (rows, more) = self.records.delta(&peer_vv, &mut budget)?;
+            // Every row through this vector is either in the delta or one
+            // the peer may not hold.
+            let held = self.records.version_vector()?;
+            let allow = |row: &RecordRow| {
+                access.holds_row(row) && roles::leaf_sends_row(leaf.as_ref(), row)
+            };
+            let (rows, more) = self.records.delta_where(&peer_vv, &mut budget, &allow)?;
+            // A worker learns how far it holds every row it may hold, and
+            // that the rows were filtered for it.
+            let floor = matches!(access, roles::Access::Worker(_)).then(|| {
+                if more {
+                    VersionVector::new()
+                } else {
+                    held.clone()
+                }
+            });
             let mut vector = self.records.version_vector()?;
             // A peer that lacks a whole origin, or more than one exchange
             // holds, is catching up and learns how much there is.
             let catching_up = !rows.is_empty()
                 && (more || vector.keys().any(|origin| !peer_vv.contains_key(origin)));
+            // A peer that holds nothing of any other member takes a
+            // snapshot: a new member, or one that forgot its records.
+            let others: Vec<&String> = vector.keys().filter(|origin| *origin != peer).collect();
+            let fresh =
+                !others.is_empty() && others.iter().all(|origin| !peer_vv.contains_key(*origin));
+            self.note_snapshot(peer, fresh, rows.len(), more)?;
             let snapshot = if catching_up {
                 Some(bootstrap::snapshot_mark(self, !more)?)
             } else {
@@ -1166,7 +1201,7 @@ impl Inner {
                     vector.remove(&origin);
                 }
             }
-            (rows, Some(vector), more, snapshot)
+            (rows, Some(vector), more, snapshot, floor)
         };
         let (clocks, watermarks, more_clocks) = match wire {
             Wire::Full => (sync::clocks(self)?, None, false),
@@ -1211,8 +1246,11 @@ impl Inner {
                     .get(peer)
                     .and_then(|sync| sync.clocks.get(thread).cloned())
             };
+            let allow = |thread: &str, origin: &str| {
+                access.holds_thread(thread) && roles::leaf_sends_event(leaf.as_ref(), origin)
+            };
             let state = (wire == Wire::Store).then_some(&mut export);
-            sync::export(self, peer, &peer_clock, state, &mut budget)?
+            sync::export(self, peer, &peer_clock, state, &mut budget, &allow)?
         } else {
             (Vec::new(), true)
         };
@@ -1223,8 +1261,9 @@ impl Inner {
                 sync.export = export;
             }
         }
+        let serve = roles::servable(self, &access, serve)?;
         let (blobs, wants) = sync::blob_traffic(self, &serve, &mut budget)?;
-        let fleet = fleet::outgoing(self, peer, &mut budget).unwrap_or_else(|error| {
+        let fleet = fleet::outgoing(self, peer, &access, &mut budget).unwrap_or_else(|error| {
             crate::runtime_eprintln!("muniment-runtime: swarm fleet exchange failed: {error}");
             fleet::Outgoing::default()
         });
@@ -1262,8 +1301,11 @@ impl Inner {
             sealed: fleet.sealed,
             sealed_have: fleet.sealed_have,
             admission: fleet.admission,
+            record_floor,
+            record_base,
             from,
         };
+        roles::restrict_outgoing(self, &access, leaf.as_ref(), &mut exchange)?;
         // A frame never grows past the protocol's limit: what does not fit
         // waits for the next exchange.
         let length = |exchange: &Exchange| {
@@ -1296,6 +1338,50 @@ impl Inner {
         }
         self.note_sent(peer, wire, &exchange, bytes);
         Ok(exchange)
+    }
+
+    /// Starts every peer's sync over, as after this runtime's role changed.
+    pub(crate) fn peers_reset(&self) {
+        lock(&self.peers).clear();
+    }
+
+    /// Starts one peer's sync over, as after its role changed.
+    pub(crate) fn forget_peer(&self, peer: &str) {
+        lock(&self.peers).remove(peer);
+    }
+
+    /// Logs in the audit log, once per snapshot, that this runtime serves
+    /// `peer` one: `fresh` when the peer said it holds nothing of any other
+    /// member.
+    fn note_snapshot(
+        &self,
+        peer: &str,
+        fresh: bool,
+        rows: usize,
+        more: bool,
+    ) -> Result<(), String> {
+        let log = {
+            let mut peers = lock(&self.peers);
+            let sync = peers.entry(peer.to_owned()).or_default();
+            if !fresh {
+                sync.snapshot_logged = false;
+                false
+            } else if rows == 0 || !sync.record_vv_heard || sync.snapshot_logged {
+                false
+            } else {
+                sync.snapshot_logged = true;
+                true
+            }
+        };
+        if log {
+            audit::append(
+                self,
+                "snapshot_served",
+                Some(peer),
+                json!({"rows": rows, "complete": !more}),
+            )?;
+        }
+        Ok(())
     }
 
     /// Counts what an exchange carried and logs a large one.
@@ -1397,13 +1483,14 @@ impl Inner {
         // The peer built this exchange before it saw the fresh snapshot
         // begin, so it cannot end it.
         let forgot = self.note_synced()?;
-        let fleet = fleet::Incoming {
+        let mut fleet = fleet::Incoming {
             roster: std::mem::take(&mut exchange.roster),
             roster_digest: exchange.roster_digest.take(),
             sealed: std::mem::take(&mut exchange.sealed),
             sealed_have: exchange.sealed_have.take(),
             admission: exchange.admission.take(),
         };
+        roles::restrict_fleet_incoming(self, peer, &mut fleet.roster, &mut fleet.sealed)?;
         match fleet::merge(self, peer, &exchange.from, fleet) {
             Ok(true) => {
                 if let Err(error) = credentials::settle(self) {
@@ -1415,7 +1502,29 @@ impl Inner {
                 crate::runtime_eprintln!("muniment-runtime: swarm fleet merge failed: {error}")
             }
         }
+        // The roster above may have admitted the peer; what it sent besides
+        // counts by the role it holds now.
+        let access = roles::peer_access(self, peer)?;
+        if !roles::restrict_incoming(self, peer, &access, &mut exchange)? {
+            return Ok(false);
+        }
         link::merge_members(self, &exchange.from, &exchange.members)?;
+        let leaf = roles::leaf(self)?;
+        roles::keep_for_leaf(leaf.as_ref(), &mut exchange);
+        match (exchange.record_floor.take(), &leaf) {
+            (Some(floor), Some(own)) => self.records.raise(&own.runtime_id, &floor)?,
+            // The peer built this exchange for this runtime as a worker; its
+            // rows are a filtered part that would claim the rows it left out.
+            (Some(_), None) => exchange.records.clear(),
+            (None, _) => {}
+        }
+        if let Some(base) = exchange.record_base.take() {
+            let held = self.records.version_vector()?;
+            exchange.records.retain(|row| {
+                base.get(&row.origin).copied().unwrap_or(0)
+                    <= held.get(&row.origin).copied().unwrap_or(0)
+            });
+        }
         let records_received = exchange.records.len() as u64;
         let catching_up = store && exchange.snapshot.is_some();
         if store {
@@ -1458,6 +1567,7 @@ impl Inner {
             sync.stats.events_received += exchange.events.len() as u64;
             if let Some(record_vv) = exchange.record_vv.filter(|_| store) {
                 sync.record_vv = record_vv;
+                sync.record_vv_heard = true;
             }
             sync.merge_clocks(exchange.clocks, watermarks.as_ref())
         };

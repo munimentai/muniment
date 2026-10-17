@@ -1508,6 +1508,8 @@ impl DesktopClient {
             Operation::FleetCredentials => &["share_models"],
             Operation::FleetPins | Operation::FleetPinSet => &["pins", "offline"],
             Operation::BlobRead => &["hash", "status"],
+            Operation::SwarmSetRole => &["role"],
+            Operation::FleetAudit => &["entries"],
             Operation::FleetOpStatus | Operation::FleetOpCancel => &["op"],
             Operation::FleetOps => &["ops"],
             _ => &[],

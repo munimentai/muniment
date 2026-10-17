@@ -49,6 +49,8 @@ struct Member {
     stop: Option<mpsc::Sender<()>>,
     server: Option<std::thread::JoinHandle<Result<(), RemoteListenerError>>>,
     artifact: PiArtifactDescriptor,
+    /// A client that reads threads, kept so reads do not pair a device each.
+    reader: Mutex<Option<DesktopClient>>,
     account: Option<Arc<dyn AccountService>>,
 }
 
@@ -78,6 +80,7 @@ impl Member {
             stop: None,
             server: None,
             artifact,
+            reader: Mutex::new(None),
             account,
         };
         member.open();
@@ -2201,6 +2204,503 @@ fn a_stop_from_another_member_cancels_the_owners_live_run() {
         a.store().get(&run.id).unwrap().unwrap().status
     );
     std::env::remove_var("PI_RESUME_STUB_PERMISSION_CAPTURE");
+}
+
+impl Member {
+    /// Links this runtime to `other` through an invitation with `role`.
+    fn join_as(&self, other: &Member, role: &str) {
+        let invite = other
+            .op(Operation::SwarmInvite, json!({"role": role}))
+            .unwrap();
+        assert_eq!(invite["role"], role);
+        let joined = self
+            .op(Operation::SwarmJoin, json!({"link": invite["link"]}))
+            .unwrap();
+        assert_eq!(joined["member"]["runtime_id"], other.runtime_id());
+    }
+
+    fn role_of(&self, other: &Member) -> Option<String> {
+        self.members()
+            .iter()
+            .find(|entry| entry["runtime_id"] == other.runtime_id().as_str())
+            .and_then(|entry| entry["fleet"]["role"].as_str().map(str::to_owned))
+    }
+
+    fn agent_dir(&self) -> std::path::PathBuf {
+        muniment_core::state_root::agent_directory(self.profile())
+    }
+
+    fn auth(&self) -> muniment_core::serde_json::Map<String, Value> {
+        muniment_core::models::pi_models::read_json(&self.agent_dir().join("auth.json"))
+            .unwrap_or_default()
+    }
+
+    fn write_auth(&self, auth: Value) {
+        std::fs::create_dir_all(self.agent_dir()).unwrap();
+        muniment_core::models::pi_models::write_json(
+            &self.agent_dir().join("auth.json"),
+            auth.as_object().unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// The sealed secrets this runtime holds, by id.
+    fn secrets(&self) -> Vec<Value> {
+        self.op(Operation::FleetCredentials, json!({})).unwrap()["secrets"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    fn audit(&self) -> Vec<Value> {
+        self.op(Operation::FleetAudit, json!({"limit": 500}))
+            .unwrap()["entries"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    /// Whether this runtime's journal holds the thread.
+    fn holds_thread(&self, thread: &str) -> bool {
+        let mut reader = self.reader.lock().unwrap();
+        let reader = reader.get_or_insert_with(|| self.client(None));
+        !history_entries(reader, thread).is_empty()
+    }
+}
+
+/// An agent on `member` that ran once, on the Pi provider `provider`.
+fn agent_on(member: &Member, name: &str, provider: &str) -> (Agent, String) {
+    let agent = member.agent(name);
+    member.run_to_end(&agent.id, "Start.");
+    let mut saved = agents::get(member.profile(), &agent.id).unwrap();
+    saved.model = Some(agents::AgentModel {
+        provider: provider.into(),
+        id: "model-1".into(),
+        thinking: None,
+    });
+    let agent = agents::save(member.profile(), saved).unwrap();
+    let thread = member.primary_thread(&agent.id);
+    (agent, thread)
+}
+
+fn api_key(key: &str) -> Value {
+    json!({"type": "api_key", "key": key})
+}
+
+#[test]
+fn a_worker_holds_only_its_own_agents_and_relays_nothing() {
+    let _environment = environment();
+    let a = Member::new("role-a");
+    let r = Member::new("role-r");
+    let w = Member::new("role-w");
+    let b = Member::new("role-b");
+    // A and B are full members, R relays between A and the worker W, and B
+    // reaches the fleet only through W.
+    r.join(&a);
+    w.join_as(&r, "worker");
+    w.join_as(&b, "worker");
+    assert!(wait(|| a.role_of(&w).as_deref() == Some("worker")));
+    assert_eq!(w.role_of(&w), Some("worker".into()));
+    assert_eq!(r.role_of(&a).as_deref(), Some("full"));
+
+    let (scout, scout_thread) = agent_on(&a, "Scout", "openai");
+    let (builder, builder_thread) = agent_on(&w, "Builder", "xai");
+    a.write_auth(json!({"openai": api_key("sk-openai"), "xai": api_key("sk-xai")}));
+    a.op(Operation::FleetCredentials, json!({"share_models": true}))
+        .unwrap();
+    a.swarm().fleet_pass().unwrap();
+
+    // The full members hold the worker's agent and thread.
+    for member in [&a, &r] {
+        assert!(
+            wait(
+                || member.swarm().is_replica_thread(&builder_thread) == Some(w.runtime_id())
+                    && member.holds_thread(&builder_thread)
+            ),
+            "{} never held the worker's thread",
+            member.name
+        );
+    }
+    assert!(wait(|| r.holds_thread(&scout_thread)));
+    // The worker sees the directory and the members, and no content of
+    // another agent: not its thread, its definition or its title.
+    assert!(wait(|| w.directory().iter().any(|entry| entry["agent_id"]
+        == scout.id.as_str()
+        && entry["name"] == "Scout")));
+    assert!(wait(|| has_member(&w, &a.runtime_id())));
+    assert_eq!(w.swarm().is_replica_thread(&scout_thread), None);
+    assert!(!w.holds_thread(&scout_thread));
+    // Its lease names only the connection its own agent uses, without a
+    // refresh token, and it holds no other secret.
+    assert!(
+        wait(|| {
+            a.swarm().fleet_pass().unwrap();
+            w.auth().get("xai").is_some()
+        }),
+        "the worker never got its lease"
+    );
+    assert!(!w.auth().contains_key("openai"));
+    let held: Vec<String> = w
+        .secrets()
+        .iter()
+        .map(|secret| secret["secret_id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        held,
+        vec![format!("lease:{}:{}", a.runtime_id(), w.runtime_id())]
+    );
+    assert!(wait(|| r.auth().contains_key("openai")));
+    // The worker gets no audit record of another member.
+    assert!(wait(|| r.audit().iter().any(|entry| entry["kind"]
+        == "sealed"
+        && entry["actor_runtime"] == a.runtime_id())));
+    assert!(w
+        .audit()
+        .iter()
+        .all(|entry| entry["actor_runtime"] == w.runtime_id()));
+    let classes = w.op(Operation::SwarmMembers, json!({})).unwrap()["sync"]["records"].clone();
+    assert!(classes.get("group").is_none(), "{classes}");
+
+    // A leaf relays nothing: B, linked only to the worker, learns the
+    // worker's agent and nothing of A's.
+    assert!(wait(|| b.holds_thread(&builder_thread)));
+    for _ in 0..5 {
+        w.swarm().sync_now();
+    }
+    assert!(!has_member(&b, &a.runtime_id()));
+    assert!(b
+        .directory()
+        .iter()
+        .all(|entry| entry["agent_id"] != scout.id.as_str()));
+    assert!(!b.holds_thread(&scout_thread));
+    assert!(!b.auth().contains_key("openai"));
+
+    // A worker sends no action that needs agents.manage, and the owner
+    // refuses one that arrives from it anyway.
+    let routine_save = json!({"agent_id": scout.id, "routine": routine("Nightly")});
+    let refused = w
+        .swarm()
+        .route(
+            Operation::RoutineSave,
+            &routine_save,
+            &FleetActor::owner(),
+            None,
+        )
+        .unwrap_err();
+    assert!(refused.contains("agents.manage"), "{refused}");
+    // A post to the worker's own agent from a full member runs there.
+    let posted = a
+        .swarm()
+        .route(
+            Operation::ThreadPost,
+            &json!({"thread_id": builder_thread, "text": "Ship it."}),
+            &FleetActor::owner(),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(posted["forwarded"], true);
+    assert!(wait(|| {
+        w.tick();
+        prompted(&w, &builder.id, "Ship it.") == 1
+    }));
+    // The owner logged the action with its actor, origin and result.
+    assert!(
+        wait(|| w.audit().iter().any(|entry| entry["kind"] == "op"
+            && entry["record"]["origin"] == a.runtime_id()
+            && entry["record"]["result"] == "delivered")),
+        "{:?}",
+        w.audit()
+    );
+}
+
+/// A device that pairs with `member` as a linked runtime would, with no
+/// invitation behind it.
+fn raw_peer(member: &Member) -> DesktopClient {
+    let link = member
+        .access()
+        .create_pairing_link(PairingLinkRequest {
+            scopes: Some(BTreeSet::from([
+                muniment_core::attach::SCOPE_SWARM_PEER.to_owned()
+            ])),
+            endpoints: None,
+        })
+        .unwrap()
+        .link;
+    let options = RemoteClientOptions {
+        kind: "swarm-peer".into(),
+        version: "1.0.0".into(),
+        device_name: Some("Impostor".into()),
+        scopes: Some(BTreeSet::from([
+            muniment_core::attach::SCOPE_SWARM_PEER.to_owned()
+        ])),
+        io_timeout: Duration::from_secs(10),
+    };
+    pair_with_link(&link, &options).unwrap().0
+}
+
+#[test]
+fn a_device_replaying_a_workers_card_gets_nothing() {
+    let _environment = environment();
+    let a = Member::new("replay-a");
+    let w = Member::new("replay-w");
+    w.join_as(&a, "worker");
+    let (_builder, builder_thread) = agent_on(&w, "Builder", "xai");
+    assert!(wait(|| a.holds_thread(&builder_thread)));
+    assert_eq!(a.role_of(&w).as_deref(), Some("worker"));
+
+    // Another device claims the worker's id with the worker's card, as a
+    // compromised worker replaying a card would, and asks for everything.
+    let mut impostor = raw_peer(&a);
+    let fresh = json!({
+        "runtime_id": uuid_string(),
+        "runtime_name": "Impostor",
+        "heartbeat_at": "2026-10-17T00:00:00Z",
+        "updated_at": "2026-10-17T00:00:00Z",
+        "capabilities": ["store/1", "ops/1", "fleet/1"],
+    });
+    let first = impostor
+        .request(
+            Operation::SwarmExchange,
+            None,
+            json!({"from": fresh, "roster_digest": "none"}),
+        )
+        .unwrap()
+        .body;
+    let card = first["roster"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["runtime_id"] == w.runtime_id().as_str() && entry["card"].is_object())
+        .map(|entry| entry["card"].clone())
+        .unwrap();
+    let mut impostor = raw_peer(&a);
+    let forged = json!({
+        "runtime_id": w.runtime_id(),
+        "runtime_name": "replay-w",
+        "heartbeat_at": "2999-01-01T00:00:00Z",
+        "updated_at": "2999-01-01T00:00:00Z",
+        "capabilities": ["store/1", "ops/1", "fleet/1"],
+        "fleet": card,
+    });
+    for _ in 0..10 {
+        let answer = impostor
+            .request(
+                Operation::SwarmExchange,
+                None,
+                json!({"from": forged, "sealed_have": {}, "record_vv": {}, "roster_digest": "none"}),
+            )
+            .unwrap()
+            .body;
+        for field in [
+            "records",
+            "events",
+            "messages",
+            "sealed",
+            "approvals",
+            "clocks",
+        ] {
+            assert!(
+                answer
+                    .get(field)
+                    .is_none_or(|value| value.as_array().map_or(
+                        value.as_object().is_some_and(|map| map.is_empty()),
+                        Vec::is_empty
+                    )),
+                "{field}: {answer}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
+fn a_promotion_bootstraps_and_a_demotion_reseals_and_drops() {
+    let _environment = environment();
+    let a = Member::new("promote-a");
+    let b = Member::new("promote-b");
+    let w = Member::new("promote-w");
+    b.join(&a);
+    w.join_as(&a, "worker");
+    let (_scout, scout_thread) = agent_on(&a, "Scout", "openai");
+    let (_builder, builder_thread) = agent_on(&w, "Builder", "xai");
+    a.write_auth(json!({"openai": api_key("sk-openai"), "xai": api_key("sk-xai")}));
+    a.op(Operation::FleetCredentials, json!({"share_models": true}))
+        .unwrap();
+    let leased = |member: &Member| {
+        wait(|| {
+            a.swarm().fleet_pass().unwrap();
+            member.auth().contains_key("xai")
+        })
+    };
+    assert!(leased(&w), "the worker never got its lease");
+    assert!(wait(|| b.holds_thread(&builder_thread)));
+    assert!(!w.auth().contains_key("openai"));
+    assert!(!w.holds_thread(&scout_thread));
+
+    // A promotes the worker: it takes the classes a full member holds.
+    let promoted = a
+        .op(
+            Operation::SwarmSetRole,
+            json!({"runtime_id": w.runtime_id(), "role": "full"}),
+        )
+        .unwrap();
+    assert_eq!(promoted["previous"], "worker");
+    assert!(wait(|| w.role_of(&w).as_deref() == Some("full")));
+    assert!(
+        wait(
+            || w.swarm().is_replica_thread(&scout_thread) == Some(a.runtime_id())
+                && w.holds_thread(&scout_thread)
+        ),
+        "the promoted member never took A's thread"
+    );
+    assert!(
+        wait(|| {
+            a.swarm().fleet_pass().unwrap();
+            w.auth().contains_key("openai")
+        }),
+        "the promoted member never got A's connections"
+    );
+    // The role change is in the audit log of every full member, the
+    // promoted one among them.
+    for member in [&b, &w] {
+        assert!(
+            wait(|| member
+                .audit()
+                .iter()
+                .any(|entry| entry["kind"] == "role_changed"
+                    && entry["actor_runtime"] == a.runtime_id()
+                    && entry["record"]["to"] == "full")),
+            "{} never saw the role change",
+            member.name
+        );
+    }
+
+    // A demotes it again: A reseals without it, and it drops what a worker
+    // may not hold.
+    a.op(
+        Operation::SwarmSetRole,
+        json!({"runtime_id": w.runtime_id(), "role": "worker"}),
+    )
+    .unwrap();
+    assert!(wait(|| w.role_of(&w).as_deref() == Some("worker")));
+    assert!(
+        wait(|| !w.holds_thread(&scout_thread)
+            && w.swarm().is_replica_thread(&scout_thread).is_none()),
+        "the demoted member kept A's thread"
+    );
+    assert!(
+        wait(|| {
+            a.swarm().fleet_pass().unwrap();
+            !w.auth().contains_key("openai") && w.auth().contains_key("xai")
+        }),
+        "the demoted member kept A's connections: {:?}",
+        w.auth()
+    );
+    let lease = format!("lease:{}:{}", a.runtime_id(), w.runtime_id());
+    assert!(
+        wait(|| w
+            .secrets()
+            .iter()
+            .all(|secret| secret["secret_id"] == lease.as_str())),
+        "{:?}",
+        w.secrets()
+    );
+    assert!(wait(|| w
+        .audit()
+        .iter()
+        .all(|entry| entry["actor_runtime"] == w.runtime_id())));
+    // Its own agent and thread stay with it and keep replicating.
+    assert!(w.holds_thread(&builder_thread));
+    let models = format!("models:{}", a.runtime_id());
+    assert!(wait(|| b
+        .secrets()
+        .iter()
+        .any(
+            |secret| secret["secret_id"] == models.as_str() && secret["for_this_runtime"] == true
+        )));
+    let removed = a.audit();
+    assert_eq!(
+        removed
+            .iter()
+            .filter(
+                |entry| entry["kind"] == "role_changed" && entry["actor_runtime"] == a.runtime_id()
+            )
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn a_thread_created_from_one_member_onto_another_runs_there() {
+    let _environment = environment();
+    let b = Member::new("offload-b");
+    let c = Member::new("offload-c");
+    for member in [&b, &c] {
+        member.state().use_pi_artifact(member.artifact);
+    }
+    c.join(&b);
+    assert!(wait(|| online_on(&c, &b.runtime_id())));
+    std::env::set_var("PI_RESUME_STUB_REPLY", " offloaded answer");
+    // A device on C starts a thread on B with its first message.
+    let mut device = c.client(None);
+    let key = muniment_core::attach::Id::new(uuid_string()).unwrap();
+    let created = device
+        .request(
+            Operation::ThreadCreate,
+            Some(key.clone()),
+            json!({
+                "runtime_id": b.runtime_id(),
+                "text": "Summarize the logs.",
+                "permission_mode": "bypass",
+            }),
+        )
+        .unwrap()
+        .body;
+    assert_eq!(created["forwarded"], true, "{created}");
+    let thread = created["thread_id"].as_str().unwrap().to_owned();
+    let op_id = created["op_id"].as_str().unwrap().to_owned();
+    // A repeat of the key names the same thread and op.
+    let again = device
+        .request(
+            Operation::ThreadCreate,
+            Some(key),
+            json!({
+                "runtime_id": b.runtime_id(),
+                "text": "Summarize the logs.",
+                "permission_mode": "bypass",
+            }),
+        )
+        .unwrap()
+        .body;
+    assert_eq!(again["thread_id"], thread.as_str());
+    assert_eq!(again["op_id"], op_id.as_str());
+    assert!(
+        wait(|| op_status(&mut device, &op_id)["state"] == "applied"),
+        "{}",
+        op_status(&mut device, &op_id)
+    );
+    let op = op_status(&mut device, &op_id);
+    assert_eq!(op["owner_runtime"], b.runtime_id());
+    assert_eq!(op["result"]["thread_id"], thread.as_str());
+    assert!(op["result"]["run_id"].is_string(), "{op}");
+    // The thread and its run live on B, under the id C chose, and C reads
+    // B's reply in its replica.
+    assert!(wait(|| b.holds_thread(&thread)));
+    assert!(
+        wait(|| c.swarm().thread_owner(&thread) == Some(b.runtime_id())),
+        "C never learned that B runs the thread"
+    );
+    let mut reader = c.client(None);
+    assert!(
+        wait(|| history_entries(&mut reader, &thread)
+            .iter()
+            .any(|entry| entry["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("offloaded answer"))),
+        "C never read B's reply"
+    );
 }
 
 /// The desktop account of the live control session test: the relay keys,

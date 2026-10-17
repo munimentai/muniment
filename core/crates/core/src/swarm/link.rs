@@ -445,6 +445,9 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
     };
     if fleet.is_some() {
         capabilities.push(super::fleet::CAPABILITY.to_owned());
+        if super::credentials::uses_vault(inner)? {
+            capabilities.push(super::credentials::VAULT_CAPABILITY.to_owned());
+        }
     }
     Ok(MemberRecord {
         runtime_id: identity.runtime_id.clone(),
@@ -668,6 +671,37 @@ pub(super) fn invite(inner: &Inner, body: Value) -> Result<Value, String> {
         "expires_at": created.expires_at,
         "runtime_id": access.runtime_info().runtime_id,
         "role": role.as_str(),
+    }))
+}
+
+/// `swarm.set_role {runtime_id, role}`: gives a fleet member a new role
+/// with a signed roster entry. Every member enforces it once the entry
+/// reaches it.
+pub(super) fn set_role(inner: &Inner, body: Value) -> Result<Value, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Body {
+        runtime_id: String,
+        role: String,
+    }
+    let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
+    let role = super::fleet::Role::parse(&body.role).ok_or("The role is full or worker.")?;
+    let previous = super::fleet::set_role(inner, &body.runtime_id, role)?;
+    if let Some(previous) = previous {
+        super::audit::append(
+            inner,
+            "role_changed",
+            Some(&body.runtime_id),
+            json!({"from": previous.as_str(), "to": role.as_str()}),
+        )?;
+        super::credentials::settle(inner)?;
+        inner.nudge();
+    }
+    Ok(json!({
+        "runtime_id": body.runtime_id,
+        "role": role.as_str(),
+        "previous": previous.map(super::fleet::Role::as_str),
+        "changed": previous.is_some(),
     }))
 }
 

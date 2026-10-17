@@ -92,7 +92,7 @@ pub struct SealedSecret {
     pub secret_id: String,
     pub version: u64,
     pub owner: String,
-    /// `models`, `mcp`, `vault` or `handover`.
+    /// `models`, `mcp`, `vault`, `handover` or `lease`.
     pub class: String,
     /// The X25519 public key the owner drew for this version, base64url.
     pub ephemeral: String,
@@ -391,7 +391,7 @@ pub struct BlobChunk {
 }
 
 /// The body of `swarm.exchange`, which a request and its response share.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Exchange {
     pub from: MemberRecord,
     #[serde(default)]
@@ -454,4 +454,14 @@ pub struct Exchange {
     /// the inviter answers with the joiner's roster entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission: Option<String>,
+    /// To a worker: the record numbers through which it holds every row
+    /// its role lets it hold, so it does not ask again for the rows the
+    /// sender kept from it (`store/1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_floor: Option<VersionVector>,
+    /// The receiver's record version vector the sender took `records` from
+    /// (`store/1`). A receiver that forgot rows since, as after its role
+    /// changed, keeps none of an origin whose base it no longer holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_base: Option<VersionVector>,
 }

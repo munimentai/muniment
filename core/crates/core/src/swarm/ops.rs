@@ -48,8 +48,11 @@ const RESULT_KEYS: [&str; 9] = [
 
 /// The operations a member forwards to the owner of their item, and the
 /// only ones an owner runs for another member. The phone's actions are all
-/// here: posts, approval answers, agent runs, stop and steer.
-pub const FORWARDABLE: [Operation; 13] = [
+/// here: posts, approval answers, agent runs, stop and steer. A
+/// `thread.create` that names another member's `runtime_id` starts the
+/// thread there.
+pub const FORWARDABLE: [Operation; 14] = [
+    Operation::ThreadCreate,
     Operation::ThreadPost,
     Operation::RunSteer,
     Operation::RunFollowUp,
@@ -113,10 +116,43 @@ fn full_scopes() -> BTreeSet<String> {
         .collect()
 }
 
-/// The scopes the member `runtime_id` may pass on for its clients. Every
-/// member holds the full set until roles narrow a member's set.
-fn member_scopes(_inner: &Inner, _runtime_id: &str) -> BTreeSet<String> {
-    full_scopes()
+/// The scopes the member `runtime_id` may pass on for its clients, by its
+/// role in the roster: a full member every scope, a worker every scope but
+/// `agents.manage` and `runtime.admin`, and a member the roster does not
+/// name or removed none. Without fleet keys every member holds the full set.
+fn member_scopes(inner: &Inner, runtime_id: &str) -> BTreeSet<String> {
+    if super::fleet::keys(inner).is_err() {
+        return full_scopes();
+    }
+    let Ok(view) = super::fleet::view(inner) else {
+        return BTreeSet::new();
+    };
+    if view.removed.contains(runtime_id) {
+        return BTreeSet::new();
+    }
+    match view.role(runtime_id) {
+        Some(super::fleet::Role::Full) => full_scopes(),
+        Some(super::fleet::Role::Worker) => full_scopes()
+            .into_iter()
+            .filter(|scope| {
+                scope != muniment_attach::SCOPE_AGENTS_MANAGE
+                    && scope != muniment_attach::SCOPE_RUNTIME_ADMIN
+            })
+            .collect(),
+        None => BTreeSet::new(),
+    }
+}
+
+/// Why this runtime may not send an action at all: a worker originates no
+/// action that takes a scope its role lacks.
+fn own_refusal(inner: &Inner, own: &str, operation: Operation, body: &Value) -> Option<String> {
+    let scopes = member_scopes(inner, own);
+    match crate::attach::remote_rule(operation, body) {
+        RemoteRule::Scope(scope) if !muniment_attach::scopes_grant(&scopes, scope) => Some(format!(
+            "This machine is a worker in the fleet, so it cannot send actions that need the {scope} scope."
+        )),
+        _ => None,
+    }
 }
 
 /// What an actor may do through a member: the actor's scopes that the
@@ -193,6 +229,7 @@ fn item(kind: &str, id: Option<String>) -> Option<OpItem> {
 /// The item a forwardable operation names in its body.
 fn item_of(operation: Operation, body: &Value) -> Option<OpItem> {
     match operation {
+        Operation::ThreadCreate => item("runtime", text(body, "runtime_id")),
         Operation::ThreadPost => item("thread", text(body, "thread_id"))
             .or_else(|| item("agent", text(body, "agent_id"))),
         Operation::RunSteer | Operation::RunFollowUp | Operation::RunCancel => {
@@ -246,6 +283,7 @@ fn owner_of(inner: &Inner, item: &OpItem) -> Option<String> {
             .ok()
             .flatten()
             .map(|approval| approval.runtime_id),
+        "runtime" => Some(item.id.clone()),
         _ => None,
     }
 }
@@ -314,6 +352,19 @@ pub(super) fn route(
     if owner == own {
         return Ok(None);
     }
+    if item.kind == "runtime" && !link::known_member(inner, &owner) {
+        return Err("The fleet has no such machine.".into());
+    }
+    if let Some(refusal) = own_refusal(inner, &own, operation, body) {
+        return Err(refusal);
+    }
+    // A new thread on another member takes its id here, so the answer
+    // names it at once.
+    let mut body = body.clone();
+    if operation == Operation::ThreadCreate && text(&body, "thread_id").is_none() {
+        body["thread_id"] = Value::String(uuid::Uuid::now_v7().to_string());
+    }
+    let mut body = &body;
     if !speaks_ops(inner, &owner) {
         // An older owner takes posts and approval answers the way it always
         // did, through replicated posts and answer messages.
@@ -329,6 +380,11 @@ pub(super) fn route(
         ));
     }
     let op = forward(inner, operation, body, actor, idempotency_key, item, &owner)?;
+    // A repeat of the key answers the op it queued first, with that body.
+    let queued = messaging::outbox_message(inner, &op.op_id)?.map(|message| message.body);
+    if let Some(queued) = queued.as_ref().and_then(|queued| queued.get("body")) {
+        body = queued;
+    }
     if operation == Operation::AgentApprovalAnswer {
         return answer_after_wait(inner, op).map(Some);
     }
@@ -339,6 +395,10 @@ pub(super) fn route(
 /// operation's answer always has, and `forwarded` with the op's id.
 fn placeholder(inner: &Inner, op: &Op, operation: Operation, body: &Value) -> Value {
     let mut answer = match operation {
+        Operation::ThreadCreate => json!({
+            "thread_id": body["thread_id"],
+            "run_id": null,
+        }),
         Operation::ThreadPost => json!({
             "message_id": op.op_id,
             "thread_id": body.get("thread_id").cloned().unwrap_or(Value::Null),
@@ -1002,7 +1062,28 @@ pub(super) fn execute_pending(inner: &Inner) -> Result<(), String> {
                 result: None,
             },
         };
+        let actor_device = message
+            .body
+            .get("actor_device")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let _merge = lock(&inner.merge);
+        let logged = super::audit::append(
+            inner,
+            "op",
+            Some(&message.from_runtime),
+            json!({
+                "op_id": message.message_id,
+                "operation": message.body.get("operation"),
+                "actor_device": actor_device,
+                "origin": message.from_runtime,
+                "result": ack.status,
+                "note": ack.note,
+            }),
+        );
+        if let Err(error) = logged {
+            crate::runtime_eprintln!("muniment-runtime: fleet audit of an action failed: {error}");
+        }
         messaging::finish(inner, &message.message_id, &ack, None)?;
         inner
             .store

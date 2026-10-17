@@ -281,18 +281,32 @@ fn a_forged_member_on_a_raw_link_gets_no_ciphertext() {
         json!({"from": own, "sealed_have": {}, "roster_digest": "none"}),
     );
     assert!(answer.get("sealed").is_none(), "{answer}");
-    // It learns C's card from the member records and replays C's record as
-    // its own from a second raw device.
-    let claimed = answer["members"]
+    // It proved no place in the roster, so it gets the roster alone: no
+    // member records, records or events.
+    assert!(
+        answer
+            .get("members")
+            .is_none_or(|members| members == &json!([])),
+        "{answer}"
+    );
+    assert!(answer.get("records").is_none(), "{answer}");
+    // It learns C's card from the roster and replays it as its own record
+    // from a second raw device.
+    let card = answer["roster"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|member| member["runtime_id"] == c.runtime_id())
-        .cloned()
+        .find(|entry| entry["runtime_id"] == c.runtime_id() && entry["card"].is_object())
+        .map(|entry| entry["card"].clone())
         .unwrap();
-    assert!(claimed["fleet"].is_object());
-    let mut forged = claimed.clone();
-    forged["updated_at"] = json!("2999-01-01T00:00:00Z");
+    let forged = json!({
+        "runtime_id": c.runtime_id(),
+        "runtime_name": "forge-c",
+        "heartbeat_at": "2999-01-01T00:00:00Z",
+        "updated_at": "2999-01-01T00:00:00Z",
+        "capabilities": ["store/1", "ops/1", "fleet/1"],
+        "fleet": card,
+    });
     let mut impostor = raw_peer(&a);
     // C's own link exchanges every 100 ms meanwhile, on another thread.
     for _ in 0..40 {
@@ -302,6 +316,7 @@ fn a_forged_member_on_a_raw_link_gets_no_ciphertext() {
         );
         assert_eq!(answer["from"]["runtime_id"], a.runtime_id());
         assert!(answer.get("sealed").is_none(), "{answer}");
+        assert!(answer.get("records").is_none(), "{answer}");
         std::thread::sleep(Duration::from_millis(25));
     }
     // A's next seal still goes to B and C alone, under their own keys.

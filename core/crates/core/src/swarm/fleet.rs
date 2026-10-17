@@ -232,13 +232,30 @@ fn channel(peer: &str) -> Channel {
 /// Whether the current exchange with `peer` provably reaches it: this
 /// runtime's pinned link, or the device the peer was admitted through. A
 /// device that only claims a member's id gets no sealed secret.
-fn proven(inner: &Inner, peer: &str) -> Result<bool, String> {
+pub(super) fn proven(inner: &Inner, peer: &str) -> Result<bool, String> {
     Ok(match channel(peer) {
         Channel::Pinned => true,
         Channel::Device(device) => {
             inner
                 .store
                 .meta(&format!("fleet_device:{peer}"))?
+                .as_deref()
+                == Some(device.as_str())
+        }
+        Channel::Unknown => false,
+    })
+}
+
+/// Whether the current exchange with `peer`, which the roster does not
+/// name, runs over this runtime's pinned link or over the device a link
+/// made before fleet keys bound to it.
+pub(super) fn legacy_channel(inner: &Inner, peer: &str) -> Result<bool, String> {
+    Ok(match channel(peer) {
+        Channel::Pinned => true,
+        Channel::Device(device) => {
+            inner
+                .store
+                .meta(&format!("fleet_legacy:{peer}"))?
                 .as_deref()
                 == Some(device.as_str())
         }
@@ -788,6 +805,36 @@ fn admit(
     Ok(())
 }
 
+/// Appends a signed entry that gives the trusted member `runtime_id` a new
+/// role. Answers the role it held before, or `None` when it held `role`.
+pub(super) fn set_role(
+    inner: &Inner,
+    runtime_id: &str,
+    role: Role,
+) -> Result<Option<Role>, String> {
+    let keys = keys(inner)?;
+    let view = view(inner)?;
+    if view.role(&view.self_id) != Some(Role::Full) || view.self_removed() {
+        return Err("Only a full member can change a role.".into());
+    }
+    if runtime_id == view.self_id {
+        return Err("A runtime cannot change its own role.".into());
+    }
+    let member = view
+        .members
+        .get(runtime_id)
+        .filter(|_| !view.removed.contains(runtime_id))
+        .ok_or("The fleet has no such member.")?;
+    if member.role == role {
+        return Ok(None);
+    }
+    let previous = member.role;
+    let entry = add_entry(inner, &keys, runtime_id, &member.card.clone(), role)?;
+    store_entries(inner, vec![entry])?;
+    inner.changed("members");
+    Ok(Some(previous))
+}
+
 /// Appends a signed removal of `runtime_id`. Members only it vouched for
 /// keep their place through a fresh vouch from this runtime. Answers
 /// whether the member was not already removed.
@@ -842,7 +889,12 @@ pub(super) struct Outgoing {
 /// What this runtime sends `peer`: its roster when the peer's differs, the
 /// sealed secrets a trusted peer lacks within `budget`, and a pending
 /// admission.
-pub(super) fn outgoing(inner: &Inner, peer: &str, budget: &mut usize) -> Result<Outgoing, String> {
+pub(super) fn outgoing(
+    inner: &Inner,
+    peer: &str,
+    access: &super::roles::Access,
+    budget: &mut usize,
+) -> Result<Outgoing, String> {
     if keys(inner).is_err() {
         return Ok(Outgoing::default());
     }
@@ -877,10 +929,12 @@ pub(super) fn outgoing(inner: &Inner, peer: &str, budget: &mut usize) -> Result<
             .map(|secret| (secret.secret_id.clone(), secret.version))
             .collect(),
     );
-    // Workers are leaves: until stage S5 scopes what they may hold, they
-    // receive no sealed secret.
-    if view.role(peer) == Some(Role::Full) && !view.self_removed() && proven(inner, peer)? {
+    // A full member takes every secret, a worker only those sealed to it.
+    if view.trusts(peer) && !view.self_removed() && proven(inner, peer)? {
         for secret in held {
+            if !access.holds_sealed(&secret) {
+                continue;
+            }
             let lacks = peer_have.as_ref().is_none_or(|have| {
                 have.get(&secret.secret_id).copied().unwrap_or(0) < secret.version
             });
@@ -1182,21 +1236,12 @@ pub(super) fn member_view(inner: &Inner, runtime_id: &str) -> Value {
     })
 }
 
-/// Appends one line to the local fleet log, which stage S5 moves to the
-/// replicated audit class.
+/// Appends one entry to the fleet's audit log.
 pub(super) fn audit(
     inner: &Inner,
     kind: &str,
     runtime_id: Option<&str>,
     record: Value,
 ) -> Result<(), String> {
-    inner
-        .store
-        .connect()?
-        .execute(
-            "INSERT INTO fleet_audit(at, kind, runtime_id, record) VALUES(?1, ?2, ?3, ?4)",
-            params![inner.now_text(), kind, runtime_id, record.to_string()],
-        )
-        .map(drop)
-        .map_err(sql)
+    super::audit::append(inner, kind, runtime_id, record)
 }
