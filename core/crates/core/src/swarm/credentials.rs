@@ -118,9 +118,11 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
     let self_id = view.self_id.clone();
     let models_id = format!("models:{self_id}");
     let mcp_id = format!("mcp:{self_id}");
+    let keys_id = format!("keys:{self_id}");
     if !sharing(inner)? {
         withdraw(inner, &keys, &models_id, "models")?;
         withdraw(inner, &keys, &mcp_id, "mcp")?;
+        withdraw(inner, &keys, &keys_id, "keys")?;
         return Ok(());
     }
     let now_ms = inner.now().timestamp_millis();
@@ -144,6 +146,19 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
         serde_json::to_vec(&json!({"tokens": tokens})).map_err(|error| error.to_string())?,
     );
     reseal(inner, &keys, &mcp_id, "mcp", &recipients, &plaintext, names)?;
+    let (own_keys, names) = super::keys::own(&inner.profile, &received_written(inner, "keys:")?)?;
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(&json!({"keys": own_keys})).map_err(|error| error.to_string())?,
+    );
+    reseal(
+        inner,
+        &keys,
+        &keys_id,
+        "keys",
+        &recipients,
+        &plaintext,
+        names,
+    )?;
     issue_vault_tokens(inner, &keys, &view, &agent)
 }
 
@@ -380,6 +395,20 @@ pub(super) fn opened_keys(inner: &Inner, secret_id: &str) -> Result<Vec<String>,
         .unwrap_or_default())
 }
 
+/// Every key slot the secrets under `prefix` wrote here, with the digest
+/// of what each wrote.
+fn received_written(inner: &Inner, prefix: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut written = BTreeMap::new();
+    for state in opened_states(inner, prefix)? {
+        if let Ok(slots) =
+            serde_json::from_value::<BTreeMap<String, String>>(state["written"].clone())
+        {
+            written.extend(slots);
+        }
+    }
+    Ok(written)
+}
+
 fn opened_states(inner: &Inner, prefix: &str) -> Result<Vec<Value>, String> {
     Ok(opened(inner)?
         .into_iter()
@@ -429,6 +458,12 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
     let opened = opened(inner)?;
     let mut models = BTreeSet::new();
     let mut mcp = BTreeSet::new();
+    // Keys whose connection had no record here yet are tried again.
+    let mut key_owners: BTreeSet<String> = opened
+        .iter()
+        .filter(|(id, (_, state))| id.starts_with("keys:") && state["waiting"] == true)
+        .filter_map(|(id, _)| id.strip_prefix("keys:").map(str::to_owned))
+        .collect();
     for secret in fleet::sealed_rows(inner)? {
         if secret.owner == self_id
             || !view.trusts(&secret.owner)
@@ -445,6 +480,9 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
             }
             "mcp" => {
                 mcp.insert(secret.owner.clone());
+            }
+            "keys" => {
+                key_owners.insert(secret.owner.clone());
             }
             "handover" => receive_handover(inner, &keys, &self_id, &secret)?,
             // Another member's vault token, or a class a later stage opens
@@ -472,7 +510,51 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
             );
         }
     }
+    for owner in key_owners {
+        if owner == self_id || !view.trusts(&owner) {
+            continue;
+        }
+        if let Err(error) = apply_keys(inner, &keys, &self_id, &owner) {
+            crate::runtime_eprintln!("muniment-runtime: keys from {owner} stayed out: {error}");
+        }
+    }
     Ok(())
+}
+
+/// Applies the decision-model and search keys one owner shares, in place of
+/// those it shared before.
+fn apply_keys(inner: &Inner, keys: &Keys, self_id: &str, owner: &str) -> Result<(), String> {
+    let secret_id = format!("keys:{owner}");
+    let Some(secret) = fleet::sealed(inner, &secret_id)? else {
+        return Ok(());
+    };
+    let value = open_json(keys, self_id, &secret)?
+        .map(|value| value["keys"].clone())
+        .unwrap_or(Value::Null);
+    let previous: BTreeMap<String, String> = opened(inner)?
+        .remove(&secret_id)
+        .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())
+        .unwrap_or_default();
+    let (written, waiting) = super::keys::apply(&inner.profile, &value, &previous)?;
+    let names: Vec<&String> = written.keys().collect();
+    mark_opened(
+        inner,
+        &secret_id,
+        secret.version,
+        owner,
+        &json!({"keys": names, "written": written, "waiting": waiting}),
+    )?;
+    fleet::audit(
+        inner,
+        "opened",
+        Some(owner),
+        json!({
+            "secret_id": secret_id,
+            "version": secret.version,
+            "recipients": secret.recipients.keys().collect::<Vec<_>>(),
+            "keys": names,
+        }),
+    )
 }
 
 /// Applies one owner's model connections and the vault token it issued for
@@ -666,6 +748,13 @@ fn drop_owner(inner: &Inner, owner: &str) -> Result<(), String> {
         );
     }
     share_mcp(inner, &format!("mcp:{owner}"), &serde_json::Map::new())?;
+    let previous: BTreeMap<String, String> = opened(inner)?
+        .remove(&format!("keys:{owner}"))
+        .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())
+        .unwrap_or_default();
+    if !previous.is_empty() {
+        super::keys::apply(&inner.profile, &Value::Null, &previous)?;
+    }
     let connection = inner.store.connect()?;
     connection
         .execute("DELETE FROM fleet_opened WHERE owner=?1", [owner])

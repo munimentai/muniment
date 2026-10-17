@@ -34,6 +34,7 @@ mod directory;
 mod fleet;
 mod groups;
 mod hlc;
+mod keys;
 mod link;
 mod messaging;
 mod moves;

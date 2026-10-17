@@ -100,3 +100,104 @@ fn every_member_lists_every_account_with_its_holder() {
         assert!(account(&accounts(node), &a.id, "pi:openai").is_none());
     }
 }
+
+fn write_connections(node: &Node, connections: Value) {
+    std::fs::create_dir_all(node.agent()).unwrap();
+    std::fs::write(
+        node.agent().join("classifier-connections.json"),
+        serde_json::to_vec(&connections).unwrap(),
+    )
+    .unwrap();
+}
+
+fn connections(node: &Node) -> Value {
+    serde_json::from_slice(
+        &std::fs::read(node.agent().join("classifier-connections.json")).unwrap(),
+    )
+    .unwrap()
+}
+
+fn search_key(node: &Node, provider: &str) -> Option<String> {
+    crate::search_settings::load(&node.root)
+        .unwrap()
+        .keys
+        .get(provider)
+        .map(|key| key.api_key.clone())
+}
+
+fn set_search_key(node: &Node, provider: &str, key: &str) {
+    let mut settings = crate::search_settings::load(&node.root).unwrap();
+    settings
+        .set_key(
+            provider,
+            crate::search_settings::ProviderKey {
+                api_key: key.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    crate::search_settings::save(&node.root, &settings).unwrap();
+}
+
+#[test]
+fn decision_model_and_search_keys_travel_sealed_and_never_replace_a_local_key() {
+    let (a, b, c) = fleet();
+    let remote = |key: &str| {
+        json!({"id": "jev", "name": "Jev", "catalog_id": "jev",
+               "classifier": {"kind": "typesafe", "api_key": key, "model": "m"}})
+    };
+    let local = json!({"id": "home", "name": "Home", "catalog_id": "custom",
+        "classifier": {"kind": "endpoint", "base_url": "http://127.0.0.1:9000", "api_key": "loop-key", "model": "m"}});
+    write_connections(&a, json!([remote("jev-key-from-a"), local]));
+    // The records brought B and C the connection without its key.
+    write_connections(&b, json!([remote("")]));
+    write_connections(&c, json!([remote("")]));
+    a.write_auth(json!({}));
+    set_search_key(&a, "serper", "serper-from-a");
+    set_search_key(&a, "kagi", "kagi-from-a");
+    set_search_key(&c, "kagi", "kagi-own-c");
+    a.share();
+    sync(&a, &b, &c);
+    a.pass();
+    sync(&a, &b, &c);
+
+    let sealed = a.sealed(&format!("keys:{}", a.id)).unwrap();
+    assert!(!serde_json::to_string(&sealed)
+        .unwrap()
+        .contains("jev-key-from-a"));
+    for node in [&b, &c] {
+        assert_eq!(
+            connections(node)[0]["classifier"]["api_key"],
+            "jev-key-from-a"
+        );
+        assert_eq!(search_key(node, "serper").as_deref(), Some("serper-from-a"));
+    }
+    // C keeps the key it entered itself, and the loopback connection's key
+    // never leaves A.
+    assert_eq!(search_key(&c, "kagi").as_deref(), Some("kagi-own-c"));
+    assert_eq!(search_key(&b, "kagi").as_deref(), Some("kagi-from-a"));
+    assert!(!serde_json::to_string(&b.open(&sealed).unwrap().unwrap())
+        .unwrap()
+        .contains("loop-key"));
+
+    // A key that arrived is not B's to share on.
+    b.write_auth(json!({}));
+    b.share();
+    b.pass();
+    let from_b = c
+        .open(&b.sealed(&format!("keys:{}", b.id)).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(from_b["keys"], json!({"decision_models": {}, "search": {}}));
+
+    // A rotates one key and drops another: the members follow.
+    set_search_key(&a, "serper", "serper-rotated");
+    let mut settings = crate::search_settings::load(&a.root).unwrap();
+    settings.remove_key("kagi").unwrap();
+    crate::search_settings::save(&a.root, &settings).unwrap();
+    a.pass();
+    sync(&a, &b, &c);
+    assert_eq!(search_key(&b, "serper").as_deref(), Some("serper-rotated"));
+    assert_eq!(search_key(&b, "kagi"), None);
+    assert_eq!(search_key(&c, "kagi").as_deref(), Some("kagi-own-c"));
+}
