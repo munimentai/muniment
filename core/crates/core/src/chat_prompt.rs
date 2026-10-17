@@ -397,6 +397,9 @@ mod local_store_tests {
     #[cfg(feature = "keyring")]
     #[test]
     fn the_marker_selects_the_file_store_under_the_state_root() {
+        // With an in-memory keyring the marker alone picks the store; a test
+        // run without one keeps every prompt in files.
+        use_mock_keyring_for_tests();
         let root = temporary_root("marker");
         assert_eq!(local_prompt_directory_under(&root), None);
         fs::write(root.join(crate::local_mode::LOCAL_MODE_MARKER), "1").unwrap();
