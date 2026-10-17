@@ -18,8 +18,8 @@ use super::RelayRuntime;
 /// the attach operation of the same name, except `fleet.snapshot`, which
 /// reads several of them at once.
 // TODO: `thread.create` with `runtime_id` (starting a thread on a chosen
-// member) and `blob.read` run once the runtime's protocol takes them; until
-// then the runtime refuses that body and that operation.
+// member) runs once the runtime's protocol takes it; until then the
+// runtime refuses that body.
 pub const PHONE_OPERATIONS: [&str; 17] = [
     "fleet.snapshot",
     "thread.summaries",
