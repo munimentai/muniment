@@ -64,7 +64,9 @@ const LAST_POST_CHARS: usize = 280;
 /// The provenance field that names the member an imported event came from.
 pub const SWARM_ORIGIN: &str = "swarm_origin";
 const MAX_ROWS_PER_ORIGIN: i64 = 400;
-const MAX_BLOB_CHUNK: usize = 192 * 1024;
+/// The most bytes of one blob slice. Its base64 text stays within the
+/// longest string an attach frame carries, or the link refuses the frame.
+const MAX_BLOB_CHUNK: usize = muniment_attach::MAX_TEXT_LENGTH / 4 * 3;
 
 /// One index row: its sequence, kind, event id, run id and run sequence.
 type LogRow = (u64, String, String, Option<String>, Option<u64>);
@@ -2054,6 +2056,9 @@ pub(super) fn blob_traffic(
 ) -> Result<(Vec<BlobChunk>, Vec<BlobWant>), String> {
     let mut chunks = Vec::new();
     for want in serve {
+        if *budget * 3 / 4 == 0 {
+            break;
+        }
         let Ok(hash) = want.hash.parse::<crate::cas::ContentHash>() else {
             continue;
         };
@@ -2064,23 +2069,25 @@ pub(super) fn blob_traffic(
         let Some(bytes) = bytes else {
             continue;
         };
-        let start = usize::try_from(want.offset).unwrap_or(usize::MAX);
-        if start >= bytes.len() {
-            continue;
+        // Consecutive slices of one blob share an exchange while the
+        // budget lasts; the receiver appends them in order.
+        let mut start = usize::try_from(want.offset).unwrap_or(usize::MAX);
+        while start < bytes.len() {
+            let room = (*budget * 3 / 4).min(MAX_BLOB_CHUNK);
+            if room == 0 {
+                break;
+            }
+            let end = (start + room).min(bytes.len());
+            let data = STANDARD.encode(&bytes[start..end]);
+            *budget = budget.saturating_sub(data.len() + 256);
+            chunks.push(BlobChunk {
+                hash: want.hash.clone(),
+                offset: start as u64,
+                total: bytes.len() as u64,
+                data,
+            });
+            start = end;
         }
-        let room = (*budget * 3 / 4).min(MAX_BLOB_CHUNK);
-        if room == 0 {
-            break;
-        }
-        let end = (start + room).min(bytes.len());
-        let data = STANDARD.encode(&bytes[start..end]);
-        *budget = budget.saturating_sub(data.len() + 256);
-        chunks.push(BlobChunk {
-            hash: want.hash.clone(),
-            offset: want.offset,
-            total: bytes.len() as u64,
-            data,
-        });
     }
     let wanted: Vec<String> = {
         let connection = inner.store.connect()?;

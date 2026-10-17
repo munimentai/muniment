@@ -137,8 +137,8 @@ pub trait RelayRuntime: Send + Sync {
     }
 
     /// Runs one attach operation for the paired phone with the phone's
-    /// scopes. `request_id` is the phone's request id, which an action that
-    /// needs one takes as its idempotency key.
+    /// scopes. `request_id` is the phone's request id, from which an action
+    /// that needs one makes its idempotency key.
     fn request(
         &self,
         operation: muniment_attach::Operation,

@@ -248,6 +248,75 @@ fn only_the_phone_operations_reach_the_runtime() {
 }
 
 #[test]
+fn a_new_thread_on_another_member_and_a_blob_read_reach_the_runtime_as_sent() {
+    let runtime = Answers::default()
+        .with(
+            "thread.create",
+            Ok(
+                json!({"thread_id": "thread_new", "run_id": null, "forwarded": true,
+                      "op_id": "op_1", "state": "sent"}),
+            ),
+        )
+        .with(
+            "blob.read",
+            Ok(json!({"hash": "a".repeat(64), "status": "fetching"})),
+        );
+    let create = json!({"runtime_id": "rt_box", "text": "Summarize the logs.",
+                        "permission_mode": "edit_auto"});
+    let created = answer(&runtime, "thread.create", create.clone(), "req_create_0001").unwrap();
+    assert_eq!(created["forwarded"], true);
+    assert_eq!(created["thread_id"], "thread_new");
+    let read = json!({"hash": "a".repeat(64), "offset": 262_144});
+    assert_eq!(
+        answer(&runtime, "blob.read", read.clone(), "req_blob_00001").unwrap()["status"],
+        "fetching"
+    );
+    // The body goes on unchanged, and the request id is the action's
+    // idempotency key, so a repeat names the same thread.
+    let calls = runtime.calls.lock().unwrap().clone();
+    assert_eq!(
+        calls,
+        vec![
+            (
+                "thread.create".to_owned(),
+                create,
+                "req_create_0001".to_owned()
+            ),
+            ("blob.read".to_owned(), read, "req_blob_00001".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_whole_blob_chunk_travels_in_pages_that_each_seal() {
+    use base64::Engine as _;
+    // The largest chunk `blob.read` answers, in bytes that do not compress.
+    let bytes: Vec<u8> = (0..256 * 1024u32)
+        .map(|index| (index.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let chunk = json!({"hash": "b".repeat(64), "status": "held", "offset": 0,
+                       "total": bytes.len(), "data": data, "done": true});
+    let pages = pages("req_blob_00002", Ok(chunk));
+    assert!(pages.len() > 1 && pages.len() <= MAX_RESPONSE_PAGES as usize);
+    let key = crate::relay_encryption::DirectionKey::from_bytes([9; 32]);
+    let header = crate::relay_encryption::ControlHeader::new(
+        "ctl_00000000000000004000800000000000",
+        1,
+        false,
+        "2026-10-17T12:00:00.000Z",
+    );
+    for (counter, page) in pages.iter().enumerate() {
+        crate::relay_encryption::seal_control(&key, &header, counter as u64 + 1, page).unwrap();
+    }
+    let joined = joined(&pages);
+    let read = base64::engine::general_purpose::STANDARD
+        .decode(joined["result"]["data"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(read, bytes);
+}
+
+#[test]
 fn reading_an_agent_another_member_runs_answers_its_directory_entry() {
     let runtime = fleet().with(
         "agent.read",

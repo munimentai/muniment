@@ -185,7 +185,8 @@ fn canonical_desktop_run_fixtures_round_trip_byte_for_byte() {
             "attachments": [{
                 "displayName": "main.rs",
                 "byteLength": 128,
-                "mediaType": "text/rust"
+                "mediaType": "text/rust",
+                "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
             }],
             "committed_seq": 1,
             "accepted_at": "2026-07-17T00:00:00Z"

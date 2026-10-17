@@ -205,8 +205,13 @@ fn streams_multiple_buffers_and_round_trips_safe_metadata_and_reference() {
         projection.attachments[0].media_type.as_deref(),
         Some("application/pdf")
     );
+    // The content hash goes out so a client can read the bytes with
+    // `blob.read`; the path on this machine never does.
+    assert_eq!(
+        projection.attachments[0].sha256.as_deref(),
+        Some(attachment.sha256().as_str())
+    );
     let public = serde_json::to_string(&projection.attachments).unwrap();
-    assert!(!public.contains("sha256"));
     assert!(!public.contains("Users"));
 
     projected_event.event_version = 2;

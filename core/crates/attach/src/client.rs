@@ -151,6 +151,8 @@ pub struct RunSubmitAttachment {
     pub display_name: String,
     pub byte_length: u64,
     pub media_type: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]

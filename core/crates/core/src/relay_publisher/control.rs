@@ -16,10 +16,10 @@ use super::RelayRuntime;
 
 /// The operations the phone may send on the control session. Each runs as
 /// the attach operation of the same name, except `fleet.snapshot`, which
-/// reads several of them at once.
-// TODO: `thread.create` with `runtime_id` (starting a thread on a chosen
-// member) runs once the runtime's protocol takes it; until then the
-// runtime refuses that body.
+/// reads several of them at once. A `thread.create` that names another
+/// member's `runtime_id` starts the thread and its first run there, and a
+/// `blob.read` answers one chunk of a blob a fleet item names, which may
+/// span several pages.
 pub const PHONE_OPERATIONS: [&str; 17] = [
     "fleet.snapshot",
     "thread.summaries",

@@ -2703,6 +2703,258 @@ fn a_thread_created_from_one_member_onto_another_runs_there() {
     );
 }
 
+/// The content hash of the artifact at `path` once `member` holds its
+/// manifest record.
+fn artifact_hash(member: &Member, path: &str) -> Option<String> {
+    member
+        .swarm()
+        .records()
+        .get("artifact", path)
+        .ok()??
+        .value("hash")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// Starts a thread on `member` whose first message attaches the file at
+/// `path`, as the desktop on that machine does, and answers its id.
+fn submit_with_file(member: &Member, text: &str, path: &std::path::Path) -> String {
+    use muniment_core::attach::desktop_service_message::CompanionProvenance;
+    use muniment_core::attach::{Id, Protocol, Request};
+    let approval = member
+        .state()
+        .signed_workspace_approval()
+        .approval()
+        .unwrap();
+    let mut service = member.state().attach_service().unwrap();
+    let request = Request {
+        protocol: Protocol,
+        request_id: Id::new(uuid_string()).unwrap(),
+        operation: Operation::RunSubmit,
+        capability: String::new(),
+        idempotency_key: Some(Id::new(uuid_string()).unwrap()),
+        body: json!({"text": text, "files": [path]}),
+    };
+    let provenance = CompanionProvenance {
+        profile: approval.profile,
+        companion_kind: "desktop".into(),
+        companion_version: "1.0.0".into(),
+        peer_uid: 0,
+        peer_pid: 0,
+    };
+    let accepted = muniment_core::attach::dispatch_forwarded(
+        &mut service,
+        request,
+        &approval.workspace,
+        provenance,
+    )
+    .unwrap();
+    accepted["thread_id"].as_str().unwrap().to_owned()
+}
+
+/// Reads a whole blob through the phone's `blob.read` on `member`, chunk
+/// by chunk, waiting while the member fetches it.
+fn phone_blob(member: &Member, hash: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    let mut reads = 0;
+    loop {
+        reads += 1;
+        let read = member
+            .state()
+            .phone_request(
+                Operation::BlobRead,
+                json!({"hash": hash, "offset": bytes.len()}),
+                &format!("req_blob_{reads:08}"),
+            )
+            .unwrap();
+        if read["status"] == "fetching" {
+            assert!(reads < 400, "the blob never arrived");
+            member.tick();
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
+        assert_eq!(read["status"], "held", "{read}");
+        assert_eq!(read["offset"], bytes.len());
+        bytes.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(read["data"].as_str().unwrap())
+                .unwrap(),
+        );
+        if read["done"] == true {
+            return bytes;
+        }
+    }
+}
+
+#[test]
+fn the_phone_starts_a_thread_on_a_chosen_member_and_reads_another_members_artifact() {
+    let _environment = environment();
+    let studio = Member::new("phone-studio");
+    let boxed = Member::new("phone-box");
+    for member in [&studio, &boxed] {
+        member.state().use_pi_artifact(member.artifact);
+    }
+    boxed.join(&studio);
+    assert!(wait(|| online_on(&studio, &boxed.runtime_id())));
+    std::env::set_var("PI_RESUME_STUB_REPLY", " answered on Box");
+
+    // The phone, paired with Studio, starts a thread on Box. Studio picks
+    // the thread id and forwards the action.
+    let body = json!({
+        "runtime_id": boxed.runtime_id(),
+        "text": "Summarize the logs.",
+        "permission_mode": "edit_auto",
+    });
+    let created = studio
+        .state()
+        .phone_request(Operation::ThreadCreate, body.clone(), "req_create_000001")
+        .unwrap();
+    assert_eq!(created["forwarded"], true, "{created}");
+    let thread = created["thread_id"].as_str().unwrap().to_owned();
+    let op_id = created["op_id"].as_str().unwrap().to_owned();
+    // The request id is the idempotency key: a repeat names the same thread.
+    let again = studio
+        .state()
+        .phone_request(Operation::ThreadCreate, body, "req_create_000001")
+        .unwrap();
+    assert_eq!(again["thread_id"], thread.as_str());
+    assert_eq!(again["op_id"], op_id.as_str());
+    let status = |attempt: usize| {
+        studio
+            .state()
+            .phone_request(
+                Operation::FleetOpStatus,
+                json!({"op_id": op_id}),
+                &format!("req_status_{attempt:06}"),
+            )
+            .unwrap()["op"]
+            .clone()
+    };
+    let mut attempt = 0;
+    assert!(
+        wait(|| {
+            attempt += 1;
+            status(attempt)["state"] == "applied"
+        }),
+        "{}",
+        status(0)
+    );
+    let op = status(0);
+    assert_eq!(op["owner_runtime"], boxed.runtime_id());
+    assert_eq!(op["result"]["thread_id"], thread.as_str());
+    assert!(op["result"]["run_id"].is_string(), "{op}");
+
+    // The thread and its run live on Box, in the mode the phone chose.
+    // Studio holds a replica and reads Box's reply.
+    assert!(wait(|| boxed.holds_thread(&thread)));
+    assert_eq!(thread_mode(&mut boxed.client(None), &thread), "edit_auto");
+    assert!(
+        wait(|| studio.swarm().is_replica_thread(&thread) == Some(boxed.runtime_id())),
+        "Studio never learned that Box runs the thread"
+    );
+    assert!(
+        wait(|| {
+            studio
+                .state()
+                .phone_request(
+                    Operation::ThreadHistory,
+                    json!({"thread_id": thread, "limit": 10}),
+                    "req_history_00001",
+                )
+                .ok()
+                .and_then(|history| history["entries"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .any(|entry| {
+                    entry["text"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("answered on Box")
+                })
+        }),
+        "the phone never read Box's reply through Studio"
+    );
+
+    // An artifact Box owns, larger than one chunk: Studio holds only its
+    // manifest, fetches the bytes on the phone's first read and answers
+    // them chunk by chunk.
+    let bytes: Vec<u8> = (0..300_000u32)
+        .map(|index| (index.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let file = boxed
+        .temporary
+        .root
+        .join("home/artifacts/report/summary.bin");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, &bytes).unwrap();
+    let mut hash = None;
+    assert!(
+        wait(|| {
+            boxed.tick();
+            studio.tick();
+            hash = artifact_hash(&studio, "report/summary.bin");
+            hash.is_some()
+        }),
+        "Studio never held Box's artifact manifest"
+    );
+    let hash = hash.unwrap();
+    assert!(!studio
+        .temporary
+        .root
+        .join("home/artifacts/report/summary.bin")
+        .exists());
+    assert_eq!(phone_blob(&studio, &hash), bytes);
+
+    // A thread on Box whose first message attaches a file: the phone finds
+    // the attachment's hash in `thread.history` and reads its bytes through
+    // Studio's replica, and through Box, which runs the thread.
+    let attached: Vec<u8> = (0..100_000u32)
+        .map(|index| b'a' + (index % 26) as u8)
+        .collect();
+    let path = boxed.temporary.root.join("notes.txt");
+    std::fs::write(&path, &attached).unwrap();
+    let thread = submit_with_file(&boxed, "Read the notes.", &path);
+    let mut sha256 = None;
+    assert!(
+        wait(|| {
+            sha256 = studio
+                .state()
+                .phone_request(
+                    Operation::ThreadHistory,
+                    json!({"thread_id": thread, "limit": 10}),
+                    "req_history_00002",
+                )
+                .ok()
+                .and_then(|history| {
+                    history["entries"][0]["attachments"][0]["sha256"]
+                        .as_str()
+                        .map(str::to_owned)
+                });
+            sha256.is_some()
+        }),
+        "Studio never listed the attachment's hash"
+    );
+    let sha256 = sha256.unwrap();
+    assert_eq!(phone_blob(&studio, &sha256), attached);
+    assert_eq!(phone_blob(&boxed, &sha256), attached);
+    // A hash no fleet item names is refused.
+    let refused = studio
+        .state()
+        .phone_request(
+            Operation::BlobRead,
+            json!({"hash": "0".repeat(64)}),
+            "req_blob_unknown",
+        )
+        .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("No fleet item names that blob"),
+        "{refused:?}"
+    );
+}
+
 /// The desktop account of the live control session test: the relay keys,
 /// access token and pair that the phone probe wrote after it paired both
 /// sides with a local cloud.
@@ -2781,8 +3033,10 @@ impl AccountService for ProbeAccount {
 /// cargo test -p muniment-runtime-core --test swarm a_phone_probe -- --ignored --nocapture
 /// ```
 ///
-/// The probe writes `desktop.json` with the pair, reads `fleet.json`, and
-/// writes `done.json` with the text it posted to Box's thread.
+/// The probe writes `desktop.json` with the pair, reads `fleet.json` (with
+/// the hash and SHA-256 of an artifact on Box, and a Box thread with an
+/// attachment), and writes `done.json` with
+/// the text it posted to Box's thread and the thread it started on Box.
 #[test]
 #[ignore = "needs a local cloud API and the phone probe"]
 fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session() {
@@ -2813,7 +3067,45 @@ fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session()
         boxed.tick();
         studio.swarm().is_replica_thread(&scout_thread) == Some(boxed.runtime_id())
     }));
-    studio.state().use_pi_artifact(studio.artifact);
+    for member in [&studio, &boxed] {
+        member.state().use_pi_artifact(member.artifact);
+    }
+    // An artifact on Box, larger than one `blob.read` chunk, that the phone
+    // reads through Studio.
+    let bytes: Vec<u8> = (0..300_000u32)
+        .map(|index| (index.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let file = boxed.temporary.root.join("home/artifacts/probe/report.bin");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, &bytes).unwrap();
+    let mut artifact = None;
+    assert!(wait(|| {
+        studio.tick();
+        boxed.tick();
+        artifact = artifact_hash(&studio, "probe/report.bin");
+        artifact.is_some()
+    }));
+    let digest = |bytes: &[u8]| {
+        use muniment_core::sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let sha256 = digest(&bytes);
+    // A thread on Box whose first message attaches a file, which the phone
+    // finds in the thread's history and reads through Studio.
+    let attached: Vec<u8> = (0..100_000u32)
+        .map(|index| b'a' + (index % 26) as u8)
+        .collect();
+    let notes = boxed.temporary.root.join("notes.txt");
+    std::fs::write(&notes, &attached).unwrap();
+    let attachment_thread = submit_with_file(&boxed, "Read the notes.", &notes);
+    assert!(wait(|| {
+        studio.tick();
+        boxed.tick();
+        studio.swarm().is_replica_thread(&attachment_thread) == Some(boxed.runtime_id())
+    }));
     let (stop, commands) = mpsc::channel();
     let schedule = muniment_runtime_core::start_retention_schedule(
         Arc::clone(studio.state()),
@@ -2827,6 +3119,9 @@ fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session()
             "studio": studio.runtime_id(), "box": boxed.runtime_id(),
             "scout": scout.id, "scout_thread": scout_thread,
             "ledger": ledger.id, "ledger_thread": studio.primary_thread(&ledger.id),
+            "artifact_hash": artifact, "artifact_size": bytes.len(), "artifact_sha256": sha256,
+            "attachment_thread": attachment_thread, "attachment_size": attached.len(),
+            "attachment_sha256": digest(&attached),
         })
         .to_string(),
     )
@@ -2848,6 +3143,14 @@ fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session()
             prompted(&boxed, &scout.id, &posted) == 1
         }),
         "Box never ran the phone's post"
+    );
+    // The thread the phone started on Box runs there, and Studio holds it
+    // as a replica.
+    let created = report["created_thread"].as_str().unwrap().to_owned();
+    assert!(wait(|| boxed.holds_thread(&created)));
+    assert_eq!(
+        studio.swarm().is_replica_thread(&created),
+        Some(boxed.runtime_id())
     );
     stop.send(muniment_runtime_core::RetentionScheduleCommand::Stop)
         .unwrap();

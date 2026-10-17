@@ -1440,6 +1440,28 @@ impl RunJournal {
             .map_err(Into::into)
     }
 
+    /// Whether an attachment a thread holds has the content hash `hash`.
+    pub fn names_attachment(&self, hash: &ContentHash) -> Result<bool, JournalError> {
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let mut statement = connection.prepare(
+            "SELECT envelope_json FROM events \
+             WHERE event_type='chat.attachment.ingested' AND instr(envelope_json, ?1) > 0",
+        )?;
+        let rows = statement.query_map([hash.as_str()], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let event: EventEnvelope = serde_json::from_str(&row?)
+                .map_err(|e| JournalError::Corrupt(format!("invalid stored envelope JSON: {e}")))?;
+            if matches!(&event.payload, EventPayload::Attachment { attachment } if attachment.sha256() == hash)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// The newest Pi binding before this run in the same live thread.
     pub fn previous_thread_session_binding(
         &mut self,
