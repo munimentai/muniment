@@ -524,6 +524,28 @@ pub enum Operation {
     /// definition.
     #[serde(rename = "agent.replay")]
     AgentReplay,
+    /// Lists the permission modes, with which can be chosen now.
+    #[serde(rename = "permission.modes")]
+    PermissionModes,
+    /// Reads the runtime's permission settings: default modes, bypass,
+    /// the unattended wait and the global rules.
+    #[serde(rename = "permission.settings")]
+    PermissionSettings,
+    /// Changes the runtime's permission settings.
+    #[serde(rename = "permission.settings_save")]
+    PermissionSettingsSave,
+    /// Reads the permission mode a thread runs in and where it comes from.
+    #[serde(rename = "thread.permission_mode")]
+    ThreadPermissionMode,
+    /// Sets the permission mode a thread runs in.
+    #[serde(rename = "thread.permission_mode_set")]
+    ThreadPermissionModeSet,
+    /// Reads the plan a thread's live run waits to have approved.
+    #[serde(rename = "thread.plan")]
+    ThreadPlan,
+    /// Approves a thread's waiting plan in a mode, or keeps planning.
+    #[serde(rename = "thread.plan_answer")]
+    ThreadPlanAnswer,
 }
 
 impl Operation {
@@ -669,6 +691,13 @@ impl Operation {
             Self::AgentToolCatalog => "agent.tool_catalog",
             Self::AgentReplays => "agent.replays",
             Self::AgentReplay => "agent.replay",
+            Self::PermissionModes => "permission.modes",
+            Self::PermissionSettings => "permission.settings",
+            Self::PermissionSettingsSave => "permission.settings_save",
+            Self::ThreadPermissionMode => "thread.permission_mode",
+            Self::ThreadPermissionModeSet => "thread.permission_mode_set",
+            Self::ThreadPlan => "thread.plan",
+            Self::ThreadPlanAnswer => "thread.plan_answer",
         }
     }
 
@@ -720,6 +749,28 @@ impl Operation {
                 | Self::AgentToolCatalog
                 | Self::AgentReplays
                 | Self::AgentReplay
+                | Self::PermissionModes
+                | Self::PermissionSettings
+                | Self::PermissionSettingsSave
+                | Self::ThreadPermissionMode
+                | Self::ThreadPermissionModeSet
+                | Self::ThreadPlan
+                | Self::ThreadPlanAnswer
+        )
+    }
+
+    /// Whether the operation reads or changes permission modes, settings or
+    /// a thread's plan. Each is also an agent operation.
+    pub fn is_permission_operation(self) -> bool {
+        matches!(
+            self,
+            Self::PermissionModes
+                | Self::PermissionSettings
+                | Self::PermissionSettingsSave
+                | Self::ThreadPermissionMode
+                | Self::ThreadPermissionModeSet
+                | Self::ThreadPlan
+                | Self::ThreadPlanAnswer
         )
     }
 }

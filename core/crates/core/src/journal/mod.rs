@@ -15,8 +15,9 @@ pub mod thread_permission_policy;
 pub mod thread_summaries;
 
 pub use thread_permission_policy::{
-    ThreadPermissionAnswerSource, ThreadPermissionDecision, ThreadPermissionPolicyDecided,
-    ThreadPermissionPolicyRevoked, ThreadPermissionRequestKind, ThreadPermissionResource,
+    ThreadPermissionAnswerSource, ThreadPermissionDecision, ThreadPermissionModeSet,
+    ThreadPermissionPolicyDecided, ThreadPermissionPolicyRevoked, ThreadPermissionRequestKind,
+    ThreadPermissionResource, THREAD_PERMISSION_MODE_SET,
 };
 
 pub const MAX_MODEL_STREAM_DELTA_BYTES: usize = 65_536;
@@ -903,6 +904,63 @@ impl RunJournal {
             payload_json,
             provenance,
         )
+    }
+
+    pub fn append_thread_permission_mode_set(
+        &mut self,
+        expected_last_thread_seq: u64,
+        thread_id: &str,
+        payload: &ThreadPermissionModeSet,
+        recorded_at: &str,
+        provenance: &Provenance,
+    ) -> Result<(), JournalError> {
+        let payload_json = serde_json::to_value(payload)
+            .map_err(|error| JournalError::InvalidEnvelope(error.to_string()))?;
+        self.append_thread_event(
+            expected_last_thread_seq,
+            thread_id,
+            THREAD_PERMISSION_MODE_SET,
+            recorded_at,
+            payload_json,
+            provenance,
+        )
+    }
+
+    /// The latest permission mode set in a thread, if any. A deleted thread
+    /// has none.
+    pub fn thread_permission_mode(
+        &mut self,
+        thread_id: &str,
+    ) -> Result<Option<ThreadPermissionModeSet>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let row: Option<(String, String)> = connection
+            .query_row(
+                "SELECT event_type, envelope_json FROM thread_events WHERE thread_id=?1 \
+                 AND event_type IN (?2, 'thread.deleted') ORDER BY thread_seq DESC LIMIT 1",
+                rusqlite::params![thread_id, THREAD_PERMISSION_MODE_SET],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((event_type, raw)) = row else {
+            return Ok(None);
+        };
+        if event_type != THREAD_PERMISSION_MODE_SET {
+            return Ok(None);
+        }
+        let envelope: ThreadEventEnvelope = serde_json::from_str(&raw).map_err(|error| {
+            JournalError::Corrupt(format!("invalid thread permission envelope JSON: {error}"))
+        })?;
+        serde_json::from_value(envelope.payload_json)
+            .map(Some)
+            .map_err(|_| JournalError::Corrupt("stored thread permission mode is invalid".into()))
     }
 
     pub fn active_thread_permission_policies(
@@ -2605,6 +2663,21 @@ fn validate_thread_envelope(event: &ThreadEventEnvelope) -> Result<(), JournalEr
             if payload.actor.trim().is_empty() || payload.reason.trim().is_empty() {
                 return Err(JournalError::InvalidEnvelope(
                     "thread.permission.policy.revoked payload is invalid".into(),
+                ));
+            }
+        }
+        THREAD_PERMISSION_MODE_SET => {
+            let payload: ThreadPermissionModeSet =
+                serde_json::from_value(event.payload_json.clone()).map_err(|_| {
+                    JournalError::InvalidEnvelope(
+                        "thread.permission.mode.set payload is invalid".into(),
+                    )
+                })?;
+            if payload.actor.trim().is_empty()
+                || !matches!(payload.source.as_str(), "user" | "plan")
+            {
+                return Err(JournalError::InvalidEnvelope(
+                    "thread.permission.mode.set payload is invalid".into(),
                 ));
             }
         }

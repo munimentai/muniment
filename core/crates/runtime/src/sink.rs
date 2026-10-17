@@ -659,6 +659,16 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
             })
     }
 
+    fn run_permissions(&self) -> Option<muniment_core::permission_gate::RunPermissions> {
+        match self.agent_launch() {
+            Some(agent) => agent.permissions,
+            None => {
+                let profile = self.profile_directory().ok()?;
+                Some(muniment_core::permission_gate::settings::thread_permissions(&profile))
+            }
+        }
+    }
+
     fn agent_launch(&self) -> Option<muniment_core::agents::AgentLaunch> {
         let profile = self.profile_directory().ok()?;
         let trigger = self.run_id.as_deref().and_then(|run_id| {

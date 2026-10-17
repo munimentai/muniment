@@ -78,20 +78,18 @@ fn current_gate(inner: &Inner, run_id: &str) -> Result<Option<Value>, String> {
     Ok(gate)
 }
 
-/// The exact policy request, summary and answer ids of an agent gate. Other
-/// gates have none.
-fn gate_rule(
-    gate: &Value,
-) -> (
-    Option<crate::permission_gate::PolicyRequest>,
-    Option<String>,
-    Vec<String>,
-) {
-    let Ok(policy) =
-        serde_json::from_value::<crate::journal::reducer::GatePolicy>(gate["policy"].clone())
-    else {
-        return (None, None, Vec::new());
-    };
+/// What an approval shows beside its gate: the exact policy request, the
+/// summary, the reason it asks and the plan of a plan gate, all from the
+/// gate's policy, and the answer ids of its options.
+struct GateFacts {
+    rule: Option<crate::permission_gate::PolicyRequest>,
+    summary: Option<String>,
+    reason: Option<String>,
+    plan: Option<String>,
+    answers: Vec<String>,
+}
+
+fn gate_facts(gate: &Value) -> GateFacts {
     let answers = gate["options"]
         .as_array()
         .into_iter()
@@ -100,14 +98,33 @@ fn gate_rule(
         .filter_map(crate::permission_gate::gate_answer)
         .map(str::to_owned)
         .collect();
-    (
+    let Ok(policy) =
+        serde_json::from_value::<crate::journal::reducer::GatePolicy>(gate["policy"].clone())
+    else {
+        return GateFacts {
+            rule: None,
+            summary: None,
+            reason: None,
+            plan: None,
+            answers,
+        };
+    };
+    // A plan gate names no request a rule could allow.
+    let rule = if policy.plan.is_none() {
         Some(crate::permission_gate::PolicyRequest {
             request_kind: policy.request_kind,
             resource: policy.resource,
-        }),
-        Some(policy.summary),
+        })
+    } else {
+        None
+    };
+    GateFacts {
+        rule,
+        summary: Some(policy.summary),
+        reason: policy.reason,
+        plan: policy.plan,
         answers,
-    )
+    }
 }
 
 /// The gate answer a client's answer names: an answer id the approval
@@ -164,7 +181,13 @@ pub(super) fn scan(inner: &Inner) -> Result<(), String> {
         let agent_name = crate::agents::get(&inner.profile, &run.agent_id)
             .map(|agent| agent.name)
             .unwrap_or_default();
-        let (rule, summary, answers) = gate_rule(&gate);
+        let GateFacts {
+            rule,
+            summary,
+            reason,
+            plan,
+            answers,
+        } = gate_facts(&gate);
         let approval = Approval {
             approval_id,
             runtime_id: own.clone(),
@@ -176,6 +199,8 @@ pub(super) fn scan(inner: &Inner) -> Result<(), String> {
             request: gate,
             rule,
             summary,
+            reason,
+            plan,
             answers,
             state: "pending".into(),
             created_at: inner.now_text(),
@@ -533,6 +558,8 @@ mod tests {
             request: json!({"gate_id": "gate-1", "kind": "confirm", "title": "Allow bash?", "message": "git push"}),
             rule: None,
             summary: None,
+            reason: None,
+            plan: None,
             answers: Vec::new(),
             state: state.into(),
             created_at: "2026-01-01T00:00:00Z".into(),

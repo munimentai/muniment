@@ -16,12 +16,22 @@ use std::sync::atomic::Ordering;
 pub const STUCK_CANCEL_REASON: &str =
     "The run waited 24 hours for an answer, so Muniment cancelled it.";
 
+/// The note a run carries when nobody answered its gate in time while it
+/// ran unattended.
+pub const UNATTENDED_DENY_REASON: &str =
+    "Nobody answered in time, so Muniment denied the action and paused the run. Post in its thread to continue.";
+
+/// How recently a client must have used the runtime for a run a person
+/// started to count as attended.
+const ATTENDED_WITHIN_SECONDS: i64 = 120;
+
 /// How a run ended in the journal, as the queue reads it.
 enum JournalOutcome {
     /// The journal has no such run: it never started.
     Missing,
     Live {
-        waiting: bool,
+        /// The gate the run waits at, if any.
+        gate: Option<String>,
     },
     Ended {
         status: RunStatus,
@@ -223,7 +233,10 @@ impl RuntimeAttachState {
                 Some("The run stopped before it finished. Open its thread to resume it.".into()),
             ),
             _ => JournalOutcome::Live {
-                waiting: projection.pending_permission.is_some(),
+                gate: projection
+                    .pending_permission
+                    .as_ref()
+                    .map(|gate| gate.gate_id.clone()),
             },
         })
     }
@@ -263,17 +276,41 @@ impl RuntimeAttachState {
                         next.status = RunStatus::Queued;
                     }
                 }
-                JournalOutcome::Live { waiting } if live => {
+                JournalOutcome::Live { gate } if live => {
                     next.lease_owner = Some(owner.clone());
                     next.lease_expires_at = Some(agent_runs::timestamp(now + LEASE_SECONDS));
-                    if waiting {
+                    if let Some(gate_id) = gate {
                         next.status = RunStatus::WaitingInput;
                         let since = next
                             .waiting_since
                             .get_or_insert_with(|| agent_runs::timestamp(now))
                             .clone();
                         let waited = agent_runs::seconds(&since).map_or(0, |since| now - since);
-                        if waited >= CANCEL_AFTER_SECONDS {
+                        let timeout = i64::try_from(
+                            muniment_core::permission_gate::settings::load(profile)
+                                .unattended_timeout_seconds,
+                        )
+                        .unwrap_or(i64::MAX);
+                        if waited >= timeout && self.unattended(&run, now) {
+                            // Nobody answered: the gate closes without a
+                            // choice, which the run reads as no answer and
+                            // never as approval, and the run stops.
+                            if let Ok(committed) =
+                                muniment_core::active_run::queue_permission_answer_with_commit(
+                                    &registry,
+                                    None,
+                                    run.id.clone(),
+                                    gate_id,
+                                    muniment_core::permission_gate::ChatPermissionAnswer::Cancelled,
+                                )
+                            {
+                                let _ = committed.recv_timeout(std::time::Duration::from_secs(5));
+                            }
+                            next.error = Some(UNATTENDED_DENY_REASON.into());
+                            let _ = muniment_core::active_run::cancel_active_run(
+                                &registry, &run.id, None,
+                            );
+                        } else if waited >= CANCEL_AFTER_SECONDS {
                             next.error = Some(STUCK_CANCEL_REASON.into());
                             let _ = muniment_core::active_run::cancel_active_run(
                                 &registry, &run.id, None,
@@ -325,6 +362,18 @@ impl RuntimeAttachState {
             }
         }
         Ok(())
+    }
+
+    /// Whether nobody is there to answer a run's gate: an event, a routine
+    /// or another agent started it, or no client used the runtime lately.
+    fn unattended(&self, run: &Run, now: i64) -> bool {
+        run.trigger.kind != TriggerKind::Manual
+            || self
+                .swarm()
+                .last_client_activity()
+                .as_deref()
+                .and_then(agent_runs::seconds)
+                .is_none_or(|seen| now - seen > ATTENDED_WITHIN_SECONDS)
     }
 
     /// Starts queued runs, oldest first, while run places are free. A run

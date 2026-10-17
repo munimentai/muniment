@@ -191,6 +191,45 @@ impl RuntimeAttachBoundaries {
         }
     }
 
+    /// Answers the permission operations: the modes and settings from the
+    /// profile, and a thread's mode and plan from the journal and its live
+    /// run.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn permission_operation(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        use muniment_core::attach::Operation;
+        if matches!(
+            operation,
+            Operation::PermissionModes
+                | Operation::PermissionSettings
+                | Operation::PermissionSettingsSave
+        ) {
+            return muniment_core::permission_gate::settings::operation(
+                &self.profile_directory,
+                operation.as_str(),
+                body,
+            )
+            .map_err(ProtocolError::invalid_request_with_reason);
+        }
+        let replica_of = |thread: &str| {
+            self.swarm
+                .as_ref()
+                .and_then(|swarm| swarm.is_replica_thread(thread))
+        };
+        let scope = muniment_core::permission_gate::threads::ThreadScope {
+            profile: &self.profile_directory,
+            storage: &self.storage,
+            active: &self.active,
+            provenance: service::runtime_provenance(self.host.runtime_version),
+            replica_of: &replica_of,
+        };
+        muniment_core::permission_gate::threads::operation(&scope, operation.as_str(), body)
+            .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
     /// Answers swarm operations through `swarm`.
     pub fn with_swarm(mut self, swarm: muniment_core::swarm::Swarm) -> Self {
         self.swarm = Some(swarm);
@@ -1635,6 +1674,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         operation: muniment_core::attach::Operation,
         body: serde_json::Value,
     ) -> Result<serde_json::Value, ProtocolError> {
+        if operation.is_permission_operation() {
+            return self.permission_operation(operation, body);
+        }
         if operation == muniment_core::attach::Operation::AgentToolCatalog {
             return muniment_core::agents::operation(
                 &self.profile_directory,

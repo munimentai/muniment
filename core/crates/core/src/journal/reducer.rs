@@ -489,7 +489,7 @@ pub struct PermissionGate {
     /// The exact policy request an agent permission gate asks about, which
     /// an allow answer journals or appends to the agent's profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<GatePolicy>,
+    pub policy: Option<Box<GatePolicy>>,
 }
 
 /// The exact `{request_kind, resource}` one agent tool call makes, as the
@@ -500,6 +500,12 @@ pub struct GatePolicy {
     pub request_kind: super::ThreadPermissionRequestKind,
     pub resource: super::ThreadPermissionResource,
     pub summary: String,
+    /// Why the gate asks, such as the auto reviewer's reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The plan a `plan` run submitted for approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

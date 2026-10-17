@@ -43,6 +43,12 @@ impl ApplicationMemoryRuntime {
         self
     }
 
+    /// The cheap model the after-run pass uses, which also reviews actions
+    /// in `auto` permission mode.
+    pub fn review_model(&self) -> Option<crate::memory_extract::Model> {
+        self.extraction_model.clone()
+    }
+
     /// Queues the after-run memory pass for a completed run while its session
     /// is still open. `messages` are the user's own messages in the run. The
     /// pass runs in the background. It does nothing while learning is off,
@@ -765,7 +771,7 @@ const AGENT_TOOLS: &str = r#"  const idSchema = {type:'object',properties:{id:{t
         model:{type:['object','null'],description:'The model the agent runs on. Null uses the default.',properties:{provider:{type:'string'},id:{type:'string'},thinking:{type:'string',enum:['off','minimal','low','medium','high','xhigh','max']}},required:['provider','id'],additionalProperties:false},
         tools:{type:['object','null'],properties:{disabled:{type:'array',items:{type:'string'},description:'Tool names this agent may not use'}},additionalProperties:false},
         skills:{type:['array','null'],items:{type:'string'},description:'Installed skill ids the agent loads'},
-        permissions:{type:['object','null'],properties:{mode:{type:'string',enum:['ask','auto','strict']},always_allow:{type:'array',items:{type:'string'}},ask_first:{type:'array',items:{type:'string'}}},additionalProperties:false,description:'Rules are tool names or tool(pattern), such as bash(git *). Ask first wins over always allow.'}
+        permissions:{type:['object','null'],properties:{mode:{type:'string',enum:['manual','edit_auto','plan','auto','dont_ask'],description:'The permission mode its threads run in. Omit for the default.'},always_allow:{type:'array',items:{type:'object'}},ask_first:{type:'array',items:{type:'object'}},deny:{type:'array',items:{type:'object'}}},additionalProperties:false,description:'Each rule is an exact {request_kind, resource} request. Deny wins over ask first, which wins over always allow.'}
       },required:['name','instructions'],additionalProperties:false
     }],
     ['agent-run', 'Run agent', 'Queue one run of a saved agent now, when the user asks to run it. It runs in the agent thread once a run place is free and uses the agent permission checks. This performs real work.', idSchema],

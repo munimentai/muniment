@@ -223,6 +223,12 @@ pub trait PiLaunchBoundaries {
     fn agent_launch(&self) -> Option<crate::agents::AgentLaunch> {
         None
     }
+
+    /// The permission gate the run applies: its agent's, else the one the
+    /// host gives threads that belong to no agent. None loads no gate.
+    fn run_permissions(&self) -> Option<crate::permission_gate::RunPermissions> {
+        self.agent_launch().and_then(|agent| agent.permissions)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -683,11 +689,8 @@ pub fn pi_launch_config_for_executable(
         "--exclude-tools".into(),
         excluded,
     ]);
-    // An agent whose profile can ask before a tool call loads the gate.
-    if agent
-        .as_ref()
-        .is_some_and(|agent| agent.permissions.is_some())
-    {
+    // A run with a permission gate loads the extension that asks it.
+    if boundaries.run_permissions().is_some() {
         let gate = session_root.join(AGENT_PERMISSIONS_EXTENSION_FILE);
         install_extension(
             &gate,

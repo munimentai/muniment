@@ -303,6 +303,11 @@ impl Swarm {
         }
     }
 
+    /// When a client last used this runtime, as an RFC 3339 time.
+    pub fn last_client_activity(&self) -> Option<String> {
+        self.inner.store.meta("last_client_at").ok().flatten()
+    }
+
     /// Answers a linked runtime's `swarm.exchange`.
     pub fn exchange(&self, device_id: &str, body: Value) -> Result<Value, String> {
         link::answer_exchange(&self.inner, device_id, body)

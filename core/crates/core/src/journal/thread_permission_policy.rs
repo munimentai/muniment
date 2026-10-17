@@ -107,3 +107,17 @@ pub struct ThreadPermissionPolicyRevoked {
     pub actor: String,
     pub reason: String,
 }
+
+/// The event that sets a thread's permission mode.
+pub const THREAD_PERMISSION_MODE_SET: &str = "thread.permission.mode.set";
+
+/// A thread's permission mode, set by a person or by approving a plan. The
+/// latest one holds for every later call in the thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadPermissionModeSet {
+    pub mode: crate::permission_gate::PermissionMode,
+    pub actor: String,
+    /// `user` when a person chose it, `plan` when approving a plan did.
+    pub source: String,
+}
