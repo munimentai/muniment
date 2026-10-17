@@ -146,7 +146,7 @@ pub use remote_route::{
     InterfaceSource, RemoteRoute, RemoteRouteOptions, RemoteRouteStatus, RemoteServe,
 };
 pub use remote_session::{
-    admit_remote_client, remote_rule, serve_remote_client, AdmittedRemoteClient,
+    admit_remote_client, dispatch_scoped, remote_rule, serve_remote_client, AdmittedRemoteClient,
     RemoteAdmissionError, RemoteRule,
 };
 pub use remote_settings::{

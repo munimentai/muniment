@@ -375,20 +375,75 @@ impl RuntimeAttachState {
     }
 
     /// Starts the session relay publisher when the host has a cloud. It
-    /// publishes the runs this runtime's own windows see.
+    /// publishes the runs this runtime's own windows see and serves the
+    /// pair's control session.
     pub(crate) fn start_relay_publisher(
-        &self,
+        self: &Arc<Self>,
     ) -> Option<muniment_core::relay_publisher::RelayPublisher> {
         crate::relay::start(
             &self.host,
             self.runtime_activity.clone(),
             self.profile_directory.clone(),
-            self.active.clone(),
-            self.chat_events
-                .clone()
-                .with_config_directory(self.config_directory.clone()),
-            Arc::clone(&self.storage),
-            Some(self.swarm.clone()),
+            crate::relay::Runs {
+                active: self.active.clone(),
+                chat_events: self
+                    .chat_events
+                    .clone()
+                    .with_config_directory(self.config_directory.clone()),
+                storage: Arc::clone(&self.storage),
+                swarm: Some(self.swarm.clone()),
+                state: Some(Arc::downgrade(self)),
+            },
+        )
+    }
+
+    /// Runs one attach operation for the paired phone, with the phone's
+    /// scopes, through the same dispatch a paired device's request takes.
+    /// An action on another member's item goes to its owner.
+    #[doc(hidden)]
+    pub fn phone_request(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: muniment_core::serde_json::Value,
+        request_id: &str,
+    ) -> Result<muniment_core::serde_json::Value, ProtocolError> {
+        crate::attach_boundaries::record_local_workspace_approval(
+            &self.approval,
+            &self.config_directory,
+        );
+        let approval = self.approval.approval().ok_or_else(|| {
+            ProtocolError::invalid_request_with_reason(
+                "Open Muniment on this machine before you use it from your phone.",
+            )
+        })?;
+        let mut service = self.attach_service()?;
+        let id = |value: String| {
+            muniment_core::attach::Id::new(value).map_err(|_| ProtocolError::invalid_request())
+        };
+        let request = muniment_core::attach::Request {
+            protocol: muniment_core::attach::Protocol,
+            request_id: id(uuid::Uuid::new_v4().to_string())?,
+            operation,
+            capability: String::new(),
+            idempotency_key: operation
+                .requires_idempotency_key()
+                .then(|| id(request_id.to_owned()))
+                .transpose()?,
+            body,
+        };
+        let provenance = muniment_core::attach::desktop_service_message::CompanionProvenance {
+            profile: approval.profile,
+            companion_kind: "phone-relay".into(),
+            companion_version: self.runtime_version().into(),
+            peer_uid: 0,
+            peer_pid: 0,
+        };
+        muniment_core::attach::dispatch_scoped(
+            &mut service,
+            request,
+            &approval.workspace,
+            provenance,
+            &muniment_core::swarm::FleetActor::phone(),
         )
     }
 

@@ -486,3 +486,157 @@ fn timestamps_use_three_fractional_digits() {
     assert!(!valid_id("short"));
     assert!(valid_uuid("22222222-2222-4222-8222-222222222222"));
 }
+
+#[test]
+fn a_control_request_and_its_response_page_open_on_the_far_side() {
+    let keys = keys_of(&vectors()["pairing"]);
+    let header = RequestHeader::new(
+        "req_local_0001",
+        "ctl_0123456789abcdef0123456789abcdef",
+        "2026-07-10T16:02:32.000Z",
+        "2026-07-10T16:03:32.000Z",
+    );
+    let content = RequestContent::Request {
+        request_id: "req_local_0001".into(),
+        operation: "fleet.snapshot".into(),
+        body: json!({}),
+    };
+    let sealed = seal_request(&keys.phone_to_desktop, &header, 5, &content).unwrap();
+    let wire: Value = serde_json::to_value(&sealed).unwrap();
+    assert_eq!(wire["header"]["header_type"], "request");
+    let opened = open_request(
+        &keys.phone_to_desktop,
+        &sealed,
+        "ctl_0123456789abcdef0123456789abcdef",
+        "req_local_0001",
+    )
+    .unwrap();
+    assert_eq!((opened.counter, opened.content), (5, content.clone()));
+    // The request binds to its envelope and its own id.
+    assert_eq!(
+        open_request(
+            &keys.phone_to_desktop,
+            &sealed,
+            "ctl_0123456789abcdef0123456789abcdef",
+            "req_other_0001"
+        ),
+        Err(RelayCryptoError::BindingMismatch)
+    );
+    let mismatched = RequestContent::Request {
+        request_id: "req_other_0001".into(),
+        operation: "fleet.snapshot".into(),
+        body: json!({}),
+    };
+    let sealed = seal_request(&keys.phone_to_desktop, &header, 6, &mismatched).unwrap();
+    assert_eq!(
+        open_request(
+            &keys.phone_to_desktop,
+            &sealed,
+            "ctl_0123456789abcdef0123456789abcdef",
+            "req_local_0001"
+        ),
+        Err(RelayCryptoError::BindingMismatch)
+    );
+    // A changed header no longer authenticates.
+    let mut changed = seal_request(&keys.phone_to_desktop, &header, 7, &content).unwrap();
+    changed.header.expires_at = "2026-07-10T16:09:32.000Z".into();
+    assert_eq!(
+        open_request(
+            &keys.phone_to_desktop,
+            &changed,
+            "ctl_0123456789abcdef0123456789abcdef",
+            "req_local_0001"
+        ),
+        Err(RelayCryptoError::AuthenticationFailed)
+    );
+
+    let control = ControlHeader::new(
+        "ctl_0123456789abcdef0123456789abcdef",
+        3,
+        true,
+        "2026-07-10T16:02:33.000Z",
+    );
+    let page = ControlContent::Response {
+        request_id: "req_local_0001".into(),
+        page: 0,
+        pages: 1,
+        body: r#"{"ok":true,"result":{}}"#.into(),
+    };
+    let sealed = seal_control(&keys.desktop_to_phone, &control, 9, &page).unwrap();
+    let wire: Value = serde_json::to_value(&sealed).unwrap();
+    assert_eq!(wire["header"]["wake"], true);
+    let opened = open_control(
+        &keys.desktop_to_phone,
+        &sealed,
+        "ctl_0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    assert_eq!((opened.counter, opened.content), (9, page));
+    assert_eq!(
+        open_control(&keys.desktop_to_phone, &sealed, "ctl_other_00000000"),
+        Err(RelayCryptoError::BindingMismatch)
+    );
+    let event = ControlContent::Event {
+        event: "swarm.changed".into(),
+        body: None,
+    };
+    let sealed = seal_control(&keys.desktop_to_phone, &control, 10, &event).unwrap();
+    let plaintext = open_sealed(&keys.desktop_to_phone, &sealed).unwrap();
+    assert_eq!(
+        String::from_utf8(plaintext.to_vec()).unwrap(),
+        r#"{"counter":"10","content":{"type":"event","event":"swarm.changed","body":null}}"#
+    );
+}
+
+#[test]
+fn a_control_page_past_its_plaintext_limit_never_seals() {
+    let keys = keys_of(&vectors()["pairing"]);
+    let control = ControlHeader::new(
+        "ctl_0123456789abcdef0123456789abcdef",
+        1,
+        false,
+        "2026-07-10T16:02:33.000Z",
+    );
+    let page = |body: String| ControlContent::Response {
+        request_id: "req_local_0001".into(),
+        page: 0,
+        pages: 1,
+        body,
+    };
+    let fits = seal_control(
+        &keys.desktop_to_phone,
+        &control,
+        1,
+        &page("x".repeat(MAX_CONTROL_PLAINTEXT_BYTES - 200)),
+    )
+    .unwrap();
+    assert!(serde_json::to_vec(&fits).unwrap().len() <= MAX_SEALED_EVENT_BYTES);
+    assert_eq!(
+        seal_control(
+            &keys.desktop_to_phone,
+            &control,
+            2,
+            &page("x".repeat(MAX_CONTROL_PLAINTEXT_BYTES))
+        ),
+        Err(RelayCryptoError::Malformed)
+    );
+    // A page past the last one, and an event with a non-object body, are malformed.
+    let past = ControlContent::Response {
+        request_id: "req_local_0001".into(),
+        page: 1,
+        pages: 1,
+        body: String::new(),
+    };
+    assert_eq!(
+        seal_control(&keys.desktop_to_phone, &control, 3, &past),
+        Err(RelayCryptoError::Malformed)
+    );
+    let listed = ControlContent::Event {
+        event: "swarm.changed".into(),
+        body: Some(json!([1])),
+    };
+    assert_eq!(
+        seal_control(&keys.desktop_to_phone, &control, 4, &listed),
+        Err(RelayCryptoError::Malformed)
+    );
+}

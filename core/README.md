@@ -866,6 +866,35 @@ their plaintext headers.
   as a forwarded action with the phone's scopes. When the cloud answers that the pair
   is unavailable, it closes the connection and asks the account for the pair
   again before it reconnects.
+- **Control session.** A runtime whose `RelayRuntime` serves it also registers
+  one long-lived session per pair, `ctl_` and the pair id's hex, with
+  `{"channel": "control"}`. The phone sends sealed `control.request`s (header
+  type `request`: `request_id`, `session_id`, `created_at`, `expires_at`, at
+  most 60 seconds apart; content `{"type": "request", "request_id",
+  "operation", "body"}`) that share the command counter and replay window.
+  The runtime runs each off the socket thread through `attach::dispatch_scoped`
+  with `FleetActor::phone()`'s scopes, `thread.read` and `run.write`, so an
+  action on another member's item goes to its owner as a forwarded action.
+  The operations are `fleet.snapshot` (`{"since"?}` → `{"version", "full",
+  "self", "members", "agents", "threads", "threads_cursor", "approvals",
+  "groups", "sync", "errors"}`; with `since` the threads updated after it),
+  `thread.summaries`, `thread.history`, `thread.history_fetch`, `thread.post`,
+  `thread.create`, `agent.list`, `agent.read` (an agent another member runs
+  answers its directory entry with `remote: true`), `agent.run_now`,
+  `agent.approvals`, `agent.approval_answer`, `run.cancel`, `run.steer`,
+  `blob.read`, `fleet.op_status`, `fleet.sync_status` and `preferences.get`;
+  one this runtime's protocol lacks answers `unsupported_operation`. Answers
+  and live events travel as sealed control events (header type `control`:
+  `session_id`, `sequence`, `wake`, `occurred_at`). An answer is
+  `{"type": "response", "request_id", "page", "pages", "body"}` pages, each
+  under 48,000 bytes of sealed plaintext, whose `body`s join into
+  `{"ok": true, "result"}` or `{"ok": false, "error": {"code", "message"}}`,
+  4 MiB at most. Live events are `{"type": "event", "event", "body"}` for
+  `swarm.changed`, `agent.activity`, `group.posted`, the approval events,
+  `fleet.op_updated`, `fleet.sync_changed` and `preferences.changed`; an
+  approval asks the relay to wake the phone. The session's sequence is
+  reserved in blocks with the pair's counters, so it never repeats after a
+  restart. Eight requests run at once; more answer `unavailable`.
 - The runtime starts the publisher with its schedules when the host has a
   cloud. A host whose account answers no relay keys, such as
   `muniment-server`, opens no connection. The pair's counters and replay

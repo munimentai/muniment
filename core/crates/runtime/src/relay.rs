@@ -2,26 +2,28 @@
 //! `muniment_core::relay_publisher` drives.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use muniment_core::active_run::{
     cancel_active_run, queue_message, queue_permission_answer_with_commit, ChatDelivery,
     ChatQueueRequest, RunRegistry,
 };
-use muniment_core::attach::{Operation, RuntimeActivityRegistry};
+use muniment_core::attach::{
+    ErrorCode, ErrorDetails, Operation, ProtocolError, RuntimeActivityRegistry,
+};
 use muniment_core::journal::EventPayload;
 use muniment_core::permission_gate::ChatPermissionAnswer;
 use muniment_core::relay_encryption::{GateDecision, RelayKeys};
 use muniment_core::relay_publisher::{
-    relay_state_path, RelayAccount, RelayConnection, RelayPublisher, RelayRuntime,
+    relay_state_path, RelayAccount, RelayConnection, RelayPublisher, RelayRuntime, RequestError,
 };
 use muniment_core::run_events::{ChatEventSubscription, SharedStorage};
 use muniment_core::serde_json::{self, json, Value};
-use muniment_core::swarm::FleetActor;
+use muniment_core::swarm::{ClientEvent, FleetActor};
 
 use crate::host::RuntimeHost;
-use crate::RuntimeChatEventBroadcast;
+use crate::{RuntimeAttachState, RuntimeChatEventBroadcast};
 
 /// How long a phone's permission answer waits for its journal commit.
 const ANSWER_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -61,11 +63,35 @@ impl RelayAccount for Account {
     }
 }
 
-struct Runs {
-    active: RunRegistry,
-    chat_events: RuntimeChatEventBroadcast,
-    storage: SharedStorage,
-    swarm: Option<muniment_core::swarm::Swarm>,
+/// The runtime's runs, its swarm and the state the phone's requests use.
+pub(crate) struct Runs {
+    pub(crate) active: RunRegistry,
+    pub(crate) chat_events: RuntimeChatEventBroadcast,
+    pub(crate) storage: SharedStorage,
+    pub(crate) swarm: Option<muniment_core::swarm::Swarm>,
+    /// The runtime state the phone's control session requests run through.
+    pub(crate) state: Option<Weak<RuntimeAttachState>>,
+}
+
+/// A request's failure as the phone reads it.
+fn request_error(error: &ProtocolError) -> RequestError {
+    let code = match error.code() {
+        ErrorCode::UnsupportedOperation => "unsupported_operation",
+        ErrorCode::Unauthorized | ErrorCode::AuthorizationFailed => "unauthorized",
+        ErrorCode::InvalidRequest | ErrorCode::InvalidCursor => "invalid_request",
+        ErrorCode::RuntimeDraining | ErrorCode::MigrationNotReady | ErrorCode::DesktopBusy => {
+            "unavailable"
+        }
+        _ => "failed",
+    };
+    let message = match error.details() {
+        Some(ErrorDetails::RequestReason { reason }) => reason.clone(),
+        _ => serde_json::to_value(error.message())
+            .ok()
+            .and_then(|message| message.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "The action failed.".into()),
+    };
+    RequestError::new(code, message)
 }
 
 impl Runs {
@@ -175,6 +201,32 @@ impl RelayRuntime for Runs {
         .ok_or_else(|| "The permission answer was rejected.".to_string())
     }
 
+    fn serves_control(&self) -> bool {
+        self.state.is_some()
+    }
+
+    fn request(
+        &self,
+        operation: Operation,
+        body: Value,
+        request_id: &str,
+    ) -> Result<Value, RequestError> {
+        let state = self
+            .state
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| RequestError::new("unavailable", "This machine is stopping."))?;
+        state
+            .phone_request(operation, body, request_id)
+            .map_err(|error| request_error(&error))
+    }
+
+    fn fleet_events(&self) -> Option<std::sync::mpsc::Receiver<ClientEvent>> {
+        self.swarm
+            .as_ref()
+            .map(muniment_core::swarm::Swarm::subscribe)
+    }
+
     /// Reads the decision the journal recorded for a gate the desktop answered.
     fn gate_decision(&self, run_id: &str, gate_id: &str) -> Option<GateDecision> {
         let events = self.storage.lock().ok()?.journal.events(run_id).ok()?;
@@ -204,10 +256,7 @@ pub(crate) fn start(
     host: &RuntimeHost,
     runtime_activity: RuntimeActivityRegistry,
     profile_directory: PathBuf,
-    active: RunRegistry,
-    chat_events: RuntimeChatEventBroadcast,
-    storage: SharedStorage,
-    swarm: Option<muniment_core::swarm::Swarm>,
+    runs: Runs,
 ) -> Option<RelayPublisher> {
     host.account.cloud_api_base()?;
     let state_path = relay_state_path(&profile_directory);
@@ -217,12 +266,7 @@ pub(crate) fn start(
             runtime_activity,
             profile_directory,
         }),
-        Arc::new(Runs {
-            active,
-            chat_events,
-            storage,
-            swarm,
-        }),
+        Arc::new(runs),
         state_path,
     ))
 }
@@ -243,10 +287,13 @@ mod tests {
             &RuntimeHost::default(),
             RuntimeActivityRegistry::default(),
             profile.clone(),
-            RunRegistry::default(),
-            RuntimeChatEventBroadcast::default(),
-            storage,
-            None,
+            Runs {
+                active: RunRegistry::default(),
+                chat_events: RuntimeChatEventBroadcast::default(),
+                storage,
+                swarm: None,
+                state: None,
+            },
         );
         assert!(publisher.is_none());
         std::fs::remove_dir_all(profile).unwrap();

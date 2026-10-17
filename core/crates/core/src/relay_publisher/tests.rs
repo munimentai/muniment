@@ -4,7 +4,8 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 
 use crate::relay_encryption::{
-    open_event, seal_command, CommandHeader, CommandKind, DirectionKey, OpenedEvent, SealedEvent,
+    open_control, open_event, seal_command, seal_request, CommandHeader, CommandKind, DirectionKey,
+    OpenedControl, OpenedEvent, RequestHeader, SealedControl, SealedEvent,
 };
 
 const VECTORS: &str = include_str!(
@@ -790,4 +791,344 @@ fn a_deny_cancels_and_an_allow_needs_a_yes_or_no_gate() {
         local_answer(&code, AnswerDecision::Allow),
         Some(ChatPermissionAnswer::CodeDiff { gate_id, .. }) if gate_id == "gate with spaces"
     ));
+}
+
+/// A runtime that serves the control session with canned answers and a
+/// fleet event stream the test feeds.
+#[derive(Default)]
+struct ControlRuntime {
+    inner: FakeRuntime,
+    fleet: Mutex<Option<std::sync::mpsc::Sender<ClientEvent>>>,
+    requests: Mutex<Vec<(String, Value, String)>>,
+}
+
+impl RelayRuntime for ControlRuntime {
+    fn subscribe(&self) -> Option<ChatEventSubscription> {
+        self.inner.subscribe()
+    }
+    fn stop(&self, run_id: &str) -> Result<(), String> {
+        self.inner.stop(run_id)
+    }
+    fn queue(&self, run_id: &str, delivery: ChatDelivery, text: &str) -> Result<(), String> {
+        self.inner.queue(run_id, delivery, text)
+    }
+    fn answer(
+        &self,
+        run_id: &str,
+        gate_id: &str,
+        answer: ChatPermissionAnswer,
+    ) -> Result<(), String> {
+        self.inner.answer(run_id, gate_id, answer)
+    }
+    fn serves_control(&self) -> bool {
+        true
+    }
+    fn request(
+        &self,
+        operation: muniment_attach::Operation,
+        body: Value,
+        request_id: &str,
+    ) -> Result<Value, RequestError> {
+        let name = serde_json::to_value(operation).unwrap();
+        let name = name.as_str().unwrap().to_owned();
+        self.requests
+            .lock()
+            .unwrap()
+            .push((name.clone(), body, request_id.to_owned()));
+        match name.as_str() {
+            "swarm.members" => Ok(json!({"self": "rt_studio", "members": [
+                {"runtime_id": "rt_studio", "runtime_name": "Studio", "self": true, "online": true},
+                {"runtime_id": "rt_box", "runtime_name": "Box", "self": false, "online": true},
+            ]})),
+            "swarm.agents" => Ok(
+                json!({"agents": [{"agent_id": "agent_scout", "name": "Scout",
+                "primary_runtime": "rt_box"}]}),
+            ),
+            "thread.summaries" => Ok(json!({"summaries": [{"threadId": "thread_one",
+                "title": "One", "updatedAt": "2026-10-17T12:00:00.000Z", "owner_runtime": "rt_box"}],
+                "nextCursor": null})),
+            "thread.post" => Ok(json!({"forwarded": true, "op_id": "op_1", "state": "sent",
+                "message_id": "op_1"})),
+            _ => Ok(json!({})),
+        }
+    }
+    fn fleet_events(&self) -> Option<std::sync::mpsc::Receiver<ClientEvent>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        *self.fleet.lock().unwrap() = Some(sender);
+        Some(receiver)
+    }
+}
+
+const CONTROL: &str = "ctl_000000000000400080000000000000a1";
+
+fn request_header(request_id: &str, lifetime: i64) -> RequestHeader {
+    let now = Utc::now();
+    RequestHeader::new(
+        request_id,
+        CONTROL,
+        &relay_encryption::timestamp(now),
+        &relay_encryption::timestamp(now + chrono::Duration::seconds(lifetime)),
+    )
+}
+
+impl StubRelay {
+    fn request(&mut self, keys: &RelayKeys, header: &RequestHeader, counter: u64, content: Value) {
+        let content: RequestContent = serde_json::from_value(content).unwrap();
+        let sealed = seal_request(&keys.phone_to_desktop, header, counter, &content).unwrap();
+        self.send(json!({
+            "protocol": RELAY_PROTOCOL, "type": "control.request", "message_id": header.request_id,
+            "session_id": header.session_id, "connection_id": "con_mobile_0001",
+            "device_id": "33333333-3333-4333-8333-333333333333",
+            "actor": {"user_id": "usr_synthetic_0001",
+                "device_id": "33333333-3333-4333-8333-333333333333", "role": "mobile"},
+            "sequence": 0, "timestamp": relay_encryption::timestamp(Utc::now()),
+            "payload": serde_json::to_value(sealed).unwrap(),
+        }));
+    }
+
+    /// The next control session event, opened as the phone opens it.
+    fn next_control(&mut self, keys: &RelayKeys) -> (ControlHeader, OpenedControl) {
+        loop {
+            let message = self.next("session.event");
+            if message["session_id"] != CONTROL {
+                continue;
+            }
+            let sealed: SealedControl = serde_json::from_value(message["payload"].clone()).unwrap();
+            let opened = open_control(&keys.desktop_to_phone, &sealed, CONTROL).unwrap();
+            return (sealed.header, opened);
+        }
+    }
+
+    /// The joined answer of the next response.
+    fn response(&mut self, keys: &RelayKeys) -> (String, Value) {
+        let mut text = String::new();
+        loop {
+            let (_, opened) = self.next_control(keys);
+            let ControlContent::Response {
+                request_id,
+                page,
+                pages,
+                body,
+            } = opened.content
+            else {
+                continue;
+            };
+            text.push_str(&body);
+            if page + 1 == pages {
+                return (request_id, serde_json::from_str(&text).unwrap());
+            }
+        }
+    }
+}
+
+fn control_keys() -> RelayKeys {
+    RelayKeys {
+        pair_id: "00000000-0000-4000-8000-0000000000a1".into(),
+        ..keys()
+    }
+}
+
+#[test]
+fn the_control_session_answers_requests_and_forwards_fleet_events() {
+    let keys = control_keys();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let account = Arc::new(FakeAccount {
+        api_base: format!("http://{}", listener.local_addr().unwrap()),
+        keys: Mutex::new(Some(keys.clone())),
+    });
+    let runtime = Arc::new(ControlRuntime::default());
+    let profile = temporary_state("control");
+    let publisher = RelayPublisher::start_with_timing(
+        account,
+        runtime.clone(),
+        relay_state_path(&profile),
+        timing(),
+    );
+    let mut relay = StubRelay::accept(&listener);
+    let register = relay.next("session.register");
+    assert_eq!(register["session_id"], CONTROL);
+    assert_eq!(
+        register["payload"],
+        json!({"channel": "control", "client_protocols": [RELAY_PROTOCOL]})
+    );
+
+    relay.request(
+        &keys,
+        &request_header("req_snapshot_0001", 60),
+        1,
+        json!({"type": "request", "request_id": "req_snapshot_0001",
+            "operation": "fleet.snapshot", "body": {}}),
+    );
+    let (request_id, answer) = relay.response(&keys);
+    assert_eq!(request_id, "req_snapshot_0001");
+    assert_eq!(answer["ok"], true);
+    let snapshot = &answer["result"];
+    assert_eq!(snapshot["members"][1]["runtime_name"], "Box");
+    assert_eq!(snapshot["agents"][0]["primary_runtime"], "rt_box");
+    assert_eq!(snapshot["threads"][0]["owner_runtime"], "rt_box");
+
+    // A post goes to the runtime with the request id as its key.
+    relay.request(
+        &keys,
+        &request_header("req_post_00000001", 60),
+        2,
+        json!({"type": "request", "request_id": "req_post_00000001",
+            "operation": "thread.post", "body": {"thread_id": "thread_one", "text": "Hello"}}),
+    );
+    let (_, answer) = relay.response(&keys);
+    assert_eq!(answer["result"]["op_id"], "op_1");
+    assert!(runtime.requests.lock().unwrap().contains(&(
+        "thread.post".to_owned(),
+        json!({"thread_id": "thread_one", "text": "Hello"}),
+        "req_post_00000001".to_owned()
+    )));
+
+    // A replayed counter is dropped; an operation off the phone list and an
+    // expired request are refused in a sealed answer.
+    relay.request(
+        &keys,
+        &request_header("req_replay_000001", 60),
+        2,
+        json!({"type": "request", "request_id": "req_replay_000001",
+            "operation": "thread.post", "body": {"thread_id": "thread_one", "text": "Again"}}),
+    );
+    relay.request(
+        &keys,
+        &request_header("req_admin_0000001", 60),
+        3,
+        json!({"type": "request", "request_id": "req_admin_0000001",
+            "operation": "agent.save", "body": {}}),
+    );
+    let (request_id, answer) = relay.response(&keys);
+    assert_eq!(request_id, "req_admin_0000001");
+    assert_eq!(answer["error"]["code"], "unsupported_operation");
+    relay.request(
+        &keys,
+        &request_header("req_late_00000001", -1),
+        4,
+        json!({"type": "request", "request_id": "req_late_00000001",
+            "operation": "fleet.sync_status", "body": {}}),
+    );
+    let (_, answer) = relay.response(&keys);
+    assert_eq!(answer["error"]["code"], "invalid_request");
+    let made = Utc::now() - chrono::Duration::seconds(61);
+    let stale = RequestHeader::new(
+        "req_stale_0000001",
+        CONTROL,
+        &relay_encryption::timestamp(made),
+        &relay_encryption::timestamp(made + chrono::Duration::seconds(60)),
+    );
+    relay.request(
+        &keys,
+        &stale,
+        5,
+        json!({"type": "request", "request_id": "req_stale_0000001",
+            "operation": "fleet.sync_status", "body": {}}),
+    );
+    let (_, answer) = relay.response(&keys);
+    assert_eq!(answer["error"]["code"], "expired");
+    relay.request(
+        &keys,
+        &request_header("req_long_00000001", 120),
+        6,
+        json!({"type": "request", "request_id": "req_long_00000001",
+            "operation": "fleet.sync_status", "body": {}}),
+    );
+    let (_, answer) = relay.response(&keys);
+    assert_eq!(answer["error"]["code"], "invalid_request");
+
+    // Fleet events travel; an approval wakes the phone, others do not.
+    let sender = runtime.fleet.lock().unwrap().clone().unwrap();
+    sender
+        .send(ClientEvent {
+            name: muniment_attach::EventName::ModelsLogin,
+            body: json!({}),
+        })
+        .unwrap();
+    sender
+        .send(ClientEvent {
+            name: muniment_attach::EventName::SwarmChanged,
+            body: json!({"kind": "agents"}),
+        })
+        .unwrap();
+    sender
+        .send(ClientEvent {
+            name: muniment_attach::EventName::AgentApprovalPending,
+            body: json!({"approval_id": "run_1:gate_1"}),
+        })
+        .unwrap();
+    let (header, opened) = relay.next_control(&keys);
+    assert!(!header.wake);
+    assert_eq!(
+        opened.content,
+        ControlContent::Event {
+            event: "swarm.changed".into(),
+            body: Some(json!({"kind": "agents"}))
+        }
+    );
+    let (header, opened) = relay.next_control(&keys);
+    assert!(header.wake);
+    assert!(
+        matches!(opened.content, ControlContent::Event { event, .. } if event == "agent.approval_pending")
+    );
+    let last_sequence: u64 = header.sequence.parse().unwrap();
+    assert!(runtime
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, body, _)| body["text"] != "Again"));
+    drop(relay);
+
+    // A reconnect registers the session again and its sequence goes on.
+    let mut relay = StubRelay::accept(&listener);
+    assert_eq!(relay.next("session.register")["session_id"], CONTROL);
+    relay.request(
+        &keys,
+        &request_header("req_status_000001", 60),
+        7,
+        json!({"type": "request", "request_id": "req_status_000001",
+            "operation": "fleet.sync_status", "body": {}}),
+    );
+    let (header, _) = relay.next_control(&keys);
+    assert!(header.sequence.parse::<u64>().unwrap() > last_sequence);
+    publisher.stop();
+    std::fs::remove_dir_all(profile).unwrap();
+}
+
+#[test]
+fn a_request_sealed_with_another_key_marks_the_pair_for_pairing_again() {
+    let keys = control_keys();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let account = Arc::new(FakeAccount {
+        api_base: format!("http://{}", listener.local_addr().unwrap()),
+        keys: Mutex::new(Some(keys.clone())),
+    });
+    let runtime = Arc::new(ControlRuntime::default());
+    let profile = temporary_state("control-mismatch");
+    let publisher = RelayPublisher::start_with_timing(
+        account,
+        runtime.clone(),
+        relay_state_path(&profile),
+        timing(),
+    );
+    let mut relay = StubRelay::accept(&listener);
+    relay.next("session.register");
+    let wrong = RelayKeys {
+        phone_to_desktop: relay_encryption::DirectionKey::from_bytes([9; 32]),
+        ..keys.clone()
+    };
+    relay.request(
+        &wrong,
+        &request_header("req_wrong_0000001", 60),
+        1,
+        json!({"type": "request", "request_id": "req_wrong_0000001",
+            "operation": "fleet.sync_status", "body": {}}),
+    );
+    let (_, answer) = relay.response(&keys);
+    assert_eq!(answer["error"]["code"], "invalid_request");
+    assert!(relay_key_mismatch(&profile, &keys.pair_id));
+    assert!(runtime.requests.lock().unwrap().is_empty());
+    publisher.stop();
+    std::fs::remove_dir_all(profile).unwrap();
 }
