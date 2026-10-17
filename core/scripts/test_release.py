@@ -1,7 +1,10 @@
 """Tests for the version rules in scripts/release.py."""
 
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location("release", Path(__file__).with_name("release.py"))
@@ -63,6 +66,59 @@ class Mirror(unittest.TestCase):
         with self.assertRaises(SystemExit):
             release.wait_for_mirror("https://example", "v1.2.3", self.SHA,
                                     lambda url, ref: "", lambda seconds: None, polls=3)
+
+
+class Publish(unittest.TestCase):
+    def test_no_core_release_is_marked_latest(self):
+        command = release.release_command("core-v1.15.0", "munimentai/muniment", "notes.md",
+                                          ["pins/pins.toml", "dist/SHA256SUMS"])
+        self.assertEqual(command[:4], ["gh", "release", "create", "core-v1.15.0"])
+        self.assertIn("--latest=false", command)
+        self.assertNotIn("--latest", command)
+        self.assertEqual(command[-2:], ["pins/pins.toml", "dist/SHA256SUMS"])
+
+    def test_the_release_lives_in_the_monorepo(self):
+        self.assertEqual(release.GITHUB_REPOSITORY, "munimentai/muniment")
+
+
+class History(unittest.TestCase):
+    """The tag and commit rules against a scratch repository with core and desktop paths."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+        self.run_git("init", "-q", "-b", "main")
+        self.commit("core/lib.rs", "chore: start")
+        self.run_git("tag", "core-v1.14.0")
+        self.commit("src/app.js", "feat: a desktop feature")
+        self.run_git("tag", "v0.9.0")
+        self.commit("core/docs/a.md", "fix: a core fix")
+        (self.root / "core").mkdir(exist_ok=True)
+        self.cwd = os.getcwd()
+        os.chdir(self.root / "core")
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.directory.cleanup()
+
+    def run_git(self, *args):
+        subprocess.run(["git", *args], cwd=self.root, env=self.env, check=True, capture_output=True)
+
+    def commit(self, path, subject):
+        file = self.root / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(subject)
+        self.run_git("add", path)
+        self.run_git("commit", "-q", "-m", subject)
+
+    def test_only_core_tags_set_the_base(self):
+        self.assertEqual(release.last_tag("HEAD"), (1, 14, 0))
+
+    def test_only_commits_under_core_count(self):
+        subjects = [s for _, s, _ in release.commits("core-v1.14.0", "HEAD")]
+        self.assertEqual(subjects, ["fix: a core fix"])
 
 
 if __name__ == "__main__":

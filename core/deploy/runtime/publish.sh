@@ -17,13 +17,13 @@
 # warning, so a registry can be added before its credential exists. The logins
 # live in a throwaway Docker config, so none stays on the runner.
 #
-# Usage: deploy/runtime/publish.sh <vX.Y.Z> [revision]
+# Usage: deploy/runtime/publish.sh <core-vX.Y.Z> [revision]
 set -euo pipefail
 
 tag=$1
 revision=${2:-$(git rev-parse HEAD)}
-if [[ ! $tag =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-  echo "publish.sh: $tag is not a vX.Y.Z tag" >&2
+if [[ ! $tag =~ ^core-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  echo "publish.sh: $tag is not a core-vX.Y.Z tag" >&2
   exit 2
 fi
 version=${BASH_REMATCH[1]}
@@ -35,7 +35,7 @@ fi
 context=$(cd "$(dirname "$0")/../.." && pwd)
 local_image="muniment-runtime:publish-$$"
 platforms=${RUNTIME_IMAGE_PLATFORMS:-linux/amd64,linux/arm64}
-feed=${RUNTIME_RELEASE_FEED:-https://github.com/munimentai/muniment-core/releases/download}
+feed=${RUNTIME_RELEASE_FEED:-https://github.com/munimentai/muniment/releases/download}
 builder="muniment-publish-$$"
 
 DOCKER_CONFIG=$(mktemp -d)
