@@ -1792,6 +1792,8 @@ fn authorized_thread_list_is_bounded_paginated_and_correlated() {
                 thread_id: "thread-1".into(),
                 title: "Safe title".into(),
                 updated_at: "2026-07-16T00:00:00Z".into(),
+                owner_runtime: None,
+                replica: false,
             }],
             next_cursor: Some("opaque-page-3".into()),
         })

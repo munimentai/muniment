@@ -563,14 +563,25 @@ steering, gate answers and run starts through `SwarmHost`.
   origin)`, where the clock is a hybrid logical clock the runtime persists, so
   a write made after seeing another member's write orders after it even when
   that member's wall clock runs ahead. A record's tombstone wins over every
-  older field write and lasts 90 days; a member away longer marks
-  `snapshot_needed_at`. A set field keeps an element that one member added
-  while another removed it. `Records` offers `put`, `remove`, `delete`,
-  `set_add`, `set_remove`, `get`, `scan` and `subscribe`.
+  older field write and lasts 90 days. Once an hour a member drops the
+  tombstones older than that which every member heard from within 90 days
+  holds, by the `record_vv` each `MemberRecord` carries, and refuses any later
+  row at or before the newest dropped clock for a field it no longer holds.
+  A member away longer marks `snapshot_needed_at`, forgets its records but
+  its own writes no member held, and takes a fresh snapshot; the copies of
+  threads whose records never come back are deleted. A set field keeps an
+  element that one member added while another removed it. `Records` offers
+  `put`, `remove`, `delete`, `set_add`, `set_remove`, `get`, `scan` and
+  `subscribe`.
 - **Exchange.** A member whose `MemberRecord.capabilities` names `store/1`
   sends `records` (the rows a peer's `record_vv` lacks), its own `record_vv`,
   and in `clocks` only the threads whose clock changed since the peer's
-  `watermarks.ack`, with a digest of every clock each 10 minutes. A member
+  `watermarks.ack`, with a digest of every clock each 10 minutes. Events go
+  for the threads whose clock changed since the last exchange and those the
+  peer still lacked, and the scan of the journal reads only the threads
+  that changed, with a full pass every 10 minutes. A peer that lacks a whole
+  origin or more than one exchange of rows also gets `snapshot` (`{"classes",
+  "complete"}`), the sender's rows per class, for its progress. A member
   without `store/1` gets the full `directory`, `groups`, `threads` and
   `clocks`. Each exchange stays under 448 KiB of content: approvals,
   acknowledgements, notices and messages first, then records, then thread
@@ -591,9 +602,35 @@ steering, gate answers and run starts through `SwarmHost`.
   "thread_id", "origin_runtime", "seq"}`) appends a `thread.message.posted`
   event with the poster's vector clock, and the primary consumes it in causal
   order: it steers a live run or queues one, then appends
-  `thread.message.consumed`. `thread.history` lists posts in `posted`.
-  Attachments and stored payloads travel on demand when a member opens the
-  thread.
+  `thread.message.consumed`. `thread.history` lists posts in `posted`, with
+  `error` when the primary started no run. Attachments and stored payloads
+  travel on demand when a member opens the thread, or at once when the
+  member keeps every attachment offline.
+- **Ordinary threads.** A thread a runtime created registers as `plain` with
+  that runtime as `owner_runtime` once it has a run. Its record also holds a
+  summary, `{"title", "owner_runtime", "last_at", "last_post"}`, which every
+  member shows as a thread in its list. A member holds the history of the
+  ordinary threads active within its offline window, 30 days by default, and
+  of those it fetched. `thread.post` on any member reaches the owner, which
+  runs the text as the thread's next prompt. The owner's permission mode
+  replicates, and a `thread.permission_mode_set` on a replica is forwarded to
+  the owner like any other action on its item. Saved Pi conversations stay
+  with the owner. `thread.list` and `thread.summaries`
+  entries carry `owner_runtime` and, on a replica, `replica: true`.
+- **Fleet status.** `fleet.sync_status` (`{}` → `{"state", "classes",
+  "last_sync_at", "snapshot_needed_at", "bootstrapped_at", "offline"}`)
+  answers `state` (`alone`, `bootstrapping`, `offline` or `synced`) and, per
+  record class and for `history`, `{"class", "held", "total", "percent"}`.
+  `fleet.sync_changed` carries the same body while a bootstrap runs, at most
+  once a second, and once it ends. `fleet.offline_set` (`{"thread_days"?,
+  "attachments"?}` → `{"offline"}`) saves this machine's window in
+  `<profile>/fleet-settings.json`: days of ordinary threads, 0 for all, and
+  attachments `open` or `all`. `thread.history_fetch` (`{"thread_id",
+  "before"?}` → `{"thread_id", "owner_runtime", "status", "held_events",
+  "total_events", "before"}`) pins an ordinary thread so its history arrives
+  from its owner or any member that holds it; `status` is `fetching` until
+  this runtime holds it, then `held` with `page`, the `thread.history` page
+  before `before`.
 - **Moves.** `agent.move` (`{"id", "to", "force"?}` → `{"status", "agent"}`)
   raises the agent's `epoch` on its primary, which then fires none of its
   routines, and hands the definition, memory folder, routine state, thread
@@ -703,16 +740,19 @@ steering, gate answers and run starts through `SwarmHost`.
   more; `agent.move` with `force` takes it.
 
 A chat-event subscription that sends `{"swarm": true}` receives
-`swarm.changed`, `agent.approval_pending` and `agent.approval_resolved`.
+`swarm.changed`, `agent.approval_pending`, `agent.approval_resolved` and
+`fleet.sync_changed`.
 With `"swarm_live": true` too it also receives `agent.activity` and
 `group.posted`; `DesktopClient::subscribe_chat_events_with_swarm_live` falls
 back to the swarm events alone on a runtime that refuses the flag. With
 `"fleet": true` as well it receives `fleet.op_updated`, and
 `DesktopClient::subscribe_chat_events_with_fleet` falls back to the live
 swarm events.
-Remotely, linking and the fleet credential operations take `runtime.admin`, the reads and `fleet.op_status`
-take `thread.read`, `thread.post`, group changes and answers take
-`run.write`, and `agent.move` and `swarm.resume` take `agents.manage`.
+Remotely, linking, `fleet.offline_set` and the fleet credential operations
+take `runtime.admin`, the reads, `fleet.op_status`, `fleet.sync_status` and
+`thread.history_fetch` take `thread.read`, `thread.post`, group changes and
+answers take `run.write`, and `agent.move` and `swarm.resume` take
+`agents.manage`.
 
 ## Phone relay
 

@@ -15,6 +15,12 @@
 //! - **Replication.** Each member numbers its own writes. A row carries its
 //!   origin's number, and the version vector says the highest number held
 //!   from each origin, so an exchange carries only the rows a peer lacks.
+//!   The table holds only each field's winning write, so a delta from an
+//!   empty version vector is a snapshot of the live rows and tombstones.
+//! - **Collection.** A deleted row older than [`TOMBSTONE_DAYS`] that every
+//!   member still in touch holds is dropped. The newest clock dropped is the
+//!   horizon: a row at or before it for a field this runtime no longer
+//!   holds may be a write such a tombstone beat, so it is refused.
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -40,6 +46,8 @@ const MAX_KEY_BYTES: usize = 256;
 const MAX_CLASS_BYTES: usize = 64;
 /// Separates a set's name from an element's tag in a field name.
 const SET_SEPARATOR: char = '\u{1f}';
+/// The meta key of the newest clock of a deleted row this runtime dropped.
+const HORIZON: &str = "gc_horizon";
 
 /// One change to a record, as subscribers see it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -456,11 +464,16 @@ impl RecordStore {
             return Ok(Vec::new());
         }
         let now_millis = now.timestamp_millis();
+        let horizon = self.horizon()?;
         let mut connection = self.store.connect()?;
         let transaction = connection.transaction().map_err(sql)?;
         let mut changes = Vec::new();
         let mut skew = 0;
-        for row in rows {
+        for mut row in rows {
+            // A field set to JSON null crosses the wire without its value.
+            if !row.deleted && row.value.is_none() {
+                row.value = Some(Value::Null);
+            }
             if check_name(&row.class, &row.key).is_err()
                 || row.field.len() > MAX_KEY_BYTES
                 || row.origin.is_empty()
@@ -482,6 +495,11 @@ impl RecordStore {
                     params![row.origin, row.seq as i64],
                 )
                 .map_err(sql)?;
+            if horizon.is_some_and(|horizon| row.clock <= horizon)
+                && current_row(&transaction, &row.class, &row.key, &row.field)?.is_none()
+            {
+                continue;
+            }
             if let Some(mut change) = apply(&transaction, &row, false)? {
                 if let Some((set, _)) = change.field.split_once(SET_SEPARATOR) {
                     change.field = set.to_owned();
@@ -555,19 +573,7 @@ impl RecordStore {
 
     /// The record `(class, key)`, if this runtime holds any write to it.
     pub(super) fn get(&self, class: &str, key: &str) -> Result<Option<Record>, String> {
-        let connection = self.store.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT class, key, field, value, clock, origin, seq, deleted, rank FROM records \
-                 WHERE class=?1 AND key=?2",
-            )
-            .map_err(sql)?;
-        let rows = statement
-            .query_map(params![class, key], read_row)
-            .map_err(sql)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql)?;
-        Ok(assemble(class, key, rows))
+        get_with(&*self.store.connect()?, class, key)
     }
 
     /// The records of a class in key order after `after`, at most `limit`.
@@ -612,6 +618,86 @@ impl RecordStore {
         Ok(records)
     }
 
+    /// The newest clock of a deleted row this runtime dropped.
+    pub(super) fn horizon(&self) -> Result<Option<Hlc>, String> {
+        Ok(self
+            .store
+            .meta(HORIZON)?
+            .and_then(|horizon| horizon.parse::<Hlc>().ok()))
+    }
+
+    /// Drops the deleted rows written before `before` that `covered` says
+    /// every member still in touch holds, and moves the horizon past them.
+    /// Answers how many it dropped.
+    pub(super) fn collect(
+        &self,
+        before: Hlc,
+        covered: impl Fn(&str, u64) -> bool,
+    ) -> Result<usize, String> {
+        let mut connection = self.store.connect()?;
+        let transaction = connection.transaction().map_err(sql)?;
+        let candidates: Vec<RecordRow> = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT class, key, field, value, clock, origin, seq, deleted, rank FROM records \
+                     WHERE deleted=1 AND clock<?1",
+                )
+                .map_err(sql)?;
+            let rows = statement
+                .query_map([before.packed()], read_row)
+                .map_err(sql)?;
+            rows.collect::<Result<_, _>>().map_err(sql)?
+        };
+        let mut dropped = 0;
+        let mut newest = self.horizon()?.unwrap_or_default();
+        for row in candidates {
+            if !covered(&row.origin, row.seq) {
+                continue;
+            }
+            transaction
+                .execute(
+                    "DELETE FROM records WHERE class=?1 AND key=?2 AND field=?3",
+                    params![row.class, row.key, row.field],
+                )
+                .map_err(sql)?;
+            newest = newest.max(row.clock);
+            dropped += 1;
+        }
+        if dropped > 0 {
+            transaction
+                .execute(
+                    "INSERT INTO meta(key, value) VALUES(?1, ?2) \
+                     ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    params![HORIZON, newest.to_string()],
+                )
+                .map_err(sql)?;
+        }
+        transaction.commit().map_err(sql)?;
+        Ok(dropped)
+    }
+
+    /// Forgets every row but the ones `own` numbered after `delivered`, and
+    /// what it held of other members, so a member that was away past
+    /// [`TOMBSTONE_DAYS`] takes a fresh snapshot. Its own write numbers stay,
+    /// so it never reuses one.
+    pub(super) fn forget(&self, own: &str, delivered: u64) -> Result<(), String> {
+        let mut connection = self.store.connect()?;
+        let transaction = connection.transaction().map_err(sql)?;
+        transaction
+            .execute(
+                "DELETE FROM records WHERE NOT (origin=?1 AND seq>?2)",
+                params![own, delivered as i64],
+            )
+            .map_err(sql)?;
+        transaction
+            .execute("DELETE FROM record_vv WHERE origin<>?1", [own])
+            .map_err(sql)?;
+        transaction
+            .execute("DELETE FROM meta WHERE key=?1", [HORIZON])
+            .map_err(sql)?;
+        transaction.commit().map_err(sql)
+    }
+
     /// The rows and tombstones of each class.
     pub(super) fn counts(&self) -> Result<BTreeMap<String, ClassCount>, String> {
         let connection = self.store.connect()?;
@@ -631,6 +717,27 @@ impl RecordStore {
             .map_err(sql)?;
         rows.collect::<Result<_, _>>().map_err(sql)
     }
+}
+
+/// The record `(class, key)` read over `connection`, so a caller that reads
+/// many records opens the store once.
+pub(super) fn get_with(
+    connection: &rusqlite::Connection,
+    class: &str,
+    key: &str,
+) -> Result<Option<Record>, String> {
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT class, key, field, value, clock, origin, seq, deleted, rank FROM records \
+             WHERE class=?1 AND key=?2",
+        )
+        .map_err(sql)?;
+    let rows = statement
+        .query_map(params![class, key], read_row)
+        .map_err(sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql)?;
+    Ok(assemble(class, key, rows))
 }
 
 fn check_name(class: &str, key: &str) -> Result<(), String> {

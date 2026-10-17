@@ -681,6 +681,128 @@ fn threads_replicate_with_causal_posts_a_replica_read_and_catch_up() {
     );
 }
 
+fn listed(reader: &mut DesktopClient, thread: &str) -> Option<Value> {
+    reader
+        .thread_summaries(100, None)
+        .ok()?
+        .get("summaries")?
+        .as_array()?
+        .iter()
+        .find(|summary| summary["threadId"] == thread)
+        .cloned()
+}
+
+fn thread_mode(reader: &mut DesktopClient, thread: &str) -> Value {
+    reader
+        .agent_request(
+            Operation::ThreadPermissionMode,
+            json!({"thread_id": thread}),
+        )
+        .map(|answer| answer["mode"].clone())
+        .unwrap_or(Value::Null)
+}
+
+#[test]
+fn an_ordinary_thread_reaches_every_member_and_a_post_runs_on_its_owner() {
+    let _environment = environment();
+    let a = Member::new("plain-a");
+    let b = Member::new("plain-b");
+    let c = Member::new("plain-c");
+    for member in [&a, &b, &c] {
+        member.state().use_pi_artifact(member.artifact);
+    }
+    // C reaches B only through A.
+    b.join(&a);
+    c.join(&a);
+    std::env::set_var("PI_RESUME_STUB_REPLY", " trip ready");
+    let mut writer = a.client(None);
+    let thread = writer
+        .run_submit("Plan the trip.", &[], None, None, None)
+        .unwrap()
+        .thread_id;
+    let ours = |summary: &Value| {
+        summary["owner_runtime"] == a.runtime_id().as_str() && summary["replica"] == true
+    };
+    for member in [&b, &c] {
+        let mut reader = member.client(None);
+        assert!(
+            wait(|| listed(&mut reader, &thread).is_some_and(|summary| ours(&summary))),
+            "{} never listed the thread: {:?}",
+            member.name,
+            listed(&mut reader, &thread)
+        );
+        assert!(
+            wait(|| history_entries(&mut reader, &thread)
+                .iter()
+                .any(|entry| entry["text"].as_str().unwrap_or("").contains("trip ready"))),
+            "{} never read A's run",
+            member.name
+        );
+        assert_eq!(
+            member.swarm().is_replica_thread(&thread),
+            Some(a.runtime_id())
+        );
+    }
+    let own = listed(&mut writer, &thread).unwrap();
+    assert_eq!(own["owner_runtime"], a.runtime_id().as_str());
+    assert!(own.get("replica").is_none());
+
+    // A post on C reaches A, which runs it; C reads the answer.
+    std::env::set_var("PI_RESUME_STUB_REPLY", " train booked");
+    let post = c
+        .op(
+            Operation::ThreadPost,
+            json!({"thread_id": thread, "text": "Book the train."}),
+        )
+        .unwrap();
+    assert_eq!(post["origin_runtime"], c.runtime_id().as_str());
+    let mut reader = c.client(None);
+    assert!(
+        wait(|| posted(&mut reader, &thread).iter().any(|entry| {
+            entry["message_id"] == post["message_id"]
+                && entry["consumed"] == true
+                && entry["run_id"].is_string()
+        })),
+        "A never consumed C's post: {:?}",
+        posted(&mut reader, &thread)
+    );
+    assert!(
+        wait(|| history_entries(&mut reader, &thread)
+            .iter()
+            .any(|entry| entry["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("train booked"))),
+        "C never read the run its post started"
+    );
+    assert_eq!(history_entries(&mut writer, &thread).len(), 2);
+    // Only the owner writes runs into the thread.
+    assert!(reader
+        .run_submit("Write here.", &[], Some(&thread), None, None)
+        .is_err());
+
+    // A mode set on C goes to A, which sets it, and it replicates back.
+    let answer = reader
+        .set_thread_permission_mode(&thread, "edit_auto")
+        .unwrap();
+    assert_eq!(answer["forwarded"], true, "{answer}");
+    assert!(
+        wait(|| thread_mode(&mut writer, &thread) == "edit_auto"),
+        "A never set the mode"
+    );
+    let mut b_reader = b.client(None);
+    for reader in [&mut reader, &mut b_reader] {
+        assert!(
+            wait(|| thread_mode(reader, &thread) == "edit_auto"),
+            "the mode never replicated"
+        );
+    }
+
+    // Every member reports itself synced.
+    let status = b.op(Operation::FleetSyncStatus, json!({})).unwrap();
+    assert_eq!(status["state"], "synced", "{status}");
+}
+
 #[test]
 fn a_move_fences_the_old_primary_and_a_forced_move_steps_it_down() {
     let _environment = environment();
