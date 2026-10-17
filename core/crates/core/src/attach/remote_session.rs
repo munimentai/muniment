@@ -232,12 +232,14 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::AgentApprovals
         | Operation::GroupList
         | Operation::FleetOpStatus
+        | Operation::FleetOps
         | Operation::FleetSyncStatus
         | Operation::ThreadHistoryFetch => RemoteRule::Scope(SCOPE_THREAD_READ),
         // What a machine keeps offline is its owner's choice of its disk.
         Operation::FleetOfflineSet => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
         Operation::ThreadPost
         | Operation::AgentApprovalAnswer
+        | Operation::FleetOpCancel
         | Operation::GroupCreate
         | Operation::GroupUpdate => RemoteRule::Scope(SCOPE_RUN_WRITE),
         Operation::AgentMove | Operation::SwarmResume => RemoteRule::Scope(SCOPE_AGENTS_MANAGE),

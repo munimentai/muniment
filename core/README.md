@@ -566,7 +566,7 @@ steering, gate answers and run starts through `SwarmHost`.
   older field write and lasts 90 days. Once an hour a member drops the
   tombstones older than that which every member heard from within 90 days
   holds, by the `record_vv` each `MemberRecord` carries, and refuses any later
-  row at or before the newest dropped clock for a field it no longer holds.
+  row at or before the newest dropped clock for a field whose rows it dropped.
   A member away longer marks `snapshot_needed_at`, forgets its records but
   its own writes no member held, and takes a fresh snapshot; the copies of
   threads whose records never come back are deleted. A set field keeps an
@@ -735,9 +735,15 @@ steering, gate answers and run starts through `SwarmHost`.
   "updated_at", "expires_at"}`. `state` is `queued` while the owner is
   offline (`reason.code` `owner_offline`, with the owner's name and
   `last_seen_at`) or no peer took it yet, `sent`, `applied` or `failed`
-  (`reason.code` `expired` after 7 days). `swarm.agents` marks
-  `move_suggested` on an agent whose primary was last seen 24 hours ago or
-  more; `agent.move` with `force` takes it.
+  (`reason.code` `expired` after 7 days), or `cancelled`.
+  `fleet.op_cancel` (`{"op_id"}` → `{"op"}`) cancels a `queued` op and
+  drops it from the outbox; a `sent` or finished op is refused. A copy a
+  relay already holds may still reach the owner, and its acknowledgement
+  then moves the op to `applied` or `failed`. `fleet.ops` (`{"state"?}` →
+  `{"ops"}`) lists this member's ops newest first, at most 200, by one
+  state or `open` for `queued` and `sent`. `swarm.agents`, `agent.list` and
+  `agent.read` mark `move_suggested` on an agent whose primary was last
+  seen 24 hours ago or more; `agent.move` with `force` takes it.
 
 - **Settings, projects and memory.** `fleet_sync` keeps nine classes on
   records, each through an adapter that maps its own storage both ways:
@@ -784,9 +790,10 @@ back to the swarm events alone on a runtime that refuses the flag. With
 swarm events.
 Remotely, linking, `fleet.offline_set`, the fleet credential operations,
 `preferences.set` and `preferences.import` take `runtime.admin`, the reads,
-`fleet.op_status`, `fleet.sync_status`, `thread.history_fetch` and
-`preferences.get` take `thread.read`, `thread.post`, group changes and
-answers take `run.write`, and `agent.move` and `swarm.resume` take
+`fleet.op_status`, `fleet.ops`, `fleet.sync_status`, `thread.history_fetch`
+and `preferences.get` take `thread.read`, `thread.post`, `fleet.op_cancel`,
+group changes and answers take `run.write`, and `agent.move` and
+`swarm.resume` take
 `agents.manage`.
 
 ## Phone relay

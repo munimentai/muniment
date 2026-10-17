@@ -288,6 +288,7 @@ pub fn run() {
             launcher::launcher_is_visible,
             launcher::launcher_present_main,
             agents::agent_request,
+            agents::fleet_thread_create,
             agents::agent_memory,
             agents::agent_export_template,
             agents::agent_open,

@@ -1,7 +1,9 @@
 import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
+import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
 export const historyFixtures = {
   agents: [],
+  'fleet-sync': [],
   'signed-out': [],
   'runtime-exit': [],
   runtimes: [],
@@ -278,10 +280,28 @@ function probeAccounts() {
     subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }],
     accounts: [
       { ...base, id: 'team', label: 'team', source: 'subscription', windows: windows(89) },
-      { ...base, id: 'personal', label: 'personal', source: 'subscription', windows: windows(100) },
+      { ...base, id: FLEET_PROBE ? `shared:swarm:${FLEET_STUDIO}:personal` : 'personal', label: 'personal', source: 'subscription', windows: windows(100) },
       { ...base, id: 'work', label: 'Work', source: 'key', overflow: false, allowance_readable: false, windows: [] },
     ],
   }
+}
+
+// ?accounts&fleet opens Settings → Model providers on a fleet: this machine
+// holds the team sign-in and Studio holds the personal one, which offers Hold
+// sign-in here. Core answers `fleet.credentials` and `fleet.hold_sign_in`.
+const FLEET_PROBE = new URLSearchParams(location.search).has('fleet')
+const FLEET_STUDIO = '018f0000-0000-7000-8000-000000000042'
+const fleetAccount = (name, label, holder, holderName) => ({ name, provider: 'anthropic', family: 'anthropic', kind: 'subscription', label, refresher: true, enabled: true, holder, holder_name: holderName, shared: true, this_machine: holder === 'local', usable_here: true })
+function fleetAnswer({ operation }) {
+  if (operation === 'fleet.hold_sign_in') return { status: 'requested', holder: FLEET_STUDIO }
+  return { share_models: true, role: 'full', removed: false, secrets: [], audit: [], accounts: [fleetAccount('router:team', 'team', 'local', 'Laptop'), fleetAccount('router:personal', 'personal', FLEET_STUDIO, 'Studio')] }
+}
+const fleetRendered = () => document.querySelectorAll('[data-hold]').length === 2 && !!document.querySelector('[data-hold] button')
+function advanceFleetFixture() {
+  if (!FLEET_PROBE || fleetRendered()) return
+  if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+  const providers = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Model providers')
+  if (providers && providers.getAttribute('aria-current') !== 'true') providers.click()
 }
 
 const providerScanFixtures = {
@@ -395,6 +415,11 @@ export function buildProbeCommandTable(fixtureName) {
   // empty-activity, with agents on three machines that all answer and a
   // synced copy from a fourth. `cards` opens the catalog's action cards, and
   // `cards-offline` the same with the Studio machine offline.
+  // `fleet-sync.html?state=` shows a fleet this laptop reaches only through
+  // the swarm: the sync line, owners, a queued post, a replica's history, a
+  // new thread on a container, the offline scope, the bootstrap and the log.
+  const fleetSyncFixture = fixtureName === 'fleet-sync'
+  if (fleetSyncFixture && fleetSyncThread()) history.push(...fleetSyncHistory())
   const agentsFixture = fixtureName === 'agents'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
   let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' ? 'agents-offline' : 'agents') : runtimesState)
@@ -403,7 +428,9 @@ export function buildProbeCommandTable(fixtureName) {
   const onboardingHomePath = '/Users/alice/Documents/muniment'
   // The runtimes fixture lists a thread on each machine, so the sidebar
   // shows the machine badges.
-  const threadSummaries = agentsFixture
+  const threadSummaries = fleetSyncFixture
+    ? fleetSyncSummaries()
+    : agentsFixture
     ? [
         { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
         { threadId: 'thread-a2', title: 'Inbox triage', updatedAt: '2026-07-28T11:00:00Z', runtimeId: 'local' },
@@ -463,7 +490,7 @@ export function buildProbeCommandTable(fixtureName) {
   const eventListeners = []
   const invokedCommands = []
   const unknownCommands = []
-  let currentThreadId = history.length ? 'probe-thread' : null
+  let currentThreadId = fleetSyncFixture ? fleetSyncThread() : history.length ? 'probe-thread' : null
   let retentionChoice = null
   let runtimeState = fixtureName === 'runtime-exit'
     ? { revision: 1, lastEvent: 'exited', visible: true, busy: false }
@@ -621,8 +648,14 @@ export function buildProbeCommandTable(fixtureName) {
       if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
     }
     if (command === 'agent_export_template') return true
+    if (FLEET_PROBE && command === 'agent_request' && payload?.operation?.startsWith('fleet.')) return fleetAnswer(payload)
+    if (fleetSyncFixture && command === 'agent_request') {
+      const answer = fleetSyncAnswer(payload)
+      if (answer !== undefined) return answer
+    }
     if (command === 'agent_request') return handleAgentRequest(agentStores, payload)
     if (command === 'agent_open') return null
+    if (command === 'project_list' && fleetSyncFixture) return structuredClone(fleetSyncProjects)
     if (command === 'project_list') return { projects: { ...projects }, threads: { ...projectThreads } }
     if (command === 'project_create') {
       if (Object.values(projects).includes(payload.name)) throw new Error('A project with that name already exists.')
@@ -802,6 +835,7 @@ export function buildProbeCommandTable(fixtureName) {
 
   return {
     invoke,
+    fleetSyncFixture,
     history,
     runDetails,
     agentsFixture,
@@ -896,6 +930,7 @@ const fixtureName = browserFixtureScript.dataset.history
 const probeTable = buildProbeCommandTable(fixtureName)
 let callbackId = 0
 const {
+  fleetSyncFixture,
   history,
   runDetails,
   agentsFixture,
@@ -1156,6 +1191,8 @@ function advanceModesFixture() {
 }
 
 function fixtureRendered() {
+  if (FLEET_PROBE) return fleetRendered()
+  if (fleetSyncFixture) return fleetSyncRendered()
   if (agentsFixture) return agentsRendered()
   if (modesFixture) return modesRendered()
   if (runtimesFixture) return runtimesRendered()
@@ -1292,6 +1329,8 @@ function markReadyAfterFixtureRender() {
   advanceAccessFixture()
   advanceRuntimesFixture()
   advanceAgentsFixture()
+  advanceFleetFixture()
+  if (fleetSyncFixture) advanceFleetSync()
   if (fixtureRendered()) {
     void markProbeReady()
     return
@@ -1302,6 +1341,8 @@ function markReadyAfterFixtureRender() {
     advanceAccessFixture()
     advanceRuntimesFixture()
     advanceAgentsFixture()
+    advanceFleetFixture()
+    if (fleetSyncFixture) advanceFleetSync()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
@@ -1309,7 +1350,7 @@ function markReadyAfterFixtureRender() {
   // A fixture can finish on a text change, such as a path or a scan count, or
   // on a control that turns on once its settings load. Agent dialogs mount
   // on the page body, so the agents fixture watches the whole body.
-  observer.observe(agentsFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
+  observer.observe(agentsFixture || fleetSyncFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {

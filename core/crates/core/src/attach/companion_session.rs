@@ -470,6 +470,8 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::PreferencesGet
         | Operation::PreferencesSet
         | Operation::PreferencesImport
+        | Operation::FleetOpCancel
+        | Operation::FleetOps
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }
