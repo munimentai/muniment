@@ -621,6 +621,23 @@ fn require_queue_ack(response: &Value, command: &str) -> Result<(), String> {
 pub const FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const FIRST_EVENT_TIMEOUT_REASON: &str = "No reply arrived within 30 seconds. Try again.";
 
+/// The titles of the dialogs among `frames` that nobody answered. Pi waits
+/// on such a dialog when an extension asks it before the prompt is accepted.
+fn unanswered_dialogs(frames: &VecDeque<Value>) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|frame| match parse_frame(frame) {
+            Ok(PiChatEvent::ExtensionUiRequest(request)) => Some(match request.dialog {
+                ExtensionUiDialog::Select { title, .. }
+                | ExtensionUiDialog::Confirm { title, .. }
+                | ExtensionUiDialog::Input { title, .. }
+                | ExtensionUiDialog::Editor { title, .. } => title,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Binds Pi's single active stream to a locally-owned run. Construct this
 /// before sending the prompt so no post-ack frame can be lost.
 pub struct PiRunAdapter {
@@ -748,6 +765,13 @@ impl PiRunAdapter {
         })
         .map_err(|error| {
             if Instant::now() >= deadline {
+                let buffered = adapter
+                    .buffered
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for title in unanswered_dialogs(&buffered) {
+                    eprintln!("muniment-runtime: run_id={run_id} prompt_blocked_on={title:?}");
+                }
                 format!("Pi did not acknowledge the prompt within 30 seconds. {error}")
             } else {
                 error
@@ -1199,6 +1223,20 @@ fn activity_detail(value: Option<&Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unanswered_dialog_names_what_the_prompt_waits_on() {
+        let frames = VecDeque::from([
+            json!({"type":"extension_ui_request", "id":"w-1", "method":"setWidget", "widgetKey":"tasks"}),
+            json!({"type":"extension_ui_request", "id":"m-1", "method":"editor",
+                "title":"muniment:permission-mode", "prefill":"{}"}),
+            json!({"type":"agent_start"}),
+        ]);
+        assert_eq!(
+            unanswered_dialogs(&frames),
+            vec!["muniment:permission-mode".to_owned()]
+        );
+    }
 
     #[test]
     fn disconnected_stream_reports_process_death_without_upstream_details() {

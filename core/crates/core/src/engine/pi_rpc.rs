@@ -416,8 +416,16 @@ impl AgentEngine for PiRpcEngine {
         run_id: &str,
         locator: &PiSessionLocator,
         continuation: &str,
+        intercept: &mut dyn FnMut(&PiRunAdapter, &EngineEvent) -> bool,
     ) -> Result<PiRunAdapter, String> {
-        let (turn, _) = PiRunAdapter::start(run_id, conversation, continuation, RPC_TIMEOUT)?;
+        let (turn, _) = PiRunAdapter::start_with_images_and_handler(
+            run_id,
+            conversation,
+            continuation,
+            Vec::new(),
+            RPC_TIMEOUT,
+            |turn, event| intercept(turn, event),
+        )?;
         turn.bind_session(locator);
         Ok(turn)
     }

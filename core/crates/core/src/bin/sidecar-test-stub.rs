@@ -242,8 +242,40 @@ fn pi_resume(args: Vec<String>) {
     // A reasoning stub model starts at medium and takes each level it is sent.
     let reasoning = std::env::var_os("PI_RESUME_STUB_REASONING").is_some();
     let mut thinking_level = if reasoning { "medium" } else { "off" }.to_owned();
+    // A prompt waits for the permission mode answer before its response, as
+    // the agent permission extension's `before_agent_start` hook makes Pi wait.
+    let ask_mode = std::env::var_os("PI_RESUME_STUB_PERMISSION_MODE").is_some();
+    let mut waiting_prompt = None;
     for line in io::stdin().lock().lines() {
-        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let mut request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let mut mode_answered = false;
+        if request["type"] == "extension_ui_response" && request["id"] == "permission-mode-1" {
+            if let Ok(path) = std::env::var("PI_RESUME_STUB_EDITOR_CAPTURE") {
+                let mut capture = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .unwrap();
+                writeln!(capture, "{request}").unwrap();
+            }
+            let Some(prompt) = waiting_prompt.take() else {
+                continue;
+            };
+            request = prompt;
+            mode_answered = true;
+        }
+        if ask_mode && request["type"] == "prompt" && !mode_answered {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "type":"extension_ui_request", "id":"permission-mode-1", "method":"editor",
+                    "title":"muniment:permission-mode", "prefill":"{}"
+                })
+            );
+            io::stdout().flush().unwrap();
+            waiting_prompt = Some(request);
+            continue;
+        }
         match request["type"].as_str().unwrap() {
             "get_state" => println!(
                 "{}",
