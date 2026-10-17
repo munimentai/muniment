@@ -705,6 +705,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ),
         ("thread-plan", Operation::ThreadPlan),
         ("thread-plan-answer", Operation::ThreadPlanAnswer),
+        ("fleet-op-status", Operation::FleetOpStatus),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -893,6 +894,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             "thread-plan-answer",
             json!({"status": "answered", "answer": "plan_edit_auto"}),
         ),
+        ("fleet-op-status", json!({"op": fixture_op("applied")})),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1077,6 +1079,24 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             capability: "fixture-capability".into(),
             idempotency_key: None,
             body: json!({"update_status": true, "agent_runs": true, "swarm": true, "swarm_live": true}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "request-run-chat-events-fleet.json",
+        &Request {
+            protocol: Protocol,
+            request_id: id(313)?,
+            operation: Operation::RunChatEvents,
+            capability: "fixture-capability".into(),
+            idempotency_key: None,
+            body: json!({
+                "update_status": true,
+                "agent_runs": true,
+                "swarm": true,
+                "swarm_live": true,
+                "fleet": true
+            }),
         },
     )?;
     insert(
@@ -1341,6 +1361,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("agent-approval-resolved", EventName::AgentApprovalResolved),
         ("agent-activity", EventName::AgentActivity),
         ("group-posted", EventName::GroupPosted),
+        ("fleet-op-updated", EventName::FleetOpUpdated),
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
@@ -1358,6 +1379,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 | EventName::AgentApprovalResolved
                 | EventName::AgentActivity
                 | EventName::GroupPosted
+                | EventName::FleetOpUpdated
         );
         insert(
             &mut fixtures,
@@ -1597,6 +1619,7 @@ fn request_body(operation: Operation) -> serde_json::Value {
             json!({"id": FIXTURE_AGENT_ID, "to": FIXTURE_RUNTIME_B, "force": false})
         }
         Operation::AgentApprovals | Operation::GroupList => json!({}),
+        Operation::FleetOpStatus => json!({"op_id": FIXTURE_OP_ID}),
         Operation::AgentApprovalAnswer => json!({
             "approval_id": FIXTURE_APPROVAL_ID,
             "answer": {"type": "confirm", "value": true}
@@ -1740,6 +1763,38 @@ const FIXTURE_THREAD_ID: &str = "019965a0-0000-7000-8000-0000000000e1";
 const FIXTURE_GROUP_ID: &str = "019965a0-0000-7000-8000-0000000000f1";
 const FIXTURE_APPROVAL_ID: &str =
     "019965a0-0000-7000-8000-0000000000b3:019965a0-0000-7000-8000-0000000000b4";
+
+const FIXTURE_OP_ID: &str = "019965a0-0000-7000-8000-0000000000d6";
+
+/// One action forwarded to the member that owns its item, as
+/// `fleet.op_status` and `fleet.op_updated` report it: queued while that
+/// member is offline, or applied with the owner's answer.
+fn fixture_op(state: &str) -> serde_json::Value {
+    let applied = state == "applied";
+    json!({
+        "op_id": FIXTURE_OP_ID,
+        "operation": "thread.post",
+        "item": {"kind": "thread", "id": FIXTURE_THREAD_ID},
+        "owner_runtime": FIXTURE_RUNTIME_A,
+        "owner_name": "Build box",
+        "state": state,
+        "reason": if applied { serde_json::Value::Null } else { json!({
+            "code": "owner_offline",
+            "text": "Build box is offline. It was last seen at 2026-01-01T13:00:00Z.",
+            "last_seen_at": "2026-01-01T13:00:00Z"
+        }) },
+        "result": if applied { json!({
+            "message_id": "019965a0-0000-7000-8000-0000000000d7",
+            "thread_id": FIXTURE_THREAD_ID,
+            "origin_runtime": FIXTURE_RUNTIME_A,
+            "seq": 13
+        }) } else { serde_json::Value::Null },
+        "error": null,
+        "created_at": "2026-01-01T14:00:00Z",
+        "updated_at": if applied { "2026-01-01T14:00:03Z" } else { "2026-01-01T14:00:00Z" },
+        "expires_at": "2026-01-08T14:00:00Z"
+    })
+}
 
 /// One swarm member as `swarm.members` reports it.
 fn fixture_member(runtime_id: &str, name: &str, this: bool) -> serde_json::Value {
@@ -1903,7 +1958,7 @@ fn fixture_exchange() -> serde_json::Value {
             "last_client_at": "2026-01-01T13:58:00Z",
             "links": [FIXTURE_RUNTIME_A],
             "updated_at": "2026-01-01T14:00:00Z",
-            "capabilities": ["store/1"]
+            "capabilities": ["store/1", "ops/1"]
         },
         "members": [],
         "directory": [fixture_directory_entry()],
@@ -1954,12 +2009,34 @@ fn fixture_exchange() -> serde_json::Value {
                 "from_name": "Deal desk",
                 "origin_run_id": "019965a0-0000-7000-8000-0000000000b5"
             }
+        }, {
+            "message_id": FIXTURE_OP_ID,
+            "kind": "op",
+            "from_runtime": FIXTURE_RUNTIME_B,
+            "to_runtime": FIXTURE_RUNTIME_A,
+            "from_agent": null,
+            "to_agent": null,
+            "hop": 0,
+            "created_at": "2026-01-01T14:00:00Z",
+            "body": {
+                "operation": "thread.post",
+                "body": {"thread_id": FIXTURE_THREAD_ID, "text": "Check the west region first."},
+                "actor_device": "018f0000-0000-4000-8000-0000000000d8",
+                "actor_scopes": ["run.write", "thread.read"],
+                "idempotency_key": "019965a0-0000-7000-8000-0000000000d5"
+            }
         }],
         "acks": [{
             "message_id": "019965a0-0000-7000-8000-0000000000d0",
             "status": "delivered",
             "note": null,
             "at": "2026-01-01T13:59:00Z"
+        }, {
+            "message_id": "019965a0-0000-7000-8000-0000000000d3",
+            "status": "delivered",
+            "note": null,
+            "at": "2026-01-01T13:59:30Z",
+            "result": {"run": {"id": "019965a0-0000-7000-8000-0000000000b6", "status": "queued"}}
         }],
         "notices": [],
         "approvals": [fixture_approval("pending")],
@@ -2310,6 +2387,7 @@ fn event_body(event: &EventName) -> serde_json::Value {
             "runtime_id": FIXTURE_RUNTIME_A,
             "activity": fixture_activity()
         }),
+        EventName::FleetOpUpdated => fixture_op("queued"),
         EventName::GroupPosted => json!({
             "group_id": FIXTURE_GROUP_ID,
             "thread_id": FIXTURE_GROUP_THREAD_ID,
@@ -2503,6 +2581,7 @@ mod tests {
             Operation::ThreadPermissionModeSet,
             Operation::ThreadPlan,
             Operation::ThreadPlanAnswer,
+            Operation::FleetOpStatus,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -2596,12 +2675,15 @@ mod tests {
             "response-thread-plan-answer.json",
             "request-agent-approval-answer-plan.json",
             "event-agent-approval-pending-plan.json",
+            "response-fleet-op-status.json",
+            "event-fleet-op-updated.json",
+            "request-run-chat-events-fleet.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4,
             "every canonical fixture must be inventoried"
         );
     }

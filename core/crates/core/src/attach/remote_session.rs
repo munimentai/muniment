@@ -223,7 +223,8 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         Operation::SwarmMembers
         | Operation::SwarmAgents
         | Operation::AgentApprovals
-        | Operation::GroupList => RemoteRule::Scope(SCOPE_THREAD_READ),
+        | Operation::GroupList
+        | Operation::FleetOpStatus => RemoteRule::Scope(SCOPE_THREAD_READ),
         Operation::ThreadPost
         | Operation::AgentApprovalAnswer
         | Operation::GroupCreate
@@ -571,13 +572,27 @@ impl<H: ThreadListService> DesktopSessionService for RemoteSession<'_, H> {
                     })
                     .map_err(refuse)
             }
-            RemoteRule::AnyScope | RemoteRule::Scope(_) => DesktopSessionService::dispatch_request(
-                self.service,
-                request,
-                workspace,
-                provenance,
-                state,
-            ),
+            RemoteRule::AnyScope | RemoteRule::Scope(_) => {
+                // An action on an item another swarm member owns goes there
+                // with this device's own scopes.
+                let actor = crate::swarm::FleetActor::new(&self.device_id, self.scopes.clone());
+                let forwarded =
+                    super::desktop_dispatch::route_to_owner(self.service, &request, &actor)
+                        .map_err(refuse)?;
+                if let Some(body) = forwarded {
+                    return Ok(DesktopDispatchResult {
+                        body,
+                        events: Vec::new(),
+                    });
+                }
+                DesktopSessionService::dispatch_request(
+                    self.service,
+                    request,
+                    workspace,
+                    provenance,
+                    state,
+                )
+            }
         }
     }
 }

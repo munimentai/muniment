@@ -14,6 +14,10 @@
 //!   output; a user message posted on any member is a `thread.message.posted`
 //!   event with that member as origin, which the primary consumes in causal
 //!   order.
+//! - **Forwarded actions.** A client acting on an item another member owns,
+//!   such as a post to its thread or a run of its agent, gets
+//!   `{forwarded: true, op_id}`. The action travels to the owner as an `op`
+//!   message, and the owner runs the same operation for it.
 //! - **Records.** The directory, groups and thread registrations, and the
 //!   classes other parts of core keep through [`Records`], replicate as
 //!   field-level last-writer-wins records ordered by a hybrid logical clock.
@@ -30,6 +34,7 @@ mod hlc;
 mod link;
 mod messaging;
 mod moves;
+mod ops;
 mod records;
 mod store;
 mod sync;
@@ -54,6 +59,11 @@ use crate::permission_gate::ChatPermissionAnswer;
 use crate::run_events::SharedStorage;
 
 pub use hlc::Hlc;
+pub use link::PEER_KIND;
+pub use ops::{
+    is_forwardable, FleetActor, Forwarded, Op, OpItem, OpReason, FORWARDABLE, MOVE_SUGGEST_HOURS,
+    OPS_CAPABILITY, OP_DAYS,
+};
 pub use records::{
     ClassCount, Field, Record, RecordChange, Tombstone, STORE_CAPABILITY, TOMBSTONE_DAYS,
 };
@@ -100,6 +110,11 @@ pub trait SwarmHost: Send + Sync {
     /// Keeps the secret of a webhook another member handed over.
     fn store_hook_secret(&self, _hook_id: &str, _secret: &str) -> Result<(), String> {
         Err("This runtime keeps no webhook secrets.".into())
+    }
+    /// Runs an action another member forwarded through the same operation a
+    /// client of this runtime reaches, and answers its body.
+    fn run_forwarded(&self, _action: &Forwarded) -> Result<Value, String> {
+        Err("This runtime cannot run actions from other machines.".into())
     }
 }
 
@@ -174,6 +189,8 @@ pub(crate) struct Inner {
     run_changes: Mutex<Option<Receiver<Value>>>,
     /// The activity of each agent this runtime runs, as last sent to clients.
     activities: Mutex<HashMap<String, crate::agent_runs::Activity>>,
+    /// Held while forwarded actions run, so each runs once.
+    ops_running: Mutex<()>,
 }
 
 /// What one member knows of a peer it exchanges with.
@@ -280,6 +297,7 @@ impl Swarm {
             gates: Mutex::new(HashMap::new()),
             run_changes: Mutex::new(None),
             activities: Mutex::new(HashMap::new()),
+            ops_running: Mutex::new(()),
         });
         absence::initialize(&inner)?;
         let mut registry = lock(&REGISTRY);
@@ -430,7 +448,11 @@ impl Swarm {
             }
             Operation::SwarmAgents => {
                 empty(&body)?;
-                Ok(json!({"agents": directory::entries(inner, false)?}))
+                let mut agents = directory::entries(inner, false)?;
+                for agent in &mut agents {
+                    agent.move_suggested = ops::move_suggested(inner, &agent.primary_runtime);
+                }
+                Ok(json!({"agents": agents}))
             }
             Operation::SwarmResume => {
                 empty(&body)?;
@@ -449,8 +471,22 @@ impl Swarm {
                 groups::list(inner)
             }
             Operation::GroupUpdate => groups::update(inner, body),
+            Operation::FleetOpStatus => ops::status(inner, body),
             _ => Err("The swarm operation is unknown.".into()),
         }
+    }
+
+    /// Where a client's call goes: `None` runs it here. When the item it
+    /// acts on belongs to another member and the operation is forwardable,
+    /// the action goes there and the answer carries `forwarded` and `op_id`.
+    pub fn route(
+        &self,
+        operation: Operation,
+        body: &Value,
+        actor: &FleetActor,
+        idempotency_key: Option<&str>,
+    ) -> Result<Option<Value>, String> {
+        ops::route(&self.inner, operation, body, actor, idempotency_key)
     }
 
     /// Runs the `agent-message` or `agent-handoff` tool for the run `run_id`
@@ -516,14 +552,19 @@ impl Swarm {
         gate_id: &str,
         answer: &ChatPermissionAnswer,
     ) -> Result<Value, String> {
-        self.operation(
+        let body = json!({
+            "approval_id": format!("{run_id}:{gate_id}"),
+            "answer": serde_json::to_value(answer).map_err(|error| error.to_string())?,
+        });
+        if let Some(answer) = self.route(
             Operation::AgentApprovalAnswer,
-            json!({
-                "approval_id": format!("{run_id}:{gate_id}"),
-                "answer": serde_json::to_value(answer).map_err(|error| error.to_string())?,
-            }),
+            &body,
+            &FleetActor::phone(),
             None,
-        )
+        )? {
+            return Ok(answer);
+        }
+        self.operation(Operation::AgentApprovalAnswer, body, None)
     }
 
     /// The summary of the approval the run `run_id` waits at, if any.
@@ -804,6 +845,20 @@ impl Inner {
             }
             if let Err(error) = approvals::forward_run_changes(self) {
                 crate::runtime_eprintln!("muniment-runtime: swarm notices failed: {error}");
+            }
+        }
+        // Forwarded actions run outside the merge: the operations they reach
+        // take it themselves.
+        for (name, step) in [
+            (
+                "ops",
+                ops::execute_pending as fn(&Self) -> Result<(), String>,
+            ),
+            ("op states", ops::refresh),
+            ("op results", ops::forget_old_results),
+        ] {
+            if let Err(error) = step(self) {
+                crate::runtime_eprintln!("muniment-runtime: swarm {name} failed: {error}");
             }
         }
         if kick {

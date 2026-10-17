@@ -145,6 +145,8 @@ pub(super) struct ActiveChatSubscription {
     swarm: Option<std::sync::mpsc::Receiver<crate::swarm::ClientEvent>>,
     /// Whether the subscriber also takes `agent.activity` and `group.posted`.
     swarm_live: bool,
+    /// Whether the subscriber also takes `fleet.op_updated`.
+    fleet: bool,
 }
 
 /// How often a subscription rereads the update status, which a launcher in
@@ -323,6 +325,7 @@ fn drain_swarm(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
                         event.name,
                         EventName::AgentActivity | EventName::GroupPosted
                     ) => {}
+            Ok(event) if !subscription.fleet && event.name == EventName::FleetOpUpdated => {}
             Ok(event) => events.push(Event {
                 protocol: Protocol,
                 subscription_id: subscription.subscription_id.clone(),
@@ -669,6 +672,40 @@ fn redacted_run_open_event(
     Ok(body)
 }
 
+/// Sends a forwardable action on an item another swarm member owns to that
+/// member, and answers the forwarding answer. `None` runs the request here.
+pub(super) fn route_to_owner<S: ThreadListService + ?Sized>(
+    service: &mut S,
+    request: &Request,
+    actor: &crate::swarm::FleetActor,
+) -> Result<Option<serde_json::Value>, ProtocolError> {
+    if !crate::swarm::is_forwardable(request.operation) || !request.body.is_object() {
+        return Ok(None);
+    }
+    request.validate_idempotency_key()?;
+    service.fleet_route(
+        request.operation,
+        &request.body,
+        actor,
+        request.idempotency_key.as_ref().map(super::Id::as_str),
+    )
+}
+
+/// Runs one request in this process as the runtime's owner would, for an
+/// action another swarm member forwarded, and answers its body. The service
+/// must not route it on again.
+pub fn dispatch_forwarded<S: ThreadListService>(
+    service: &mut S,
+    request: Request,
+    workspace: &str,
+    provenance: CompanionProvenance,
+) -> Result<serde_json::Value, ProtocolError> {
+    let mut state = DesktopSessionService::new_session_state(service);
+    DesktopSessionService::dispatch_request(service, request, workspace, provenance, &mut state)
+        .map(|result| result.body)
+        .map_err(|failure| failure.error)
+}
+
 pub(super) fn dispatch_request<S: ThreadListService>(
     request: Request,
     workspace: &str,
@@ -740,6 +777,11 @@ pub(super) fn dispatch_request<S: ThreadListService>(
     request.validate_idempotency_key()?;
     if request.operation != Operation::SwarmExchange {
         service.note_client_activity();
+    }
+    // An action on an item another swarm member owns goes there. A remote
+    // device's session routed it already, with the device's own scopes.
+    if let Some(body) = route_to_owner(service, &request, &crate::swarm::FleetActor::owner())? {
+        return bounded_response(body);
     }
     if request.operation.is_swarm_operation() {
         // Only a linked runtime trades swarm state, over the remote route.
@@ -999,6 +1041,9 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             /// With `swarm`, also send `agent.activity` and `group.posted`.
             #[serde(default)]
             swarm_live: bool,
+            /// With `swarm`, also send `fleet.op_updated`.
+            #[serde(default)]
+            fleet: bool,
         }
         let body: Body =
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
@@ -1052,6 +1097,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             agent_runs,
             swarm,
             swarm_live: body.swarm_live,
+            fleet: body.fleet,
         });
         return Ok(response_only(serde_json::json!({
             "subscription_id": subscription_id,

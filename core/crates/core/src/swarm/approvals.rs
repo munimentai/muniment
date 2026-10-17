@@ -19,13 +19,13 @@ use crate::journal::reducer::ChatProjector;
 use crate::permission_gate::ChatPermissionAnswer;
 
 /// How long an answer given on another member waits to hear which answer won.
-const REMOTE_ANSWER_WAIT: Duration = Duration::from_secs(8);
+pub(super) const REMOTE_ANSWER_WAIT: Duration = Duration::from_secs(8);
 
 fn self_id(inner: &Inner) -> String {
     inner.runtime_id().unwrap_or_else(|| "local".into())
 }
 
-fn get(inner: &Inner, approval_id: &str) -> Result<Option<Approval>, String> {
+pub(super) fn get(inner: &Inner, approval_id: &str) -> Result<Option<Approval>, String> {
     inner
         .store
         .record("approvals", "approval_id", "record", approval_id)
@@ -345,6 +345,7 @@ pub(super) fn answer_operation(
         approval_id: String,
         answer: Value,
     }
+    let request = body.clone();
     let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
     let answer_id = uuid::Uuid::now_v7().to_string();
     let own = self_id(inner);
@@ -377,6 +378,21 @@ pub(super) fn answer_operation(
                 false,
             ),
         });
+    }
+    // Another member runs the gate: the answer travels there as a forwarded
+    // action, unless that member predates them.
+    let mut actor = super::ops::FleetActor::owner();
+    if let Some(client) = client {
+        actor.device = client.to_owned();
+    }
+    if let Some(answer) = super::ops::route(
+        inner,
+        muniment_attach::Operation::AgentApprovalAnswer,
+        &request,
+        &actor,
+        None,
+    )? {
+        return Ok(answer);
     }
     {
         let _merge = lock(&inner.merge);

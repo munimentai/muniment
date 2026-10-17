@@ -50,6 +50,10 @@ pub struct DirectoryEntry {
     /// The agent's primary thread, which every member replicates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_thread: Option<String>,
+    /// Whether the primary has been away long enough that this member offers
+    /// to take the agent. Client reads only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub move_suggested: bool,
     /// The agent's definition, which a forced move installs when the old
     /// primary is offline. Exchanges carry it; client reads leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -174,7 +178,7 @@ pub struct ReplicatedEvent {
 pub struct Message {
     pub message_id: String,
     /// `agent_message`, `handoff`, `user_message`, `group_turn`,
-    /// `group_reply`, `approval_answer`, `handover` or `move_request`.
+    /// `group_reply`, `approval_answer`, `handover`, `move_request` or `op`.
     pub kind: String,
     pub from_runtime: String,
     #[serde(default)]
@@ -198,6 +202,9 @@ pub struct Ack {
     #[serde(default)]
     pub note: Option<String>,
     pub at: String,
+    /// The owner's answer to a forwarded action it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
 }
 
 /// A change every member shows its clients, such as a run that ended.
