@@ -195,13 +195,18 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::PermissionModes
         | Operation::PermissionSettings
         | Operation::ThreadPermissionMode
-        | Operation::ThreadPlan => RemoteRule::Scope(SCOPE_THREAD_READ),
+        | Operation::ThreadPlan
+        | Operation::PreferencesGet => RemoteRule::Scope(SCOPE_THREAD_READ),
         Operation::AgentRunNow
         | Operation::AgentReplay
         | Operation::ThreadPermissionModeSet
         | Operation::ThreadPlanAnswer => RemoteRule::Scope(SCOPE_RUN_WRITE),
         // The settings choose how much every later run may do unasked.
         Operation::PermissionSettingsSave => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
+        // Fleet-wide preferences reach every machine of the owner.
+        Operation::PreferencesSet | Operation::PreferencesImport => {
+            RemoteRule::Scope(SCOPE_RUNTIME_ADMIN)
+        }
         // A saved agent and its routines act on their own later, so changing
         // them takes its own scope, which `runtime.admin` grants too.
         Operation::AgentSave
