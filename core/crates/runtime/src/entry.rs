@@ -1,0 +1,143 @@
+//! The entry that runs the runtime for a host with no OS service registration.
+
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::time::Duration;
+
+use muniment_core::attach::linux::{AttachFilesystem, AttachTransport};
+use muniment_core::attach::{RemoteRouteOptions, UpdateCapability};
+
+use crate::host::RuntimeHost;
+use crate::retention_schedule::{start_retention_schedule, RetentionScheduleCommand};
+use crate::{run_bound_attach_listener, AttachListenerError, RuntimeAttachState};
+
+const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Where one runtime keeps its state and serves its attach endpoint.
+pub struct RuntimeDirectories {
+    /// The state root: the run journal, content store, memory and records.
+    pub profile: PathBuf,
+    /// The config root: the local-mode marker and the Home record.
+    pub config: PathBuf,
+    /// The directory that holds the attach endpoint and its instance lock.
+    pub endpoint: PathBuf,
+}
+
+/// How a host that a launcher updates runs the runtime.
+pub struct RuntimeUpdateOptions {
+    /// Who installs a requested version, as `runtime.info` reports it.
+    pub capability: UpdateCapability,
+    /// Fires when the launcher asks the runtime to drain for an update.
+    pub drain: Receiver<()>,
+    /// How long a drain waits for the runtime to go idle before it stops.
+    pub grace: Duration,
+}
+
+/// The reason the runtime could not serve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunRuntimeError {
+    State,
+    /// The remote access identity or store under the state root could not open.
+    RemoteAccess,
+    Listener(AttachListenerError),
+}
+
+impl fmt::Display for RunRuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::State => formatter.write_str("runtime attach state could not be opened"),
+            Self::RemoteAccess => formatter.write_str("remote access could not be opened"),
+            Self::Listener(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for RunRuntimeError {}
+
+/// Opens the runtime state for `host` and serves attach connections until
+/// `stop` fires or its sender drops. The runtime owns the endpoint's instance
+/// lock before its retention and agent schedules start, so one runtime runs
+/// them. With `remote`, it also serves the remote route as the remote access
+/// settings direct.
+pub fn run_runtime(
+    host: RuntimeHost,
+    directories: &RuntimeDirectories,
+    remote: Option<RemoteRouteOptions>,
+    stop: Receiver<()>,
+) -> Result<(), RunRuntimeError> {
+    run_runtime_with_updates(host, directories, remote, None, stop)
+}
+
+/// Runs the runtime like [`run_runtime`]. With `updates`, `runtime.info`
+/// reports the update capability, a drain request drains the runtime and
+/// then stops it, and runs the last update interrupted resume.
+pub fn run_runtime_with_updates(
+    host: RuntimeHost,
+    directories: &RuntimeDirectories,
+    remote: Option<RemoteRouteOptions>,
+    updates: Option<RuntimeUpdateOptions>,
+    stop: Receiver<()>,
+) -> Result<(), RunRuntimeError> {
+    let state = Arc::new(
+        RuntimeAttachState::open(host, &directories.profile, &directories.config)
+            .map_err(|_| RunRuntimeError::State)?,
+    );
+    let filesystem = AttachFilesystem::from_runtime_directory(directories.endpoint.as_os_str())
+        .map_err(|_| RunRuntimeError::Listener(AttachListenerError::Filesystem))?;
+    let instance_lock = filesystem
+        .acquire_instance_lock()
+        .map_err(|_| RunRuntimeError::Listener(AttachListenerError::InstanceLock))?;
+    let transport = AttachTransport::bind(&filesystem)
+        .map_err(|_| RunRuntimeError::Listener(AttachListenerError::Bind))?;
+    if let Some(remote) = remote {
+        state
+            .start_remote_route(remote)
+            .map_err(|_| RunRuntimeError::RemoteAccess)?;
+    }
+    let stop = match updates {
+        None => stop,
+        Some(updates) => {
+            if let Some(access) = state.remote_access() {
+                access.set_update_capability(updates.capability);
+            }
+            state.resume_after_update();
+            // A drain ends in a stop, so both the host's stop and the drain
+            // feed the listener's one stop channel.
+            let (merged, merged_stop) = mpsc::channel();
+            let host_stop = merged.clone();
+            std::thread::spawn(move || {
+                if stop.recv().is_ok() {
+                    let _ = host_stop.send(());
+                }
+            });
+            let drain_state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                if updates.drain.recv().is_ok() {
+                    drain_state.drain_for_update(updates.grace);
+                    muniment_core::runtime_eprintln!("muniment-runtime: stopping reason=update");
+                    let _ = merged.send(());
+                }
+            });
+            merged_stop
+        }
+    };
+    let (commands, command_rx) = mpsc::channel();
+    let retention =
+        start_retention_schedule(Arc::clone(&state), RETENTION_INTERVAL, command_rx, None);
+    let service_state = Arc::clone(&state);
+    let result = run_bound_attach_listener(
+        instance_lock,
+        transport,
+        state.attach_listener_inputs(),
+        None,
+        move || service_state.attach_service(),
+        stop,
+    )
+    .map_err(RunRuntimeError::Listener);
+    state.stop_remote_route();
+    let _ = commands.send(RetentionScheduleCommand::Stop);
+    retention.join().expect("retention schedule does not panic");
+    result
+}

@@ -1,0 +1,30 @@
+[package]
+name = "muniment-runtime-core"
+version = "0.0.1"
+edition = "2021"
+
+# The platform-neutral runtime: attach serving, runs, schedules, the company
+# record service, the model service with its router, and the web search
+# server. The host binary supplies cloud accounts, chat grants, credential
+# storage, provider OAuth clients and its own executables through
+# `RuntimeHost`, and registers the binary with the OS service manager.
+
+[features]
+default = ["keyring"]
+# The platform keychain: `KeyringCredentialStore`, the default credential
+# store, and prompt history outside local mode. A host without a keychain
+# turns it off, and prompts and credentials then live in files under the
+# state root.
+keyring = ["muniment-core/keyring"]
+
+[dependencies]
+muniment-attach = { path = "../attach", features = ["client"] }
+muniment-core = { path = "../core" }
+muniment-search = { path = "../search" }
+serde = { version = "1", features = ["derive"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "v7"] }
+
+[dev-dependencies]
+# The journal tests drop tables to build missing-table fixtures.
+rusqlite = { version = "0.40", features = ["bundled"] }

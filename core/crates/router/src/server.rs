@@ -1,0 +1,3559 @@
+//! The loopback endpoint Pi talks to.
+//!
+//! The router answers the OpenAI chat wire on `127.0.0.1` at an ephemeral
+//! port, behind a token it writes beside its record. Pi holds that port and
+//! token as one more custom endpoint, so every turn arrives here, gets a route
+//! and an account, and goes out on that account's credential. Nothing off the
+//! machine can reach the port, and the token keeps another process on the
+//! machine from spending the user's accounts.
+//!
+//! A refused turn fails over: the account that refused goes into cooldown and
+//! the next account takes the turn, then another enabled model if the pool fails.
+
+use std::collections::BTreeMap;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::config::{self, RouterConfig};
+use super::store::Backend;
+use super::usage::{self, Ledger};
+use super::{balance, plan, served_models, wire, ResolveError};
+use super::{native_auth, transport};
+
+/// Where the router writes the port and token Pi needs.
+pub const ENDPOINT_FILE: &str = "muniment-router-endpoint.json";
+/// The longest a request head may be, and the longest a request body may be.
+const HEAD_LIMIT: usize = 64 * 1024;
+const BODY_LIMIT: usize = 32 * 1024 * 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const READ_TIMEOUT: Duration = Duration::from_secs(600);
+const ACCEPT_POLL: Duration = Duration::from_millis(50);
+/// What a turn reads when the sign-in another machine shares has lapsed.
+const SHARED_EXPIRED: &str =
+    "This shared sign-in expired. Open Muniment on the computer that shares it.";
+
+/// How long a token refresh may take before the turn moves on.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(12);
+/// How long a request waits for its thread's request in flight before it gets
+/// 409. It stays under Pi's five-minute idle timeout, because the waiting client
+/// receives no bytes.
+const LEASE_WAIT: Duration = Duration::from_secs(240);
+/// How often a waiting request checks that its client is still connected.
+const CLIENT_POLL: Duration = Duration::from_secs(1);
+
+/// The port and token Pi reaches the router on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Endpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+impl Endpoint {
+    /// The base URL Pi stores for the router provider.
+    pub fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}/v1", self.port)
+    }
+}
+
+/// The endpoint record inside an agent directory.
+pub fn endpoint_path(agent: &Path) -> PathBuf {
+    agent.join(ENDPOINT_FILE)
+}
+
+/// The running router's endpoint, when one has started.
+pub fn read_endpoint(agent: &Path) -> Option<Endpoint> {
+    serde_json::from_slice(&std::fs::read(endpoint_path(agent)).ok()?).ok()
+}
+
+fn write_endpoint(agent: &Path, endpoint: &Endpoint) -> io::Result<()> {
+    std::fs::create_dir_all(agent)?;
+    config::write_private(&endpoint_path(agent), &serde_json::to_vec_pretty(endpoint)?)
+}
+
+/// A random 32-byte token in hex.
+fn token() -> String {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).expect("the platform's random source");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// How many turns each account has in flight right now, by account id.
+pub type Active = Arc<Mutex<BTreeMap<String, u32>>>;
+
+/// A started router. Dropping the handle stops the listener.
+pub struct Handle {
+    endpoint: Endpoint,
+    stop: Arc<AtomicBool>,
+    active: Active,
+    state: Arc<State>,
+}
+
+impl Handle {
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// The turns in flight per account, for the pools screen.
+    pub fn active(&self) -> BTreeMap<String, u32> {
+        self.active
+            .lock()
+            .map(|active| active.clone())
+            .unwrap_or_default()
+    }
+
+    /// Uses the running router's ledger without generating an assistant reply.
+    pub fn test_route(&self, sample: &str) -> Result<RouteTest, String> {
+        self.state.test_route(sample)
+    }
+
+    /// Stops the accept loop. Turns already in flight finish.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// What the router keeps between turns: where its records are, and the
+/// counters it has not yet written down.
+pub(crate) struct State {
+    sessions: Mutex<super::policy::Sessions>,
+    contexts: super::context::Contexts,
+    active_sessions: Leases,
+    progress: super::progress::Progress,
+    pub(crate) backend: Backend,
+    /// The desktop agent directory, where the subscription probe writes its
+    /// receipts. A server host has none.
+    agent: Option<PathBuf>,
+    ledger: Mutex<Ledger>,
+    /// The turns in flight, counted up while an upstream call is open.
+    pub(crate) active: Active,
+    /// The clock, so a test can hold time still.
+    pub(crate) now_ms: fn() -> i64,
+}
+
+/// What a host learns about a turn and may refuse, beyond what the desktop
+/// router does. The desktop runs with [`NoHooks`].
+pub(crate) trait Hooks {
+    /// Measured success rates by `family/model` for this turn's scope.
+    fn success_rates(&self) -> BTreeMap<String, f64> {
+        BTreeMap::new()
+    }
+    /// What the run this turn belongs to may still spend, which replaces the
+    /// configured task budget. `None` keeps the configured one. An error
+    /// answers the client with that status and body and ends the turn.
+    fn budget(&self) -> Result<Option<f64>, (u16, Value)> {
+        Ok(None)
+    }
+    /// The route policy chose for the turn, and why.
+    fn decided(&self, _route: &config::Route, _reason: &str) {}
+    /// Called before each upstream attempt with the attempt's uncached cost
+    /// estimate. An error answers the client with that status and body and
+    /// ends the turn.
+    fn admit(
+        &self,
+        _route: &config::Route,
+        _account: &config::Account,
+        _estimate_usd: f64,
+    ) -> Result<(), (u16, Value)> {
+        Ok(())
+    }
+    /// Called once for every admitted attempt, however it ended.
+    fn settle(&self, _attempt: &Attempt) {}
+}
+
+/// The desktop's hooks: no refusal and nothing recorded.
+pub(crate) struct NoHooks;
+impl Hooks for NoHooks {}
+
+/// How one admitted upstream attempt ended.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+pub(crate) struct Attempt {
+    pub route: config::Route,
+    pub account: String,
+    /// What the attempt cost: the priced tokens of a completed answer, the
+    /// estimate for an answer that broke off after output began, and zero for
+    /// an attempt that produced nothing.
+    pub cost_usd: f64,
+    pub tokens: Option<wire::Tokens>,
+    /// Whether any answer reached the client.
+    pub served: bool,
+    /// The upstream status of a refused attempt.
+    pub status: Option<u16>,
+    pub elapsed_ms: u64,
+}
+
+/// One turn's place in the in-flight count. It clears when the turn ends,
+/// whichever way it ends.
+struct InFlight {
+    active: Active,
+    account: String,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        if let Ok(mut held) = self.active.lock() {
+            if let Some(count) = held.get_mut(&self.account) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    held.remove(&self.account);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct RouteTest {
+    pub model: String,
+    pub reason: &'static str,
+    pub confidence: Option<f64>,
+    pub elapsed_ms: u128,
+    pub eligible_models: Vec<String>,
+    pub exclusions: Vec<RouteExclusion>,
+    pub fallback_reason: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RouteExclusion {
+    pub model: String,
+    pub reason: String,
+}
+
+fn route_availability(
+    config: &RouterConfig,
+    ledger: &Ledger,
+    now_ms: i64,
+) -> (Vec<String>, Vec<RouteExclusion>) {
+    let mut models = std::collections::BTreeSet::new();
+    for account in &config.accounts {
+        let names = if account.models.is_empty() {
+            super::model_catalog::family_models(&account.family)
+                .iter()
+                .map(|entry| entry.model.to_owned())
+                .collect()
+        } else {
+            account.models.clone()
+        };
+        for model in names {
+            models.insert((account.family.clone(), model));
+        }
+    }
+    let mut eligible = Vec::new();
+    let mut excluded = Vec::new();
+    for (family, model) in models {
+        let name = format!("{family}/{model}");
+        match balance::pick(config, ledger, &family, &model, now_ms) {
+            Ok(_) => eligible.push(name),
+            Err(error) => excluded.push(RouteExclusion {
+                model: name,
+                reason: error.message(),
+            }),
+        }
+    }
+    (eligible, excluded)
+}
+
+impl State {
+    /// The configuration for one turn, with the run's remaining budget when
+    /// the turn belongs to a run.
+    fn classifier_config(&self, run_budget_usd: Option<f64>) -> RouterConfig {
+        let current = || {
+            let mut config = self.config();
+            config.policy.run_budget_usd = run_budget_usd;
+            config
+        };
+        let config = current();
+        // An offline or task-budgeted turn refreshes no pooled classifier token.
+        if config.policy.offline_only || super::constraints::task_budgeted(&config) {
+            return config;
+        }
+        if let config::Classifier::Pooled { family, model } = &config.classifier {
+            if let Ok(account) =
+                balance::pick(&config, &self.ledger(), family, model, (self.now_ms)())
+            {
+                if let Err(error) = native_auth::refresh_account_in(
+                    &self.backend,
+                    &account.id,
+                    (self.now_ms)(),
+                    REFRESH_TIMEOUT,
+                ) {
+                    self.record_error(&account.id, &error, true);
+                }
+            }
+        }
+        current()
+    }
+
+    fn test_route(&self, sample: &str) -> Result<RouteTest, String> {
+        if sample.trim().is_empty() || sample.len() > 32_000 {
+            return Err("Enter a sample of 1 to 32,000 bytes.".into());
+        }
+        let started = std::time::Instant::now();
+        let original = self.classifier_config(None);
+        let features = super::policy::Features::read(
+            &serde_json::json!({"messages":[{"role":"user","content":sample}]}),
+        );
+        let config = super::constraints::filter(&original, &Default::default(), &features, true);
+        let decision = super::classify::decide(
+            &config,
+            &super::options(&config),
+            &self.ledger(),
+            sample,
+            (self.now_ms)(),
+            super::classify::TIMEOUT,
+        )
+        .ok_or("Connect an eligible account before testing.")?;
+        if let Some(account) = &decision.spent_on {
+            self.record_success(account, decision.spent);
+        }
+        let (eligible_models, exclusions) =
+            route_availability(&config, &self.ledger(), (self.now_ms)());
+        Ok(RouteTest {
+            eligible_models,
+            exclusions,
+            fallback_reason: match decision.reason {
+                super::classify::Reason::Classified => None,
+                super::classify::Reason::NotClassified => {
+                    Some("Classification is not active for this request.")
+                }
+                super::classify::Reason::LowConfidence => {
+                    Some("Classifier confidence is below the configured minimum.")
+                }
+                super::classify::Reason::Failed => {
+                    Some("The classifier did not return a valid choice.")
+                }
+            },
+            model: format!("{}/{}", decision.route.family, decision.route.model),
+            reason: match decision.reason {
+                super::classify::Reason::Classified => "Classifier selected the model",
+                super::classify::Reason::NotClassified => "Fallback used without classification",
+                super::classify::Reason::LowConfidence => {
+                    "Fallback used because confidence was low"
+                }
+                super::classify::Reason::Failed => "Fallback used because the classifier failed",
+            },
+            confidence: (decision.reason == super::classify::Reason::Classified
+                || decision.reason == super::classify::Reason::LowConfidence)
+                .then_some(decision.confidence),
+            elapsed_ms: started.elapsed().as_millis(),
+        })
+    }
+
+    /// The configuration as it stands right now. It is read per turn, so a
+    /// change in Settings takes the next turn with no restart.
+    #[cfg(test)]
+    fn reserve(
+        &self,
+        config: &RouterConfig,
+        family: &str,
+        model: &str,
+    ) -> Result<(config::Account, InFlight), balance::PickError> {
+        self.reserve_preferred(config, family, model, None)
+    }
+
+    /// The ledger with every account whose allowance is known to be spent held
+    /// cooling until its reset, and the ids of those accounts. Unknown or stale
+    /// windows do not disable an account indefinitely.
+    fn quota_ledger(&self, now: i64) -> (Ledger, std::collections::BTreeSet<String>) {
+        let mut ledger = self.ledger();
+        let mut exhausted = std::collections::BTreeSet::new();
+        for (id, quota) in self.backend.store.load_quotas().accounts {
+            let reset = quota
+                .windows
+                .iter()
+                .filter(|window| {
+                    window.scope.is_empty()
+                        && (window.limit_reached || window.used_percent >= 100.0)
+                })
+                .filter_map(|window| window.resets_at_ms.filter(|reset| *reset > now))
+                .max();
+            if let Some(reset) = reset {
+                exhausted.insert(id.clone());
+                let usage = ledger.accounts.entry(id).or_default();
+                usage.cooldown_until_ms = Some(usage.cooldown_until_ms.unwrap_or(0).max(reset));
+            }
+        }
+        (ledger, exhausted)
+    }
+
+    fn reserve_preferred(
+        &self,
+        config: &RouterConfig,
+        family: &str,
+        model: &str,
+        preferred: Option<&str>,
+    ) -> Result<(config::Account, InFlight), balance::PickError> {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let now = (self.now_ms)();
+        let (ledger, exhausted) = self.quota_ledger(now);
+        let mut preferred_config = config.clone();
+        for account in &mut preferred_config.accounts {
+            account.enabled &= preferred.is_some_and(|id| {
+                super::policy::scope(config, id) == super::policy::scope(config, &account.id)
+            });
+        }
+        let account =
+            balance::pick_with_active(&preferred_config, &ledger, family, model, now, &active)
+                .or_else(|_| {
+                    balance::pick_with_active(config, &ledger, family, model, now, &active)
+                })
+                .map_err(|error| {
+                    if matches!(error, balance::PickError::AllCooling { .. })
+                        && balance::balanced(config, family, model)
+                            .into_iter()
+                            .chain(balance::overflow(config, family, model))
+                            .all(|account| exhausted.contains(&account.id))
+                    {
+                        balance::PickError::UsageLimit
+                    } else {
+                        error
+                    }
+                })?
+                .clone();
+        *active.entry(account.id.clone()).or_insert(0) += 1;
+        let guard = InFlight {
+            active: Arc::clone(&self.active),
+            account: account.id.clone(),
+        };
+        Ok((account, guard))
+    }
+
+    #[cfg(test)]
+    fn reserve_delivery(
+        &self,
+        config: &RouterConfig,
+        selected: &config::Route,
+        session: &super::policy::Session,
+        features: &super::policy::Features,
+    ) -> Result<(config::Account, config::Route, InFlight), balance::PickError> {
+        self.reserve_delivery_in(config, config, selected, session, features)
+    }
+
+    /// Reserves an account for one attempt. `configured` is the pool as the
+    /// user set it, and `config` is that pool less the accounts this turn has
+    /// already tried.
+    fn reserve_delivery_in(
+        &self,
+        configured: &RouterConfig,
+        config: &RouterConfig,
+        selected: &config::Route,
+        session: &super::policy::Session,
+        features: &super::policy::Features,
+    ) -> Result<(config::Account, config::Route, InFlight), balance::PickError> {
+        // While the family has a subscription for this model, the turn belongs
+        // to its subscriptions, even after each one has failed this turn. A key
+        // joins only as overflow, and only while every subscription cools.
+        let subscribed = configured.accounts.iter().any(|a| {
+            a.family == selected.family
+                && !a.is_key()
+                && balance::usable(a, &selected.model)
+                && !configured.refuses(&a.id, &selected.model)
+        });
+        let fits = |a: &config::Account| {
+            a.family == selected.family
+                && a.serves(&selected.model)
+                && !configured.refuses(&a.id, &selected.model)
+                && !(subscribed && a.is_key())
+        };
+        // Keep an established service pool even if one account becomes unavailable.
+        // A subscription must not silently spill into an API or gateway pool.
+        let anchor = config
+            .accounts
+            .iter()
+            .find(|a| a.id == session.account && fits(a))
+            .or_else(|| {
+                config
+                    .accounts
+                    .iter()
+                    .find(|a| a.enabled && a.weight > 0 && a.credential.servable() && fits(a))
+            })
+            .or_else(|| {
+                configured
+                    .accounts
+                    .iter()
+                    .filter(|_| subscribed)
+                    .find(|a| fits(a) && balance::usable(a, &selected.model))
+            })
+            .ok_or(balance::PickError::NoneServesModel)?;
+        let spill = subscribed && {
+            let (ledger, _) = self.quota_ledger((self.now_ms)());
+            balance::subscriptions_cooling(
+                configured,
+                &ledger,
+                &selected.family,
+                &selected.model,
+                (self.now_ms)(),
+            )
+        };
+        let routes = super::options(config);
+        let mut deliveries = Vec::new();
+        for route in routes
+            .iter()
+            .filter(|r| super::policy::same_model(config, selected, r))
+        {
+            if route.key != selected.key
+                && !super::policy::model(config, route).is_some_and(|m| features.fits(&m))
+            {
+                continue;
+            }
+            for account in config.accounts.iter().filter(|a| {
+                a.family == route.family
+                    && a.serves(&route.model)
+                    && !configured.refuses(&a.id, &route.model)
+                    && if subscribed && a.is_key() {
+                        spill && a.overflow && a.family == selected.family
+                    } else {
+                        super::policy::same_service(anchor, a)
+                    }
+            }) {
+                if !deliveries
+                    .iter()
+                    .any(|(a, _): &(config::Account, config::Route)| a.id == account.id)
+                {
+                    deliveries.push((account.clone(), route.clone()));
+                }
+            }
+        }
+        // The account that served this thread last holds its prompt cache, so
+        // it keeps the thread while it is healthy and under quota. Accounts
+        // that share its verified cache scope share that preference. Served
+        // shares and reservations distribute everything else.
+        deliveries.sort_by_key(|(account, _)| {
+            super::policy::scope(config, &account.id) != session.cache_scope
+        });
+        let warm = deliveries
+            .iter()
+            .any(|(account, _)| account.id == session.account)
+            .then_some(session.account.as_str());
+        let mut pool = config.clone();
+        pool.accounts = deliveries
+            .iter()
+            .map(|(account, _)| {
+                let mut a = account.clone();
+                a.family = "openai".into();
+                a.models = vec!["delivery".into()];
+                a
+            })
+            .collect();
+        let (picked, guard) = self.reserve_preferred(&pool, "openai", "delivery", warm)?;
+        let (account, route) = deliveries
+            .into_iter()
+            .find(|(a, _)| a.id == picked.id)
+            .unwrap();
+        Ok((account, route, guard))
+    }
+
+    pub(crate) fn new(backend: Backend, agent: Option<PathBuf>, clock: fn() -> i64) -> Self {
+        Self {
+            sessions: Mutex::new(backend.store.load_sessions()),
+            contexts: Default::default(),
+            active_sessions: Default::default(),
+            progress: Default::default(),
+            ledger: Mutex::new(backend.store.load_ledger()),
+            backend,
+            agent,
+            active: Arc::new(Mutex::new(BTreeMap::new())),
+            now_ms: clock,
+        }
+    }
+
+    pub(crate) fn config(&self) -> RouterConfig {
+        let mut config = self.backend.config().unwrap_or_default();
+        config.refused = self.ledger().refusals((self.now_ms)());
+        config
+    }
+
+    fn record_success(&self, account: &str, tokens: wire::Tokens) {
+        let now = (self.now_ms)();
+        if let Ok(mut ledger) = self.ledger.lock() {
+            ledger.record_success(account, &day(now), now, tokens.input, tokens.output);
+            ledger.record_cache(account, tokens);
+            let _ = self.backend.store.save_ledger(&ledger, account);
+        }
+    }
+
+    fn record_error(&self, account: &str, message: &str, cools: bool) {
+        let now = (self.now_ms)();
+        if let Ok(mut ledger) = self.ledger.lock() {
+            ledger.record_error(account, &day(now), now, message, cools);
+            let _ = self.backend.store.save_ledger(&ledger, account);
+        }
+    }
+
+    /// Records that the plan of `account` does not offer `model`. On the
+    /// desktop, Pi's entry for the router is written again, so a model every
+    /// account refused leaves the list Pi offers.
+    fn refuse_model(&self, account: &str, model: &str) {
+        {
+            let mut ledger = self
+                .ledger
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ledger.record_refusal(account, model, (self.now_ms)());
+            let _ = self.backend.store.save_ledger(&ledger, account);
+        }
+        let Some(agent) = &self.agent else {
+            return;
+        };
+        let settings = self.config();
+        let _ = muniment_models::pi_models::merge_discovered(agent, &[], |root| {
+            let Some(endpoint) = read_endpoint(agent) else {
+                return false;
+            };
+            let entry = |root: &serde_json::Map<String, Value>| {
+                root.get("providers")
+                    .and_then(|providers| providers.get(config::ROUTER_PROVIDER))
+                    .cloned()
+            };
+            let before = entry(root);
+            if !settings.enabled || before.is_none() {
+                return false;
+            }
+            super::pi_provider::register(root, &endpoint, &settings);
+            before != entry(root)
+        });
+    }
+
+    /// Keeps the account out of the pool until `until_ms`, when that is later
+    /// than the cooldown it already has.
+    fn hold_until(&self, account: &str, until_ms: i64) {
+        let mut ledger = self
+            .ledger
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = ledger.accounts.get_mut(account) {
+            entry.cooldown_until_ms = Some(entry.cooldown_until_ms.unwrap_or(0).max(until_ms));
+        }
+        let _ = self.backend.store.save_ledger(&ledger, account);
+    }
+
+    /// Writes the subscription probe's transport receipt, on the desktop only.
+    fn probe(&self, model: &str, outcome: &str, error_class: &str) {
+        if let Some(agent) = &self.agent {
+            super::subscription_probe::transport(agent, model, outcome, error_class);
+        }
+    }
+
+    fn save_session(&self, id: &str, session: &super::policy::Session) -> io::Result<()> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| io::Error::other("The session records are poisoned."))?;
+        sessions.entries.insert(id.into(), session.clone());
+        self.backend
+            .store
+            .save_sessions(&mut sessions, id, (self.now_ms)())
+    }
+
+    pub(crate) fn ledger(&self) -> Ledger {
+        self.ledger
+            .lock()
+            .map(|ledger| ledger.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// The `YYYY-MM-DD` bucket a moment falls in, in the machine's own zone.
+fn day(now_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(now_ms)
+        .map(|moment| {
+            chrono::DateTime::<chrono::Local>::from(moment)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|| "1970-01-01".to_owned())
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// Binds the loopback listener, writes the endpoint record, and serves until
+/// the handle stops or drops.
+pub fn start(agent: PathBuf) -> io::Result<Handle> {
+    start_with_clock(agent, now_ms)
+}
+
+fn start_with_clock(agent: PathBuf, clock: fn() -> i64) -> io::Result<Handle> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    listener.set_nonblocking(true)?;
+    let endpoint = Endpoint {
+        port,
+        token: token(),
+    };
+    write_endpoint(&agent, &endpoint)?;
+    let state = Arc::new(State::new(
+        Backend::files(&agent),
+        Some(agent.clone()),
+        clock,
+    ));
+    let active = Arc::clone(&state.active);
+    let stop = Arc::new(AtomicBool::new(false));
+    let accept_stop = Arc::clone(&stop);
+    let accept_token = endpoint.token.clone();
+    let handle_state = Arc::clone(&state);
+    std::thread::spawn(move || {
+        while !accept_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let state = Arc::clone(&state);
+                    let token = accept_token.clone();
+                    std::thread::spawn(move || {
+                        let _ = stream.set_nonblocking(false);
+                        serve(stream, &state, &token);
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(ACCEPT_POLL);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(Handle {
+        endpoint,
+        stop,
+        active,
+        state: handle_state,
+    })
+}
+
+/// One request's head: the method, the target and the headers.
+pub(crate) struct Head {
+    pub(crate) method: String,
+    pub(crate) target: String,
+    pub(crate) headers: Vec<(String, String)>,
+}
+
+impl Head {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// The path with any query string removed.
+    pub(crate) fn path(&self) -> &str {
+        self.target.split('?').next().unwrap_or(&self.target)
+    }
+}
+
+pub(crate) fn read_head(reader: &mut BufReader<TcpStream>) -> Option<Head> {
+    let mut line = String::new();
+    let mut read = 0;
+    reader.read_line(&mut line).ok()?;
+    read += line.len();
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?.to_owned();
+    let target = parts.next()?.to_owned();
+    let mut headers = Vec::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        read += line.len();
+        if read > HEAD_LIMIT {
+            return None;
+        }
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+        }
+    }
+    Some(Head {
+        method,
+        target,
+        headers,
+    })
+}
+
+pub(crate) fn read_body(reader: &mut BufReader<TcpStream>, head: &Head) -> Option<Vec<u8>> {
+    let length: usize = head.header("content-length")?.parse().ok()?;
+    if length > BODY_LIMIT {
+        return None;
+    }
+    let mut body = vec![0_u8; length];
+    reader.read_exact(&mut body).ok()?;
+    Some(body)
+}
+
+pub(crate) fn respond(stream: &mut dyn Write, status: u16, reason: &str, body: &Value) {
+    let payload = body.to_string();
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        payload.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(payload.as_bytes());
+    let _ = stream.flush();
+}
+
+fn serve(stream: TcpStream, state: &State, token: &str) {
+    let Ok(peer) = stream.peer_addr() else {
+        return;
+    };
+    // Belt on top of the loopback bind: nothing off the machine is served.
+    if !peer.ip().is_loopback() {
+        return;
+    }
+    let mut reader = BufReader::new(match stream.try_clone() {
+        Ok(clone) => clone,
+        Err(_) => return,
+    });
+    let mut stream = stream;
+    let Some(head) = read_head(&mut reader) else {
+        respond(
+            &mut stream,
+            400,
+            "Bad Request",
+            &wire::error_body("The router could not read the request.", "router_error"),
+        );
+        return;
+    };
+    if head.path() == "/healthz" {
+        respond(&mut stream, 200, "OK", &serde_json::json!({ "ok": true }));
+        return;
+    }
+    let presented = head
+        .header("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !constant_time_eq(presented.as_bytes(), token.as_bytes()) {
+        respond(
+            &mut stream,
+            401,
+            "Unauthorized",
+            &wire::error_body("The router refused this token.", "router_error"),
+        );
+        return;
+    }
+    match (head.method.as_str(), head.path()) {
+        ("GET", path) if path.starts_with("/v1/routing-progress/") => {
+            let id = path.trim_start_matches("/v1/routing-progress/");
+            if let Some(snapshot) = state.progress.get(id, (state.now_ms)()) {
+                respond(
+                    &mut stream,
+                    200,
+                    "OK",
+                    &serde_json::to_value(snapshot).unwrap(),
+                );
+            } else {
+                respond(&mut stream, 404, "Not Found", &serde_json::json!({}));
+            }
+        }
+        ("GET", "/v1/models") | ("GET", "/models") => {
+            let models = served_models(&state.config());
+            respond(&mut stream, 200, "OK", &wire::model_list(&models));
+        }
+        ("POST", "/v1/chat/completions") | ("POST", "/chat/completions") => {
+            let Some(body) = read_body(&mut reader, &head) else {
+                respond(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    &wire::error_body(
+                        "The router could not read the request body.",
+                        "router_error",
+                    ),
+                );
+                return;
+            };
+            let Ok(request) = serde_json::from_slice::<Value>(&body) else {
+                respond(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    &wire::error_body("The request body is not JSON.", "router_error"),
+                );
+                return;
+            };
+            let progress = state
+                .progress
+                .start(head.header("x-muniment-routing-id"), (state.now_ms)());
+            complete(
+                &mut stream,
+                Some(reader.get_ref()),
+                state,
+                &NoHooks,
+                &request,
+                progress.as_deref(),
+                head.header("x-muniment-thread"),
+                head.header("x-muniment-task").unwrap_or("default"),
+                head.header("x-muniment-validation-failures")
+                    .and_then(|v| v.parse::<u32>().ok()),
+                head.header("x-muniment-request-purpose"),
+            );
+            state.progress.finish(progress.as_deref());
+        }
+        _ => respond(
+            &mut stream,
+            404,
+            "Not Found",
+            &wire::error_body("The router does not serve this route.", "router_error"),
+        ),
+    }
+}
+
+/// Compares two secrets without leaking their length through timing.
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |seen, (a, b)| seen | (a ^ b))
+        == 0
+}
+
+/// The largest context among the routes that would take this request at no
+/// input size, when every one of them is too small for it.
+fn overflow(
+    original: &config::RouterConfig,
+    session: &super::policy::Session,
+    features: &super::policy::Features,
+    automatic: bool,
+) -> Option<u64> {
+    let sizeless = super::policy::Features {
+        input: 0,
+        ..features.clone()
+    };
+    let fitting = super::constraints::filter(original, session, &sizeless, automatic);
+    let largest = super::options(&fitting)
+        .iter()
+        .filter_map(|route| super::policy::model(original, route))
+        .map(|model| model.context)
+        .max()?;
+    (features.input.saturating_add(features.output) > largest).then_some(largest)
+}
+
+/// The threads with a request in flight. A request for a busy thread waits for
+/// the lease instead of failing, because the holder may only be finishing its
+/// bookkeeping after the client already read the whole answer.
+#[derive(Default)]
+pub(crate) struct Leases {
+    busy: Mutex<std::collections::HashSet<String>>,
+    released: std::sync::Condvar,
+}
+
+/// Why a request did not get its thread's lease.
+#[derive(Debug, PartialEq, Eq)]
+enum LeaseRefusal {
+    /// The holder kept the thread for the whole wait.
+    Busy,
+    /// The waiting client closed its connection.
+    Gone,
+}
+
+impl Leases {
+    /// Takes the lease of thread `id`, waiting up to `wait` for the request that
+    /// holds it. `gone` reports that the waiting client left.
+    fn acquire(
+        &self,
+        id: &str,
+        wait: Duration,
+        gone: &dyn Fn() -> bool,
+    ) -> Result<SessionGuard<'_>, LeaseRefusal> {
+        let deadline = std::time::Instant::now() + wait;
+        let mut busy = self
+            .busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if busy.insert(id.into()) {
+                return Ok(SessionGuard(self, id.into()));
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(LeaseRefusal::Busy);
+            }
+            if gone() {
+                return Err(LeaseRefusal::Gone);
+            }
+            busy = self
+                .released
+                .wait_timeout(busy, left.min(CLIENT_POLL))
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+    }
+}
+
+/// Classify once, try the selected pool, then eligible fallback models.
+/// Once response output starts, never replay the request on another model.
+struct SessionGuard<'a>(&'a Leases, String);
+impl Drop for SessionGuard<'_> {
+    fn drop(&mut self) {
+        let mut busy = self
+            .0
+            .busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        busy.remove(&self.1);
+        self.0.released.notify_all();
+    }
+}
+
+/// Whether the client closed its connection. The router reads the request body
+/// whole before it routes, so a live client has nothing more for the socket to
+/// read, and a peek that sees the end of the stream means the client left.
+fn client_gone(client: Option<&TcpStream>) -> bool {
+    let Some(client) = client else {
+        return false;
+    };
+    if client
+        .set_read_timeout(Some(Duration::from_millis(1)))
+        .is_err()
+    {
+        return true;
+    }
+    let mut byte = [0u8; 1];
+    match client.peek(&mut byte) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error) => !matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+        ),
+    }
+}
+
+/// An upstream request with its answer.
+type Sent = (
+    super::subscription_probe::TransportRequest,
+    Result<ureq::Response, ureq::Error>,
+);
+
+/// Sends the upstream request and waits for its answer while the client stays
+/// connected. With a client to watch, the call runs on its own thread, and the
+/// answer is None once the client leaves first: the turn ends and releases its
+/// thread, and the abandoned call finishes on its own.
+fn send_watching(
+    mut upstream: super::subscription_probe::TransportRequest,
+    headers: Vec<(&'static str, String)>,
+    body: Value,
+    client: Option<&TcpStream>,
+) -> Option<Sent> {
+    if client.is_none() {
+        let result = upstream.send_json(&headers, &body).map_err(|error| *error);
+        return Some((upstream, result));
+    }
+    let (sender, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = upstream.send_json(&headers, &body).map_err(|error| *error);
+        let _ = sender.send((upstream, result));
+    });
+    loop {
+        match answer.recv_timeout(CLIENT_POLL) {
+            Ok(result) => return Some(result),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if client_gone(client) {
+                    return None;
+                }
+            }
+        }
+    }
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn complete(
+    stream: &mut dyn Write,
+    client: Option<&TcpStream>,
+    state: &State,
+    hooks: &dyn Hooks,
+    request: &Value,
+    progress: Option<&str>,
+    thread: Option<&str>,
+    task: &str,
+    failures: Option<u32>,
+    purpose: Option<&str>,
+) {
+    let thread = thread.filter(|id| id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()));
+    let _lease = if let Some(id) = thread {
+        match state
+            .active_sessions
+            .acquire(id, LEASE_WAIT, &|| client_gone(client))
+        {
+            Ok(guard) => Some(guard),
+            Err(LeaseRefusal::Gone) => return,
+            Err(LeaseRefusal::Busy) => {
+                respond(
+                    stream,
+                    409,
+                    "Conflict",
+                    &wire::error_body(
+                        "This thread already has a request in flight.",
+                        "router_busy",
+                    ),
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let mut session = thread
+        .and_then(|id| state.sessions.lock().ok()?.entries.get(id).cloned())
+        .unwrap_or_default();
+    session.reserved_cost = 0.0; // A prior ambiguous attempt remains charged.
+    let features = super::policy::Features::read(request);
+    let boundary = session.observe(&features, &super::policy::digest(task));
+    if let Some(failures) = failures {
+        session.failures = failures.min(100);
+    }
+    let started = std::time::Instant::now();
+    state
+        .progress
+        .stage(progress, "choosing-model", (state.now_ms)());
+    let run_budget = match hooks.budget() {
+        Ok(budget) => budget,
+        Err((status, body)) => {
+            respond(stream, status, "Router", &body);
+            return;
+        }
+    };
+    let mut original = state.classifier_config(run_budget);
+    original.policy.measured = hooks.success_rates();
+    if super::constraints::task_budgeted(&original) && thread.is_none() {
+        respond(
+            stream,
+            422,
+            "Unprocessable Content",
+            &wire::error_body(
+                "An estimated task budget requires a thread ID.",
+                "routing_budget",
+            ),
+        );
+        return;
+    }
+    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
+    // Endpoint, capability, context and budget limits run before any
+    // classifier or model receives text.
+    let config = super::constraints::filter(
+        &original,
+        &session,
+        &features,
+        requested == config::AUTO_MODEL,
+    );
+    if !super::options(&original).is_empty() && super::options(&config).is_empty() {
+        if let Some(largest) = overflow(
+            &original,
+            &session,
+            &features,
+            requested == config::AUTO_MODEL,
+        ) {
+            // Pi compacts and retries on this error type and message.
+            respond(
+                stream,
+                400,
+                "Bad Request",
+                &wire::error_body(
+                    &format!(
+                        "This request needs about {} tokens, and the maximum context length is {largest} tokens across the routable models.",
+                        features.input.saturating_add(features.output)
+                    ),
+                    "context_length_exceeded",
+                ),
+            );
+            return;
+        }
+        respond(
+            stream,
+            422,
+            "Unprocessable Content",
+            &wire::error_body(
+                "No model satisfies the endpoint, capability and estimated budget limits.",
+                "routing_constraints",
+            ),
+        );
+        return;
+    }
+    if session.cache_scope != super::policy::scope(&config, &session.account) {
+        session.tokens.cache_read = 0;
+    }
+
+    let context_key = thread
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+    let (text, mut context_refresh) = state.contexts.prepare(&context_key, request, &session);
+    // Reuse the decision across attempts so failure never spends the classifier twice.
+    let classification_started = std::time::Instant::now();
+    let mut plan = match plan(&config, &state.ledger(), requested, &text, (state.now_ms)()) {
+        Ok(plan) => plan,
+        Err(error) => {
+            // The limits above drop the models a plan refused along with the
+            // rest, so the configured pool says whether a refusal is the reason.
+            let error = match error {
+                ResolveError::UnknownModel(_) => {
+                    match super::plan(&original, &state.ledger(), requested, "", (state.now_ms)()) {
+                        Err(refused @ ResolveError::PlanRefused { .. }) => refused,
+                        _ => error,
+                    }
+                }
+                other => other,
+            };
+            let status = match error {
+                ResolveError::UnknownModel(_) => 404,
+                ResolveError::PlanRefused { .. } => 400,
+                _ => 503,
+            };
+            respond(
+                stream,
+                status,
+                "Router",
+                &wire::error_body(&error.message(), "router_error"),
+            );
+            return;
+        }
+    };
+    if let Some(spent_on) = &plan.classifier_spent_on {
+        state.record_success(spent_on, plan.classifier_spent);
+    }
+    if let Some(cost) = plan.classifier.as_ref().and_then(|c| c.cost) {
+        session.estimated_cost += cost;
+    }
+    let mut policy_reason = None;
+    {
+        if requested == config::AUTO_MODEL {
+            match super::policy::choose(
+                &config,
+                &super::options(&config),
+                super::policy::Proposal {
+                    route: &plan.route,
+                    confident: plan.reason == super::classify::Reason::Classified,
+                },
+                &session,
+                &features,
+                boundary,
+                (state.now_ms)(),
+            ) {
+                Ok((route, reason)) => {
+                    plan.family = route.family;
+                    plan.model = route.model;
+                    plan.route = route.key;
+                    policy_reason = Some(reason);
+                }
+                Err(message) => {
+                    respond(
+                        stream,
+                        422,
+                        "Unprocessable Content",
+                        &wire::error_body(&message, "routing_capability"),
+                    );
+                    return;
+                }
+            }
+        } else {
+            let route = config::Route {
+                key: plan.route.clone(),
+                family: plan.family.clone(),
+                model: plan.model.clone(),
+                description: String::new(),
+            };
+            if super::policy::model(&config, &route).is_some_and(|m| !features.fits_direct(&m)) {
+                respond(stream, 422, "Unprocessable Content", &wire::error_body("The selected model cannot fit this request or lacks a required capability.","routing_capability"));
+                return;
+            }
+        }
+    }
+    let classification_ms = classification_started
+        .elapsed()
+        .as_millis()
+        .min(u64::MAX as u128) as u64;
+    let decision: String = policy_reason.unwrap_or_else(|| {
+        match plan.reason {
+            super::classify::Reason::Classified => "Classifier selected the model",
+            super::classify::Reason::NotClassified if requested != config::AUTO_MODEL => {
+                "User selected the model"
+            }
+            super::classify::Reason::NotClassified => "Fallback used without classification",
+            super::classify::Reason::LowConfidence => {
+                "Fallback used because classifier confidence was low"
+            }
+            super::classify::Reason::Failed => "Fallback used because the classifier failed",
+        }
+        .into()
+    });
+    hooks.decided(
+        &config::Route {
+            key: plan.route.clone(),
+            description: String::new(),
+            family: plan.family.clone(),
+            model: plan.model.clone(),
+        },
+        &decision,
+    );
+    let (_, exclusions) = route_availability(&config, &state.ledger(), (state.now_ms)());
+    let mut refusals: Vec<String> = Vec::new();
+    let mut routes = super::options(&config);
+    // Prefer the configured fallback, then another provider, then remaining models.
+    routes.sort_by_key(|route| {
+        (
+            config.fallback.as_deref() != Some(route.key.as_str()),
+            route.family == plan.family,
+        )
+    });
+    routes.retain(|route| route.family != plan.family || route.model != plan.model);
+    routes.insert(
+        0,
+        config::Route {
+            key: plan.route.clone(),
+            description: String::new(),
+            family: plan.family.clone(),
+            model: plan.model.clone(),
+        },
+    );
+    if requested != config::AUTO_MODEL || thread.is_some() {
+        routes.truncate(1);
+    }
+    let mut last_failure = (503, "No eligible model served this turn.".to_owned());
+    let mut attempted = false;
+    for route in routes {
+        let mut candidates = config.clone();
+        // Attempts on this route, and how many of them its plan refused.
+        let (mut tried, mut plan_refused) = (0_u32, 0_u32);
+        loop {
+            let (account, delivered_route, _in_flight) = match state.reserve_delivery_in(
+                &config,
+                &candidates,
+                &route,
+                &session,
+                &features,
+            ) {
+                Ok(account) => account,
+                Err(error) => {
+                    if matches!(error, balance::PickError::UsageLimit) {
+                        state.probe(&route.model, "failed", "quota");
+                    }
+                    // Once every account refused the model on its plan, the
+                    // refusals already say why the pool is spent.
+                    if tried > 0 && plan_refused == tried {
+                        break;
+                    }
+                    refusals.push(format!(
+                        "{}/{}: {}",
+                        route.family,
+                        route.model,
+                        error.message()
+                    ));
+                    break;
+                }
+            };
+            let route = delivered_route;
+            if attempted
+                || matches!(
+                    plan.reason,
+                    super::classify::Reason::Failed | super::classify::Reason::LowConfidence
+                )
+            {
+                state.progress.stage(progress, "fallback", (state.now_ms)());
+            } else {
+                state
+                    .progress
+                    .stage(progress, "waiting-for-account", (state.now_ms)());
+            }
+            attempted = true;
+            tried += 1;
+            // Try each account at most once for this model, even if cooldown expires.
+            if let Some(candidate) = candidates.accounts.iter_mut().find(|a| a.id == account.id) {
+                candidate.enabled = false;
+            }
+            // A token inside a minute of dying is traded for a fresh one first, and
+            // the pool keeps the fresh one, so this turn and the ones behind it go
+            // out on a live token. A refused refresh is the account refused.
+            // A shared sign-in comes without its refresh token, so the machine
+            // that shares it renews it. Once it lapses, the next account serves.
+            if account.id.starts_with(super::config::SHARED_ACCOUNT_PREFIX)
+                && account.credential.expired((state.now_ms)())
+            {
+                let message = SHARED_EXPIRED.to_string();
+                state.record_error(&account.id, &message, true);
+                refusals.push(message);
+                continue;
+            }
+            let account = match native_auth::refresh_account_in(
+                &state.backend,
+                &account.id,
+                (state.now_ms)(),
+                REFRESH_TIMEOUT,
+            ) {
+                Ok(account) => account,
+                Err(message) => {
+                    state.record_error(&account.id, &message, true);
+                    refusals.push(message);
+                    continue;
+                }
+            };
+            let offline = config.policy.offline_only;
+            if offline
+                && !account
+                    .upstream()
+                    .is_some_and(|url| super::constraints::loopback(&url))
+            {
+                refusals.push("This account is not a loopback endpoint.".into());
+                continue;
+            }
+            let prepared = match transport::prepare(&account, request, &route.model) {
+                Ok(prepared) => prepared,
+                Err(message) => {
+                    last_failure = (400, message);
+                    break;
+                }
+            };
+            if offline && !super::constraints::loopback(&prepared.url) {
+                refusals.push("This account is not a loopback endpoint.".into());
+                continue;
+            }
+            let reserve = super::constraints::reserve(&config, &route, &features);
+            match hooks.budget() {
+                Err((status, body)) => {
+                    respond(stream, status, "Router", &body);
+                    return;
+                }
+                // The host holds the run's reservation when it admits the attempt.
+                Ok(Some(left)) => {
+                    if reserve.unwrap_or(f64::INFINITY) > left {
+                        respond(
+                            stream,
+                            422,
+                            "Unprocessable Content",
+                            &wire::error_body(
+                                "The estimated task budget cannot cover another attempt.",
+                                "routing_budget",
+                            ),
+                        );
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    if let Some(left) = super::constraints::remaining(&config, &session) {
+                        let reserve = reserve.unwrap_or(f64::INFINITY);
+                        if reserve > left {
+                            respond(
+                                stream,
+                                422,
+                                "Unprocessable Content",
+                                &wire::error_body(
+                                    "The estimated task budget cannot cover another attempt.",
+                                    "routing_budget",
+                                ),
+                            );
+                            return;
+                        }
+                        session.reserved_cost = reserve;
+                        session.estimated_cost += reserve;
+                        session.updated_ms = (state.now_ms)();
+                        if let Some(id) = thread {
+                            if state.save_session(id, &session).is_err() {
+                                respond(
+                                    stream,
+                                    503,
+                                    "Unavailable",
+                                    &wire::error_body(
+                                        "The task budget could not be saved. No model request was sent.",
+                                        "routing_budget",
+                                    ),
+                                );
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            let price = super::policy::model(&config, &route);
+            let estimate_usd = price
+                .as_ref()
+                .map(|model| {
+                    model.cost(wire::Tokens {
+                        input: features.input,
+                        output: features.output,
+                        ..wire::Tokens::default()
+                    })
+                })
+                .unwrap_or(0.0);
+            if let Err((status, body)) = hooks.admit(&route, &account, estimate_usd) {
+                respond(stream, status, "Router", &body);
+                return;
+            }
+            let attempt_started = std::time::Instant::now();
+            let settle = |tokens: Option<wire::Tokens>, served: bool, status: Option<u16>| {
+                let cost_usd = match (served, tokens) {
+                    (true, Some(tokens)) => price.as_ref().map(|m| m.cost(tokens)).unwrap_or(0.0),
+                    (true, None) => estimate_usd,
+                    (false, _) => 0.0,
+                };
+                hooks.settle(&Attempt {
+                    route: route.clone(),
+                    account: account.id.clone(),
+                    cost_usd,
+                    tokens,
+                    served,
+                    status,
+                    elapsed_ms: attempt_started.elapsed().as_millis() as u64,
+                });
+            };
+            let upstream = super::subscription_probe::TransportRequest::new(
+                crate::http::agent_builder()
+                    .timeout_connect(CONNECT_TIMEOUT)
+                    .timeout_read(READ_TIMEOUT),
+                &prepared.url,
+            )
+            .loopback_only(offline);
+            state.probe(&route.model, "pending", "none");
+            let Some((upstream, call)) = send_watching(
+                upstream,
+                prepared.headers.clone(),
+                prepared.body.clone(),
+                client,
+            ) else {
+                // The client left before the answer started. Nothing reads a reply.
+                settle(None, false, None);
+                return;
+            };
+            match call {
+                Ok(response) => {
+                    state.probe(&route.model, "accepted", "none");
+                    state.progress.stage(progress, "thinking", (state.now_ms)());
+                    let response_id = wire::evidenced_response_id(
+                        &route.family,
+                        &route.model,
+                        plan.classifier.as_ref(),
+                        wire::RoutingEvidence {
+                            account: account.label.clone(),
+                            selected_model: format!("{}/{}", plan.family, plan.model),
+                            decision: decision.clone(),
+                            confidence: matches!(
+                                plan.reason,
+                                super::classify::Reason::Classified
+                                    | super::classify::Reason::LowConfidence
+                            )
+                            .then_some(plan.confidence),
+                            classification_ms,
+                            exclusions: exclusions
+                                .iter()
+                                .map(|item| format!("{}: {}", item.model, item.reason))
+                                .collect(),
+                            fallback_causes: refusals.clone(),
+                        },
+                    );
+                    let result = if prepared.protocol != transport::Protocol::Chat {
+                        relay_native(
+                            stream,
+                            state,
+                            &account.id,
+                            response,
+                            NativeRequest {
+                                body: request,
+                                model: &route.model,
+                                response_id: &response_id,
+                                purpose,
+                            },
+                        )
+                    } else if wire::streams(request) {
+                        relay_stream(
+                            stream,
+                            state,
+                            &account.id,
+                            response,
+                            wire::wants_usage(request),
+                            &response_id,
+                        )
+                    } else {
+                        relay_once(stream, state, &account.id, response, &response_id)
+                    };
+                    match result {
+                        Ok(tokens) => {
+                            settle(tokens, true, None);
+                            if let (Some(id), Some(tokens)) = (thread, tokens) {
+                                session.cache_scope = super::policy::scope(&config, &account.id);
+                                session.finish(
+                                    &route,
+                                    &account.id,
+                                    &features,
+                                    super::policy::Completion {
+                                        tokens,
+                                        finished_ms: (state.now_ms)(),
+                                        elapsed_ms: started.elapsed().as_millis() as u64,
+                                    },
+                                    price.as_ref(),
+                                );
+                                if let Some(job) = context_refresh.take() {
+                                    state.contexts.refresh(job);
+                                }
+                                session.remember_cache(&config, &route);
+                                let _ = state.save_session(id, &session);
+                            }
+                            return;
+                        }
+                        Err(message) => {
+                            settle(None, false, None);
+                            last_failure = (502, message);
+                        }
+                    }
+                }
+                Err(ureq::Error::Status(status, response)) => {
+                    settle(None, false, Some(status));
+                    state.probe(
+                        &route.model,
+                        "failed",
+                        super::subscription_probe::http_error(status),
+                    );
+                    let now = (state.now_ms)();
+                    let retry_after = response
+                        .header("retry-after")
+                        .and_then(|value| usage::retry_after_ms(value, now));
+                    let unified = super::quota::parse_anthropic_unified(|name| {
+                        response.header(name).map(str::to_owned)
+                    });
+                    let limit_headers = [
+                        "retry-after",
+                        "anthropic-ratelimit-unified-status",
+                        "anthropic-ratelimit-unified-reset",
+                        "anthropic-ratelimit-unified-representative-claim",
+                    ]
+                    .iter()
+                    .filter_map(|name| {
+                        response.header(name).map(|value| {
+                            format!("{name}={}", value.chars().take(200).collect::<String>())
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                    let detail = response
+                        .into_string()
+                        .unwrap_or_else(|_| format!("The provider answered {status}."));
+                    let cools = usage::status_cools(status);
+                    state.record_error(
+                        &account.id,
+                        &format!(
+                            "HTTP {status} model={} {limit_headers} {detail}",
+                            route.model
+                        ),
+                        cools,
+                    );
+                    // The upstream's own reset outranks the doubling cooldown
+                    // when it reaches further.
+                    let refused_until = unified
+                        .as_ref()
+                        .filter(|limit| limit.rejected)
+                        .and_then(|limit| limit.reset_ms)
+                        .map(|reset| reset.clamp(now, now + usage::MAX_RETRY_AFTER_MS));
+                    if let Some(until) = retry_after.into_iter().chain(refused_until).max() {
+                        state.hold_until(&account.id, until);
+                    }
+                    if let Some(limit) = unified.filter(|limit| !limit.windows.is_empty()) {
+                        let mut quota = state
+                            .backend
+                            .store
+                            .load_quotas()
+                            .accounts
+                            .remove(&account.id)
+                            .unwrap_or_default();
+                        for window in limit.windows {
+                            quota.windows.retain(|known| {
+                                known.kind != window.kind || known.scope != window.scope
+                            });
+                            quota.windows.push(window);
+                        }
+                        quota.observed_at_ms = now;
+                        let _ = state.backend.store.save_quota(&account.id, &quota);
+                    }
+                    if usage::model_refused(status, &detail) {
+                        // The plan of this account does not offer the model.
+                        // Another account of the family may, so the turn tries
+                        // it next, and this pair leaves the running.
+                        state.refuse_model(&account.id, &route.model);
+                        plan_refused += 1;
+                        refusals.push(format!(
+                            "The plan of {} does not offer {}.",
+                            account.label, route.model
+                        ));
+                        last_failure = (status, String::new());
+                        continue;
+                    }
+                    last_failure = (status, detail);
+                    refusals.push(format!("{} answered {status}.", account.label));
+                    if !cools {
+                        // Another model may accept the request, but repeating it on
+                        // the same model's other accounts does not help.
+                        break;
+                    }
+                }
+                Err(ureq::Error::Transport(error)) => {
+                    settle(None, false, None);
+                    if let Some(agent) = &state.agent {
+                        super::subscription_probe::transport_failed(
+                            agent,
+                            &route.model,
+                            &upstream,
+                            &error,
+                        );
+                    }
+                    state.record_error(&account.id, &error.to_string(), true);
+                    refusals.push(format!("{} did not answer.", account.label));
+                }
+            }
+        }
+    }
+    let refusals = refusals.join(" ");
+    let message = [
+        "No eligible model served this turn.",
+        &last_failure.1,
+        &refusals,
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
+    respond(
+        stream,
+        last_failure.0,
+        "Router",
+        &wire::error_body(&message, "router_error"),
+    );
+}
+
+struct NativeRequest<'a> {
+    body: &'a Value,
+    model: &'a str,
+    response_id: &'a str,
+    purpose: Option<&'a str>,
+}
+
+/// Native providers stream even when the caller wants one complete answer.
+/// Once a delta is delivered, errors end this turn and never replay it.
+fn relay_native(
+    stream: &mut dyn Write,
+    state: &State,
+    account: &str,
+    response: ureq::Response,
+    request: NativeRequest<'_>,
+) -> Result<Option<wire::Tokens>, String> {
+    let NativeRequest {
+        body: request,
+        model,
+        response_id,
+        purpose,
+    } = request;
+    let streaming = wire::streams(request);
+    let mut started = false;
+    let mut decoder = transport::Decoder::new(model);
+    decoder.response_id = response_id.to_owned();
+    let mut reader = BufReader::new(response.into_reader().take(BODY_LIMIT as u64));
+    let mut line = String::new();
+    let mut data = String::new();
+    let mut failure = None;
+    let mut failure_class = "stream";
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => {
+                failure = Some("The provider stream ended unexpectedly.".to_owned());
+                break;
+            }
+        }
+        if data.len() + line.len() > BODY_LIMIT {
+            failure = Some("The provider event exceeds the size limit.".to_owned());
+            break;
+        }
+        if let Some(part) = line.trim_end().strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(part.trim_start());
+        }
+        if !line.trim().is_empty() || data.is_empty() {
+            continue;
+        }
+        if data == "[DONE]" {
+            break;
+        }
+        let event: Value = match serde_json::from_str(&data) {
+            Ok(event) => event,
+            Err(_) => {
+                failure = Some("The provider sent an invalid event.".to_owned());
+                break;
+            }
+        };
+        data.clear();
+        match decoder.event(&event) {
+            Ok(Some(chunk)) if streaming => {
+                if !started {
+                    if stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n").is_err() { return Ok(None); }
+                    started = true;
+                }
+                if write_event(stream, &chunk).is_err() {
+                    state.record_error(account, "The client closed the stream.", false);
+                    return Ok(None);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                failure_class = super::subscription_probe::event_error(&event);
+                failure = Some(error);
+                break;
+            }
+        }
+        if decoder.finished {
+            break;
+        }
+    }
+    if !decoder.finished || failure.is_some() {
+        let message =
+            failure.unwrap_or_else(|| "The provider stream ended before completion.".into());
+        state.probe(model, "failed", failure_class);
+        state.record_error(account, &message, false);
+        if started {
+            let _ = write_event(stream, &wire::error_body(&message, "provider_error"));
+        } else {
+            return Err(message);
+        }
+        return Ok(None);
+    }
+    state.probe(model, "complete", "none");
+    record_subscription_probe(state, account, model, &decoder, purpose);
+    state.record_success(account, decoder.tokens);
+    if streaming {
+        if !started && stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").is_err() { return Ok(None); }
+        if write_event(stream, &decoder.final_chunk()).is_err() {
+            return Ok(None);
+        }
+        if wire::wants_usage(request) && write_event(stream, &decoder.usage_chunk()).is_err() {
+            return Ok(None);
+        }
+        let _ = stream.write_all(b"data: [DONE]\n\n");
+        let _ = stream.flush();
+    } else {
+        respond(stream, 200, "OK", &decoder.completion());
+    }
+    Ok(Some(decoder.tokens))
+}
+
+// The installed probe exports model IDs, a reply digest, and fixed request labels.
+fn record_subscription_probe(
+    state: &State,
+    account: &str,
+    model: &str,
+    decoder: &transport::Decoder,
+    purpose: Option<&str>,
+) {
+    use sha2::{Digest, Sha256};
+    if std::env::var("MUNIMENT_SUBSCRIPTION_PROBE").as_deref() != Ok("1") {
+        return;
+    }
+    let Some(agent) = &state.agent else {
+        return;
+    };
+    let Ok(config) = config::load(agent) else {
+        return;
+    };
+    let subscription = config.account(account).is_some_and(|account| {
+        matches!(account.credential, config::Credential::Subscription { .. })
+    });
+    let valid_id = |id: &str| {
+        !id.is_empty()
+            && id.len() <= 128
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+    };
+    let actual = decoder.reported_model.as_deref().filter(|id| valid_id(id));
+    if !valid_id(model) {
+        return;
+    }
+    let purpose = match purpose {
+        None | Some("chat") => "chat",
+        Some("thread-name") => "thread-name",
+        Some(_) => "unknown",
+    };
+    let receipt = serde_json::json!({
+        "purpose": purpose,
+        "requested": model,
+        "actual": if decoder.conflicting_models { None } else { actual },
+        "subscription": subscription,
+        "finished": decoder.finished,
+        "tools": decoder.tools.len(),
+        "reply_sha256": hex::encode(Sha256::digest(decoder.text.trim().as_bytes())),
+    });
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(agent.join("subscription-probe-transports.jsonl")) {
+        let _ = writeln!(file, "{receipt}");
+    }
+}
+
+fn write_event(stream: &mut dyn Write, value: &Value) -> io::Result<()> {
+    write!(stream, "data: {value}\n\n")?;
+    stream.flush()
+}
+
+/// One whole answer: forward the body and count what it says it spent.
+fn relay_once(
+    stream: &mut dyn Write,
+    state: &State,
+    account: &str,
+    response: ureq::Response,
+    response_id: &str,
+) -> Result<Option<wire::Tokens>, String> {
+    let Ok(mut value) = response.into_json::<Value>() else {
+        state.record_error(
+            account,
+            "The provider answered with something that is not JSON.",
+            false,
+        );
+        return Err("The provider answered with something that is not JSON.".into());
+    };
+    if value.get("error").is_some() || !value["choices"].is_array() {
+        let message = "The provider returned no completion.";
+        state.record_error(account, message, false);
+        return Err(message.into());
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert("id".into(), Value::String(response_id.into()));
+    }
+    state.record_success(account, wire::tokens(&value).unwrap_or_default());
+    respond(stream, 200, "OK", &value);
+    Ok(Some(wire::tokens(&value).unwrap_or_default()))
+}
+
+/// A streamed answer: forward every frame as it arrives, and keep the usage
+/// frame the router asked for off the client's wire unless `keep_usage` says
+/// the client asked for it too.
+fn relay_stream(
+    stream: &mut dyn Write,
+    state: &State,
+    account: &str,
+    response: ureq::Response,
+    keep_usage: bool,
+    response_id: &str,
+) -> Result<Option<wire::Tokens>, String> {
+    let mut reader = BufReader::new(response.into_reader().take(BODY_LIMIT as u64));
+    let mut tokens = wire::Tokens::default();
+    let mut line = String::new();
+    let mut started = false;
+    let mut finished = false;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let Some(payload) = line.trim_end().strip_prefix("data:").map(str::trim_start) else {
+            continue;
+        };
+        if payload == "[DONE]" {
+            finished = started;
+            if started {
+                let _ = stream.write_all(b"data: [DONE]\n\n");
+            }
+            break;
+        }
+        let Ok(mut chunk) = serde_json::from_str::<Value>(payload) else {
+            break;
+        };
+        if chunk.get("error").is_some() || !chunk["choices"].is_array() {
+            break;
+        }
+        if let Some(counted) = wire::tokens(&chunk) {
+            tokens = counted;
+        }
+        if !keep_usage && wire::usage_only_chunk(&chunk) {
+            continue;
+        }
+        if !started {
+            if stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n").is_err() { return Ok(None); }
+            started = true;
+        }
+        chunk["id"] = Value::String(response_id.into());
+        if write_event(stream, &chunk).is_err() {
+            break;
+        }
+    }
+    if finished {
+        state.record_success(account, tokens);
+    } else {
+        let message = "The provider stream ended before completion.";
+        state.record_error(account, message, false);
+        if !started {
+            return Err(message.into());
+        }
+        let _ = write_event(stream, &wire::error_body(message, "provider_error"));
+    }
+    Ok(finished.then_some(tokens))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Account, Credential, Route, RouterConfig};
+    use serde_json::json;
+
+    #[test]
+    fn a_busy_thread_waits_for_its_lease_instead_of_failing() {
+        let leases = Leases::default();
+        let alive = || false;
+        let held = leases.acquire("t", Duration::ZERO, &alive).unwrap();
+        assert_eq!(
+            leases.acquire("t", Duration::ZERO, &alive).err(),
+            Some(LeaseRefusal::Busy)
+        );
+        // Another thread is not held up.
+        drop(leases.acquire("u", Duration::ZERO, &alive).unwrap());
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                drop(held);
+            });
+            let started = std::time::Instant::now();
+            assert!(leases.acquire("t", Duration::from_secs(5), &alive).is_ok());
+            assert!(started.elapsed() < Duration::from_secs(2));
+        });
+    }
+
+    #[test]
+    fn a_waiting_client_that_leaves_gives_up_its_place() {
+        let leases = Leases::default();
+        let _held = leases.acquire("t", Duration::ZERO, &|| false).unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            leases.acquire("t", Duration::from_secs(30), &|| true).err(),
+            Some(LeaseRefusal::Gone)
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A connected pair: the client's socket and the router's side of it.
+    fn connection() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (served, _) = listener.accept().unwrap();
+        (client, served)
+    }
+
+    #[test]
+    fn a_closed_client_connection_reads_as_gone() {
+        let (client, served) = connection();
+        assert!(!client_gone(Some(&served)));
+        assert!(!client_gone(None));
+        drop(client);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !client_gone(Some(&served)) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn a_client_that_leaves_ends_the_wait_for_a_silent_upstream() {
+        // The upstream accepts and never answers, as a model that has not started.
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/v1/chat/completions",
+            upstream.local_addr().unwrap()
+        );
+        let hold = std::thread::spawn(move || upstream.accept().map(|(socket, _)| socket));
+        let (client, served) = connection();
+        let request = super::super::subscription_probe::TransportRequest::new(
+            crate::http::agent_builder().timeout_read(Duration::from_secs(60)),
+            &url,
+        );
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(client);
+        });
+        let started = std::time::Instant::now();
+        assert!(send_watching(request, Vec::new(), json!({}), Some(&served)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(10));
+        drop(hold);
+    }
+
+    /// The clock every server test reads, so a day bucket never drifts.
+    fn fixed_clock() -> i64 {
+        1_789_000_000_000
+    }
+
+    fn state_in(agent: PathBuf) -> State {
+        State::new(Backend::files(&agent), Some(agent), fixed_clock)
+    }
+
+    fn agent_dir() -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("muniment-router-server-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn account(id: &str, base_url: &str) -> Account {
+        Account {
+            id: id.to_owned(),
+            family: "openai".to_owned(),
+            label: id.to_owned(),
+            credential: Credential::ApiKey {
+                key: format!("sk-{id}"),
+            },
+            base_url: Some(base_url.to_owned()),
+            // The one model this pool serves, so the option set is exactly it.
+            models: vec!["gpt-5.6-mini".to_owned()],
+            enabled: true,
+            weight: 1,
+            overflow: false,
+        }
+    }
+
+    fn config(accounts: Vec<Account>) -> RouterConfig {
+        let mut policy = super::super::policy::Settings::default();
+        for account in &accounts {
+            for model in &account.models {
+                policy.models.insert(
+                    format!("{}/{model}", account.family),
+                    super::super::policy::Model {
+                        context: 128000,
+                        output_limit: 8192,
+                        tools: true,
+                        input: 1.0,
+                        output: 1.0,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+        RouterConfig {
+            policy,
+            enabled: true,
+            accounts,
+            routes: vec![Route {
+                key: "fast".into(),
+                description: "A short question".into(),
+                family: "openai".into(),
+                model: "gpt-5.6-mini".into(),
+            }],
+            fallback: Some("fast".into()),
+            ..RouterConfig::default()
+        }
+    }
+
+    #[test]
+    fn route_test_availability_uses_runtime_pool_readiness() {
+        let ready = account("ready", "http://localhost");
+        let mut disabled = account("disabled", "http://localhost");
+        disabled.models = vec!["disabled-model".into()];
+        disabled.enabled = false;
+        let mut cooling = account("cooling", "http://localhost");
+        cooling.models = vec!["cooling-model".into()];
+        let config = config(vec![ready, disabled, cooling]);
+        let mut ledger = Ledger::default();
+        ledger
+            .accounts
+            .entry("cooling".into())
+            .or_default()
+            .cooldown_until_ms = Some(fixed_clock() + 1000);
+        let (eligible, excluded) = route_availability(&config, &ledger, fixed_clock());
+        assert_eq!(eligible, vec!["openai/gpt-5.6-mini"]);
+        assert_eq!(excluded.len(), 2);
+        assert_eq!(excluded[0].model, "openai/cooling-model");
+        assert!(excluded[0].reason.contains("temporarily unavailable"));
+        assert_eq!(excluded[1].model, "openai/disabled-model");
+        assert!(excluded[1].reason.contains("serves this model"));
+        let (eligible, _) = route_availability(&config, &ledger, fixed_clock() + 1000);
+        assert!(eligible.contains(&"openai/cooling-model".to_owned()));
+    }
+
+    /// One request to the running router, answered whole.
+    fn call(
+        endpoint: &Endpoint,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        token: &str,
+    ) -> (u16, String) {
+        let mut stream = TcpStream::connect(("127.0.0.1", endpoint.port)).unwrap();
+        let payload = body.map(|value| value.to_string()).unwrap_or_default();
+        let head = format!(
+            "{method} {path} HTTP/1.1\r\nhost: 127.0.0.1\r\nauthorization: Bearer {token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            payload.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(payload.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        let status: u16 = answer
+            .split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        let body = answer.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
+        (status, body)
+    }
+
+    /// A stand-in provider. Each connection is answered by `answer`, which
+    /// reads the request body and writes the whole HTTP response.
+    fn upstream(answers: Vec<(u16, String, bool)>) -> (String, std::sync::mpsc::Receiver<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sender, seen) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for (status, payload, sse) in answers {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut head = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => head.push(byte[0]),
+                        _ => break,
+                    }
+                }
+                let text = String::from_utf8_lossy(&head).to_string();
+                let length: usize = text
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+                    .and_then(|line| line.split(':').nth(1)?.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body = vec![0_u8; length];
+                let _ = stream.read_exact(&mut body);
+                let mut request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                if let Some(object) = request.as_object_mut() {
+                    let bearer = text
+                        .lines()
+                        .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                        .map(|line| line["authorization:".len()..].trim().to_owned())
+                        .unwrap_or_default();
+                    object.insert("__authorization".into(), Value::String(bearer));
+                }
+                let _ = sender.send(request);
+                let kind = if sse {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/v1"), seen)
+    }
+
+    fn answer(text: &str, input: u64, output: u64) -> String {
+        json!({
+            "id": "c1",
+            "object": "chat.completion",
+            "choices": [{ "index": 0, "message": { "role": "assistant", "content": text } }],
+            "usage": { "prompt_tokens": input, "completion_tokens": output }
+        })
+        .to_string()
+    }
+
+    fn turn(model: &str, stream: bool) -> Value {
+        json!({
+            "model": model,
+            "stream": stream,
+            "messages": [{ "role": "user", "content": "Why did the build fail?" }]
+        })
+    }
+
+    #[test]
+    fn progress_endpoint_reports_real_fallback_and_requires_authentication() {
+        let agent = agent_dir();
+        let (url, _) = upstream(vec![
+            (429, "limited".into(), false),
+            (200, answer("hello", 1, 1), false),
+        ]);
+        config::save(
+            &agent,
+            &config(vec![account("a", &url), account("b", &url)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let id = uuid::Uuid::new_v4().to_string();
+        ureq::post(&format!("{}/chat/completions", endpoint.base_url()))
+            .set("authorization", &format!("Bearer {}", endpoint.token))
+            .set("x-muniment-routing-id", &id)
+            .send_json(turn("auto", false))
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let path = format!("/v1/routing-progress/{id}");
+        assert_eq!(call(endpoint, "GET", &path, None, "wrong").0, 401);
+        let (status, body) = call(endpoint, "GET", &path, None, &endpoint.token);
+        assert_eq!(status, 200);
+        let snapshot: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            snapshot["stages"],
+            json!([
+                "choosing-model",
+                "waiting-for-account",
+                "fallback",
+                "thinking"
+            ])
+        );
+        assert_eq!(snapshot["done"], true);
+        assert_eq!(
+            call(
+                endpoint,
+                "GET",
+                &format!("/v1/routing-progress/{}", uuid::Uuid::new_v4()),
+                None,
+                &endpoint.token
+            )
+            .0,
+            404
+        );
+    }
+
+    #[test]
+    fn native_subscription_streams_fail_over_and_count_only_complete_answers() {
+        let agent = agent_dir();
+        let payload = [
+            json!({"type":"response.output_text.delta","delta":"hello"}),
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":2}}}),
+        ].iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+        let (url, seen) = upstream(vec![(429, "limited".into(), false), (200, payload, true)]);
+        let mut accounts = vec![account("s1", &url), account("s2", &url)];
+        for account in &mut accounts {
+            account.credential = Credential::Subscription {
+                provider: "openai-codex".into(),
+                access: format!("token-{}", account.id),
+                refresh: None,
+                expires_ms: None,
+                account_id: Some(account.id.clone()),
+                email: None,
+                plan: None,
+                renews_at_ms: None,
+            };
+        }
+        config::save(&agent, &config(accounts)).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", true)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200);
+        let chunks: Vec<Value> = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let id = chunks[0]["id"].as_str().unwrap();
+        assert_eq!(
+            wire::response_model(id),
+            Some(("openai".into(), "gpt-5.6-mini".into()))
+        );
+        assert!(chunks.iter().all(|chunk| chunk["id"] == id));
+        assert!(body.contains("hello"));
+        assert!(body.contains("[DONE]"));
+        assert_eq!(seen.try_iter().count(), 2);
+        let ledger = usage::load(&agent);
+        assert_eq!(ledger.account("s1").unwrap().errors, 1);
+        assert_eq!(ledger.account("s2").unwrap().input_tokens, 11);
+        assert_eq!(ledger.account("s2").unwrap().requests, 1);
+    }
+
+    #[test]
+    fn native_probe_receipts_record_only_fixed_request_purposes() {
+        // Isolate the probe flag from concurrent router tests.
+        if std::env::var("MUNIMENT_SUBSCRIPTION_PROBE").as_deref() != Ok("1") {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "server::tests::native_probe_receipts_record_only_fixed_request_purposes",
+                ])
+                .env("MUNIMENT_SUBSCRIPTION_PROBE", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let agent = agent_dir();
+        let payload = [
+            json!({"type":"response.output_text.delta","delta":"PRIVATE REPLY"}),
+            json!({"type":"response.completed","response":{"model":"gpt-5.6-mini"}}),
+        ]
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>();
+        let (url, _) = upstream(vec![(200, payload, true); 4]);
+        let mut native = account("s1", &url);
+        native.credential = Credential::Subscription {
+            provider: "openai-codex".into(),
+            access: "PRIVATE TOKEN".into(),
+            refresh: None,
+            expires_ms: None,
+            account_id: Some("s1".into()),
+            email: None,
+            plan: None,
+            renews_at_ms: None,
+        };
+        config::save(&agent, &config(vec![native])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        for (purpose, expected) in [
+            (Some("thread-name"), "thread-name"),
+            (None, "chat"),
+            (Some("chat"), "chat"),
+            (Some("PRIVATE PURPOSE"), "unknown"),
+        ] {
+            let endpoint = handle.endpoint();
+            let mut request = ureq::post(&format!(
+                "http://127.0.0.1:{}/v1/chat/completions",
+                endpoint.port
+            ))
+            .set("authorization", &format!("Bearer {}", endpoint.token));
+            if let Some(purpose) = purpose {
+                request = request.set("x-muniment-request-purpose", purpose);
+            }
+            request
+                .send_json(turn("auto", false))
+                .unwrap()
+                .into_string()
+                .unwrap();
+            let text =
+                std::fs::read_to_string(agent.join("subscription-probe-transports.jsonl")).unwrap();
+            assert!(!text.contains("PRIVATE"));
+            let receipt: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+            assert_eq!(receipt["purpose"], expected);
+            assert_eq!(receipt["requested"], "gpt-5.6-mini");
+            assert_eq!(receipt["actual"], "gpt-5.6-mini");
+            assert_eq!(receipt["subscription"], true);
+            assert_eq!(receipt["finished"], true);
+        }
+        drop(handle);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn provider_connect_failures_record_redacted_transport_details() {
+        // Isolate the probe flag and proxy settings from concurrent router tests.
+        if std::env::var("MUNIMENT_SUBSCRIPTION_PROBE").as_deref() != Ok("1") {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "server::tests::provider_connect_failures_record_redacted_transport_details",
+                ])
+                .env("MUNIMENT_SUBSCRIPTION_PROBE", "1");
+            for name in [
+                "ALL_PROXY",
+                "all_proxy",
+                "HTTPS_PROXY",
+                "https_proxy",
+                "HTTP_PROXY",
+                "http_proxy",
+            ] {
+                child.env_remove(name);
+            }
+            assert!(child.status().unwrap().success());
+            return;
+        }
+        let root = agent_dir();
+        let agent = root.join("agent");
+        std::fs::create_dir(&agent).unwrap();
+        std::fs::write(
+            root.join("subscription-probe.json"),
+            r#"{"phase":"chat","models":[{"id":"gpt-5.6-mini"}]}"#,
+        )
+        .unwrap();
+        config::save(
+            &agent,
+            &config(vec![account(
+                "PRIVATE",
+                "http://127.0.0.1:0/PRIVATE?token=PRIVATE",
+            )]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let (status, _) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 503);
+        let text =
+            std::fs::read_to_string(root.join("subscription-probe-transport-progress.jsonl"))
+                .unwrap();
+        assert!(!text.contains("PRIVATE"));
+        let row: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        assert_eq!(row["transport"], "failed");
+        assert_eq!(row["error_class"], "network");
+        assert_eq!(row["transport_kind"], "connect");
+        assert_eq!(row["host"], "127.0.0.1");
+        assert_eq!(row["turn"], 0);
+        drop(handle);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_http_200_error_events_record_redacted_failure_classes() {
+        // Isolate the probe flag from concurrent router tests.
+        if std::env::var("MUNIMENT_SUBSCRIPTION_PROBE").as_deref() != Ok("1") {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "server::tests::native_http_200_error_events_record_redacted_failure_classes",
+                ])
+                .env("MUNIMENT_SUBSCRIPTION_PROBE", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let root = agent_dir();
+        let agent = root.join("agent");
+        std::fs::create_dir(&agent).unwrap();
+        std::fs::write(
+            root.join("subscription-probe.json"),
+            r#"{"phase":"chat","models":[{"id":"test-model"}]}"#,
+        )
+        .unwrap();
+        let state = state_in(agent);
+        for (event, expected) in [
+            (
+                json!({"type":"error","error":{"type":"authentication_error","message":"PRIVATE TOKEN"}}),
+                "auth",
+            ),
+            (
+                json!({"type":"error","error":{"type":"rate_limit_error","message":"PRIVATE TOKEN"}}),
+                "quota",
+            ),
+            (
+                json!({"type":"response.failed","response":{"error":{"code":"usage_limit_reached","message":"PRIVATE TOKEN"}}}),
+                "quota",
+            ),
+            (
+                json!({"type":"response.failed","response":{"error":{"code":"server_error","message":"PRIVATE TOKEN"}}}),
+                "stream",
+            ),
+        ] {
+            for partial in [false, true] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+                let (mut server, _) = listener.accept().unwrap();
+                let prefix = if partial {
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"PRIVATE REPLY\"}\n\n"
+                } else {
+                    ""
+                };
+                let payload = format!("{prefix}data: {event}\n\n");
+                let response = ureq::Response::new(200, "OK", &payload).unwrap();
+                let result = relay_native(
+                    &mut server,
+                    &state,
+                    "test-account",
+                    response,
+                    NativeRequest {
+                        body: &turn("test-model", true),
+                        model: "test-model",
+                        response_id: "test-response",
+                        purpose: None,
+                    },
+                );
+                if partial {
+                    assert!(result.unwrap().is_none());
+                } else {
+                    assert!(result.is_err());
+                }
+                drop(server);
+                let mut reply = String::new();
+                client.read_to_string(&mut reply).unwrap();
+                assert!(!reply.contains("PRIVATE TOKEN"));
+                let progress = std::fs::read_to_string(
+                    root.join("subscription-probe-transport-progress.jsonl"),
+                )
+                .unwrap();
+                assert!(!progress.contains("PRIVATE"));
+                let row: Value = serde_json::from_str(progress.lines().last().unwrap()).unwrap();
+                assert_eq!(row["error_class"], expected);
+                assert_eq!(row["transport"], "failed");
+                assert_eq!(row["turn"], 0);
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_truncated_native_stream_is_not_counted_as_success_or_replayed() {
+        let agent = agent_dir();
+        let (url, seen) = upstream(vec![(200, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n".into(), true)]);
+        let mut native = account("s1", &url);
+        native.family = "anthropic".into();
+        native.credential = Credential::Subscription {
+            provider: "anthropic".into(),
+            access: "token".into(),
+            refresh: None,
+            expires_ms: None,
+            account_id: None,
+            email: None,
+            plan: None,
+            renews_at_ms: None,
+        };
+        let mut saved = config(vec![native]);
+        saved.routes.clear();
+        saved.fallback = None;
+        config::save(&agent, &saved).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", true)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200);
+        assert!(body.contains("partial"));
+        assert!(body.contains("provider_error"));
+        assert!(!body.contains("[DONE]"));
+        assert_eq!(seen.try_iter().count(), 1);
+        let ledger = usage::load(&agent);
+        let usage = ledger.account("s1").unwrap();
+        assert_eq!(usage.requests, 0);
+        assert_eq!(usage.errors, 1);
+    }
+
+    #[test]
+    fn known_exhaustion_reports_usage_limit_until_reset() {
+        use crate::quota::{self, Quota, QuotaStore, Window, WindowKind};
+        let state = state_in(agent_dir());
+        let mut quotas = QuotaStore::default();
+        quotas.accounts.insert(
+            "a".into(),
+            Quota {
+                windows: vec![Window {
+                    kind: WindowKind::Weekly,
+                    scope: String::new(),
+                    used_percent: 100.0,
+                    resets_at_ms: Some(fixed_clock() + 1000),
+                    limit_reached: true,
+                }],
+                ..Quota::default()
+            },
+        );
+        quota::save(state.agent.as_ref().unwrap(), &quotas).unwrap();
+        let saved = config(vec![account("a", "http://unused")]);
+        assert!(matches!(
+            state.reserve(&saved, "openai", "gpt-5.6-mini"),
+            Err(balance::PickError::UsageLimit)
+        ));
+        let available = config(vec![
+            account("a", "http://unused"),
+            account("b", "http://unused"),
+        ]);
+        assert_eq!(
+            state
+                .reserve(&available, "openai", "gpt-5.6-mini")
+                .unwrap()
+                .0
+                .id,
+            "b"
+        );
+        quotas.accounts.get_mut("a").unwrap().windows[0].resets_at_ms = Some(fixed_clock() - 1);
+        quota::save(state.agent.as_ref().unwrap(), &quotas).unwrap();
+        assert!(state.reserve(&saved, "openai", "gpt-5.6-mini").is_ok());
+        std::fs::remove_dir_all(state.agent.as_ref().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn reservations_distribute_concurrent_turns_and_release_on_drop() {
+        let agent = agent_dir();
+        let state = state_in(agent);
+        let saved = config(vec![
+            account("a", "http://unused"),
+            account("b", "http://unused"),
+        ]);
+        let (first, first_guard) = state.reserve(&saved, "openai", "gpt-5.6-mini").unwrap();
+        let (second, second_guard) = state.reserve(&saved, "openai", "gpt-5.6-mini").unwrap();
+        assert_ne!(first.id, second.id);
+        drop(first_guard);
+        drop(second_guard);
+        assert!(state.active.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn routing_balances_like_subscriptions_without_api_spillover() {
+        for provider in ["openai-codex", "anthropic", "xai", "kimi"] {
+            check_subscription_pool(provider);
+        }
+    }
+
+    fn check_subscription_pool(provider: &str) {
+        let state = state_in(agent_dir());
+        let mut first = account("subscription-a", "http://native");
+        first.credential = Credential::from_pi_auth(
+            provider,
+            &json!({
+                "type":"oauth", "access":"fixture", "accountId":"a"
+            }),
+        )
+        .unwrap();
+        let mut second = first.clone();
+        second.id = "subscription-b".into();
+        second.credential = Credential::from_pi_auth(
+            provider,
+            &json!({
+                "type":"oauth", "access":"fixture", "accountId":"b"
+            }),
+        )
+        .unwrap();
+        let api = account("api", "http://native");
+        let mut gateway = second.clone();
+        gateway.id = "gateway".into();
+        gateway.base_url = Some("http://gateway".into());
+        let mut saved = config(vec![first, second, api, gateway]);
+        let route = saved.routes[0].clone();
+        let session = super::super::policy::Session {
+            account: "subscription-a".into(),
+            cache_scope: super::super::policy::scope(&saved, "subscription-a"),
+            ..Default::default()
+        };
+        let features = super::super::policy::Features::read(&turn("auto", false));
+        // A thread stays on the account that holds its prompt cache, even
+        // while that account has other turns in flight.
+        let (a, _, ga) = state
+            .reserve_delivery(&saved, &route, &session, &features)
+            .unwrap();
+        let (again, _, gagain) = state
+            .reserve_delivery(&saved, &route, &session, &features)
+            .unwrap();
+        assert_eq!(a.id, "subscription-a");
+        assert_eq!(again.id, "subscription-a");
+        // A thread with no account yet takes the least-loaded one.
+        let fresh = super::super::policy::Session::default();
+        let (b, _, gb) = state
+            .reserve_delivery(&saved, &route, &fresh, &features)
+            .unwrap();
+        assert_eq!(b.id, "subscription-b");
+        drop((ga, gagain, gb));
+        // An explicit shared namespace cannot cross a service or credential type.
+        for id in ["subscription-a", "subscription-b", "api", "gateway"] {
+            saved
+                .policy
+                .cache_scopes
+                .insert(id.into(), "verified-namespace".into());
+        }
+        let scope = |id| super::super::policy::scope(&saved, id);
+        assert_eq!(scope("subscription-a"), scope("subscription-b"));
+        assert_ne!(scope("subscription-a"), scope("api"));
+        assert_ne!(scope("subscription-a"), scope("gateway"));
+        for a in &mut saved.accounts[..2] {
+            a.enabled = false;
+        }
+        assert!(state
+            .reserve_delivery(&saved, &route, &session, &features)
+            .is_err());
+    }
+
+    /// A subscription account of the test family on `url`.
+    fn subscription(id: &str, url: &str) -> Account {
+        let mut account = account(id, url);
+        account.family = "anthropic".into();
+        account.models = vec!["claude-test".into()];
+        account.credential = Credential::Subscription {
+            provider: "anthropic".into(),
+            access: format!("token-{id}"),
+            refresh: None,
+            expires_ms: None,
+            account_id: Some(id.into()),
+            email: None,
+            plan: None,
+            renews_at_ms: None,
+        };
+        account
+    }
+
+    /// A key of the same family as [`subscription`] on `url`.
+    fn family_key(id: &str, url: &str, overflow: bool) -> Account {
+        let mut account = account(id, url);
+        account.family = "anthropic".into();
+        account.models = vec!["claude-test".into()];
+        account.overflow = overflow;
+        account
+    }
+
+    fn anthropic_route() -> config::Route {
+        config::Route {
+            key: "anthropic/claude-test".into(),
+            description: String::new(),
+            family: "anthropic".into(),
+            model: "claude-test".into(),
+        }
+    }
+
+    #[test]
+    fn a_key_joins_a_subscription_thread_only_as_overflow_while_every_subscription_cools() {
+        let state = state_in(agent_dir());
+        let mut saved = config(vec![
+            family_key("plain", "http://unused", false),
+            subscription("s1", "http://unused"),
+            subscription("s2", "http://unused"),
+            family_key("spill", "http://unused", true),
+        ]);
+        saved.routes.clear();
+        let route = anthropic_route();
+        let features = super::super::policy::Features::read(&turn("auto", false));
+        let fresh = super::super::policy::Session::default();
+        let pick = |configured: &RouterConfig,
+                    candidates: &RouterConfig,
+                    session: &super::super::policy::Session| {
+            state
+                .reserve_delivery_in(configured, candidates, &route, session, &features)
+                .map(|(account, _, _)| account.id)
+        };
+        // A fresh thread starts on a subscription although a key is listed first.
+        assert_eq!(pick(&saved, &saved, &fresh).unwrap(), "s1");
+        // Every subscription tried this turn, none cooling: no key takes it.
+        let mut tried = saved.clone();
+        for account in &mut tried.accounts[1..3] {
+            account.enabled = false;
+        }
+        assert!(pick(&saved, &tried, &fresh).is_err());
+        // Every subscription cooling: the overflow key takes it, never the plain one.
+        state.record_error("s1", "429", true);
+        state.record_error("s2", "429", true);
+        assert_eq!(pick(&saved, &saved, &fresh).unwrap(), "spill");
+        assert_eq!(pick(&saved, &tried, &fresh).unwrap(), "spill");
+        // A thread that overflowed returns to a subscription that is ready again.
+        let spilled = super::super::policy::Session {
+            account: "spill".into(),
+            cache_scope: super::super::policy::scope(&saved, "spill"),
+            ..Default::default()
+        };
+        assert_eq!(pick(&saved, &saved, &spilled).unwrap(), "spill");
+        state.record_success("s2", wire::Tokens::default());
+        assert_eq!(pick(&saved, &saved, &spilled).unwrap(), "s2");
+        // Without an overflow key, cooling subscriptions leave the turn unserved.
+        saved.accounts.pop();
+        state.record_error("s2", "429", true);
+        assert!(pick(&saved, &saved, &fresh).is_err());
+        assert!(state.ledger().account("plain").is_none());
+        std::fs::remove_dir_all(state.agent.as_ref().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_fresh_thread_never_spills_from_failed_subscriptions_into_a_key() {
+        let agent = agent_dir();
+        let (limited, seen_limited) = upstream(vec![(429, "limited".into(), false); 2]);
+        let (key, seen_key) = upstream(vec![(200, answer("from the key", 1, 1), false)]);
+        let mut saved = config(vec![
+            subscription("s1", &limited),
+            subscription("s2", &limited),
+            family_key("k1", &key, false),
+        ]);
+        saved.routes.clear();
+        saved.fallback = None;
+        config::save(&agent, &saved).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("anthropic/claude-test", false)),
+            &handle.endpoint().token,
+        );
+        assert_ne!(status, 200, "{body}");
+        assert!(!body.contains("from the key"));
+        assert_eq!(seen_limited.try_iter().count(), 2);
+        assert_eq!(seen_key.try_iter().count(), 0);
+        assert!(usage::load(&agent).account("k1").is_none());
+    }
+
+    #[test]
+    fn an_overflow_key_serves_a_turn_after_every_subscription_cools() {
+        let agent = agent_dir();
+        let (limited, seen_limited) = upstream(vec![(429, "limited".into(), false); 2]);
+        let reply = [
+            json!({"type":"message_start","message":{"model":"claude-test"}}),
+            json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"from the key"}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+            json!({"type":"message_stop"}),
+        ]
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>();
+        let (key, seen_key) = upstream(vec![(200, reply, true)]);
+        let mut saved = config(vec![
+            family_key("k1", &key, true),
+            subscription("s1", &limited),
+            subscription("s2", &limited),
+        ]);
+        saved.routes.clear();
+        saved.fallback = None;
+        config::save(&agent, &saved).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("anthropic/claude-test", true)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("from the key"));
+        assert_eq!(seen_limited.try_iter().count(), 2);
+        assert_eq!(seen_key.try_iter().count(), 1);
+        assert_eq!(usage::load(&agent).account("k1").unwrap().requests, 1);
+    }
+
+    #[test]
+    fn cache_affinity_yields_when_the_warm_account_cools_or_runs_out() {
+        use crate::quota::{Quota, Window, WindowKind};
+        let state = state_in(agent_dir());
+        let saved = config(vec![
+            account("a", "http://unused"),
+            account("b", "http://unused"),
+        ]);
+        let route = saved.routes[0].clone();
+        let features = super::super::policy::Features::read(&turn("auto", false));
+        let session = super::super::policy::Session {
+            account: "b".into(),
+            cache_scope: super::super::policy::scope(&saved, "b"),
+            ..Default::default()
+        };
+        // b has served more, and the thread still stays on it.
+        for _ in 0..5 {
+            state.record_success("b", wire::Tokens::default());
+        }
+        let pick = |session: &super::super::policy::Session| {
+            state
+                .reserve_delivery(&saved, &route, session, &features)
+                .unwrap()
+                .0
+                .id
+        };
+        assert_eq!(pick(&session), "b");
+        // A cooling account loses the thread.
+        state.record_error("b", "429", true);
+        assert_eq!(pick(&session), "a");
+        state.record_success("b", wire::Tokens::default());
+        assert_eq!(pick(&session), "b");
+        // So does an account whose allowance is known to be spent.
+        state
+            .backend
+            .store
+            .save_quota(
+                "b",
+                &Quota {
+                    windows: vec![Window {
+                        kind: WindowKind::FiveHour,
+                        scope: String::new(),
+                        used_percent: 100.0,
+                        resets_at_ms: Some(fixed_clock() + 60_000),
+                        limit_reached: true,
+                    }],
+                    observed_at_ms: fixed_clock(),
+                    ..Quota::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(pick(&session), "a");
+        std::fs::remove_dir_all(state.agent.as_ref().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_retry_after_date_and_a_unified_reset_hold_the_account() {
+        let agent = agent_dir();
+        let reset = fixed_clock() / 1000 + 3_600;
+        let date = chrono::DateTime::from_timestamp_millis(fixed_clock() + 120_000)
+            .unwrap()
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for headers in [
+                format!("retry-after: {date}\r\n"),
+                format!(
+                    "anthropic-ratelimit-unified-status: rejected\r\nanthropic-ratelimit-unified-reset: {reset}\r\nanthropic-ratelimit-unified-5h-status: rejected\r\nanthropic-ratelimit-unified-5h-utilization: 1.0\r\nanthropic-ratelimit-unified-5h-reset: {reset}\r\n"
+                ),
+            ] {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                // Read the whole request so closing never resets the client.
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut request = vec![0_u8; length];
+                let _ = reader.read_exact(&mut request);
+                let body = "{\"error\":\"limited\"}";
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 429 X\r\n{headers}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/v1");
+        config::save(
+            &agent,
+            &config(vec![account("a1", &url), account("a2", &url)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, _) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 429);
+        let ledger = usage::load(&agent);
+        assert_eq!(
+            ledger.account("a1").unwrap().cooldown_until_ms,
+            Some(fixed_clock() + 120_000)
+        );
+        assert_eq!(
+            ledger.account("a2").unwrap().cooldown_until_ms,
+            Some(reset * 1000)
+        );
+        let quota = crate::quota::load(&agent);
+        let window = &quota.accounts["a2"].windows[0];
+        assert!(window.limit_reached);
+        assert_eq!(window.resets_at_ms, Some(reset * 1000));
+        drop(handle);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_turn_reaches_the_pool_and_lands_in_the_ledger() {
+        let agent = agent_dir();
+        let (url, seen) = upstream(vec![(200, answer("because", 312, 48), false)]);
+        config::save(&agent, &config(vec![account("a1", &url)])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200);
+        let answered: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(answered["choices"][0]["message"]["content"], "because");
+
+        let sent = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(sent["model"], "gpt-5.6-mini");
+        assert_eq!(sent["__authorization"], "Bearer sk-a1");
+
+        let ledger = usage::load(&agent);
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.requests, 1);
+        assert_eq!(usage.input_tokens, 312);
+        assert_eq!(usage.output_tokens, 48);
+    }
+
+    #[test]
+    fn a_refused_account_cools_and_the_next_one_serves_the_turn() {
+        let agent = agent_dir();
+        let (refusing, _first) = upstream(vec![(
+            429,
+            json!({ "error": "slow down" }).to_string(),
+            false,
+        )]);
+        let (serving, _second) = upstream(vec![(200, answer("second", 10, 2), false)]);
+        config::save(
+            &agent,
+            &config(vec![account("a1", &refusing), account("a2", &serving)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200);
+        assert!(body.contains("second"));
+
+        let ledger = usage::load(&agent);
+        let refused = ledger.account("a1").unwrap();
+        assert_eq!(refused.errors, 1);
+        assert!(refused.cooldown_until_ms.is_some());
+        assert!(refused.last_error.as_ref().unwrap().contains("slow down"));
+        assert_eq!(ledger.account("a2").unwrap().requests, 1);
+    }
+
+    /// What a subscription answers for a model its plan does not offer.
+    fn plan_refusal(model: &str) -> (u16, String, bool) {
+        (
+            400,
+            json!({
+                "detail": format!(
+                    "The '{model}' model is not supported when using Codex with a ChatGPT account."
+                )
+            })
+            .to_string(),
+            false,
+        )
+    }
+
+    #[test]
+    fn a_plan_refusal_fails_over_and_keeps_that_account_off_the_model() {
+        let agent = agent_dir();
+        let (refusing, seen_refusing) = upstream(vec![
+            plan_refusal("gpt-5.6-mini"),
+            plan_refusal("gpt-5.6-mini"),
+        ]);
+        let (serving, seen_serving) = upstream(vec![
+            (200, answer("second", 10, 2), false),
+            (200, answer("again", 10, 2), false),
+        ]);
+        config::save(
+            &agent,
+            &config(vec![account("a1", &refusing), account("a2", &serving)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200, "{body}");
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let routing = wire::response_routing(response["id"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            routing.fallback_causes,
+            ["The plan of a1 does not offer gpt-5.6-mini."]
+        );
+        assert_eq!(routing.account, "a2");
+        let ledger = usage::load(&agent);
+        let refused = ledger.account("a1").unwrap();
+        assert!(refused.refused_models.contains_key("gpt-5.6-mini"));
+        assert!(refused.cooldown_until_ms.is_none());
+
+        // The next turn goes straight to the account whose plan offers it.
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("again"));
+        assert_eq!(seen_refusing.try_iter().count(), 1);
+        assert_eq!(seen_serving.try_iter().count(), 2);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_model_every_plan_refuses_names_the_model_and_leaves_the_offered_list() {
+        let agent = agent_dir();
+        let (first, seen_first) = upstream(vec![plan_refusal("gpt-5.5"), plan_refusal("gpt-5.5")]);
+        let (second, seen_second) =
+            upstream(vec![plan_refusal("gpt-5.5"), plan_refusal("gpt-5.5")]);
+        let mut a1 = account("a1", &first);
+        a1.models.push("gpt-5.5".into());
+        let mut a2 = account("a2", &second);
+        a2.models.push("gpt-5.5".into());
+        let saved = config(vec![a1, a2]);
+        config::save(&agent, &saved).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let mut models = serde_json::Map::new();
+        super::super::pi_provider::register(&mut models, handle.endpoint(), &saved);
+        std::fs::write(agent.join("models.json"), Value::Object(models).to_string()).unwrap();
+        let offered = || {
+            let models: Value =
+                serde_json::from_slice(&std::fs::read(agent.join("models.json")).unwrap()).unwrap();
+            models["providers"][config::ROUTER_PROVIDER]["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|model| model["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(offered().contains(&"openai/gpt-5.5".to_owned()));
+
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("openai/gpt-5.5", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 400, "{body}");
+        let message = serde_json::from_str::<Value>(&body).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            message,
+            "No eligible model served this turn. The plan of a1 does not offer gpt-5.5. The plan of a2 does not offer gpt-5.5."
+        );
+        assert_eq!(seen_first.try_iter().count(), 1);
+        assert_eq!(seen_second.try_iter().count(), 1);
+        assert_eq!(offered(), ["fast"]);
+        let (_, listed) = call(
+            handle.endpoint(),
+            "GET",
+            "/v1/models",
+            None,
+            &handle.endpoint().token,
+        );
+        assert!(!listed.contains("gpt-5.5"), "{listed}");
+
+        // A turn that still names it fails at once, with no upstream call.
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("openai/gpt-5.5", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 400, "{body}");
+        assert!(
+            body.contains("The plan of a1 or a2 does not offer gpt-5.5."),
+            "{body}"
+        );
+        assert_eq!(seen_first.try_iter().count(), 0);
+        assert_eq!(seen_second.try_iter().count(), 0);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn explicit_model_never_falls_back_to_another_model() {
+        let agent = agent_dir();
+        let (limited, seen_limited) = upstream(vec![
+            (429, "limited".into(), false),
+            (429, "limited".into(), false),
+        ]);
+        let (serving, seen_serving) = upstream(vec![(200, answer("fallback reply", 12, 3), false)]);
+        let mut spare = account("spare", &serving);
+        spare.family = "xai".into();
+        spare.models = vec!["grok-test".into()];
+        let mut disabled = spare.clone();
+        disabled.id = "disabled".into();
+        disabled.enabled = false;
+        let mut configuration = config(vec![
+            account("a1", &limited),
+            account("a2", &limited),
+            disabled,
+            spare,
+        ]);
+        configuration.fallback = Some("xai/grok-test".into());
+        config::save(&agent, &configuration).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 429, "{body}");
+        assert_eq!(seen_limited.try_iter().count(), 2);
+        assert_eq!(seen_serving.try_iter().count(), 0);
+        assert!(usage::load(&agent).account("spare").is_none());
+    }
+
+    #[test]
+    fn model_rejection_tries_another_model_without_repeating_the_rejected_one() {
+        let agent = agent_dir();
+        let (url, seen) = upstream(vec![
+            (404, "model unavailable".into(), false),
+            (200, answer("alternate", 1, 1), false),
+        ]);
+        let mut a = account("a", &url);
+        a.models.push("alternate-model".into());
+        config::save(&agent, &config(vec![a])).unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200, "{body}");
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let routing = wire::response_routing(response["id"].as_str().unwrap()).unwrap();
+        assert_eq!(routing.fallback_causes, ["a answered 404."]);
+        assert_eq!(routing.account, "a");
+        assert_eq!(routing.selected_model, "openai/gpt-5.6-mini");
+        let models: Vec<_> = seen
+            .try_iter()
+            .map(|r| r["model"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(models, vec!["gpt-5.6-mini", "alternate-model"]);
+    }
+
+    #[test]
+    fn native_error_before_output_can_use_another_provider() {
+        let agent = agent_dir();
+        let (broken, _) = upstream(vec![(
+            200,
+            "data: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}\n\n".into(),
+            true,
+        )]);
+        let mut native = account("native", &broken);
+        native.family = "anthropic".into();
+        native.models = vec!["claude-test".into()];
+        let (serving, _) = upstream(vec![(200, answer("recovered", 1, 1), false)]);
+        let mut saved = config(vec![native, account("spare", &serving)]);
+        saved.fallback = Some("anthropic/claude-test".into());
+        config::save(&agent, &saved).unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("recovered"));
+    }
+
+    #[test]
+    fn a_rejected_request_comes_straight_back_and_spends_no_second_account() {
+        let agent = agent_dir();
+        let (rejecting, _first) = upstream(vec![(
+            400,
+            json!({ "error": "no such model" }).to_string(),
+            false,
+        )]);
+        let (spare, _second) = upstream(vec![(200, answer("unused", 1, 1), false)]);
+        config::save(
+            &agent,
+            &config(vec![account("a1", &rejecting), account("a2", &spare)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("no such model"));
+        let ledger = usage::load(&agent);
+        assert_eq!(ledger.account("a1").unwrap().errors, 1);
+        assert!(ledger.account("a1").unwrap().cooldown_until_ms.is_none());
+        assert!(ledger.account("a2").is_none());
+    }
+
+    #[test]
+    fn a_streamed_turn_forwards_every_frame_and_counts_the_usage_frame_away() {
+        let agent = agent_dir();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"be\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"cause\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (url, seen) = upstream(vec![(200, body.to_owned(), true)]);
+        config::save(&agent, &config(vec![account("a1", &url)])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, answered) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", true)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200);
+        assert!(answered.contains("\"be\""));
+        assert!(answered.contains("\"cause\""));
+        assert!(answered.contains("[DONE]"));
+        assert!(!answered.contains("prompt_tokens"));
+
+        let sent = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(sent["stream_options"]["include_usage"], true);
+        let usage = usage::load(&agent);
+        let counted = usage.account("a1").unwrap();
+        assert_eq!(counted.requests, 1);
+        assert_eq!(counted.input_tokens, 100);
+        assert_eq!(counted.output_tokens, 7);
+    }
+
+    #[test]
+    fn a_client_that_asked_for_usage_keeps_the_usage_frame() {
+        let agent = agent_dir();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"be\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (url, _seen) = upstream(vec![(200, body.to_owned(), true)]);
+        config::save(&agent, &config(vec![account("a1", &url)])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let mut request = turn("auto", true);
+        request["stream_options"] = json!({ "include_usage": true });
+        let (status, answered) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&request),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 200);
+        assert!(answered.contains("prompt_tokens"));
+        assert_eq!(usage::load(&agent).account("a1").unwrap().input_tokens, 100);
+    }
+
+    #[test]
+    fn the_router_serves_its_model_list_and_refuses_a_wrong_token() {
+        let agent = agent_dir();
+        config::save(
+            &agent,
+            &config(vec![account("a1", "http://127.0.0.1:9/v1")]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let (status, body) = call(endpoint, "GET", "/v1/models", None, &endpoint.token);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"auto\""));
+        assert!(body.contains("\"fast\""));
+
+        let (status, _) = call(endpoint, "GET", "/v1/models", None, "wrong-token");
+        assert_eq!(status, 401);
+        let (status, _) = call(endpoint, "GET", "/v1/nothing", None, &endpoint.token);
+        assert_eq!(status, 404);
+        // Health needs no token, so a caller can see the router is up.
+        let (status, _) = call(endpoint, "GET", "/healthz", None, "");
+        assert_eq!(status, 200);
+
+        assert_eq!(read_endpoint(&agent).as_ref(), Some(endpoint));
+        assert_eq!(
+            endpoint.base_url(),
+            format!("http://127.0.0.1:{}/v1", endpoint.port)
+        );
+    }
+
+    #[test]
+    fn an_empty_pool_says_so_and_an_unknown_model_is_not_found() {
+        let agent = agent_dir();
+        config::save(&agent, &config(Vec::new())).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let (status, body) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &endpoint.token,
+        );
+        assert_eq!(status, 503);
+        assert!(body.contains("No model is in the running"));
+        let (status, _) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("nobody", false)),
+            &endpoint.token,
+        );
+        assert_eq!(status, 404);
+        let (status, _) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            None,
+            &endpoint.token,
+        );
+        assert_eq!(status, 400);
+    }
+
+    #[test]
+    fn constraints_reject_before_a_classifier_or_answer_request() {
+        let agent = agent_dir();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let mut c = config(vec![account("a", &url)]);
+        c.policy.task_budget_usd = Some(0.0);
+        c.classifier = config::Classifier::Endpoint {
+            base_url: url.clone(),
+            model: "test".into(),
+            api_key: None,
+            max_options: None,
+            limits: Default::default(),
+        };
+        config::save(&agent, &c).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let (status, _) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &endpoint.token,
+        );
+        assert_eq!(status, 422);
+        assert!(listener.accept().is_err());
+        c.policy.task_budget_usd = None;
+        c.policy.offline_only = true;
+        c.accounts[0].base_url = Some("https://example.com/v1".into());
+        config::save(&agent, &c).unwrap();
+        let (status, _) = call(
+            endpoint,
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", false)),
+            &endpoint.token,
+        );
+        assert_eq!(status, 422);
+        assert!(listener.accept().is_err());
+    }
+
+    #[test]
+    fn two_tokens_of_the_same_length_compare_without_matching() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert_eq!(token().len(), 64);
+        assert_ne!(token(), token());
+    }
+}

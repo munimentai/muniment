@@ -1,0 +1,1 @@
+{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000c3","operation":"agent.move","capability":"fixture-capability","body":{"force":false,"id":"018f0000-0000-4000-8000-0000000000a1","to":"018f0000-0000-7000-8000-0000000000c2"}}
