@@ -1251,6 +1251,51 @@ database they may create schemas in.
 shared libraries on first build. `third-party/` holds the ONNX Runtime
 libraries that the on-device tests load.
 
+### Docker fleet test
+
+`scripts/fleet-e2e.sh` runs the fleet end to end: three runtime containers
+and the runtime of the test process, linked as full members over a Docker
+network. It builds the runtime image, a test layer that puts the sidecar
+test stub where Pi runs (`scripts/fleet-e2e/stub.Containerfile`) and a `tc`
+helper, then runs the ignored test `crates/runtime/tests/fleet_docker.rs`.
+The test proves, with a deadline on each step:
+
+- An agent made on one member reaches every container, and a thread created
+  on another member with `thread.create {runtime_id}` runs there and lists
+  everywhere with that owner.
+- Permission settings, preferences and memory files converge, and two edits
+  of one memory file made apart keep the later one and a
+  `name (from <machine>).md` copy.
+- Sealed model connections reach every member. `swarm.leave` reseals them
+  without the removed member, which drops the keys, and `fleet.audit` lists
+  what it held.
+- A container cut off with `docker network disconnect` catches up, and
+  nothing deleted meanwhile comes back.
+- Changes converge under `tc netem` delay and loss.
+- A post for a stopped container queues with `owner_offline` and runs there
+  once it starts again.
+
+```sh
+scripts/fleet-e2e.sh                 # removes its images when it ends
+scripts/fleet-e2e.sh --keep-images   # keeps them for the next run
+MUNIMENT_FLEET_E2E_RUNTIME_IMAGE=muniment-runtime scripts/fleet-e2e.sh
+```
+
+It needs Docker with `sch_netem` in its kernel, Rust, and Python 3, on the
+machine that runs the test: the containers reach the test runtime through
+`host.docker.internal` and the test reaches them on published loopback
+ports. That rules out a CI job whose steps run in a container beside the
+Docker daemon, so the test runs by hand. A full run takes about four minutes
+after the images build.
+
+With `MUNIMENT_FLEET_E2E_CLOUD_DIR` naming a cloud API checkout with its
+packages installed, the script also runs that API on port 58788
+(`MUNIMENT_FLEET_E2E_CLOUD_PORT`) with its own Postgres and Redis
+containers. The phone probe (`scripts/fleet-e2e/phone-probe.mjs`, Node 22
+or later) then pairs with the test runtime's account, reads `fleet.snapshot`
+over the relay control session, and posts into a container's thread, which
+runs on that container.
+
 Pushes to `main` that touch `core/` cut a `core-v*` release. The conventional
 prefixes of those commits pick the version: `feat:` is minor, `fix:` and
 `perf:` are patch, `feat!:` or a `BREAKING CHANGE:` trailer is major, and other

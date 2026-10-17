@@ -389,8 +389,31 @@ pub(crate) fn pass(adapter: &dyn Adapter, context: &Context<'_>) -> Result<bool,
                         );
                     }
                 }
-                // A write can add slots, such as a conflict copy: they are
-                // local changes for the next pass.
+                // A write that stores part of a key can fill in the rest of
+                // it, such as the default wait beside a mode that arrived
+                // first. Those values are not choices made here, so they
+                // never go to the records. A write can also add slots under
+                // a new key, such as a conflict copy: they are local changes
+                // for the next pass.
+                let written: BTreeSet<&str> = changes
+                    .iter()
+                    .map(|change| change.slot.key.as_str())
+                    .collect();
+                for (slot, value) in &after {
+                    if written.contains(slot.key.as_str())
+                        && !local.contains_key(slot)
+                        && !base.contains_key(slot)
+                    {
+                        base.insert(
+                            slot.clone(),
+                            Base {
+                                local: Some(hash(value)),
+                                remote: remote_hash(&remote, slot),
+                                mine: false,
+                            },
+                        );
+                    }
+                }
             }
             Err(error) => {
                 crate::runtime_eprintln!(

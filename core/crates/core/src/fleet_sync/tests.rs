@@ -212,6 +212,50 @@ fn permission_rules_keep_a_concurrent_add_and_bypass_stays_local() {
     assert_quiet(&members);
 }
 
+#[test]
+fn settings_that_arrive_in_parts_never_publish_the_defaults_a_write_filled_in() {
+    let members = fleet();
+    let [a, b, c] = &members;
+    // A's fields reach B in two exchanges, as a cut exchange delivers them.
+    // B has no settings file, so its write of the first part fills in the
+    // default wait.
+    let records = a.records();
+    records
+        .put(
+            permissions::CLASS,
+            "settings",
+            "default_thread_mode",
+            json!("edit_auto"),
+        )
+        .unwrap();
+    exchange(b, a);
+    sync_all(&b.records());
+    assert_eq!(permissions(b)["default_thread_mode"], "edit_auto");
+    records
+        .put(
+            permissions::CLASS,
+            "settings",
+            "unattended_timeout_seconds",
+            json!(7200),
+        )
+        .unwrap();
+    exchange(b, a);
+    settle(&members);
+    for member in [b, c] {
+        assert_eq!(permissions(member)["unattended_timeout_seconds"], 7200);
+    }
+    let held = b
+        .records()
+        .get(permissions::CLASS, "settings")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        held.fields["unattended_timeout_seconds"].origin,
+        a.records().origin().unwrap()
+    );
+    assert_quiet(&members);
+}
+
 fn retention(member: &TestMember) -> Option<crate::retention_record::RetentionChoice> {
     crate::retention_record::read_retention_choice(&member.profile)
 }
