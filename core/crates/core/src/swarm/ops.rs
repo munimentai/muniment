@@ -113,10 +113,43 @@ fn full_scopes() -> BTreeSet<String> {
         .collect()
 }
 
-/// The scopes the member `runtime_id` may pass on for its clients. Every
-/// member holds the full set until roles narrow a member's set.
-fn member_scopes(_inner: &Inner, _runtime_id: &str) -> BTreeSet<String> {
-    full_scopes()
+/// The scopes the member `runtime_id` may pass on for its clients, by its
+/// role in the roster: a full member every scope, a worker every scope but
+/// `agents.manage` and `runtime.admin`, and a member the roster does not
+/// name or removed none. Without fleet keys every member holds the full set.
+fn member_scopes(inner: &Inner, runtime_id: &str) -> BTreeSet<String> {
+    if super::fleet::keys(inner).is_err() {
+        return full_scopes();
+    }
+    let Ok(view) = super::fleet::view(inner) else {
+        return BTreeSet::new();
+    };
+    if view.removed.contains(runtime_id) {
+        return BTreeSet::new();
+    }
+    match view.role(runtime_id) {
+        Some(super::fleet::Role::Full) => full_scopes(),
+        Some(super::fleet::Role::Worker) => full_scopes()
+            .into_iter()
+            .filter(|scope| {
+                scope != muniment_attach::SCOPE_AGENTS_MANAGE
+                    && scope != muniment_attach::SCOPE_RUNTIME_ADMIN
+            })
+            .collect(),
+        None => BTreeSet::new(),
+    }
+}
+
+/// Why this runtime may not send an action at all: a worker originates no
+/// action that takes a scope its role lacks.
+fn own_refusal(inner: &Inner, own: &str, operation: Operation, body: &Value) -> Option<String> {
+    let scopes = member_scopes(inner, own);
+    match crate::attach::remote_rule(operation, body) {
+        RemoteRule::Scope(scope) if !muniment_attach::scopes_grant(&scopes, scope) => Some(format!(
+            "This machine is a worker in the fleet, so it cannot send actions that need the {scope} scope."
+        )),
+        _ => None,
+    }
 }
 
 /// What an actor may do through a member: the actor's scopes that the
@@ -313,6 +346,9 @@ pub(super) fn route(
     };
     if owner == own {
         return Ok(None);
+    }
+    if let Some(refusal) = own_refusal(inner, &own, operation, body) {
+        return Err(refusal);
     }
     if !speaks_ops(inner, &owner) {
         // An older owner takes posts and approval answers the way it always
@@ -901,6 +937,27 @@ pub(super) fn execute_pending(inner: &Inner) -> Result<(), String> {
                 result: None,
             },
         };
+        let actor_device = message
+            .body
+            .get("actor_device")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let logged = super::audit::append(
+            inner,
+            "op",
+            Some(&message.from_runtime),
+            json!({
+                "op_id": message.message_id,
+                "operation": message.body.get("operation"),
+                "actor_device": actor_device,
+                "origin": message.from_runtime,
+                "result": ack.status,
+                "note": ack.note,
+            }),
+        );
+        if let Err(error) = logged {
+            crate::runtime_eprintln!("muniment-runtime: fleet audit of an action failed: {error}");
+        }
         let _merge = lock(&inner.merge);
         messaging::finish(inner, &message.message_id, &ack, None)?;
         inner

@@ -474,6 +474,14 @@ impl RecordStore {
             {
                 continue;
             }
+            if row.class == super::audit::CLASS
+                && (!super::audit::written_by(&row, &row.origin)
+                    || current_row(&transaction, &row.class, &row.key, &row.field)?.is_some())
+            {
+                // The audit log only grows: an entry names the member that
+                // wrote it, and a held entry is never replaced.
+                continue;
+            }
             skew = skew.max(lock(&self.clock).observe(row.clock, now_millis));
             transaction
                 .execute(
@@ -519,10 +527,22 @@ impl RecordStore {
 
     /// The rows a peer with version vector `peer` lacks, in number order per
     /// origin, within `budget` bytes. Answers whether rows were left out.
+    #[cfg(test)]
     pub(super) fn delta(
         &self,
         peer: &VersionVector,
         budget: &mut usize,
+    ) -> Result<(Vec<RecordRow>, bool), String> {
+        self.delta_where(peer, budget, &|_| true)
+    }
+
+    /// The rows of [`Self::delta`] that `allow` passes. A row it holds back
+    /// takes none of the budget.
+    pub(super) fn delta_where(
+        &self,
+        peer: &VersionVector,
+        budget: &mut usize,
+        allow: &dyn Fn(&RecordRow) -> bool,
     ) -> Result<(Vec<RecordRow>, bool), String> {
         let connection = self.store.connect()?;
         let mut rows = Vec::new();
@@ -542,6 +562,9 @@ impl RecordStore {
                 .map_err(sql)?;
             for row in found {
                 let row = row.map_err(sql)?;
+                if !allow(&row) {
+                    continue;
+                }
                 let size = serde_json::to_vec(&row).map_or(usize::MAX, |bytes| bytes.len());
                 if size > *budget {
                     return Ok((rows, true));
@@ -551,6 +574,69 @@ impl RecordStore {
             }
         }
         Ok((rows, false))
+    }
+
+    /// Notes that this runtime holds what it may hold of each origin through
+    /// the number `floor` names, as a full member tells a worker. Its own
+    /// numbers never move.
+    pub(super) fn raise(&self, own: &str, floor: &VersionVector) -> Result<(), String> {
+        let mut connection = self.store.connect()?;
+        let transaction = connection.transaction().map_err(sql)?;
+        for (origin, seq) in floor {
+            if origin == own || origin.is_empty() {
+                continue;
+            }
+            transaction
+                .execute(
+                    "INSERT INTO record_vv(origin, seq) VALUES(?1, ?2) \
+                     ON CONFLICT(origin) DO UPDATE SET seq=MAX(seq, excluded.seq)",
+                    params![origin, (*seq).min(i64::MAX as u64) as i64],
+                )
+                .map_err(sql)?;
+        }
+        transaction.commit().map_err(sql)
+    }
+
+    /// Forgets the numbers held from every origin but `own`, so peers send
+    /// every row this runtime may now hold again.
+    pub(super) fn forget_numbers(&self, own: &str) -> Result<(), String> {
+        self.store
+            .connect()?
+            .execute("DELETE FROM record_vv WHERE origin<>?1", [own])
+            .map(drop)
+            .map_err(sql)
+    }
+
+    /// Deletes the rows other members wrote that `keep` refuses, without a
+    /// tombstone: they leave this runtime alone.
+    pub(super) fn drop_where(
+        &self,
+        own: &str,
+        keep: &dyn Fn(&RecordRow) -> bool,
+    ) -> Result<usize, String> {
+        let mut connection = self.store.connect()?;
+        let transaction = connection.transaction().map_err(sql)?;
+        let rows: Vec<RecordRow> = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT class, key, field, value, clock, origin, seq, deleted, rank FROM records \
+                     WHERE origin<>?1",
+                )
+                .map_err(sql)?;
+            let rows = statement.query_map([own], read_row).map_err(sql)?;
+            rows.collect::<Result<_, _>>().map_err(sql)?
+        };
+        let mut dropped = 0;
+        for row in rows.iter().filter(|row| !keep(row)) {
+            dropped += transaction
+                .execute(
+                    "DELETE FROM records WHERE class=?1 AND key=?2 AND field=?3",
+                    params![row.class, row.key, row.field],
+                )
+                .map_err(sql)?;
+        }
+        transaction.commit().map_err(sql)?;
+        Ok(dropped)
     }
 
     /// The record `(class, key)`, if this runtime holds any write to it.

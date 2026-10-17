@@ -298,7 +298,7 @@ pub(super) fn enqueue(inner: &Inner, message: &Message, relay: bool) -> Result<(
         .map_err(sql)
 }
 
-fn outbox_message(inner: &Inner, message_id: &str) -> Result<Option<Message>, String> {
+pub(super) fn outbox_message(inner: &Inner, message_id: &str) -> Result<Option<Message>, String> {
     inner
         .store
         .record("outbox", "message_id", "message", message_id)
@@ -630,10 +630,11 @@ pub(super) fn deliver_pending(inner: &Inner) -> Result<bool, String> {
     Ok(kick)
 }
 
-/// The unacknowledged messages to pass to `peer`, oldest first.
+/// The unacknowledged messages to pass on, oldest first: those addressed
+/// to `to` alone when it names a runtime.
 pub(super) fn outgoing(
     inner: &Inner,
-    _peer: &str,
+    to: Option<&str>,
     budget: &mut usize,
 ) -> Result<(Vec<Message>, bool), String> {
     let own = self_id(inner);
@@ -642,11 +643,11 @@ pub(super) fn outgoing(
         let mut statement = connection
             .prepare(
                 "SELECT message FROM outbox WHERE acked=0 AND (to_runtime IS NULL OR to_runtime<>?1) \
-                 ORDER BY created_at LIMIT ?2",
+                 AND (?3 IS NULL OR to_runtime=?3) ORDER BY created_at LIMIT ?2",
             )
             .map_err(sql)?;
         let rows = statement
-            .query_map(params![own, MAX_OUTGOING], |row| row.get(0))
+            .query_map(params![own, MAX_OUTGOING, to], |row| row.get(0))
             .map_err(sql)?;
         rows.collect::<Result<_, _>>().map_err(sql)?
     };

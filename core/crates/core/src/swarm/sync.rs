@@ -514,11 +514,12 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
 }
 
 /// The events this runtime holds that `peer_clocks` lack, oldest first per
-/// origin, within `budget` bytes.
+/// origin, within `budget` bytes, of the threads and origins `allow` passes.
 pub(super) fn export(
     inner: &Inner,
     peer_clocks: &Clocks,
     budget: &mut usize,
+    allow: &dyn Fn(&str, &str) -> bool,
 ) -> Result<(Vec<ReplicatedEvent>, bool), String> {
     let mine = clocks(inner)?;
     let subject = inner.host.replica_scope().and_then(|scope| scope.subject);
@@ -526,6 +527,9 @@ pub(super) fn export(
     let mut events = Vec::new();
     for (thread, origins) in mine {
         for (origin, held) in origins {
+            if !allow(&thread, &origin) {
+                continue;
+            }
             let known = peer_clocks
                 .get(&thread)
                 .and_then(|clock| clock.get(&origin))
@@ -989,6 +993,42 @@ fn append_local(
         ))
         .map_err(journal_error)?;
     Ok(stored.recorded_at().to_owned())
+}
+
+/// Drops this runtime's copy of a thread another member runs: its
+/// registration and index here, and the thread in the journal.
+pub(super) fn drop_replica(inner: &Inner, thread_id: &str) -> Result<(), String> {
+    let connection = inner.store.connect()?;
+    for table in ["threads", "log", "thread_marks", "thread_versions", "blobs"] {
+        connection
+            .execute(
+                &format!("DELETE FROM {table} WHERE thread_id=?1"),
+                [thread_id],
+            )
+            .map_err(sql)?;
+    }
+    let scope = inner.host.replica_scope();
+    let mut storage = storage_lock(&inner.storage)?;
+    let journal = &mut storage.journal;
+    if !journal.thread_exists(thread_id).map_err(journal_error)? {
+        return Ok(());
+    }
+    let profile = journal
+        .thread_scope(thread_id)
+        .map_err(journal_error)?
+        .and_then(|(_, profile)| profile)
+        .unwrap_or_default();
+    journal
+        .append_thread_event_with_id(ThreadEventEnvelope::new(
+            &uuid::Uuid::now_v7().to_string(),
+            thread_id,
+            "thread.deleted",
+            &inner.now_text(),
+            json!({}),
+            local_provenance(scope.as_ref(), &profile),
+        ))
+        .map_err(journal_error)?;
+    Ok(())
 }
 
 /// Posts a message an agent or this runtime writes, such as an agent's

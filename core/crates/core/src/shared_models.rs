@@ -541,6 +541,43 @@ pub fn bundle(agent: &Path, now_ms: i64) -> Result<Bundle, String> {
     collect(agent, now_ms, Audience::Peer)
 }
 
+/// A lease out of `bundle` for a machine that runs agents on the Pi
+/// providers `providers`, and on the router when `router` is set: those
+/// connections alone, each without a refresh token, so the machine uses a
+/// sign-in until it expires and never refreshes it.
+pub fn lease(bundle: Bundle, providers: &BTreeSet<String>, router: bool) -> Bundle {
+    let pi = bundle
+        .pi
+        .into_iter()
+        .filter(|(provider, _)| providers.contains(provider))
+        .map(|(provider, mut entry)| {
+            if let Some(entry) = entry.as_object_mut() {
+                entry.remove("refresh");
+            }
+            (provider, entry)
+        })
+        .collect();
+    let router = if router {
+        bundle
+            .router
+            .into_iter()
+            .map(|mut account| {
+                if let Credential::Subscription { refresh, .. } = &mut account.credential {
+                    *refresh = None;
+                }
+                account
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Bundle {
+        pi,
+        router,
+        cloud: None,
+    }
+}
+
 /// The bundle this computer uploads to the model vault: its own connections
 /// with the refresh token of each sign-in the vault renews or may copy, and
 /// the sign-ins the vault already holds, without theirs.

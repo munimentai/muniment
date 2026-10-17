@@ -16,7 +16,7 @@ use crate::agents::{self, Agent};
 
 /// The record class of the directory.
 pub(super) const CLASS: &str = "agent";
-const ENTRY: &str = "entry";
+pub(super) const ENTRY: &str = "entry";
 const DEFINITION: &str = "definition";
 const ACTIVITY: &str = "activity";
 

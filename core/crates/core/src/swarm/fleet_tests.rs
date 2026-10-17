@@ -128,16 +128,16 @@ impl Node {
             .map(|bytes| bytes.map(|bytes| serde_json::from_slice(&bytes).unwrap()))
     }
 
+    /// The audit entries of `kind` this member wrote, oldest first.
     fn audit(&self, kind: &str) -> Vec<Value> {
-        let connection = self.inner().store.connect().unwrap();
-        let mut statement = connection
-            .prepare("SELECT record FROM fleet_audit WHERE kind=?1 ORDER BY seq")
-            .unwrap();
-        let rows = statement
-            .query_map([kind], |row| row.get::<_, String>(0))
-            .unwrap();
-        rows.map(|row| serde_json::from_str(&row.unwrap()).unwrap())
-            .collect()
+        let mut entries: Vec<Value> = audit::entries(self.inner())
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.kind == kind && entry.actor_runtime == self.id)
+            .map(|entry| entry.record)
+            .collect();
+        entries.reverse();
+        entries
     }
 }
 
