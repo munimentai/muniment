@@ -354,8 +354,11 @@ impl RunJournal {
         if deleted {
             return Err(JournalError::InvalidEnvelope("thread is deleted".into()));
         }
+        // A thread's permission mode replicates from its owner; its
+        // policies stay with the runtime that decided them.
         if event.event_type == "thread.created"
-            || event.event_type.starts_with("thread.permission.")
+            || (event.event_type.starts_with("thread.permission.")
+                && event.event_type != super::THREAD_PERMISSION_MODE_SET)
         {
             return Err(JournalError::InvalidEnvelope(
                 "this thread event cannot be replicated".into(),
@@ -398,6 +401,49 @@ impl RunJournal {
                 |row| row.get(0),
             )
             .map_err(Into::into)
+    }
+
+    /// The threads whose run events or thread events were stored after the
+    /// row marks `run_mark` and `thread_mark`, with the newest marks. A mark
+    /// past the newest row, as after a compaction renumbers rows, reads as
+    /// zero, so the caller rescans.
+    pub fn threads_changed_after(
+        &mut self,
+        run_mark: i64,
+        thread_mark: i64,
+    ) -> Result<(Vec<String>, i64, i64), JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let (run_max, thread_max): (i64, i64) = connection.query_row(
+            "SELECT (SELECT COALESCE(MAX(rowid), 0) FROM events), \
+             (SELECT COALESCE(MAX(rowid), 0) FROM thread_events)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let run_mark = if run_mark > run_max { 0 } else { run_mark };
+        let thread_mark = if thread_mark > thread_max {
+            0
+        } else {
+            thread_mark
+        };
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT rt.thread_id FROM events e JOIN run_threads rt ON rt.run_id=e.run_id \
+             WHERE e.rowid>?1 AND e.rowid<=?2 \
+             UNION SELECT DISTINCT thread_id FROM thread_events WHERE rowid>?3 AND rowid<=?4",
+        )?;
+        let rows = statement
+            .query_map(params![run_mark, run_max, thread_mark, thread_max], |row| {
+                row.get::<_, String>(0)
+            })?;
+        let threads = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok((threads, run_max, thread_max))
     }
 
     /// The workspace and attach profile a thread was created with.

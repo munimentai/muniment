@@ -464,6 +464,13 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
             .as_ref()
             .map(RemoteAccess::advertised_endpoints)
             .unwrap_or_default(),
+        offline_days: Some(super::bootstrap::offline(inner).thread_days),
+        pins: super::sync::own_pins(inner)?,
+        record_vv: if inner.legacy() {
+            None
+        } else {
+            Some(inner.records.version_vector()?)
+        },
     })
 }
 
@@ -506,11 +513,19 @@ pub(super) fn merge_members(
             inner
                 .store
                 .record("members", "runtime_id", "record", &record.runtime_id)?;
-        if existing
-            .as_ref()
-            .is_none_or(|existing| record.updated_at > existing.updated_at)
-        {
+        // A record rewritten within the same second, as a new pin makes it,
+        // still replaces the held one.
+        if existing.as_ref().is_none_or(|existing| {
+            record.updated_at > existing.updated_at
+                || (record.updated_at == existing.updated_at && record != existing)
+        }) {
             added |= existing.is_none();
+            // A member's new pins or window change which threads it takes.
+            if existing.as_ref().is_none_or(|existing| {
+                existing.pins != record.pins || existing.offline_days != record.offline_days
+            }) {
+                inner.refresh_exports();
+            }
             inner.store.put_record(
                 "members",
                 "runtime_id",

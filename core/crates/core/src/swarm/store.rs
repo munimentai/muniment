@@ -1,12 +1,15 @@
 //! The swarm's own records in `<profile>/swarm.sqlite3`: links, members, the
 //! replicated records (the directory, groups and thread registrations among
 //! them), the replication index and thread versions, the outbox and inbox,
-//! forwarded actions, approvals, meetings and pending moves.
+//! forwarded actions, approvals, meetings and pending moves, the time of
+//! each thread's newest event, and the ordinary threads this runtime asked
+//! to hold in full.
 //!
 //! Thread content stays in the run journal. The replication index maps each
 //! `(thread, origin, seq)` to the journal event that holds it.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
@@ -67,9 +70,15 @@ CREATE TABLE IF NOT EXISTS op_results(
   at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS thread_versions(thread_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS thread_versions_version ON thread_versions(version);
-CREATE TRIGGER IF NOT EXISTS log_thread_version AFTER INSERT ON log BEGIN
-  INSERT OR REPLACE INTO thread_versions(thread_id, version)
-  VALUES(NEW.thread_id, (SELECT COALESCE(MAX(version), 0) + 1 FROM thread_versions));
+CREATE TABLE IF NOT EXISTS thread_activity(thread_id TEXT PRIMARY KEY, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pins(thread_id TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- The version trigger upserts: an OR clause in a trigger gives way to the
+-- inserting statement's own, and the log inserts with OR IGNORE.
+DROP TRIGGER IF EXISTS log_thread_version;
+CREATE TRIGGER IF NOT EXISTS log_thread_version_upsert AFTER INSERT ON log BEGIN
+  INSERT INTO thread_versions(thread_id, version)
+  VALUES(NEW.thread_id, (SELECT COALESCE(MAX(version), 0) + 1 FROM thread_versions))
+  ON CONFLICT(thread_id) DO UPDATE SET version=excluded.version;
 END;
 ";
 
@@ -83,16 +92,74 @@ FROM (SELECT DISTINCT thread_id FROM log
   WHERE thread_id NOT IN (SELECT thread_id FROM thread_versions));
 ";
 
-/// The swarm store of one profile.
-#[derive(Clone, Debug)]
+/// The most idle connections a store keeps for reuse.
+const POOLED_CONNECTIONS: usize = 4;
+
+/// The swarm store of one profile. It keeps a few idle connections, so the
+/// many small reads of a pass do not each open the file.
+#[derive(Clone)]
 pub(super) struct Store {
     path: PathBuf,
+    idle: Arc<Mutex<Vec<Connection>>>,
+}
+
+impl std::fmt::Debug for Store {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Store")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A connection to the store that goes back to its pool when dropped.
+pub(super) struct Pooled {
+    connection: Option<Connection>,
+    idle: Arc<Mutex<Vec<Connection>>>,
+}
+
+impl std::ops::Deref for Pooled {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.connection
+            .as_ref()
+            .expect("a pooled connection is present until it drops")
+    }
+}
+
+impl std::ops::DerefMut for Pooled {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.connection
+            .as_mut()
+            .expect("a pooled connection is present until it drops")
+    }
+}
+
+impl Drop for Pooled {
+    fn drop(&mut self) {
+        let Some(connection) = self.connection.take() else {
+            return;
+        };
+        // A connection left inside a transaction is not reused.
+        if !connection.is_autocommit() {
+            return;
+        }
+        let mut idle = self
+            .idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if idle.len() < POOLED_CONNECTIONS {
+            idle.push(connection);
+        }
+    }
 }
 
 impl Store {
     pub(super) fn open(profile: &Path) -> Result<Self, String> {
         let store = Self {
             path: profile.join(STORE_FILE),
+            idle: Arc::new(Mutex::new(Vec::new())),
         };
         let connection = Connection::open(&store.path)
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
@@ -103,8 +170,32 @@ impl Store {
         Ok(store)
     }
 
-    /// Opens the store. A store removed since `open` stays removed.
-    pub(super) fn connect(&self) -> Result<Connection, String> {
+    /// Opens the store, or reuses an idle connection. A store removed since
+    /// `open` stays removed.
+    pub(super) fn connect(&self) -> Result<Pooled, String> {
+        if !self.path.exists() {
+            self.idle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clear();
+            return Err("The swarm store is unavailable: it was removed.".into());
+        }
+        let reused = self
+            .idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop();
+        let connection = match reused {
+            Some(connection) => connection,
+            None => self.open_connection()?,
+        };
+        Ok(Pooled {
+            connection: Some(connection),
+            idle: Arc::clone(&self.idle),
+        })
+    }
+
+    fn open_connection(&self) -> Result<Connection, String> {
         let connection = Connection::open_with_flags(
             &self.path,
             OpenFlags::SQLITE_OPEN_READ_WRITE

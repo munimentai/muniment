@@ -63,13 +63,28 @@ pub fn chat_thread_summaries_page(
     journal
         .scan_thread_summaries(None, cursor, scan, |journal, thread_id| {
             // A created thread with no run holds no message, so the list
-            // leaves it out. The shell shows the open fresh thread itself.
+            // leaves it out. The shell shows the open fresh thread itself. A
+            // thread another swarm member runs shows before its history
+            // arrives.
             let has_run = !journal
                 .thread_run_ids(thread_id, 1, None)
                 .map_err(|error| ThreadOwnershipError::ThreadRunsUnavailable(format!("{error:?}")))?
                 .run_ids
                 .is_empty();
-            Ok(has_run && subject_owns_first_run(journal, thread_id, subject)?)
+            let shared = !has_run
+                && journal
+                    .thread_events_after(thread_id, 0)
+                    .map_err(|error| {
+                        ThreadOwnershipError::FirstEnvelopeUnavailable(error.to_string())
+                    })?
+                    .first()
+                    .is_some_and(|created| {
+                        created
+                            .provenance
+                            .extra
+                            .contains_key(crate::swarm::SWARM_ORIGIN)
+                    });
+            Ok((has_run || shared) && subject_owns_first_run(journal, thread_id, subject)?)
         })
         .map_err(scan_error)
 }

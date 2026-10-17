@@ -23,12 +23,21 @@
 //!   field-level last-writer-wins records ordered by a hybrid logical clock.
 //!   Members that name `store/1` trade only the records and thread clocks a
 //!   peer lacks; an older member gets the full state.
+//! - **Ordinary threads.** A thread a runtime created replicates to every
+//!   member with that runtime as its owner: a summary everywhere, and the
+//!   history of threads active within each member's offline window or that
+//!   it fetched. A post on any member reaches the owner, which runs it.
+//! - **Bootstrap and collection.** A new member takes a snapshot of the
+//!   records, then the thread summaries, then history, and reports its
+//!   progress per class. Tombstones that every member in touch holds go
+//!   after [`TOMBSTONE_DAYS`]; a member away longer takes a fresh snapshot.
 //!
 //! The runtime supplies what only it can do through [`SwarmHost`].
 
 mod absence;
 mod approvals;
 mod audit;
+mod bootstrap;
 mod credentials;
 mod directory;
 mod fleet;
@@ -65,6 +74,7 @@ use crate::permission_gate::ChatPermissionAnswer;
 use crate::run_events::SharedStorage;
 
 pub use audit::{AuditEntry, MAX_AUDIT_LIMIT};
+pub use bootstrap::{OfflineSettings, OFFLINE_DAYS};
 pub use fleet::{RecipientSet, Role};
 pub use hlc::Hlc;
 pub use link::PEER_KIND;
@@ -110,6 +120,13 @@ pub trait SwarmHost: Send + Sync {
     ) -> Result<(), String>;
     /// Starts queued agent runs soon, without waiting for the next pass.
     fn kick_runs(&self);
+    /// Starts a run of `text` in the ordinary thread `thread_id`, as its
+    /// owner does for a message another member posted, and answers the
+    /// run's id. A thread that is already replying answers
+    /// [`crate::active_run::THREAD_BUSY`].
+    fn submit(&self, _thread_id: &str, _text: &str) -> Result<String, String> {
+        Err("This runtime runs no ordinary threads.".into())
+    }
     /// The secret of this runtime's webhook `hook_id`, which a move hands to
     /// the agent's new primary.
     fn hook_secret(&self, _hook_id: &str) -> Option<String> {
@@ -207,6 +224,15 @@ pub(crate) struct Inner {
     run_changes: Mutex<Option<Receiver<Value>>>,
     /// The activity of each agent this runtime runs, as last sent to clients.
     activities: Mutex<HashMap<String, crate::agent_runs::Activity>>,
+    /// What the scan of the journal last read.
+    scan: Mutex<sync::ScanMarks>,
+    /// What this machine keeps offline.
+    offline: Mutex<bootstrap::OfflineSettings>,
+    /// Where the `fleet.sync_changed` events stand.
+    status: Mutex<bootstrap::StatusState>,
+    /// Bumped when a member's pins or offline window change, so every
+    /// export looks at every thread again.
+    export_epoch: std::sync::atomic::AtomicU64,
     /// Fleet keys, the roster and sealed secrets.
     fleet: fleet::FleetState,
     /// Held while forwarded actions run, so each runs once.
@@ -241,6 +267,12 @@ struct PeerSync {
     /// This runtime logged that it serves the peer a snapshot, and the peer
     /// has not caught up since.
     snapshot_logged: bool,
+    /// Where the export of events to the peer stands.
+    export: sync::ExportState,
+    /// The export epoch `export` belongs to.
+    export_epoch: u64,
+    /// The record counts the peer sent while this runtime caught up.
+    snapshot: Option<SnapshotMark>,
 }
 
 /// What a member sent one peer and took in from it, for `swarm.members`
@@ -322,6 +354,10 @@ impl Swarm {
             gates: Mutex::new(HashMap::new()),
             run_changes: Mutex::new(None),
             activities: Mutex::new(HashMap::new()),
+            scan: Mutex::new(sync::ScanMarks::default()),
+            offline: Mutex::new(bootstrap::load_offline(profile)),
+            status: Mutex::new(bootstrap::StatusState::default()),
+            export_epoch: std::sync::atomic::AtomicU64::new(0),
             fleet: fleet::FleetState::default(),
             ops_running: Mutex::new(()),
         });
@@ -534,6 +570,12 @@ impl Swarm {
                 groups::list(inner)
             }
             Operation::GroupUpdate => groups::update(inner, body),
+            Operation::FleetSyncStatus => {
+                empty(&body)?;
+                bootstrap::status(inner)
+            }
+            Operation::FleetOfflineSet => bootstrap::offline_set(inner, body),
+            Operation::ThreadHistoryFetch => bootstrap::history_fetch(inner, body),
             Operation::FleetOpStatus => ops::status(inner, body),
             _ => Err("The swarm operation is unknown.".into()),
         }
@@ -564,10 +606,24 @@ impl Swarm {
         messaging::tool(&self.inner, run_id, thread_id, tool, arguments)
     }
 
-    /// Whether `thread_id` replicates an agent or group thread that another
-    /// member runs, so this runtime writes no run output into it.
+    /// Whether `thread_id` replicates an agent, group or ordinary thread
+    /// that another member runs, so this runtime writes no run output into
+    /// it.
     pub fn is_replica_thread(&self, thread_id: &str) -> Option<String> {
         sync::replica_primary(&self.inner, thread_id)
+    }
+
+    /// The runtime that runs `thread_id`: its owner when the swarm shares it,
+    /// else this runtime.
+    pub fn thread_owner(&self, thread_id: &str) -> Option<String> {
+        sync::thread_owner(&self.inner, thread_id)
+    }
+
+    /// Drops the tombstones every member in touch holds now, for tests.
+    #[doc(hidden)]
+    pub fn collect_now(&self) -> Result<usize, String> {
+        let _merge = lock(&self.inner.merge);
+        bootstrap::collect(&self.inner, true)
     }
 
     /// Asks the members for the content-store objects a thread's events name
@@ -858,6 +914,12 @@ impl Inner {
             .and_then(|identity| identity.access.clone())
     }
 
+    /// Makes every export look at every thread again, as after a member's
+    /// pins or offline window changed.
+    pub(crate) fn refresh_exports(&self) {
+        self.export_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// Wakes the worker and every idle link.
     pub(crate) fn nudge(&self) {
         *lock(&self.wake) += 1;
@@ -886,7 +948,7 @@ impl Inner {
             type Step<'a> = (&'a str, &'a dyn Fn() -> Result<bool, String>);
             // Approvals come before activity, so a waiting agent's activity
             // names its approval rather than a bare wait.
-            let steps: [Step<'_>; 11] = [
+            let steps: [Step<'_>; 12] = [
                 ("approvals", &|| approvals::scan(self).map(|()| false)),
                 ("activity", &|| directory::refresh_activity(self)),
                 ("directory", &|| directory::refresh_local(self)),
@@ -897,6 +959,9 @@ impl Inner {
                 ("results", &|| messaging::send_results(self)),
                 ("moves", &|| moves::activate_pending(self)),
                 ("absence", &|| absence::check(self).map(|()| false)),
+                ("collect", &|| {
+                    bootstrap::collect(self, false).map(|_| false)
+                }),
                 ("fleet", &|| credentials::settle(self).map(|()| false)),
             ];
             for (name, step) in steps {
@@ -911,6 +976,7 @@ impl Inner {
                 crate::runtime_eprintln!("muniment-runtime: swarm notices failed: {error}");
             }
         }
+        bootstrap::flush_progress(self);
         // Forwarded actions run outside the merge: the operations they reach
         // take it themselves.
         for (name, step) in [
@@ -941,18 +1007,23 @@ impl Inner {
         let now = self.now();
         let access = roles::peer_access(self, peer)?;
         let leaf = roles::leaf(self)?;
-        let (peer_vv, acked, held_mark, peer_clocks, clocks_ready, digest_due, serve) = {
+        let epoch = self.export_epoch.load(Ordering::SeqCst);
+        let (peer_vv, acked, held_mark, clocks_ready, digest_due, serve, mut export) = {
             let mut peers = lock(&self.peers);
             let sync = peers.entry(peer.to_owned()).or_default();
+            if sync.export_epoch != epoch {
+                sync.export = sync::ExportState::default();
+                sync.export_epoch = epoch;
+            }
             (
                 sync.record_vv.clone(),
                 sync.acked,
                 sync.clocks_mark,
-                sync.clocks.clone(),
                 wire != Wire::Store || sync.clocks_synced,
                 sync.digest_at
                     .is_none_or(|at| (now - at).num_seconds() >= DIGEST_SECONDS),
                 std::mem::take(&mut sync.wants),
+                std::mem::take(&mut sync.export),
             )
         };
         let acks = messaging::recent_acks(self)?;
@@ -963,8 +1034,8 @@ impl Inner {
         let (messages, more_messages) =
             messaging::outgoing(self, access.message_target(), &mut budget)?;
         let record_base = (wire != Wire::Full && !peer_vv.is_empty()).then(|| peer_vv.clone());
-        let (records, record_vv, more_records, record_floor) = if wire == Wire::Full {
-            (Vec::new(), None, false, None)
+        let (records, record_vv, more_records, snapshot, record_floor) = if wire == Wire::Full {
+            (Vec::new(), None, false, None, None)
         } else {
             // Every row through this vector is either in the delta or one
             // the peer may not hold.
@@ -982,8 +1053,25 @@ impl Inner {
                     held.clone()
                 }
             });
-            self.note_snapshot(peer, &peer_vv, &held, rows.len(), more)?;
-            (rows, Some(self.records.version_vector()?), more, floor)
+            let mut vector = self.records.version_vector()?;
+            // A peer that lacks a whole origin, or more than one exchange
+            // holds, is catching up and learns how much there is.
+            let catching_up = !rows.is_empty()
+                && (more || vector.keys().any(|origin| !peer_vv.contains_key(origin)));
+            self.note_snapshot(peer, catching_up, rows.len(), more)?;
+            let snapshot = if catching_up {
+                Some(bootstrap::snapshot_mark(self, !more)?)
+            } else {
+                None
+            };
+            // While this runtime takes a fresh snapshot, its peers send its
+            // own writes back too.
+            if self.store.meta(bootstrap::BOOTSTRAPPING)?.is_some() {
+                if let Ok(origin) = self.origin() {
+                    vector.remove(&origin);
+                }
+            }
+            (rows, Some(vector), more, snapshot, floor)
         };
         let (clocks, watermarks, more_clocks) = match wire {
             Wire::Full => (sync::clocks(self)?, None, false),
@@ -1023,13 +1111,26 @@ impl Inner {
             }
         };
         let (events, more_events) = if clocks_ready {
+            let peer_clock = |thread: &str| {
+                lock(&self.peers)
+                    .get(peer)
+                    .and_then(|sync| sync.clocks.get(thread).cloned())
+            };
             let allow = |thread: &str, origin: &str| {
                 access.holds_thread(thread) && roles::leaf_sends_event(leaf.as_ref(), origin)
             };
-            sync::export(self, &peer_clocks, &mut budget, &allow)?
+            let state = (wire == Wire::Store).then_some(&mut export);
+            sync::export(self, peer, &peer_clock, state, &mut budget, &allow)?
         } else {
             (Vec::new(), true)
         };
+        if wire == Wire::Store {
+            let mut peers = lock(&self.peers);
+            let sync = peers.entry(peer.to_owned()).or_default();
+            if sync.export_epoch == epoch {
+                sync.export = export;
+            }
+        }
         let serve = roles::servable(self, &access, serve)?;
         let (blobs, wants) = sync::blob_traffic(self, &serve, &mut budget)?;
         let fleet = fleet::outgoing(self, peer, &access, &mut budget).unwrap_or_else(|error| {
@@ -1064,6 +1165,7 @@ impl Inner {
             records,
             record_vv,
             watermarks,
+            snapshot,
             roster: fleet.roster,
             roster_digest: fleet.roster_digest,
             sealed: fleet.sealed,
@@ -1120,23 +1222,21 @@ impl Inner {
 
     /// Logs in the audit log, once per catch-up, that this runtime serves
     /// `peer` a snapshot: rows of an origin the peer said it holds nothing
-    /// of.
+    /// of, or more rows than one exchange holds.
     fn note_snapshot(
         &self,
         peer: &str,
-        peer_vv: &VersionVector,
-        held: &VersionVector,
+        catching_up: bool,
         rows: usize,
         more: bool,
     ) -> Result<(), String> {
-        let lacking = held.keys().any(|origin| !peer_vv.contains_key(origin));
         let log = {
             let mut peers = lock(&self.peers);
             let sync = peers.entry(peer.to_owned()).or_default();
-            if !lacking {
+            if !catching_up {
                 sync.snapshot_logged = false;
                 false
-            } else if rows == 0 || !sync.record_vv_heard || sync.snapshot_logged {
+            } else if !sync.record_vv_heard || sync.snapshot_logged {
                 false
             } else {
                 sync.snapshot_logged = true;
@@ -1216,26 +1316,27 @@ impl Inner {
         }))
     }
 
-    /// Notes that this runtime heard from the swarm, and marks it as needing
-    /// a fresh snapshot when it was away past the tombstone lifetime.
-    fn note_synced(&self) -> Result<(), String> {
+    /// Notes that this runtime heard from the swarm. When it was away past
+    /// the tombstone lifetime, it marks it as needing a fresh snapshot and
+    /// forgets its records, and answers true.
+    fn note_synced(&self) -> Result<bool, String> {
         let now = self.now();
         let last = self
             .store
             .meta("last_sync_at")?
             .as_deref()
             .and_then(parse_time);
+        let mut forgot = false;
         if last.is_some_and(|last| (now - last).num_days() >= TOMBSTONE_DAYS) {
             self.store
                 .set_meta("snapshot_needed_at", Some(&timestamp(now)))?;
-            crate::runtime_eprintln!(
-                "muniment-runtime: swarm member was away past {TOMBSTONE_DAYS} days and needs a fresh snapshot"
-            );
+            bootstrap::rebootstrap(self)?;
+            forgot = true;
         }
         if last.is_none_or(|last| (now - last).num_seconds() >= ONLINE_SECONDS) {
             self.store.set_meta("last_sync_at", Some(&timestamp(now)))?;
         }
-        Ok(())
+        Ok(forgot)
     }
 
     /// Takes in what `peer` sent.
@@ -1249,7 +1350,9 @@ impl Inner {
                 .iter()
                 .any(|capability| capability == STORE_CAPABILITY);
         self.note_peer_wire(peer, store)?;
-        self.note_synced()?;
+        // The peer built this exchange before it saw the fresh snapshot
+        // begin, so it cannot end it.
+        let forgot = self.note_synced()?;
         let mut fleet = fleet::Incoming {
             roster: std::mem::take(&mut exchange.roster),
             roster_digest: exchange.roster_digest.take(),
@@ -1293,6 +1396,19 @@ impl Inner {
             });
         }
         let records_received = exchange.records.len() as u64;
+        let catching_up = store && exchange.snapshot.is_some();
+        if store {
+            match &exchange.snapshot {
+                Some(snapshot) => {
+                    lock(&self.peers)
+                        .entry(peer.to_owned())
+                        .or_default()
+                        .snapshot = Some(snapshot.clone());
+                }
+                None if !exchange.more && !forgot => bootstrap::snapshot_received(self)?,
+                None => {}
+            }
+        }
         if store {
             let changes = self.records.merge(self.now(), exchange.records)?;
             self.dispatch(&changes)?;
@@ -1307,6 +1423,12 @@ impl Inner {
         }
         let watermarks = exchange.watermarks.filter(|_| store);
         let clocks_received = exchange.clocks.len() as u64;
+        let events_received = exchange.events.len() as u64;
+        let snapshot_complete = store
+            && exchange
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.complete);
         let digest_failed = {
             let mut peers = lock(&self.peers);
             let sync = peers.entry(peer.to_owned()).or_default();
@@ -1333,6 +1455,14 @@ impl Inner {
         lock(&self.peers).entry(peer.to_owned()).or_default().wants = exchange.wants;
         absence::merge(self, exchange.client_seen_at, exchange.resumed_at)?;
         kick |= sync::consume_posts(self)?;
+        if snapshot_complete && !forgot {
+            bootstrap::snapshot_received(self)?;
+        }
+        bootstrap::note_progress(
+            self,
+            records_received + clocks_received + events_received > 0,
+            catching_up,
+        );
         Ok(kick)
     }
 
@@ -1391,6 +1521,7 @@ impl PeerSync {
             self.clocks_mark = 0;
             self.clocks_complete = false;
             self.clocks_synced = false;
+            self.export = sync::ExportState::default();
         }
         self.clocks_synced |= self.clocks_complete;
         drifted

@@ -387,9 +387,7 @@ pub(super) fn restrict_outgoing(
                 .retain(|message| message.to_runtime.as_deref() == Some(&grant.runtime_id));
             let mut acks = Vec::new();
             for ack in std::mem::take(&mut exchange.acks) {
-                let sent_by_worker = messaging::outbox_message(inner, &ack.message_id)?
-                    .is_some_and(|message| message.from_runtime == grant.runtime_id);
-                if sent_by_worker {
+                if acknowledges_worker(inner, &grant.runtime_id, &ack)? {
                     acks.push(ack);
                 }
             }
@@ -538,6 +536,24 @@ pub(super) fn keep_for_leaf(leaf: Option<&Grant>, exchange: &mut Exchange) {
         .retain(|approval| own.agents.contains(&approval.agent_id));
 }
 
+/// Whether an acknowledgement answers a message the worker `worker` sent:
+/// one this runtime relays or ran for it. An agent message this runtime
+/// took names no sender here, so its acknowledgement goes when it carries
+/// no answer of an action.
+fn acknowledges_worker(inner: &Inner, worker: &str, ack: &super::Ack) -> Result<bool, String> {
+    if let Some(message) = messaging::outbox_message(inner, &ack.message_id)? {
+        return Ok(message.from_runtime == worker);
+    }
+    let forwarded: Option<super::Message> =
+        inner
+            .store
+            .record("op_inbox", "op_id", "message", &ack.message_id)?;
+    if let Some(message) = forwarded {
+        return Ok(message.from_runtime == worker);
+    }
+    Ok(ack.result.is_none() && delivered_here(inner, &ack.message_id)?)
+}
+
 /// Whether this runtime acknowledged `message_id` itself, as its target.
 fn delivered_here(inner: &Inner, message_id: &str) -> Result<bool, String> {
     Ok(inner
@@ -565,9 +581,9 @@ pub(super) fn change_own_role(inner: &Inner, role: Role) -> Result<(), String> {
             .records
             .drop_where(&own, &|row| grant.holds_row(row))?;
         for registration in sync::registrations(inner)? {
-            let owned = sync::thread_primary(inner, &registration).as_deref() == Some(own.as_str());
-            if !owned && !grant.threads.contains(&registration.thread_id) {
-                sync::drop_replica(inner, &registration.thread_id)?;
+            let owner = sync::thread_primary(inner, &registration).unwrap_or_default();
+            if owner != own && !grant.threads.contains(&registration.thread_id) {
+                sync::drop_replica(inner, &registration.thread_id, &owner)?;
             }
         }
     }
