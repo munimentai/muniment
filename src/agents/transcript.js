@@ -88,25 +88,40 @@ export function postAuthor(post, agents = []) {
   return { kind: author.kind === 'system' ? 'system' : 'user', name: author.kind === 'system' ? 'Muniment' : 'You' }
 }
 
-// Labels a meeting's rounds in a group thread. After each message from the
-// user, each member's first reply is the blind round, its next replies are
-// the debate rounds, and the lead's reply after those is the summary. Posts
-// carry no round, so the count per member places each reply.
-export function meetingSections(posts = [], group = null) {
-  if (!group?.meeting_mode) return posts.map((post) => ({ post, section: null }))
-  const debate = group.debate_rounds ?? 2
-  let counts = null
+// The label of the meeting round a group reply belongs to. Core puts the
+// round and the phase on the agent author of every group reply: `blind` for
+// round 1, `debate` for the rounds after it, `summary` for the lead's close
+// and `chat` outside a meeting.
+export function roundLabel(author) {
+  const phase = author?.phase === 'reply' ? 'chat' : author?.phase
+  if (phase === 'blind') return 'Round 1 · blind'
+  if (phase === 'debate') return `Debate round ${Math.max(1, (Number(author.round) || 2) - 1)}`
+  if (phase === 'summary') return 'Summary'
+  return null
+}
+
+// Each post with the label of the meeting round it starts, or null when it
+// continues the round before it. A user message ends a meeting's rounds.
+export function meetingSections(posts = []) {
   let last = null
   return posts.map((post) => {
-    const kind = post.author?.kind
-    if (kind === 'user') { counts = new Map(); last = null; return { post, section: null } }
-    if (kind !== 'agent' || !counts) return { post, section: null }
-    const id = post.author.agent_id
-    const round = (counts.get(id) ?? 0) + 1
-    counts.set(id, round)
-    const label = round === 1 ? 'Round 1 · blind' : round <= debate + 1 ? `Debate round ${round - 1}` : 'Summary'
-    const section = label === last ? null : label
+    if (post.author?.kind === 'user') { last = null; return { post, section: null } }
+    if (post.author?.kind !== 'agent') return { post, section: null }
+    const label = roundLabel(post.author)
+    const section = label && label !== last ? label : null
     last = label
     return { post, section }
   })
+}
+
+// The posts of the open thread after one `group-posted` event,
+// `{ runtimeId, posted }`, where `posted` is core's `{ group_id, thread_id,
+// post }`. A post already held is replaced, so an import and a local write
+// of the same post show once.
+export function applyGroupPost(threadPosts, event) {
+  const posted = event?.posted
+  if (!posted?.post?.message_id || posted.thread_id !== threadPosts.threadId) return threadPosts
+  const rest = threadPosts.posts.filter((post) => post.message_id !== posted.post.message_id)
+  const posts = [...rest, posted.post].sort((a, b) => String(a.posted_at ?? '').localeCompare(String(b.posted_at ?? '')))
+  return { ...threadPosts, posts }
 }

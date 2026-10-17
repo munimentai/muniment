@@ -11,10 +11,13 @@
   import WebhookPanel from './WebhookPanel.svelte'
   import { conditionToTree, treeToCondition } from './condition.js'
   import { localTimeZone } from './cron.js'
+  import { serverTools } from './agent-tools.js'
 
   // A new webhook routine goes through `oncreatewebhook`, which answers core's
   // `routine.webhook_create`: the routine, its address and its one-time secret.
-  let { routine = null, servers = [], webhooks = false, tauri = null, agent = null, onsave, oncreatewebhook = null, ondelete = null, onclose } = $props()
+  // `catalog` is the agent machine's `agent.tool_catalog`, whose MCP servers
+  // and their tools fill the pickers. Both fields still take any name.
+  let { routine = null, catalog = null, webhooks = false, tauri = null, agent = null, onsave, oncreatewebhook = null, ondelete = null, onclose } = $props()
   const original = routine
   const trigger = original?.trigger ?? { kind: 'cron', expr: '0 9 * * *', tz: localTimeZone() }
   let name = $state(original?.name ?? '')
@@ -30,6 +33,7 @@
   let condition = $state(conditionToTree(trigger.kind === 'mcp' ? trigger.condition : null))
   let busy = $state(false)
   let error = $state('')
+  const offered = $derived(serverTools(catalog, server.trim()))
   let confirmDelete = $state(false)
   let created = $state(null)
   let panel
@@ -116,9 +120,11 @@
         {:else}
           <div class="line">
             <label class="grow">Server<input class="mono" list={`${id}-servers`} bind:value={server} required disabled={busy} spellcheck="false" autocomplete="off" /></label>
-            <label class="grow">Tool<input class="mono" bind:value={tool} required disabled={busy} spellcheck="false" autocomplete="off" /></label>
+            <label class="grow">Tool<input class="mono" list={`${id}-tools`} bind:value={tool} required disabled={busy} spellcheck="false" autocomplete="off" /></label>
           </div>
-          <datalist id={`${id}-servers`}>{#each servers as entry (entry)}<option value={entry}></option>{/each}</datalist>
+          <datalist id={`${id}-servers`}>{#each catalog?.mcp ?? [] as entry (entry.server)}<option value={entry.server}></option>{/each}</datalist>
+          <datalist id={`${id}-tools`}>{#each offered.tools as name (name)}<option value={name}></option>{/each}</datalist>
+          {#if offered.note}<p class="note">{offered.note}</p>{:else if catalog?.loaded && !catalog.error && !(catalog.mcp ?? []).length}<p class="note">This machine has no MCP servers. Add one in Extend.</p>{/if}
           <label>Arguments<textarea class="mono" rows="3" bind:value={args} disabled={busy} spellcheck="false"></textarea></label>
           <CronEditor bind:schedule={every} label="Check" disabled={busy} />
           <div class="condition"><span class="legend">Start the agent when</span><ConditionBuilder bind:node={condition} disabled={busy} /></div>

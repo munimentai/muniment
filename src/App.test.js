@@ -5588,9 +5588,9 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
     view.unmount()
-    // Every event listener ends, the agent run updates, swarm changes and
-    // approvals among them.
-    expect(eventUnlisten).toHaveBeenCalledTimes(12)
+    // Every event listener ends, the agent run updates, swarm changes,
+    // approvals, agent activity and group posts among them.
+    expect(eventUnlisten).toHaveBeenCalledTimes(14)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
@@ -8802,11 +8802,11 @@ describe('runtimes', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Expand Agents' }))
     const roster = await screen.findByLabelText('Saved agents')
     await waitFor(() => expect(within(roster).getByRole('button', { name: /^Test triage/ })).toBeInTheDocument())
-    // Each agent names its machine by shape and name.
+    // Each agent names its machine in one status mark.
     const boxAgent = within(roster).getByRole('button', { name: /^Test triage/ })
-    expect(boxAgent.querySelector('[data-icon=container]')).not.toBeNull()
-    expect(boxAgent).toHaveTextContent('Build box')
-    expect(within(roster).getByRole('button', { name: /^Scout/ }).querySelector('[data-icon=monitor]')).not.toBeNull()
+    expect(boxAgent.querySelector('.agent-status')).not.toBeNull()
+    expect(boxAgent).toHaveTextContent('On Build box')
+    expect(within(roster).getByRole('button', { name: /^Scout/ })).toHaveTextContent('On This computer')
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: buildBox.id, operation: 'agent.list', body: {} })
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.list', body: {} })
     // Opening Agents keeps the paired machine selected.
@@ -8863,7 +8863,8 @@ describe('the swarm', () => {
     { id: 'a2', name: 'Deal desk', instructions: 'Price deals.', projectId: null, schedule: null, routines: [] },
   ]
   const at = (minute) => `2026-01-01T10:${String(minute).padStart(2, '0')}:00Z`
-  const reply = (id, agent_id, name, text, minute) => ({ message_id: id, author: { kind: 'agent', agent_id, name }, text, posted_at: at(minute), consumed: false, run_id: null })
+  const reply = (id, agent_id, name, text, minute, round = 0, phase = 'chat') => ({ message_id: id, author: { kind: 'agent', agent_id, name, round, phase }, text, posted_at: at(minute), consumed: false, run_id: null })
+  const listener = (event) => window.__TAURI__.event.listen.mock.calls.findLast(([name]) => name === event)[1]
 
   // Answers the swarm operations of this computer's runtime.
   function swarmMachine({ approvals = [], absence = { paused: false, paused_at: null, last_client_at: null }, answers = {} } = {}) {
@@ -8884,9 +8885,8 @@ describe('the swarm', () => {
   it('opens a group, labels its meeting rounds, suggests mentions and posts through core', async () => {
     const posted = [
       { message_id: 'u1', author: { kind: 'user' }, text: 'Which deals close this week?', posted_at: at(0), consumed: false, run_id: null },
-      reply('p1', 'a1', 'Lead scout', 'Two.', 1), reply('p2', 'a2', 'Deal desk', 'Three.', 2),
-      reply('p3', 'a2', 'Deal desk', 'Three, counting the renewal.', 3), reply('p4', 'a1', 'Lead scout', 'Agreed.', 4),
-      reply('p5', 'a1', 'Lead scout', 'Three deals close this week.', 5),
+      reply('p1', 'a1', 'Lead scout', 'Two.', 1, 1, 'blind'), reply('p2', 'a2', 'Deal desk', 'Three.', 2, 1, 'blind'),
+      reply('p3', 'a2', 'Deal desk', 'Three, counting the renewal.', 3, 2, 'debate'), reply('p4', 'a1', 'Lead scout', 'Agreed.', 4, 2, 'debate'),
       { message_id: 's1', author: { kind: 'system' }, text: 'The meeting ended with the lead\'s summary.', posted_at: at(6), consumed: false, run_id: null },
     ]
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Notes', updatedAt: '' }, { threadId: 'group-thread', title: 'Launch room', updatedAt: '' }]
@@ -8904,9 +8904,17 @@ describe('the swarm', () => {
     await fireEvent.click(await within(groups).findByRole('button', { name: /^Launch room/ }))
     expect(await screen.findByText('Round 1 · blind')).toBeInTheDocument()
     expect(screen.getByText('Debate round 1')).toBeInTheDocument()
-    expect(screen.getByText('Summary')).toBeInTheDocument()
     expect(screen.getAllByRole('article', { name: 'Reply from Deal desk' })[0]).toHaveTextContent('Three.')
     expect(screen.getByText('The meeting ended with the lead\'s summary.')).toHaveAttribute('role', 'note')
+    // The lead's summary arrives as a live post, with no read of the thread.
+    const opens = invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').length
+    listener('group-posted')({ payload: { runtimeId: 'local', posted: { group_id: 'g1', thread_id: 'group-thread', post: reply('p5', 'a1', 'Lead scout', 'Three deals close this week.', 5, 3, 'summary') } } })
+    expect(await screen.findByText('Summary')).toBeInTheDocument()
+    expect(screen.getByText('Three deals close this week.')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open')).toHaveLength(opens)
+    // The group answers with each member's own model, so the band names the members.
+    expect(screen.queryByRole('button', { name: /^Model:/ })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Group members: Lead scout, Deal desk' })).toHaveTextContent('2 agents')
 
     const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: '@de' } })
@@ -8938,18 +8946,22 @@ describe('the swarm', () => {
   })
 
   it('answers an approval from Activity and says when another device answered first', async () => {
-    const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-box', run_id: 'r1', gate_id: 'g1', thread_id: 't1', state: 'pending', created_at: new Date().toISOString(), request: { kind: 'select', title: 'Allow bash? Writes need a yes.', options: ['Allow once', 'Allow for this thread', 'Deny'] } }
+    const rule = { request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push origin main'], working_directory: '/work/scout' } }
+    const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-box', run_id: 'r1', gate_id: 'g1', thread_id: 't1', state: 'pending', created_at: new Date().toISOString(), request: { kind: 'select', title: 'Allow bash? Writes need a yes.', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] }, rule, summary: 'bash `git push origin main` in /work/scout', answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'] }
     swarmMachine({ approvals: [approval], answers: { 'agent.approval_answer': () => ({ status: 'already_answered', approval: { ...approval, state: 'answered' } }), 'agent.runs': () => ({ runs: [] }) } })
     render(App)
     const activity = await screen.findByRole('button', { name: /^Activity/ })
     await waitFor(() => expect(activity).toHaveTextContent('1'))
     await fireEvent.click(activity)
     const list = await screen.findByRole('list', { name: 'Waiting for approval' })
-    expect(list).toHaveTextContent('Allow bash? Writes need a yes.')
+    expect(list).toHaveTextContent('bash `git push origin main` in /work/scout')
+    expect(list).toHaveTextContent('/work/scout')
     expect(list).toHaveTextContent('Build box')
-    await fireEvent.click(within(list).getByRole('button', { name: 'Always allow' }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: { type: 'select', value: 'Allow for this thread' } } }))
-    expect(await screen.findByText('Lead scout: Another device answered this first. Its answer stands.')).toBeInTheDocument()
+    expect(within(list).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny', 'Open conversation'])
+    await fireEvent.click(within(list).getByRole('button', { name: 'Always allow for this agent' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: 'always_allow_agent' } }))
+    expect(await within(list).findByText('Another device answered this first. Its answer stands.')).toBeInTheDocument()
+    expect(within(list).queryByRole('button', { name: 'Deny' })).toBeNull()
   })
 
   it('asks to resume routines after the absence pause', async () => {

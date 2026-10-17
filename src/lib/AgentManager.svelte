@@ -55,7 +55,7 @@
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
         <CatalogCard onclick={()=>onselect(agent)}>
           {#snippet menu()}{#if !agent.replica}<CatalogActions name={agent.name} {archived} onaction={(action,name)=>onaction('agent',agent,action,name)}/>{/if}{/snippet}
-          <AgentAvatar {agent} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{agent.replica ? 'Synced copy from another machine' : cardNote(agent)}</small>{#if showMachines}<div class="machine"><MachineMark machine={machineOf(agent)} />{#if agent.online === false}<span class="offline">Offline</span>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" size={12} /><span class="visually-hidden">Synced copy</span></span>{/if}</div>{/if}
+          <AgentAvatar {agent} activity={agent.activity} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{agent.replica ? 'Synced copy from another machine' : cardNote(agent)}</small>{#if showMachines}<div class="machine"><MachineMark machine={machineOf(agent)} />{#if agent.online === false}<span class="offline">Offline</span>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" size={12} /><span class="visually-hidden">Synced copy</span></span>{/if}</div>{/if}
         </CatalogCard>
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}

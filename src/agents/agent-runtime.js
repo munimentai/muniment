@@ -14,7 +14,20 @@ export function agentRuntimes(list) {
 }
 
 export function emptyListing() {
-  return { agents: [], primaryThreads: {}, latestRuns: {}, errors: [], unreachable: [] }
+  return { agents: [], primaryThreads: {}, threads: {}, latestRuns: {}, errors: [], unreachable: [] }
+}
+
+// Every thread of each listed agent, from core's `agent.threads` on the
+// agent's own machine: `{ [agentId]: [{ thread_id, title, updated_at,
+// primary }] }`, newest first. A machine that refuses the operation leaves
+// that agent with its primary thread alone.
+export async function listAgentThreads(tauri, agents) {
+  const answers = await Promise.allSettled(agents.map((agent) => agentRequest(tauri, agent.runtimeId, 'agent.threads', { id: agent.id })))
+  const threads = {}
+  answers.forEach((answer, index) => {
+    if (answer.status === 'fulfilled') threads[agents[index].id] = answer.value?.threads ?? []
+  })
+  return threads
 }
 
 // One listing across machines. Each agent carries the `runtimeId` it came
@@ -39,13 +52,15 @@ export async function listAgents(tauri, runtimeList) {
     for (const error of body.errors ?? []) listing.errors.push({ ...error, runtimeId })
   })
   if (localError && answers.every((answer) => answer.status === 'rejected')) throw localError
+  listing.threads = await listAgentThreads(tauri, listing.agents)
   return listing
 }
 
-// Which agent each known thread belongs to: its primary conversation and the
-// thread of its latest run.
+// Which agent each known thread belongs to: every thread `agent.threads`
+// names, its primary conversation and the thread of its latest run.
 export function agentThreads(listing) {
   const threads = {}
+  for (const [agentId, list] of Object.entries(listing?.threads ?? {})) for (const thread of list) if (thread?.thread_id) threads[thread.thread_id] = agentId
   for (const [agentId, threadId] of Object.entries(listing?.primaryThreads ?? {})) threads[threadId] = agentId
   for (const run of Object.values(listing?.latestRuns ?? {})) if (run?.thread_id && !threads[run.thread_id]) threads[run.thread_id] = run.agent_id
   return threads

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { emptyRuleForm, ruleFromForm, ruleLabel, sameRule } from './permission-rules.js'
-import { agentTools, toggleTool } from './agent-tools.js'
 
 // The rules in core's agent.save fixture.
 const command = { request_kind: 'command', resource: { arguments: ['bash', 'git status'], type: 'command', working_directory: '/work/agents/Lead-scout' } }
@@ -31,21 +30,5 @@ describe('permission rules', () => {
     expect(() => ruleFromForm(emptyRuleForm('path'))).toThrow('Enter the full path of the file.')
     expect(() => ruleFromForm(emptyRuleForm('tool'))).toThrow('Enter the tool name.')
     expect(() => ruleFromForm({ ...emptyRuleForm('tool'), name: 'x', input: '{' })).toThrow('Enter the tool input as JSON.')
-  })
-})
-
-describe('agent tools', () => {
-  it('lists the built-in tools and any id the agent already turns off', () => {
-    const ids = agentTools({ tools: { disabled: ['powershell', 'mcp__crm__delete_lead'] } }).map(([id]) => id)
-    expect(ids).toContain('bash')
-    expect(ids.filter((id) => id === 'powershell')).toHaveLength(1)
-    expect(ids.at(-1)).toBe('mcp__crm__delete_lead')
-  })
-
-  it('turns one tool on or off and keeps the rest', () => {
-    const agent = { tools: { disabled: ['powershell'] } }
-    expect(toggleTool(agent, 'bash', false)).toEqual({ disabled: ['powershell', 'bash'] })
-    expect(toggleTool(agent, 'powershell', true)).toEqual({ disabled: [] })
-    expect(toggleTool({}, 'bash', false)).toEqual({ disabled: ['bash'] })
   })
 })

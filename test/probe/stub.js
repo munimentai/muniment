@@ -367,7 +367,8 @@ export function buildProbeCommandTable(fixtureName) {
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
   // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals,
   // activity, machines, move, transcript, group-create, meeting, approvals,
-  // import or absence, with agents on three machines that all answer and a
+  // approval-inline, replays, import, absence, preferences, empty or
+  // empty-activity, with agents on three machines that all answer and a
   // synced copy from a fourth.
   const agentsFixture = fixtureName === 'agents'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
@@ -381,6 +382,7 @@ export function buildProbeCommandTable(fixtureName) {
     ? [
         { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
         { threadId: 'thread-a2', title: 'Inbox triage', updatedAt: '2026-07-28T11:00:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a2b', title: 'Vendor follow-up', updatedAt: '2026-07-27T11:00:00Z', runtimeId: 'local' },
         { threadId: 'thread-a3', title: 'Release editor', updatedAt: '2026-07-28T10:30:00Z', runtimeId: '018f0000-0000-7000-8000-000000000042' },
         { threadId: 'thread-a4', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
         { threadId: 'probe-box', title: 'Nightly test notes', updatedAt: '2026-07-27T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
@@ -919,12 +921,22 @@ const AGENT_STATES = {
   meeting: { agent: null },
   import: { agent: null },
   absence: { agent: null },
+  replays: { agent: 'Lead scout' },
+  'approval-inline': { agent: 'Inbox triage' },
+  preferences: { agent: null },
+  empty: { agent: null },
+  'empty-activity': { agent: null },
 }
 
 const AGENT_SCREENS = {
-  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .agent-roster .machine-mark').length === 5 && !!document.querySelector('#sidebar .agent-synced'),
+  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .agent-roster .agent-status').length === 5 && !!document.querySelector('#sidebar .agent-status[data-replica]') && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`#sidebar .agent-avatar[data-activity="${state}"]`)),
   activity: () => document.querySelectorAll('[data-panel="activity"] .run').length >= 9,
-  approvals: () => document.querySelectorAll('[data-panel="activity"] .approval').length === 2,
+  approvals: () => document.querySelectorAll('[data-panel="activity"] .approval').length === 4,
+  'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
+  replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="Failed runs"] .replay').length === 2,
+  preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
+  empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .catalog-card .agent-avatar'),
+  'empty-activity': () => document.querySelector('[data-panel="activity"]')?.textContent.includes('No agent runs yet.'),
   machines: () => !!document.querySelector('.settings-runtimes [aria-label="Swarm member Office mini"]') && document.querySelector('.settings-runtimes')?.textContent.includes('retrying'),
   'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
   meeting: () => document.querySelector('.thread')?.textContent.includes('Debate round 1') && document.querySelectorAll('.thread .round').length === 3,
@@ -961,6 +973,17 @@ function advanceAgentsFixture() {
   const target = AGENT_STATES[agentsState] ?? AGENT_STATES.list
   const sidebarButton = (name) => Array.from(document.querySelectorAll('#sidebar button')).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
   if (agentsState === 'absence') return
+  if (agentsState === 'preferences') {
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    const appearance = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Appearance')
+    if (appearance && appearance.getAttribute('aria-current') !== 'true') return appearance.click()
+    document.querySelector('[aria-label="Agent avatars"]')?.scrollIntoView({ block: 'center' })
+    return
+  }
+  if (agentsState === 'empty') {
+    if (!document.querySelector('[data-panel="agents"]')) sidebarButton('Agents')?.click()
+    return
+  }
   if (agentsState === 'machines') {
     if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
     const machines = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Machines')
@@ -1003,7 +1026,7 @@ function advanceAgentsFixture() {
     }, 100)
     return
   }
-  if (agentsState === 'activity' || agentsState === 'approvals') {
+  if (agentsState === 'activity' || agentsState === 'approvals' || agentsState === 'empty-activity') {
     if (!document.querySelector('[data-panel="activity"]')) document.querySelector('#sidebar .activity-row')?.click()
     return
   }
@@ -1020,6 +1043,7 @@ function advanceAgentsFixture() {
     if (force && !force.checked) force.click()
     return
   }
+  if (agentsState === 'replays') return profile.querySelector('[aria-label="Failed runs"]')?.scrollIntoView({ block: 'start' })
   const editor = document.querySelector('[data-panel="routine"]')
   if (target.routine && !editor) {
     Array.from(profile.querySelectorAll('.routine button')).find((button) => button.textContent.trim() === target.routine)?.click()
@@ -1208,6 +1232,13 @@ window.__PROBE__ = {
         history[0].appliedDiffs[0].summary = diffSummary(diff)
       }
     }
+    // `?avatars=colorful|muniment` picks the agent avatar style and `?theme=light|dark`
+    // the mode, as Appearance would store them, before the app reads them.
+    const pick = new URLSearchParams(location.search)
+    try {
+      if (['colorful', 'muniment'].includes(pick.get('avatars'))) localStorage.setItem('muniment.agent-avatars', pick.get('avatars'))
+      if (['light', 'dark'].includes(pick.get('theme'))) localStorage.setItem('muniment.theme', pick.get('theme'))
+    } catch (_) {}
     const response = await fetch('/dist/index.html')
     if (!response.ok) throw new Error(`Could not load the built bundle: ${response.status}`)
     const builtPage = new DOMParser().parseFromString(await response.text(), 'text/html')

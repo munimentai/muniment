@@ -11,7 +11,7 @@
   import { conditionLabel } from './condition.js'
   import { isProposal, lastFiredLabel, pollLabel, triggerSummary } from './routine-labels.js'
 
-  let { agent, tauri, servers = [], webhooks = true, disabled = false, onchange = async () => {} } = $props()
+  let { agent, tauri, catalog = null, webhooks = true, disabled = false, onchange = async () => {} } = $props()
   let editing = $state(null)
   let busy = $state(false)
   let error = $state('')
@@ -87,14 +87,14 @@
       <Toggle checked={routine.enabled} label={`${routine.name} on`} disabled={disabled || busy} onchange={(checked) => work(() => save({ ...routine, enabled: checked }))} />
     </div>
   {:else}
-    {#if !proposals.length}<p class="empty">Runs only when you ask.</p>{/if}
+    {#if !proposals.length}<p class="empty">No routines. It runs only when you ask.</p>{/if}
   {/each}
   {#if agent.paused_reason}<p class="note">{agent.paused_reason === 'absence' ? 'Routines paused after 14 days without use. Resume them from the sidebar.' : 'Routines are paused.'}</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 
 {#if editing}
-  <RoutineEditor routine={editing.routine} {servers} {webhooks} {tauri} {agent} onsave={saveAndRefresh} oncreatewebhook={createWebhook} ondelete={editing.routine && !isProposal(editing.routine) ? removeAndRefresh : null} onclose={() => { editing = null }} />
+  <RoutineEditor routine={editing.routine} {catalog} {webhooks} {tauri} {agent} onsave={saveAndRefresh} oncreatewebhook={createWebhook} ondelete={editing.routine && !isProposal(editing.routine) ? removeAndRefresh : null} onclose={() => { editing = null }} />
 {/if}
 
 <style>

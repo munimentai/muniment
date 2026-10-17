@@ -8,6 +8,8 @@
   import RunMark from './RunMark.svelte'
   import { MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
   import { FRAME_OPTIONS, commitFrame, readStoredFrame } from './frame-state.js'
+  import { AVATAR_STYLE_OPTIONS, commitAvatarStyle, readStoredAvatarStyle } from './avatar-style-state.js'
+  import AgentAvatar from './AgentAvatar.svelte'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
   let { tauri } = $props()
@@ -26,6 +28,9 @@
   })
 
   let theme = $state(readStoredTheme())
+  // Every agent avatar draws in this style. The preview shows three sample seeds.
+  let avatarStyle = $state(readStoredAvatarStyle())
+  const AVATAR_SAMPLES = ['scout', 'inbox', 'editor', 'triage'].map((seed) => ({ id: seed, name: seed, avatar: { seed } }))
   let frame = $state(readStoredFrame())
 
   // Type: one size step for the body register, and a family for each register
@@ -101,6 +106,19 @@
     {/each}
   </div>
   </Row>
+  </Group>
+
+  <Group heading="Agent avatars">
+  <Row title="Style" description="How every agent's avatar draws, in light and dark.">
+  <div class="theme-options" role="group" aria-label="Agent avatars">
+    {#each AVATAR_STYLE_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={avatarStyle === id} onclick={() => { avatarStyle = commitAvatarStyle(id) }}>{label}</button>
+    {/each}
+  </div>
+  </Row>
+  <div class="avatar-preview" aria-label="Agent avatar preview">
+    {#each AVATAR_SAMPLES as agent (agent.id)}<AgentAvatar {agent} size={40} />{/each}
+  </div>
   </Group>
 
   <Group heading="Color scheme" description="Four colors, each in three styles. Mode picks the light or dark version.">
@@ -188,6 +206,7 @@
   .frame-sketch[data-sketch="frameless"] .sketch-side { background-color: var(--frame-sidebar-panel); }
   .frame-sketch[data-sketch="frameless"] .sketch-main { background: var(--surface); }
   .mark-preview { display: flex; align-items: center; min-height: 64px; }
+  .avatar-preview { display: flex; align-items: center; gap: 16px; min-height: 64px; }
   /* Each palette pick shows its light and dark versions side by side over the color's name. */
   .palettes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .palette-pick { display: grid; justify-items: start; gap: 6px; min-width: 0; padding: 6px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }

@@ -426,13 +426,14 @@ async function checkAgentAvatars(browser, baseUrl) {
     import: ['.body .profile'],
     'group-create': ['.members .check'],
     move: ['.catalog-sidebar-row .side-action', '.profile .avatar'],
+    'approval-inline': ['.approval .who'],
+    preferences: ['.avatar-preview'],
   }
-  for (const colorScheme of ['light', 'dark']) {
+  for (const [colorScheme, avatars] of [['light', 'colorful'], ['dark', 'colorful'], ['light', 'muniment'], ['dark', 'muniment']]) {
     for (const [state, slots] of Object.entries(surfaces)) {
       const page = await browser.newPage({ viewport: { width: 1100, height: 720 }, colorScheme })
       try {
-        await page.addInitScript((theme) => localStorage.setItem('muniment.theme', theme), colorScheme)
-        await page.goto(`${baseUrl}/test/probe/agents.html${state ? `?state=${state}` : ''}`)
+        await page.goto(`${baseUrl}/test/probe/agents.html?avatars=${avatars}&theme=${colorScheme}${state ? `&state=${state}` : ''}`)
         await page.waitForSelector('[data-probe-ready]')
         await page.evaluate(() => document.fonts.ready)
         if (state === 'meeting') {
@@ -480,7 +481,10 @@ async function checkAgentAvatars(browser, baseUrl) {
           }
           return failures
         }, slots)
-        assert.deepEqual(failures, [], `agents.html?state=${state} in ${colorScheme}`)
+        assert.deepEqual(failures, [], `agents.html?state=${state} in ${colorScheme} with ${avatars} avatars`)
+        // Each avatar draws the picked style in the theme's tone.
+        const drawn = await page.evaluate(() => [...new Set([...document.querySelectorAll('.agent-avatar svg')].map((svg) => `${svg.dataset.style}:${svg.dataset.tone}`))])
+        assert.deepEqual(drawn, [`${avatars}:${colorScheme}`], `agents.html?state=${state} draws ${drawn}`)
       } finally {
         await page.close()
       }
@@ -491,8 +495,10 @@ async function checkAgentAvatars(browser, baseUrl) {
     await page.goto(`${baseUrl}/test/probe/avatars.html`)
     await page.waitForSelector('[data-probe-ready]')
     assert.equal(await page.getAttribute('body', 'data-seeds'), '48')
-    // Each drawing's own bounds center on its 92px box, within a pixel.
-    assert.ok(Number(await page.getAttribute('body', 'data-worst-offset')) < 1)
+    // Each head's own bounds center on its 92px box, within a pixel and a quarter. The box a
+    // browser measures leaves out strokes, and the generators center the painted head, so a
+    // head whose top piece is a thick stroke measures up to half that stroke off.
+    assert.ok(Number(await page.getAttribute('body', 'data-worst-offset')) < 1.25)
   } finally {
     await page.close()
   }

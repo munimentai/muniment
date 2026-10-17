@@ -8,10 +8,12 @@
   import ModelPicker from './ModelPicker.svelte'
   import Button from './ui/Button.svelte'
   import { newAvatar } from './agent-avatar.js'
-  import { runActive, runStatusLabel, templateNote } from './agent-labels.js'
+  import { runActive, runStatusLabel, templateNote, whenLabel } from './agent-labels.js'
   import { thinkingLabel } from './thinking-level.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
-  import { agentTools, toggleTool } from '../agents/agent-tools.js'
+  import { agentTools, emptyCatalog, missingSkills, toggleTool } from '../agents/agent-tools.js'
+  import { activityLabel, activityState } from '../agents/activity.js'
+  import ReplayList from '../agents/ReplayList.svelte'
   import { MODES, PATH_OPERATIONS, RULE_KINDS, SHELLS, emptyRuleForm, ruleFromForm, ruleLabel } from '../agents/permission-rules.js'
   import MachineMark from '../agents/MachineMark.svelte'
   import RoutinesPanel from '../agents/RoutinesPanel.svelte'
@@ -25,8 +27,10 @@
   // An agent the app sees only through the swarm directory (`replica`) shows
   // its profile, its primary machine and a move, since its settings live on
   // a machine this device does not reach.
-  let { agent, tauri, projects = [], run, runs = [], agents = [], runtimeList = null, swarm = null, inventory = null, skills = [], servers = [], webhooks = true,
-    onclose, onchange = async () => {}, ondelete, onopen, onrun = () => {}, onmanagemodels = () => {} } = $props()
+  // `catalog` is core's `agent.tool_catalog` from the agent's own machine:
+  // the tools, skills and MCP servers it can offer this agent.
+  let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true,
+    onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onactivity = null, onrun = () => {}, onmanagemodels = () => {} } = $props()
   let editing = $state(null)
   let value = $state('')
   let busy = $state(false)
@@ -110,13 +114,15 @@
   <header data-panel-header><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
   <div class="body" use:panelScroll>
     {#if agent.replica}
-      <div class="avatar"><AgentAvatar {agent} size={92} /></div>
+      <div class="avatar"><AgentAvatar {agent} {activity} size={92} /></div>
+      {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
       <section class="field"><div class="field-heading"><h3>Name</h3></div><p class="name">{agent.name}</p></section>
       {#if agent.label}<section class="field"><div class="field-heading"><h3>Job title</h3></div><p>{agent.label}</p></section>{/if}
       {@render primaryMachine()}
       <p class="muted">Its instructions, tools, routines and memory live on {primary.name}. Pair this device with that machine to change them.</p>
     {:else}
-    <div class="avatar"><AgentAvatar {agent} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={() => change({ avatar: newAvatar() })}><LucideIcon name="refresh-cw" size={14} /></button></div>
+    <div class="avatar"><AgentAvatar {agent} {activity} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={() => change({ avatar: newAvatar() })}><LucideIcon name="refresh-cw" size={14} /></button></div>
+    {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
     {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Instructions'], ...(local ? [['projectId', 'Project']] : [])] as [field, label]}
       <section class="field">
         <div class="field-heading"><h3>{label}</h3>{#if editing !== field}<button class="edit quiet" disabled={busy} aria-label={`Edit ${fieldLabel(field)}`} onclick={() => edit(field)}><LucideIcon name="pencil" size={14} /></button>{/if}</div>
@@ -146,15 +152,16 @@
 
     <section class="field" aria-label="Tools">
       <div class="field-heading"><h3>Tools</h3></div>
-      <ul class="toggles">{#each agentTools(agent) as [id, label] (id)}<li><span>{label}<span class="record id">{id}</span></span><Toggle checked={!(agent.tools?.disabled ?? []).includes(id)} label={`${label} on`} disabled={busy} onchange={(on) => change({ tools: toggleTool(agent, id, on) })} /></li>{/each}</ul>
+      {#if catalog.error}<p class="muted">{primary.name} did not list its tools. {catalog.error}</p>{:else if !catalog.loaded}<p class="muted">Loading tools…</p>{/if}
+      <ul class="toggles">{#each agentTools(agent, catalog) as tool (tool.id)}<li><span>{tool.label}<span class="record id">{tool.id}{tool.readOnly ? ' · read only' : ''}{tool.known ? '' : ' · not on this machine'}</span></span><Toggle checked={!(agent.tools?.disabled ?? []).includes(tool.id)} label={`${tool.label} on`} disabled={busy} onchange={(on) => change({ tools: toggleTool(agent, tool.id, on) })} /></li>{/each}</ul>
     </section>
 
     <section class="field" aria-label="Skills">
       <div class="field-heading"><h3>Skills</h3></div>
-      {#if skills.length}
-        <ul>{#each skills as skill (skill.id)}<li><label class="check"><input type="checkbox" checked={(agent.skills ?? []).includes(skill.id)} disabled={busy} onchange={(event) => toggleSkill(skill.id, event.currentTarget.checked)} />{skill.name}</label></li>{/each}</ul>
-      {:else}<p class="muted">No skills installed. Add them in Extend.</p>{/if}
-      {#each (agent.skills ?? []).filter((id) => !skills.some((skill) => skill.id === id)) as id (id)}<p class="record muted">{id} is not installed here.</p>{/each}
+      {#if catalog.skills.length}
+        <ul>{#each catalog.skills as skill (skill.id)}<li><label class="check skill"><input type="checkbox" checked={(agent.skills ?? []).includes(skill.id)} disabled={busy} onchange={(event) => toggleSkill(skill.id, event.currentTarget.checked)} /><span>{skill.name}{#if skill.description}<small>{skill.description}</small>{/if}</span></label></li>{/each}</ul>
+      {:else if catalog.loaded && !catalog.error}<p class="muted">{primary.name} has no skills installed. Add them in Extend.</p>{/if}
+      {#if catalog.loaded && !catalog.error}{#each missingSkills(agent, catalog) as id (id)}<p class="record muted">{id} is not installed on {primary.name}.</p>{/each}{/if}
     </section>
 
     <section class="field" aria-label="Permissions">
@@ -199,12 +206,21 @@
 
     {@render primaryMachine()}
 
-    <RoutinesPanel {agent} {tauri} {servers} {webhooks} disabled={busy} {onchange} />
+    <RoutinesPanel {agent} {tauri} {catalog} {webhooks} disabled={busy} {onchange} />
 
     <section class="field" aria-label="Activity">
       <div class="field-heading"><h3>Activity</h3>{#if run?.status}<span class="record muted">{runStatusLabel(run.status)}</span>{/if}</div>
-      <RunList runs={runs.slice(0, 20)} onopen={onopen ? (entry) => action(() => onopen(entry.thread_id)) : null} />
+      <RunList runs={runs.slice(0, 20)} empty="No runs yet. Run now starts one." onopen={onopen ? (entry) => action(() => onopen(entry.thread_id)) : null} />
     </section>
+
+    <ReplayList {tauri} {agent} {runs} disabled={busy} {onrun} onopen={onopenrun} {onactivity} />
+
+    {#if threads.length > 1}
+      <section class="field" aria-label="Conversations">
+        <div class="field-heading"><h3>Conversations</h3><span class="record muted">{threads.length}</span></div>
+        <ul class="threads">{#each threads as thread (thread.thread_id)}<li><button class="thread-link" disabled={busy || !onopen} onclick={() => action(() => onopen(thread.thread_id))}><span>{thread.title || 'Untitled'}</span><span class="record muted">{thread.primary ? 'Primary · ' : ''}{whenLabel(thread.updated_at)}</span></button></li>{/each}</ul>
+      </section>
+    {/if}
 
     {#if local}<details class="template" bind:open={memoryOpen}><summary>Memory</summary>{#if memoryOpen}{#key agent.id}<MemorySection {tauri} agentId={agent.id} />{/key}{/if}</details>{/if}
     {#if agent.template}<details class="template"><summary>Imported template</summary><p>{templateNote(agent.template)}</p><pre>{JSON.stringify(agent.template, null, 2)}</pre></details>{/if}
@@ -279,6 +295,14 @@
   .id { margin-left: 6px; color: var(--muted); }
   .muted { color: var(--muted); font-size: var(--text-12); }
   .machine { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .state[data-state="waiting"] { color: var(--ochre); }
+  .state[data-state="error"] { color: var(--oxide); }
+  .skill span { display: grid; gap: 2px; }
+  .skill small { font-size: var(--text-12); }
+  .threads { gap: 0; }
+  .thread-link { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 6px; border: 0; text-align: left; font-size: var(--text-13); }
+  .thread-link span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .offline { color: var(--ochre); font: var(--text-12) var(--font-mono); }
   .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }

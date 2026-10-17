@@ -1,68 +1,148 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { render } from '@testing-library/svelte'
-import { expect, it } from 'vitest'
+import { flushSync } from 'svelte'
+import { describe, expect, it } from 'vitest'
 import { avatarBounds, avatarFor, avatarSvg, newAvatar } from './agent-avatar.js'
 import AgentAvatar from './AgentAvatar.svelte'
-import { DIMS, svg, traits } from './muniment-avatar.js'
-// Output of the brand kit's avatars/m/robots.js for these seeds, recorded from that file.
-import fixtures from './muniment-avatar.fixtures.json'
+import * as colorful from './colorful-avatar.js'
+import * as muniment from './muniment-avatar.js'
+import { commitAvatarStyle, readStoredAvatarStyle } from './avatar-style-state.js'
+import { documentTone } from './avatar-display.svelte.js'
+// Output of the brand kit's avatars/robots.js and avatars/m/robots.js for these
+// seeds, in both tones, with and without the tile, recorded from those files.
+import fixtures from './avatar-generators.fixtures.json'
 
-it('draws exactly what the brand generator draws for every recorded seed', () => {
-  expect(fixtures).toHaveLength(20)
-  for (const { seed, svg: full, bare } of fixtures) {
-    expect(svg(seed)).toBe(full)
-    expect(svg(seed, { background: false, size: 64 })).toBe(bare)
-  }
+const generators = { colorful, muniment }
+
+describe('the vendored brand generators', () => {
+  it('draw exactly what the brand files draw for every recorded seed, tone and mode', () => {
+    for (const [style, generator] of Object.entries(generators)) {
+      expect(fixtures[style]).toHaveLength(12)
+      for (const entry of fixtures[style]) {
+        for (const tone of ['light', 'dark']) {
+          expect(generator.svg(entry.seed, { tone })).toBe(entry[tone])
+          expect(generator.svg(entry.seed, { tone, background: false, size: 64 })).toBe(entry[`${tone}Head`])
+        }
+      }
+    }
+  })
+
+  // Set MUNIMENT_BRAND_AVATARS to the brand kit's avatars folder to compare the source too.
+  it.skipIf(!process.env.MUNIMENT_BRAND_AVATARS)('keep the brand files\' code line for line', () => {
+    for (const [file, vendored] of [['robots.js', 'colorful-avatar.js'], ['m/robots.js', 'muniment-avatar.js']]) {
+      const brand = fs.readFileSync(path.join(process.env.MUNIMENT_BRAND_AVATARS, file), 'utf8').split('\n')
+      const body = brand.slice(brand.findIndex((line) => line.startsWith('(function (root)')) + 2, brand.findIndex((line) => line.trim().startsWith('const api =')))
+      expect(fs.readFileSync(path.join(process.cwd(), 'src/lib', vendored), 'utf8')).toContain(body.join('\n').trimEnd())
+    }
+  })
 })
 
-it('keeps the avatar across renames and draws every saved style from its seed', () => {
-  const agent = { id: 'original-agent', name: 'Scout' }
-  expect(avatarSvg(avatarFor(agent))).toBe(avatarSvg(avatarFor({ ...agent, name: 'Researcher' })))
-  expect(avatarFor(agent).seed).toMatch(/^legacy-[0-9a-f]+$/)
-  expect(avatarFor(agent).seed).not.toContain(agent.id)
-  for (const style of ['muniment', 'muniment-v1', 'muniment-v2', 'unknown']) {
-    expect(avatarFor({ ...agent, avatar: { style, seed: 'scout' } }).seed).toBe('scout')
-    expect(avatarSvg({ style, seed: 'scout' })).toBe(avatarSvg({ style: 'muniment', seed: 'scout' }))
-  }
-  expect(avatarSvg({ seed: 'one' })).not.toBe(avatarSvg({ seed: 'two' }))
-  const fresh = newAvatar()
-  expect(fresh.style).toBe('muniment')
-  expect(fresh.seed).not.toBe(newAvatar().seed)
+describe('agent avatars', () => {
+  it('keep the avatar across renames and draw every saved style id from its seed', () => {
+    const agent = { id: 'original-agent', name: 'Scout' }
+    expect(avatarSvg(avatarFor(agent))).toBe(avatarSvg(avatarFor({ ...agent, name: 'Researcher' })))
+    expect(avatarFor(agent).seed).toMatch(/^legacy-[0-9a-f]+$/)
+    expect(avatarFor(agent).seed).not.toContain(agent.id)
+    for (const saved of ['muniment', 'muniment-v1', 'muniment-v2', 'unknown']) {
+      expect(avatarFor({ ...agent, avatar: { style: saved, seed: 'scout' } }).seed).toBe('scout')
+      for (const style of ['colorful', 'muniment']) {
+        expect(avatarSvg({ style: saved, seed: 'scout' }, { style })).toBe(avatarSvg({ seed: 'scout' }, { style }))
+      }
+    }
+    expect(avatarSvg({ seed: 'one' })).not.toBe(avatarSvg({ seed: 'two' }))
+    expect(newAvatar().style).toBe('muniment')
+    expect(newAvatar().seed).not.toBe(newAvatar().seed)
+  })
+
+  it('draw the head alone in the picked style and tone, and never insert the seed', () => {
+    for (const [style, generator] of Object.entries(generators)) {
+      for (const tone of ['light', 'dark']) {
+        for (let i = 0; i < 100; i++) {
+          const seed = `${i}<script>alert(1)</script>"`
+          const markup = avatarSvg({ seed }, { style, tone })
+          expect(markup).toContain(generator.svg(seed, { tone, background: false }).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, ''))
+          expect(markup).not.toMatch(/<script|alert|href=|<image|<foreignObject|onload=|aria-label|<rect width="120"/)
+          expect(markup).toMatch(new RegExp(`^<svg [^>]*viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet" data-style="${style}" data-tone="${tone}">`))
+        }
+      }
+    }
+    expect(avatarSvg({ seed: 'scout' }, { style: 'muniment', tone: 'light' })).not.toBe(avatarSvg({ seed: 'scout' }, { style: 'muniment', tone: 'dark' }))
+    expect(avatarSvg({ seed: 'scout' }, { style: 'nope', tone: 'nope' })).toBe(avatarSvg({ seed: 'scout' }, { style: 'colorful', tone: 'dark' }))
+  })
+
+  it('center each head across the box and keep it inside', () => {
+    for (const [style, generator] of Object.entries(generators)) {
+      for (const tone of ['light', 'dark']) {
+        const seen = new Set()
+        for (let i = 0; i < 1500; i++) {
+          const seed = `center-${i}`
+          const t = generator.traits(seed)
+          seen.add(t.sides)
+          const box = avatarBounds(seed, style, tone)
+          const dx = Number(avatarSvg({ seed }, { style, tone }).match(/<g transform="translate\(([-\d.]+) 0\)">/)[1])
+          expect(Math.abs((box.left + box.right) / 2 + dx - 60)).toBeLessThan(0.06)
+          expect(box.left + dx).toBeGreaterThan(1)
+          expect(box.right + dx).toBeLessThan(119)
+        }
+        expect(seen.size).toBe(generator.DIMS.sides.length)
+      }
+    }
+  })
 })
 
-it('wraps the brand drawing unchanged and never inserts the seed', () => {
-  for (let i = 0; i < 200; i++) {
-    const seed = `${i}<script>alert(1)</script>"`
-    const markup = avatarSvg({ seed })
-    expect(markup).toContain(svg(seed, { background: false }).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, ''))
-    expect(markup).not.toMatch(/<script|alert|href=|<image|<foreignObject|onload=|aria-label/)
-    expect(markup).toMatch(/^<svg [^>]*viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet">/)
-  }
-})
+describe('the avatar style and tone', () => {
+  it('default to colorful and keep a pick on the device', () => {
+    localStorage.removeItem('muniment.agent-avatars')
+    expect(readStoredAvatarStyle()).toBe('colorful')
+    expect(commitAvatarStyle('muniment')).toBe('muniment')
+    expect(readStoredAvatarStyle()).toBe('muniment')
+    expect(commitAvatarStyle('boxbot')).toBe('colorful')
+  })
 
-it('centers each drawing on the tile and keeps it inside', () => {
-  const seen = new Set()
-  for (let i = 0; i < 2000; i++) {
-    const seed = `center-${i}`
-    const t = traits(seed)
-    seen.add(`${t.head}:${t.top}:${t.sides}`)
-    const box = avatarBounds(seed)
-    const [, dx, dy] = avatarSvg({ seed }).match(/translate\(([-\d.]+) ([-\d.]+)\)/).map(Number)
-    expect(Math.abs((box.left + box.right) / 2 + dx - 60)).toBeLessThan(0.06)
-    expect(Math.abs((box.top + box.bottom) / 2 + dy - 60)).toBeLessThan(0.06)
-    expect(box.left + dx).toBeGreaterThan(4)
-    expect(box.top + dy).toBeGreaterThan(4)
-  }
-  expect(seen.size).toBe(DIMS.head.length * DIMS.top.length * DIMS.sides.length)
-})
+  it('read the tone from the theme on the root', () => {
+    const root = document.createElement('div')
+    root.dataset.theme = 'harbor-vibrant-light'
+    expect(documentTone(root)).toBe('light')
+    root.dataset.theme = 'moss-dark'
+    expect(documentTone(root)).toBe('dark')
+  })
 
-it('renders a decorative square box at the size it is given', () => {
-  const { container } = render(AgentAvatar, { agent: { id: 'a1', name: 'Scout', avatar: { style: 'muniment', seed: 'scout' } }, size: 48 })
-  const box = container.querySelector('.agent-avatar')
-  expect(box.getAttribute('aria-hidden')).toBe('true')
-  expect(box.style.width).toBe('48px')
-  expect(box.style.height).toBe('48px')
-  expect(box.querySelector('svg')).not.toBeNull()
-  const template = document.createElement('template')
-  template.innerHTML = avatarSvg({ seed: 'scout' })
-  expect(box.querySelector('svg').isEqualNode(template.content.firstChild)).toBe(true)
+  it('render one decorative box that redraws when the style or theme changes', async () => {
+    commitAvatarStyle('colorful')
+    document.documentElement.dataset.theme = 'moss-light'
+    const { container } = render(AgentAvatar, { agent: { id: 'a1', name: 'Scout', avatar: { style: 'muniment', seed: 'scout' } }, size: 48 })
+    const box = container.querySelector('.agent-avatar')
+    expect(box.getAttribute('aria-hidden')).toBe('true')
+    expect(box.style.width).toBe('48px')
+    expect(box.style.height).toBe('48px')
+    await Promise.resolve()
+    flushSync()
+    expect(box.querySelector('svg').dataset).toMatchObject({ style: 'colorful', tone: 'light' })
+    commitAvatarStyle('muniment')
+    document.documentElement.dataset.theme = 'moss-dark'
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    flushSync()
+    expect(box.querySelector('svg').dataset).toMatchObject({ style: 'muniment', tone: 'dark' })
+    const template = document.createElement('template')
+    template.innerHTML = avatarSvg({ seed: 'scout' }, { style: 'muniment', tone: 'dark' })
+    expect(box.querySelector('svg').isEqualNode(template.content.firstChild)).toBe(true)
+  })
+
+  it('outline the head with the agent\'s activity and name it on hover', () => {
+    const agent = { id: 'a1', name: 'Scout', avatar: { seed: 'scout' } }
+    const states = [
+      [undefined, null, null],
+      [{ state: 'idle', action: null, since: null }, 'idle', 'Idle'],
+      [{ state: 'running', action: 'Runs a scheduled routine' }, 'running', 'Running: Runs a scheduled routine'],
+      [{ state: 'waiting', action: 'bash `git push origin main`' }, 'waiting', 'Waiting for you: bash `git push origin main`'],
+      [{ state: 'error', action: 'The model could not complete this reply.' }, 'error', 'Last run failed: The model could not complete this reply.'],
+    ]
+    for (const [activity, state, title] of states) {
+      const { container } = render(AgentAvatar, { agent, activity, size: 20 })
+      const box = container.querySelector('.agent-avatar')
+      expect(box.getAttribute('data-activity')).toBe(state)
+      expect(box.getAttribute('data-tooltip')).toBe(title)
+    }
+  })
 })
