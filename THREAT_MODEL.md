@@ -1,7 +1,8 @@
 # Runtime threat model
 
-This document describes the desktop runtime boundary as built in this
-repository. It is an internal engineering record, not a public security claim.
+This document describes the desktop runtime boundary and the headless hosts
+built from `core/` in this repository. It is an internal engineering record, not
+a public security claim.
 
 ## Trust boundary
 
@@ -216,10 +217,80 @@ redacted, bounded diagnostics to
 credentials, prompts, model output, local paths, workspace values, connection
 nonces, and peer identifiers.
 
+## Headless hosts
+
+The core ships two network servers and an updater for hosts without the desktop.
+`core/README.md` describes their settings. Each one trusts its operator, who
+holds the host, its state directory and its environment.
+
+### Runtime server and remote attach
+
+`muniment-server` runs the runtime with no keychain and no cloud account. It
+keeps secrets in owner-only files under the state root, or reads them from
+`MUNIMENT_SECRET_*` variables. Anyone who can read the state directory or the
+process environment holds every secret and can pair a device, so the state
+volume is the trust boundary of a container.
+
+The remote route serves `muniment.attach/1` over TLS 1.3 only. A client pins the
+runtime certificate by its SHA-256 from the pairing link. A pairing link carries
+a 128-bit secret in its fragment, works once, expires after ten minutes, and the
+runtime stores only its hash. Redeeming it issues a device credential with a
+256-bit secret, also stored only as a hash. Each device holds the scopes its link
+granted and can delegate only those. Revocation closes the device's live sessions.
+The listener refuses a public peer address before the handshake unless
+`allow_public` is set. It caps connections, sets handshake and first-frame
+deadlines, limits the first frame to 16 KiB, and holds back a peer address after
+repeated refusals. The remote route refuses the local-only operations and any
+request that names a file on the runtime's machine.
+
+The route does not defend against a stolen device credential before its
+revocation, or against an operator who publishes the listener on a public
+address with `allow_public` set.
+
+### Router server
+
+`muniment-router serve` binds loopback unless its operator sets `listen`. The
+admin token, 16 characters or more, guards run creation, run revocation and
+outcomes, and the router compares it in constant time. Each run gets a run token:
+claims for the run, task, role, budget and expiry, signed with HMAC-SHA256 under
+the `run_token_signing_key`. The router checks the signature and expiry, then the
+claims against the stored run, so a revoked run stops at once. An admin token
+routes no model turn, and a run token creates no run. `/healthz` and `/metrics`
+take no token. The metrics carry counts, costs and account labels but no secrets
+or prompt content, so the listener stays off untrusted networks. Provider credentials live in
+the configured secret store or state directory, never in the request path.
+A leaked signing key lets its holder mint run tokens until the key changes.
+
+### Release signing key
+
+Each `core-v*` release attaches `SHA256SUMS` and a minisign signature over it.
+The `MUNIMENT_RELEASE_SIGNING_KEY` secret exists only in the release job, which
+fails before it tags when the key is missing or when `RELEASE_PUBLIC_KEY` in
+`core/crates/server/src/release.rs` does not verify the signature. The public key
+is in source control. The private key never is. A holder of the private key can
+publish an update that every launcher accepts. A key change needs a new launcher
+build, because each launcher trusts the public key it was built with.
+
+### Self-update launcher
+
+`muniment-server launch` installs a version only when a device with
+`runtime.update` or `runtime.admin`, or the local owner, requests one newer than
+the running version. It downloads the archive, `SHA256SUMS` and the signature from
+the feed, checks the signature against the release public key, checks the
+archive's SHA-256, and unpacks only regular files into a staging directory. The
+new binary must report the requested version. It runs as a trial and keeps the
+version only when `health` passes. Otherwise the launcher restores the state
+snapshot, starts the earlier version and never retries the failed one.
+
+`MUNIMENT_UPDATE_FEED` and `MUNIMENT_UPDATE_PUBLIC_KEY` replace the feed and the
+trusted key. They serve tests and mirrors that sign their own releases, and they
+grant nothing beyond the operator's existing control of the environment. A
+compromised feed can withhold updates but cannot install an unsigned build.
+
 ## Prompt injection
 
 Pi assembles model context for prompts sent through
-`src-tauri/core/src/sidecar/pi_chat.rs`. The cloud classifies each prompt at
+`core/crates/core/src/sidecar/pi_chat.rs`. The cloud classifies each prompt at
 ingress. The deleted resident path in `src-tauri/core/src/llama.rs` no longer
 defines a model-context boundary.
 
