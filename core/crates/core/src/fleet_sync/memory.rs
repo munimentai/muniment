@@ -110,12 +110,16 @@ impl Adapter for Memory {
                 continue;
             };
             // This machine wrote the version that lost, and the winner did
-            // not edit it: both edits stay.
-            let concurrent = change.previous.as_ref().is_some_and(|previous| {
-                previous.mine
-                    && previous.remote.is_some()
-                    && value["base"].as_str() != previous.remote.as_deref()
-            });
+            // not edit it: both edits stay. A file this machine never
+            // synced, such as one it held before it joined, stays too.
+            let concurrent = match change.previous.as_ref() {
+                Some(previous) => {
+                    previous.mine
+                        && previous.remote.is_some()
+                        && value["base"].as_str() != previous.remote.as_deref()
+                }
+                None => true,
+            };
             if concurrent {
                 if let Some(mine) = local
                     .get(&change.slot)

@@ -635,3 +635,30 @@ fn concurrent_memory_edits_keep_both_as_a_conflict_copy() {
     }
     assert_quiet(&members);
 }
+
+#[test]
+fn a_joining_member_keeps_its_own_memory_file_as_a_copy() {
+    let members = ["Studio", "Laptop", "Box"].map(TestMember::new);
+    for member in &members {
+        crate::home::initialize_state_home(&member.profile).unwrap();
+    }
+    let [a, b, c] = &members;
+    crate::memory_files::profile_save(&a.profile, "# Profile\n\nFleet.\n").unwrap();
+    exchange(b, a);
+    sync_all(&a.records());
+    exchange(b, a);
+    // C wrote its own profile before it ever linked.
+    crate::memory_files::profile_save(&c.profile, "# Profile\n\nMine.\n").unwrap();
+    exchange(c, b);
+    settle(&members);
+    for member in &members {
+        assert_eq!(
+            memory_file(member, "profile.md").as_deref(),
+            Some("# Profile\n\nFleet.\n")
+        );
+        assert_eq!(
+            memory_file(member, "profile (from Box).md").as_deref(),
+            Some("# Profile\n\nMine.\n")
+        );
+    }
+}
