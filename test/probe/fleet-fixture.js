@@ -3,7 +3,7 @@
 // their threads, agents and projects through the swarm. `fleetSyncAnswer`
 // answers the fleet operations with the shapes the core protocol fixtures
 // show. `?state=` picks synced, syncing, offline, bootstrap, owners, queued,
-// replica, offload, offline-settings or log.
+// replica, offload, offline-settings, log or projects.
 
 export const LAPTOP = '018f0000-0000-7000-8000-000000000041'
 export const STUDIO = '018f0000-0000-7000-8000-000000000042'
@@ -29,7 +29,10 @@ export function fleetSyncSummaries() {
 
 export const fleetSyncProjects = {
   projects: { 'project-lease': 'Lease renewal' },
-  remote: { 'project-launch': { name: 'Launch plan', ownerRuntime: STUDIO, path: '/Users/alice/Documents/muniment/projects/Launch plan' } },
+  remote: {
+    'project-launch': { name: 'Launch plan', ownerRuntime: STUDIO, path: '/Users/alice/Documents/muniment/projects/Launch plan' },
+    'project-sweeps': { name: 'Log sweeps', ownerRuntime: POD, path: '/home/muniment/projects/Log sweeps' },
+  },
   threads: { 'fleet-local': 'project-lease', 'fleet-launch': 'project-launch' },
 }
 
@@ -71,7 +74,6 @@ function syncStatus() {
 
 const offline = { thread_days: 30, attachments: 'open' }
 let pins = { pins: [{ class: 'artifact', key: 'report/index.html' }], offline: { artifacts: 'pinned', budget_bytes: 5368709120, prefetch: true }, usage: { fetched_bytes: 48_000_000, own_bytes: 12_000_000 } }
-if (fleetSyncState === 'offline-settings') pins = { ...pins, pins: [...pins.pins, { class: 'project', key: 'project-launch' }] }
 
 function op(op_id, threadId, ownerRuntime, ownerName, state = 'queued', minutes = 2) {
   return {
@@ -110,13 +112,18 @@ const credentials = () => ({
     : [],
 })
 
+// `fleet.audit` entries as core answers them: keyed `<writer>:<uuidv7>`,
+// with the writer as `actor_runtime`. The owner of a forwarded action writes
+// it, and its `runtime_id` names the sender.
+const auditKey = (writer, n) => `${writer}:019a0000-0000-7000-8000-0000000000${String(n).padStart(2, '0')}`
 const audit = [
-  { id: `${LAPTOP}:1`, at: at(3), kind: 'op', actor_runtime: POD, runtime_id: LAPTOP, record: { operation: 'thread.post', result: 'applied' } },
-  { id: `${LAPTOP}:2`, at: at(25), kind: 'sealed', actor_runtime: LAPTOP, runtime_id: LAPTOP, record: { secret_id: `models:${LAPTOP}`, recipients: [STUDIO, POD] } },
-  { id: `${STUDIO}:3`, at: at(60 * 5), kind: 'hold_moved', actor_runtime: STUDIO, runtime_id: LAPTOP, record: { account: 'pi:anthropic' } },
-  { id: `${LAPTOP}:4`, at: at(60 * 26), kind: 'role_changed', actor_runtime: LAPTOP, runtime_id: POD, record: { from: 'worker', to: 'full' } },
-  { id: `${LAPTOP}:5`, at: at(60 * 49), kind: 'snapshot_served', actor_runtime: LAPTOP, runtime_id: POD, record: {} },
-  { id: `${LAPTOP}:6`, at: at(60 * 72), kind: 'vault_token_issued', actor_runtime: LAPTOP, runtime_id: STUDIO, record: {} },
+  { id: auditKey(LAPTOP, 1), at: at(3), kind: 'op', actor_runtime: LAPTOP, runtime_id: POD, record: { op_id: '019a0000-0000-7000-8000-0000000000f1', operation: 'thread.post', actor_device: 'local', origin: POD, result: 'applied', note: null } },
+  { id: auditKey(LAPTOP, 2), at: at(25), kind: 'sealed', actor_runtime: LAPTOP, runtime_id: null, record: { secret_id: `models:${LAPTOP}`, version: 4, recipients: [STUDIO, POD], keys: ['router:team', 'pi:anthropic'] } },
+  { id: auditKey(POD, 3), at: at(26), kind: 'opened', actor_runtime: POD, runtime_id: LAPTOP, record: { secret_id: `models:${LAPTOP}`, version: 4, recipients: [STUDIO, POD], keys: ['router:team', 'pi:anthropic'] } },
+  { id: auditKey(STUDIO, 4), at: at(60 * 5), kind: 'hold_moved', actor_runtime: STUDIO, runtime_id: LAPTOP, record: { account: 'pi:anthropic' } },
+  { id: auditKey(LAPTOP, 5), at: at(60 * 26), kind: 'role_changed', actor_runtime: LAPTOP, runtime_id: POD, record: { from: 'worker', to: 'full' } },
+  { id: auditKey(LAPTOP, 6), at: at(60 * 49), kind: 'snapshot_served', actor_runtime: LAPTOP, runtime_id: POD, record: { rows: 1840, complete: true } },
+  { id: auditKey(LAPTOP, 7), at: at(60 * 72), kind: 'vault_token_issued', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { pairing_id: 'pairing-studio' } },
 ]
 
 let historyPolls = 0
@@ -144,7 +151,7 @@ export function fleetSyncAnswer({ operation, body = {} }) {
     return structuredClone(pins)
   }
   if (operation === 'fleet.offline_set') { Object.assign(offline, body); return { offline: { ...offline } } }
-  if (operation === 'fleet.audit') return { entries: structuredClone(audit), more: false }
+  if (operation === 'fleet.audit') return { entries: structuredClone(audit).slice(0, body.limit ?? 100), more: audit.length > (body.limit ?? 100) }
   if (operation === 'thread.history_fetch') {
     // The Pod thread's history is still on its way; the Studio thread is here.
     if (body.thread_id === POD_THREAD) { historyPolls += 1; return { thread_id: POD_THREAD, owner_runtime: POD, status: 'fetching', held_events: 12, total_events: 48, before: null } }
@@ -190,6 +197,10 @@ export function advanceFleetSync() {
     }
     return
   }
+  if (state === 'projects') {
+    if (!document.querySelector('[aria-label="Projects catalog"]')) document.querySelector('.project-title[aria-label="Projects"]')?.click()
+    return
+  }
   if (state === 'offline-settings' || state === 'log') {
     if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
     const machines = [...document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')].find((button) => button.textContent.trim() === 'Machines')
@@ -211,7 +222,11 @@ export function fleetSyncRendered() {
   if (state === 'queued') return document.body.textContent.includes("Queued. Studio is offline. Sends when it's back.") && document.body.textContent.includes('Move here')
   if (state === 'replica') return document.body.textContent.includes('History arriving from Pod: 12 of 48 events.')
   if (state === 'offload') return offloadStep === 3 && !!document.querySelector('.machine-menu [role="menuitemradio"][aria-checked="true"]')?.textContent.includes('Pod')
-  if (state === 'offline-settings') return !!document.querySelector('[role="radiogroup"][aria-label="Projects"]') && !!document.querySelector('input[type="checkbox"]')
-  if (state === 'log') return (document.querySelector('[aria-label="Fleet log"]')?.children.length ?? 0) === audit.length
+  if (state === 'offline-settings') return document.body.textContent.includes('Details only. Files stay on the machine that owns the project.') && !document.querySelector('[role="radiogroup"][aria-label="Projects"]')
+  if (state === 'log') return (document.querySelector('[aria-label="Fleet log"]')?.children.length ?? 0) === audit.length && document.body.textContent.includes('Pod → Laptop')
+  if (state === 'projects') {
+    const catalog = document.querySelector('[aria-label="Projects catalog"]')?.textContent ?? ''
+    return catalog.includes('Lease renewal') && catalog.includes('files on Studio') && catalog.includes('files on Pod')
+  }
   return false
 }

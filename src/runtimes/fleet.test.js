@@ -80,9 +80,9 @@ describe('owners', () => {
 
 describe('offline and bootstrap', () => {
   it('reads the offline scope from the sync status and the pins', () => {
-    expect(offlineScope({ offline: { thread_days: 0, attachments: 'all' } }, { offline: { artifacts: 'all' }, pins: [{ class: 'project', key: 'p1' }] }))
-      .toEqual({ threads: 0, attachments: 'all', artifacts: 'all', projects: 'chosen', pinnedProjects: ['p1'], skills: 'all' })
-    expect(offlineScope(null, null)).toMatchObject({ threads: 30, attachments: 'open', artifacts: 'pinned', projects: 'none' })
+    expect(offlineScope({ offline: { thread_days: 0, attachments: 'all' } }, { offline: { artifacts: 'all' }, pins: [{ class: 'artifact', key: 'report' }] }))
+      .toEqual({ threads: 0, attachments: 'all', artifacts: 'all' })
+    expect(offlineScope(null, null)).toEqual({ threads: 30, attachments: 'open', artifacts: 'pinned' })
   })
 
   it('lists each class with its progress and knows when the lists arrived', () => {
@@ -111,10 +111,22 @@ describe('offline and bootstrap', () => {
 
 describe('the audit log', () => {
   it('names the action, the machines and the detail of each entry', () => {
-    const row = auditRow({ id: 'x', at: '2026-01-01T14:00:00Z', kind: 'role_changed', actor_runtime: LAPTOP, runtime_id: BOX, record: { from: 'full', to: 'worker' } }, swarm)
-    expect(row).toMatchObject({ what: 'Changed a role', actor: 'Laptop', machine: 'Build box', detail: 'full to worker' })
-    expect(auditRow({ at: 'x', kind: 'something_new', runtime_id: 'core-unknown-machine' }, swarm)).toMatchObject({ what: 'something new', machine: 'core-unk', time: '' })
+    const row = auditRow({ id: `${LAPTOP}:0192`, at: '2026-01-01T14:00:00Z', kind: 'role_changed', actor_runtime: LAPTOP, runtime_id: BOX, record: { from: 'full', to: 'worker' } }, swarm)
+    expect(row).toMatchObject({ id: `${LAPTOP}:0192`, what: 'Changed a role', machines: 'Laptop → Build box', detail: 'full to worker' })
+    expect(auditRow({ at: 'x', kind: 'something_new', runtime_id: 'core-unknown-machine' }, swarm)).toMatchObject({ what: 'something new', machines: 'core-unk', time: '' })
     const named = { members: [{ runtime_id: '018f0000-0000-7000-8000-000000000041', runtime_name: 'Laptop' }] }
-    expect(auditRow({ kind: 'sealed', record: { secret_id: 'models:018f0000-0000-7000-8000-000000000041', recipients: ['a', 'b'] } }, named).detail).toBe('models:Laptop · 2 recipients')
+    expect(auditRow({ kind: 'sealed', runtime_id: null, actor_runtime: '018f0000-0000-7000-8000-000000000041', record: { secret_id: 'models:018f0000-0000-7000-8000-000000000041', version: 3, recipients: ['a', 'b'], keys: ['pi:anthropic'] } }, named))
+      .toMatchObject({ machines: 'Laptop', detail: 'models:Laptop · pi:anthropic · 2 recipients' })
+  })
+
+  it('reads each entry in the direction the action went', () => {
+    // The owner writes a forwarded action, and `runtime_id` is its sender.
+    const op = auditRow({ kind: 'op', actor_runtime: LAPTOP, runtime_id: POD, record: { op_id: 'o1', operation: 'thread.post', actor_device: 'local', origin: POD, result: 'applied', note: null } }, swarm)
+    expect(op).toMatchObject({ what: 'Ran a forwarded action', machines: 'Pod → Laptop', detail: 'thread.post · applied' })
+    expect(auditRow({ kind: 'opened', actor_runtime: POD, runtime_id: STUDIO, record: { secret_id: `models:${STUDIO}`, recipients: [POD] } }, swarm).machines).toBe('Studio → Pod')
+    expect(auditRow({ kind: 'hold_received', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'pi:anthropic' } }, swarm).machines).toBe('Studio → Laptop')
+    expect(auditRow({ kind: 'hold_moved', actor_runtime: STUDIO, runtime_id: LAPTOP, record: { account: 'pi:anthropic' } }, swarm).machines).toBe('Studio → Laptop')
+    expect(auditRow({ kind: 'snapshot_served', actor_runtime: LAPTOP, runtime_id: POD, record: { rows: 1, complete: true } }, swarm)).toMatchObject({ machines: 'Laptop → Pod', detail: '1 row' })
+    expect(auditRow({ kind: 'vault_token_refused', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { error: 'The account holds five machines.' } }, swarm).detail).toBe('The account holds five machines.')
   })
 })

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
 import ProjectCatalog from './ProjectCatalog.svelte'
 afterEach(cleanup)
 
@@ -47,4 +48,23 @@ it('offers rename, new thread, and open folder from the project card menu', asyn
   await fireEvent.click(screen.getByRole('button', {name:'Actions for Research'}))
   await fireEvent.click(screen.getByRole('menuitem', {name:'New thread'}))
   await waitFor(() => expect(onnewthread).toHaveBeenCalledWith('a'))
+})
+
+it('lists other members\' projects after own ones with their owner, and opens one like its sidebar row', async () => {
+  const onnewthread = vi.fn(), onthread = vi.fn()
+  const studio = { name: 'Studio', kind: 'desktop', online: false }
+  render(ProjectCatalog, { projects: [['a', 'Research']], remote: [['r', 'Launch plan', studio]], threads: [{threadId:'one',title:'Sources'}, {threadId:'two',title:'Checklist'}], assignments: {one:'a',two:'r'}, onnewthread, onthread })
+  const cards = screen.getAllByRole('button', { name: /thread/ })
+  expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual(['Research 1 thread', 'Launch plan 1 thread, files on Studio, offline'])
+  expect(cards[1]).toHaveTextContent('files on Studio')
+  expect(screen.queryByRole('button', { name: 'Actions for Launch plan' })).toBeNull()
+  await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'launch'}})
+  expect(screen.queryByRole('button', { name: /^Research/ })).toBeNull()
+  await fireEvent.click(screen.getByRole('button', { name: /^Launch plan/ }))
+  expect(screen.getByText('Threads in Launch plan.')).toBeInTheDocument()
+  expect(screen.getByText('files on Studio')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Checklist' }))
+  expect(onthread).toHaveBeenCalledWith('two')
+  await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+  expect(onnewthread).toHaveBeenCalledWith('r')
 })

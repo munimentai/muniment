@@ -113,20 +113,17 @@ export function historyLine(fetch, ownerName = '') {
 export const THREAD_CHOICES = [{ value: 30, label: '30 days' }, { value: 0, label: 'All' }]
 export const ATTACHMENT_CHOICES = [{ value: 'open', label: 'On open' }, { value: 'all', label: 'All' }]
 export const ARTIFACT_CHOICES = [{ value: 'pinned', label: 'Pinned' }, { value: 'all', label: 'All' }]
-export const PROJECT_CHOICES = [{ value: 'none', label: 'None' }, { value: 'chosen', label: 'Chosen' }]
 
 // The scope as the page shows it, from `fleet.sync_status.offline` and
 // `fleet.pins`. A thread window other than every thread shows as 30 days.
+// Projects and skills have no choice: a project's details and membership
+// always sync and its files stay on its owner, and every skill syncs.
 export function offlineScope(status, pins) {
   const days = Number(status?.offline?.thread_days ?? 30)
-  const pinned = new Set((pins?.pins ?? []).filter((pin) => pin.class === 'project').map((pin) => pin.key))
   return {
     threads: days === 0 ? 0 : 30,
     attachments: status?.offline?.attachments === 'all' ? 'all' : 'open',
     artifacts: pins?.offline?.artifacts === 'all' ? 'all' : 'pinned',
-    projects: pinned.size ? 'chosen' : 'none',
-    pinnedProjects: [...pinned],
-    skills: 'all',
   }
 }
 
@@ -202,6 +199,14 @@ const AUDIT_LINES = {
   snapshot_served: 'Sent a snapshot',
 }
 
+// The kinds whose entry `runtime_id` names the machine the action came from:
+// the sender of a forwarded action, the owner of an opened secret, and the
+// last holder of a sign-in. Every other kind names the machine it acted on.
+const FROM_MACHINE = new Set(['op', 'opened', 'hold_received'])
+
+// The most entries one `fleet.audit` answers.
+export const AUDIT_LIMIT = 500
+
 // The machine name behind a core runtime id, for the log.
 function machineName(swarm, runtimeId) {
   if (!runtimeId) return ''
@@ -210,27 +215,36 @@ function machineName(swarm, runtimeId) {
   return `${String(runtimeId).slice(0, 8)}`
 }
 
-// One audit entry as a log row: when, what, who acted and on which machine,
-// and the record's detail.
+const RUNTIME_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+
+// One `fleet.audit` entry as a log row: when, what, the machines it moved
+// between in the direction it went, and the record's detail. Core keys each
+// entry `<writer>:<uuidv7>`, and `actor_runtime` is the writer.
 export function auditRow(entry, swarm) {
   const record = entry?.record ?? {}
+  const rows = Number.isInteger(record.rows) ? `${record.rows} ${record.rows === 1 ? 'row' : 'rows'}` : ''
   const detail = [
     record.operation,
     record.secret_id,
     record.account,
     record.from && record.to ? `${record.from} to ${record.to}` : '',
     Array.isArray(record.keys) ? record.keys.join(', ') : '',
-    Array.isArray(record.recipients) ? `${record.recipients.length} recipients` : '',
+    Array.isArray(record.recipients) ? `${record.recipients.length} ${record.recipients.length === 1 ? 'recipient' : 'recipients'}` : '',
+    rows,
     record.result,
+    record.note,
+    record.error,
   ].filter((part) => typeof part === 'string' && part).join(' · ')
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, (id) => swarm?.members?.find((member) => member.runtime_id === id)?.runtime_name ?? id)
+    .replace(RUNTIME_ID, (id) => swarm?.members?.find((member) => member.runtime_id === id)?.runtime_name ?? id)
+  const actor = machineName(swarm, entry?.actor_runtime)
+  const other = machineName(swarm, entry?.runtime_id)
+  const [from, to] = FROM_MACHINE.has(entry?.kind) ? [other, actor] : [actor, other]
   return {
     id: entry?.id ?? `${entry?.at}:${entry?.kind}`,
     at: entry?.at ?? '',
     time: auditTime(entry?.at),
     what: AUDIT_LINES[entry?.kind] ?? String(entry?.kind ?? '').replace(/_/g, ' '),
-    actor: machineName(swarm, entry?.actor_runtime),
-    machine: machineName(swarm, entry?.runtime_id),
+    machines: from && to && from !== to ? `${from} → ${to}` : actor || other,
     detail,
   }
 }

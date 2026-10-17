@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { holdLine, piHold, readFleetAccounts, routerHold } from './fleet-accounts.js'
+import { holdLine, otherSignIns, piHold, readFleetAccounts, routerHold } from './fleet-accounts.js'
 
 const STUDIO = '018f0000-0000-7000-8000-0000000000aa'
 const own = { name: 'router:work', kind: 'subscription', holder: 'self', holder_name: 'Laptop', shared: true, this_machine: true, usable_here: true }
@@ -41,8 +41,20 @@ describe('fleet sign-in holders', () => {
   })
 
   it('states the holder in one line', () => {
-    expect(holdLine(own)).toBe('Held here')
-    expect(holdLine(received)).toBe('Held by Studio')
+    expect(holdLine(own)).toBe('Signed in here')
+    expect(holdLine(received)).toBe('Signed in on Studio')
+    expect(holdLine({ ...received, holder_name: '' })).toBe('Signed in on another machine')
     expect(holdLine(received, true)).toBe('Moving the sign-in here.')
+  })
+
+  it('lists the sign-ins other machines hold that this machine cannot use yet', () => {
+    const arriving = { name: 'pi:openai-codex', provider: 'openai-codex', kind: 'oauth', label: 'openai-codex', holder: STUDIO, holder_name: 'Studio', shared: true, this_machine: false, usable_here: false }
+    const kept = { name: 'router:home', provider: 'anthropic', family: 'anthropic', kind: 'subscription', label: 'Home', holder: STUDIO, holder_name: 'Studio', shared: false, this_machine: false, usable_here: false }
+    const keyElsewhere = { ...key, usable_here: false }
+    expect(otherSignIns([...accounts, arriving, kept, keyElsewhere])).toEqual([
+      { id: `${STUDIO}/pi:openai-codex`, label: 'openai-codex', provider: 'openai-codex', line: 'Signed in on Studio, arriving' },
+      { id: `${STUDIO}/router:home`, label: 'Home', provider: 'anthropic', line: 'Signed in on Studio, not shared' },
+    ])
+    expect(otherSignIns(null)).toEqual([])
   })
 })
