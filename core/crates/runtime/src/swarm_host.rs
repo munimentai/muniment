@@ -129,6 +129,29 @@ impl SwarmHost for RuntimeSwarmHost {
             .write(muniment_core::agent_hooks::SECRET_SERVICE, hook_id, secret)
     }
 
+    fn settings_applied(&self, class: &str) {
+        let Some(state) = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade()
+        else {
+            return;
+        };
+        match class {
+            "route" | "decision-model" => state.models().apply_router(),
+            "search" => state.models().restore_search(),
+            "retention" => {
+                if let Err(error) = state.apply_recorded_retention() {
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: retention from another machine failed: {error}"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn run_forwarded(&self, action: &Forwarded) -> Result<serde_json::Value, String> {
         let state = self
             .state
