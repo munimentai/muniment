@@ -1,4 +1,4 @@
-//! Run tokens: a bearer the router signs for one factory run.
+//! Run tokens: a bearer the router signs for one agent run.
 //!
 //! A token is `mrt1.<claims>.<signature>`, where the claims are base64url JSON
 //! naming the run, task, repository, role, budget and expiry, and the
@@ -122,7 +122,7 @@ mod tests {
         Claims {
             run_id: "run-1".into(),
             task_id: "task-1".into(),
-            repo: "factory/app".into(),
+            repo: "acme/app".into(),
             role: "implementer".into(),
             budget_usd: Some(2.5),
             expires_ms,

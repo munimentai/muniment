@@ -72,8 +72,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: bash ci/rust-toolchain.sh clippy
-      # OpenBao integration runs only when MUNIMENT_ROUTER_TEST_OPENBAO_ADDR is
-      # set. The OpenBao client tests run against a stand-in server always.
       - name: Start Postgres
         run: echo "MUNIMENT_ROUTER_TEST_DATABASE_URL=$(bash ci/postgres.sh start)" >> "$GITHUB_ENV"
       - run: cargo clippy -p muniment-router --all-targets --features server --locked -- -D warnings

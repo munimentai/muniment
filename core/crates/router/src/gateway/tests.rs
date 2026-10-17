@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{Credential, RouterConfig};
-use crate::store::{FileSecrets, FileStore, RouterStore, SecretSource};
+use crate::credentials::{CredentialStore, FileCredentialStore};
+use crate::store::{FileSecrets, FileStore, RouterStore, SecretSource, StoredSecrets};
 use std::io::{BufRead, Read};
 use std::sync::mpsc;
 
@@ -121,7 +122,7 @@ fn options(min_samples: f64) -> Options {
             min_samples,
         },
         metrics: true,
-        langfuse: None,
+        otlp: None,
     }
 }
 
@@ -131,7 +132,7 @@ fn fixture(accounts: Vec<Account>, min_samples: f64) -> Fixture {
 }
 
 fn fixture_with(accounts: Vec<Account>, options: Options) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("muniment-factory-{}", uuid::Uuid::now_v7()));
+    let dir = std::env::temp_dir().join(format!("muniment-gateway-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&dir).unwrap();
     crate::config::save(
         &dir,
@@ -190,7 +191,7 @@ fn create_run(address: SocketAddr, run_id: &str, role: &str, budget: f64) -> Str
         "/v1/runs",
         ADMIN,
         Some(
-            &json!({"run_id": run_id, "task_id": "task-1", "repo": "factory/app", "role": role, "budget_usd": budget, "expires_in_s": 3600}),
+            &json!({"run_id": run_id, "task_id": "task-1", "repo": "acme/app", "role": role, "budget_usd": budget, "expires_in_s": 3600}),
         ),
         &[],
     );
@@ -225,7 +226,7 @@ fn run_tokens_are_issued_bound_and_revoked() {
         5.0,
     );
     let address = fixture.handle.address();
-    let new_run = json!({"run_id": "r1", "task_id": "t1", "repo": "factory/app", "role": "planner", "budget_usd": 1.0, "expires_in_s": 600});
+    let new_run = json!({"run_id": "r1", "task_id": "t1", "repo": "acme/app", "role": "planner", "budget_usd": 1.0, "expires_in_s": 600});
     assert_eq!(
         call(address, "POST", "/v1/runs", "wrong", Some(&new_run), &[]).0,
         401
@@ -277,7 +278,7 @@ fn run_tokens_are_issued_bound_and_revoked() {
     let foreign = SigningKey::parse(&"7b".repeat(32)).unwrap().sign(&Claims {
         run_id: "r1".into(),
         task_id: "t1".into(),
-        repo: "factory/app".into(),
+        repo: "acme/app".into(),
         role: "planner".into(),
         budget_usd: Some(1.0),
         expires_ms: i64::MAX,
@@ -303,7 +304,7 @@ fn run_tokens_are_issued_bound_and_revoked() {
         404
     );
     // A run token stops serving at its expiry.
-    let short = json!({"run_id": "r2", "task_id": "t1", "repo": "factory/app", "role": "planner", "budget_usd": 1.0, "expires_in_s": 1});
+    let short = json!({"run_id": "r2", "task_id": "t1", "repo": "acme/app", "role": "planner", "budget_usd": 1.0, "expires_in_s": 1});
     let (_, body) = call(address, "POST", "/v1/runs", ADMIN, Some(&short), &[]);
     let token = serde_json::from_str::<Value>(&body).unwrap()["token"]
         .as_str()
@@ -455,20 +456,18 @@ fn a_run_reports_the_status_type_and_time_of_its_last_request_when_it_failed() {
 }
 
 #[test]
-fn each_turn_becomes_one_langfuse_generation_in_its_trace() {
-    let (host, seen) = langfuse::tests::ingestion(207);
-    let langfuse = langfuse::Langfuse::start(langfuse::Settings {
-        host,
-        public_key: "pk-lf-1".into(),
-        secret_key: "sk-lf-1".into(),
-    });
+fn each_turn_becomes_one_otlp_span_in_its_trace() {
+    use otlp::tests::attribute;
+    let (base, seen) = otlp::tests::collector(200, "{}");
+    let exporter = otlp::Exporter::start(otlp::tests::settings(&base));
     // The answer costs $0.20 + $0.12 on gpt-5.6-luna.
     let (url, _seen) = upstream(vec![
         completion("one", 1_000_000, 100_000),
+        completion("two", 10, 1),
         Answer::Json(429, json!({"error": {"message": "slow down"}}).to_string()),
     ]);
     let mut options = options(5.0);
-    options.langfuse = Some(langfuse.clone());
+    options.otlp = Some(exporter.clone());
     let fixture = fixture_with(vec![account("a1", &url, &["gpt-5.6-luna"])], options);
     let address = fixture.handle.address();
     let token = create_run(address, "r1", "implementer", 5.0);
@@ -483,52 +482,73 @@ fn each_turn_becomes_one_langfuse_generation_in_its_trace() {
         )
         .0
     };
-    assert_eq!(send(&[("x-muniment-trace", "trace-abc")]), 200);
+    let caller_trace = "0af7651916cd43dd8448eb211c80319c";
+    assert_eq!(send(&[("x-muniment-trace", caller_trace)]), 200);
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    assert_eq!(send(&[("traceparent", traceparent)]), 200);
     assert_eq!(send(&[]), 429);
-    assert!(langfuse.flush(Duration::from_secs(5)));
-    let events: Vec<Value> = seen
-        .try_iter()
-        .flat_map(|(auth, body)| {
-            assert_eq!(auth, "Basic cGstbGYtMTpzay1sZi0x");
-            body["batch"].as_array().unwrap().clone()
-        })
-        .collect();
-    let generations: Vec<&Value> = events
+    assert!(exporter.flush(Duration::from_secs(5)));
+    let captured: Vec<otlp::tests::Captured> = seen.try_iter().collect();
+    assert!(!captured.is_empty());
+    for request in &captured {
+        assert_eq!(request.path, "/v1/traces");
+        assert_eq!(request.header("authorization"), Some("Basic cGstMTpzay0x"));
+        let resource = &request.body["resourceSpans"][0]["resource"];
+        assert_eq!(
+            resource["attributes"][0]["value"]["stringValue"],
+            "gateway-test"
+        );
+    }
+    let spans: Vec<Value> = captured
         .iter()
-        .filter(|event| event["type"] == "generation-create")
-        .map(|event| &event["body"])
+        .flat_map(|request| request.spans())
         .collect();
-    assert_eq!(generations.len(), 2, "{events:?}");
-    let served = generations[0];
-    assert_eq!(served["traceId"], "trace-abc");
-    assert_eq!(served["model"], "openai/gpt-5.6-luna");
-    assert_eq!(served["usageDetails"]["input"], 1_000_000);
-    assert_eq!(served["usageDetails"]["output"], 100_000);
-    assert!((served["costDetails"]["total"].as_f64().unwrap() - 0.32).abs() < 1e-9);
-    assert_eq!(served["metadata"]["run_id"], "r1");
-    assert_eq!(served["metadata"]["task_id"], "task-1");
-    assert_eq!(served["metadata"]["role"], "implementer");
-    assert_eq!(served["level"], "DEFAULT");
-    let start =
-        chrono::DateTime::parse_from_rfc3339(served["startTime"].as_str().unwrap()).unwrap();
-    let end = chrono::DateTime::parse_from_rfc3339(served["endTime"].as_str().unwrap()).unwrap();
-    assert!(start <= end);
+    assert_eq!(spans.len(), 3, "{spans:?}");
+    let served = &spans[0];
+    assert_eq!(served["traceId"], caller_trace);
+    assert!(served.get("parentSpanId").is_none());
+    assert_eq!(served["name"], "chat gpt-5.6-luna");
+    assert_eq!(served["kind"], 3);
+    assert_eq!(attribute(served, "gen_ai.operation.name"), "chat");
+    assert_eq!(attribute(served, "gen_ai.provider.name"), "openai");
+    assert_eq!(attribute(served, "gen_ai.request.model"), "gpt-5.6-luna");
+    assert_eq!(attribute(served, "gen_ai.response.model"), "gpt-5.6-luna");
+    assert_eq!(attribute(served, "gen_ai.usage.input_tokens"), "1000000");
+    assert_eq!(attribute(served, "gen_ai.usage.output_tokens"), "100000");
     assert_eq!(
-        served["metadata"]["latency_ms"],
-        (end - start).num_milliseconds()
+        attribute(served, "gen_ai.usage.cache_read.input_tokens"),
+        "0"
     );
+    assert!((attribute(served, "muniment.cost_usd").as_f64().unwrap() - 0.32).abs() < 1e-9);
+    assert_eq!(attribute(served, "muniment.run.id"), "r1");
+    assert_eq!(attribute(served, "muniment.task.id"), "task-1");
+    assert_eq!(attribute(served, "muniment.role"), "implementer");
+    assert_eq!(attribute(served, "muniment.repo"), "acme/app");
+    assert_eq!(attribute(served, "muniment.account"), "a1");
+    assert_eq!(attribute(served, "muniment.attempts"), "1");
+    assert_eq!(attribute(served, "http.response.status_code"), "200");
+    assert_eq!(attribute(served, "error.type"), Value::Null);
+    assert!(served.get("status").is_none());
+    let start: u128 = served["startTimeUnixNano"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let end: u128 = served["endTimeUnixNano"].as_str().unwrap().parse().unwrap();
+    assert!(start <= end);
+    // A W3C traceparent names both the trace and the parent span.
+    let child = &spans[1];
+    assert_eq!(child["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736");
+    assert_eq!(child["parentSpanId"], "00f067aa0ba902b7");
     // A turn with no trace header goes to the task's own trace.
-    let failed = generations[1];
-    let task_trace = langfuse::task_trace_id("task-1");
-    assert_eq!(failed["traceId"], task_trace.as_str());
-    assert_eq!(failed["level"], "ERROR");
-    assert_eq!(failed["statusMessage"], "429 rate_limited");
-    assert!(
-        events
-            .iter()
-            .any(|event| event["type"] == "trace-create"
-                && event["body"]["id"] == task_trace.as_str())
-    );
+    let failed = &spans[2];
+    assert_eq!(failed["traceId"], otlp::task_trace_id("task-1"));
+    assert_eq!(failed["status"]["code"], 2);
+    assert_eq!(failed["status"]["message"], "429 rate_limited");
+    assert_eq!(attribute(failed, "error.type"), "rate_limited");
+    assert_eq!(attribute(failed, "http.response.status_code"), "429");
+    assert_eq!(attribute(failed, "gen_ai.response.model"), Value::Null);
+    assert_eq!(exporter.failed(), 0);
 }
 
 #[test]
@@ -639,7 +659,7 @@ fn a_run_without_a_budget_is_never_refused_on_spend() {
     ]);
     let fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
     let address = fixture.handle.address();
-    let new_run = json!({"run_id": "r1", "task_id": "task-1", "repo": "factory/app", "role": "implementer", "expires_in_s": 3600});
+    let new_run = json!({"run_id": "r1", "task_id": "task-1", "repo": "acme/app", "role": "implementer", "expires_in_s": 3600});
     let (status, body) = call(address, "POST", "/v1/runs", ADMIN, Some(&new_run), &[]);
     assert_eq!(status, 200, "{body}");
     let token = serde_json::from_str::<Value>(&body).unwrap()["token"]
@@ -799,7 +819,7 @@ fn outcomes_feed_measured_success_into_the_next_task() {
         .state
         .backend
         .store
-        .success_stats("implementer", "factory/app")
+        .success_stats("implementer", "acme/app")
         .unwrap();
     let global = stats[&(
         "openai/gpt-5.6-luna".to_owned(),
@@ -993,19 +1013,20 @@ fn a_drain_gives_up_at_its_deadline() {
     assert_eq!(fixture.handle.connections(), 1);
 }
 
-/// The whole factory path on Postgres and OpenBao: an account added through
-/// the account commands, a run, a routed turn and its usage.
+/// The whole gateway path on Postgres and the file credential store: an
+/// account added through the account commands, a run, a routed turn and its
+/// usage.
 #[test]
-fn end_to_end_on_postgres_and_openbao() {
+fn end_to_end_on_postgres_and_the_credential_store() {
     let Some(scratch) = postgres::tests::scratch() else {
         return;
     };
-    let mock = openbao::tests::mock(3600);
-    let secrets = Arc::new(openbao::OpenBao::new(openbao::tests::settings(
-        &mock.address,
-        openbao::Auth::Token("static".into()),
-        Duration::from_secs(60),
-    )));
+    let credentials = std::env::temp_dir().join(format!(
+        "muniment-gateway-credentials-{}",
+        uuid::Uuid::now_v7()
+    ));
+    let files = Arc::new(FileCredentialStore::new(&credentials));
+    let secrets = Arc::new(StoredSecrets::new(files.clone()));
     let store = Arc::new(postgres::PgStore::connect(&scratch.url).unwrap());
     let backend = Backend::new(store.clone(), secrets);
     let (url, seen) = upstream(vec![completion("done", 1_000, 10)]);
@@ -1020,8 +1041,8 @@ fn end_to_end_on_postgres_and_openbao() {
     )
     .unwrap();
     assert_eq!(
-        mock.secrets.lock().unwrap()[&format!("router/accounts/{id}")].0["key"],
-        "sk-live"
+        files.read(store::ACCOUNT_SERVICE, &id).as_deref(),
+        Some(r#"{"type":"api_key","key":"sk-live"}"#)
     );
     let handle = start("127.0.0.1:0", backend, options(5.0)).unwrap();
     let address = handle.address();
@@ -1059,26 +1080,41 @@ fn end_to_end_on_postgres_and_openbao() {
     );
     assert_eq!(
         store
-            .success_stats("implementer", "factory/app")
+            .success_stats("implementer", "acme/app")
             .unwrap()
             .len(),
         3
     );
+    std::fs::remove_dir_all(credentials).unwrap();
 }
 
 #[test]
-fn a_server_without_secrets_serves_no_account() {
-    let dir = std::env::temp_dir().join(format!("muniment-factory-{}", uuid::Uuid::now_v7()));
+fn a_gateway_without_a_credential_directory_reads_only_the_environment() {
+    let dir = std::env::temp_dir().join(format!("muniment-gateway-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&dir).unwrap();
     let store = FileStore::new(&dir);
     store
         .upsert_account(&account("a1", "http://127.0.0.1:9/v1", &["gpt-5.6-luna"]))
         .unwrap();
-    let backend = Backend::new(Arc::new(store), Arc::new(NoSecrets));
+    let environment = Arc::new(StoredSecrets::new(Arc::new(
+        FileCredentialStore::environment_only(),
+    )));
+    let backend = Backend::new(Arc::new(store), environment.clone());
     assert!(backend.config().unwrap().accounts.is_empty());
-    assert!(NoSecrets
+    assert!(environment
         .write("a1", &Credential::ApiKey { key: "k".into() })
         .is_err());
+    let variable = crate::credentials::credential_variable(store::ACCOUNT_SERVICE, "a1");
+    std::env::set_var(&variable, r#"{"type":"api_key","key":"from-env"}"#);
+    let accounts = backend.config().unwrap().accounts;
+    std::env::remove_var(&variable);
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(
+        accounts[0].credential,
+        Credential::ApiKey {
+            key: "from-env".into()
+        }
+    );
     let files = Backend::new(
         Arc::new(FileStore::new(&dir)),
         Arc::new(FileSecrets::new(&dir)),
