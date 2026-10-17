@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use muniment_core::agents;
-use muniment_core::attach::{ClientError, DesktopClientHolder, Operation};
+use muniment_core::attach::{
+    ClientError, DesktopClientHolder, ErrorDetails, Operation, ProtocolError,
+};
 use serde_json::Value;
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
@@ -32,15 +34,22 @@ fn target(runtime: Option<&str>) -> Target<'_> {
     }
 }
 
+/// A refused request: the client's error and the runtime's protocol error,
+/// which carries core's reason when the runtime gave one.
+type Refusal = (ClientError, Option<ProtocolError>);
+
 /// One agent operation sent to a runtime. Core decides every request.
 trait AgentClient {
-    fn agent_request(&self, operation: Operation, body: Value) -> Result<Value, ClientError>;
+    fn agent_request(&self, operation: Operation, body: Value) -> Result<Value, Refusal>;
 }
 
 impl AgentClient for DesktopClientHolder {
-    fn agent_request(&self, operation: Operation, body: Value) -> Result<Value, ClientError> {
-        self.request(operation, None, body)
-            .map(|response| response.body)
+    fn agent_request(&self, operation: Operation, body: Value) -> Result<Value, Refusal> {
+        if operation.is_agent_operation() {
+            DesktopClientHolder::agent_request(self, operation, body)
+        } else {
+            self.swarm_request(operation, body)
+        }
     }
 }
 
@@ -55,7 +64,16 @@ fn agent_operation(name: &str) -> Option<Operation> {
         })
 }
 
-fn agent_error(error: ClientError) -> String {
+/// The line a refused request shows: core's reason when the runtime gave one,
+/// else a line for the kind of failure.
+fn agent_error((error, refusal): Refusal) -> String {
+    if let Some(ErrorDetails::RequestReason { reason }) =
+        refusal.as_ref().and_then(ProtocolError::details)
+    {
+        if !reason.trim().is_empty() {
+            return reason.trim().to_owned();
+        }
+    }
     match error {
         ClientError::RequestRejected | ClientError::DesktopFailed => {
             "The machine refused the agent request. Check the fields and try again.".into()
@@ -228,13 +246,25 @@ mod tests {
     struct Recorder {
         runtime: String,
         calls: RefCell<Vec<(Operation, Value)>>,
+        refusal: Option<Refusal>,
     }
 
     impl AgentClient for &Recorder {
-        fn agent_request(&self, operation: Operation, body: Value) -> Result<Value, ClientError> {
+        fn agent_request(&self, operation: Operation, body: Value) -> Result<Value, Refusal> {
             self.calls.borrow_mut().push((operation, body));
-            Ok(serde_json::json!({"runtime": self.runtime}))
+            match &self.refusal {
+                Some(refusal) => Err(refusal.clone()),
+                None => Ok(serde_json::json!({"runtime": self.runtime})),
+            }
         }
+    }
+
+    fn refusal(reason: Option<&str>) -> Refusal {
+        let error = match reason {
+            Some(reason) => ProtocolError::invalid_request_with_reason(reason),
+            None => ProtocolError::invalid_request(),
+        };
+        (ClientError::RequestRejected, Some(error))
     }
 
     fn connect<'a>(
@@ -252,7 +282,49 @@ mod tests {
         Recorder {
             runtime: runtime.into(),
             calls: RefCell::new(Vec::new()),
+            refusal: None,
         }
+    }
+
+    #[test]
+    fn a_refusal_shows_the_runtime_reason() {
+        let mut local = recorder("local");
+        let paired = recorder("box");
+        local.refusal = Some(refusal(Some(
+            "A cron routine runs at most every five minutes.",
+        )));
+        assert_eq!(
+            forward(
+                None,
+                "routine.save",
+                serde_json::json!({"agent_id": "a"}),
+                connect(&local, &paired)
+            )
+            .unwrap_err(),
+            "A cron routine runs at most every five minutes."
+        );
+        local.refusal = Some(refusal(None));
+        assert_eq!(
+            forward(
+                None,
+                "agent.save",
+                serde_json::json!({}),
+                connect(&local, &paired)
+            )
+            .unwrap_err(),
+            "The machine refused the agent request. Check the fields and try again."
+        );
+        local.refusal = Some((ClientError::RequestRejected, None));
+        assert_eq!(
+            forward(
+                None,
+                "thread.post",
+                serde_json::json!({}),
+                connect(&local, &paired)
+            )
+            .unwrap_err(),
+            "The machine refused the agent request. Check the fields and try again."
+        );
     }
 
     #[test]
@@ -424,6 +496,10 @@ mod tests {
             ("routine.list", Operation::RoutineList),
             ("routine.save", Operation::RoutineSave),
             ("routine.delete", Operation::RoutineDelete),
+            ("agent.threads", Operation::AgentThreads),
+            ("agent.tool_catalog", Operation::AgentToolCatalog),
+            ("agent.replays", Operation::AgentReplays),
+            ("agent.replay", Operation::AgentReplay),
         ] {
             assert_eq!(agent_operation(name), Some(operation));
         }

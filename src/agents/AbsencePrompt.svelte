@@ -3,9 +3,10 @@
   // for 14 days. The next visit asks here to resume them, and one resume
   // reaches every member.
   import Button from '../lib/ui/Button.svelte'
+  import LucideIcon from '../lib/LucideIcon.svelte'
   import { agentRequest } from './agent-runtime.js'
 
-  let { tauri, runtime, pausedAt = null, onresumed = () => {} } = $props()
+  let { tauri, runtime, pausedAt = null, count = 0, onresumed = () => {} } = $props()
   let busy = $state(false)
   let error = $state('')
   let hidden = $state(false)
@@ -27,7 +28,8 @@
 
 {#if !hidden}
   <section class="absence" aria-label="Routines paused">
-    <p><strong>Routines paused{since ? ` since ${since}` : ''}.</strong> No one used Muniment for 14 days, so agents stopped running on their own.</p>
+    <p class="head"><LucideIcon name="clock" size={14} /><strong>Routines paused{since ? ` since ${since}` : ''}</strong></p>
+    <p>Muniment went unused for 14 days, so {count ? `${count} ${count === 1 ? 'agent' : 'agents'}` : 'agents'} stopped running on their own. Resuming starts them on every machine.</p>
     <div class="actions">
       <Button variant="primary" disabled={busy} onclick={resume}>{busy ? 'Resuming…' : 'Resume routines'}</Button>
       <Button disabled={busy} onclick={() => { hidden = true }}>Not now</Button>
@@ -38,7 +40,9 @@
 
 <style>
   .absence { display: grid; gap: 8px; margin: 4px 8px 8px; padding: 10px; border: 1px solid var(--ochre); border-radius: var(--radius-control); background: var(--surface); }
-  p { margin: 0; font-size: var(--text-12); line-height: 1.5; }
+  p { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; }
+  .head { display: flex; align-items: center; gap: 6px; color: var(--ochre); }
+  .head strong { color: var(--ink); font-weight: 600; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .error { color: var(--oxide); }
 </style>

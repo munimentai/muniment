@@ -1,29 +1,72 @@
-import { expect, it } from 'vitest'
-import { approvalChoices, approvalOutcome, approvalSummary } from './approvals.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { approvalChoices, approvalOutcome, approvalSummary, longInput, ruleInputs, threadApprovals } from './approvals.js'
 
-it('offers Allow once, Always allow and Deny for an agent tool gate', () => {
-  const request = { kind: 'select', title: 'Allow bash? A write needs a yes.', options: ['Allow once', 'Allow for this thread', 'Deny'] }
-  expect(approvalChoices(request)).toEqual([
-    { label: 'Allow once', answer: { type: 'select', value: 'Allow once' } },
-    { label: 'Always allow', answer: { type: 'select', value: 'Allow for this thread' } },
-    { label: 'Deny', answer: { type: 'select', value: 'Deny' }, tone: 'deny' },
-  ])
+const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/muniment.attach/1', name), 'utf8')).body
+const pending = fixture('response-agent-approvals.json').approvals[0]
+
+describe('approval answers', () => {
+  it('offers exactly the answers core lists, in a fixed order', () => {
+    expect(approvalChoices(pending).map((choice) => [choice.label, choice.answer])).toEqual([
+      ['Allow once', 'allow_once'],
+      ['Allow for this thread', 'allow_thread'],
+      ['Always allow for this agent', 'always_allow_agent'],
+      ['Deny', 'deny'],
+    ])
+    expect(approvalChoices(pending).at(-1).tone).toBe('deny')
+  })
+
+  it('leaves out Always allow when an ask-first rule matches', () => {
+    const limited = { ...pending, answers: ['deny', 'allow_thread', 'allow_once'] }
+    expect(approvalChoices(limited).map((choice) => choice.answer)).toEqual(['allow_once', 'allow_thread', 'deny'])
+  })
+
+  it('answers an older runtime\'s gate with its own options', () => {
+    const request = { kind: 'select', title: 'Allow bash? A write needs a yes.', options: ['Allow once', 'Allow for this thread', 'Deny'] }
+    expect(approvalChoices({ request })).toEqual([
+      { label: 'Allow once', answer: { type: 'select', value: 'Allow once' } },
+      { label: 'Allow for this thread', answer: { type: 'select', value: 'Allow for this thread' } },
+      { label: 'Deny', answer: { type: 'select', value: 'Deny' }, tone: 'deny' },
+    ])
+    expect(approvalChoices({ request: { kind: 'confirm', title: 'Allow bash?', message: 'git push' } }).map((choice) => choice.answer)).toEqual([
+      { type: 'confirm', value: true },
+      { type: 'confirm', value: false },
+    ])
+    expect(approvalChoices({ request: { kind: 'select', title: 'Pick', options: ['Red', 'Blue'] } }).map((choice) => choice.label)).toEqual(['Red', 'Blue'])
+    expect(approvalChoices({ request: { kind: 'input', title: 'Name?' } })).toEqual([])
+    expect(approvalChoices(undefined)).toEqual([])
+  })
 })
 
-it('answers a yes or no gate and each option of another choice', () => {
-  expect(approvalChoices({ kind: 'confirm', title: 'Allow bash?', message: 'git push' }).map((choice) => [choice.label, choice.answer])).toEqual([
-    ['Allow once', { type: 'confirm', value: true }],
-    ['Deny', { type: 'confirm', value: false }],
-  ])
-  expect(approvalChoices({ kind: 'select', title: 'Pick', options: ['Red', 'Blue'] }).map((choice) => choice.label)).toEqual(['Red', 'Blue'])
-  expect(approvalChoices({ kind: 'input', title: 'Name?' })).toEqual([])
-  expect(approvalChoices(undefined)).toEqual([])
-})
+describe('approval summary', () => {
+  it('names the exact operation and its inputs from the rule', () => {
+    expect(approvalSummary(pending)).toEqual({
+      operation: 'bash `git push origin main` in /work/agents/Lead-scout',
+      title: pending.request.title,
+      rows: [['Command', 'git push origin main'], ['Shell', 'bash'], ['Folder', '/work/agents/Lead-scout']],
+      exact: true,
+    })
+  })
 
-it('names the operation and its inputs', () => {
-  expect(approvalSummary({ request: { kind: 'confirm', title: 'Allow bash?', message: 'git push origin main' } })).toEqual({ title: 'Allow bash?', inputs: 'git push origin main' })
-  expect(approvalSummary({ request: { kind: 'select', title: 'Allow write?', options: [] } })).toEqual({ title: 'Allow write?', inputs: '' })
-  expect(approvalSummary({})).toEqual({ title: 'Approval needed', inputs: '' })
+  it('reads a path or tool rule and an older gate', () => {
+    expect(ruleInputs({ request_kind: 'path', resource: { type: 'path', path: '/tmp/a.md', operation: 'write' } })).toEqual([['Action', 'write'], ['Path', '/tmp/a.md']])
+    expect(ruleInputs({ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__crm__delete_lead', input: { id: 'lead-1' } } })).toEqual([['Tool', 'mcp__crm__delete_lead'], ['Input', '{\n  "id": "lead-1"\n}']])
+    expect(ruleInputs({ request_kind: 'tool', resource: { type: 'tool', name: 'web_search', input: {} } })).toEqual([['Tool', 'web_search']])
+    expect(approvalSummary({ request: { kind: 'confirm', title: 'Allow bash?', message: 'git push origin main' } })).toEqual({ operation: 'Allow bash?', title: 'Allow bash?', rows: [['Input', 'git push origin main']], exact: false })
+    expect(approvalSummary({})).toEqual({ operation: 'Approval needed', title: 'Approval needed', rows: [], exact: false })
+  })
+
+  it('folds long inputs', () => {
+    expect(longInput('git status')).toBe(false)
+    expect(longInput('x'.repeat(300))).toBe(true)
+    expect(longInput('a\nb\nc\nd\ne\nf\ng')).toBe(true)
+  })
+
+  it('lists one thread\'s pending approvals', () => {
+    expect(threadApprovals([pending, { ...pending, approval_id: 'b', thread_id: 'other' }], pending.thread_id)).toEqual([pending])
+    expect(threadApprovals([pending], null)).toEqual([])
+  })
 })
 
 it('says when another device answered first or the answer is on its way', () => {

@@ -4,6 +4,14 @@ import '@testing-library/jest-dom/vitest'
 import AgentProfile from './AgentProfile.svelte'
 afterEach(cleanup)
 
+// Core's `agent.tool_catalog` from the agent's machine, as the window maps it.
+const catalog = {
+  builtin: [{ id: 'read', label: 'Read files', readOnly: true }, { id: 'bash', label: 'Shell commands', readOnly: false }],
+  mcp: [{ server: 'crm', tools: ['search_leads', 'get_lead'], checkedAt: '2026-01-01T08:55:00Z' }, { server: 'calendar', tools: [], checkedAt: null }],
+  skills: [{ id: 'review', name: 'Code review', description: 'Review a draft.' }],
+  loaded: true,
+  error: '',
+}
 const agent = { id: 'scout', name: 'Scout', instructions: 'Find sources.', projectId: 'p', schedule: null, runtimeId: 'local', routines: [], tools: { disabled: ['powershell'] }, skills: [], permissions: { mode: 'ask', always_allow: [], ask_first: [] } }
 
 // Answers `agent_request` from one stored agent per machine and records each request.
@@ -19,8 +27,8 @@ function machine(stored = agent, extra = {}) {
     if (args.operation === 'agent.export') return { format: args.body.format, file_name: `${stored.name}.${args.body.format}.md`, content: '# Export' }
     return {}
   })
-  // The proposal cards read core's live list on their own.
-  const changes = () => requests.filter((request) => request.operation !== 'agent.routine_proposals')
+  // The proposal cards and the failed runs read core's live lists on their own.
+  const changes = () => requests.filter((request) => !['agent.routine_proposals', 'agent.replays'].includes(request.operation))
   return { invoke, requests, changes, saved: () => requests.filter((request) => request.operation === 'agent.save').at(-1)?.body.agent }
 }
 
@@ -64,10 +72,13 @@ it('keeps a failed edit for retry and names the failure', async () => {
 it('turns tools and skills on and off, edits permission rules and the messaging list', async () => {
   const { invoke, saved } = machine()
   const others = [{ id: 'editor', name: 'Editor', runtimeId: 'box' }]
-  render(AgentProfile, { agent, tauri: { invoke }, agents: [agent, ...others], skills: [{ id: 'review', name: 'Code review' }], onchange: vi.fn() })
+  render(AgentProfile, { agent, tauri: { invoke }, agents: [agent, ...others], catalog, onchange: vi.fn() })
+  // The catalog lists the machine's tools, and a disabled id it does not list stays to turn on again.
+  expect(screen.getByRole('switch', { name: 'powershell on' })).not.toBeChecked()
+  expect(screen.getByText('read · read only')).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('switch', { name: 'Shell commands on' }))
   await waitFor(() => expect(saved().tools).toEqual({ disabled: ['powershell', 'bash'] }))
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Code review' }))
+  await fireEvent.click(screen.getByRole('checkbox', { name: /^Code review/ }))
   await waitFor(() => expect(saved().skills).toEqual(['review']))
 
   await fireEvent.change(screen.getByRole('combobox', { name: 'Permission mode' }), { target: { value: 'strict' } })
@@ -157,13 +168,16 @@ it('accepts or dismisses routines core proposed and edits a schedule', async () 
 
 it('adds a tool check with its condition', async () => {
   const { invoke, requests } = machine()
-  render(AgentProfile, { agent, tauri: { invoke }, servers: ['crm'], onchange: vi.fn() })
+  render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
   await fireEvent.click(screen.getByRole('button', { name: 'Add routine' }))
   const editor = await screen.findByRole('dialog', { name: 'New routine' })
   await fireEvent.input(within(editor).getByRole('textbox', { name: 'Name' }), { target: { value: 'New leads' } })
   await fireEvent.change(within(editor).getByRole('combobox', { name: 'Starts on' }), { target: { value: 'mcp' } })
+  await fireEvent.input(within(editor).getByRole('combobox', { name: 'Server' }), { target: { value: 'calendar' } })
+  expect(within(editor).getByText('Test this server in Extend to list its tools.')).toBeInTheDocument()
   await fireEvent.input(within(editor).getByRole('combobox', { name: 'Server' }), { target: { value: 'crm' } })
-  await fireEvent.input(within(editor).getByRole('textbox', { name: 'Tool' }), { target: { value: 'search_leads' } })
+  expect([...editor.querySelectorAll('datalist[id$="-servers"] option, datalist[id$="-tools"] option')].map((option) => option.value)).toEqual(['crm', 'calendar', 'search_leads', 'get_lead'])
+  await fireEvent.input(within(editor).getByRole('combobox', { name: 'Tool' }), { target: { value: 'search_leads' } })
   await fireEvent.input(within(editor).getByRole('textbox', { name: 'Arguments' }), { target: { value: '{"status":"new"}' } })
   const check = within(editor).getByRole('group', { name: 'Check 1' })
   await fireEvent.input(within(check).getByRole('textbox', { name: 'Result path' }), { target: { value: '/total' } })
@@ -292,4 +306,39 @@ it('loads an existing webhook\'s address and shows a tool check\'s last poll', a
   expect(within(editor).getByText('cd'.repeat(32))).toBeInTheDocument()
   expect(within(editor).queryByText(/does not accept connections/)).not.toBeInTheDocument()
   expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'routine.webhook_info', body: { agent_id: 'scout', routine_id: 'build' } })
+})
+
+it('lists failed runs, replays one against the agent as it is now and links the new run', async () => {
+  const replay = { replay_id: 'rp1', agent_id: 'scout', trigger: { kind: 'webhook', routine_id: 'hook' }, error: 'The model could not complete this reply.', failed_at: '2026-01-01T14:05:00Z', redacted: true, replayed_by: [], prompt_preview: 'Summarize the build.', prompt_bytes: 20, definition_changed: true }
+  const run = { id: 'run-r', agent_id: 'scout', thread_id: null, status: 'queued', trigger: { kind: 'webhook', source: 'replay' }, origin_run_id: 'rp1' }
+  const { invoke, requests } = machine({ ...agent, routines: [] })
+  const answer = invoke.getMockImplementation()
+  invoke.mockImplementation(async (command, args) => {
+    if (args?.operation === 'agent.replays') { requests.push(args); return { replays: [replay], agent_version: 'v2' } }
+    if (args?.operation === 'agent.replay') { requests.push(args); return { run, replay: { ...replay, replayed_by: ['run-r'] } } }
+    return answer(command, args)
+  })
+  const onrun = vi.fn()
+  const onopenrun = vi.fn()
+  const view = render(AgentProfile, { agent: { ...agent, routines: [{ id: 'hook', name: 'Build finished', enabled: true, trigger: { kind: 'webhook' } }] }, tauri: { invoke }, catalog, onchange: vi.fn(), onrun, onopenrun })
+  const section = await screen.findByRole('region', { name: 'Failed runs' })
+  expect(await within(section).findByText('Webhook · Build finished')).toBeInTheDocument()
+  expect(section).toHaveTextContent('The agent changed since this failure. A replay uses it as it is now.')
+  expect(section).toHaveTextContent('Secrets in the input were removed.')
+  await fireEvent.click(within(section).getByRole('button', { name: 'Replay' }))
+  await waitFor(() => expect(requests).toContainEqual({ runtime: 'local', operation: 'agent.replay', body: { id: 'scout', replay_id: 'rp1' } }))
+  expect(onrun).toHaveBeenCalledWith({ ...run, runtimeId: 'local' })
+  expect(await within(section).findByText('Replayed 1 time.')).toBeInTheDocument()
+  expect(within(section).getByText('It links here once it starts.')).toBeInTheDocument()
+  await view.rerender({ runs: [{ ...run, runtimeId: 'local', status: 'running', thread_id: 'thread-r' }] })
+  await fireEvent.click(await within(section).findByRole('button', { name: 'Open run' }))
+  expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-r', thread_id: 'thread-r' }))
+})
+
+it('says when a machine has no failed runs and shows the agent\'s activity', async () => {
+  const { invoke } = machine()
+  render(AgentProfile, { agent, tauri: { invoke }, catalog, activity: { state: 'waiting', action: 'bash `git push`', since: null }, onchange: vi.fn(), onactivity: vi.fn() })
+  expect(await screen.findByText('No failed runs to replay.')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Open activity' })).toBeInTheDocument()
+  expect(screen.getByText('Waiting for you: bash `git push`')).toBeInTheDocument()
 })

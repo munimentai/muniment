@@ -30,8 +30,22 @@ describe('agents across machines', () => {
     expect(agentThreads(listing)).toEqual({ t1: 'a1', t9: 'a1' })
   })
 
+  it('names every thread of each agent from its own machine', async () => {
+    const tauri = { invoke: vi.fn(async (_, { runtime, operation, body }) => {
+      if (operation === 'agent.threads') {
+        if (runtime !== 'local') throw new Error('The agent action is unknown.')
+        return { threads: [{ thread_id: 't1', title: 'Morning', updated_at: '2026-01-01T09:00:00Z', primary: true }, { thread_id: 't2', title: 'Older', updated_at: '2025-12-30T09:00:00Z', primary: false }] }
+      }
+      return runtime === 'local' ? { agents: [{ id: 'a1' }], primary_threads: { a1: 't1' } } : { agents: [{ id: 'a2' }], primary_threads: { a2: 't5' } }
+    }) }
+    const listing = await listAgents(tauri, list)
+    expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.threads', body: { id: 'a1' } })
+    expect(listing.threads).toEqual({ a1: [expect.objectContaining({ thread_id: 't1' }), expect.objectContaining({ thread_id: 't2' })] })
+    expect(agentThreads(listing)).toEqual({ t1: 'a1', t2: 'a1', t5: 'a2' })
+  })
+
   it('leaves out a paired machine that fails and fails only when nothing answers', async () => {
-    const failing = (failed) => ({ invoke: vi.fn(async (_, { runtime }) => { if (failed.includes(runtime)) throw new Error(`${runtime} down`); return { agents: [{ id: runtime }] } }) })
+    const failing = (failed) => ({ invoke: vi.fn(async (_, { runtime, operation }) => { if (failed.includes(runtime)) throw new Error(`${runtime} down`); return operation === 'agent.threads' ? { threads: [] } : { agents: [{ id: runtime }] } }) })
     const listing = await listAgents(failing([studio.id]), list)
     expect(listing.agents.map((agent) => agent.id)).toEqual(['local'])
     expect(listing.unreachable).toEqual([studio.id])

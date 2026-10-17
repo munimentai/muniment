@@ -37,11 +37,10 @@
   import AgentAvatar from './lib/AgentAvatar.svelte'
   import AgentProfile from './lib/AgentProfile.svelte'
   import ActivityPanel from './agents/ActivityPanel.svelte'
-  import MachineMark from './agents/MachineMark.svelte'
   import { agentMachine, agentRequest, agentThreads, applyRunUpdate, emptyListing, listAgents, listRuns } from './agents/agent-runtime.js'
   import { notificationKey, notificationText, shouldNotify, showNotification } from './agents/notify.js'
   import { applyApproval, emptySwarm, listSwarm, postTarget, swarmRoster, swarmThreads } from './agents/swarm.js'
-  import { agentEnvelope, meetingSections, silentRun, timeline, visiblePosts } from './agents/transcript.js'
+  import { agentEnvelope, applyGroupPost, meetingSections, silentRun, timeline, visiblePosts } from './agents/transcript.js'
   import { agentMentions, insertAgentMention } from './agents/mentions.js'
   import { groupMembers } from './agents/groups.js'
   import AgentMessage from './agents/AgentMessage.svelte'
@@ -49,6 +48,12 @@
   import AgentMentions from './agents/AgentMentions.svelte'
   import GroupCreate from './agents/GroupCreate.svelte'
   import AbsencePrompt from './agents/AbsencePrompt.svelte'
+  import ApprovalList from './agents/ApprovalList.svelte'
+  import AgentStatus from './agents/AgentStatus.svelte'
+  import GroupMembers from './agents/GroupMembers.svelte'
+  import { agentActivity, applyActivity } from './agents/activity.js'
+  import { emptyCatalog, loadToolCatalog } from './agents/agent-tools.js'
+  import { threadApprovals } from './agents/approvals.js'
   import ChatComposer from './composer/ChatComposer.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
   import ThinkingPicker from './lib/ThinkingPicker.svelte'
@@ -398,7 +403,10 @@
   let swarm = $state(emptySwarm())
   // Every agent the sidebar and catalog list: the listed ones, then the ones
   // only the swarm directory names, each with its primary machine.
-  const roster = $derived(swarmRoster(agentListing, swarm, runtimeList))
+  // Each carries its activity: the newest `agent.activity` event, else what
+  // its machine or the swarm directory listed.
+  let liveActivity = $state({})
+  const roster = $derived(swarmRoster(agentListing, swarm, runtimeList).map(agent => ({ ...agent, activity: agentActivity(agent, liveActivity, swarm.agents) })))
   // Which agent each known thread belongs to, replicated threads included.
   const agentThreadMap = $derived({ ...swarmThreads(swarm), ...agentThreads(agentListing) })
   // The group whose thread is open, and its members.
@@ -803,15 +811,11 @@
   // Messages posted on swarm members, for the open thread.
   let threadPosts = $state({ threadId: null, posts: [] })
   const currentPosts = $derived(threadPosts.threadId === currentThreadId ? visiblePosts(threadPosts.posts) : [])
-  const postSections = $derived(new Map(meetingSections(currentPosts, threadGroup).map(({ post, section }) => [post.message_id, section])))
+  const postSections = $derived(new Map(meetingSections(currentPosts).map(({ post, section }) => [post.message_id, section])))
   const transcriptItems = $derived(timeline(messages, currentPosts))
-  // A group's replies arrive as posts with no chat event, so its thread reads
-  // again while it is open.
-  $effect(() => {
-    if (!threadGroup) return
-    const timer = setInterval(() => { if (!document.hidden) void chatController.refreshOpenThread() }, 5000)
-    return () => clearInterval(timer)
-  })
+  // Approvals waiting in the open thread. Each shows as an approval card at
+  // the end of the transcript in place of the run's own gate.
+  const openApprovals = $derived(threadApprovals(swarm.approvals, freshThread ? null : currentThreadId))
   // A catalog covers the thread, so the title bar names the catalog.
   const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? 'Projects' : '')
   let currentThreadTitle = $derived(threadAgent?.name || threadGroup?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
@@ -2182,8 +2186,10 @@
     const stops = []
     let destroyed = false
     for (const [event, handle] of [
-      ['agent-run-updated', (payload) => { agentRunUpdated(payload); if (threadGroup) void chatController.refreshOpenThread() }],
+      ['agent-run-updated', agentRunUpdated],
       ['swarm-changed', swarmChanged],
+      ['agent-activity', (payload) => { liveActivity = applyActivity(liveActivity, payload) }],
+      ['group-posted', (payload) => { threadPosts = applyGroupPost(threadPosts, payload) }],
       ['agent-approval-pending', approvalChanged],
       ['agent-approval-resolved', approvalChanged],
     ]) {
@@ -2191,21 +2197,21 @@
     }
     return () => { destroyed = true; for (const stop of stops) stop?.() }
   })
-  // The installed skills and MCP servers an agent profile offers. They are
-  // this computer's extensions.
-  let agentSkills = $state([])
-  let agentServers = $state([])
-  const profileAgentKey = $derived(agentProfileOpen && profileAgent ? `${profileAgent.runtimeId}:${profileAgent.id}` : null)
+  // The tools, skills and MCP servers an agent profile offers: core's
+  // `agent.tool_catalog` from the agent's own machine.
+  let agentCatalog = $state(emptyCatalog())
+  const profileAgentKey = $derived(agentProfileOpen && profileAgent && !profileAgent.replica ? `${profileAgent.runtimeId}:${profileAgent.id}` : null)
+  const profileRuntime = $derived(profileAgentKey ? profileAgent.runtimeId : null)
   $effect(() => {
-    if (!profileAgentKey) return
+    const runtime = profileRuntime
+    if (!runtime) return
+    let current = true
     untrack(() => {
-      void tauri.invoke('extend_command', { action: 'read', data: {} }).then(state => {
-        const items = state?.items ?? []
-        agentSkills = items.filter(item => item.kind === 'skill' || item.kind === 'plugin').map(item => ({ id: item.id, name: item.name }))
-        agentServers = items.filter(item => item.kind === 'mcp').map(item => item.name)
-      }).catch(() => {})
+      agentCatalog = emptyCatalog()
+      void loadToolCatalog(tauri, runtime).then(catalog => { if (current) agentCatalog = catalog })
       if (!activityRuns.length) void refreshRuns()
     })
+    return () => { current = false }
   })
 
   // A hidden window skips the poll and refreshes once when it shows again.
@@ -2716,7 +2722,7 @@
           <div class="titlebar-thread" data-tauri-drag-region>
             {#if catalogTitle}<span class="catalog-title" data-tauri-drag-region>{catalogTitle}</span>
             {:else}
-            {#if threadAgent}<button class="quiet agent-chat-title" aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} size={20} /><span>{threadAgent.name}</span></button>{/if}
+            {#if threadAgent}<button class="quiet agent-chat-title" aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
             {#if !threadAgent}
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
@@ -2768,14 +2774,14 @@
               </button>
             </div>
             <div class="side-scroll" use:panelScroll>
-            {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} onresumed={() => refreshAgents()} />{/if}
+            {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
             <section class="sidebar-collection" aria-label="Agents group">
               <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} running={!agentsExpanded && !!backgroundRunAgent} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
               {#if agentsExpanded}<div class="collection-children">
             {#if roster.length}
               <div class="agent-roster" aria-label="Saved agents">
                 {#each roster.filter(agent=>!catalogArchived('agent',agent)) as agent (`${agent.runtimeId}:${agent.id}`)}
-                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} size={20} /><span>{agent.name}</span>{#if showAgentMachines}<MachineMark machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} named={false} />{/if}{#if agent.online === false}<em class="agent-offline"><LucideIcon name="globe-off" size={12} /><span class="visually-hidden">Offline</span></em>{/if}{#if agent.replica}<span class="agent-synced"><LucideIcon name="refresh-cw" size={12} /><em class="visually-hidden">Synced copy</em></span>{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
+                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} activity={agent.activity} tooltip={false} size={20} /><span>{agent.name}</span>{#if showAgentMachines || agent.online === false || agent.replica || (agent.activity && agent.activity.state !== 'idle')}<AgentStatus {agent} activity={agent.activity} machine={showAgentMachines || agent.replica ? agent.primaryMachine ?? agentMachine(runtimeList, agent) : null} />{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
                 {/each}
               </div>
             {/if}
@@ -2788,6 +2794,7 @@
               {#if groupsExpanded && swarm.groups.length}<div class="collection-children"><div class="agent-roster" aria-label="Group chats">
                 {#each swarm.groups as group (group.group_id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={group.thread_id === currentThreadId ? 'true' : undefined} disabled={switchLocked} onclick={() => openGroup(group).catch(error => { submitError = String(error) })}><LucideIcon name="users" /><span>{group.name}</span>{#if group.meeting_mode}<em class="visually-hidden">Meeting</em>{/if}</button></div>{/each}
               </div></div>{/if}
+              {#if !swarm.groups.length}<div class="collection-children"><button class="side-action group-empty" disabled={switchLocked} onclick={() => { groupCreateOpen = true }}><LucideIcon name="plus" /><span>Start a group chat</span></button></div>{/if}
             </section>
             {/if}
             <section class="sidebar-collection" aria-label="Artifacts group">
@@ -2963,7 +2970,7 @@
               {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry prepares the message for review.</span> <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button></div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
-              {#if message.run.phase === 'pending-permission' && message.run.pendingPermission}
+              {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && !openApprovals.some(approval => approval.run_id === message.run.id)}
                 {@const gate = message.run.pendingPermission}
                 {@const answerState = permissionState(message.run)}
                 {#if gate.kind === 'editor' && gate.title === 'muniment:ask_user_question'}
@@ -3082,6 +3089,8 @@
 
             </div>{/if}{/if}
           {/each}
+          {#if openApprovals.length}<div class="thread-approvals"><ApprovalList {tauri} inline approvals={openApprovals} agents={roster} {swarm} {runtimeList} live={liveActivity}
+            onanswered={(approval, result) => { if (result?.status === 'answered') swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) } }} /></div>{/if}
         </div>
         <!-- Always mounted so the region is live before text lands in it; atomic so each
              run phase is read as one sentence, and never re-read per streamed chunk. -->
@@ -3192,7 +3201,9 @@
             <div class="composer-meta">
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
             <MachinePicker list={runtimeList} locked={threadMachine} disabled={switchLocked || !!active} onselect={selectRuntime} onmanage={() => openSettings('runtimes')} />
-            {#if auth.name === 'local'}
+            {#if threadGroup}
+              <GroupMembers members={threadGroupMembers} live={(agent) => roster.find(entry => entry.id === agent.id)?.activity} />
+            {:else if auth.name === 'local'}
               <ComposerMenuButton menu="model" open={pickerOpen} chevrons haspopup="dialog" label={`Model: ${modelSourceLabel}`} text={modelSourceLabel} compact={chipModel ? null : unconnectedModelIcon} bind:element={modelChip} onclick={togglePicker}>
                 {#snippet icon()}{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}{/snippet}
               </ComposerMenuButton>
@@ -3311,16 +3322,16 @@
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div class="artifact-divider agent-divider" role="separator" aria-label="Agent profile width" aria-orientation="vertical" aria-valuemin="240" aria-valuemax={agentPanelMaximum} aria-valuenow={agentPanelWidth} tabindex="0" onpointerdown={agentResize.pointerDown} onpointermove={agentResize.pointerMove} onpointerup={agentResize.pointerEnd} onpointercancel={agentResize.pointerEnd} onkeydown={agentResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
       {#key `${profileAgent.runtimeId}:${profileAgent.id}`}<AgentProfile agent={profileAgent} {tauri} projects={projectRows} run={agentListing.latestRuns[profileAgent.id]}
-        runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} skills={agentSkills} servers={agentServers}
+        runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} threads={agentListing.threads?.[profileAgent.id] ?? []}
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings}
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; profileOnlyAgent = null; void refreshAgents() }}
-        onopen={(id) => chatController.openThread(id, true)} />{/key}
+        onopen={(id) => chatController.openThread(id, true)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onactivity={() => showActivity()} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
-  {#if activityOpen}<ActivityPanel {tauri} runs={activityRuns} agents={roster} approvals={swarm.approvals} {swarm} {runtimeList} loading={activityLoading} error={activityError} unreachable={agentListing.unreachable} onrefresh={() => refreshAgentsAndRuns()} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
-    onanswered={(approval, result) => { if (result?.status !== 'sent') swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) } }}
+  {#if activityOpen}<ActivityPanel {tauri} runs={activityRuns} agents={roster} approvals={swarm.approvals} {swarm} {runtimeList} live={liveActivity} onagents={() => showAgents()} loading={activityLoading} error={activityError} unreachable={agentListing.unreachable} onrefresh={() => refreshAgentsAndRuns()} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
+    onanswered={(approval, result) => { if (result?.status === 'answered') swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) } }}
     onopenapproval={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); groupsExpanded = true; await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
@@ -3371,9 +3382,7 @@
 
 <style>
   .catalog-sidebar-row {display:flex;align-items:center;min-width:0;border-radius:var(--radius-control)}
-  .catalog-sidebar-row .side-action {flex:1;min-width:0}
-  .agent-offline { display: inline-flex; flex: none; color: var(--ochre); }
-  .agent-synced { display: inline-flex; flex: none; color: var(--muted); }
+  .catalog-sidebar-row .side-action {position:relative;flex:1;min-width:0}
   .catalog-sidebar-row :global(.catalog-actions) {opacity:0}
   .catalog-sidebar-row:hover :global(.catalog-actions), .catalog-sidebar-row:focus-within :global(.catalog-actions), .catalog-sidebar-row :global(.catalog-actions.opened) {opacity:1}
   @media (hover:none) { .catalog-sidebar-row :global(.catalog-actions) {opacity:1} }
@@ -3683,6 +3692,8 @@
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   .user-turn { margin: 0 0 28px auto; }
   .agent-turn { margin: 0 0 16px; }
+  .thread-approvals { max-width: 760px; margin: 16px auto; }
+  .side-action.group-empty { color: var(--muted); }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
   .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); }
   .user-turn:hover .message-actions, .user-turn:focus-within .message-actions { opacity: 1; }

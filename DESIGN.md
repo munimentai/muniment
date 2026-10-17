@@ -50,7 +50,7 @@ device beside the theme and the shipped pair stays the default.
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
 Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide. `prefers-reduced-motion` removes all of it.
+rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide, a running agent's outline. `prefers-reduced-motion` removes all of it.
 
 ## Laws
 
@@ -99,7 +99,7 @@ writes, raises its front on the hind hip with both feet down and curls its trunk
 
 Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
 Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. The Agents, Artifacts and Projects catalogs share PanelPage and PageHead with Settings, so an intro, not a title, leads each. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
-messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Agent avatars are the brand's MunimentAvatar tiles, whose fixed brand palette stands outside the color law. Responses sit plain on
+messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Agent avatars are heads with no tile from the brand's two generators, Colorful by default or Muniment as Appearance picks, in the theme's light or dark tone; their palettes stand outside the color law. An outline on the head names what the agent does: signal breathing while it runs, ochre while it waits, oxide after a failure. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
@@ -122,7 +122,7 @@ composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
 controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small mono meta line over its title, the machine's shape and name once a machine is paired, then the time ago. Hover is a lighter wash than the open thread,
-New thread leads the sidebar, followed by Agents, Groups once a machine is in a swarm, Artifacts, Activity and title search, with no static Threads heading. Activity counts the agent runs that raised a notification since it last opened and the approvals waiting, in a mono chip, and lists those approvals above the runs. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers and every agent the swarm knows, each row and card with its primary machine's shape icon, an ochre slashed globe when that machine does not answer and a sync icon on a synced copy, and Artifacts and Projects open on this computer.
+New thread leads the sidebar, followed by Agents, Groups once a machine is in a swarm, Artifacts, Activity and title search, with no static Threads heading. Activity counts the agent runs that raised a notification since it last opened and the approvals waiting, in a mono chip, and lists those approvals above the runs. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers and every agent the swarm knows, each card with its primary machine's shape icon, an ochre slashed globe when that machine does not answer and a sync icon on a synced copy, and each row with one status mark, ochre when the machine does not answer and a ring on a synced copy, whose hover names the machine and the activity, and Artifacts and Projects open on this computer.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
 Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.

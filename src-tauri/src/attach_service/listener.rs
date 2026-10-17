@@ -146,15 +146,18 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
         SubscriptionEvent::AgentRunUpdated(_)
         | SubscriptionEvent::SwarmChanged(_)
         | SubscriptionEvent::ApprovalPending(_)
-        | SubscriptionEvent::ApprovalResolved(_) => {}
+        | SubscriptionEvent::ApprovalResolved(_)
+        | SubscriptionEvent::AgentActivity(_)
+        | SubscriptionEvent::GroupPosted(_) => {}
     }
 }
 
 /// Hands one runtime's agent or swarm event to the window whichever runtime
 /// is selected: `agent-run-updated` `{runtimeId, run}`, `swarm-changed`
-/// `{runtimeId, change}`, and `agent-approval-pending` or
-/// `agent-approval-resolved` `{runtimeId, approval}`. Any other event comes
-/// back to the caller.
+/// `{runtimeId, change}`, `agent-approval-pending` or
+/// `agent-approval-resolved` `{runtimeId, approval}`, `agent-activity`
+/// `{runtimeId, update}` and `group-posted` `{runtimeId, posted}`. Any other
+/// event comes back to the caller.
 #[cfg(any(unix, target_os = "windows"))]
 pub(crate) fn deliver_agent_event<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -170,6 +173,8 @@ pub(crate) fn deliver_agent_event<R: tauri::Runtime>(
         SubscriptionEvent::ApprovalResolved(approval) => {
             ("agent-approval-resolved", "approval", approval)
         }
+        SubscriptionEvent::AgentActivity(update) => ("agent-activity", "update", update),
+        SubscriptionEvent::GroupPosted(posted) => ("group-posted", "posted", posted),
         event => return Some(event),
     };
     let _ = app.emit(name, serde_json::json!({"runtimeId": runtime_id, field: body}));
@@ -301,7 +306,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_with_swarm(cursor)?;
+                    client.subscribe_chat_events_with_swarm_live(cursor)?;
                     Ok(client)
                 })
             {
@@ -330,7 +335,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_with_swarm(cursor)?;
+                    client.subscribe_chat_events_with_swarm_live(cursor)?;
                     Ok(client)
                 })
             {

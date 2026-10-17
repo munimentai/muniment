@@ -52,6 +52,7 @@
 
 <AgentDialog title="Import agent" panel="import" {busy} width={600} {onclose}>
   {#if !preview}
+    <p class="intro">Bring in an agent from a share link, a template file or pasted text. Nothing saves until you import.</p>
     <div class="ways" role="radiogroup" aria-label="Import from">
       {#each [['link', 'Share link'], ['file', 'File'], ['paste', 'Paste']] as [value, label] (value)}
         <label class="way"><input type="radio" name="import-way" {value} bind:group={way} disabled={busy} />{label}</label>
@@ -72,9 +73,8 @@
   {:else}
     <div class="profile">
       <AgentAvatar agent={{ ...preview.agent, id: preview.agent.id || preview.agent.name }} size={40} />
-      <div><strong>{preview.agent.name}</strong>{#if preview.agent.label}<span class="muted">{preview.agent.label}</span>{/if}</div>
+      <div><strong>{preview.agent.name}</strong>{#if preview.agent.label}<span class="muted">{preview.agent.label}</span>{/if}<span class="record">{facts.source}</span></div>
     </div>
-    <p class="record">{facts.source}</p>
     {#if facts.coverage}<p class="warning" role="note">{facts.coverage}</p>{/if}
     {#if preview.agent.instructions}<p class="instructions">{preview.agent.instructions}</p>{/if}
     <section aria-label="Routines">
@@ -87,13 +87,13 @@
       <h3>Skills</h3>
       {#each preview.skills?.matched ?? [] as skill (skill.id)}<p class="item">{skill.name}<span class="record">installed</span></p>{/each}
       {#each preview.skills?.proposals ?? [] as skill (skill.name)}<p class="item">{skill.name}<span class="record">kept as reference text</span></p>{/each}
-      {#if !preview.skills?.matched?.length && !preview.skills?.proposals?.length}<p class="note">None.</p>{/if}
+      {#if !preview.skills?.matched?.length && !preview.skills?.proposals?.length}<p class="note">The template names no skills.</p>{/if}
     </section>
     <section aria-label="Setup">
       <h3>Tools</h3>
       {#each preview.tools?.matched ?? [] as tool (tool.name)}<p class="item">{tool.name}<span class="record">installed</span></p>{/each}
       {#each preview.tools?.setup ?? [] as tool (tool.name)}<p class="item">{tool.name}<span class="record">set up in Extend</span></p>{/each}
-      {#if !preview.tools?.matched?.length && !preview.tools?.setup?.length}<p class="note">None.</p>{/if}
+      {#if !preview.tools?.matched?.length && !preview.tools?.setup?.length}<p class="note">The template names no tools.</p>{/if}
     </section>
     {#if preview.memories?.length}
       <label class="check"><input type="checkbox" bind:checked={keepMemories} disabled={busy} />Import {preview.memories.length} {preview.memories.length === 1 ? 'memory' : 'memories'} as outside facts</label>
@@ -120,11 +120,12 @@
   textarea { resize: vertical; line-height: 1.5; }
   .mono, .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .record { color: var(--muted); }
-  .profile { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
-  .profile div { display: grid; gap: 2px; }
+  .intro { margin: 0; color: var(--muted); font-size: var(--text-13); line-height: 1.5; }
+  .profile { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .profile div { display: grid; gap: 2px; min-width: 0; }
   .muted { color: var(--muted); font-size: var(--text-13); }
   .instructions { margin: 0; max-height: 120px; overflow-y: auto; white-space: pre-wrap; font-size: var(--text-13); line-height: 1.5; }
-  section { display: grid; gap: 4px; }
+  section { display: grid; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
   h3 { margin: 4px 0 0; color: var(--muted); font-size: var(--text-12); font-weight: 500; }
   ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
   li, .item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: var(--text-13); }
