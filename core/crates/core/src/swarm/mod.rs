@@ -27,6 +27,7 @@
 //! The runtime supplies what only it can do through [`SwarmHost`].
 
 mod absence;
+mod accounts;
 mod approvals;
 mod credentials;
 mod directory;
@@ -42,6 +43,8 @@ mod store;
 mod sync;
 pub mod wire;
 
+#[cfg(test)]
+mod class_tests;
 #[cfg(test)]
 mod exchange_tests;
 #[cfg(test)]
@@ -779,6 +782,14 @@ impl Inner {
         lock(&self.identity)
             .as_ref()
             .map(|identity| identity.runtime_id.clone())
+    }
+
+    /// This runtime's machine name, once remote access gave it one.
+    pub(crate) fn runtime_name(&self) -> Option<String> {
+        lock(&self.identity)
+            .as_ref()
+            .map(|identity| identity.runtime_name.clone())
+            .filter(|name| !name.is_empty())
     }
 
     /// The member id this runtime writes records under.

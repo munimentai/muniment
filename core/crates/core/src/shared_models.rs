@@ -329,6 +329,82 @@ pub fn connection_names(bundle: &Bundle) -> Vec<String> {
         .collect()
 }
 
+/// What this computer's own connections are, without their secrets: one
+/// object per connection named `pi:<provider>` or `router:<id>`, with its
+/// provider, its kind (`api_key`, `oauth` or `subscription`), its label and
+/// email when known, and whether this computer refreshes it. Connections
+/// other devices share here stay out.
+pub fn own_accounts(agent: &Path) -> Result<Vec<Value>, String> {
+    const READ_ERROR: &str =
+        "This computer cannot read its model connections. Check folder access.";
+    let received = if agent.join(RECORD_FILE).is_file() {
+        received_connections(agent)?
+    } else {
+        BTreeSet::new()
+    };
+    let mut accounts = Vec::new();
+    let auth = pi_models::read_json(&agent.join("auth.json")).map_err(|_| READ_ERROR)?;
+    for (provider, entry) in &auth {
+        let name = format!("pi:{provider}");
+        if received.contains(&name) {
+            continue;
+        }
+        let kind = entry["type"].as_str().unwrap_or_default();
+        if !matches!(kind, "api_key" | "oauth") {
+            continue;
+        }
+        let refresher = kind == "oauth"
+            && entry["refresh"]
+                .as_str()
+                .is_some_and(|refresh| !refresh.is_empty());
+        accounts.push(serde_json::json!({
+            "name": name,
+            "provider": provider,
+            "kind": kind,
+            "label": provider,
+            "refresher": refresher,
+        }));
+    }
+    let settings = config::load(agent).map_err(|_| READ_ERROR)?;
+    for account in settings.accounts {
+        if account.id.starts_with(SHARED_ACCOUNT_PREFIX) {
+            continue;
+        }
+        let (kind, provider, refresher) = match &account.credential {
+            Credential::ApiKey { .. } => ("api_key", account.family.clone(), false),
+            Credential::Subscription {
+                provider, refresh, ..
+            } => (
+                "subscription",
+                provider.clone(),
+                refresh
+                    .as_deref()
+                    .is_some_and(|refresh| !refresh.is_empty()),
+            ),
+        };
+        let mut value = serde_json::json!({
+            "name": format!("router:{}", account.id),
+            "provider": provider,
+            "family": account.family,
+            "kind": kind,
+            "label": account.label,
+            "refresher": refresher,
+            "enabled": account.enabled,
+        });
+        if let Some(email) = account.email() {
+            value["email"] = email.into();
+        }
+        if let Credential::Subscription {
+            plan: Some(plan), ..
+        } = &account.credential
+        {
+            value["plan"] = plan.clone().into();
+        }
+        accounts.push(value);
+    }
+    Ok(accounts)
+}
+
 /// Takes this computer's own sign-in `name` (`pi:<provider>` or
 /// `router:<id>`) out of its store with its refresh token, so another
 /// machine becomes its one refresher. Refuses a connection another device

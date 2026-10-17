@@ -13,8 +13,8 @@ use crate::model_router::config::{self, Account, Credential};
 use crate::shared_models::{self, CloudSession};
 use muniment_models::pi_models;
 
-struct FleetHost {
-    session: Option<CloudSession>,
+pub(super) struct FleetHost {
+    pub(super) session: Option<CloudSession>,
 }
 
 impl SwarmHost for FleetHost {
@@ -42,11 +42,11 @@ impl SwarmHost for FleetHost {
     }
 }
 
-struct Node {
-    swarm: Swarm,
-    id: String,
-    root: PathBuf,
-    cert: String,
+pub(super) struct Node {
+    pub(super) swarm: Swarm,
+    pub(super) id: String,
+    pub(super) root: PathBuf,
+    pub(super) cert: String,
 }
 
 impl Drop for Node {
@@ -56,11 +56,11 @@ impl Drop for Node {
 }
 
 impl Node {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         Self::with_session(name, None)
     }
 
-    fn with_session(name: &str, session: Option<CloudSession>) -> Self {
+    pub(super) fn with_session(name: &str, session: Option<CloudSession>) -> Self {
         let root =
             std::env::temp_dir().join(format!("swarm-fleet-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -89,46 +89,46 @@ impl Node {
         }
     }
 
-    fn inner(&self) -> &Inner {
+    pub(super) fn inner(&self) -> &Inner {
         &self.swarm.inner
     }
 
-    fn agent(&self) -> PathBuf {
+    pub(super) fn agent(&self) -> PathBuf {
         crate::state_root::agent_directory(&self.root)
     }
 
-    fn auth(&self) -> serde_json::Map<String, Value> {
+    pub(super) fn auth(&self) -> serde_json::Map<String, Value> {
         pi_models::read_json(&self.agent().join("auth.json")).unwrap()
     }
 
-    fn write_auth(&self, auth: Value) {
+    pub(super) fn write_auth(&self, auth: Value) {
         std::fs::create_dir_all(self.agent()).unwrap();
         pi_models::write_json(&self.agent().join("auth.json"), auth.as_object().unwrap()).unwrap();
     }
 
-    fn share(&self) {
+    pub(super) fn share(&self) {
         credentials::credentials_operation(self.inner(), json!({"share_models": true})).unwrap();
     }
 
-    fn pass(&self) {
+    pub(super) fn pass(&self) {
         self.swarm.fleet_pass().unwrap();
     }
 
-    fn view(&self) -> Arc<fleet::View> {
+    pub(super) fn view(&self) -> Arc<fleet::View> {
         fleet::view(self.inner()).unwrap()
     }
 
-    fn sealed(&self, secret_id: &str) -> Option<SealedSecret> {
+    pub(super) fn sealed(&self, secret_id: &str) -> Option<SealedSecret> {
         fleet::sealed(self.inner(), secret_id).unwrap()
     }
 
-    fn open(&self, secret: &SealedSecret) -> Result<Option<Value>, String> {
+    pub(super) fn open(&self, secret: &SealedSecret) -> Result<Option<Value>, String> {
         let keys = fleet::keys(self.inner()).unwrap();
         fleet::open(&keys, &self.id, secret)
             .map(|bytes| bytes.map(|bytes| serde_json::from_slice(&bytes).unwrap()))
     }
 
-    fn audit(&self, kind: &str) -> Vec<Value> {
+    pub(super) fn audit(&self, kind: &str) -> Vec<Value> {
         let connection = self.inner().store.connect().unwrap();
         let mut statement = connection
             .prepare("SELECT record FROM fleet_audit WHERE kind=?1 ORDER BY seq")
@@ -142,14 +142,14 @@ impl Node {
 }
 
 /// Carries an exchange through JSON, as a link does.
-fn wire(exchange: &Exchange) -> Exchange {
+pub(super) fn wire(exchange: &Exchange) -> Exchange {
     serde_json::from_slice(&serde_json::to_vec(exchange).unwrap()).unwrap()
 }
 
 /// One exchange from `dialer` to `answerer` and back. The dialer pinned the
 /// answerer's certificate, so it vouches for the card the answer carries.
 /// Answers what the answerer sent back.
-fn round(dialer: &Node, answerer: &Node) -> Exchange {
+pub(super) fn round(dialer: &Node, answerer: &Node) -> Exchange {
     fleet::note_pinned(&answerer.id);
     let request = wire(&dialer.inner().build_exchange(&answerer.id).unwrap());
     fleet::note_device(&dialer.id, &format!("device-{}", dialer.id));
@@ -168,7 +168,7 @@ fn round(dialer: &Node, answerer: &Node) -> Exchange {
 }
 
 /// Runs a few rounds over each link so everything relays end to end.
-fn settle_links(links: &[(&Node, &Node)]) {
+pub(super) fn settle_links(links: &[(&Node, &Node)]) {
     for _ in 0..4 {
         for (dialer, answerer) in links {
             round(dialer, answerer);
@@ -180,7 +180,7 @@ fn settle_links(links: &[(&Node, &Node)]) {
 }
 
 /// `joiner` redeems an invitation `inviter` issued with `role`.
-fn join(joiner: &Node, inviter: &Node, role: Role) {
+pub(super) fn join(joiner: &Node, inviter: &Node, role: Role) {
     let secret = uuid::Uuid::new_v4().simple().to_string();
     fleet::note_invite(inviter.inner(), &secret, role, "2999-01-01T00:00:00Z").unwrap();
     fleet::note_join(joiner.inner(), &inviter.id, &secret).unwrap();
@@ -188,7 +188,7 @@ fn join(joiner: &Node, inviter: &Node, role: Role) {
     round(joiner, inviter);
 }
 
-fn api_key(key: &str) -> Value {
+pub(super) fn api_key(key: &str) -> Value {
     json!({"type": "api_key", "key": key})
 }
 

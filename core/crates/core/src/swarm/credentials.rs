@@ -101,6 +101,9 @@ fn fleet_pub(view: &View, runtime_id: &str) -> Option<(String, String)> {
 /// it hands over is never refreshed here at the same time.
 pub(super) fn pass(inner: &Inner) -> Result<(), String> {
     let _refresh = lock(&inner.fleet.refresh);
+    if let Err(error) = super::accounts::publish(inner, sharing(inner)?) {
+        crate::runtime_eprintln!("muniment-runtime: swarm account records failed: {error}");
+    }
     let keys = fleet::keys(inner)?;
     let view = fleet::view(inner)?;
     if view.self_removed() || view.role(&view.self_id) != Some(Role::Full) {
@@ -367,6 +370,14 @@ fn opened(inner: &Inner) -> Result<BTreeMap<String, (u64, Value)>, String> {
         );
     }
     Ok(opened)
+}
+
+/// The connection names this runtime applied from one sealed secret.
+pub(super) fn opened_keys(inner: &Inner, secret_id: &str) -> Result<Vec<String>, String> {
+    Ok(opened(inner)?
+        .remove(secret_id)
+        .and_then(|(_, state)| serde_json::from_value(state["keys"].clone()).ok())
+        .unwrap_or_default())
 }
 
 fn opened_states(inner: &Inner, prefix: &str) -> Result<Vec<Value>, String> {
@@ -843,7 +854,8 @@ pub(super) fn on_hold_request(inner: &Inner, message: &Message) -> Result<(), St
 
 /// `fleet.credentials {share_models?}`: turns sharing this runtime's model
 /// connections with the fleet on or off, and shows the sealed secrets this
-/// runtime holds and its recent fleet log.
+/// runtime holds, every account in the fleet with its holder, and its recent
+/// fleet log.
 pub(super) fn credentials_operation(inner: &Inner, body: Value) -> Result<Value, String> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -912,6 +924,7 @@ pub(super) fn credentials_operation(inner: &Inner, body: Value) -> Result<Value,
         "role": view.role(&view.self_id).map(Role::as_str),
         "removed": view.self_removed(),
         "secrets": secrets,
+        "accounts": super::accounts::view(inner),
         "audit": audit,
     }))
 }
