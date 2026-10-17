@@ -23,8 +23,9 @@ use common::TemporaryProfile;
 /// The tests change process-wide stub settings, so they run one at a time.
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-const STUB_SETTINGS: [&str; 10] = [
+const STUB_SETTINGS: [&str; 11] = [
     "PI_RESUME_STUB_AGENT_GATE",
+    "PI_RESUME_STUB_PERMISSION_MODE",
     "PI_RESUME_STUB_PLAN",
     "PI_RESUME_STUB_STEER_CAPTURE",
     "PI_RESUME_STUB_PERMISSION_CAPTURE",
@@ -560,6 +561,45 @@ fn an_agent_runs_on_its_model_and_thinking_without_disabled_tools_behind_its_gat
     .unwrap();
     let verdict: Value = serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
     assert_eq!(verdict["decision"], "allow");
+}
+
+#[test]
+fn an_agent_run_answers_the_permission_mode_its_gate_asks_before_the_prompt_starts() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new(
+        "agent-runs-mode-before-prompt",
+        true,
+        RuntimeHost::default(),
+    );
+    let capture = setup.temporary.root.join("editor.jsonl");
+    std::env::set_var("PI_RESUME_STUB_PERMISSION_MODE", "1");
+    std::env::set_var("PI_RESUME_STUB_EDITOR_CAPTURE", &capture);
+    let agent: Agent = serde_json::from_value(json!({
+        "name": "Planner",
+        "instructions": "Plan first.",
+        "permissions": {"mode": "ask"}
+    }))
+    .unwrap();
+    let agent = agents::save(setup.profile(), agent).unwrap();
+    let run = enqueue(&setup.store(), &agent.id, TriggerKind::Manual);
+    setup.tick();
+    assert!(wait(|| setup.live() == 0));
+    setup.tick();
+
+    assert_eq!(setup.run(&run.id).status, RunStatus::Completed);
+    let answer: Value = serde_json::from_str(
+        std::fs::read_to_string(&capture)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(answer["id"], "permission-mode-1");
+    let mode: Value = serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
+    assert!(mode["mode"].is_string(), "{mode}");
 }
 
 /// A host whose account is signed in as one subject.

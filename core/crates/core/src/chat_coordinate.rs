@@ -905,7 +905,38 @@ fn coordinate_work(
     diagnostics.prompt_submitted = true;
     let mut gateway_failure = None;
     let (adapter, buffered_events) = if let Some(resume) = &resume {
-        let adapter = match engine.resume(&transport, &run_id, &resume.locator, &prompt) {
+        let resumed = engine.resume(
+            &transport,
+            &run_id,
+            &resume.locator,
+            &prompt,
+            &mut |adapter, event| {
+                answer_thread_title(&journal, adapter, &transport, &run_id, &prompt, event)
+                    || answer_gateway_boundary(
+                        &app,
+                        adapter,
+                        &transport,
+                        &mut grant,
+                        &mut access_token,
+                        &mut gateway_failure,
+                        event,
+                    )
+                    || coordinate_agent_permission(
+                        &app,
+                        &journal,
+                        adapter,
+                        &transport,
+                        &agent_permissions,
+                        &mut auto_review,
+                        agent_id.as_deref(),
+                        &mut asked_policies,
+                        &run_id,
+                        subject.as_deref(),
+                        event,
+                    )
+            },
+        );
+        let adapter = match resumed {
             Ok(value) => value,
             Err(error) => {
                 diagnostics.prompt_failed(&error);
@@ -1078,6 +1109,18 @@ fn coordinate_work(
                                 &mut grant,
                                 &mut access_token,
                                 &mut gateway_failure,
+                                event,
+                            ) || coordinate_agent_permission(
+                                &app,
+                                &journal,
+                                adapter,
+                                &transport,
+                                &agent_permissions,
+                                &mut auto_review,
+                                agent_id.as_deref(),
+                                &mut asked_policies,
+                                &run_id,
+                                subject.as_deref(),
                                 event,
                             )
                         },

@@ -194,13 +194,15 @@ pub trait AgentEngine {
     ) -> Result<(Self::Locator, Vec<EngineEvent>), String>;
 
     /// Continues a reply that a crash interrupted, in the conversation the
-    /// journal names.
+    /// journal names. `intercept` sees each event that arrives before the
+    /// engine accepts the continuation, as for `submit`.
     fn resume(
         &self,
         conversation: &Self::Conversation,
         run_id: &str,
         locator: &Self::Locator,
         continuation: &str,
+        intercept: &mut dyn FnMut(&Self::Turn, &EngineEvent) -> bool,
     ) -> Result<Self::Turn, String>;
 
     /// Delivers a message to the running turn now, or after it ends.

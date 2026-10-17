@@ -169,6 +169,79 @@ fn an_interrupted_run_resumes_after_an_update_with_a_notice() {
 }
 
 #[test]
+fn a_resumed_run_answers_the_permission_mode_its_gate_asks_before_the_continuation_starts() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    common::use_test_prompt_store();
+    let temporary = TemporaryProfile::new("update-resume-mode", false);
+    let profile = temporary.profile.clone();
+    fs::write(
+        profile.join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        "1",
+    )
+    .unwrap();
+    let artifact = stage_pi_stub(&profile);
+    let capture = temporary.root.join("editor.jsonl");
+    std::env::set_var("PI_RESUME_STUB_PERMISSION_MODE", "1");
+    std::env::set_var("PI_RESUME_STUB_EDITOR_CAPTURE", &capture);
+    let run_id = "018f0000-0000-7000-8000-000000000203";
+    let thread_id = interrupted_run(&profile, run_id);
+    write_resume_ledger(
+        &profile,
+        &ResumeLedger {
+            interrupted: vec![InterruptedRun {
+                run_id: run_id.into(),
+                thread_id,
+                workspace: "local".into(),
+                permission_gate: false,
+            }],
+            ..ResumeLedger::default()
+        },
+    )
+    .unwrap();
+
+    let state = RuntimeAttachState::open(RuntimeHost::default(), &profile, &profile).unwrap();
+    state.resume_interrupted_runs_with(state.boundaries().with_pi_artifact(artifact));
+
+    let storage = open_profile_storage(&profile).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let events = loop {
+        let events = storage.lock().unwrap().journal.events(run_id).unwrap();
+        let finished = events.iter().any(|event| {
+            matches!(
+                event.event_type.as_str(),
+                "run.completed" | "run.failed" | "run.cancelled"
+            )
+        });
+        if finished || Instant::now() > deadline {
+            break events;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    std::env::remove_var("PI_RESUME_STUB_PERMISSION_MODE");
+    std::env::remove_var("PI_RESUME_STUB_EDITOR_CAPTURE");
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|event| event.event_type.as_str())
+        .collect();
+    assert!(kinds.contains(&"run.resumed"), "{kinds:?}");
+    assert!(kinds.contains(&"run.completed"), "{kinds:?}");
+    let answer: muniment_core::serde_json::Value = muniment_core::serde_json::from_str(
+        fs::read_to_string(&capture)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(answer["id"], "permission-mode-1");
+    drop(storage);
+    drop(state);
+    std::env::remove_var("MUNIMENT_PI_ROOT");
+}
+
+#[test]
 fn a_drain_records_every_live_run_and_the_restart_resumes_each_one() {
     use muniment_core::run_start::RunAttachBoundaries;
     let _environment = ENVIRONMENT
