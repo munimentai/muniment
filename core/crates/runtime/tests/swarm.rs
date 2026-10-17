@@ -2272,9 +2272,13 @@ fn a_worker_holds_only_its_own_agents_and_relays_nothing() {
         prompted(&w, &builder.id, "Ship it.") == 1
     }));
     // The owner logged the action with its actor, origin and result.
-    assert!(wait(|| w.audit().iter().any(|entry| entry["kind"] == "op"
-        && entry["record"]["origin"] == a.runtime_id()
-        && entry["record"]["result"] == "delivered")));
+    assert!(
+        wait(|| w.audit().iter().any(|entry| entry["kind"] == "op"
+            && entry["record"]["origin"] == a.runtime_id()
+            && entry["record"]["result"] == "delivered")),
+        "{:?}",
+        w.audit()
+    );
 }
 
 /// A device that pairs with `member` as a linked runtime would, with no

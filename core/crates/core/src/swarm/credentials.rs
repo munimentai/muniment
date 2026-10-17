@@ -228,7 +228,14 @@ fn seal_leases(
         .map(|entry| entry.agent_id)
         .collect();
     let mut owed: BTreeMap<String, Bundle> = BTreeMap::new();
-    for worker in fleet::recipient_set(inner, &agents)?.workers {
+    // While sharing is off this runtime owes no lease and withdraws those
+    // it sealed.
+    let workers = if sharing(inner)? {
+        fleet::recipient_set(inner, &agents)?.workers
+    } else {
+        Vec::new()
+    };
+    for worker in workers {
         let runs: Vec<String> = agents
             .iter()
             .filter(|agent| {
