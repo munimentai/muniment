@@ -1442,6 +1442,8 @@ impl DesktopClient {
             Operation::AgentApprovals => &["approvals"],
             Operation::GroupCreate | Operation::GroupUpdate => &["group"],
             Operation::GroupList => &["groups"],
+            Operation::FleetHoldSignIn => &["status"],
+            Operation::FleetCredentials => &["share_models"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)
