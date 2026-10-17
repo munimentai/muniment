@@ -1210,7 +1210,7 @@ impl PiLaunchBoundaries for AgentBoundaries {
 
 #[test]
 fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
-    use muniment_core::permission_gate::{GateMode, RunPermissions};
+    use muniment_core::permission_gate::{PermissionMode, RunPermissions};
     use muniment_core::pi_launch::{AGENT_PERMISSIONS_EXTENSION, AGENT_PERMISSIONS_EXTENSION_FILE};
     let root = temporary_directory();
     let mut boundaries = AgentBoundaries {
@@ -1221,7 +1221,7 @@ fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
             disabled_tools: vec!["bash".into(), "mcp__crm__delete".into()],
             skills: Vec::new(),
             permissions: Some(RunPermissions {
-                mode: GateMode::Ask,
+                mode: PermissionMode::Manual,
                 ..RunPermissions::default()
             }),
         },
@@ -1247,7 +1247,7 @@ fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
         fs::read_to_string(&gate).unwrap(),
         AGENT_PERMISSIONS_EXTENSION
     );
-    // A profile that never asks loads no gate.
+    // A host that gives the run no gate loads no extension.
     boundaries.launch.permissions = None;
     let plain =
         pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)

@@ -1,4 +1,5 @@
-//! Permission gate coordination for a chat run.
+//! Permission gate coordination for a chat run, and the permission modes
+//! and rules that decide each tool call.
 //!
 //! A Pi extension-UI request opens a gate. The gate stays open until an answer
 //! arrives for its id and matches its dialog shape. This state is
@@ -8,6 +9,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+
+pub mod classifier;
+pub mod settings;
+pub mod shell;
+pub mod threads;
+
+pub use classifier::AutoReview;
 
 use crate::journal::pi_translation::permission_journal_payload;
 use crate::journal::{
@@ -163,17 +172,77 @@ pub fn coordinate_permission_answer(
     Ok(())
 }
 
-/// How much a run asks before a tool call that no thread policy decides.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A global permission mode. Threads and agents both run in one, and the
+/// same rules decide each tool call in every mode: deny rules, then
+/// ask-first rules, then protected paths and critical commands, then
+/// always-allow rules, then the mode's baseline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum GateMode {
-    /// Reads run. Every other call asks.
-    Ask,
-    /// Every call runs.
+pub enum PermissionMode {
+    /// Reads and read-only commands run. Everything else asks. An agent
+    /// profile's old `ask` reads as this mode.
     #[default]
+    #[serde(alias = "ask")]
+    Manual,
+    /// Also file edits and file commands inside the working folders run.
+    EditAuto,
+    /// Reads only; the agent writes a plan, and approving it picks the mode
+    /// the thread continues in.
+    Plan,
+    /// A cheap model reviews each action that is not a read.
     Auto,
-    /// Every call asks, reads included.
-    Strict,
+    /// Only reads and always-allowed actions run; the rest is denied
+    /// without asking. An agent profile's old `strict` reads as this mode.
+    #[serde(alias = "strict")]
+    DontAsk,
+    /// Everything runs except what deny and ask-first rules, protected
+    /// paths and critical commands stop.
+    Bypass,
+}
+
+impl PermissionMode {
+    /// Every mode, in menu order.
+    pub const ALL: [Self; 6] = [
+        Self::Manual,
+        Self::EditAuto,
+        Self::Plan,
+        Self::Auto,
+        Self::DontAsk,
+        Self::Bypass,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::EditAuto => "edit_auto",
+            Self::Plan => "plan",
+            Self::Auto => "auto",
+            Self::DontAsk => "dont_ask",
+            Self::Bypass => "bypass",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Manual => "Ask before changes",
+            Self::EditAuto => "Edit automatically",
+            Self::Plan => "Plan first",
+            Self::Auto => "Auto review",
+            Self::DontAsk => "Don't ask",
+            Self::Bypass => "Bypass permissions",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Manual => "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.",
+            Self::EditAuto => "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.",
+            Self::Plan => "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.",
+            Self::Auto => "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.",
+            Self::DontAsk => "Only reads and always-allowed actions run. Everything else is denied without asking.",
+            Self::Bypass => "Everything runs except deny and ask-first rules, protected paths and critical commands. Use it only on a container or a disposable machine.",
+        }
+    }
 }
 
 /// One pre-decided thread policy, without the identity a journaled
@@ -185,25 +254,69 @@ pub struct PolicyRequest {
     pub resource: ThreadPermissionResource,
 }
 
-/// The gate one run applies: its mode, whether an event started it, and
-/// the pre-decided policies that hold in every thread of its agent. The
-/// thread's own journaled policies join these at each call.
+/// Checks one rule list: at most `max` exact requests.
+pub fn validate_rules(requests: &[PolicyRequest], max: usize) -> Result<(), String> {
+    if requests.len() > max {
+        return Err(format!("Keep each permission list under {max} entries."));
+    }
+    if !requests.iter().all(|request| {
+        crate::journal::thread_permission_policy::valid_policy_resource(
+            &request.request_kind,
+            &request.resource,
+        )
+    }) {
+        return Err("A permission entry names an exact absolute path, command or tool.".into());
+    }
+    Ok(())
+}
+
+/// The pre-decided policies of one rule set, as `actor` decided them.
+pub fn rule_policies(
+    actor: &str,
+    deny: &[PolicyRequest],
+    ask_first: &[PolicyRequest],
+    always_allow: &[PolicyRequest],
+) -> Vec<ThreadPermissionPolicyDecided> {
+    let with = |requests: &[PolicyRequest], decision: ThreadPermissionDecision| {
+        requests
+            .iter()
+            .map(|request| settings::decided(actor, request, decision.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut policies = with(always_allow, ThreadPermissionDecision::Allow);
+    policies.extend(with(ask_first, ThreadPermissionDecision::Ask));
+    policies.extend(with(deny, ThreadPermissionDecision::Deny));
+    policies
+}
+
+/// The gate one run applies: the mode it launched in, whether an outside
+/// event started it, the global and agent rules, and the folders it works
+/// in. The thread's own journaled policies and mode join these at each call.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RunPermissions {
-    pub mode: GateMode,
+    pub mode: PermissionMode,
     pub event_triggered: bool,
+    /// Global rules first, then the agent's.
     pub policies: Vec<ThreadPermissionPolicyDecided>,
+    /// The folders `edit_auto` edits without asking.
+    pub working_directories: Vec<PathBuf>,
+    /// Folders no action reads or writes without a person's answer, such as
+    /// the runtime's state folder, apart from the working folders inside
+    /// them.
+    pub protected_roots: Vec<PathBuf>,
+    /// The user's home, for `~` in commands and the critical list.
+    pub home: Option<PathBuf>,
+    pub bypass_enabled: bool,
 }
 
 impl RunPermissions {
-    /// Whether any call can be asked about or denied, so the run loads the gate.
-    pub fn gates(&self) -> bool {
-        self.event_triggered
-            || self.mode != GateMode::Auto
-            || self
-                .policies
-                .iter()
-                .any(|policy| policy.decision != ThreadPermissionDecision::Allow)
+    /// The mode a call runs in: the thread's journaled mode when it has one,
+    /// else the launch mode. `bypass` while it is off runs as `manual`.
+    pub fn mode_for(&self, thread_mode: Option<PermissionMode>) -> PermissionMode {
+        match thread_mode.unwrap_or(self.mode) {
+            PermissionMode::Bypass if !self.bypass_enabled => PermissionMode::Manual,
+            mode => mode,
+        }
     }
 }
 
@@ -212,7 +325,7 @@ impl RunPermissions {
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum GateDecision {
     Allow,
-    /// A deny policy refuses the call without asking.
+    /// The call is refused without asking.
     Deny {
         reason: String,
     },
@@ -241,6 +354,23 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "ask_user_question",
     "mcp__record__sql",
 ];
+
+/// Tools that reach the web. They read, but every mode short of `auto` and
+/// `bypass` asks before them.
+const WEB_TOOLS: &[&str] = &["web_search", "fetch_content", "get_search_content"];
+
+/// Muniment's own tools that keep the user's memory and the run's plan.
+/// They run in every mode.
+const KEEPING_TOOLS: &[&str] = &[
+    "memory-save",
+    "memory-delete",
+    "memory-profile-save",
+    "creation-plan",
+    PLAN_TOOL,
+];
+
+/// The tool a `plan` run submits its plan with.
+pub const PLAN_TOOL: &str = "plan_submit";
 
 /// Whether the tool named `tool` reads and changes nothing.
 pub fn is_read_only_tool(tool: &str) -> bool {
@@ -301,6 +431,245 @@ pub fn tool_request(
     })
 }
 
+/// What one call does, for the mode baselines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionClass {
+    /// Reads, read-only commands and Muniment's own keeping tools.
+    Read,
+    /// File edits and writes, and commands that only create, move, copy or
+    /// remove files. `inside` when every written path is inside a working
+    /// folder, in both its given and its symlink-resolved form.
+    Edit {
+        inside: bool,
+    },
+    /// Any other command or tool.
+    Command,
+    Web,
+    Mcp {
+        read_only: bool,
+    },
+}
+
+/// One call's class, and whether it touches a protected path or is a
+/// critical command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Assessment {
+    pub class: ActionClass,
+    pub protected: bool,
+    pub critical: bool,
+}
+
+/// File names that configure MCP servers.
+const MCP_CONFIG_FILES: [&str; 4] = [
+    ".mcp.json",
+    "mcp.json",
+    "mcp_config.json",
+    "claude_desktop_config.json",
+];
+/// Shell startup files: a write there runs on every new shell.
+const SHELL_RC_FILES: [&str; 16] = [
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zshenv",
+    ".zlogin",
+    ".zlogout",
+    ".cshrc",
+    ".tcshrc",
+    ".kshrc",
+    "config.fish",
+    "Microsoft.PowerShell_profile.ps1",
+    "profile.ps1",
+];
+/// Folders inside a protected root that runs read without asking: the
+/// installed extensions and the harness's skills.
+const READABLE_IN_PROTECTED_ROOTS: [&str; 2] = ["extensions", "agent/skills"];
+/// Folders whose every file is protected.
+const PROTECTED_FOLDERS: [&str; 2] = [".git", ".muniment"];
+
+/// A path as given and as the file system resolves it, symlinks followed.
+/// A path that does not exist yet resolves through its nearest existing
+/// parent.
+fn path_forms(path: &Path) -> [PathBuf; 2] {
+    let mut existing = path.to_path_buf();
+    let mut rest = Vec::new();
+    let resolved = loop {
+        if let Ok(resolved) = std::fs::canonicalize(&existing) {
+            break rest
+                .iter()
+                .rev()
+                .fold(resolved, |path: PathBuf, part| path.join(part));
+        }
+        match (existing.file_name(), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_owned());
+                existing = parent.to_path_buf();
+            }
+            _ => break path.to_path_buf(),
+        }
+    };
+    [path.to_path_buf(), resolved]
+}
+
+impl RunPermissions {
+    /// Whether `path` is strictly inside a working folder, in both forms.
+    fn inside_workspace(&self, path: &Path) -> bool {
+        let [given, resolved] = path_forms(path);
+        self.working_directories.iter().any(|folder| {
+            let [folder_given, folder_resolved] = path_forms(folder);
+            given.starts_with(&folder_given)
+                && given != folder_given
+                && resolved.starts_with(&folder_resolved)
+                && resolved != folder_resolved
+        })
+    }
+
+    /// Whether `path`, in either form, sits in a protected root outside
+    /// every working folder.
+    fn in_protected_root(&self, path: &Path) -> bool {
+        let forms = path_forms(path);
+        let in_workspace = |form: &PathBuf| {
+            self.working_directories
+                .iter()
+                .flat_map(|folder| path_forms(folder))
+                .any(|folder| form.starts_with(folder))
+        };
+        self.protected_roots.iter().any(|root| {
+            path_forms(root).iter().any(|root| {
+                forms
+                    .iter()
+                    .any(|form| form.starts_with(root) && !in_workspace(form))
+            })
+        })
+    }
+
+    /// Whether reading `path` needs a person's answer: a file in a
+    /// protected root, apart from the installed skills and plugins the
+    /// harness tells the model to read.
+    pub fn protected_read(&self, path: &Path) -> bool {
+        let forms = path_forms(path);
+        self.in_protected_root(path)
+            && !self.protected_roots.iter().any(|root| {
+                path_forms(root).iter().any(|root| {
+                    READABLE_IN_PROTECTED_ROOTS
+                        .iter()
+                        .any(|folder| forms.iter().any(|form| form.starts_with(root.join(folder))))
+                })
+            })
+    }
+
+    /// Whether writing `path` needs a person's answer: a file in `.git` or
+    /// `.muniment`, an MCP configuration, a shell startup file, or a
+    /// protected root.
+    pub fn protected_write(&self, path: &Path) -> bool {
+        path_forms(path).iter().any(|form| {
+            form.components().any(|component| {
+                PROTECTED_FOLDERS
+                    .iter()
+                    .any(|folder| component.as_os_str() == *folder)
+            }) || form.file_name().is_some_and(|name| {
+                MCP_CONFIG_FILES
+                    .iter()
+                    .chain(SHELL_RC_FILES.iter())
+                    .any(|file| name == *file)
+            })
+        }) || self.in_protected_root(path)
+    }
+
+    /// Classes one call.
+    pub fn assess(&self, request: &PolicyRequest, tool: &str, read_only_hint: bool) -> Assessment {
+        let plain = |class| Assessment {
+            class,
+            protected: false,
+            critical: false,
+        };
+        if WEB_TOOLS.contains(&tool) {
+            return plain(ActionClass::Web);
+        }
+        match &request.resource {
+            ThreadPermissionResource::Path { path, operation } => {
+                let path = Path::new(path);
+                match operation.as_str() {
+                    "read" | "ls" | "find" | "grep" => Assessment {
+                        class: ActionClass::Read,
+                        protected: self.protected_read(path),
+                        critical: false,
+                    },
+                    "write" | "edit" => Assessment {
+                        class: ActionClass::Edit {
+                            inside: self.inside_workspace(path),
+                        },
+                        protected: self.protected_write(path),
+                        critical: false,
+                    },
+                    _ => plain(ActionClass::Command),
+                }
+            }
+            ThreadPermissionResource::Command {
+                arguments,
+                working_directory,
+            } => {
+                let command = arguments.get(1).map(String::as_str).unwrap_or_default();
+                let critical = shell::is_critical(command, self.home.as_deref());
+                if arguments.first().map(String::as_str) == Some("powershell") {
+                    return Assessment {
+                        class: ActionClass::Command,
+                        protected: false,
+                        critical,
+                    };
+                }
+                let reading = shell::read_command(
+                    command,
+                    Path::new(working_directory),
+                    self.home.as_deref(),
+                );
+                let reads_protected = reading.reads.iter().any(|path| self.protected_read(path));
+                let writes_protected = reading
+                    .writes
+                    .iter()
+                    .chain(&reading.unknown)
+                    .any(|path| self.protected_write(path));
+                let class = match reading.kind {
+                    shell::ShellKind::ReadOnly => ActionClass::Read,
+                    shell::ShellKind::FileOps => ActionClass::Edit {
+                        inside: reading
+                            .writes
+                            .iter()
+                            .all(|path| self.inside_workspace(path)),
+                    },
+                    shell::ShellKind::Other(_) => ActionClass::Command,
+                };
+                Assessment {
+                    class,
+                    protected: reads_protected || writes_protected,
+                    critical,
+                }
+            }
+            ThreadPermissionResource::Tool { name, .. } => {
+                let class = if name == "mcp__record__sql"
+                    || KEEPING_TOOLS.contains(&name.as_str())
+                    || (READ_ONLY_TOOLS.contains(&name.as_str()))
+                {
+                    ActionClass::Read
+                } else if name.starts_with("mcp__") {
+                    ActionClass::Mcp {
+                        read_only: read_only_hint,
+                    }
+                } else if read_only_hint {
+                    ActionClass::Read
+                } else {
+                    ActionClass::Command
+                };
+                plain(class)
+            }
+        }
+    }
+}
+
 /// The agent gate's answers, as the gate offers them and as
 /// `agent.approval_answer` names them.
 pub const GATE_ANSWERS: [(&str, &str); 4] = [
@@ -310,12 +679,59 @@ pub const GATE_ANSWERS: [(&str, &str); 4] = [
     ("deny", "Deny"),
 ];
 
+/// The plan gate's answers: each approval and the mode the thread then
+/// runs in, and keep planning.
+pub const PLAN_ANSWERS: [(&str, &str, Option<PermissionMode>); 4] = [
+    (
+        "plan_manual",
+        "Approve, then ask before changes",
+        Some(PermissionMode::Manual),
+    ),
+    (
+        "plan_edit_auto",
+        "Approve and edit automatically",
+        Some(PermissionMode::EditAuto),
+    ),
+    (
+        "plan_auto",
+        "Approve with auto review",
+        Some(PermissionMode::Auto),
+    ),
+    ("plan_keep", "Keep planning", None),
+];
+
+/// The title of the gate a submitted plan opens.
+pub const PLAN_GATE_TITLE: &str = "Approve this plan?";
+
+/// The plan gate's options.
+pub fn plan_options() -> Vec<String> {
+    PLAN_ANSWERS
+        .iter()
+        .map(|(_, option, _)| (*option).to_owned())
+        .collect()
+}
+
+/// The mode a plan gate option approves, or `None` for keep planning and
+/// any other text.
+pub fn plan_choice(option: &str) -> Option<PermissionMode> {
+    PLAN_ANSWERS
+        .iter()
+        .find(|(_, label, _)| *label == option)
+        .and_then(|(_, _, mode)| *mode)
+}
+
 /// The gate option an answer id names, such as `Allow once` for `allow_once`.
 pub fn gate_option(answer: &str) -> Option<&'static str> {
     GATE_ANSWERS
         .iter()
         .find(|(id, _)| *id == answer)
         .map(|(_, option)| *option)
+        .or_else(|| {
+            PLAN_ANSWERS
+                .iter()
+                .find(|(id, _, _)| *id == answer)
+                .map(|(_, option, _)| *option)
+        })
 }
 
 /// The answer id of a gate option, such as `allow_once` for `Allow once`.
@@ -324,21 +740,32 @@ pub fn gate_answer(option: &str) -> Option<&'static str> {
         .iter()
         .find(|(_, label)| *label == option)
         .map(|(id, _)| *id)
+        .or_else(|| {
+            PLAN_ANSWERS
+                .iter()
+                .find(|(_, label, _)| *label == option)
+                .map(|(id, _, _)| *id)
+        })
 }
 
-/// The options the agent gate offers for one call. "Always allow for this
-/// agent" is left out when an ask policy covers the call, since ask-first
-/// outranks every allow.
-pub fn gate_options(always_allow: bool) -> Vec<String> {
+/// The options the gate offers for one call. "Allow for this thread" is
+/// left out when no rule can allow the call, such as a protected path, and
+/// "Always allow for this agent" also when the run has no agent or an ask
+/// policy covers the call, since ask-first outranks every allow.
+pub fn gate_options(thread_rule: bool, agent_rule: bool) -> Vec<String> {
     GATE_ANSWERS
         .iter()
-        .filter(|(id, _)| always_allow || *id != "always_allow_agent")
+        .filter(|(id, _)| match *id {
+            "allow_thread" => thread_rule,
+            "always_allow_agent" => thread_rule && agent_rule,
+            _ => true,
+        })
         .map(|(_, option)| (*option).to_owned())
         .collect()
 }
 
-/// Whether an ask policy, the agent's `ask_first` or a thread's own,
-/// matches the request exactly.
+/// Whether an ask policy, a global, agent or thread one, matches the
+/// request exactly.
 pub fn asks_first(
     permissions: &RunPermissions,
     thread_policies: &[ThreadPermissionPolicyDecided],
@@ -390,61 +817,129 @@ pub fn summary(request: &PolicyRequest) -> String {
     short
 }
 
-/// Decides one tool call from the policies in force, oldest first, and the
-/// run's mode. A matching ask policy always asks, even when an allow policy
-/// also matches. Otherwise the latest matching policy allows or denies.
-/// With none, the mode decides; a run an event started asks before any
-/// call that is not a read.
+/// What a `plan` run is told when it tries a change.
+pub const PLAN_REFUSAL: &str =
+    "Plan mode refuses changes while planning. Read what you need, then submit your plan with plan_submit.";
+
+/// Decides one tool call in `mode`: deny rules (global, agent, thread),
+/// then ask-first rules, then protected paths and critical commands, then
+/// always-allow rules, then the mode's baseline. Rules match the request
+/// exactly. `review` answers for `auto`.
 pub fn decide_tool_call(
     permissions: &RunPermissions,
     thread_policies: &[ThreadPermissionPolicyDecided],
+    mode: PermissionMode,
     request: &PolicyRequest,
     tool: &str,
     read_only_hint: bool,
+    review: &mut AutoReview,
 ) -> GateDecision {
-    let matching: Vec<&ThreadPermissionPolicyDecided> = permissions
-        .policies
-        .iter()
-        .chain(thread_policies)
-        .filter(|policy| {
-            policy.request_kind == request.request_kind && policy.resource == request.resource
-        })
-        .collect();
-    if matching
-        .iter()
-        .any(|policy| policy.decision == ThreadPermissionDecision::Ask)
-    {
-        return GateDecision::Ask {
-            reason: "A policy asks before this action.".into(),
+    let mode = permissions.mode_for(Some(mode));
+    let matching = |decision: ThreadPermissionDecision| {
+        permissions
+            .policies
+            .iter()
+            .chain(thread_policies)
+            .any(|policy| {
+                policy.decision == decision
+                    && policy.request_kind == request.request_kind
+                    && policy.resource == request.resource
+            })
+    };
+    let ask = |reason: &str| GateDecision::Ask {
+        reason: reason.into(),
+    };
+    let deny = |reason: &str| GateDecision::Deny {
+        reason: reason.into(),
+    };
+    if matching(ThreadPermissionDecision::Deny) {
+        return deny("A deny rule refuses this action.");
+    }
+    if matching(ThreadPermissionDecision::Ask) {
+        return if mode == PermissionMode::DontAsk {
+            deny("An ask-first rule covers this action, and Don't ask mode denies instead of asking.")
+        } else {
+            ask("An ask-first rule covers this action.")
         };
     }
-    match matching.last().map(|policy| &policy.decision) {
-        Some(ThreadPermissionDecision::Allow) => return GateDecision::Allow,
-        Some(ThreadPermissionDecision::Deny) => {
-            return GateDecision::Deny {
-                reason: "A policy denies this action.".into(),
-            }
+    let assessment = permissions.assess(request, tool, read_only_hint);
+    let changes = matches!(
+        assessment.class,
+        ActionClass::Edit { .. } | ActionClass::Command | ActionClass::Mcp { read_only: false }
+    );
+    if assessment.critical {
+        return match mode {
+            PermissionMode::DontAsk => deny("Don't ask mode denies critical commands."),
+            PermissionMode::Plan => deny(PLAN_REFUSAL),
+            _ => ask("This is a critical command, so it always asks."),
+        };
+    }
+    if assessment.protected {
+        return match mode {
+            PermissionMode::Bypass => GateDecision::Allow,
+            PermissionMode::DontAsk => deny("Don't ask mode denies actions on protected paths."),
+            PermissionMode::Plan if changes => deny(PLAN_REFUSAL),
+            _ => ask("This action touches a protected path, so it always asks."),
+        };
+    }
+    if mode == PermissionMode::Plan && changes {
+        return deny(PLAN_REFUSAL);
+    }
+    if matching(ThreadPermissionDecision::Allow) {
+        return GateDecision::Allow;
+    }
+    match (mode, assessment.class) {
+        (_, ActionClass::Read) | (PermissionMode::Bypass, _) => GateDecision::Allow,
+        (PermissionMode::EditAuto, ActionClass::Edit { inside: true }) => GateDecision::Allow,
+        (PermissionMode::DontAsk, _) => deny("Don't ask mode denies actions that no rule allows."),
+        (PermissionMode::Auto, _) => match review.review(tool, &summary(request)) {
+            classifier::Review::Allow => GateDecision::Allow,
+            classifier::Review::Pause(reason) => GateDecision::Ask { reason },
+        },
+        (PermissionMode::EditAuto, ActionClass::Edit { inside: false }) => {
+            ask("This edit is outside the working folders, so it asks.")
         }
-        _ => {}
+        (PermissionMode::Plan, _) => ask("Plan mode asks before web and MCP reads."),
+        (_, ActionClass::Edit { .. }) => ask("This thread asks before edits."),
+        (_, ActionClass::Web) => ask("This thread asks before it uses the web."),
+        (_, ActionClass::Mcp { .. }) => ask("This thread asks before MCP calls."),
+        (_, ActionClass::Command) => ask("This thread asks before this command."),
     }
-    let read_only = read_only_hint || READ_ONLY_TOOLS.contains(&tool);
-    let mode = match permissions.mode {
-        GateMode::Auto if permissions.event_triggered => GateMode::Ask,
-        mode => mode,
-    };
-    match mode {
-        GateMode::Auto => GateDecision::Allow,
-        GateMode::Ask if read_only => GateDecision::Allow,
-        GateMode::Ask if permissions.event_triggered => GateDecision::Ask {
-            reason: "An event started this run, so it asks before it changes anything.".into(),
-        },
-        GateMode::Ask => GateDecision::Ask {
-            reason: "This agent asks before it changes anything.".into(),
-        },
-        GateMode::Strict => GateDecision::Ask {
-            reason: "This agent asks before every action.".into(),
-        },
-    }
+}
+
+/// Journals `mode` as the thread's permission mode. `source` is `user` or
+/// `plan`.
+pub fn set_thread_mode(
+    journal: &mut crate::journal::RunJournal,
+    thread_id: &str,
+    mode: PermissionMode,
+    source: &str,
+    actor: &str,
+    provenance: &crate::journal::Provenance,
+) -> Result<(), String> {
+    let last = journal
+        .last_thread_seq(thread_id)
+        .map_err(|error| error.to_string())?;
+    journal
+        .append_thread_permission_mode_set(
+            last,
+            thread_id,
+            &crate::journal::ThreadPermissionModeSet {
+                mode,
+                actor: actor.to_owned(),
+                source: source.to_owned(),
+            },
+            &crate::run_start::accepted_time_now(),
+            provenance,
+        )
+        .map_err(|error| error.to_string())
+}
+
+/// Whether a thread or agent rule could allow the call: protected paths
+/// and critical commands never take an allow rule.
+pub fn rules_can_allow(permissions: &RunPermissions, request: &PolicyRequest, tool: &str) -> bool {
+    let assessment = permissions.assess(request, tool, false);
+    !assessment.protected && !assessment.critical
 }
 
 #[cfg(test)]
@@ -535,15 +1030,7 @@ mod tests {
         decision: ThreadPermissionDecision,
         request: &PolicyRequest,
     ) -> ThreadPermissionPolicyDecided {
-        ThreadPermissionPolicyDecided {
-            policy_id: uuid::Uuid::now_v7().to_string(),
-            decision,
-            request_kind: request.request_kind.clone(),
-            resource: request.resource.clone(),
-            actor: "owner".into(),
-            answer_source: crate::journal::ThreadPermissionAnswerSource::Native,
-            gate_id: None,
-        }
+        settings::decided("owner", request, decision)
     }
 
     #[test]
@@ -583,72 +1070,348 @@ mod tests {
         );
     }
 
+    /// A working folder with a `.git` folder, a link that leaves it, and a
+    /// state folder outside it.
+    struct Folders {
+        root: PathBuf,
+        work: PathBuf,
+        state: PathBuf,
+    }
+
+    impl Folders {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(uuid::Uuid::now_v7().to_string());
+            let work = root.join("work");
+            let state = root.join("state");
+            std::fs::create_dir_all(work.join(".git")).unwrap();
+            std::fs::create_dir_all(work.join("src")).unwrap();
+            std::fs::create_dir_all(&state).unwrap();
+            std::fs::write(state.join("token"), "secret").unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&state, work.join("escape")).unwrap();
+            Self {
+                root: std::fs::canonicalize(&root).unwrap(),
+                work: std::fs::canonicalize(&work).unwrap(),
+                state: std::fs::canonicalize(&state).unwrap(),
+            }
+        }
+
+        fn permissions(&self, mode: PermissionMode) -> RunPermissions {
+            RunPermissions {
+                mode,
+                working_directories: vec![self.work.clone()],
+                protected_roots: vec![self.state.clone()],
+                home: Some(self.root.clone()),
+                bypass_enabled: true,
+                ..RunPermissions::default()
+            }
+        }
+
+        fn call(&self, tool: &str, input: Value) -> (PolicyRequest, String) {
+            (tool_request(tool, &input, &self.work), tool.to_owned())
+        }
+    }
+
+    impl Drop for Folders {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// The decision letter: `A`llow, `D`eny or `Q` (ask).
+    fn letter(decision: &GateDecision) -> char {
+        match decision {
+            GateDecision::Allow => 'A',
+            GateDecision::Deny { .. } => 'D',
+            GateDecision::Ask { .. } => 'Q',
+        }
+    }
+
+    fn allow_review() -> AutoReview {
+        let model: crate::memory_extract::Model = std::sync::Arc::new(|_, _| {
+            Ok(crate::memory_extract::Answer {
+                text: r#"{"verdict":"allow","reason":"The request asks for it."}"#.into(),
+                via: "router",
+            })
+        });
+        AutoReview::new(Some(model), "Tidy the project.", false)
+    }
+
     #[test]
-    fn modes_policies_and_events_decide_tool_calls() {
-        let directory = std::path::Path::new("/work");
-        let push = tool_request("bash", &json!({"command": "git push"}), directory);
-        let status = tool_request("bash", &json!({"command": "git status"}), directory);
-        let read = tool_request("read", &json!({"path": "a.md"}), directory);
-        let asks = |decision: GateDecision| matches!(decision, GateDecision::Ask { .. });
-        let auto = RunPermissions::default();
-        assert!(!auto.gates());
-        assert_eq!(
-            decide_tool_call(&auto, &[], &push, "bash", false),
-            GateDecision::Allow
-        );
-        let ask = RunPermissions {
-            mode: GateMode::Ask,
-            policies: vec![policy(ThreadPermissionDecision::Allow, &status)],
-            ..RunPermissions::default()
+    fn every_mode_decides_every_action_class() {
+        let folders = Folders::new();
+        let work = folders.work.to_string_lossy().into_owned();
+        let calls = [
+            ("read", folders.call("read", json!({"path": "src/main.rs"}))),
+            ("edit", folders.call("edit", json!({"path": "src/main.rs"}))),
+            (
+                "edit outside",
+                folders.call("write", json!({"path": "../elsewhere.md"})),
+            ),
+            (
+                "shell read",
+                folders.call("bash", json!({"command": "git status && rg todo src"})),
+            ),
+            (
+                "shell file op",
+                folders.call(
+                    "bash",
+                    json!({"command": "mkdir -p src/new && touch src/new/a.rs"}),
+                ),
+            ),
+            (
+                "shell mutating",
+                folders.call("bash", json!({"command": "npm install left-pad"})),
+            ),
+            ("web", folders.call("web_search", json!({"query": "rust"}))),
+            ("mcp", folders.call("mcp__crm__delete", json!({"id": 7}))),
+            (
+                "protected",
+                folders.call("write", json!({"path": ".git/config"})),
+            ),
+            (
+                "critical",
+                folders.call("bash", json!({"command": "rm -rf ~"})),
+            ),
+            ("keeping", folders.call("memory-save", json!({"text": "x"}))),
+        ];
+        // Columns: manual, edit_auto, plan, auto, dont_ask, bypass.
+        let expected = [
+            ("read", "AAAAAA"),
+            ("edit", "QADADA"),
+            ("edit outside", "QQDADA"),
+            ("shell read", "AAAAAA"),
+            ("shell file op", "QADADA"),
+            ("shell mutating", "QQDADA"),
+            ("web", "QQQADA"),
+            ("mcp", "QQDADA"),
+            ("protected", "QQDQDA"),
+            ("critical", "QQDQDQ"),
+            ("keeping", "AAAAAA"),
+        ];
+        for ((name, (request, tool)), (expected_name, letters)) in calls.iter().zip(expected) {
+            assert_eq!(*name, expected_name);
+            let decided: String = PermissionMode::ALL
+                .iter()
+                .map(|mode| {
+                    letter(&decide_tool_call(
+                        &folders.permissions(*mode),
+                        &[],
+                        *mode,
+                        request,
+                        tool,
+                        false,
+                        &mut allow_review(),
+                    ))
+                })
+                .collect();
+            assert_eq!(decided, letters, "{name} in {work}");
+        }
+    }
+
+    #[test]
+    fn paths_are_checked_by_direction_and_through_symlinks() {
+        let folders = Folders::new();
+        let permissions = folders.permissions(PermissionMode::EditAuto);
+        let decide = |tool: &str, input: Value| {
+            let (request, tool) = folders.call(tool, input);
+            decide_tool_call(
+                &permissions,
+                &[],
+                PermissionMode::EditAuto,
+                &request,
+                &tool,
+                false,
+                &mut allow_review(),
+            )
         };
-        assert!(asks(decide_tool_call(&ask, &[], &push, "bash", false)));
+        // Reading .git is fine; writing it asks.
         assert_eq!(
-            decide_tool_call(&ask, &[], &status, "bash", false),
+            decide("read", json!({"path": ".git/HEAD"})),
             GateDecision::Allow
         );
-        assert_eq!(
-            decide_tool_call(&ask, &[], &read, "read", false),
-            GateDecision::Allow
-        );
-        // A thread's own "allow for this thread" answer joins the profile.
-        let thread = [policy(ThreadPermissionDecision::Allow, &push)];
-        assert_eq!(
-            decide_tool_call(&ask, &thread, &push, "bash", false),
-            GateDecision::Allow
-        );
-        let strict = RunPermissions {
-            mode: GateMode::Strict,
-            ..RunPermissions::default()
-        };
-        assert!(asks(decide_tool_call(&strict, &[], &read, "read", false)));
-        // An event's run asks before writes even in auto mode.
-        let event = RunPermissions {
-            event_triggered: true,
-            ..RunPermissions::default()
-        };
-        assert!(event.gates());
-        assert!(asks(decide_tool_call(&event, &[], &push, "bash", false)));
-        assert_eq!(
-            decide_tool_call(&event, &[], &read, "read", false),
-            GateDecision::Allow
-        );
-        assert_eq!(
-            decide_tool_call(&event, &thread, &push, "bash", false),
-            GateDecision::Allow
-        );
-        let deny = RunPermissions {
-            policies: vec![policy(ThreadPermissionDecision::Deny, &push)],
-            ..RunPermissions::default()
-        };
-        assert!(deny.gates());
         assert!(matches!(
-            decide_tool_call(&deny, &[], &push, "bash", false),
-            GateDecision::Deny { .. }
+            decide("edit", json!({"path": ".git/HEAD"})),
+            GateDecision::Ask { .. }
+        ));
+        // The state folder is protected both ways.
+        let token = folders.state.join("token").to_string_lossy().into_owned();
+        assert!(matches!(
+            decide("read", json!({"path": token})),
+            GateDecision::Ask { .. }
+        ));
+        assert!(matches!(
+            decide("bash", json!({"command": format!("cat {token}")})),
+            GateDecision::Ask { .. }
+        ));
+        #[cfg(unix)]
+        {
+            // A link inside the working folder that resolves into the state
+            // folder is protected and outside the working folder.
+            assert!(matches!(
+                decide("read", json!({"path": "escape/token"})),
+                GateDecision::Ask { .. }
+            ));
+            assert!(matches!(
+                decide("write", json!({"path": "escape/new.txt"})),
+                GateDecision::Ask { .. }
+            ));
+        }
+        // Shell startup files and MCP configuration are protected writes.
+        for path in ["~/.zshrc", ".mcp.json"] {
+            assert!(matches!(
+                decide("bash", json!({"command": format!("echo x >> {path}")})),
+                GateDecision::Ask { .. }
+            ));
+        }
+        assert_eq!(
+            decide("bash", json!({"command": "echo x >> notes.md"})),
+            GateDecision::Allow
+        );
+        // A protected path never takes an allow rule.
+        let (request, tool) = folders.call("write", json!({"path": ".git/config"}));
+        assert!(!rules_can_allow(&permissions, &request, &tool));
+        let allowed = [policy(ThreadPermissionDecision::Allow, &request)];
+        assert!(matches!(
+            decide_tool_call(
+                &permissions,
+                &allowed,
+                PermissionMode::Manual,
+                &request,
+                &tool,
+                false,
+                &mut allow_review()
+            ),
+            GateDecision::Ask { .. }
         ));
     }
 
     #[test]
-    fn the_gate_names_each_call_and_leaves_out_always_allow_under_ask_first() {
+    fn rules_apply_in_order_deny_then_ask_then_allow_then_the_mode() {
+        let folders = Folders::new();
+        let (push, bash) = folders.call("bash", json!({"command": "git push"}));
+        let decide = |permissions: &RunPermissions, thread: &[ThreadPermissionPolicyDecided]| {
+            decide_tool_call(
+                permissions,
+                thread,
+                permissions.mode,
+                &push,
+                &bash,
+                false,
+                &mut AutoReview::new(None, "", false),
+            )
+        };
+        let mut permissions = folders.permissions(PermissionMode::Manual);
+        assert!(matches!(
+            decide(&permissions, &[]),
+            GateDecision::Ask { .. }
+        ));
+        // A thread allow runs it.
+        let thread_allow = [policy(ThreadPermissionDecision::Allow, &push)];
+        assert_eq!(decide(&permissions, &thread_allow), GateDecision::Allow);
+        // An agent ask-first outranks the thread allow.
+        permissions.policies = rule_policies("agent:a", &[], std::slice::from_ref(&push), &[]);
+        assert!(matches!(
+            decide(&permissions, &thread_allow),
+            GateDecision::Ask { .. }
+        ));
+        // A global deny outranks everything, bypass included.
+        let mut global = settings::PermissionSettings {
+            deny: vec![push.clone()],
+            ..Default::default()
+        }
+        .policies();
+        global.extend(permissions.policies.clone());
+        permissions.policies = global;
+        permissions.mode = PermissionMode::Bypass;
+        assert!(matches!(
+            decide(&permissions, &thread_allow),
+            GateDecision::Deny { .. }
+        ));
+        // Don't ask turns an ask-first rule into a denial.
+        let ask_only = RunPermissions {
+            mode: PermissionMode::DontAsk,
+            policies: rule_policies("global", &[], std::slice::from_ref(&push), &[]),
+            ..folders.permissions(PermissionMode::DontAsk)
+        };
+        assert!(matches!(decide(&ask_only, &[]), GateDecision::Deny { .. }));
+        // Don't ask runs what an always-allow rule names.
+        let allowed = RunPermissions {
+            policies: rule_policies("agent:a", &[], &[], std::slice::from_ref(&push)),
+            ..folders.permissions(PermissionMode::DontAsk)
+        };
+        assert_eq!(decide(&allowed, &[]), GateDecision::Allow);
+        // Plan refuses a change even when a rule allows it.
+        let planning = RunPermissions {
+            policies: rule_policies("agent:a", &[], &[], std::slice::from_ref(&push)),
+            ..folders.permissions(PermissionMode::Plan)
+        };
+        assert!(matches!(decide(&planning, &[]), GateDecision::Deny { .. }));
+    }
+
+    #[test]
+    fn bypass_while_off_runs_as_manual_and_a_thread_mode_wins() {
+        let folders = Folders::new();
+        let (push, bash) = folders.call("bash", json!({"command": "git push"}));
+        let permissions = RunPermissions {
+            bypass_enabled: false,
+            ..folders.permissions(PermissionMode::Bypass)
+        };
+        assert_eq!(permissions.mode_for(None), PermissionMode::Manual);
+        assert!(matches!(
+            decide_tool_call(
+                &permissions,
+                &[],
+                PermissionMode::Bypass,
+                &push,
+                &bash,
+                false,
+                &mut AutoReview::new(None, "", false)
+            ),
+            GateDecision::Ask { .. }
+        ));
+        let manual = folders.permissions(PermissionMode::Manual);
+        assert_eq!(
+            manual.mode_for(Some(PermissionMode::EditAuto)),
+            PermissionMode::EditAuto
+        );
+    }
+
+    #[test]
+    fn auto_mode_asks_when_the_reviewer_fails() {
+        let folders = Folders::new();
+        let (push, bash) = folders.call("bash", json!({"command": "git push"}));
+        let decided = decide_tool_call(
+            &folders.permissions(PermissionMode::Auto),
+            &[],
+            PermissionMode::Auto,
+            &push,
+            &bash,
+            false,
+            &mut AutoReview::new(None, "Ship it.", false),
+        );
+        assert!(matches!(decided, GateDecision::Ask { .. }));
+    }
+
+    #[test]
+    fn modes_migrate_from_the_old_agent_profile_ids() {
+        for (old, new) in [
+            ("ask", PermissionMode::Manual),
+            ("auto", PermissionMode::Auto),
+            ("strict", PermissionMode::DontAsk),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<PermissionMode>(json!(old)).unwrap(),
+                new
+            );
+        }
+        for mode in PermissionMode::ALL {
+            assert_eq!(serde_json::to_value(mode).unwrap(), json!(mode.id()));
+        }
+    }
+
+    #[test]
+    fn the_gate_names_each_call_and_offers_only_the_rules_that_can_apply() {
         let directory = std::path::Path::new("/work");
         let push = tool_request("bash", &json!({"command": "git push"}), directory);
         assert_eq!(summary(&push), "bash `git push` in /work");
@@ -663,17 +1426,22 @@ mod tests {
         );
         assert_eq!(summary(&long).chars().count(), 240);
         assert!(summary(&long).ends_with('…'));
-        assert_eq!(gate_options(true).len(), 4);
-        assert!(!gate_options(false)
+        assert_eq!(gate_options(true, true).len(), 4);
+        assert!(!gate_options(true, false)
             .iter()
             .any(|option| option == "Always allow for this agent"));
+        assert_eq!(gate_options(false, true), ["Allow once", "Deny"]);
         for (id, option) in GATE_ANSWERS {
             assert_eq!(gate_option(id), Some(option));
             assert_eq!(gate_answer(option), Some(id));
         }
+        for (id, option, mode) in PLAN_ANSWERS {
+            assert_eq!(gate_option(id), Some(option));
+            assert_eq!(gate_answer(option), Some(id));
+            assert_eq!(plan_choice(option), mode);
+        }
         assert_eq!(gate_option("allow_forever"), None);
         let ask_first = RunPermissions {
-            mode: GateMode::Ask,
             policies: vec![policy(ThreadPermissionDecision::Ask, &push)],
             ..RunPermissions::default()
         };
@@ -681,24 +1449,5 @@ mod tests {
         assert!(!asks_first(&ask_first, &[], &write));
         let thread_ask = [policy(ThreadPermissionDecision::Ask, &write)];
         assert!(asks_first(&RunPermissions::default(), &thread_ask, &write));
-    }
-
-    #[test]
-    fn an_ask_policy_beats_every_allow_policy() {
-        let push = tool_request(
-            "bash",
-            &json!({"command": "git push"}),
-            std::path::Path::new("/work"),
-        );
-        let permissions = RunPermissions {
-            policies: vec![policy(ThreadPermissionDecision::Ask, &push)],
-            ..RunPermissions::default()
-        };
-        assert!(permissions.gates());
-        let later_allow = [policy(ThreadPermissionDecision::Allow, &push)];
-        assert!(matches!(
-            decide_tool_call(&permissions, &later_allow, &push, "bash", false),
-            GateDecision::Ask { .. }
-        ));
     }
 }

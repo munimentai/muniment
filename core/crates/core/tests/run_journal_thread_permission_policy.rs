@@ -491,3 +491,72 @@ fn append_rejects_mismatched_and_noncanonical_resources() {
     assert_eq!(thread_for(&path, &started.run_id), thread_id);
     RunJournal::open(&path).unwrap();
 }
+
+#[test]
+fn a_thread_keeps_its_latest_permission_mode_until_it_is_deleted() {
+    use muniment_core::journal::ThreadPermissionModeSet;
+    use muniment_core::permission_gate::PermissionMode;
+    let path = journal_path();
+    let mut journal = RunJournal::open(&path).unwrap();
+    let thread_id = journal.append_new_run("workspace", &run_started()).unwrap();
+    assert_eq!(journal.thread_permission_mode(&thread_id).unwrap(), None);
+    let set = |mode, source: &str| ThreadPermissionModeSet {
+        mode,
+        actor: "user-1".into(),
+        source: source.into(),
+    };
+    journal
+        .append_thread_permission_mode_set(
+            1,
+            &thread_id,
+            &set(PermissionMode::Plan, "user"),
+            "2026-08-02T10:01:00Z",
+            &provenance(),
+        )
+        .unwrap();
+    // A policy between two modes changes nothing about the mode.
+    append_decision(
+        &mut journal,
+        &thread_id,
+        2,
+        &path_decision(Uuid::now_v7().to_string()),
+    );
+    journal
+        .append_thread_permission_mode_set(
+            3,
+            &thread_id,
+            &set(PermissionMode::EditAuto, "plan"),
+            "2026-08-02T10:02:00Z",
+            &provenance(),
+        )
+        .unwrap();
+    assert_eq!(
+        journal.thread_permission_mode(&thread_id).unwrap(),
+        Some(set(PermissionMode::EditAuto, "plan"))
+    );
+    assert_eq!(
+        journal
+            .active_thread_permission_policies(&thread_id)
+            .unwrap()
+            .len(),
+        1
+    );
+    // Only a person or a plan approval sets a mode.
+    assert!(matches!(
+        journal.append_thread_permission_mode_set(
+            4,
+            &thread_id,
+            &set(PermissionMode::Auto, "webhook"),
+            "2026-08-02T10:03:00Z",
+            &provenance(),
+        ),
+        Err(JournalError::InvalidEnvelope(_))
+    ));
+    // The journal reopens and verifies with the mode events in it.
+    drop(journal);
+    let mut journal = RunJournal::open(&path).unwrap();
+    journal
+        .append_thread_deleted(4, &thread_id, "2026-08-02T10:04:00Z", &provenance())
+        .unwrap();
+    assert_eq!(journal.thread_permission_mode(&thread_id).unwrap(), None);
+}

@@ -241,25 +241,28 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   place of the default model, and at its thinking level unless the run names
   one. A cloud grant names its own model.
 - `tools`: `{"disabled": [tool names]}`, the Pi tool names, MCP tools
-  included, that the agent's runs exclude.
+  included, that the agent's runs exclude. It is an advanced, deprecated
+  control kept for compatibility; permission modes and rules are the main
+  control.
 - `skills`: installed skill and plugin ids from the extension inventory,
   picked on every turn of the agent's thread as an automatic pick is.
-- `permissions`: `{"mode": "ask"|"auto"|"strict", "always_allow":
-  [request], "ask_first": [request]}`. A request is a thread permission
-  policy's `{"request_kind", "resource"}`: an exact absolute path and
-  operation, an exact command and working directory, or an exact tool name
-  and input. They hold in every thread of the agent as pre-decided allow and
-  ask policies beside the thread's own journaled policies. An ask policy
-  outranks every allow. A gate extension asks the runtime before each tool
-  call; `auto` runs what no policy settles, `ask` runs reads and asks about
-  the rest, `strict` asks about everything, and a run a webhook, an MCP poll
-  or another agent started asks before every write in `auto` too. The gate
-  shows the call's exact request and a summary and offers "Allow once",
-  "Allow for this thread", "Always allow for this agent" and "Deny".
+- `permissions`: `{"mode"?, "always_allow": [request], "ask_first":
+  [request], "deny"?: [request]}`. `mode` is a permission mode (see
+  [Permission modes](#permission-modes)); without one the agent runs in the
+  runtime's `default_agent_mode`. The old ids read as the new ones: `ask` is
+  `manual`, `auto` is `auto` and `strict` is `dont_ask`, and the next save
+  writes the new id. A request is a thread permission policy's
+  `{"request_kind", "resource"}`: an exact absolute path and operation, an
+  exact command and working directory, or an exact tool name and input. The
+  lists hold in every thread of the agent as pre-decided deny, ask and allow
+  policies beside the global rules and the thread's own journaled policies.
+  The gate shows the call's exact request and a summary and offers "Allow
+  once", "Allow for this thread", "Always allow for this agent" and "Deny".
   "Allow for this thread" journals an allow policy in the thread. "Always
   allow for this agent" also appends the request to `always_allow` through
-  the agent save path. A call an ask policy covers never offers it, and the
-  save refuses a request `ask_first` names.
+  the agent save path. A call an ask policy covers never offers it, a
+  protected path or critical command offers neither, and the save refuses a
+  request `ask_first` names.
 - `primary_runtime`, the runtime id that runs the agent's routines;
   `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
   `paused_reason`, which stops the routines while set.
@@ -431,6 +434,86 @@ swarm operation answers `invalid_request` with the reason in the error's
 `details`; `DesktopClientHolder::agent_request`, `swarm_request` and
 `request_with_error` return that `ProtocolError` beside the `ClientError`.
 
+### Permission modes
+
+One permission gate decides every tool call of every run, composer threads
+and agent threads alike. `muniment_core::permission_gate` holds it, on the
+journal's thread permission policies. A run loads the gate extension, which
+asks the runtime before each call. The rules apply in this order:
+
+1. Deny rules: global, then the agent's, then the thread's. They refuse.
+2. Ask-first rules, in the same order. They ask; `dont_ask` denies instead.
+3. Protected paths and critical commands. They ask in every mode but
+   `dont_ask`, which denies, `plan`, which refuses a change, and `bypass`,
+   which runs a protected path that is not critical.
+4. Always-allow rules, which `plan` ignores for changes.
+5. The mode's baseline.
+
+| Mode | `title` | Baseline |
+| --- | --- | --- |
+| `manual` | Ask before changes | Reads and read-only commands run; edits, other commands, web and MCP calls ask. |
+| `edit_auto` | Edit automatically | Also file edits and `mkdir`, `touch`, `mv`, `cp` and `rm` inside the working folders run. |
+| `plan` | Plan first | Reads only; changes are refused. The agent submits a plan with `plan_submit`, and the approval picks the mode the thread continues in. |
+| `auto` | Auto review | A cheap model reviews each action that is not a read and allows it or pauses it with its reason. |
+| `dont_ask` | Don't ask | Reads and always-allowed actions run; the rest is denied without asking, and the denial is the tool's result. |
+| `bypass` | Bypass permissions | Everything runs past the first three steps. Only on a container or a disposable machine, and refused until enabled. |
+
+- **Reads.** File reads, Muniment's memory and plan tools, and shell commands
+  the reader proves read-only: the read-only command core (`cat`, `grep`,
+  `rg`, `ls`, `find` and the rest) unless an option withdraws it (`find
+  -exec`, `fd -x`, `sort -o`, a writing `sed` or `awk`), plus `git status`,
+  `log`, `diff`, `show`, `rev-parse`, `ls-files` and `blame`. A pipeline or
+  compound command reads only when every part reads. A command the reader
+  cannot follow, a variable assignment, and anything behind a wrapper (`bash
+  -c`, `eval`, `sudo`, `env`, `xargs` and the like) counts as a command that
+  may do anything.
+- **Paths.** Checks separate reads from writes and match both the given path
+  and its symlink-resolved form. A write to `.git`, `.muniment`, an MCP
+  configuration file, a shell startup file, or the runtime's state folder
+  (outside the working folders) is protected; so is a read in the state
+  folder, apart from its installed extensions and skills. A write counts as
+  inside the working folders only when both forms are.
+- **Critical commands.** Removing `/`, the home folder or a system folder
+  recursively, wiping or formatting a disk, writing a disk device, and
+  shutting the computer down, also behind wrappers.
+- **Auto review.** The reviewer is the cheap model path the memory pass uses
+  (router cheapest, then Pi). It reads the run's request, all of it marked
+  untrusted when a webhook, an MCP poll or another agent started the run, and
+  answers exactly `{"verdict": "allow"|"block", "reason"}`. A failed call or
+  any other reply asks. After 3 blocks in a row or 20 in a run, every action
+  asks. Each verdict is logged as `permission_auto outcome=...`, and a pause
+  carries its reason in the gate title and in its approval's `reason`.
+- **Unattended runs.** A gate of a run a routine, a webhook, an MCP poll or
+  another agent started, or of any run while no client used the runtime for
+  two minutes, waits as an agent approval. When nobody answers within
+  `unattended_timeout_seconds` (four hours unless changed), the gate closes
+  unanswered, which the agent reads as "nobody answered", never as a
+  refusal or an approval, and the run stops with that note.
+
+The thread's mode is journal state: `thread.permission.mode.set`
+(`{"mode", "actor", "source": "user"|"plan"}`), the latest one winning. A
+thread with none runs in its agent's mode, else the runtime's default. The
+runtime's settings live in `<profile>/permission-settings.json`.
+
+Operations: `permission.modes` (`{}` → `{"modes": [{"id", "title",
+"description", "available", "reason"?}], "default_thread_mode",
+"default_agent_mode"}`); `permission.settings` (`{}` →
+`{"default_thread_mode", "default_agent_mode", "bypass_enabled",
+"unattended_timeout_seconds", "deny", "ask_first", "always_allow"}`);
+`permission.settings_save` (any of those fields → the settings); and
+`thread.permission_mode` (`{"thread_id"}`) and `thread.permission_mode_set`
+(`{"thread_id", "mode"}`), which answer `{"thread_id", "mode", "title",
+"source": "thread"|"agent"|"default", "set_by"?, "agent_id"?}`. A plan gate
+waits as an approval with `plan` and the answers `plan_manual`,
+`plan_edit_auto`, `plan_auto` and `plan_keep`. `thread.plan`
+(`{"thread_id"}` → `{"plan": null|{"run_id", "gate_id", "approval_id",
+"summary", "plan", "answers"}}`) reads it, and `thread.plan_answer`
+(`{"thread_id", "answer"}` → `{"status": "answered", "answer"}`) answers it,
+as `agent.approval_answer` does for an agent's thread. They are agent
+operations, so `DesktopClient::agent_request` sends them. Remotely the reads
+take `thread.read`, the thread changes take `run.write`, and
+`permission.settings_save` takes `runtime.admin`.
+
 ### Swarm
 
 `muniment_core::swarm` links one owner's runtimes so their agents work
@@ -508,9 +591,12 @@ steering, gate answers and run starts through `SwarmHost`.
   "approval"}`) answers one; the member that runs the gate applies the first
   answer. `agent.approval_resolved` follows. An agent gate's approval carries
   `rule`, the exact `{"request_kind", "resource"}` an `always_allow` entry
-  takes, `summary`, and `answers`, the answer ids it offers: `allow_once`,
-  `allow_thread`, `always_allow_agent` and `deny`. `answer` is one of those
-  ids or a gate answer such as `{"type": "confirm", "value": true}`.
+  takes, `summary`, `reason`, why the gate asks, and `answers`, the answer
+  ids it offers: `allow_once`, `allow_thread`, `always_allow_agent` and
+  `deny`. A plan gate's approval carries `plan` and no `rule`, and offers
+  `plan_manual`, `plan_edit_auto`, `plan_auto` and `plan_keep`. `answer` is
+  one of those ids or a gate answer such as `{"type": "confirm", "value":
+  true}`.
 - **Absence.** When no client used any member for 14 days, each member sets
   `paused_reason: "absence"` on the agents it runs. `swarm.resume` clears it
   on every member.

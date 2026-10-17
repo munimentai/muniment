@@ -692,6 +692,19 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("agent-tool-catalog", Operation::AgentToolCatalog),
         ("agent-replays", Operation::AgentReplays),
         ("agent-replay", Operation::AgentReplay),
+        ("permission-modes", Operation::PermissionModes),
+        ("permission-settings", Operation::PermissionSettings),
+        (
+            "permission-settings-save",
+            Operation::PermissionSettingsSave,
+        ),
+        ("thread-permission-mode", Operation::ThreadPermissionMode),
+        (
+            "thread-permission-mode-set",
+            Operation::ThreadPermissionModeSet,
+        ),
+        ("thread-plan", Operation::ThreadPlan),
+        ("thread-plan-answer", Operation::ThreadPlanAnswer),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -811,6 +824,51 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 "run": fixture_replay_run(),
                 "replay": fixture_replay(false)
             }),
+        ),
+        ("permission-modes", fixture_permission_modes()),
+        (
+            "permission-settings",
+            fixture_permission_settings(PERMISSION_DEFAULT_TIMEOUT),
+        ),
+        (
+            "permission-settings-save",
+            fixture_permission_settings(7200),
+        ),
+        (
+            "thread-permission-mode",
+            json!({
+                "thread_id": FIXTURE_THREAD_ID,
+                "mode": "plan",
+                "title": "Plan first",
+                "source": "agent",
+                "agent_id": FIXTURE_AGENT_ID
+            }),
+        ),
+        (
+            "thread-permission-mode-set",
+            json!({
+                "thread_id": FIXTURE_THREAD_ID,
+                "mode": "edit_auto",
+                "title": "Edit automatically",
+                "source": "thread",
+                "set_by": "user",
+                "agent_id": FIXTURE_AGENT_ID
+            }),
+        ),
+        (
+            "thread-plan",
+            json!({"plan": {
+                "run_id": "019965a0-0000-7000-8000-0000000000b3",
+                "gate_id": "019965a0-0000-7000-8000-0000000000b7",
+                "approval_id": "019965a0-0000-7000-8000-0000000000b3:019965a0-0000-7000-8000-0000000000b7",
+                "summary": FIXTURE_PLAN_SUMMARY,
+                "plan": FIXTURE_PLAN,
+                "answers": ["plan_manual", "plan_edit_auto", "plan_auto", "plan_keep"]
+            }}),
+        ),
+        (
+            "thread-plan-answer",
+            json!({"status": "answered", "answer": "plan_edit_auto"}),
         ),
     ];
     for (name, body) in swarm_responses {
@@ -996,6 +1054,33 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             capability: "fixture-capability".into(),
             idempotency_key: None,
             body: json!({"update_status": true, "agent_runs": true, "swarm": true, "swarm_live": true}),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "request-agent-approval-answer-plan.json",
+        &Request {
+            protocol: Protocol,
+            request_id: id(312)?,
+            operation: Operation::AgentApprovalAnswer,
+            capability: "fixture-capability".into(),
+            idempotency_key: None,
+            body: json!({
+                "approval_id": fixture_plan_approval()["approval_id"].clone(),
+                "answer": "plan_edit_auto"
+            }),
+        },
+    )?;
+    insert(
+        &mut fixtures,
+        "event-agent-approval-pending-plan.json",
+        &Event {
+            protocol: Protocol,
+            subscription_id: id(400)?,
+            event: EventName::AgentApprovalPending,
+            run_id: None,
+            run_seq: None,
+            body: fixture_plan_approval(),
         },
     )?;
     insert(
@@ -1526,7 +1611,101 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::AgentThreads | Operation::AgentReplays => json!({"id": FIXTURE_AGENT_ID}),
         Operation::AgentToolCatalog => json!({}),
         Operation::AgentReplay => json!({"id": FIXTURE_AGENT_ID, "replay_id": FIXTURE_REPLAY_ID}),
+        Operation::PermissionModes | Operation::PermissionSettings => json!({}),
+        Operation::PermissionSettingsSave => json!({
+            "default_agent_mode": "edit_auto",
+            "unattended_timeout_seconds": 7200
+        }),
+        Operation::ThreadPermissionMode | Operation::ThreadPlan => {
+            json!({"thread_id": FIXTURE_THREAD_ID})
+        }
+        Operation::ThreadPermissionModeSet => {
+            json!({"thread_id": FIXTURE_THREAD_ID, "mode": "edit_auto"})
+        }
+        Operation::ThreadPlanAnswer => {
+            json!({"thread_id": FIXTURE_THREAD_ID, "answer": "plan_edit_auto"})
+        }
     }
+}
+
+const PERMISSION_DEFAULT_TIMEOUT: u64 = 4 * 60 * 60;
+const FIXTURE_PLAN_SUMMARY: &str = "1. Add a `--dry-run` flag to the export script.";
+const FIXTURE_PLAN: &str = "1. Add a `--dry-run` flag to the export script.\n2. Print each file it would write.\n3. Test it on the sample folder.";
+
+/// The permission modes as `permission.modes` lists them with the default
+/// settings: bypass is off.
+fn fixture_permission_modes() -> serde_json::Value {
+    json!({
+        "modes": [
+            {"id": "manual", "title": "Ask before changes", "description": "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.", "available": true},
+            {"id": "edit_auto", "title": "Edit automatically", "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "available": true},
+            {"id": "plan", "title": "Plan first", "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "available": true},
+            {"id": "auto", "title": "Auto review", "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "available": true},
+            {"id": "dont_ask", "title": "Don't ask", "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "available": true},
+            {"id": "bypass", "title": "Bypass permissions", "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Use it only on a container or a disposable machine.", "available": false, "reason": "Bypass is off. Turn it on in the runtime's permission settings, and only on a container or a disposable machine."}
+        ],
+        "default_thread_mode": "manual",
+        "default_agent_mode": "manual"
+    })
+}
+
+/// The runtime's permission settings, with one global rule of each kind.
+fn fixture_permission_settings(timeout: u64) -> serde_json::Value {
+    json!({
+        "default_thread_mode": "manual",
+        "default_agent_mode": if timeout == PERMISSION_DEFAULT_TIMEOUT { "manual" } else { "edit_auto" },
+        "bypass_enabled": false,
+        "unattended_timeout_seconds": timeout,
+        "deny": [{"request_kind": "command", "resource": {
+            "type": "command",
+            "arguments": ["bash", "git push --force"],
+            "working_directory": "/work/agents/Lead-scout"
+        }}],
+        "ask_first": [{"request_kind": "command", "resource": fixture_push_resource()}],
+        "always_allow": [{"request_kind": "tool", "resource": {
+            "type": "tool",
+            "name": "mcp__leads__search_leads",
+            "input": {"stage": "new"}
+        }}]
+    })
+}
+
+/// A plan gate's approval: the plan and the modes it may approve.
+fn fixture_plan_approval() -> serde_json::Value {
+    let gate_id = "019965a0-0000-7000-8000-0000000000b7";
+    json!({
+        "approval_id": format!("019965a0-0000-7000-8000-0000000000b3:{gate_id}"),
+        "runtime_id": FIXTURE_RUNTIME_A,
+        "run_id": "019965a0-0000-7000-8000-0000000000b3",
+        "gate_id": gate_id,
+        "agent_id": FIXTURE_AGENT_ID,
+        "agent_name": "Lead scout",
+        "thread_id": FIXTURE_THREAD_ID,
+        "request": {
+            "gate_id": gate_id,
+            "kind": "select",
+            "title": "Approve this plan?",
+            "options": [
+                "Approve, then ask before changes",
+                "Approve and edit automatically",
+                "Approve with auto review",
+                "Keep planning"
+            ],
+            "policy": {
+                "request_kind": "tool",
+                "resource": {"type": "tool", "name": "plan_submit", "input": {}},
+                "summary": FIXTURE_PLAN_SUMMARY,
+                "plan": FIXTURE_PLAN
+            }
+        },
+        "summary": FIXTURE_PLAN_SUMMARY,
+        "plan": FIXTURE_PLAN,
+        "answers": ["plan_manual", "plan_edit_auto", "plan_auto", "plan_keep"],
+        "state": "pending",
+        "created_at": "2026-01-01T14:01:00Z",
+        "answered_at": null,
+        "answered_by": null
+    })
 }
 
 const FIXTURE_RUNTIME_A: &str = "018f0000-0000-7000-8000-0000000000c1";
@@ -1596,16 +1775,18 @@ fn fixture_approval(state: &str) -> serde_json::Value {
         "request": {
             "gate_id": "019965a0-0000-7000-8000-0000000000b4",
             "kind": "select",
-            "title": "Allow bash `git push origin main` in /work/agents/Lead-scout? This agent asks before it changes anything.",
+            "title": "Allow bash `git push origin main` in /work/agents/Lead-scout? Auto review paused this: The request does not ask to publish the branch.",
             "options": ["Allow once", "Allow for this thread", "Always allow for this agent", "Deny"],
             "policy": {
                 "request_kind": "command",
                 "resource": fixture_push_resource(),
-                "summary": "bash `git push origin main` in /work/agents/Lead-scout"
+                "summary": "bash `git push origin main` in /work/agents/Lead-scout",
+                "reason": "Auto review paused this: The request does not ask to publish the branch."
             }
         },
         "rule": {"request_kind": "command", "resource": fixture_push_resource()},
         "summary": "bash `git push origin main` in /work/agents/Lead-scout",
+        "reason": "Auto review paused this: The request does not ask to publish the branch.",
         "answers": ["allow_once", "allow_thread", "always_allow_agent", "deny"],
         "state": state,
         "created_at": "2026-01-01T14:01:00Z",
@@ -1854,7 +2035,7 @@ fn fixture_agent() -> serde_json::Value {
         "tools": {"disabled": ["powershell"]},
         "skills": ["review"],
         "permissions": {
-            "mode": "ask",
+            "mode": "manual",
             "always_allow": [{
                 "request_kind": "command",
                 "resource": {"type": "command", "arguments": ["bash", "git status"], "working_directory": "/work/agents/Lead-scout"}
@@ -2253,6 +2434,13 @@ mod tests {
             Operation::AgentToolCatalog,
             Operation::AgentReplays,
             Operation::AgentReplay,
+            Operation::PermissionModes,
+            Operation::PermissionSettings,
+            Operation::PermissionSettingsSave,
+            Operation::ThreadPermissionMode,
+            Operation::ThreadPermissionModeSet,
+            Operation::ThreadPlan,
+            Operation::ThreadPlanAnswer,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -2337,12 +2525,21 @@ mod tests {
             "event-group-posted.json",
             "request-run-chat-events-swarm-live.json",
             "request-agent-approval-answer-always.json",
+            "response-permission-modes.json",
+            "response-permission-settings.json",
+            "response-permission-settings-save.json",
+            "response-thread-permission-mode.json",
+            "response-thread-permission-mode-set.json",
+            "response-thread-plan.json",
+            "response-thread-plan-answer.json",
+            "request-agent-approval-answer-plan.json",
+            "event-agent-approval-pending-plan.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16,
             "every canonical fixture must be inventoried"
         );
     }

@@ -175,8 +175,14 @@ pub struct Approval {
     /// A short human summary of the operation and its inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Why the gate asks, such as the auto reviewer's reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The plan a plan gate asks to approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
     /// The answer ids `agent.approval_answer` takes for this gate, such as
-    /// `allow_once` and `always_allow_agent`.
+    /// `allow_once` and `always_allow_agent`, or `plan_edit_auto` for a plan.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<String>,
     /// `pending`, `answered` or `closed`.

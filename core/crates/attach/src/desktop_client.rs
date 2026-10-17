@@ -1282,6 +1282,18 @@ impl DesktopClient {
             Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
             Operation::AgentReplays => &["replays"],
             Operation::AgentReplay => &["run", "replay"],
+            Operation::PermissionModes => &["modes", "default_thread_mode", "default_agent_mode"],
+            Operation::PermissionSettings | Operation::PermissionSettingsSave => &[
+                "default_thread_mode",
+                "default_agent_mode",
+                "bypass_enabled",
+                "unattended_timeout_seconds",
+            ],
+            Operation::ThreadPermissionMode | Operation::ThreadPermissionModeSet => {
+                &["thread_id", "mode", "source"]
+            }
+            Operation::ThreadPlan => &["plan"],
+            Operation::ThreadPlanAnswer => &["status"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)
@@ -1313,6 +1325,23 @@ impl DesktopClient {
         self.agent_request(
             Operation::AgentReplay,
             serde_json::json!({"id": id, "replay_id": replay_id}),
+        )
+    }
+
+    /// Lists the permission modes and which can be chosen now.
+    pub fn permission_modes(&mut self) -> Result<Value, ClientError> {
+        self.agent_request(Operation::PermissionModes, serde_json::json!({}))
+    }
+
+    /// Sets the permission mode a thread runs in.
+    pub fn set_thread_permission_mode(
+        &mut self,
+        thread_id: &str,
+        mode: &str,
+    ) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::ThreadPermissionModeSet,
+            serde_json::json!({"thread_id": thread_id, "mode": mode}),
         )
     }
 

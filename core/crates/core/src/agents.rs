@@ -8,7 +8,7 @@ pub use crate::agent_routines::{
     McpTrigger, PollRecord, Routine, RoutineResult, Trigger, WebhookPreset, WebhookTrigger,
 };
 use crate::agent_runs::{NewRun, Run, RunStatus, RunStore, RunTrigger, TriggerKind};
-pub use crate::permission_gate::{GateMode as PermissionMode, PolicyRequest};
+pub use crate::permission_gate::{PermissionMode, PolicyRequest};
 use chrono::{Datelike, TimeZone, Timelike};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -90,63 +90,38 @@ impl<'de> Deserialize<'de> for MessagingAllow {
     }
 }
 /// An agent's permission profile, in the thread permission policy's own
-/// terms: a gate mode and exact policy requests that hold in every thread
-/// the agent owns. An `ask_first` request asks even when an
-/// `always_allow` request, or a thread's own answer, allows it.
+/// terms: a global permission mode and exact policy requests that hold in
+/// every thread the agent owns. A `deny` request refuses, and an
+/// `ask_first` request asks even when an `always_allow` request, or a
+/// thread's own answer, allows it. Without a mode the agent runs in the
+/// runtime's default agent mode.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentPermissions {
-    #[serde(default)]
-    pub mode: PermissionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PermissionMode>,
     #[serde(default)]
     pub always_allow: Vec<PolicyRequest>,
     #[serde(default)]
     pub ask_first: Vec<PolicyRequest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<PolicyRequest>,
 }
 /// The most requests in each permission list.
 pub const MAX_PERMISSION_RULES: usize = 64;
 impl AgentPermissions {
-    /// The profile as pre-decided thread policies, oldest first.
+    /// The profile as pre-decided thread policies.
     pub fn policies(&self, agent_id: &str) -> Vec<crate::journal::ThreadPermissionPolicyDecided> {
-        use crate::journal::{ThreadPermissionAnswerSource, ThreadPermissionDecision};
-        let decided = |request: &PolicyRequest, decision: ThreadPermissionDecision| {
-            crate::journal::ThreadPermissionPolicyDecided {
-                policy_id: uuid::Uuid::now_v7().to_string(),
-                decision,
-                request_kind: request.request_kind.clone(),
-                resource: request.resource.clone(),
-                actor: format!("agent:{agent_id}"),
-                answer_source: ThreadPermissionAnswerSource::Native,
-                gate_id: None,
-            }
-        };
-        self.always_allow
-            .iter()
-            .map(|request| decided(request, ThreadPermissionDecision::Allow))
-            .chain(
-                self.ask_first
-                    .iter()
-                    .map(|request| decided(request, ThreadPermissionDecision::Ask)),
-            )
-            .collect()
+        crate::permission_gate::rule_policies(
+            &format!("agent:{agent_id}"),
+            &self.deny,
+            &self.ask_first,
+            &self.always_allow,
+        )
     }
 
     fn validate(&self) -> Result<(), String> {
-        for requests in [&self.always_allow, &self.ask_first] {
-            if requests.len() > MAX_PERMISSION_RULES {
-                return Err(format!(
-                    "Keep each permission list under {MAX_PERMISSION_RULES} entries."
-                ));
-            }
-            if !requests.iter().all(|request| {
-                crate::journal::thread_permission_policy::valid_policy_resource(
-                    &request.request_kind,
-                    &request.resource,
-                )
-            }) {
-                return Err(
-                    "A permission entry names an exact absolute path, command or tool.".into(),
-                );
-            }
+        for requests in [&self.always_allow, &self.ask_first, &self.deny] {
+            crate::permission_gate::validate_rules(requests, MAX_PERMISSION_RULES)?;
         }
         Ok(())
     }
@@ -673,6 +648,20 @@ pub fn next_after<T: TimeZone>(
     Err("The next schedule time could not be found.".into())
 }
 pub fn save(profile: &Path, agent: Agent) -> Result<Agent, String> {
+    if let Some(mode) = agent.permissions.as_ref().and_then(|rules| rules.mode) {
+        let previous_mode = get(profile, &agent.id)
+            .ok()
+            .and_then(|previous| previous.permissions)
+            .and_then(|rules| rules.mode);
+        // A saved agent keeps a mode the settings turned off since; a new
+        // choice must be available.
+        if previous_mode != Some(mode) {
+            if let Some(reason) = crate::permission_gate::settings::load(profile).unavailable(mode)
+            {
+                return Err(reason.into());
+            }
+        }
+    }
     let previous = (!agent.id.is_empty())
         .then(|| get(profile, &agent.id).ok())
         .flatten();
@@ -1124,7 +1113,7 @@ pub struct AgentLaunch {
     pub model: Option<AgentModel>,
     pub disabled_tools: Vec<String>,
     pub skills: Vec<String>,
-    /// None loads no permission gate.
+    /// The run's permission gate. Every agent run loads it.
     pub permissions: Option<crate::permission_gate::RunPermissions>,
 }
 /// The launch settings of the agent that owns `thread`. `trigger` is what
@@ -1137,18 +1126,23 @@ pub fn thread_launch(
     let Some(agent) = thread_agent(profile, thread)? else {
         return Ok(None);
     };
-    let profile = agent.permissions.clone().unwrap_or_default();
+    let rules = agent.permissions.clone().unwrap_or_default();
+    let settings = crate::permission_gate::settings::load(profile);
+    let mut policies = settings.policies();
+    policies.extend(rules.policies(&agent.id));
     let permissions = crate::permission_gate::RunPermissions {
-        mode: profile.mode,
+        mode: settings.effective(rules.mode.unwrap_or(settings.default_agent_mode)),
         event_triggered: trigger.is_some_and(TriggerKind::event_triggered),
-        policies: profile.policies(&agent.id),
+        policies,
+        bypass_enabled: settings.bypass_enabled,
+        ..Default::default()
     };
     Ok(Some(AgentLaunch {
         agent_id: agent.id,
         model: agent.model,
         disabled_tools: agent.tools.map(|tools| tools.disabled).unwrap_or_default(),
         skills: agent.skills.unwrap_or_default(),
-        permissions: permissions.gates().then_some(permissions),
+        permissions: Some(permissions),
     }))
 }
 /// Adds or replaces one routine. An empty id adds a routine with a new id.
@@ -1459,6 +1453,9 @@ pub fn operation(
                 &request.format,
                 &crate::agent_templates::Installed::local(),
             )
+        }
+        "permission.modes" | "permission.settings" | "permission.settings_save" => {
+            crate::permission_gate::settings::operation(profile, operation, body)
         }
         _ => Err("The agent operation is unknown.".into()),
     }
@@ -1931,10 +1928,14 @@ mod tests {
             Some("high")
         );
         assert_eq!(read.tools.as_ref().unwrap().disabled.len(), 2);
+        // The old `strict` migrates to `dont_ask`, and a save writes the new id.
         assert_eq!(
             read.permissions.as_ref().unwrap().mode,
-            PermissionMode::Strict
+            Some(PermissionMode::DontAsk)
         );
+        let file =
+            fs::read_to_string(folder(&profile, &read.id).unwrap().join("agent.md")).unwrap();
+        assert!(file.contains("\"mode\": \"dont_ask\""), "{file}");
         assert_eq!(read.paused_reason.as_deref(), Some("absence"));
         assert_eq!(
             read.messaging,
@@ -2000,6 +2001,10 @@ mod tests {
         })
         .contains("exact absolute path"));
         assert!(invalid(&|a| a.primary_runtime = Some("../etc".into())).contains("runtime id"));
+        assert!(
+            invalid(&|a| a.permissions.as_mut().unwrap().mode = Some(PermissionMode::Bypass))
+                .contains("Bypass is off")
+        );
         assert!(invalid(&|a| {
             a.messaging = Some(AgentMessaging {
                 allow: MessagingAllow::Agents(vec!["not-an-id".into()]),

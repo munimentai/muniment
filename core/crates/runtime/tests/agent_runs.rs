@@ -23,8 +23,9 @@ use common::TemporaryProfile;
 /// The tests change process-wide stub settings, so they run one at a time.
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-const STUB_SETTINGS: [&str; 9] = [
+const STUB_SETTINGS: [&str; 10] = [
     "PI_RESUME_STUB_AGENT_GATE",
+    "PI_RESUME_STUB_PLAN",
     "PI_RESUME_STUB_STEER_CAPTURE",
     "PI_RESUME_STUB_PERMISSION_CAPTURE",
     "PI_RESUME_STUB_REPLY",
@@ -895,4 +896,176 @@ fn a_failed_run_keeps_its_inputs_without_secrets_and_replays_against_the_current
     let folder = agents::folder(setup.profile(), &agent.id).unwrap();
     agents::delete_agent(setup.profile(), &agent.id, false).unwrap();
     assert!(!folder.exists());
+}
+
+/// Runs one permission operation through the runtime's attach boundary.
+fn permission_operation(setup: &Setup, operation: &str, body: Value) -> Result<Value, String> {
+    use muniment_core::run_start::RunAttachBoundaries;
+    let operation: muniment_core::attach::Operation =
+        serde_json::from_value(json!(operation)).unwrap();
+    setup
+        .state
+        .boundaries()
+        .agent_operation(operation, body)
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[test]
+fn a_plan_waits_as_an_approval_and_its_answer_switches_the_thread_mode() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-plan", true, RuntimeHost::default());
+    let plan = "1. Read the export script.\n2. Add a dry-run flag.";
+    std::env::set_var("PI_RESUME_STUB_PLAN", plan);
+    let agent: Agent = serde_json::from_value(json!({
+        "name": "Planner",
+        "instructions": "Plan before you change anything.",
+        "permissions": {"mode": "plan"}
+    }))
+    .unwrap();
+    let agent = agents::save(setup.profile(), agent).unwrap();
+    agents::queue_run(setup.profile(), &agent.id).unwrap();
+    let run = setup.store().latest(&agent.id).unwrap().unwrap();
+    assert!(wait(|| {
+        setup.tick();
+        setup.run(&run.id).status == RunStatus::WaitingInput
+    }));
+    let thread = setup.run(&run.id).thread_id.unwrap();
+    let mode = permission_operation(
+        &setup,
+        "thread.permission_mode",
+        json!({"thread_id": thread}),
+    )
+    .unwrap();
+    assert_eq!(mode["mode"], "plan");
+    assert_eq!(mode["source"], "agent");
+    assert_eq!(mode["agent_id"], agent.id.as_str());
+
+    // The plan waits as a pending approval every member and the phone see.
+    let waiting =
+        permission_operation(&setup, "thread.plan", json!({"thread_id": thread})).unwrap();
+    assert_eq!(waiting["plan"]["plan"], plan);
+    assert_eq!(waiting["plan"]["run_id"], run.id.as_str());
+    assert_eq!(
+        waiting["plan"]["answers"],
+        json!(["plan_manual", "plan_edit_auto", "plan_auto", "plan_keep"])
+    );
+    setup.state.swarm().tick().unwrap();
+    let approvals = setup
+        .state
+        .swarm()
+        .operation(
+            muniment_core::attach::Operation::AgentApprovals,
+            json!({}),
+            None,
+        )
+        .unwrap();
+    let approval = &approvals["approvals"][0];
+    assert_eq!(approval["plan"], plan);
+    assert_eq!(approval["answers"], waiting["plan"]["answers"]);
+    assert!(approval.get("rule").is_none());
+
+    // Approving it in a mode journals that mode for the thread.
+    assert!(permission_operation(
+        &setup,
+        "thread.plan_answer",
+        json!({"thread_id": thread, "answer": "always_allow_agent"})
+    )
+    .is_err());
+    let answered = permission_operation(
+        &setup,
+        "thread.plan_answer",
+        json!({"thread_id": thread, "answer": "plan_edit_auto"}),
+    )
+    .unwrap();
+    assert_eq!(answered["status"], "answered");
+    assert!(wait(|| setup.live() == 0));
+    setup.tick();
+    assert_eq!(setup.run(&run.id).status, RunStatus::Completed);
+    let mode = permission_operation(
+        &setup,
+        "thread.permission_mode",
+        json!({"thread_id": thread}),
+    )
+    .unwrap();
+    assert_eq!(mode["mode"], "edit_auto");
+    assert_eq!(mode["source"], "thread");
+    assert_eq!(mode["set_by"], "plan");
+    assert_eq!(
+        permission_operation(&setup, "thread.plan", json!({"thread_id": thread})).unwrap(),
+        json!({"plan": null})
+    );
+
+    // A person sets the mode too, but never to bypass while it is off.
+    let refused = permission_operation(
+        &setup,
+        "thread.permission_mode_set",
+        json!({"thread_id": thread, "mode": "bypass"}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("Bypass is off"), "{refused}");
+    let set = permission_operation(
+        &setup,
+        "thread.permission_mode_set",
+        json!({"thread_id": thread, "mode": "dont_ask"}),
+    )
+    .unwrap();
+    assert_eq!(set["mode"], "dont_ask");
+    assert_eq!(set["set_by"], "user");
+    let modes = permission_operation(&setup, "permission.modes", json!({})).unwrap();
+    assert_eq!(modes["modes"].as_array().unwrap().len(), 6);
+    assert_eq!(modes["default_agent_mode"], "manual");
+}
+
+#[test]
+fn nobody_answers_an_unattended_gate_so_its_action_is_denied_and_the_run_pauses() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-unattended", true, RuntimeHost::default());
+    let answers = setup.temporary.root.join("answers.jsonl");
+    std::env::set_var("PI_RESUME_STUB_PERMISSION_CAPTURE", &answers);
+    // The wait is a runtime setting.
+    permission_operation(
+        &setup,
+        "permission.settings_save",
+        json!({"unattended_timeout_seconds": 3600}),
+    )
+    .unwrap();
+    let agent = setup.agent("Night shift");
+    let run = enqueue(&setup.store(), &agent.id, TriggerKind::Cron);
+    assert!(wait(|| {
+        setup.tick();
+        setup.run(&run.id).status == RunStatus::WaitingInput
+    }));
+    let age = |hours: i64| {
+        let mut waiting = setup.run(&run.id);
+        waiting.waiting_since = Some(agent_runs::timestamp(agent_runs::now() - hours * 3600));
+        setup.store().save(&mut waiting).unwrap();
+    };
+    // Within the wait nothing happens.
+    age(0);
+    setup.tick();
+    assert_eq!(setup.run(&run.id).status, RunStatus::WaitingInput);
+    age(2);
+    setup.tick();
+    assert!(wait(|| setup.live() == 0));
+    setup.tick();
+    let paused = setup.run(&run.id);
+    assert_eq!(paused.status, RunStatus::Cancelled);
+    assert_eq!(
+        paused.error.as_deref(),
+        Some(muniment_runtime_core::UNATTENDED_DENY_REASON)
+    );
+    // The gate closed with no answer, which the run reads as unanswered,
+    // never as approval.
+    let answered: Vec<Value> = std::fs::read_to_string(&answers)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(answered.len(), 1, "{answered:?}");
+    assert_eq!(answered[0]["cancelled"], true);
+    assert!(answered[0].get("confirmed").is_none());
 }

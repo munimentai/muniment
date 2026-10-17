@@ -82,7 +82,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | model_install_native | It adapts model installation to native filesystems. |
 | module | onnx_runtime | It loads the native inference runtime. |
 | module | owned_threads | It selects owned journal threads. |
-| module | permission_gate | It enforces per-thread permission answers. |
+| module | permission_gate | It decides each tool call from the permission modes, the global, agent and thread rules, and the run's permission answers. |
 | module | pi_execution | It executes Pi runs. |
 | module | pi_launch | It configures Pi launches. |
 | module | pi_packages | It installs Pi extension packages. |

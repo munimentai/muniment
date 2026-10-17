@@ -350,6 +350,16 @@ fn pi_resume(args: Vec<String>) {
                 );
                 if std::env::var_os("PI_RESUME_STUB_STEER_CAPTURE").is_some() {
                     // Keep the run active until the test sends a queued message.
+                } else if let Ok(plan) = std::env::var("PI_RESUME_STUB_PLAN") {
+                    // The plan tool's first step: the plan check.
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"plan-check", "method":"editor",
+                            "title":"muniment:plan-check",
+                            "prefill":serde_json::json!({"plan": plan}).to_string()
+                        })
+                    );
                 } else if let Ok(call) = std::env::var("PI_RESUME_STUB_AGENT_GATE") {
                     // The agent permission extension's first step: the check.
                     println!(
@@ -476,6 +486,40 @@ fn pi_resume(args: Vec<String>) {
                         .open(path)
                         .unwrap();
                     writeln!(capture, "{request}").unwrap();
+                }
+                // The plan tool's later steps: the gate the check asks for,
+                // then the approval its answer names.
+                if std::env::var_os("PI_RESUME_STUB_PLAN").is_some() {
+                    let next = match request["id"].as_str() {
+                        Some("plan-check") => {
+                            let verdict: serde_json::Value =
+                                serde_json::from_str(request["value"].as_str().unwrap_or("{}"))
+                                    .unwrap_or_default();
+                            (verdict["decision"] == "ask").then(|| {
+                                serde_json::json!({
+                                    "type":"extension_ui_request", "id":"plan-select",
+                                    "method":"select", "title":verdict["title"],
+                                    "options":verdict["options"]
+                                })
+                            })
+                        }
+                        Some("plan-select") => request["value"]
+                            .as_str()
+                            .filter(|choice| *choice != "Keep planning")
+                            .map(|choice| {
+                                serde_json::json!({
+                                    "type":"extension_ui_request", "id":"plan-approve",
+                                    "method":"editor", "title":"muniment:plan-approve",
+                                    "prefill":serde_json::json!({"choice": choice}).to_string()
+                                })
+                            }),
+                        _ => None,
+                    };
+                    if let Some(next) = next {
+                        println!("{next}");
+                        io::stdout().flush().unwrap();
+                        continue;
+                    }
                 }
                 // The agent permission extension's later steps: the gate
                 // the check asks for, then the save its answer names.

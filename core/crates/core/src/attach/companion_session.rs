@@ -454,6 +454,13 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::AgentToolCatalog
         | Operation::AgentReplays
         | Operation::AgentReplay
+        | Operation::PermissionModes
+        | Operation::PermissionSettings
+        | Operation::PermissionSettingsSave
+        | Operation::ThreadPermissionMode
+        | Operation::ThreadPermissionModeSet
+        | Operation::ThreadPlan
+        | Operation::ThreadPlanAnswer
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }

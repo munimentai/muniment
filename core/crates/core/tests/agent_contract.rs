@@ -32,7 +32,7 @@ fn the_agent_fixture_is_an_agent_v2() {
     );
     assert_eq!(
         agent.permissions.as_ref().unwrap().mode,
-        PermissionMode::Ask
+        Some(PermissionMode::Manual)
     );
     assert_eq!(agent.messaging.as_ref().unwrap().allow, MessagingAllow::Any);
     assert!(agent.primary_runtime.is_none() && agent.paused_reason.is_none());
@@ -167,4 +167,48 @@ fn the_polish_fixtures_are_core_shapes() {
     let posted = fixture("event-group-posted.json")["body"].clone();
     assert_eq!(posted["post"]["author"]["phase"], "debate");
     assert_eq!(posted["post"]["author"]["round"], 2);
+}
+
+#[test]
+fn the_permission_fixtures_are_the_cores_own_shapes() {
+    use muniment_core::permission_gate::settings::{self, PermissionSettings};
+    // `permission.modes` with the default settings is exactly the fixture.
+    let modes = fixture("response-permission-modes.json")["body"].clone();
+    assert_eq!(settings::modes(&PermissionSettings::default()), modes);
+    for name in [
+        "response-permission-settings.json",
+        "response-permission-settings-save.json",
+    ] {
+        round_trip::<PermissionSettings>(&fixture(name)["body"]);
+    }
+    // A plan approval carries the plan and the mode answers the gate offers.
+    let plan = fixture("event-agent-approval-pending-plan.json")["body"].clone();
+    let approval: muniment_core::swarm::Approval = round_trip(&plan);
+    assert!(approval.rule.is_none());
+    assert_eq!(
+        approval.answers,
+        muniment_core::permission_gate::PLAN_ANSWERS
+            .iter()
+            .map(|(id, _, _)| id.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        plan["request"]["options"],
+        serde_json::json!(muniment_core::permission_gate::plan_options())
+    );
+    assert_eq!(
+        plan["request"]["title"],
+        muniment_core::permission_gate::PLAN_GATE_TITLE
+    );
+    let pending = fixture("event-agent-approval-pending.json")["body"].clone();
+    let approval: muniment_core::swarm::Approval = round_trip(&pending);
+    assert!(approval
+        .reason
+        .unwrap()
+        .starts_with("Auto review paused this"));
+    let answer = fixture("request-agent-approval-answer-plan.json");
+    assert!(muniment_core::permission_gate::gate_option(
+        answer["body"]["answer"].as_str().unwrap()
+    )
+    .is_some());
 }
