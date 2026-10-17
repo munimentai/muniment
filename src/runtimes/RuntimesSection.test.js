@@ -272,55 +272,67 @@ describe('machine picker', () => {
 })
 
 describe('Model sharing', () => {
-  it('turns sharing on under the machine list and shows which machines use it', async () => {
-    const shared = { ...buildBox, sharing: 'shared' }
-    const reader = { ...studio, sharing: 'no_access' }
-    let on = false
-    const current = () => ({ ...runtimeList(on ? [local, reader, shared] : [local, studio, buildBox]), shareModels: on })
-    const bridge = tauri({
-      runtime_list: current,
-      runtime_refresh: current,
-      runtime_share_models: ({ share }) => { on = share; return current() },
-    })
+  // Core keeps the sharing switch: `fleet.credentials` answers and sets it.
+  function fleet(state) {
+    return ({ runtime, operation, body }) => {
+      if (operation !== 'fleet.credentials') throw new Error(`unexpected operation: ${operation}`)
+      expect(runtime).toBe('local')
+      if (body.share_models !== undefined) state.shareModels = body.share_models
+      return { share_models: state.shareModels, role: 'full', removed: false, secrets: [], audit: [] }
+    }
+  }
+
+  it('reads the switch from core and turns sharing on through fleet.credentials', async () => {
+    const state = { shareModels: false }
+    const bridge = tauri({ agent_request: fleet(state) })
     render(RuntimesSection, { tauri: bridge, listen })
     const toggle = await screen.findByRole('switch', { name: 'Share model connections' })
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.credentials', body: {} }))
+    await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByRole('note')).toHaveTextContent('Shared subscriptions depend on this computer.')
 
     await fireEvent.click(toggle)
-    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { share: true }))
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.credentials', body: { share_models: true } }))
+    expect(state.shareModels).toBe(true)
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
-    const box = screen.getByRole('group', { name: 'Build box' })
-    expect(within(box).getByText("Uses this computer's models")).toBeInTheDocument()
-    const desk = screen.getByRole('group', { name: 'Studio' })
-    expect(within(desk).getByText('Check that it is running and reachable.')).toBeInTheDocument()
+    expect(bridge.invoke).not.toHaveBeenCalledWith('runtime_share_models', expect.anything())
+    // Machine rows carry no share state of their own.
+    expect(screen.queryByText("Uses this computer's models")).toBeNull()
   })
 
-  it('asks a machine this device may not run on to pair again', async () => {
-    const reader = { ...studio, status: 'online', scopes: ['thread.read'], sharing: 'no_access' }
-    render(RuntimesSection, { tauri: tauri({ runtime_list: () => ({ ...runtimeList([local, reader]), shareModels: true }), runtime_refresh: () => ({ ...runtimeList([local, reader]), shareModels: true }) }), listen })
-    const desk = await screen.findByRole('group', { name: 'Studio' })
-    expect(within(desk).getByText("Pair it again with run access to share this computer's models.")).toBeInTheDocument()
+  it('names the failure when core refuses the switch', async () => {
+    const bridge = tauri({ agent_request: ({ body }) => { if (body.share_models !== undefined) throw new Error('This runtime is not in a fleet.'); return { share_models: false } } })
+    render(RuntimesSection, { tauri: bridge, listen })
+    const toggle = await screen.findByRole('switch', { name: 'Share model connections' })
+    await waitFor(() => expect(toggle).toBeEnabled())
+    await fireEvent.click(toggle)
+    expect(await screen.findByText('This runtime is not in a fleet.')).toBeInTheDocument()
   })
 
-  it('keeps shared connections in MuniCloud for a signed-in account', async () => {
-    let state = { shareModels: true, shareViaCloud: false }
-    const limited = { ...studio, status: 'online', sharing: 'limit' }
-    const current = () => ({ ...runtimeList([local, limited]), ...state })
+  it('keeps shared connections in MuniCloud for a signed-in account, and takes them back when sharing turns off', async () => {
+    const state = { shareModels: true }
+    let viaCloud = false
+    const current = () => ({ ...runtimeList([local, studio]), shareViaCloud: viaCloud })
     const bridge = tauri({
       auth_status: () => ({ signed_in: true, subject: 'owner' }),
+      agent_request: fleet(state),
       runtime_list: current,
       runtime_refresh: current,
-      runtime_share_models: ({ share, cloud }) => { state = { shareModels: share, shareViaCloud: cloud ?? state.shareViaCloud }; return current() },
+      runtime_share_models: ({ cloud }) => { viaCloud = cloud; return current() },
     })
     render(RuntimesSection, { tauri: bridge, listen })
     const cloud = await screen.findByRole('switch', { name: 'Keep them in MuniCloud' })
+    await waitFor(() => expect(cloud).toBeEnabled())
     expect(screen.getByRole('note')).toHaveTextContent('Shared subscriptions depend on this computer.')
     await fireEvent.click(cloud)
-    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { share: true, cloud: true }))
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { cloud: true }))
     await waitFor(() => expect(screen.getByRole('note')).toHaveTextContent('MuniCloud renews shared sign-ins'))
-    const desk = screen.getByRole('group', { name: 'Studio' })
-    expect(within(desk).getByText('Your account shares with as many machines as it may. Remove one to add this machine.')).toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('switch', { name: 'Share model connections' }))
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { cloud: false }))
+    expect(state.shareModels).toBe(false)
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Keep them in MuniCloud' })).toBeDisabled())
   })
 
   it('hides MuniCloud from a computer that is not signed in', async () => {

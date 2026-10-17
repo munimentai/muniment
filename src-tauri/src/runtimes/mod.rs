@@ -329,9 +329,6 @@ pub(crate) struct RuntimeView {
     /// This app asked for an update the runtime has not acted on yet.
     update_requested: bool,
     ssh_host: Option<String>,
-    /// How the last share of this computer's model connections went there.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sharing: Option<sharing::ShareState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -341,11 +338,9 @@ pub(crate) struct RuntimeList {
     device_name: String,
     selected: String,
     runtimes: Vec<RuntimeView>,
-    /// Whether this computer shares its model connections with its machines.
-    share_models: bool,
-    /// Whether the shared connections live in the account's model vault.
+    /// Whether the account's model vault holds this computer's connections.
     share_via_cloud: bool,
-    /// Why the last share could not reach the model vault.
+    /// Why the last upload could not reach the model vault.
     #[serde(skip_serializing_if = "Option::is_none")]
     share_error: Option<String>,
     /// One line about the command that answered this list, such as a removed
@@ -391,7 +386,6 @@ fn local_view(
         update_status,
         update_requested: false,
         ssh_host: None,
-        sharing: None,
     }
 }
 
@@ -429,7 +423,6 @@ fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> Runt
         scopes: runtime.scopes.into_iter().collect(),
         admin,
         ssh_host: runtime.entry.ssh.map(|ssh| ssh.host),
-        sharing: None,
     }
 }
 
@@ -447,17 +440,9 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
         views.extend(registry.list().into_iter().map(|runtime| {
             let observed = runtimes.observed(&runtime.id);
             let selected = active.as_deref() == Some(runtime.id.as_str());
-            let sharing = runtimes.sharing.state(&runtime.id);
-            RuntimeView {
-                sharing,
-                ..paired_view(runtime, observed, selected)
-            }
+            paired_view(runtime, observed, selected)
         }));
     }
-    let share_models = runtimes
-        .registry
-        .as_ref()
-        .is_some_and(Registry::share_models);
     let share_via_cloud = runtimes
         .registry
         .as_ref()
@@ -467,7 +452,6 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
         device_name: device_name(),
         selected: active.unwrap_or_else(|| LOCAL_RUNTIME_ID.into()),
         runtimes: views,
-        share_models,
         share_via_cloud,
         share_error: runtimes.sharing.error(),
         notice: None,
@@ -539,11 +523,12 @@ fn observer<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> connection::Observe
         let Some((version, kind)) = welcome else {
             return;
         };
-        // A machine that connects gets this computer's connections at once.
+        // A machine that connects and still holds a bundle this computer sent
+        // over the pairing link drops it at once.
         if runtimes
             .registry
             .as_ref()
-            .is_some_and(Registry::share_models)
+            .is_some_and(|registry| registry.shared_with().contains(id))
         {
             runtimes.sharing.wake();
         }

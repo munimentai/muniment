@@ -1,22 +1,27 @@
 <script>
   // The composer's machine chip: the machine a new thread starts on, with a
   // menu of every machine and whether it answers, or the machine an open
-  // thread lives on, which it keeps. It shows only once a machine is paired.
-  // The menu is a composer panel, so opening it closes any other.
+  // thread lives on, which it keeps. Under the paired machines, the menu
+  // lists the fleet members this app does not reach itself, containers
+  // included: a new thread can start on any of them, and core forwards it
+  // there. An open thread another member owns names that owner. It shows
+  // only once a machine is paired or a fleet has other members. The menu is
+  // a composer panel, so opening it closes any other.
   import { onMount, tick } from 'svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ComposerMenuButton from '../composer/ComposerMenuButton.svelte'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from '../lib/composer-panels.js'
   import { activeRuntime, kindIcon, pairedRuntimes, statusLabel } from './runtimes.js'
 
-  let { list = null, locked = null, disabled = false, onselect = () => {}, onmanage = () => {} } = $props()
+  let { list = null, locked = null, owner = null, fleet = [], offload = null, disabled = false, onselect = () => {}, onoffload = () => {}, onmanage = () => {} } = $props()
   let open = $state(false)
   let root = $state()
   let toggle = $state()
   let menu = $state()
   const active = $derived(activeRuntime(list))
   const held = $derived(locked ? list?.runtimes?.find((runtime) => runtime.id === locked) ?? null : null)
-  const shown = $derived(held ?? active)
+  const shown = $derived(owner ?? held ?? (offload && !locked ? offload : active))
+  const visible = $derived(!!shown && (pairedRuntimes(list).length > 0 || fleet.length > 0 || !!owner))
 
   onMount(() => {
     const follow = async (event) => {
@@ -63,13 +68,20 @@
   function pick(runtime) {
     close()
     if (!reachable(runtime)) onmanage()
-    else if (!runtime.active) onselect(runtime)
+    else if (!runtime.active || offload) onselect(runtime)
+  }
+
+  // A fleet member takes a new thread even while it is away: core queues
+  // the thread until it answers.
+  function pickMember(member) {
+    close()
+    onoffload(member)
   }
 </script>
 
-{#if shown && pairedRuntimes(list).length}
-  {#if locked}
-    <span class="machine-chip" role="note" aria-label="This thread stays on {shown.name}"><LucideIcon name={kindIcon(shown)} size={14} /><span class="name">{shown.name}</span></span>
+{#if visible}
+  {#if locked || owner}
+    <span class="machine-chip" role="note" aria-label="This thread stays on {shown.name}"><LucideIcon name={kindIcon(shown)} size={14} /><span class="name">{owner ? `on ${shown.name}` : shown.name}</span>{#if owner?.online === false}<span class="state" role="img" aria-label="Offline"><LucideIcon name="globe-off" variant="action" size={14} /></span>{/if}</span>
   {:else}
     <span class="machine-picker" bind:this={root}>
       <ComposerMenuButton menu="machine" {open} chevrons label="Machine: {shown.name}. Choose a machine" text={shown.name} {disabled} bind:element={toggle} onclick={() => openComposerPanel(open ? null : 'machine')}>
@@ -79,14 +91,25 @@
       {#if open}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div data-composer-panel data-panel="machine-menu" data-panel-variant="overlay" class="machine-menu" role="menu" tabindex="-1" aria-label="Machines" bind:this={menu} onkeydown={keydown}>
-          {#each list.runtimes as runtime (runtime.id)}
+          {#each list?.runtimes ?? [] as runtime (runtime.id)}
             {@const online = reachable(runtime)}
-            <button type="button" role="menuitemradio" aria-checked={runtime.active} onclick={() => pick(runtime)}>
+            <button type="button" role="menuitemradio" aria-checked={runtime.active && !offload} onclick={() => pick(runtime)}>
               <LucideIcon name={kindIcon(runtime)} size={14} />
               <span class="name">{runtime.name}</span>
               <span class="state" class:online role="img" aria-label={online ? 'Online' : statusLabel(runtime)}><LucideIcon name={online ? 'globe' : 'globe-off'} variant="action" size={14} /></span>
             </button>
           {/each}
+          {#if fleet.length}
+            <div class="separator" role="separator"></div>
+            <p class="heading" aria-hidden="true">Fleet</p>
+            {#each fleet as member (member.coreId)}
+              <button type="button" role="menuitemradio" aria-checked={offload?.coreId === member.coreId} aria-label="{member.name}{member.online ? '' : ', offline'}" onclick={() => pickMember(member)}>
+                <LucideIcon name={kindIcon(member)} size={14} />
+                <span class="name">{member.name}</span>
+                <span class="state" class:online={member.online} role="img" aria-label={member.online ? 'Online' : 'Offline'}><LucideIcon name={member.online ? 'globe' : 'globe-off'} variant="action" size={14} /></span>
+              </button>
+            {/each}
+          {/if}
           <div class="separator" role="separator"></div>
           <button type="button" role="menuitem" class="manage" onclick={() => { close(); onmanage() }}>
             <LucideIcon name="plus" size={14} /><span class="name">Add a machine</span>
@@ -114,4 +137,7 @@
   .machine-menu .state :global(.lucide) { color: inherit; }
   .separator { height: 1px; margin: 2px 4px; background: var(--border); }
   .manage { color: var(--muted) !important; }
+  .heading { margin: 2px 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .machine-chip .state { margin-left: 0; color: var(--ochre); }
+  .machine-chip .state :global(.lucide) { color: inherit; }
 </style>

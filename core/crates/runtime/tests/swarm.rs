@@ -1962,6 +1962,65 @@ fn an_action_for_an_offline_owner_queues_until_the_owner_returns() {
 }
 
 #[test]
+fn a_queued_action_cancels_before_its_owner_returns() {
+    let _environment = environment();
+    let mut a = Member::new("fleet-cancel-a");
+    let b = Member::new("fleet-cancel-b");
+    b.join(&a);
+    let scout = a.agent("Scout");
+    a.run_to_end(&scout.id, "Find leads.");
+    let thread = a.primary_thread(&scout.id);
+    assert!(wait(|| b.swarm().is_replica_thread(&thread)
+        == Some(a.runtime_id())
+        && online_on(&b, &a.runtime_id())));
+    let events = fleet_events(&b);
+    a.offline();
+    for member in [&a, &b] {
+        member
+            .swarm()
+            .advance_clock(muniment_core::chrono::Duration::minutes(2));
+    }
+    assert!(wait(|| !online_on(&b, &a.runtime_id())));
+
+    let mut device = b.client(None);
+    let text = "Post that never runs.";
+    let posted = device
+        .swarm_request(
+            Operation::ThreadPost,
+            json!({"thread_id": thread, "text": text}),
+        )
+        .unwrap();
+    let op_id = posted["op_id"].as_str().unwrap().to_owned();
+    let open = device
+        .swarm_request(Operation::FleetOps, json!({"state": "open"}))
+        .unwrap();
+    assert_eq!(open["ops"][0]["op_id"], op_id.as_str(), "{open}");
+    assert_eq!(open["ops"][0]["state"], "queued");
+
+    let cancelled = device
+        .swarm_request(Operation::FleetOpCancel, json!({"op_id": op_id}))
+        .unwrap();
+    assert_eq!(cancelled["op"]["state"], "cancelled", "{cancelled}");
+    assert!(wait(|| op_states(&events, &op_id)
+        .last()
+        .map(String::as_str)
+        == Some("cancelled")));
+    let open = device
+        .swarm_request(Operation::FleetOps, json!({"state": "open"}))
+        .unwrap();
+    assert_eq!(open["ops"], json!([]));
+
+    a.listen();
+    assert!(wait(|| online_on(&b, &a.runtime_id())));
+    for _ in 0..5 {
+        a.tick();
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(prompted(&a, &scout.id, text), 0);
+    assert_eq!(op_status(&mut device, &op_id)["state"], "cancelled");
+}
+
+#[test]
 fn an_agent_away_a_day_offers_a_move_and_its_queued_actions_expire_in_7_days() {
     let _environment = environment();
     let mut a = Member::new("away-a");

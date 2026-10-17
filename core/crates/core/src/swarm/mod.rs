@@ -63,6 +63,8 @@ mod class_tests;
 mod exchange_tests;
 #[cfg(test)]
 mod fleet_tests;
+#[cfg(test)]
+pub(crate) mod test_members;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -156,6 +158,9 @@ pub trait SwarmHost: Send + Sync {
     fn run_forwarded(&self, _action: &Forwarded) -> Result<Value, String> {
         Err("This runtime cannot run actions from other machines.".into())
     }
+    /// Takes in settings of `class` another member changed, such as the
+    /// router routes or the search engines, after the files were written.
+    fn settings_applied(&self, _class: &str) {}
 }
 
 /// How long a member counts as online after its last heartbeat.
@@ -490,6 +495,9 @@ impl Swarm {
                 crate::runtime_eprintln!("muniment-runtime: swarm tick failed: {error}");
             }
             credentials::maybe_pass(&inner);
+            crate::fleet_sync::tick(&Records {
+                inner: Arc::clone(&inner),
+            });
             let guard = lock(&inner.wake);
             let _ = inner.woken.wait_timeout(guard, Duration::from_millis(500));
         });
@@ -587,8 +595,16 @@ impl Swarm {
             Operation::FleetOfflineSet => bootstrap::offline_set(inner, body),
             Operation::ThreadHistoryFetch => bootstrap::history_fetch(inner, body),
             Operation::FleetOpStatus => ops::status(inner, body),
+            Operation::FleetOpCancel => ops::cancel(inner, body),
+            Operation::FleetOps => ops::list(inner, body),
             _ => Err("The swarm operation is unknown.".into()),
         }
+    }
+
+    /// Whether an agent's primary `primary_runtime` is another member that
+    /// has been away long enough that this member offers to take the agent.
+    pub fn move_suggested(&self, primary_runtime: &str) -> bool {
+        ops::move_suggested(&self.inner, primary_runtime)
     }
 
     /// Where a client's call goes: `None` runs it here. When the item it
@@ -831,6 +847,44 @@ impl Records {
     /// needs a fresh snapshot of the records.
     pub fn snapshot_needed_at(&self) -> Option<String> {
         self.inner.store.meta("snapshot_needed_at").ok().flatten()
+    }
+
+    /// The profile these records belong to.
+    pub(crate) fn profile(&self) -> &Path {
+        &self.inner.profile
+    }
+
+    /// The member id this runtime writes under, once it has one.
+    pub(crate) fn origin(&self) -> Option<String> {
+        self.inner.origin().ok()
+    }
+
+    /// Whether this runtime ever took in an exchange from another member.
+    pub(crate) fn has_synced(&self) -> bool {
+        self.inner
+            .store
+            .meta("last_sync_at")
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// This runtime's name as other members show it.
+    pub(crate) fn runtime_name(&self) -> Option<String> {
+        lock(&self.inner.identity)
+            .as_ref()
+            .map(|identity| identity.runtime_name.clone())
+    }
+
+    /// Sends a client event to this runtime's subscribers.
+    pub(crate) fn emit(&self, name: EventName, body: Value) {
+        self.inner.emit(name, body);
+    }
+
+    /// Tells the runtime that settings of `class` from another member were
+    /// written.
+    pub(crate) fn settings_applied(&self, class: &str) {
+        self.inner.host.settings_applied(class);
     }
 }
 
