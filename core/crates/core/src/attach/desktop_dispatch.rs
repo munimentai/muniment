@@ -325,7 +325,12 @@ fn drain_swarm(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
                         event.name,
                         EventName::AgentActivity | EventName::GroupPosted
                     ) => {}
-            Ok(event) if !subscription.fleet && event.name == EventName::FleetOpUpdated => {}
+            Ok(event)
+                if !subscription.fleet
+                    && matches!(
+                        event.name,
+                        EventName::FleetOpUpdated | EventName::PreferencesChanged
+                    ) => {}
             Ok(event) => events.push(Event {
                 protocol: Protocol,
                 subscription_id: subscription.subscription_id.clone(),
@@ -1041,7 +1046,8 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             /// With `swarm`, also send `agent.activity` and `group.posted`.
             #[serde(default)]
             swarm_live: bool,
-            /// With `swarm`, also send `fleet.op_updated`.
+            /// With `swarm`, also send `fleet.op_updated` and
+            /// `preferences.changed`.
             #[serde(default)]
             fleet: bool,
         }

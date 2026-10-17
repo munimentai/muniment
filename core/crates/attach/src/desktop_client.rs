@@ -59,6 +59,9 @@ pub enum SubscriptionEvent {
     /// An action this runtime forwarded to the member that owns its item
     /// changed state. Only a subscription that asked for `fleet` receives it.
     FleetOpUpdated(Value),
+    /// Preferences changed here or on another swarm member: `{values,
+    /// source}`. Only a subscription that asked for `fleet` receives it.
+    PreferencesChanged(Value),
 }
 
 /// A connection-bound client for the peer-authorized desktop session.
@@ -821,6 +824,7 @@ impl DesktopClient {
                         | EventName::AgentActivity
                         | EventName::GroupPosted
                         | EventName::FleetOpUpdated
+                        | EventName::PreferencesChanged
                 )
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -887,6 +891,12 @@ impl DesktopClient {
                     return Err(ClientError::UnexpectedMessage);
                 }
                 return Ok(SubscriptionEvent::FleetOpUpdated(event.body));
+            }
+            if event.event == EventName::PreferencesChanged {
+                if !event.body["values"].is_object() || !event.body["source"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::PreferencesChanged(event.body));
             }
             if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
                 if let Some(seq) = body.get("seq").and_then(Value::as_u64) {
@@ -1335,6 +1345,10 @@ impl DesktopClient {
             }
             Operation::ThreadPlan => &["plan"],
             Operation::ThreadPlanAnswer => &["status"],
+            Operation::PreferencesGet | Operation::PreferencesSet => {
+                &["values", "fleet_keys", "local_keys"]
+            }
+            Operation::PreferencesImport => &["values", "imported", "skipped"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)
