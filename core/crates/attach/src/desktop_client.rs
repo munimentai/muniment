@@ -56,6 +56,10 @@ pub enum SubscriptionEvent {
     /// A message was posted to a group thread: `{group_id, thread_id,
     /// post}`. Only a subscription that asked for `swarm_live` receives it.
     GroupPosted(Value),
+    /// The runtime's sync status changed while it caught up; the body is
+    /// the `fleet.sync_status` answer. Only a subscription that asked for
+    /// the swarm receives it.
+    FleetSyncChanged(Value),
     /// An action this runtime forwarded to the member that owns its item
     /// changed state. Only a subscription that asked for `fleet` receives it.
     FleetOpUpdated(Value),
@@ -820,6 +824,7 @@ impl DesktopClient {
                         | EventName::AgentApprovalResolved
                         | EventName::AgentActivity
                         | EventName::GroupPosted
+                        | EventName::FleetSyncChanged
                         | EventName::FleetOpUpdated
                 )
                 || event.run_id.is_some()
@@ -881,6 +886,12 @@ impl DesktopClient {
                     return Err(ClientError::UnexpectedMessage);
                 }
                 return Ok(SubscriptionEvent::GroupPosted(event.body));
+            }
+            if event.event == EventName::FleetSyncChanged {
+                if !event.body["state"].is_string() || !event.body["classes"].is_array() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::FleetSyncChanged(event.body));
             }
             if event.event == EventName::FleetOpUpdated {
                 if !event.body["op_id"].is_string() || !event.body["state"].is_string() {
@@ -1476,6 +1487,9 @@ impl DesktopClient {
             Operation::AgentApprovals => &["approvals"],
             Operation::GroupCreate | Operation::GroupUpdate => &["group"],
             Operation::GroupList => &["groups"],
+            Operation::FleetSyncStatus => &["state", "classes"],
+            Operation::FleetOfflineSet => &["offline"],
+            Operation::ThreadHistoryFetch => &["status"],
             Operation::FleetHoldSignIn => &["status"],
             Operation::FleetCredentials => &["share_models"],
             Operation::FleetPins | Operation::FleetPinSet => &["pins", "offline"],

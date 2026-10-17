@@ -29,6 +29,18 @@ pub struct MemberRecord {
     /// as `store/1` for records and thread clock deltas.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// How many days of ordinary threads the member keeps offline, `0` for
+    /// all of them. Absent means the default, [`super::OFFLINE_DAYS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_days: Option<u32>,
+    /// The ordinary threads the member asked to hold in full whatever their
+    /// age, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<String>,
+    /// The member's record version vector, so every member knows which
+    /// writes all others hold before it drops a tombstone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_vv: Option<VersionVector>,
     /// The member's fleet key, signed with its identity key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet: Option<FleetCard>,
@@ -161,17 +173,53 @@ pub(super) fn default_debate_rounds() -> u32 {
     super::groups::MAX_DEBATE_ROUNDS
 }
 
-/// A thread every member replicates: an agent's thread or a group's.
+/// A thread every member replicates: an agent's thread, a group's, or an
+/// ordinary thread its owner created.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadRegistration {
     pub thread_id: String,
-    /// `agent` or `group`.
+    /// `agent`, `group` or `plain`.
     pub kind: String,
     #[serde(default)]
     pub agent_id: Option<String>,
     #[serde(default)]
     pub group_id: Option<String>,
     pub updated_at: String,
+    /// The runtime that created a `plain` thread and runs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_runtime: Option<String>,
+}
+
+/// What every member knows of an ordinary thread before it holds the
+/// thread's history: its owner writes it as the thread changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadSummaryRecord {
+    pub title: String,
+    pub owner_runtime: String,
+    /// The time of the thread's newest event.
+    pub last_at: String,
+    /// The newest prompt or posted message, clipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_post: Option<LastPost>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastPost {
+    pub text: String,
+    /// `user`, `agent` or `system`.
+    pub author: String,
+    pub at: String,
+}
+
+/// What the sender of a record delta holds while the receiver catches up:
+/// its rows per class, so the receiver can show its progress.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotMark {
+    /// Rows, tombstones among them, per record class.
+    pub classes: BTreeMap<String, u64>,
+    /// The delta left nothing out.
+    #[serde(default)]
+    pub complete: bool,
 }
 
 /// Per thread, the highest sequence held from each origin runtime.
@@ -387,6 +435,9 @@ pub struct Exchange {
     /// receiver's watermark (`store/1`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watermarks: Option<Watermarks>,
+    /// Present while the receiver catches up on records (`store/1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<SnapshotMark>,
     /// The roster entries, when the receiver's roster digest differs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roster: Vec<RosterEntry>,

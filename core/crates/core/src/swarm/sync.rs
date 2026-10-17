@@ -7,8 +7,19 @@
 //! its journal under the same thread, run and event ids. A posted user
 //! message carries the clock its poster had seen, and the thread's primary
 //! consumes it once it holds every event that clock names.
+//!
+//! - **Ordinary threads.** A thread this runtime created registers as
+//!   `plain` with this runtime as its owner once it has a run. Every member
+//!   learns of it through its record, which also holds a summary (title,
+//!   owner, newest post). A member holds the history of the ordinary threads
+//!   active within its offline window, and of the ones it pinned; other
+//!   threads show as their summary until a client fetches them.
+//! - **Incremental work.** The scan reads only the threads the journal
+//!   changed since its last pass, with a full pass every 10 minutes, and an
+//!   export to a peer looks only at threads whose clock changed since its
+//!   last look and at those the peer still lacked.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -19,8 +30,8 @@ use serde_json::{json, Value};
 use super::records::RecordChange;
 use super::store::sql;
 use super::{
-    directory, groups, BlobChunk, BlobWant, Clocks, Inner, ReplicaScope, ReplicatedEvent,
-    ThreadRegistration,
+    directory, groups, BlobChunk, BlobWant, Clocks, Inner, LastPost, ReplicaScope, ReplicatedEvent,
+    ThreadRegistration, ThreadSummaryRecord,
 };
 use crate::agent_runs::{NewRun, RunStore, RunTrigger, TriggerKind};
 use crate::journal::replica::{MAX_POSTED_TEXT_BYTES, THREAD_MESSAGE_POSTED};
@@ -30,13 +41,26 @@ use crate::run_events::SharedStorage;
 /// The thread event the primary appends once it consumed a posted message.
 pub const THREAD_MESSAGE_CONSUMED: &str = "thread.message.consumed";
 /// The thread events a member replicates. Creation and permission policies
-/// stay with the runtime that wrote them.
-const REPLICATED_THREAD_EVENTS: [&str; 4] = [
+/// stay with the runtime that wrote them; the permission mode replicates
+/// from the thread's owner.
+const REPLICATED_THREAD_EVENTS: [&str; 5] = [
     THREAD_MESSAGE_POSTED,
     THREAD_MESSAGE_CONSUMED,
     "thread.title.renamed",
     "thread.deleted",
+    crate::journal::THREAD_PERMISSION_MODE_SET,
 ];
+/// The registration kind of an ordinary thread.
+pub(super) const PLAIN: &str = "plain";
+/// The provenance source of the threads and events the swarm writes.
+const SWARM_SOURCE: &str = "muniment-swarm";
+/// How often the scan reads every thread instead of the changed ones.
+const FULL_SCAN_SECONDS: i64 = 10 * 60;
+/// An owner rewrites a summary whose title and newest post are unchanged
+/// only once its newest event is this much later.
+const SUMMARY_REFRESH_SECONDS: i64 = 60 * 60;
+/// The longest text a summary keeps of the newest post.
+const LAST_POST_CHARS: usize = 280;
 /// The provenance field that names the member an imported event came from.
 pub const SWARM_ORIGIN: &str = "swarm_origin";
 const MAX_ROWS_PER_ORIGIN: i64 = 400;
@@ -100,10 +124,15 @@ fn announce_post(inner: &Inner, thread_id: &str, payload: &Value, posted_at: &st
 /// that the replication reads.
 pub(super) const CLASS: &str = "thread";
 const REGISTRATION: &str = "registration";
+/// The record field of an ordinary thread's summary.
+const SUMMARY: &str = "summary";
 
 /// Registers a thread this runtime runs or learned of from an older member,
 /// and writes its record so `store/1` members learn of it too.
-fn ensure_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
+pub(super) fn ensure_registration(
+    inner: &Inner,
+    registration: &ThreadRegistration,
+) -> Result<bool, String> {
     if !keep_registration(inner, registration)? {
         return Ok(false);
     }
@@ -145,25 +174,63 @@ fn put_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<
     Ok(())
 }
 
-/// Registers the threads another member's records name. Answers whether
-/// any was new.
+/// Registers the threads another member's records name, shows the summary
+/// of each ordinary thread this runtime does not hold, and forgets a thread
+/// its owner deleted. Answers whether the thread list changed.
 pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool, String> {
-    let mut added = false;
+    let mut changed = false;
+    let mut keys: Vec<&str> = Vec::new();
     for change in changes
         .iter()
-        .filter(|change| change.class == CLASS && !change.local && !change.deleted)
+        .filter(|change| change.class == CLASS && !change.local)
     {
-        let registration = inner
-            .records
-            .get(CLASS, &change.key)?
-            .and_then(|record| record.value(REGISTRATION).cloned())
-            .and_then(|value| serde_json::from_value::<ThreadRegistration>(value).ok())
-            .filter(|registration| registration.thread_id == change.key);
-        if let Some(registration) = registration {
-            added |= keep_registration(inner, &registration)?;
+        if change.deleted && change.field.is_empty() {
+            changed |= forget_thread(inner, &change.key)?;
+        } else if !change.deleted && !keys.contains(&change.key.as_str()) {
+            keys.push(&change.key);
         }
     }
-    Ok(added)
+    if keys.is_empty() {
+        return Ok(changed);
+    }
+    // One transaction registers a page of threads at once.
+    let mut plain = Vec::new();
+    {
+        let mut connection = inner.store.connect()?;
+        let transaction = connection.transaction().map_err(sql)?;
+        for key in keys {
+            let registration = super::records::get_with(&transaction, CLASS, key)?
+                .and_then(|record| record.value(REGISTRATION).cloned())
+                .and_then(|value| serde_json::from_value::<ThreadRegistration>(value).ok())
+                .filter(|registration| registration.thread_id == key);
+            let Some(registration) = registration else {
+                continue;
+            };
+            if registration_valid(&registration) {
+                let added = transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO threads(thread_id, record) VALUES(?1, ?2)",
+                        params![
+                            registration.thread_id,
+                            serde_json::to_string(&registration)
+                                .map_err(|error| error.to_string())?
+                        ],
+                    )
+                    .map_err(sql)?;
+                changed |= added > 0;
+            }
+            if registration.kind == PLAIN {
+                plain.push(registration.thread_id);
+            }
+        }
+        transaction.commit().map_err(sql)?;
+    }
+    if inner.host.replica_scope().is_some() {
+        for thread_id in plain {
+            changed |= show_summary(inner, &thread_id)?;
+        }
+    }
+    Ok(changed)
 }
 
 /// Writes a record for each registration a store held before records.
@@ -181,6 +248,7 @@ fn registration_valid(registration: &ThreadRegistration) -> bool {
         && match registration.kind.as_str() {
             "agent" => registration.agent_id.is_some(),
             "group" => registration.group_id.is_some(),
+            PLAIN => registration.owner_runtime.is_some(),
             _ => false,
         }
 }
@@ -206,6 +274,7 @@ pub(super) fn register_local(inner: &Inner) -> Result<(), String> {
                     agent_id: Some(agent_id.clone()),
                     group_id: None,
                     updated_at: inner.now_text(),
+                    owner_runtime: None,
                 },
             )?;
         }
@@ -220,6 +289,7 @@ pub(super) fn register_local(inner: &Inner) -> Result<(), String> {
                     agent_id: None,
                     group_id: Some(group.group_id.clone()),
                     updated_at: inner.now_text(),
+                    owner_runtime: None,
                 },
             )?;
         }
@@ -243,6 +313,7 @@ pub(super) fn register_agent_thread(
             agent_id: Some(agent_id.to_owned()),
             group_id: None,
             updated_at: inner.now_text(),
+            owner_runtime: None,
         },
     )
     .map(drop)
@@ -258,6 +329,54 @@ pub(super) fn merge_registrations(
     Ok(())
 }
 
+/// Registers an ordinary thread this runtime created, once it has a run.
+/// A thread the swarm created, an agent's thread and a group's are not
+/// ordinary threads.
+fn register_plain(inner: &Inner, self_id: &str, thread_id: &str) -> Result<bool, String> {
+    let ordinary = {
+        let mut storage = storage_lock(&inner.storage)?;
+        let journal = &mut storage.journal;
+        if !journal.thread_exists(thread_id).map_err(journal_error)?
+            || journal
+                .thread_run_marks(thread_id)
+                .map_err(journal_error)?
+                .is_empty()
+        {
+            return Ok(false);
+        }
+        journal
+            .thread_events_after(thread_id, 0)
+            .map_err(journal_error)?
+            .first()
+            .is_some_and(|created| {
+                created.provenance.source != SWARM_SOURCE
+                    && !created.provenance.extra.contains_key(SWARM_ORIGIN)
+            })
+    };
+    if !ordinary {
+        return Ok(false);
+    }
+    let state = crate::agents::state(&inner.profile).unwrap_or_default();
+    if state.threads.contains_key(thread_id)
+        || groups::all(inner)?
+            .iter()
+            .any(|group| group.thread_id == thread_id)
+    {
+        return Ok(false);
+    }
+    ensure_registration(
+        inner,
+        &ThreadRegistration {
+            thread_id: thread_id.to_owned(),
+            kind: PLAIN.into(),
+            agent_id: None,
+            group_id: None,
+            updated_at: inner.now_text(),
+            owner_runtime: Some(self_id.to_owned()),
+        },
+    )
+}
+
 /// The runtime that writes run output into a registered thread.
 pub(super) fn thread_primary(inner: &Inner, registration: &ThreadRegistration) -> Option<String> {
     match registration.kind.as_str() {
@@ -265,6 +384,7 @@ pub(super) fn thread_primary(inner: &Inner, registration: &ThreadRegistration) -
         "group" => {
             groups::get(inner, registration.group_id.as_deref()?).map(|group| group.owner_runtime)
         }
+        PLAIN => registration.owner_runtime.clone(),
         _ => None,
     }
 }
@@ -274,6 +394,259 @@ pub(super) fn replica_primary(inner: &Inner, thread_id: &str) -> Option<String> 
     let registration = registration(inner, thread_id)?;
     let primary = thread_primary(inner, &registration)?;
     (inner.runtime_id().as_deref() != Some(primary.as_str())).then_some(primary)
+}
+
+/// The summary an ordinary thread's owner wrote, if any.
+pub(super) fn summary(inner: &Inner, thread_id: &str) -> Option<ThreadSummaryRecord> {
+    inner
+        .records
+        .get(CLASS, thread_id)
+        .ok()
+        .flatten()
+        .and_then(|record| record.value(SUMMARY).cloned())
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+/// Every ordinary thread's summary, by thread.
+pub(super) fn summaries(inner: &Inner) -> Result<BTreeMap<String, ThreadSummaryRecord>, String> {
+    Ok(inner
+        .records
+        .scan(CLASS, None, usize::MAX)?
+        .into_iter()
+        .filter_map(|record| {
+            let summary = serde_json::from_value(record.value(SUMMARY)?.clone()).ok()?;
+            Some((record.key, summary))
+        })
+        .collect())
+}
+
+/// Shows an ordinary thread another member owns in this runtime's thread
+/// list: a thread under its id, created at its newest event's time, that
+/// takes the summary's title. Its history arrives when it is active within
+/// the offline window or a client fetches it.
+fn show_summary(inner: &Inner, thread_id: &str) -> Result<bool, String> {
+    let Some(summary) = summary(inner, thread_id) else {
+        return Ok(false);
+    };
+    if inner.runtime_id().as_deref() == Some(summary.owner_runtime.as_str()) {
+        return Ok(false);
+    }
+    let Some(scope) = inner.host.replica_scope() else {
+        return Ok(false);
+    };
+    let mut storage = storage_lock(&inner.storage)?;
+    let journal = &mut storage.journal;
+    let created = journal
+        .create_thread_with_id(
+            thread_id,
+            &scope.workspace,
+            &summary.last_at,
+            imported_provenance(&scope, &summary.owner_runtime),
+        )
+        .map_err(journal_error)?;
+    if !journal.thread_exists(thread_id).map_err(journal_error)? {
+        return Ok(false);
+    }
+    let title = journal
+        .summaries_of_threads(&[thread_id.to_owned()])
+        .map_err(journal_error)?
+        .into_iter()
+        .next()
+        .map(|held| held.title);
+    let wanted = summary.title.trim();
+    if !wanted.is_empty() && title.as_deref() != Some(wanted) {
+        journal
+            .append_thread_event_with_id(ThreadEventEnvelope::new(
+                &uuid::Uuid::now_v7().to_string(),
+                thread_id,
+                "thread.title.renamed",
+                &summary.last_at,
+                json!({"title": wanted}),
+                imported_provenance(&scope, &summary.owner_runtime),
+            ))
+            .map_err(journal_error)?;
+        return Ok(true);
+    }
+    Ok(created)
+}
+
+/// The provenance of an event this runtime writes on another member's
+/// behalf, which the scan never indexes as its own.
+fn imported_provenance(scope: &ReplicaScope, origin: &str) -> Provenance {
+    let mut provenance = local_provenance(Some(scope), &scope.attach_profile);
+    provenance
+        .extra
+        .insert(SWARM_ORIGIN.into(), Value::from(origin));
+    provenance
+}
+
+/// Forgets a thread whose owner deleted it: its registration goes, and its
+/// copy here is deleted. Answers whether this runtime held it.
+fn forget_thread(inner: &Inner, thread_id: &str) -> Result<bool, String> {
+    let Some(registration) = registration(inner, thread_id) else {
+        return Ok(false);
+    };
+    inner
+        .store
+        .delete_record("threads", "thread_id", thread_id)?;
+    let owner = thread_primary(inner, &registration).unwrap_or_default();
+    if inner.runtime_id().as_deref() == Some(owner.as_str()) {
+        return Ok(true);
+    }
+    delete_copy(inner, thread_id, &owner)?;
+    Ok(true)
+}
+
+/// Deletes this runtime's copy of a thread `owner` runs.
+pub(super) fn delete_copy(inner: &Inner, thread_id: &str, owner: &str) -> Result<(), String> {
+    let scope = inner.host.replica_scope();
+    let mut storage = storage_lock(&inner.storage)?;
+    let journal = &mut storage.journal;
+    if let Some(scope) = scope {
+        if journal.thread_exists(thread_id).map_err(journal_error)? {
+            journal
+                .append_thread_event_with_id(ThreadEventEnvelope::new(
+                    &uuid::Uuid::now_v7().to_string(),
+                    thread_id,
+                    "thread.deleted",
+                    &inner.now_text(),
+                    json!({}),
+                    imported_provenance(&scope, owner),
+                ))
+                .map_err(journal_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// Deletes the record of an ordinary thread this runtime owns once its
+/// journal deleted the thread, so every member forgets it.
+fn retire_plain(inner: &Inner, thread_id: &str) -> Result<(), String> {
+    inner
+        .store
+        .delete_record("threads", "thread_id", thread_id)?;
+    let origin = inner.origin()?;
+    inner
+        .records
+        .delete(&origin, inner.now(), CLASS, thread_id, 0, None)?;
+    inner.changed("threads");
+    Ok(())
+}
+
+/// Rewrites the summary of an ordinary thread this runtime owns when its
+/// title or newest post changed, or its newest event moved on by an hour.
+fn refresh_summary(inner: &Inner, self_id: &str, thread_id: &str) -> Result<(), String> {
+    let held = storage_lock(&inner.storage)?
+        .journal
+        .summaries_of_threads(&[thread_id.to_owned()])
+        .map_err(journal_error)?
+        .into_iter()
+        .next();
+    let Some(held) = held else {
+        return Ok(());
+    };
+    let next = ThreadSummaryRecord {
+        title: held.title,
+        owner_runtime: self_id.to_owned(),
+        last_at: held.updated_at,
+        last_post: last_post(inner, thread_id)?,
+    };
+    if let Some(current) = summary(inner, thread_id) {
+        let moved = match (
+            super::parse_time(&current.last_at),
+            super::parse_time(&next.last_at),
+        ) {
+            (Some(was), Some(now)) => (now - was).num_seconds() >= SUMMARY_REFRESH_SECONDS,
+            _ => current.last_at != next.last_at,
+        };
+        if current.title == next.title && current.last_post == next.last_post && !moved {
+            return Ok(());
+        }
+    }
+    let value = serde_json::to_value(&next).map_err(|error| error.to_string())?;
+    inner
+        .records
+        .put(self_id, inner.now(), CLASS, thread_id, SUMMARY, value, 0)?;
+    Ok(())
+}
+
+fn clip_text(text: &str) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= LAST_POST_CHARS {
+        return text;
+    }
+    text.chars()
+        .take(LAST_POST_CHARS - 1)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
+/// The newer of a thread's newest posted message and its newest run's
+/// prompt.
+fn last_post(inner: &Inner, thread_id: &str) -> Result<Option<LastPost>, String> {
+    let posted: Option<String> = inner
+        .store
+        .connect()?
+        .query_row(
+            "SELECT event_id FROM log WHERE thread_id=?1 AND event_type=?2 ORDER BY rowid DESC LIMIT 1",
+            params![thread_id, THREAD_MESSAGE_POSTED],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql)?;
+    let mut storage = storage_lock(&inner.storage)?;
+    let journal = &mut storage.journal;
+    let post = match posted {
+        Some(event_id) => journal
+            .thread_event_by_id(&event_id)
+            .map_err(journal_error)?
+            .map(|event| LastPost {
+                text: clip_text(event.payload()["text"].as_str().unwrap_or_default()),
+                author: event.payload()["author"]["kind"]
+                    .as_str()
+                    .unwrap_or("user")
+                    .to_owned(),
+                at: event.recorded_at().to_owned(),
+            }),
+        None => None,
+    };
+    let last_run = journal
+        .thread_run_marks(thread_id)
+        .map_err(journal_error)?
+        .pop()
+        .map(|(run_id, _)| run_id);
+    let prompt = match last_run {
+        Some(run_id) => journal
+            .run_events_after(&run_id, 0, 4)
+            .map_err(journal_error)?
+            .into_iter()
+            .find(|event| event.event_type == "user.prompt.submitted")
+            .and_then(|event| match &event.payload {
+                EventPayload::Inline { payload_json } => payload_json["prompt"]
+                    .as_str()
+                    .filter(|prompt| !prompt.trim().is_empty())
+                    .map(|prompt| LastPost {
+                        text: clip_text(prompt),
+                        author: "user".into(),
+                        at: event.recorded_at.clone(),
+                    }),
+                _ => None,
+            }),
+        None => None,
+    };
+    Ok(match (post, prompt) {
+        (Some(post), Some(prompt)) => Some(if prompt.at > post.at { prompt } else { post }),
+        (post, prompt) => post.or(prompt),
+    })
+}
+
+/// The owner of a registered thread, or this runtime for a thread the swarm
+/// does not share.
+pub(super) fn thread_owner(inner: &Inner, thread_id: &str) -> Option<String> {
+    match registration(inner, thread_id) {
+        Some(registration) => thread_primary(inner, &registration),
+        None => inner.runtime_id(),
+    }
 }
 
 pub(super) fn clocks(inner: &Inner) -> Result<Clocks, String> {
@@ -302,7 +675,21 @@ pub(super) fn thread_clock(
     inner: &Inner,
     thread_id: &str,
 ) -> Result<BTreeMap<String, u64>, String> {
-    Ok(clocks(inner)?.remove(thread_id).unwrap_or_default())
+    clock_of(&*inner.store.connect()?, thread_id)
+}
+
+/// The highest sequence held from each origin in one thread.
+fn clock_of(
+    connection: &rusqlite::Connection,
+    thread_id: &str,
+) -> Result<BTreeMap<String, u64>, String> {
+    let mut statement = connection
+        .prepare_cached("SELECT origin, MAX(seq) FROM log WHERE thread_id=?1 GROUP BY origin")
+        .map_err(sql)?;
+    let rows = statement
+        .query_map([thread_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(sql)?;
+    rows.collect::<Result<_, _>>().map_err(sql)
 }
 
 /// The clocks of the threads whose version is past `base`, in version
@@ -377,15 +764,100 @@ fn next_seq(
         .map_err(sql)
 }
 
-/// Indexes the events this runtime wrote into each registered thread.
+/// What the scan of the journal last read: its row marks and when it last
+/// read every thread.
+#[derive(Default)]
+pub(super) struct ScanMarks {
+    run: i64,
+    thread: i64,
+    full_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The log row up to which every posted message was consumed or is
+    /// another member's to consume.
+    posts: i64,
+}
+
+/// Indexes the events this runtime wrote into each registered thread the
+/// journal changed since the last pass, registers the ordinary threads it
+/// created, and keeps the summaries of those it owns. Every 10 minutes it
+/// reads every thread instead.
 pub(super) fn scan_local(inner: &Inner) -> Result<(), String> {
     let Some(self_id) = inner.runtime_id() else {
         return Ok(());
     };
-    for registration in registrations(inner)? {
-        scan_thread(inner, &self_id, &registration.thread_id)?;
+    let now = inner.now();
+    let (run_mark, thread_mark, full) = {
+        let marks = super::lock(&inner.scan);
+        let full = marks
+            .full_at
+            .is_none_or(|at| (now - at).num_seconds() >= FULL_SCAN_SECONDS);
+        if full {
+            (0, 0, true)
+        } else {
+            (marks.run, marks.thread, false)
+        }
+    };
+    let (changed, run_max, thread_max) = storage_lock(&inner.storage)?
+        .journal
+        .threads_changed_after(run_mark, thread_mark)
+        .map_err(journal_error)?;
+    let mut added = false;
+    for thread_id in &changed {
+        let registration = match registration(inner, thread_id) {
+            Some(registration) => registration,
+            None if register_plain(inner, &self_id, thread_id)? => {
+                added = true;
+                match registration(inner, thread_id) {
+                    Some(registration) => registration,
+                    None => continue,
+                }
+            }
+            None => continue,
+        };
+        let exists = scan_thread(inner, &self_id, thread_id)?;
+        if registration.kind == PLAIN
+            && registration.owner_runtime.as_deref() == Some(self_id.as_str())
+        {
+            if exists {
+                refresh_summary(inner, &self_id, thread_id)?;
+            } else {
+                retire_plain(inner, thread_id)?;
+            }
+        }
+    }
+    let mut marks = super::lock(&inner.scan);
+    marks.run = run_max;
+    marks.thread = thread_max;
+    if full {
+        marks.full_at = Some(now);
+        marks.posts = 0;
+    }
+    drop(marks);
+    if added {
+        inner.changed("threads");
     }
     Ok(())
+}
+
+/// Makes the next scan read every thread, as after a fresh snapshot.
+pub(super) fn rescan(inner: &Inner) {
+    *super::lock(&inner.scan) = ScanMarks::default();
+}
+
+/// Keeps the time of a thread's newest event, which decides whether an
+/// ordinary thread is within a member's offline window.
+fn note_activity(
+    connection: &rusqlite::Connection,
+    thread_id: &str,
+    at: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO thread_activity(thread_id, at) VALUES(?1, ?2) \
+             ON CONFLICT(thread_id) DO UPDATE SET at=MAX(at, excluded.at)",
+            params![thread_id, at],
+        )
+        .map(drop)
+        .map_err(sql)
 }
 
 fn origin_of(event: &EventEnvelope) -> Option<String> {
@@ -397,7 +869,9 @@ fn origin_of(event: &EventEnvelope) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Result<(), String> {
+/// Indexes the events this runtime wrote into one thread. Answers whether
+/// the journal holds the thread.
+pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Result<bool, String> {
     let mut connection = inner.store.connect()?;
     let mark: u64 = connection
         .query_row(
@@ -426,7 +900,7 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
         let mut storage = storage_lock(&inner.storage)?;
         let journal = &mut storage.journal;
         if !journal.thread_exists(thread_id).map_err(journal_error)? {
-            return Ok(());
+            return Ok(false);
         }
         for (run_id, last) in journal.thread_run_marks(thread_id).map_err(journal_error)? {
             let (origin, indexed) = match known_runs.get(&run_id) {
@@ -465,9 +939,16 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
             )
             .map_err(sql)?;
     }
+    let mut newest: Option<String> = None;
     for (run_id, events) in run_events {
         let mut last = None;
         for event in events {
+            if newest
+                .as_deref()
+                .is_none_or(|at| event.recorded_at.as_str() > at)
+            {
+                newest = Some(event.recorded_at.clone());
+            }
             let seq = next_seq(&transaction, thread_id, self_id)?;
             transaction
                 .execute(
@@ -502,6 +983,9 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
                 params![thread_id, self_id, seq, event.event_id(), event.event_type],
             )
             .map_err(sql)?;
+        if newest.as_deref().is_none_or(|at| event.recorded_at() > at) {
+            newest = Some(event.recorded_at().to_owned());
+        }
     }
     transaction
         .execute(
@@ -510,105 +994,280 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
             params![thread_id, scanned],
         )
         .map_err(sql)?;
-    transaction.commit().map_err(sql)
+    if let Some(newest) = newest {
+        note_activity(&transaction, thread_id, &newest)?;
+    }
+    transaction.commit().map_err(sql)?;
+    Ok(true)
 }
 
-/// The events this runtime holds that `peer_clocks` lack, oldest first per
-/// origin, within `budget` bytes.
+/// Where an export to one peer stands: the thread version up to which it
+/// looked, and the threads the peer still lacked events of.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ExportState {
+    mark: u64,
+    lagging: BTreeSet<String>,
+}
+
+/// Which ordinary threads a peer takes the history of.
+struct Window {
+    peer: String,
+    /// The oldest newest-event time within the peer's window, `None` for
+    /// every thread.
+    since: Option<String>,
+    pins: BTreeSet<String>,
+}
+
+impl Window {
+    fn for_peer(inner: &Inner, peer: &str) -> Result<Self, String> {
+        let members = inner
+            .store
+            .records::<super::MemberRecord>("members", "record")?;
+        let days = members
+            .iter()
+            .find(|member| member.runtime_id == peer)
+            .and_then(|member| member.offline_days)
+            .unwrap_or(super::OFFLINE_DAYS);
+        let mut pins: BTreeSet<String> =
+            members.into_iter().flat_map(|member| member.pins).collect();
+        pins.extend(own_pins(inner)?);
+        Ok(Self {
+            peer: peer.to_owned(),
+            since: (days > 0)
+                .then(|| super::timestamp(inner.now() - chrono::Duration::days(i64::from(days)))),
+            pins,
+        })
+    }
+
+    /// Whether the peer takes the history of `thread_id`: every agent and
+    /// group thread, and an ordinary thread the peer owns, someone pinned,
+    /// or that was active within the peer's window.
+    fn wants(
+        &self,
+        inner: &Inner,
+        connection: &rusqlite::Connection,
+        thread_id: &str,
+    ) -> Result<bool, String> {
+        let Some(since) = &self.since else {
+            return Ok(true);
+        };
+        let Some(registration) = registration(inner, thread_id) else {
+            return Ok(true);
+        };
+        if registration.kind != PLAIN
+            || registration.owner_runtime.as_deref() == Some(self.peer.as_str())
+            || self.pins.contains(thread_id)
+        {
+            return Ok(true);
+        }
+        let at: Option<String> = connection
+            .query_row(
+                "SELECT at FROM thread_activity WHERE thread_id=?1",
+                [thread_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        Ok(at.is_none_or(|at| at.as_str() >= since.as_str()))
+    }
+}
+
+/// The ordinary threads this runtime asked to hold in full, newest first.
+pub(super) fn own_pins(inner: &Inner) -> Result<Vec<String>, String> {
+    let connection = inner.store.connect()?;
+    let mut statement = connection
+        .prepare("SELECT thread_id FROM pins ORDER BY at DESC LIMIT ?1")
+        .map_err(sql)?;
+    let rows = statement
+        .query_map([MAX_PINS as i64], |row| row.get(0))
+        .map_err(sql)?;
+    rows.collect::<Result<_, _>>().map_err(sql)
+}
+
+/// The most ordinary threads one member pins.
+pub(super) const MAX_PINS: usize = 64;
+
+/// Pins a thread so its history arrives whatever its age. Answers whether
+/// it was new.
+pub(super) fn pin(inner: &Inner, thread_id: &str) -> Result<bool, String> {
+    let connection = inner.store.connect()?;
+    let added = connection
+        .execute(
+            "INSERT INTO pins(thread_id, at) VALUES(?1, ?2) \
+             ON CONFLICT(thread_id) DO UPDATE SET at=excluded.at",
+            params![thread_id, inner.now_text()],
+        )
+        .map_err(sql)?;
+    connection
+        .execute(
+            "DELETE FROM pins WHERE thread_id NOT IN \
+             (SELECT thread_id FROM pins ORDER BY at DESC LIMIT ?1)",
+            [MAX_PINS as i64],
+        )
+        .map_err(sql)?;
+    Ok(added > 0)
+}
+
+/// The events this runtime holds that the peer's clocks lack, oldest first
+/// per origin, within `budget` bytes. `peer_clock` answers the peer's clock
+/// of one thread. It looks at the threads whose clock changed since `state`
+/// last looked and at those the peer still lacked, so an idle exchange
+/// reads no clocks. `state` is `None` for an older member, whose full
+/// clocks arrive each time.
 pub(super) fn export(
     inner: &Inner,
-    peer_clocks: &Clocks,
+    peer: &str,
+    peer_clock: &dyn Fn(&str) -> Option<BTreeMap<String, u64>>,
+    state: Option<&mut ExportState>,
     budget: &mut usize,
 ) -> Result<(Vec<ReplicatedEvent>, bool), String> {
-    let mine = clocks(inner)?;
-    let subject = inner.host.replica_scope().and_then(|scope| scope.subject);
+    let mut fresh = ExportState::default();
+    let state = state.unwrap_or(&mut fresh);
     let connection = inner.store.connect()?;
-    let mut events = Vec::new();
-    for (thread, origins) in mine {
-        for (origin, held) in origins {
-            let known = peer_clocks
-                .get(&thread)
-                .and_then(|clock| clock.get(&origin))
-                .copied()
-                .unwrap_or(0);
-            if held <= known {
-                continue;
-            }
-            let rows: Vec<LogRow> = {
-                let mut statement = connection
-                    .prepare(
-                        "SELECT seq, kind, event_id, run_id, run_seq FROM log \
-                         WHERE thread_id=?1 AND origin=?2 AND seq>?3 ORDER BY seq LIMIT ?4",
-                    )
-                    .map_err(sql)?;
-                let rows = statement
-                    .query_map(params![thread, origin, known, MAX_ROWS_PER_ORIGIN], |row| {
-                        Ok((
-                            row.get(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                            row.get(4)?,
-                        ))
-                    })
-                    .map_err(sql)?;
-                rows.collect::<Result<_, _>>().map_err(sql)?
-            };
-            for (seq, kind, event_id, run_id, run_seq) in rows {
-                let (envelope, prompt) = {
-                    let mut storage = storage_lock(&inner.storage)?;
-                    let journal = &mut storage.journal;
-                    match (kind.as_str(), run_id, run_seq) {
-                        ("run", Some(run_id), Some(run_seq)) => {
-                            let Some(event) =
-                                journal.run_event(&run_id, run_seq).map_err(journal_error)?
-                            else {
-                                break;
-                            };
-                            let prompt = (run_seq == 1)
-                                .then(|| {
-                                    crate::chat_prompt::load_prompt(&run_id, subject.as_deref())
-                                        .ok()
-                                        .flatten()
-                                })
-                                .flatten();
-                            (
-                                serde_json::to_value(event).map_err(|e| e.to_string())?,
-                                prompt,
-                            )
-                        }
-                        _ => {
-                            let Some(event) = journal
-                                .thread_event_by_id(&event_id)
-                                .map_err(journal_error)?
-                            else {
-                                break;
-                            };
-                            (
-                                serde_json::to_value(event).map_err(|e| e.to_string())?,
-                                None,
-                            )
-                        }
-                    }
-                };
-                let event = ReplicatedEvent {
-                    thread_id: thread.clone(),
-                    origin: origin.clone(),
-                    seq,
-                    kind,
-                    envelope,
-                    prompt,
-                };
-                let size = serde_json::to_vec(&event).map_or(usize::MAX, |bytes| bytes.len());
-                if size > *budget {
-                    return Ok((events, true));
-                }
-                *budget -= size;
-                events.push(event);
+    let mut candidates: Vec<String> = state.lagging.iter().cloned().collect();
+    {
+        let mut statement = connection
+            .prepare_cached(
+                "SELECT thread_id, version FROM thread_versions WHERE version>?1 ORDER BY version",
+            )
+            .map_err(sql)?;
+        let mut rows = statement.query([state.mark as i64]).map_err(sql)?;
+        while let Some(row) = rows.next().map_err(sql)? {
+            let thread: String = row.get(0).map_err(sql)?;
+            state.mark = state.mark.max(row.get::<_, i64>(1).map_err(sql)? as u64);
+            if !state.lagging.contains(&thread) {
+                candidates.push(thread);
             }
         }
     }
-    Ok((events, false))
+    let window = Window::for_peer(inner, peer)?;
+    let subject = inner.host.replica_scope().and_then(|scope| scope.subject);
+    let mut events = Vec::new();
+    let mut lagging = BTreeSet::new();
+    let mut more = false;
+    for thread in candidates {
+        if more {
+            lagging.insert(thread);
+            continue;
+        }
+        let mine = clock_of(&connection, &thread)?;
+        let theirs = peer_clock(&thread).unwrap_or_default();
+        let known = |origin: &str| theirs.get(origin).copied().unwrap_or(0);
+        if mine.iter().all(|(origin, held)| *held <= known(origin))
+            || !window.wants(inner, &connection, &thread)?
+        {
+            continue;
+        }
+        lagging.insert(thread.clone());
+        for (origin, held) in &mine {
+            let known = known(origin);
+            if *held <= known {
+                continue;
+            }
+            if !export_rows(
+                inner,
+                &connection,
+                &thread,
+                origin,
+                known,
+                subject.as_deref(),
+                &mut events,
+                budget,
+            )? {
+                more = true;
+                break;
+            }
+        }
+    }
+    state.lagging = lagging;
+    Ok((events, more))
+}
+
+/// Adds the events of one thread and origin after `known` to `events`.
+/// Answers false when the budget ran out.
+#[allow(clippy::too_many_arguments)]
+fn export_rows(
+    inner: &Inner,
+    connection: &rusqlite::Connection,
+    thread: &str,
+    origin: &str,
+    known: u64,
+    subject: Option<&str>,
+    events: &mut Vec<ReplicatedEvent>,
+    budget: &mut usize,
+) -> Result<bool, String> {
+    let rows: Vec<LogRow> = {
+        let mut statement = connection
+            .prepare_cached(
+                "SELECT seq, kind, event_id, run_id, run_seq FROM log \
+                 WHERE thread_id=?1 AND origin=?2 AND seq>?3 ORDER BY seq LIMIT ?4",
+            )
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(params![thread, origin, known, MAX_ROWS_PER_ORIGIN], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    for (seq, kind, event_id, run_id, run_seq) in rows {
+        let (envelope, prompt) = {
+            let mut storage = storage_lock(&inner.storage)?;
+            let journal = &mut storage.journal;
+            match (kind.as_str(), run_id, run_seq) {
+                ("run", Some(run_id), Some(run_seq)) => {
+                    let Some(event) = journal.run_event(&run_id, run_seq).map_err(journal_error)?
+                    else {
+                        break;
+                    };
+                    let prompt = (run_seq == 1)
+                        .then(|| {
+                            crate::chat_prompt::load_prompt(&run_id, subject)
+                                .ok()
+                                .flatten()
+                        })
+                        .flatten();
+                    (
+                        serde_json::to_value(event).map_err(|e| e.to_string())?,
+                        prompt,
+                    )
+                }
+                _ => {
+                    let Some(event) = journal
+                        .thread_event_by_id(&event_id)
+                        .map_err(journal_error)?
+                    else {
+                        break;
+                    };
+                    (
+                        serde_json::to_value(event).map_err(|e| e.to_string())?,
+                        None,
+                    )
+                }
+            }
+        };
+        let event = ReplicatedEvent {
+            thread_id: thread.to_owned(),
+            origin: origin.to_owned(),
+            seq,
+            kind,
+            envelope,
+            prompt,
+        };
+        let size = serde_json::to_vec(&event).map_or(usize::MAX, |bytes| bytes.len());
+        if size > *budget {
+            return Ok(false);
+        }
+        *budget -= size;
+        events.push(event);
+    }
+    Ok(true)
 }
 
 fn local_provenance(scope: Option<&ReplicaScope>, attach_profile: &str) -> Provenance {
@@ -668,12 +1327,16 @@ fn note_blob(inner: &Inner, event: &EventEnvelope, thread_id: &str) -> Result<()
         })
         .unwrap_or(false);
     if !present {
+        // A member that keeps every attachment offline asks at once; others
+        // ask as a client opens the thread.
+        let requested =
+            super::bootstrap::offline(inner).attachments == super::bootstrap::ATTACHMENTS_ALL;
         inner
             .store
             .connect()?
             .execute(
-                "INSERT OR IGNORE INTO blobs(hash, thread_id, total) VALUES(?1, ?2, ?3)",
-                params![hash, thread_id, total],
+                "INSERT OR IGNORE INTO blobs(hash, thread_id, total, requested) VALUES(?1, ?2, ?3, ?4)",
+                params![hash, thread_id, total, requested],
             )
             .map_err(sql)?;
     }
@@ -744,6 +1407,9 @@ pub(super) fn import(inner: &Inner, mut events: Vec<ReplicatedEvent>) -> Result<
                 ],
             )
             .map_err(sql)?;
+        if let Some(at) = event.envelope["recorded_at"].as_str() {
+            note_activity(&connection, &event.thread_id, at)?;
+        }
         imported += 1;
         if logged.event_type == THREAD_MESSAGE_POSTED {
             if let Ok(envelope) = serde_json::from_value::<ThreadEventEnvelope>(event.envelope) {
@@ -903,9 +1569,9 @@ pub(super) fn post(
 ) -> Result<(String, u64), String> {
     let self_id = inner
         .runtime_id()
-        .ok_or("Turn on remote access to post to agent threads.")?;
+        .ok_or("Turn on remote access to post to shared threads.")?;
     if registration(inner, thread_id).is_none() {
-        return Err("This thread is not an agent or group thread.".into());
+        return Err("This thread is not shared with the swarm.".into());
     }
     let text = text.trim();
     if text.is_empty() || text.len() > MAX_POSTED_TEXT_BYTES {
@@ -1029,8 +1695,8 @@ pub(super) fn post_as(
     Ok(())
 }
 
-/// `thread.post`: posts to an agent or group thread on any member, or to an
-/// agent that has no thread yet through its primary runtime.
+/// `thread.post`: posts to an agent, group or ordinary thread on any member,
+/// or to an agent that has no thread yet through its primary runtime.
 pub(super) fn post_operation(inner: &Inner, body: Value) -> Result<Value, String> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -1097,20 +1763,46 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
         return Ok(false);
     };
     let mut kick = false;
-    // Only threads with a posted message not yet consumed have work.
-    let waiting: Vec<String> = {
+    // Only threads with a posted message not yet consumed have work. The
+    // pass reads the posts after its mark, and a thread another member runs
+    // never has work here.
+    let mark = super::lock(&inner.scan).posts;
+    let posted: Vec<(i64, String, bool)> = {
         let connection = inner.store.connect()?;
         let mut statement = connection
-            .prepare(
-                "SELECT DISTINCT thread_id FROM log l WHERE kind='thread' AND event_type=?1 \
-                 AND NOT EXISTS(SELECT 1 FROM consumed c WHERE c.event_id=l.event_id)",
+            .prepare_cached(
+                "SELECT l.rowid, l.thread_id, EXISTS(SELECT 1 FROM consumed c WHERE c.event_id=l.event_id) \
+                 FROM log l WHERE l.rowid>?1 AND l.event_type=?2 AND l.kind='thread' ORDER BY l.rowid",
             )
             .map_err(sql)?;
         let rows = statement
-            .query_map([THREAD_MESSAGE_POSTED], |row| row.get(0))
+            .query_map(params![mark, THREAD_MESSAGE_POSTED], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .map_err(sql)?;
         rows.collect::<Result<_, _>>().map_err(sql)?
     };
+    let mut ours: BTreeMap<String, bool> = BTreeMap::new();
+    let mut waiting: Vec<String> = Vec::new();
+    let mut next_mark = posted.last().map_or(mark, |(rowid, _, _)| *rowid);
+    for (rowid, thread, consumed) in posted {
+        if consumed {
+            continue;
+        }
+        let primary = *ours.entry(thread.clone()).or_insert_with(|| {
+            registration(inner, &thread)
+                .and_then(|registration| thread_primary(inner, &registration))
+                .as_deref()
+                == Some(self_id.as_str())
+        });
+        if primary {
+            next_mark = next_mark.min(rowid - 1);
+            if !waiting.contains(&thread) {
+                waiting.push(thread);
+            }
+        }
+    }
+    super::lock(&inner.scan).posts = next_mark;
     for registration in waiting
         .iter()
         .filter_map(|thread| registration(inner, thread))
@@ -1176,9 +1868,24 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
             let Some(index) = ready else {
                 break;
             };
-            let message = pending.remove(index);
-            let user = message.payload["author"]["kind"] == "user";
+            let user = pending[index].payload["author"]["kind"] == "user";
             let mut run_id = None;
+            let mut error = None;
+            if user && registration.kind == PLAIN {
+                // The owner runs a post in an ordinary thread as the next
+                // prompt, or steers the run live there; a busy thread keeps
+                // the post for the next pass.
+                let text = pending[index].payload["text"].as_str().unwrap_or_default();
+                match inner.host.steer(&registration.thread_id, text) {
+                    Some(steered) => run_id = Some(steered),
+                    None => match inner.host.submit(&registration.thread_id, text) {
+                        Ok(started) => run_id = Some(started),
+                        Err(reason) if reason == crate::active_run::THREAD_BUSY => break,
+                        Err(reason) => error = Some(reason),
+                    },
+                }
+            }
+            let message = pending.remove(index);
             if user {
                 match registration.kind.as_str() {
                     "agent" => {
@@ -1224,14 +1931,18 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
                 )
                 .map_err(sql)?;
             if user {
+                let mut payload = json!({
+                    "message_id": message.payload["message_id"],
+                    "run_id": run_id,
+                });
+                if let Some(error) = error {
+                    payload["error"] = Value::from(error);
+                }
                 append_local(
                     inner,
                     &registration.thread_id,
                     THREAD_MESSAGE_CONSUMED,
-                    json!({
-                        "message_id": message.payload["message_id"],
-                        "run_id": run_id,
-                    }),
+                    payload,
                 )?;
                 scan_thread(inner, &self_id, &registration.thread_id)?;
             }
@@ -1241,7 +1952,7 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
 }
 
 /// The messages posted to a thread, oldest first, each with whether its
-/// primary consumed it and the run that answered it.
+/// primary consumed it, the run that answered it, and why it started none.
 pub fn posted_messages(
     storage: &SharedStorage,
     thread_id: &str,
@@ -1252,7 +1963,7 @@ pub fn posted_messages(
         .thread_events_after(thread_id, 0)
         .map_err(journal_error)?;
     let mut posts: Vec<Value> = Vec::new();
-    let mut consumed: BTreeMap<String, Value> = BTreeMap::new();
+    let mut consumed: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
     for event in events {
         let payload = event.payload();
         match event.event_type.as_str() {
@@ -1267,16 +1978,22 @@ pub fn posted_messages(
             })),
             THREAD_MESSAGE_CONSUMED => {
                 if let Some(id) = payload["message_id"].as_str() {
-                    consumed.insert(id.to_owned(), payload["run_id"].clone());
+                    consumed.insert(
+                        id.to_owned(),
+                        (payload["run_id"].clone(), payload.get("error").cloned()),
+                    );
                 }
             }
             _ => {}
         }
     }
     for post in &mut posts {
-        if let Some(run_id) = post["message_id"].as_str().and_then(|id| consumed.get(id)) {
+        if let Some((run_id, error)) = post["message_id"].as_str().and_then(|id| consumed.get(id)) {
             post["consumed"] = Value::Bool(true);
             post["run_id"] = run_id.clone();
+            if let Some(error) = error {
+                post["error"] = error.clone();
+            }
         }
     }
     let excess = posts.len().saturating_sub(limit);

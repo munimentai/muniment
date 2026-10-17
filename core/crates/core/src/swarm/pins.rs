@@ -225,9 +225,16 @@ pub(super) fn evict(inner: &Inner) -> Result<Vec<String>, String> {
                 .remove(&parsed)
                 .map_err(|error| error.to_string())?;
         }
-        inner
-            .store
-            .connect()?
+        // A blob only fleet records named leaves the want list, so a request
+        // for every missing attachment does not fetch it back.
+        let connection = inner.store.connect()?;
+        connection
+            .execute(
+                "DELETE FROM blobs WHERE hash=?1 AND thread_id IS NULL",
+                [&hash],
+            )
+            .map_err(sql)?;
+        connection
             .execute(
                 "UPDATE blobs SET requested=0, done=0 WHERE hash=?1",
                 [&hash],

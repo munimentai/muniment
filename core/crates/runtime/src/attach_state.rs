@@ -50,6 +50,9 @@ pub struct RuntimeAttachState {
     pub(crate) swarm_host: Arc<crate::swarm_host::RuntimeSwarmHost>,
     /// Keeps one agent run queue pass at a time.
     schedule_pass: Mutex<()>,
+    /// The Pi artifact every boundary built from this state launches, when
+    /// a test stages one.
+    pi_artifact: Mutex<Option<muniment_core::sidecar::pi_install::PiArtifactDescriptor>>,
     /// Set while an MCP poll pass runs.
     mcp_polling: Arc<AtomicBool>,
 }
@@ -133,6 +136,7 @@ impl RuntimeAttachState {
             swarm,
             swarm_host,
             schedule_pass: Mutex::new(()),
+            pi_artifact: Mutex::new(None),
             mcp_polling: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -157,9 +161,26 @@ impl RuntimeAttachState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Makes every boundary built from this state launch `artifact`, as a
+    /// test that stages a Pi stub does.
+    #[doc(hidden)]
+    pub fn use_pi_artifact(
+        &self,
+        artifact: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+    ) {
+        *self
+            .pi_artifact
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(artifact);
+    }
+
     /// Builds boundaries that share the runtime state.
     pub fn boundaries(&self) -> RuntimeAttachBoundaries {
-        RuntimeAttachBoundaries::new_with_sign_in(
+        let artifact = *self
+            .pi_artifact
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let boundaries = RuntimeAttachBoundaries::new_with_sign_in(
             Arc::clone(&self.storage),
             self.active.clone(),
             self.profile_directory.clone(),
@@ -177,7 +198,11 @@ impl RuntimeAttachState {
             self.chat_events.clone(),
             Arc::clone(&self.models),
         )
-        .with_swarm(self.swarm.clone())
+        .with_swarm(self.swarm.clone());
+        match artifact {
+            Some(artifact) => boundaries.with_pi_artifact(artifact),
+            None => boundaries,
+        }
     }
 
     /// Returns the model service shared by every attach connection.
