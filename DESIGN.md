@@ -8,7 +8,7 @@ default. The interface is the user's territory and the model is a visitor.
 ## Tokens
 
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
-first-class, Framed Moss dark is the default, and a user override persists per device.
+first-class, Framed Moss dark is the default, and a user override follows the user to every machine in a fleet.
 Every theme carries ten core color tokens in one `:root[data-theme]`
 block. Appearance offers four colors, Moss, Harbor, Clay and Iris, in three
 rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
@@ -44,8 +44,8 @@ Appearance moves two things and nothing else: a size step scales every
 `--text-*` token and `--text-provenance` together by a tenth per step, from
 two steps down to four up, and a family picked from the device's installed
 fonts sits in front of the shipped stack in `--font-human`, `--font-heading` or `--font-mono`. Headers have a separate picker.
-The super key with `=`, `-` and `0` moves the same step. Both live on the
-device beside the theme and the shipped pair stays the default.
+The super key with `=`, `-` and `0` moves the same step. Both follow the
+theme across the fleet and the shipped pair stays the default.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
 Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
@@ -121,11 +121,11 @@ control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
-controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small mono meta line over its title, the machine's shape and name once a machine is paired, then the time ago. Hover is a lighter wash than the open thread,
+controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small mono meta line over its title, the machine's shape and name once a machine is paired, or `on Studio` for a thread another fleet member owns with an ochre slashed globe while that member is away, then the time ago. Hover is a lighter wash than the open thread,
 New thread leads the sidebar, followed by Agents, Groups once a machine is in a swarm, Artifacts, Activity and title search, with no static Threads heading. Activity counts the agent runs that raised a notification since it last opened and the approvals waiting, in a mono chip, and lists those approvals above the runs. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers and every agent the swarm knows, each card with its primary machine's shape icon, an ochre slashed globe when that machine does not answer and a sync icon on a synced copy, and each row with one status mark, ochre when the machine does not answer and a ring on a synced copy, whose hover names the machine and the activity, and Artifacts and Projects open on this computer.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
-Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. The cloud flag adds the account controls.
+Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. In a fleet a mono sync line sits above Settings, Synced, Syncing N or Offline with the last sync time, and opens the bootstrap panel: each class with a bar and each sign-in arriving from its holder or waiting for one. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,

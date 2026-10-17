@@ -91,7 +91,7 @@
 </script>
 
 <section class="appearance" aria-label="Appearance">
-  <PageHead intro="Choose how Muniment looks on this device." />
+  <PageHead intro="Choose how Muniment looks. Theme and type follow you to every machine." />
   <Group heading="Theme">
   <Row title="Mode" description="Follow the system, or keep one.">
   <div class="theme-options" role="group" aria-label="Mode">
