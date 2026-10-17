@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start a throwaway PostgreSQL 17 server for the router tests and print its
 # URL, or stop it.
-# Usage: .forgejo/postgres.sh start|stop
+# Usage: ci/postgres.sh start|stop
 #
 # Jobs run in host mode, where `services:` does not work. initdb and the server
 # run as the postgres user, which cannot reach RUNNER_TEMP under /root, so the

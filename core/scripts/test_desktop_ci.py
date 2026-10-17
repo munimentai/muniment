@@ -1,11 +1,11 @@
-"""Tests for the argument and environment checks in .forgejo/desktop-ci.sh."""
+"""Tests for the argument and environment checks in ci/desktop-ci.sh."""
 
 import os
 import subprocess
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / ".forgejo" / "desktop-ci.sh"
+SCRIPT = Path(__file__).resolve().parent.parent / "ci" / "desktop-ci.sh"
 
 
 def run_script(**overrides):

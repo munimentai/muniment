@@ -6,7 +6,7 @@
 # launcher unpacks.
 #
 # cargo-zigbuild links against glibc 2.36, so the archive runs on Debian 12
-# and later, the runtime image among them. .forgejo/zig-toolchain.sh installs
+# and later, the runtime image among them. ci/zig-toolchain.sh installs
 # zig, cargo-zigbuild and both Rust targets.
 #
 # Usage: deploy/runtime/package.sh <X.Y.Z> <x86_64|aarch64> [out]

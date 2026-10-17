@@ -1,5 +1,5 @@
 * text=auto eol=lf
-protocol-fixtures/**/*.json text eol=lf
+**/protocol-fixtures/**/*.json text eol=lf
 
 *.png binary
 *.woff2 binary
@@ -12,3 +12,4 @@ protocol-fixtures/**/*.json text eol=lf
 *.so binary
 *.lib binary
 *.onnx binary
+*.wav binary

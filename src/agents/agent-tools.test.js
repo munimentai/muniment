@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { agentTools, emptyCatalog, loadToolCatalog, missingSkills, serverTools, toggleTool } from './agent-tools.js'
 
-const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/muniment.attach/1', name), 'utf8')).body
+const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
 const answer = fixture('response-agent-tool-catalog.json')
 const tauri = (reply) => ({ invoke: vi.fn(async () => { if (reply instanceof Error) throw reply; return reply }) })
 

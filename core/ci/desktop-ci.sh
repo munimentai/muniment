@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run a command on a fresh macOS or Windows VM on the desktop-ci host through
 # `sudo desktop-ci`, and exit with its status.
-# Usage: .forgejo/desktop-ci.sh <macos|windows|linux> <command>
+# Usage: ci/desktop-ci.sh <macos|windows|linux> <command>
 #
 # The VM fetches REF from this repository with the job token, checks out
 # SOURCE_SHA, drops the token, and runs the command. The token belongs to

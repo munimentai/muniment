@@ -1,1 +1,0 @@
-{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000bc","operation":"swarm.join","capability":"fixture-capability","body":{"link":"muniment://pair?v=1&id=018f0000-0000-7000-8000-0000000000c1&name=Build+box&fp=8a0f0c5e2b1d4f6e9a7c3b5d1e2f4a6c8b0d2e4f6a8c0e2f4a6b8c0d2e4f6a8c&host=192.0.2.20%3A7443#00112233445566778899aabbccddeeff"}}

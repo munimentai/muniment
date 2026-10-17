@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { approvalChoices, approvalOutcome, approvalSummary, longInput, ruleInputs, threadApprovals } from './approvals.js'
 
-const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/muniment.attach/1', name), 'utf8')).body
+const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
 const pending = fixture('response-agent-approvals.json').approvals[0]
 
 describe('approval answers', () => {

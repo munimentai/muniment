@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the stable Rust toolchain with the named components on a runner, and
 # put cargo on PATH for the later steps of the job.
-# Usage: .forgejo/rust-toolchain.sh [component...]
+# Usage: ci/rust-toolchain.sh [component...]
 #
 # The runner container keeps /root between jobs, so rustup installs once.
 # rustup-init is pinned by version and checked against the SHA-256 that

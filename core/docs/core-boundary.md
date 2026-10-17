@@ -129,6 +129,22 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 The reader interface stays small and hand-guarded through the attach protocol and journal projections.
 The boundary does not authorize wider reader access or a protocol change.
 
+## Desktop
+
+The desktop workspace in `../src-tauri/` builds on the port crates through path dependencies under `crates/`.
+The repository root's `scripts/check-core-boundary.sh` reads the Port table and this table.
+
+| Kind | Name | Why |
+| --- | --- | --- |
+| crate | muniment-desktop | It owns the Tauri shell and entitlement projection UI. |
+| crate | muniment-desktop-integration | It holds cloud sign-in, cloud chat grants, browser control, and the provider OAuth clients. |
+| crate | muniment-runtime | It owns the user-level runtime service. |
+| crate | muniment-cli | It gives the local runtime a shell-free client. |
+| crate | muniment-acp | It adapts ACP agents to the runtime. |
+
+The `browser-control/` extension and the remote-control design study also stay with the desktop.
+Neither is a workspace crate.
+
 ## Host contracts
 
 The host supplies desktop behavior through port-owned values and traits.
@@ -139,6 +155,9 @@ The host supplies desktop behavior through port-owned values and traits.
 Its defaults answer that the cloud is unavailable, so a host without cloud accounts runs locally.
 `PiLaunchBoundaries::browser_host` answers the host's browser for the `browser` tool. Its default answers none.
 `process_reader` reads Linux process identities for attach peers and for the desktop's browser control.
+`auth` re-exports the `account` values and produces them for the runtime's `RunAttachBoundaries` calls.
+The desktop shell's launch boundaries fetch receipts through `chat_grant` and answer that renewal and inspection are unavailable.
+The desktop shell and runtime register the Antigravity OAuth client with the router at startup.
 `muniment-runtime-core` takes the host's cloud account, chat grants, credential store, provider OAuth clients, sign-in page and executable paths as one `RuntimeHost` value.
 Its defaults answer that the cloud is unavailable, and the host binary registers the runtime with the OS service manager.
 `muniment-server` is the host with no keychain and no service manager. It builds `muniment-runtime-core` without its `keyring` feature and keeps secrets in `FileCredentialStore`.
@@ -161,3 +180,9 @@ It rejects root glob imports, alternate root aliases, and source includes that c
 A source include needs a boundary review. The reviewed includes are named in the check.
 Cargo compilation checks the enabled code paths as well.
 Linux and macOS tests do not prove Windows compilation, so CI checks the workspace on Windows.
+
+The root `scripts/check-core-boundary.sh` checks the desktop workspace.
+It requires every desktop workspace crate in the Desktop table and no port crate in that workspace.
+It requires the three desktop-only modules in `muniment-desktop-integration`.
+It checks every desktop crate except the shell with Cargo's all-target dependency tree, including build and test dependencies.
+It rejects the shell and Tauri packages in those trees.

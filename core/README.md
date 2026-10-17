@@ -903,4 +903,4 @@ trailer is major, and other prefixes cut no release.
 
 ## License
 
-FSL-1.1-ALv2. See `LICENSE.md`.
+FSL-1.1-ALv2. See `../LICENSE.md`.
