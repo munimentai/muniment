@@ -1034,7 +1034,7 @@ esac
                 ("libstub.so", b"library", 0o644),
             ]);
             let sums = sums(&[(&name, &archive)]);
-            let directory = self.feed.join(format!("v{version}"));
+            let directory = self.feed.join(format!("{}{version}", release::TAG_PREFIX));
             std::fs::create_dir_all(&directory).unwrap();
             std::fs::write(directory.join(&name), &archive).unwrap();
             std::fs::write(
@@ -1281,7 +1281,7 @@ esac
         let fixture = Fixture::new("tampered");
         fixture.publish("1.1.0", "1.1.0", true);
         let name = release::archive_name("1.1.0", release::host_arch().unwrap());
-        let path = fixture.feed.join("v1.1.0").join(&name);
+        let path = fixture.feed.join("core-v1.1.0").join(&name);
         let mut bytes = std::fs::read(&path).unwrap();
         bytes.push(0);
         std::fs::write(&path, bytes).unwrap();
