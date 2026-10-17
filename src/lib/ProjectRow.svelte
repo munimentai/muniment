@@ -2,7 +2,9 @@
   import { floatingMenu } from './floating-menu.js'
   import { tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { name, expanded, disabled = false, ontoggle, onnew, onrename, onopen, icon = 'folder', label = `Project ${name}`, newLabel = `New thread in ${name}`, onactivate = ontoggle, panelOpen = undefined, collapsible = true, running = false } = $props()
+  import OwnerChip from '../runtimes/OwnerChip.svelte'
+  // `owner` names the fleet member that holds a shared project's files.
+  let { owner = null, name, expanded, disabled = false, ontoggle, onnew, onrename, onopen, icon = 'folder', label = `Project ${name}`, newLabel = `New thread in ${name}`, onactivate = ontoggle, panelOpen = undefined, collapsible = true, running = false } = $props()
   let open = $state(false)
   let row = $state()
   let trigger = $state()
@@ -32,7 +34,7 @@
 
 <!-- An open catalog marks its row the way the open thread marks its own. -->
 <div class="project-row" class:current={panelOpen === true} bind:this={row}>
-  <button class="project-title" aria-label={running ? `${label}, running` : label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span>{#if running}<i class="run-mark" aria-hidden="true"></i>{/if}</button>
+  <button class="project-title" aria-label={running ? `${label}, running` : label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span>{#if owner}<OwnerChip machine={owner} prefix="files on" compact />{/if}{#if running}<i class="run-mark" aria-hidden="true"></i>{/if}</button>
   <!-- A project folder starts a thread with the pencil. The Agents, Artifacts and Projects rows create with the plus. -->
   <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name={icon === 'folder' ? 'square-pen' : 'plus'} size={14} /></button>
   <!-- A section with nothing in it has nothing to expand, so it shows no chevron. -->

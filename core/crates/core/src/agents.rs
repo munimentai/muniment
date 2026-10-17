@@ -1243,6 +1243,15 @@ pub fn routines(profile: &Path, agent_id: &str) -> Result<Vec<Routine>, String> 
     read(profile, agent_id).map(|agent| agent.routines)
 }
 
+/// Whether the swarm offers to move `agent` here: its primary is another
+/// member that has been away a day or more.
+fn move_suggested(swarm: Option<&crate::swarm::Swarm>, agent: &Agent) -> bool {
+    match (swarm, agent.primary_runtime.as_deref()) {
+        (Some(swarm), Some(primary)) => swarm.move_suggested(primary),
+        _ => false,
+    }
+}
+
 /// Answers one agent operation of the attach protocol, named by its wire
 /// name such as `agent.list`, and its body.
 pub fn operation(
@@ -1336,6 +1345,7 @@ pub fn operation(
                 .map(|agent| {
                     let mut value = json!(agent);
                     value["activity"] = json!(activities.remove(&agent.id));
+                    value["move_suggested"] = json!(move_suggested(swarm.as_ref(), agent));
                     value
                 })
                 .collect();
@@ -1355,7 +1365,12 @@ pub fn operation(
             let request: ById = parse(body)?;
             let agent = read(profile, &request.id)?;
             let primary = state(profile)?.primary_threads.get(&agent.id).cloned();
-            Ok(json!({"agent": agent, "primary_thread_id": primary}))
+            let swarm = crate::swarm::Swarm::for_profile(profile);
+            Ok(json!({
+                "agent": agent,
+                "primary_thread_id": primary,
+                "move_suggested": move_suggested(swarm.as_ref(), &agent),
+            }))
         }
         "agent.save" => {
             let request: Save = parse(body)?;

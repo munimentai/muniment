@@ -192,7 +192,7 @@ pub struct Op {
     pub owner_runtime: String,
     #[serde(default)]
     pub owner_name: Option<String>,
-    /// `queued`, `sent`, `applied` or `failed`.
+    /// `queued`, `sent`, `applied`, `failed` or `cancelled`.
     pub state: String,
     #[serde(default)]
     pub reason: Option<OpReason>,
@@ -698,7 +698,9 @@ pub(super) fn on_ack(inner: &Inner, ack: &Ack) -> Result<(), String> {
     let Some(mut op) = get(inner, &ack.message_id)? else {
         return Ok(());
     };
-    if !op.open() {
+    // A cancelled op whose relayed copy still reached its owner reports
+    // what the owner did with it.
+    if !op.open() && op.state != CANCELLED {
         return Ok(());
     }
     if ack.status == "refused" {
@@ -777,6 +779,105 @@ pub(super) fn status(inner: &Inner, body: Value) -> Result<Value, String> {
     let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
     let op = get(inner, &body.op_id)?.ok_or("The action was not found.")?;
     Ok(json!({"op": op}))
+}
+
+/// The state of an op its sender cancelled before it left.
+const CANCELLED: &str = "cancelled";
+/// The most ops `fleet.ops` lists.
+const MAX_LISTED: usize = 200;
+
+/// `fleet.op_cancel`: drops an action that waits for its owner. An action
+/// the owner already received cannot be called back. A copy another member
+/// relays may still reach the owner, and its acknowledgement then reports
+/// what the owner did.
+pub(super) fn cancel(inner: &Inner, body: Value) -> Result<Value, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Body {
+        op_id: String,
+    }
+    let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
+    let op = {
+        let _merge = lock(&inner.merge);
+        let mut op = get(inner, &body.op_id)?.ok_or("The action was not found.")?;
+        if op.state == CANCELLED {
+            return Ok(json!({"op": op}));
+        }
+        if op.state != "queued" {
+            let name = op
+                .owner_name
+                .clone()
+                .unwrap_or_else(|| "The machine that runs it".into());
+            return Err(match op.state.as_str() {
+                "sent" => format!("{name} already received the action."),
+                _ => "The action already finished.".into(),
+            });
+        }
+        op.state = CANCELLED.into();
+        op.reason = None;
+        op.updated_at = inner.now_text();
+        store(inner, &op)?;
+        inner
+            .store
+            .connect()?
+            .execute("DELETE FROM outbox WHERE message_id=?1", [&op.op_id])
+            .map_err(sql)?;
+        op
+    };
+    emit(inner, &op);
+    Ok(json!({"op": op}))
+}
+
+/// `fleet.ops`: the actions this member forwarded, newest first. `state`
+/// names one state, or `open` for those still `queued` or `sent`.
+pub(super) fn list(inner: &Inner, body: Value) -> Result<Value, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Body {
+        #[serde(default)]
+        state: Option<String>,
+    }
+    let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
+    let state = body.state.filter(|state| !state.is_empty());
+    if let Some(state) = &state {
+        if !["open", "queued", "sent", "applied", "failed", CANCELLED].contains(&state.as_str()) {
+            return Err("The state is not one an action takes.".into());
+        }
+    }
+    // Open ops come from their index. A closed state reads every op, since
+    // the state lives in the record.
+    let (query, limit) = match state.as_deref() {
+        Some("open" | "queued" | "sent") => (
+            "SELECT record FROM ops WHERE open=1 ORDER BY created_at DESC LIMIT ?1",
+            MAX_LISTED as i64,
+        ),
+        None => (
+            "SELECT record FROM ops ORDER BY created_at DESC LIMIT ?1",
+            MAX_LISTED as i64,
+        ),
+        Some(_) => (
+            "SELECT record FROM ops ORDER BY created_at DESC LIMIT ?1",
+            -1,
+        ),
+    };
+    let rows: Vec<String> = {
+        let connection = inner.store.connect()?;
+        let mut statement = connection.prepare(query).map_err(sql)?;
+        let rows = statement
+            .query_map([limit], |row| row.get(0))
+            .map_err(sql)?;
+        rows.collect::<Result<_, _>>().map_err(sql)?
+    };
+    let ops: Vec<Op> = rows
+        .iter()
+        .filter_map(|raw| serde_json::from_str::<Op>(raw).ok())
+        .filter(|op| match state.as_deref() {
+            None | Some("open") => true,
+            Some(state) => op.state == state,
+        })
+        .take(MAX_LISTED)
+        .collect();
+    Ok(json!({"ops": ops}))
 }
 
 /// Keeps an op addressed to this runtime until the worker runs it. Copies
@@ -1325,5 +1426,79 @@ mod tests {
         assert_eq!(first, forwarded_key("c", "phone", "k"));
         assert_ne!(first, forwarded_key("b", "phone", "k"));
         assert!(muniment_attach::Id::new(first).is_ok());
+    }
+
+    #[test]
+    fn a_queued_action_cancels_and_leaves_the_outbox() {
+        let sender = Owner::new();
+        let inner = sender.inner();
+        let queue = |key: &str| {
+            forward(
+                inner,
+                Operation::ThreadPost,
+                &json!({"thread_id": "thread-1", "text": "Check the west region."}),
+                &FleetActor::owner(),
+                Some(key),
+                OpItem {
+                    kind: "thread".into(),
+                    id: "thread-1".into(),
+                },
+                "member-b",
+            )
+            .unwrap()
+        };
+        let first = queue("key-1");
+        let second = queue("key-2");
+        assert_eq!(first.state, "queued");
+        let outbox = |op_id: &str| messaging::outbox_message(inner, op_id).unwrap().is_some();
+        assert!(outbox(&first.op_id));
+        let open = list(inner, json!({"state": "open"})).unwrap();
+        assert_eq!(open["ops"].as_array().unwrap().len(), 2);
+        // Newest first.
+        assert_eq!(open["ops"][0]["op_id"], second.op_id);
+
+        let cancelled = cancel(inner, json!({"op_id": first.op_id})).unwrap();
+        assert_eq!(cancelled["op"]["state"], "cancelled");
+        assert!(!outbox(&first.op_id));
+        // A second cancel answers the same op.
+        assert_eq!(
+            cancel(inner, json!({"op_id": first.op_id})).unwrap()["op"]["state"],
+            "cancelled"
+        );
+        let open = list(inner, json!({"state": "open"})).unwrap();
+        assert_eq!(open["ops"].as_array().unwrap().len(), 1);
+        let gone = list(inner, json!({"state": "cancelled"})).unwrap();
+        assert_eq!(gone["ops"][0]["op_id"], first.op_id);
+        assert_eq!(
+            list(inner, json!({})).unwrap()["ops"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(list(inner, json!({"state": "lost"})).is_err());
+
+        // A relayed copy that still reached the owner reports its outcome.
+        on_ack(
+            inner,
+            &Ack {
+                message_id: first.op_id.clone(),
+                status: "delivered".into(),
+                note: None,
+                at: inner.now_text(),
+                result: Some(json!({"message_id": "m-1"})),
+            },
+        )
+        .unwrap();
+        let applied = get(inner, &first.op_id).unwrap().unwrap();
+        assert_eq!(applied.state, "applied");
+        assert_eq!(
+            cancel(inner, json!({"op_id": first.op_id})).unwrap_err(),
+            "The action already finished."
+        );
+        assert_eq!(
+            cancel(inner, json!({"op_id": "missing"})).unwrap_err(),
+            "The action was not found."
+        );
     }
 }

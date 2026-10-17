@@ -1508,7 +1508,8 @@ impl DesktopClient {
             Operation::FleetCredentials => &["share_models"],
             Operation::SwarmSetRole => &["role"],
             Operation::FleetAudit => &["entries"],
-            Operation::FleetOpStatus => &["op"],
+            Operation::FleetOpStatus | Operation::FleetOpCancel => &["op"],
+            Operation::FleetOps => &["ops"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)

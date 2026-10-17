@@ -5,10 +5,11 @@
   // thread runs on the machine it started on. An older machine updates on its
   // own. Update all asks every machine that is behind and answers, names the
   // ones it skips, and updates this computer last. Under the list, one
-  // switch shares this computer's model connections with every machine, and
-  // for a signed-in account a second keeps them in MuniCloud. The swarm
+  // switch has core share this computer's model connections with the fleet
+  // through `fleet.credentials`, and for a signed-in account a second keeps
+  // them in MuniCloud. The swarm
   // follows: linked machines and their links. Below that, Pair shares this
-  // computer and adds another machine.
+  // computer and adds another machine, and Log lists the fleet's audit log.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
@@ -19,8 +20,10 @@
   import RuntimeRow from './RuntimeRow.svelte'
   import RuntimeAdd from './RuntimeAdd.svelte'
   import ThisComputer from './ThisComputer.svelte'
+  import AuditLog from './AuditLog.svelte'
   import SwarmSection from '../agents/SwarmSection.svelte'
   import { errorLine, skipLabel } from './runtimes.js'
+  import { agentRequest } from '../agents/agent-runtime.js'
   import { interruptionCount, interruptionMessage } from '../lib/app-update.js'
   import { featureFlags } from '../feature-flags.js'
 
@@ -33,12 +36,14 @@
   let skipped = $state([])
   let failures = $state([])
   let localUpdate = $state(null)
+  let shareModels = $state(null)
   const viaCloud = $derived(signedIn && !!list?.shareViaCloud)
 
   onMount(() => {
     let alive = true
     let stop
     void load().then(refresh)
+    void readSharing()
     if (featureFlags.cloud) {
       Promise.resolve(tauri.invoke('auth_status')).then((status) => { if (alive) signedIn = !!status?.signed_in }).catch(() => {})
     }
@@ -63,6 +68,32 @@
     } catch (_) {
       // The rows keep the state each machine answered last.
     }
+  }
+
+  // Core keeps the sharing switch: `fleet.credentials` answers it and sets it.
+  async function readSharing() {
+    try {
+      shareModels = !!(await agentRequest(tauri, 'local', 'fleet.credentials', {}))?.share_models
+    } catch (_) {
+      shareModels = false
+    }
+  }
+
+  // Turning sharing off takes the connections back from MuniCloud too.
+  async function setSharing(next) {
+    busy = 'share'
+    error = ''
+    notice = ''
+    try {
+      const answer = await agentRequest(tauri, 'local', 'fleet.credentials', { share_models: next })
+      shareModels = !!answer?.share_models
+    } catch (failure) {
+      error = errorLine(failure)
+      return
+    } finally {
+      busy = ''
+    }
+    if (!next && list?.shareViaCloud) await act('share', 'runtime_share_models', { cloud: false })
   }
 
   function named(names) {
@@ -174,11 +205,11 @@
 
   <Group label="Model sharing">
     <Row title="Share model connections" description="Paired machines use the providers, sign-ins and keys connected on this computer.">
-      <Toggle checked={list?.shareModels ?? false} label="Share model connections" disabled={!list || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { share: next })} />
+      <Toggle checked={shareModels ?? false} label="Share model connections" disabled={shareModels === null || busy === 'share'} onchange={setSharing} />
     </Row>
     {#if signedIn}
       <Row title="Keep them in MuniCloud" description="MuniCloud holds them encrypted and renews sign-ins. A free account shares with up to five machines.">
-        <Toggle checked={viaCloud} label="Keep them in MuniCloud" disabled={!list?.shareModels || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { share: true, cloud: next })} />
+        <Toggle checked={viaCloud} label="Keep them in MuniCloud" disabled={!list || !shareModels || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { cloud: next })} />
       </Row>
     {/if}
   </Group>
@@ -203,6 +234,8 @@
       <RuntimeAdd {tauri} deviceName={list?.deviceName ?? ''} onpaired={(next) => { if (next?.runtimes) list = next; error = ''; notice = '' }} />
     {/snippet}
   </ThisComputer>
+
+  <AuditLog {tauri} />
 </section>
 
 <style>

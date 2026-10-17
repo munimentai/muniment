@@ -1,5 +1,8 @@
 export const DEFAULT_HOMEPAGE = 'https://muniment.ai/docs/'
-const key = 'muniment.browser.homepage'
+export const HOMEPAGE_STORAGE_KEY = 'muniment.browser.homepage'
+export const HOMEPAGE_EVENT = 'muniment:browser.homepage'
+const key = HOMEPAGE_STORAGE_KEY
+const announce = (name, detail) => { try { window.dispatchEvent(new CustomEvent(name, { detail })) } catch (_) {} }
 export function homepageUrl(value) {
   const text = value.trim()
   if (!text) return DEFAULT_HOMEPAGE
@@ -14,6 +17,7 @@ export function readHomepage() {
 export function saveHomepage(value) {
   const url = homepageUrl(value)
   localStorage.setItem(key, url)
+  announce(HOMEPAGE_EVENT, url)
   return url
 }
 
@@ -26,7 +30,9 @@ export const SEARCH_ENGINES = [
   { id: 'startpage', name: 'Startpage', url: 'https://www.startpage.com/do/search?query=%s' },
 ]
 export const DEFAULT_SEARCH = 'google'
-const searchKey = 'muniment.browser.search'
+export const SEARCH_STORAGE_KEY = 'muniment.browser.search'
+export const SEARCH_EVENT = 'muniment:browser.search'
+const searchKey = SEARCH_STORAGE_KEY
 export function readSearchEngine() {
   try { const saved = localStorage.getItem(searchKey); return SEARCH_ENGINES.some(engine => engine.id === saved) ? saved : DEFAULT_SEARCH }
   catch { return DEFAULT_SEARCH }
@@ -34,6 +40,7 @@ export function readSearchEngine() {
 export function saveSearchEngine(id) {
   if (!SEARCH_ENGINES.some(engine => engine.id === id)) throw new Error('Choose a listed search engine.')
   localStorage.setItem(searchKey, id)
+  announce(SEARCH_EVENT, id)
   return id
 }
 

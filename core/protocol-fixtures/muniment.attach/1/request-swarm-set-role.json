@@ -1,1 +1,1 @@
-{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000dd","operation":"swarm.set_role","capability":"fixture-capability","body":{"role":"worker","runtime_id":"018f0000-0000-7000-8000-0000000000c2"}}
+{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000df","operation":"swarm.set_role","capability":"fixture-capability","body":{"role":"worker","runtime_id":"018f0000-0000-7000-8000-0000000000c2"}}

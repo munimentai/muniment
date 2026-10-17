@@ -46,12 +46,11 @@ fn the_agent_fixture_is_an_agent_v2() {
     assert_eq!(request["operation"], "agent.save");
     round_trip::<Agent>(&request["body"]["agent"]);
     let mut listing = fixture("response-agent-list.json")["body"].clone();
-    // `agent.list` adds each agent's activity to the agent.
-    let activity = listing["agents"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("activity")
-        .unwrap();
+    // `agent.list` adds each agent's activity and whether the swarm offers
+    // to move it here to the agent.
+    let listed = listing["agents"][0].as_object_mut().unwrap();
+    let activity = listed.remove("activity").unwrap();
+    assert_eq!(listed.remove("move_suggested"), Some(Value::Bool(false)));
     round_trip::<Activity>(&activity);
     round_trip::<Agent>(&listing["agents"][0]);
     round_trip::<Run>(&listing["latest_runs"]["018f0000-0000-4000-8000-0000000000a1"]);

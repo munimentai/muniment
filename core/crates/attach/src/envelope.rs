@@ -589,6 +589,14 @@ pub enum Operation {
     /// once. A key the runtime already holds keeps its value.
     #[serde(rename = "preferences.import")]
     PreferencesImport,
+    /// Cancels an action this member queued for another member before it
+    /// leaves this member.
+    #[serde(rename = "fleet.op_cancel")]
+    FleetOpCancel,
+    /// Lists the actions this member forwarded, newest first, optionally
+    /// by state.
+    #[serde(rename = "fleet.ops")]
+    FleetOps,
 }
 
 impl Operation {
@@ -752,6 +760,8 @@ impl Operation {
             Self::PreferencesGet => "preferences.get",
             Self::PreferencesSet => "preferences.set",
             Self::PreferencesImport => "preferences.import",
+            Self::FleetOpCancel => "fleet.op_cancel",
+            Self::FleetOps => "fleet.ops",
         }
     }
 
@@ -782,6 +792,8 @@ impl Operation {
                 | Self::GroupList
                 | Self::GroupUpdate
                 | Self::FleetOpStatus
+                | Self::FleetOpCancel
+                | Self::FleetOps
         )
     }
 

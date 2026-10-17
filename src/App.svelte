@@ -1,10 +1,16 @@
 <script>
   import { accountCache } from './lib/account-cache.js'
   import { migrateRecall } from './lib/memory-recall.js'
+  import { startFleetPreferences } from './lib/fleet-preferences.js'
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
   import { settingsGroups, settingsPage } from './lib/settings-sections.js'
   import MachinePicker from './runtimes/MachinePicker.svelte'
+  import SyncStatus from './runtimes/SyncStatus.svelte'
+  import OwnerChip from './runtimes/OwnerChip.svelte'
+  import QueuedNotice from './runtimes/QueuedNotice.svelte'
+  import { createFleet } from './runtimes/fleet-state.svelte.js'
+  import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, threadOwner } from './runtimes/fleet.js'
   import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel, statusTone } from './runtimes/runtimes.js'
   import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
@@ -39,7 +45,7 @@
   import ActivityPanel from './agents/ActivityPanel.svelte'
   import { agentMachine, agentRequest, agentThreads, applyRunUpdate, emptyListing, listAgents, listRuns } from './agents/agent-runtime.js'
   import { notificationKey, notificationText, shouldNotify, showNotification } from './agents/notify.js'
-  import { applyApproval, emptySwarm, listSwarm, postTarget, swarmRoster, swarmThreads } from './agents/swarm.js'
+  import { applyApproval, emptySwarm, listSwarm, moveRequest, postTarget, swarmRoster, swarmThreads } from './agents/swarm.js'
   import { agentEnvelope, applyGroupPost, meetingSections, silentRun, timeline, visiblePosts } from './agents/transcript.js'
   import { agentMentions, insertAgentMention } from './agents/mentions.js'
   import { groupMembers } from './agents/groups.js'
@@ -136,6 +142,7 @@
 
   const tauri = window.__TAURI__?.core
   onMount(() => { void migrateRecall(tauri); return tauri ? accountCache(tauri).start() : undefined })
+  onMount(() => startFleetPreferences(tauri, (...args) => window.__TAURI__?.event?.listen(...args)))
   let auth = $state(bootState)
   let localEntryError = $state('')
   let accountStatus = $state('')
@@ -405,6 +412,9 @@
   // The swarm every reachable machine reports: members, the agent directory,
   // groups, pending approvals and the absence pause.
   let swarm = $state(emptySwarm())
+  // This computer's fleet: its sync status, the actions it forwarded to an
+  // offline owner and its model accounts.
+  const fleet = createFleet(tauri)
   // Every agent the sidebar and catalog list: the listed ones, then the ones
   // only the swarm directory names, each with its primary machine.
   // Each carries its activity: the newest `agent.activity` event, else what
@@ -731,6 +741,9 @@
   let projectBusy = $state(false)
   let projectError = $state('')
   const projectRows = $derived(Object.entries(projectCatalog.projects).sort((a, b) => a[1].localeCompare(b[1])))
+  // Projects another fleet member owns, each with its owner. Their files
+  // stay on that member.
+  const remoteProjectRows = $derived(Object.entries(projectCatalog.remote ?? {}).map(([id, project]) => [id, project.name, projectOwner(project, swarm, runtimeList)]).sort((a, b) => a[1].localeCompare(b[1])))
   const regularThreads = $derived(threadSummaries.filter(thread => !agentThreadMap[thread.threadId] && !swarm.groups.some(group => group.thread_id === thread.threadId) && !creations.some(item=>item.threadId===thread.threadId) && !artifactItems.some(item=>item.threadId===thread.threadId)))
   let threadOrganization = $state(readThreadOrganization())
   let threadSearch = $state('')
@@ -743,7 +756,7 @@
   let rowRenamePending = $state(false)
   const threadGroups = $derived(organizeThreads((threadSort === 'title' ? [...regularThreads].sort((a,b) => (a.title || '').localeCompare(b.title || '')) : regularThreads).filter(thread => includeArchived || archivedThreads || !threadOrganization[thread.threadId]?.archived), threadOrganization, threadSearch, archivedThreads, includeArchived))
   const unpinnedThreads = $derived(threadGroups.filter(group => group.name !== 'Pinned').flatMap(group => group.threads))
-  const sidebarSections = $derived([...projectRows.filter(([id]) => expandedProjects.has(id)).map(([id]) => id), null]
+  const sidebarSections = $derived([...[...projectRows, ...remoteProjectRows].filter(([id]) => expandedProjects.has(id)).map(([id]) => id), null]
     .map(projectId => ({ projectId, threads: unpinnedThreads.filter(thread => (projectCatalog.threads[thread.threadId] || null) === projectId) })))
   const pinnedThreads = $derived(threadGroups.find(group => group.name === 'Pinned')?.threads || [])
   const visibleThreads = $derived([...pinnedThreads, ...sidebarSections.flatMap(section => section.threads)])
@@ -873,12 +886,94 @@
     const command = compactCommand(draft)
     if (command) void compactThread(command.instructions, true)
     else if (threadPostTarget) void postToThread(threadPostTarget)
+    else if (freshThread && offloadTarget) void offloadThread()
     else chatController.send()
   }
   // A group thread, or a replica of another machine's agent thread, takes a
   // message through `thread.post`. Core hands it to the group or to the
   // agent's primary machine.
-  const threadPostTarget = $derived(postTarget({ threadId: freshThread ? null : currentThreadId, threadRuntime: threadMachine, groups: swarm.groups, agent: threadAgent, swarm }))
+  const threadPostTarget = $derived(postTarget({ threadId: freshThread ? null : currentThreadId, threadRuntime: threadMachine, groups: swarm.groups, agent: threadAgent, swarm, owner: currentSummary?.owner_runtime }))
+  // The open thread's summary, and the fleet member that owns it when that
+  // is another machine.
+  const currentSummary = $derived(freshThread || !currentThreadId ? null : threadSummaries.find((summary) => summary.threadId === currentThreadId) ?? null)
+  const currentOwner = $derived(currentSummary ? threadOwner(currentSummary, swarm, runtimeList) : null)
+  // A message queued for the open thread's offline owner, or for the
+  // machine a new thread started on.
+  let pendingOffload = $state(null)
+  const queuedOp = $derived(pendingOffload
+    ? fleet.state.ops.find((op) => op.op_id === pendingOffload.opId && op.state === 'queued') ?? null
+    : queuedFor(fleet.state.ops, freshThread ? null : currentThreadId, threadAgent?.replica ? threadAgent.id : null))
+  // A replica's history travels from its owner on open: core pins the
+  // thread and answers `fetching` until it holds every event.
+  let historyFetch = $state(null)
+  const replicaKey = $derived(currentSummary?.replica ? `${currentSummary.runtimeId ?? LOCAL_RUNTIME_ID}\u001f${currentSummary.threadId}` : null)
+  $effect(() => {
+    const key = replicaKey
+    historyFetch = null
+    if (!key || !tauri) return
+    const [runtime, threadId] = key.split('\u001f')
+    let alive = true
+    let timer = null
+    let waited = false
+    const fetchHistory = async () => {
+      try {
+        const answer = await agentRequest(tauri, runtime, 'thread.history_fetch', { thread_id: threadId })
+        if (!alive) return
+        historyFetch = answer
+        if (answer?.status === 'held') { if (waited) void chatController.refreshOpenThread(); return }
+        waited = true
+        timer = setTimeout(fetchHistory, 2000)
+      } catch (_) { if (alive) historyFetch = null }
+    }
+    untrack(() => { void fetchHistory() })
+    return () => { alive = false; clearTimeout(timer) }
+  })
+  const composerFleetLine = $derived(pendingOffload && !queuedOp
+    ? `Starting on ${pendingOffload.name}. It opens here once it syncs.`
+    : historyLine(historyFetch, currentOwner?.name ?? historyFetch?.owner_name ?? ''))
+  // The machine a new thread starts on when it is a fleet member this app
+  // does not reach itself, such as a container.
+  let offloadTarget = $state(null)
+  const fleetTargets = $derived(offloadTargets(swarm, runtimeList))
+  async function offloadThread() {
+    const text = draft.trim()
+    const target = offloadTarget
+    if (!text || posting || !target) return
+    posting = true
+    submitError = ''
+    try {
+      const answer = await tauri.invoke('fleet_thread_create', { runtimeId: target.coreId, text, permissionMode: pendingMode ?? null })
+      fleet.forwarded(answer)
+      pendingOffload = { threadId: answer?.thread_id, opId: answer?.op_id ?? null, name: target.name }
+      draft = ''
+      await chatController.refreshThreads()
+    } catch (error) {
+      submitError = String(error?.message ?? error)
+    } finally {
+      posting = false
+    }
+  }
+  // An offloaded thread opens once its owner's sync brings it here.
+  $effect(() => {
+    const pending = pendingOffload
+    if (!pending?.threadId || !threadSummaries.some((summary) => summary.threadId === pending.threadId)) return
+    untrack(() => {
+      pendingOffload = null
+      offloadTarget = null
+      void chatController.openThread(pending.threadId)
+    })
+  })
+  // An agent whose machine has been away a day moves here by force.
+  async function moveAgentHere() {
+    const request = moveRequest({ agent: threadAgent, to: swarm.self[LOCAL_RUNTIME_ID], swarm, force: true })
+    if (request.error) { submitError = request.error; return }
+    try {
+      await agentRequest(tauri, request.runtime, 'agent.move', request.body)
+      await refreshAgents()
+    } catch (error) {
+      submitError = String(error?.message ?? error)
+    }
+  }
   let posting = $state(false)
   async function postToThread(target) {
     const text = draft.trim()
@@ -886,7 +981,8 @@
     posting = true
     submitError = ''
     try {
-      await agentRequest(tauri, target.runtime, 'thread.post', { ...target.body, text })
+      const answer = await agentRequest(tauri, target.runtime, 'thread.post', { ...target.body, text })
+      fleet.forwarded(answer)
       draft = ''
       await chatController.refreshOpenThread()
     } catch (error) {
@@ -1178,7 +1274,7 @@
     onQueueError: (next) => { queueError = next },
     onThreadListError: (next, action) => { threadListError = next; threadListErrorAction = action },
     onHistoryError: (next, action) => { historyError = next; historyErrorAction = action },
-    onThreadSummaries: (next) => { threadSummaries = next },
+    onThreadSummaries: (next) => { threadSummaries = dedupeThreads(next, swarm) },
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,
@@ -2266,6 +2362,7 @@
     void refreshSwarm()
     if (kind === 'agents' || kind === 'absence') void refreshAgents()
     if (kind === 'threads' && (threadGroup || threadPostTarget)) void chatController.refreshOpenThread()
+    if (kind === 'threads' && pendingOffload) void chatController.refreshThreads()
   }
   function approvalChanged(update) {
     swarm = { ...swarm, approvals: applyApproval(swarm.approvals, update) }
@@ -2283,6 +2380,7 @@
     ]) {
       void Promise.resolve(window.__TAURI__?.event?.listen(event, ({ payload }) => handle(payload))).then(unlisten => { if (destroyed) unlisten?.(); else stops.push(unlisten) })
     }
+    if (tauri) stops.push(fleet.start())
     return () => { destroyed = true; for (const stop of stops) stop?.() }
   })
   // The tools, skills and MCP servers an agent profile offers: core's
@@ -2704,7 +2802,7 @@
 </script>
 
 {#snippet projectThreadList(projectId = null)}
-            <ul class="thread-list" aria-label={projectId ? `${projectCatalog.projects[projectId]} threads` : "Threads"}>
+            <ul class="thread-list" aria-label={projectId ? `${projectCatalog.projects[projectId] ?? projectCatalog.remote?.[projectId]?.name} threads` : "Threads"}>
               {#if showFreshThread && selectedProject === projectId}
                 <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(freshThreadPosition + 1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
               {/if}
@@ -2725,8 +2823,9 @@
 <!-- A row's meta line: once a machine is paired, the machine the thread lives
      on, by its shape and name, then how long ago the thread last changed. -->
 {#snippet rowMeta(summary)}
-  {@const machine = pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta">{#if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<span class="visually-hidden">, {statusLabel(machine)}</span>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  {@const owner = threadOwner(summary, swarm, runtimeList)}
+  {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
+  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<span class="visually-hidden">, {statusLabel(machine)}</span>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -2899,7 +2998,7 @@
             <button class="side-action activity-row" aria-current={activityOpen ? 'true' : undefined} disabled={switchLocked} onclick={() => showActivity()}><LucideIcon name="activity" /><span>Activity</span>{#if activityUnseen + swarm.approvals.length}<span class="side-count" aria-label={`${activityUnseen + swarm.approvals.length} new`}>{activityUnseen + swarm.approvals.length}</span>{/if}</button>
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
             <section class="project-section" aria-label="Projects">
-              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length > 0} collapsible={projectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
+              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length + remoteProjectRows.length > 0} collapsible={projectRows.length + remoteProjectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
               {#if projectForm}
                 <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveProject() }}>
                   <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
@@ -2907,11 +3006,16 @@
                   <button type="button" disabled={projectBusy} onclick={() => { projectForm = null }}>Cancel</button>
                 </form>
               {/if}
-              {#if projectsExpanded && projectRows.length}<div class="collection-children">
+              {#if projectsExpanded && projectRows.length + remoteProjectRows.length}<div class="collection-children">
               {#each projectRows as [projectId, name] (projectId)}
                 <ProjectRow {name} expanded={expandedProjects.has(projectId)} disabled={switchLocked || projectBusy}
                   ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)}
                   onrename={() => { projectForm = projectId; projectName = name }} onopen={() => openProjectFolder(projectId)} />
+                {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
+              {/each}
+              {#each remoteProjectRows as [projectId, name, owner] (projectId)}
+                <ProjectRow {name} {owner} expanded={expandedProjects.has(projectId)} disabled={switchLocked || projectBusy}
+                  ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)} />
                 {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
               {/each}
               </div>{/if}
@@ -2937,6 +3041,7 @@
           {/if}
           {#if !sidebarCollapsed && !settingsOpen}
           <div class="side-foot">
+            <SyncStatus status={fleet.state.status} ops={fleet.state.ops} credentials={fleet.state.credentials} {swarm} />
             <div class="settings-block">
               <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
             </div>
@@ -3283,6 +3388,7 @@
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
+          <QueuedNotice op={queuedOp} history={composerFleetLine} moveSuggested={!!threadAgent?.move_suggested} error={fleet.state.error} oncancel={async (op) => { if (await fleet.cancel(op.op_id) && pendingOffload?.opId === op.op_id) pendingOffload = null }} onmove={moveAgentHere} />
           {#if unreachableMachine}
             <section class="update-notice" aria-live="polite">
               <p class="record error-record">{unreachableMachine.name}: {statusLabel(unreachableMachine)}</p>
@@ -3298,7 +3404,7 @@
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
-            <MachinePicker list={runtimeList} locked={threadMachine} disabled={switchLocked || !!active} onselect={selectRuntime} onmanage={() => openSettings('runtimes')} />
+            <MachinePicker list={runtimeList} locked={threadMachine} owner={currentOwner} fleet={fleetTargets} offload={offloadTarget} disabled={switchLocked || !!active || !!pendingOffload} onselect={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} onoffload={(target) => { offloadTarget = target }} onmanage={() => openSettings('runtimes')} />
             {#if threadGroup}
               <GroupMembers members={threadGroupMembers} live={(agent) => roster.find(entry => entry.id === agent.id)?.activity} />
             {:else if auth.name === 'local'}

@@ -50,16 +50,13 @@
       <p class="runtime-facts">
         {#if !runtime.local}<span>{kindLabel(runtime)}</span>{/if}
         {#if runtime.sshHost}<span class="record">ssh {runtime.sshHost}</span>{/if}
-        {#if runtime.sharing === 'shared'}<span>Uses this computer's models</span>{/if}
         {#if update}
           <span class="runtime-state" data-tone="signal" data-tooltip={update.tooltip || undefined} tabindex={update.tooltip ? 0 : undefined}>{update.text}</span>
         {:else}
           <span class="runtime-state" data-tone={statusTone(runtime)}>{statusLabel(runtime)}</span>
         {/if}
       </p>
-      {#if statusHint(runtime)}<p class="runtime-hint">{statusHint(runtime)}</p>
-      {:else if runtime.sharing === 'no_access'}<p class="runtime-hint">Pair it again with run access to share this computer's models.</p>
-      {:else if runtime.sharing === 'limit'}<p class="runtime-hint">Your account shares with as many machines as it may. Remove one to add this machine.</p>{/if}
+      {#if statusHint(runtime)}<p class="runtime-hint">{statusHint(runtime)}</p>{/if}
     {/snippet}
     {#if !runtime.local}
       <span class="menu-wrap" bind:this={root}>

@@ -2,8 +2,9 @@
   // This computer on the Machines page. Pair holds a one-time pairing code
   // for another device, with its QR code, link, Copy and countdown, beside
   // the `add` panel. Showing a code turns on connections the first time.
-  // Devices using this computer lists each paired device with Revoke, and
-  // Network holds the switch, port and addresses. While a code shows, the
+  // Devices using this computer lists each paired device with Revoke,
+  // Available offline sets what a fleet keeps here, and Network holds the
+  // switch, port and addresses. While a code shows, the
   // page watches for the device that uses it and then closes the code. The
   // link holds a secret, so it lives in this page's state and nowhere else.
   import { onMount } from 'svelte'
@@ -14,6 +15,7 @@
   import DisclosureSummary from '../lib/ui/DisclosureSummary.svelte'
   import { DEFAULT_SSH_PORT, endpointKindLabel, errorLine, kindIcon, listenPort, seenLabel } from './runtimes.js'
   import LucideIcon from '../lib/LucideIcon.svelte'
+  import OfflineSettings from './OfflineSettings.svelte'
 
   let { tauri, add } = $props()
   const id = $props.id()
@@ -184,6 +186,8 @@
     {/each}
   </Group>
 {/if}
+
+<OfflineSettings {tauri} />
 
 <details class="network" bind:open={network}>
   <DisclosureSummary>Network</DisclosureSummary>

@@ -141,6 +141,56 @@ pub async fn agent_request(
     .map_err(|_| crate::auth::background_service_error())?
 }
 
+/// The `thread.create` body that starts a thread on the fleet member
+/// `runtime_id` with its first message. Core validates the rest.
+fn offload_body(
+    runtime_id: &str,
+    text: &str,
+    permission_mode: Option<&str>,
+) -> Result<Value, String> {
+    if runtime_id.trim().is_empty() {
+        return Err("Choose a machine for the thread.".into());
+    }
+    if text.trim().is_empty() {
+        return Err("Enter a message before sending.".into());
+    }
+    let mut body = serde_json::json!({"runtime_id": runtime_id, "text": text});
+    if let Some(mode) = permission_mode.filter(|mode| !mode.is_empty()) {
+        body["permission_mode"] = Value::String(mode.to_owned());
+    }
+    Ok(body)
+}
+
+/// Starts a new thread on another fleet member, containers included.
+/// This computer's runtime forwards `thread.create` to that member, which
+/// owns the thread and runs its first message. The answer names the thread
+/// and the forwarded action.
+#[tauri::command]
+pub async fn fleet_thread_create(
+    app: tauri::AppHandle,
+    runtime_id: String,
+    text: String,
+    permission_mode: Option<String>,
+) -> Result<Value, String> {
+    let body = offload_body(&runtime_id, &text, permission_mode.as_deref())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let attach = app.state::<AttachCompanionState>();
+        let DesktopClientSession::Connected(client) =
+            attach.local_client_session_within(AGENT_CONNECT_WAIT)
+        else {
+            return Err(crate::auth::background_service_error());
+        };
+        let key = muniment_core::attach::Id::new(uuid::Uuid::now_v7().simple().to_string())
+            .map_err(|_| crate::auth::background_service_error())?;
+        client
+            .request_with_error(Operation::ThreadCreate, Some(key), body)
+            .map(|response| response.body)
+            .map_err(agent_error)
+    })
+    .await
+    .map_err(|_| crate::auth::background_service_error())?
+}
+
 #[tauri::command]
 pub fn agent_open(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let folder = agents::folder(&profile()?, &id)?;
@@ -162,7 +212,10 @@ pub async fn agent_export_template(
         return Err("The template exceeds 128 KB.".into());
     }
     let file_name = export_file_name(&file_name);
-    let extension = file_name.rsplit_once('.').map_or("md", |(_, extension)| extension).to_owned();
+    let extension = file_name
+        .rsplit_once('.')
+        .map_or("md", |(_, extension)| extension)
+        .to_owned();
     tauri::async_runtime::spawn_blocking(move || {
         let selected = app
             .dialog()
@@ -405,15 +458,32 @@ mod tests {
     }
 
     #[test]
+    fn an_offloaded_thread_names_its_machine_and_first_message() {
+        assert_eq!(
+            offload_body("runtime-pod", "Summarize the logs.", Some("manual")).unwrap(),
+            serde_json::json!({"runtime_id": "runtime-pod", "text": "Summarize the logs.", "permission_mode": "manual"})
+        );
+        assert_eq!(
+            offload_body("runtime-pod", "Hi", None).unwrap(),
+            serde_json::json!({"runtime_id": "runtime-pod", "text": "Hi"})
+        );
+        assert_eq!(
+            offload_body("", "Hi", None).unwrap_err(),
+            "Choose a machine for the thread."
+        );
+        assert_eq!(
+            offload_body("runtime-pod", "  ", None).unwrap_err(),
+            "Enter a message before sending."
+        );
+    }
+
+    #[test]
     fn an_export_file_name_stays_plain() {
         assert_eq!(
             export_file_name("Lead-scout.grok-bot.md"),
             "Lead-scout.grok-bot.md"
         );
-        assert_eq!(
-            export_file_name("../../etc/passwd"),
-            "etcpasswd"
-        );
+        assert_eq!(export_file_name("../../etc/passwd"), "etcpasswd");
         assert_eq!(export_file_name("..."), "agent.md");
         assert_eq!(export_file_name(""), "agent.md");
     }
@@ -435,6 +505,11 @@ mod tests {
             ("group.list", Operation::GroupList),
             ("group.update", Operation::GroupUpdate),
             ("fleet.op_status", Operation::FleetOpStatus),
+            ("fleet.op_cancel", Operation::FleetOpCancel),
+            ("fleet.ops", Operation::FleetOps),
+            ("fleet.sync_status", Operation::FleetSyncStatus),
+            ("fleet.offline_set", Operation::FleetOfflineSet),
+            ("thread.history_fetch", Operation::ThreadHistoryFetch),
             ("agent.routine_proposals", Operation::AgentRoutineProposals),
             (
                 "agent.routine_proposal_accept",
