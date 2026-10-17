@@ -25,6 +25,9 @@ INCLUDE_EXCEPTIONS = {
 # The headless runtime host runs where no keychain exists.
 KEYRING_FREE = frozenset({"muniment-server"})
 
+# The desktop shell directory. The name is split so this file does not contain it.
+SHELL_DIRECTORY = "src-" + "tauri"
+
 
 def require(condition, message):
     if not condition:
@@ -154,6 +157,34 @@ def check_tree(text, staying_crates, package):
                     f"{package} enables unexpected core features: {sorted(features - allowed)}")
 
 
+def shell_references():
+    """List the tracked and untracked text files here that name the shell directory."""
+    result = subprocess.run(
+        ["git", "grep", "-I", "-l", "--untracked", "-F", "-e", SHELL_DIRECTORY, "--", "."],
+        capture_output=True, text=True)
+    require(result.returncode in (0, 1), f"git grep failed: {result.stderr.strip()}")
+    return result.stdout.splitlines()
+
+
+def check_shell_references(paths):
+    require(not paths, "".join(
+        f"{path} names the desktop shell directory {SHELL_DIRECTORY}.\n" for path in sorted(paths)))
+
+
+def check_path_dependencies(packages, root):
+    """Every path dependency of a workspace crate stays inside the core directory."""
+    root = Path(root).resolve()
+    outside = set()
+    for package in packages.values():
+        for dependency in package["dependencies"]:
+            path = dependency.get("path")
+            if path and not Path(path).resolve().is_relative_to(root):
+                outside.add((package["name"], dependency["name"], path))
+    require(not outside, "".join(
+        f"{name} has a path dependency outside the core: {dependency} at {path}.\n"
+        for name, dependency, path in sorted(outside)))
+
+
 def check_inventory(tables, packages, lib):
     require(tables["Port"]["crate"] == set(packages),
             "The boundary doc must list every workspace crate as a port crate.")
@@ -192,6 +223,8 @@ def main():
     packages = {p["name"]: p for p in metadata["packages"]
                 if p["id"] in metadata["workspace_members"]}
     check_inventory(tables, packages, Path("crates/core/src/lib.rs").read_text())
+    check_path_dependencies(packages, Path.cwd())
+    check_shell_references(shell_references())
     port = [packages[name] for name in sorted(tables["Port"]["crate"])]
     check_edges(source_edges(port, tables["Stay"]["module"]))
     commands = []
