@@ -12,7 +12,19 @@ const catalog = {
   loaded: true,
   error: '',
 }
-const agent = { id: 'scout', name: 'Scout', instructions: 'Find sources.', projectId: 'p', schedule: null, runtimeId: 'local', routines: [], tools: { disabled: ['powershell'] }, skills: [], permissions: { mode: 'ask', always_allow: [], ask_first: [] } }
+const agent = { id: 'scout', name: 'Scout', instructions: 'Find sources.', projectId: 'p', schedule: null, runtimeId: 'local', routines: [], tools: { disabled: ['powershell'] }, skills: [], permissions: { mode: 'manual', always_allow: [], ask_first: [] } }
+
+// Core's `permission.modes` on the agent's machine, with bypass off.
+const modes = {
+  modes: [
+    { id: 'manual', title: 'Ask before changes', description: 'Reads run. Edits ask first.', available: true },
+    { id: 'plan', title: 'Plan first', description: 'Plans first.', available: true },
+    { id: 'dont_ask', title: "Don't ask", description: 'Denies the rest.', available: true },
+    { id: 'bypass', title: 'Bypass permissions', description: 'Runs everything.', available: false, reason: 'Bypass is off.' },
+  ],
+  default_thread_mode: 'manual',
+  default_agent_mode: 'plan',
+}
 
 // Answers `agent_request` from one stored agent per machine and records each request.
 function machine(stored = agent, extra = {}) {
@@ -22,13 +34,14 @@ function machine(stored = agent, extra = {}) {
     requests.push(args)
     if (args.operation === 'agent.read') return { agent: structuredClone(stored), primary_thread_id: null }
     if (args.operation === 'agent.save') return { agent: args.body.agent }
+    if (args.operation === 'permission.modes') return structuredClone(modes)
     if (args.operation === 'agent.run_now') return { run: { id: 'run-new', agent_id: stored.id, status: 'queued', trigger: { kind: 'manual' } } }
     if (args.operation === 'agent.routine_proposals') return { proposals: stored.routines.filter((routine) => routine.proposed) }
     if (args.operation === 'agent.export') return { format: args.body.format, file_name: `${stored.name}.${args.body.format}.md`, content: '# Export' }
     return {}
   })
-  // The proposal cards and the failed runs read core's live lists on their own.
-  const changes = () => requests.filter((request) => !['agent.routine_proposals', 'agent.replays'].includes(request.operation))
+  // The proposal cards, the failed runs and the mode list read core's live lists on their own.
+  const changes = () => requests.filter((request) => !['agent.routine_proposals', 'agent.replays', 'permission.modes'].includes(request.operation))
   return { invoke, requests, changes, saved: () => requests.filter((request) => request.operation === 'agent.save').at(-1)?.body.agent }
 }
 
@@ -69,31 +82,48 @@ it('keeps a failed edit for retry and names the failure', async () => {
   await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Job title' })).not.toBeInTheDocument())
 })
 
-it('turns tools and skills on and off, edits permission rules and the messaging list', async () => {
+it('turns skills on and off, sets the mode from core, edits permission rules and the messaging list', async () => {
   const { invoke, saved } = machine()
   const others = [{ id: 'editor', name: 'Editor', runtimeId: 'box' }]
   render(AgentProfile, { agent, tauri: { invoke }, agents: [agent, ...others], catalog, onchange: vi.fn() })
-  // The catalog lists the machine's tools, and a disabled id it does not list stays to turn on again.
-  expect(screen.getByRole('switch', { name: 'powershell on' })).not.toBeChecked()
-  expect(screen.getByText('read · read only')).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('switch', { name: 'Shell commands on' }))
-  await waitFor(() => expect(saved().tools).toEqual({ disabled: ['powershell', 'bash'] }))
+  // The tool switches are gone. The deprecated list waits under Advanced.
+  expect(screen.queryByRole('switch', { name: 'Shell commands on' })).not.toBeInTheDocument()
   await fireEvent.click(screen.getByRole('checkbox', { name: /^Code review/ }))
   await waitFor(() => expect(saved().skills).toEqual(['review']))
 
-  await fireEvent.change(screen.getByRole('combobox', { name: 'Permission mode' }), { target: { value: 'strict' } })
-  await waitFor(() => expect(saved().permissions.mode).toBe('strict'))
+  const mode = await screen.findByRole('combobox', { name: 'Permission mode' })
+  expect([...mode.options].map((option) => option.textContent)).toEqual(['Default: Plan first', 'Ask before changes', 'Plan first', "Don't ask", 'Bypass permissions'])
+  expect(mode.options[4]).toBeDisabled()
+  await fireEvent.change(mode, { target: { value: 'dont_ask' } })
+  await waitFor(() => expect(saved().permissions.mode).toBe('dont_ask'))
+  // The default sends no mode, so the agent follows the machine's default.
+  await fireEvent.change(mode, { target: { value: '' } })
+  await waitFor(() => expect(saved().permissions).toEqual({ always_allow: [], ask_first: [] }))
+
   await fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
   const form = screen.getByRole('form', { name: 'New permission rule' })
-  await fireEvent.change(within(form).getByRole('combobox', { name: 'List' }), { target: { value: 'ask_first' } })
+  expect([...within(form).getByRole('combobox', { name: 'List' }).options].map((option) => option.textContent)).toEqual(['Deny', 'Ask first', 'Always allow'])
+  await fireEvent.change(within(form).getByRole('combobox', { name: 'List' }), { target: { value: 'deny' } })
   await fireEvent.change(within(form).getByRole('combobox', { name: 'Kind' }), { target: { value: 'tool' } })
   await fireEvent.input(within(form).getByRole('textbox', { name: 'Tool' }), { target: { value: 'mcp__crm__delete_lead' } })
   await fireEvent.input(within(form).getByRole('textbox', { name: 'Input' }), { target: { value: '{"id":"lead-1"}' } })
   await fireEvent.click(within(form).getByRole('button', { name: 'Add rule' }))
-  await waitFor(() => expect(saved().permissions.ask_first).toEqual([{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__crm__delete_lead', input: { id: 'lead-1' } } }]))
+  await waitFor(() => expect(saved().permissions.deny).toEqual([{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__crm__delete_lead', input: { id: 'lead-1' } } }]))
 
   await fireEvent.click(screen.getByRole('radio', { name: 'Only these agents' }))
   await waitFor(() => expect(saved().messaging).toEqual({ allow: [] }))
+})
+
+it('keeps the deprecated disabled tools under Advanced', async () => {
+  const { invoke, saved } = machine()
+  render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
+  const list = screen.getByRole('list', { name: 'Disabled tools' })
+  expect(within(list).getByText('powershell')).toBeInTheDocument()
+  await fireEvent.input(screen.getByRole('combobox', { name: 'Tool id' }), { target: { value: 'bash' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
+  await waitFor(() => expect(saved().tools).toEqual({ disabled: ['powershell', 'bash'] }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Turn powershell on again' }))
+  await waitFor(() => expect(saved().tools).toEqual({ disabled: [] }))
 })
 
 it('runs the agent on its own machine, lists its runs and deletes it with its memory on request', async () => {

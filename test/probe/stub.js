@@ -117,6 +117,27 @@ export const historyFixtures = {
       resumable: false,
     },
   ],
+  // A composer thread in Ask before changes, paused on core's gate for a
+  // command. `?state=menu` opens the composer's Modes menu, `?state=plan`
+  // pauses it on a plan instead, and `?state=settings` opens Settings →
+  // Permissions.
+  'permission-modes': [
+    {
+      runId: 'probe-mode-gate',
+      prompt: 'Clear out last year\'s exports.',
+      phase: 'pending-permission',
+      text: 'I will remove the exports from last year.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-mode-gate',
+        kind: 'select',
+        title: 'Allow bash `rm exports/2025-*.csv` in /Users/alice/Documents/muniment? This thread asks before it changes anything.',
+        options: ['Allow once', 'Allow for this thread', 'Deny'],
+      },
+      resumable: false,
+    },
+  ],
   'pending-permission': [
     {
       runId: 'probe-permission',
@@ -421,6 +442,14 @@ export function buildProbeCommandTable(fixtureName) {
   let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
   let pendingChanges = memorySeed ? probePending(savedFacts) : []
   const agentStores = probeAgentStores(agentsFixture, agentsState)
+  const modesFixture = fixtureName === 'permission-modes'
+  const modesState = modesFixture ? new URLSearchParams(location.search).get('state') ?? 'gate' : null
+  if (modesState === 'plan') {
+    const plan = ['1. List the exports in exports/ by year.', '2. Move the 2025 files to archive/2025/ instead of deleting them.', '3. Report the files moved and the space freed.'].join('\n')
+    history[0] = { ...history[0], prompt: 'Plan how to clear out last year\'s exports.', text: 'Here is the plan.', pendingPermission: { gateId: 'probe-plan-gate', kind: 'select', title: 'Approve this plan?', options: ['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'] } }
+    agentStores.local.threadModes = { 'probe-thread': 'plan' }
+    agentStores.local.plans = { 'probe-thread': { run_id: 'probe-mode-gate', gate_id: 'probe-plan-gate', approval_id: 'probe-mode-gate:probe-plan-gate', summary: '1. List the exports in exports/ by year.', plan, answers: ['plan_manual', 'plan_edit_auto', 'plan_auto', 'plan_keep'] } }
+  }
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
   const projectThreads = { 'probe-thread': 'project-lease', 'probe-archive': 'project-lease', 'probe-notes': 'project-research' }
@@ -767,6 +796,8 @@ export function buildProbeCommandTable(fixtureName) {
     runDetails,
     agentsFixture,
     agentsState,
+    modesFixture,
+    modesState,
     onboardingFixture,
     scanFixture,
     accessFixture,
@@ -859,6 +890,8 @@ const {
   runDetails,
   agentsFixture,
   agentsState,
+  modesFixture,
+  modesState,
   onboardingFixture,
   scanFixture,
   accessFixture,
@@ -934,7 +967,7 @@ const AGENT_STATES = {
 const AGENT_SCREENS = {
   list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .agent-roster .agent-status').length === 5 && !!document.querySelector('#sidebar .agent-status[data-replica]') && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`#sidebar .agent-avatar[data-activity="${state}"]`)),
   activity: () => document.querySelectorAll('[data-panel="activity"] .run').length >= 9,
-  approvals: () => document.querySelectorAll('[data-panel="activity"] .approval').length === 4,
+  approvals: () => document.querySelectorAll('[data-panel="activity"] .approval').length === 5,
   'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
   replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="Failed runs"] .replay').length === 2,
   preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
@@ -1090,8 +1123,29 @@ function advanceAgentsFixture() {
   if (rotate && !rotate.disabled) rotate.click()
 }
 
+// The permission-modes fixture shows the composer's gate, opens the Modes
+// menu, shows a plan gate, or opens Settings → Permissions.
+function modesRendered() {
+  if (modesState === 'settings') return !!document.querySelector('.permission-settings .group') && !!document.querySelector('.permission-settings [role="switch"]')
+  const workspace = document.querySelector('.workspace')
+  if (!workspace?.querySelector('.permission-card') || !document.querySelector('[data-menu="mode"]')) return false
+  if (modesState === 'menu') return !!document.querySelector('[data-panel="mode-picker"]')
+  if (modesState === 'plan') return !!workspace.querySelector('.permission-plan')
+  return true
+}
+
+function advanceModesFixture() {
+  if (!modesFixture || fixtureRendered()) return
+  if (modesState === 'menu') return document.querySelector('[data-menu="mode"][aria-expanded="false"]')?.click()
+  if (modesState !== 'settings') return
+  if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+  const page = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Permissions')
+  if (page && page.getAttribute('aria-current') !== 'true') page.click()
+}
+
 function fixtureRendered() {
   if (agentsFixture) return agentsRendered()
+  if (modesFixture) return modesRendered()
   if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
     const notice = document.querySelector('[data-testid="runtime-notice"]')
@@ -1221,6 +1275,7 @@ async function markProbeReady() {
 }
 
 function markReadyAfterFixtureRender() {
+  advanceModesFixture()
   advanceScanFixture()
   advanceAccessFixture()
   advanceRuntimesFixture()
@@ -1230,6 +1285,7 @@ function markReadyAfterFixtureRender() {
     return
   }
   const observer = new MutationObserver(() => {
+    advanceModesFixture()
     advanceScanFixture()
     advanceAccessFixture()
     advanceRuntimesFixture()

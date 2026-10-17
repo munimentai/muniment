@@ -37,9 +37,18 @@ const ACTIVITY = {
   [RECEPTION]: { state: 'error', action: 'The model could not complete this reply.', since: at(240) },
 }
 
+// The plan the Lead scout submitted in plan mode.
+const SCOUT_PLAN = [
+  '1. Search the CRM for leads created this week.',
+  '2. Check each lead against the target list in targets.md.',
+  '3. Write the promising ones to leads.md with one line on why each fits.',
+  '4. Leave the CRM records as they are.',
+].join('\n')
+
 // The approvals waiting on the swarm, as core's `agent.approvals` lists them:
 // every answer, an ask-first rule that leaves out "Always allow for this
-// agent", a long tool input that folds, and one from an older runtime.
+// agent", a long tool input that folds, an auto review's reason, a plan
+// waiting for approval, and one from an older runtime.
 function approvals() {
   const command = (args, folder) => ({ request_kind: 'command', resource: { type: 'command', arguments: args, working_directory: folder } })
   const pushRule = command(['bash', 'git push origin main'], INBOX_PATH)
@@ -53,7 +62,11 @@ function approvals() {
       rule: command(['bash', 'git tag v0.4.0'], '/Users/sam/release'), summary: 'bash `git tag v0.4.0` in /Users/sam/release', answers: ['allow_once', 'allow_thread', 'deny'] },
     { approval_id: 'h-4:gate-3', agent_id: INBOX, agent_name: 'Inbox triage', runtime_id: LAPTOP, run_id: 'h-4', gate_id: 'gate-3', thread_id: 'thread-a2', state: 'pending', created_at: at(2), answered_at: null, answered_by: null,
       request: { gate_id: 'gate-3', kind: 'select', title: `Allow bash \`git push origin main\` in ${INBOX_PATH}? This agent asks before it changes anything.`, options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'], policy: { ...pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}` } },
-      rule: pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}`, answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'] },
+      rule: pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}`, answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'],
+      reason: 'Auto review paused this: it pushes to the main branch, which the instructions never ask for.' },
+    { approval_id: 'run-2:gate-5', agent_id: SCOUT, agent_name: 'Lead scout', runtime_id: LAPTOP, run_id: 'run-2', gate_id: 'gate-5', thread_id: 'thread-a1', state: 'pending', created_at: at(1), answered_at: null, answered_by: null,
+      request: { gate_id: 'gate-5', kind: 'select', title: 'Approve this plan?', options: ['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'], policy: { request_kind: 'tool', resource: { type: 'tool', name: 'plan_submit', input: {} }, summary: '1. Search the CRM for leads created this week.', plan: SCOUT_PLAN } },
+      summary: '1. Search the CRM for leads created this week.', plan: SCOUT_PLAN, answers: ['plan_manual', 'plan_edit_auto', 'plan_auto', 'plan_keep'] },
     { approval_id: 'run-50:gate-4', agent_id: RECEPTION, agent_name: 'Front desk', runtime_id: OFFICE, run_id: 'run-50', gate_id: 'gate-4', thread_id: 'thread-a5', state: 'pending', created_at: at(30), answered_at: null, answered_by: null,
       request: { gate_id: 'gate-4', kind: 'confirm', title: 'Allow bash?', message: `git pull --rebase in ${TRIAGE_PATH}` } },
   ]
@@ -78,14 +91,14 @@ function seeded() {
     avatar: { seed: 'scout', style: 'muniment-v2' }, template: null, projectId: null, schedule: { cadence: 'weekdays', enabled: true, time: '09:00', weekday: 0 },
     model: { provider: 'ollama', id: 'qwen3:8b', thinking: 'medium' }, tools: { disabled: ['powershell'] }, skills: ['review'],
     permissions: {
-      mode: 'ask',
+      mode: 'manual',
       always_allow: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git status'], working_directory: '/Users/alice/Documents/muniment/agents/Lead-scout' } }],
       ask_first: [{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__crm__delete_lead', input: { id: 'lead-1' } } }],
     },
     primary_runtime: null, messaging: { allow: [INBOX] }, paused_reason: null,
     activity: ACTIVITY[SCOUT],
     routines: [
-      { id: 'schedule', name: 'Weekday briefing', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: zone }, last_fired_at: at(190), last_result: { run_id: 'run-1', status: 'completed', silent: false } },
+      { id: 'schedule', name: 'Weekday briefing', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: zone }, last_fired_at: at(190), last_result: { run_id: 'run-1', status: 'completed', silent: false }, next_fire_at: Math.floor(Date.now() / 1000) + 14 * 3600 },
       { id: 'build-hook', name: 'Build finished', enabled: true, created_from: 'user', prompt: 'Summarize the build result.', trigger: { kind: 'webhook', hook_id: '4f1c2b7a9d0e4c55b6a1f2e3d4c5b6a7', preset: 'forgejo' }, last_fired_at: at(1500), last_result: { run_id: 'run-9', status: 'failed', silent: false } },
       { id: 'new-leads', name: 'New leads', enabled: true, created_from: 'instructions', prompt: 'Pull the new leads and draft a summary.', trigger: { kind: 'mcp', server: 'crm', tool: 'search_leads', args: { status: 'new' }, every: { expr: '*/30 * * * *', tz: zone }, condition: { all: [{ op: 'gt', path: '/total', value: 0 }, { any: [{ op: 'eq', path: '/items/0/region', value: 'west' }, { op: 'changed', path: '/items' }] }] } }, last_fired_at: at(20), last_result: { run_id: 'run-3', status: 'completed', silent: true }, last_poll: { at: at(5), fired: false, failures: 0 } },
     ],
@@ -259,6 +272,29 @@ export const probeExtensions = {
 
 const newestFirst = (a, b) => b.updated_at.localeCompare(a.updated_at)
 
+// Core's permission modes and each runtime's permission settings. The build
+// box is a container, so it turns bypass on.
+const MODES = [{"available": true, "description": "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.", "id": "manual", "title": "Ask before changes"}, {"available": true, "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "id": "edit_auto", "title": "Edit automatically"}, {"available": true, "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "id": "plan", "title": "Plan first"}, {"available": true, "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "id": "auto", "title": "Auto review"}, {"available": true, "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "id": "dont_ask", "title": "Don't ask"}, {"available": false, "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Use it only on a container or a disposable machine.", "id": "bypass", "reason": "Bypass is off. Turn it on in the runtime's permission settings, and only on a container or a disposable machine.", "title": "Bypass permissions"}]
+function permissionSettings(store, runtime) {
+  store.permissions ??= {
+    default_thread_mode: 'manual', default_agent_mode: 'manual', bypass_enabled: runtime === BOX, unattended_timeout_seconds: 14400,
+    deny: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push --force'], working_directory: '/Users/alice/Documents/muniment' } }],
+    ask_first: [{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__mail__send', input: {} } }],
+    always_allow: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git status'], working_directory: '/Users/alice/Documents/muniment' } }],
+  }
+  return store.permissions
+}
+function permissionModes(settings) {
+  return MODES.map((mode) => mode.id === 'bypass' && settings.bypass_enabled ? { ...mode, available: true, reason: undefined } : mode)
+}
+function threadMode(store, runtime, threadId) {
+  const settings = permissionSettings(store, runtime)
+  const set = store.threadModes?.[threadId]
+  const agent = store.agents.find((entry) => store.primaryThreads[entry.id] === threadId)
+  const mode = set ?? agent?.permissions?.mode ?? (agent ? settings.default_agent_mode : settings.default_thread_mode)
+  return { thread_id: threadId, mode, title: MODES.find((entry) => entry.id === mode)?.title ?? mode, source: set ? 'thread' : agent?.permissions?.mode ? 'agent' : 'default', ...(set ? { set_by: 'user' } : {}), ...(agent ? { agent_id: agent.id } : {}) }
+}
+
 export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
   const store = stores[runtime || 'local']
   if (!store) throw 'That machine is offline. Try again when it answers.'
@@ -271,6 +307,25 @@ export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
     const newest = store.runs.filter((entry) => entry.agent_id === agent.id).sort(newestFirst)[0]
     return newest ? [[agent.id, clone(newest)]] : []
   }))
+  if (operation === 'permission.modes') {
+    const settings = permissionSettings(store, runtime)
+    return { modes: clone(permissionModes(settings)), default_thread_mode: settings.default_thread_mode, default_agent_mode: settings.default_agent_mode }
+  }
+  if (operation === 'permission.settings') return clone(permissionSettings(store, runtime))
+  if (operation === 'permission.settings_save') {
+    const settings = permissionSettings(store, runtime)
+    if (body.unattended_timeout_seconds !== undefined && (body.unattended_timeout_seconds < 60 || body.unattended_timeout_seconds > 604800)) throw 'Choose an unattended wait between one minute and seven days.'
+    Object.assign(settings, clone(body))
+    return clone(settings)
+  }
+  if (operation === 'thread.permission_mode') return threadMode(store, runtime, body.thread_id)
+  if (operation === 'thread.permission_mode_set') {
+    const mode = permissionModes(permissionSettings(store, runtime)).find((entry) => entry.id === body.mode)
+    if (!mode?.available) throw mode?.reason ?? 'The request is invalid.'
+    store.threadModes = { ...store.threadModes, [body.thread_id]: body.mode }
+    return threadMode(store, runtime, body.thread_id)
+  }
+  if (operation === 'thread.plan') return { plan: store.plans?.[body.thread_id] ? clone(store.plans[body.thread_id]) : null }
   if (operation === 'agent.list') return { agents: clone(store.agents), primary_threads: { ...store.primaryThreads }, latest_runs: latest(), errors: [] }
   if (operation === 'agent.read') return { agent: clone(find(body.id)), primary_thread_id: store.primaryThreads[body.id] ?? null }
   if (operation === 'agent.save') {

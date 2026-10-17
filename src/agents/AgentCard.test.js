@@ -7,7 +7,7 @@ afterEach(cleanup)
 const agent = {
   id: 'scout', name: 'Scout', label: 'Researcher', instructions: 'Find sources.', runtimeId: 'box', projectId: null, schedule: null,
   model: { provider: 'ollama', id: 'qwen3:8b', thinking: 'medium' },
-  permissions: { mode: 'ask', always_allow: [{ request_kind: 'tool', resource: { type: 'tool', name: 'read', input: {} } }], ask_first: [] },
+  permissions: { mode: 'manual', always_allow: [{ request_kind: 'tool', resource: { type: 'tool', name: 'read', input: {} } }], ask_first: [] },
   routines: [{ id: 'daily', name: 'Daily brief', enabled: true, prompt: '', trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' } }],
 }
 const machine = { id: 'box', name: 'Build box', kind: 'container' }
@@ -118,34 +118,55 @@ it('sets the model reference through agent.save, or clears it for the default', 
   await waitFor(() => expect(machineCore.saved().body.agent.model).toBeNull())
 })
 
-it('sets a permission mode through agent.save and keeps the rules', async () => {
-  const machineCore = core()
-  show({ tauri: machineCore.tauri })
-  await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  const modes = screen.getByRole('radiogroup', { name: 'Permission mode' })
-  // The agent's `ask` reads as Manual.
-  expect(within(modes).getByRole('radio', { name: 'Manual' })).toHaveAttribute('aria-checked', 'true')
-  expect(within(modes).getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(['Manual', 'Edit automatically', 'Plan', 'Auto', "Don't ask", 'Bypass permissions'])
-  const bypass = within(modes).getByRole('radio', { name: 'Bypass permissions' })
-  expect(bypass).toBeDisabled()
-  expect(bypass).toHaveAccessibleDescription('This machine has not turned it on.')
+// Core's `permission.modes` answer on the agent's machine, with bypass off.
+const modes = {
+  modes: [
+    { id: 'manual', title: 'Ask before changes', description: 'Reads run. Edits ask first.', available: true },
+    { id: 'edit_auto', title: 'Edit automatically', description: 'Edits run.', available: true },
+    { id: 'plan', title: 'Plan first', description: 'Plans first.', available: true },
+    { id: 'auto', title: 'Auto review', description: 'A model reviews each action.', available: true },
+    { id: 'dont_ask', title: "Don't ask", description: 'Denies the rest.', available: true },
+    { id: 'bypass', title: 'Bypass permissions', description: 'Runs everything.', available: false, reason: 'Bypass is off.' },
+  ],
+  default_thread_mode: 'manual',
+  default_agent_mode: 'auto',
+}
 
-  await fireEvent.click(within(modes).getByRole('radio', { name: "Don't ask" }))
+it('sets a permission mode from core through agent.save and keeps the rules', async () => {
+  const machineCore = core()
+  show({ tauri: machineCore.tauri, modes })
+  await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
+  const group = screen.getByRole('radiogroup', { name: 'Permission mode' })
+  expect(within(group).getByRole('radio', { name: 'Ask before changes' })).toHaveAttribute('aria-checked', 'true')
+  expect(within(group).getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(modes.modes.map((mode) => mode.title))
+  const bypass = within(group).getByRole('radio', { name: 'Bypass permissions' })
+  expect(bypass).toBeDisabled()
+  expect(bypass).toHaveAccessibleDescription('Bypass is off.')
+
+  await fireEvent.click(within(group).getByRole('radio', { name: "Don't ask" }))
   await waitFor(() => expect(machineCore.saved()).toBeDefined())
-  expect(machineCore.saved().body.agent.permissions).toEqual({ ...agent.permissions, mode: 'strict' })
-  await waitFor(() => expect(within(modes).getByRole('radio', { name: 'Plan' })).not.toBeDisabled())
-  await fireEvent.click(within(modes).getByRole('radio', { name: 'Plan' }))
+  expect(machineCore.saved().body.agent.permissions).toEqual({ ...agent.permissions, mode: 'dont_ask' })
+  await waitFor(() => expect(within(group).getByRole('radio', { name: 'Plan first' })).not.toBeDisabled())
+  await fireEvent.click(within(group).getByRole('radio', { name: 'Plan first' }))
   await waitFor(() => expect(machineCore.saved().body.agent.permissions.mode).toBe('plan'))
 })
 
-it('renders the modes core reports and names a refused change', async () => {
-  const machineCore = core({ refuse: 'Plan mode needs a newer runtime.' })
-  const modes = [{ id: 'manual', title: 'Manual', description: 'Asks first.', available: true }, { id: 'plan', title: 'Plan', description: 'Plans first.', available: true }]
-  show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: { ...agent.permissions, mode: 'manual' } } })
+it('marks the default mode of an agent that chose none, and names a refused change', async () => {
+  const machineCore = core({ refuse: 'The agent settings are invalid.' })
+  show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: { always_allow: [], ask_first: [] } } })
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(['Manual', 'Plan'])
-  await fireEvent.click(screen.getByRole('radio', { name: 'Plan' }))
-  expect(await screen.findByRole('alert')).toHaveTextContent('Plan mode needs a newer runtime.')
+  const chosen = screen.getByRole('radio', { name: 'Auto review' })
+  expect(chosen).toHaveAttribute('aria-checked', 'true')
+  expect(chosen).toHaveTextContent('Default')
+  await fireEvent.click(screen.getByRole('radio', { name: 'Plan first' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('The agent settings are invalid.')
+})
+
+it('says so when the machine lists no modes', async () => {
+  show({ tauri: core().tauri, modes: null })
+  await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
+  expect(screen.queryAllByRole('radio')).toEqual([])
+  expect(screen.getByText('Update Build box to choose a mode.')).toBeInTheDocument()
 })
 
 it('turns a routine on and off through routine.save and opens the profile to edit it', async () => {
@@ -161,11 +182,12 @@ it('turns a routine on and off through routine.save and opens the profile to edi
 })
 
 it('shows an agent whose machine is offline read only, with a note', async () => {
-  show({ tauri: core().tauri, agent: { ...agent, online: false, replica: true } })
+  show({ tauri: core().tauri, modes, agent: { ...agent, online: false, replica: true } })
   expect(screen.getByRole('note')).toHaveTextContent('Build box is offline. This card is read only until it answers.')
   expect(screen.getByRole('button', { name: 'Edit agent name: Scout' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Open chat' })).not.toBeDisabled()
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
+  expect(screen.getAllByRole('radio')).toHaveLength(6)
   expect(screen.getAllByRole('radio').every((radio) => radio.disabled)).toBe(true)
 })

@@ -1485,7 +1485,7 @@ describe('workspace composer entry', () => {
     // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
     // Machines closes Extend under the network mark, and Storage closes Personal.
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Machines', 'Appearance', 'Context', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Machines', 'Appearance', 'Context', 'Permissions', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
     expect(within(nav).getByRole('button', { name: 'Machines' }).querySelector('[data-icon=network]')).not.toBeNull()
     expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
@@ -8188,7 +8188,7 @@ it('keeps one composer panel open and dismisses it with Escape or an outside cli
 })
 
 
-it('draws the machine, model, thinking level and usage menus with one shared button', async () => {
+it('draws the machine, model, thinking level, usage and permission mode menus with one shared button', async () => {
   localModeStatus = true
   threadSummaryResult = []
   const reasoning = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [
@@ -8203,7 +8203,8 @@ it('draws the machine, model, thinking level and usage menus with one shared but
     : command === 'local_mode_provider_inventory' ? Promise.resolve(reasoning)
       : command === 'model_router_settings' ? Promise.resolve({accounts:[{id:'subscription',source:'account',family:'openai',label:'OpenAI'}]})
         : command === 'runtime_list' ? Promise.resolve(machines)
-          : original(command,args))
+          : command === 'agent_request' && args?.operation === 'permission.modes' ? Promise.resolve(JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/response-permission-modes.json'), 'utf8')).body)
+            : original(command,args))
   render(App)
   await findReadyWorkspaceComposer()
   const buttons = {
@@ -8211,17 +8212,19 @@ it('draws the machine, model, thinking level and usage menus with one shared but
     model: await screen.findByRole('button', { name: 'Model: GPT 5.5' }),
     thinking: await screen.findByRole('button', { name: 'Thinking level: Medium' }),
     usage: await screen.findByRole('button', { name: 'Usage', exact: true }),
+    mode: await screen.findByRole('button', { name: 'Permission mode: Ask before changes' }),
   }
-  const panels = { machine: () => screen.queryByRole('menu', { name: 'Machines' }), model: () => screen.queryByRole('dialog', { name: 'Model' }), thinking: () => screen.queryByRole('menu', { name: 'Thinking level' }), usage: () => screen.queryByRole('dialog', { name: 'Account usage' }) }
+  const panels = { machine: () => screen.queryByRole('menu', { name: 'Machines' }), model: () => screen.queryByRole('dialog', { name: 'Model' }), thinking: () => screen.queryByRole('menu', { name: 'Thinking level' }), usage: () => screen.queryByRole('dialog', { name: 'Account usage' }), mode: () => screen.queryByRole('menu', { name: 'Modes' }) }
   // Every menu button is the one shared button, so none can drift from the others.
   for (const [menu, button] of Object.entries(buttons)) {
     expect(button, menu).toHaveClass('composer-menu-button')
     expect(button, menu).toHaveAttribute('data-menu', menu)
     expect(button, menu).not.toHaveAttribute('data-open')
   }
-  expect(document.querySelectorAll('.composer-row button[aria-haspopup]:not([aria-label="Extensions"]):not(.context-trigger)')).toHaveLength(4)
+  expect(document.querySelectorAll('.composer-row button[aria-haspopup]:not([aria-label="Extensions"]):not(.context-trigger)')).toHaveLength(5)
   expect(buttons.machine.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
   expect(buttons.model.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
+  expect(buttons.mode.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
   // Opening one menu marks its button open and closes every other menu.
   for (const [menu, button] of Object.entries(buttons)) {
     await fireEvent.click(button)
@@ -8987,5 +8990,74 @@ describe('the swarm', () => {
     const prompt = await screen.findByRole('region', { name: 'Routines paused' })
     await fireEvent.click(within(prompt).getByRole('button', { name: 'Resume routines' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'swarm.resume', body: {} }))
+  })
+})
+
+describe('permission modes', () => {
+  const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
+  // The composer's thread on this computer, with core's mode operations and
+  // an optional gate its run waits at.
+  function modesRuntime({ gate = null, mode = 'manual' } = {}) {
+    let threadMode = mode
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_thread_open' && gate) return [{ runId: 'run-gated', phase: 'pending-permission', text: 'I need access.', prompt: 'Clean the exports.', receipt: null, toolActivity: [], pendingPermission: gate }]
+      if (command === 'chat_answer_permission') return undefined
+      if (command === 'agent_request' && payload.operation === 'permission.modes') return fixture('response-permission-modes.json')
+      if (command === 'agent_request' && payload.operation === 'thread.permission_mode') return { thread_id: payload.body.thread_id, mode: threadMode, title: '', source: 'default' }
+      if (command === 'agent_request' && payload.operation === 'thread.permission_mode_set') { threadMode = payload.body.mode; return { thread_id: payload.body.thread_id, mode: threadMode, title: '', source: 'thread', set_by: 'user' } }
+      if (command === 'agent_request' && payload.operation === 'thread.plan') return fixture('response-thread-plan.json')
+      return original(command, payload)
+    })
+    render(App)
+  }
+
+  it('shows the thread mode on a composer button and sets another from the Modes menu', async () => {
+    modesRuntime()
+    const button = await screen.findByRole('button', { name: 'Permission mode: Ask before changes' })
+    expect(button).toHaveClass('composer-menu-button')
+    expect(button).toHaveAttribute('data-menu', 'mode')
+    expect(button.querySelector('[data-icon=hand]')).not.toBeNull()
+    expect(button.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
+    await fireEvent.click(button)
+    const menu = await screen.findByRole('menu', { name: 'Modes' })
+    expect(button).toHaveAttribute('data-open', 'true')
+    expect(button.querySelector('[data-icon=chevrons-down-up]')).not.toBeNull()
+    expect(within(menu).getAllByRole('menuitemradio').map((item) => item.getAttribute('aria-label'))).toEqual(['Ask before changes', 'Edit automatically', 'Plan first', 'Auto review', "Don't ask", 'Bypass permissions'])
+    expect(within(menu).getByRole('menuitemradio', { name: 'Ask before changes' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeDisabled()
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAccessibleDescription(/Bypass is off/)
+    expect(menu).toHaveTextContent('Shift+Tabcycles modes')
+    await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Plan first' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.permission_mode_set', body: { thread_id: 'thread-1', mode: 'plan' } }))
+    expect(screen.queryByRole('menu', { name: 'Modes' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Permission mode: Plan first' })).toBeInTheDocument()
+  })
+
+  it('cycles the available modes with Shift+Tab in the composer and skips bypass', async () => {
+    modesRuntime({ mode: 'dont_ask' })
+    await screen.findByRole('button', { name: "Permission mode: Don't ask" })
+    const composer = await findWorkspaceComposer()
+    await fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.permission_mode_set', body: { thread_id: 'thread-1', mode: 'manual' } }))
+    expect(await screen.findByRole('button', { name: 'Permission mode: Ask before changes' })).toBeInTheDocument()
+  })
+
+  it('shows a composer gate without the agent-only answer and answers Deny with its option', async () => {
+    modesRuntime({ gate: { gateId: 'gate-1', kind: 'select', title: 'Allow bash `rm old.csv` in /work? This thread asks before it changes anything.', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] } })
+    const card = (await screen.findByText(/Allow bash `rm old.csv`/)).closest('.permission-card')
+    expect(within(card).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Deny', 'Allow once', 'Allow for this thread'])
+    await fireEvent.click(within(card).getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_answer_permission', { runId: 'run-gated', gateId: 'gate-1', answer: { type: 'select', value: 'Deny' } }))
+  })
+
+  it('shows the plan a composer plan gate waits on', async () => {
+    modesRuntime({ mode: 'plan', gate: { gateId: '019965a0-0000-7000-8000-0000000000b7', kind: 'select', title: 'Approve this plan?', options: ['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'] } })
+    const plan = await screen.findByRole('region', { name: 'Plan' })
+    expect(plan).toHaveTextContent('Add a `--dry-run` flag to the export script.')
+    const card = plan.closest('.permission-card')
+    await fireEvent.click(within(card).getByRole('button', { name: 'Approve and edit automatically' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_answer_permission', { runId: 'run-gated', gateId: '019965a0-0000-7000-8000-0000000000b7', answer: { type: 'select', value: 'Approve and edit automatically' } }))
   })
 })

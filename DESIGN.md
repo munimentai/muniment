@@ -129,7 +129,7 @@ Pins and archives persist on the device. Projects group ordinary chats and autom
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
 Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
-then Models, Extend (ending with Machines), Preferences (Appearance, Context, Voice, Language), Personal (Profile, Memory, Storage) and Workspace (Companies). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
+then Models, Extend (ending with Machines), Preferences (Appearance, Context, Permissions, Voice, Language), Personal (Profile, Memory, Storage) and Workspace (Companies). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
@@ -152,7 +152,7 @@ Both share one geometry, a one-pixel frame and a 35px title band, so a switch mo
 and draws the thread and rail as `surface` cards clipped `--card-ring` inside their boxes with a hairline. Frameless fills it with `border` seams, a sidebar panel a step toward `ink`, and flat panels. The update control is a circular
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
-The composer band is one mono row under the composer. The plus, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level and usage menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine and model. A narrow composer keeps each to its icon with a hover label.
+The composer band is one mono row under the composer. The plus, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level, usage and permission mode menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine, model and mode. The mode menu sits under a mono Modes heading: a row per mode with its Lucide icon (hand, pencil, map, zap, shield-check, triangle-alert), its title over one muted line, a check on the current one, and a Shift+Tab chip at its foot. A narrow composer keeps each to its icon with a hover label.
 The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A window no source knows shows no meter. The model picker shows no window and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
 opens with Add files and folders. Voice sits beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has

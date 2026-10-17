@@ -1,7 +1,8 @@
 <script>
   // One agent approval: the agent with its activity, its machine and age,
   // core's summary of the exact operation, that operation's inputs with long
-  // ones folded, and only the answers core accepts. Core applies the first
+  // ones folded, why the gate asks, a plan waiting for approval, and only
+  // the answers core accepts. Core applies the first
   // answer from any device. A later one comes back as already answered and
   // its line shows here.
   import Button from '../lib/ui/Button.svelte'
@@ -19,6 +20,8 @@
   const summary = $derived(approvalSummary(approval))
   const choices = $derived(approvalChoices(approval))
   const folds = $derived(summary.rows.some(([, value]) => longInput(value)))
+  const plan = $derived(String(approval.plan ?? '').trim())
+  let planOpen = $state(false)
   const shown = $derived(agent ?? { id: approval.agent_id, name: approval.agent_name })
 
   async function answer(choice) {
@@ -43,8 +46,13 @@
     {#if machine}<MachineMark {machine} />{/if}
     <time class="when" datetime={approval.created_at}>{whenLabel(approval.created_at)}</time>
   </header>
-  <p class="operation">{summary.operation}</p>
-  {#if summary.rows.length}
+  <p class="operation">{plan ? 'Approve this plan?' : summary.operation}</p>
+  {#if approval.reason}<p class="reason">{approval.reason}</p>{/if}
+  {#if plan}
+    <div class="plan" class:folded={longInput(plan, 14, 900) && !planOpen} aria-label="Plan" role="region">{plan}</div>
+    {#if longInput(plan, 14, 900)}<button type="button" class="more" aria-expanded={planOpen} onclick={() => { planOpen = !planOpen }}>{planOpen ? 'Show less' : 'Show all'}</button>{/if}
+  {/if}
+  {#if summary.rows.length && !plan}
     <dl class="inputs" class:folded={folds && !open}>
       {#each summary.rows as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}
     </dl>
@@ -69,6 +77,9 @@
   .who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; font-size: var(--text-13); }
   .when { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .operation { margin: 0; font: var(--text-13) var(--font-mono); overflow-wrap: anywhere; }
+  .reason { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
+  .plan { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font-size: var(--text-13); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .plan.folded { max-height: 15.5em; overflow: hidden; mask-image: linear-gradient(to bottom, currentColor 70%, transparent); }
   .inputs { display: grid; gap: 4px; margin: 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--faint); font: var(--text-12) var(--font-mono); }
   .inputs.folded { max-height: 7.5em; overflow: hidden; mask-image: linear-gradient(to bottom, currentColor 70%, transparent); }
   .inputs div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }

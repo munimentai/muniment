@@ -19,10 +19,12 @@
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
   import InlineEdit from './InlineEdit.svelte'
   import MachineMark from './MachineMark.svelte'
-  import { PERMISSION_MODES, agentMode, modeIcon, modePermissions } from './permission-modes.js'
+  import { agentMode, modeIcon, modePermissions } from './permission-modes.js'
   import { isProposal, nextRunLabel, triggerSummary } from './routine-labels.js'
 
-  let { agent, tauri, machine, inventory = null, latestRun = null, modes = PERMISSION_MODES, archived = false,
+  // `modes` is core's `permission.modes` from the agent's machine: undefined
+  // while it loads, null when the machine lists none.
+  let { agent, tauri, machine, inventory = null, latestRun = null, modes = undefined, archived = false,
     onchat = () => {}, onprofile = () => {}, onaction = async () => {}, onchange = async () => {}, onrun = () => {}, onmanagemodels = () => {} } = $props()
 
   const PANELS = [
@@ -188,11 +190,13 @@
       {:else if panel === 'permissions'}
         <div class="choices" role="radiogroup" aria-label="Permission mode">
           <h4>Permissions</h4>
-          {#each modes as mode (mode.id)}
+          {#if modes === undefined && !readOnly}<p class="empty" role="status">Loading modes…</p>
+          {:else if !modes}<p class="empty">{readOnly ? `Modes show once ${machineName} answers.` : `Update ${machineName} to choose a mode.`}</p>{/if}
+          {#each modes?.modes ?? [] as mode (mode.id)}
             {@const chosen = mode.id === currentMode?.id}
             <button type="button" role="radio" class="row mode" aria-checked={chosen} aria-label={mode.title} aria-describedby={`agent-${key}-mode-${mode.id}`} disabled={readOnly || busy || mode.available === false} onclick={() => chooseMode(mode)}>
               <LucideIcon name={modeIcon(mode)} variant="action" size={16} />
-              <span class="mode-text"><span class="mode-title">{mode.title}</span><span class="mode-line" id={`agent-${key}-mode-${mode.id}`}>{mode.available === false && mode.reason ? mode.reason : mode.description}</span></span>
+              <span class="mode-text"><span class="mode-title">{mode.title}{#if chosen && !currentMode.chosen}<span class="default">Default</span>{/if}</span><span class="mode-line" id={`agent-${key}-mode-${mode.id}`}>{mode.available === false && mode.reason ? mode.reason : mode.description}</span></span>
               {#if chosen}<LucideIcon name="check" variant="action" size={14} />{/if}
             </button>
           {/each}
@@ -276,7 +280,8 @@
   .mode > :global(svg:first-child) { flex: none; margin-top: 2px; }
   .mode > :global(svg:last-child:not(:first-child)) { flex: none; margin: 2px 0 0 auto; }
   .mode-text { display: grid; gap: 2px; min-width: 0; }
-  .mode-title { font-size: var(--text-13); }
+  .mode-title { display: flex; align-items: baseline; gap: 6px; font-size: var(--text-13); }
+  .default { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .mode-line { color: var(--muted); font-size: var(--text-12); line-height: 1.4; }
   .routines, .runs { display: grid; margin: 0; padding: 0; list-style: none; }
   .routine { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 2px 4px 2px 0; }

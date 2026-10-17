@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { agentTools, emptyCatalog, loadToolCatalog, missingSkills, serverTools, toggleTool } from './agent-tools.js'
+import { emptyCatalog, loadToolCatalog, missingSkills, serverTools, toggleTool } from './agent-tools.js'
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
 const answer = fixture('response-agent-tool-catalog.json')
@@ -25,14 +25,6 @@ describe('agent tool catalog', () => {
   it('keeps the machine\'s refusal as the reason', async () => {
     const catalog = await loadToolCatalog(tauri(new Error('That machine is offline. Try again when it answers.')), 'box')
     expect(catalog).toMatchObject({ builtin: [], loaded: true, error: 'That machine is offline. Try again when it answers.' })
-  })
-
-  it('lists the catalog\'s tools and any id the agent already turns off', async () => {
-    const catalog = await loadToolCatalog(tauri(answer), 'local')
-    const tools = agentTools({ tools: { disabled: ['bash', 'mcp__crm__delete_lead'] } }, catalog)
-    expect(tools.map((tool) => tool.id)).toEqual(['read', 'write', 'bash', 'web_search', 'mcp__crm__delete_lead'])
-    expect(tools.at(-1)).toMatchObject({ known: false, label: 'mcp__crm__delete_lead' })
-    expect(agentTools({}, emptyCatalog())).toEqual([])
   })
 
   it('turns one tool on or off and keeps the rest', () => {

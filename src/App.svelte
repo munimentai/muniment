@@ -53,10 +53,12 @@
   import GroupMembers from './agents/GroupMembers.svelte'
   import { agentActivity, applyActivity } from './agents/activity.js'
   import { emptyCatalog, loadToolCatalog } from './agents/agent-tools.js'
-  import { threadApprovals } from './agents/approvals.js'
+  import { composerGateOptions, isPlanGate, threadApprovals } from './agents/approvals.js'
   import ChatComposer from './composer/ChatComposer.svelte'
   import ModelPicker from './lib/ModelPicker.svelte'
   import ThinkingPicker from './lib/ThinkingPicker.svelte'
+  import ModePicker from './composer/ModePicker.svelte'
+  import { findMode, loadModes, modeIcon, nextMode } from './agents/permission-modes.js'
   import { modelThinking, thinkingLabel, withThinkingLevel } from './lib/thinking-level.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
   import Usage from './lib/Usage.svelte'
@@ -166,6 +168,7 @@
   let inventoryRequestVersion = 0
   let pickerOpen = $state(false)
   let thinkingOpen = $state(false)
+  let modeOpen = $state(false)
   let usageOpen = $state(false)
   let machineOpen = $state(false)
   let contextOpen = $state(false)
@@ -173,6 +176,7 @@
     const panel = event => {
       pickerOpen = event.detail === 'model'
       thinkingOpen = event.detail === 'thinking'
+      modeOpen = event.detail === 'mode'
       usageOpen = event.detail === 'usage'
       machineOpen = event.detail === 'machine'
       contextOpen = event.detail === 'context'
@@ -768,6 +772,92 @@
     } catch (_) { if (request === contextRequest) contextUsage = null }
   }
   $effect(() => { void currentThreadId; if (!replyRunning) void refreshContextUsage() })
+  // The composer's permission mode. Core lists the modes of the thread's
+  // machine, or of the picked machine for a new thread, and answers the
+  // open thread's mode. A mode picked on a new thread waits for its first
+  // message, then goes to the thread the message starts.
+  let modeChip = $state()
+  let modeListing = $state(null)
+  let modesRevision = $state(0)
+  let threadMode = $state(null)
+  let pendingMode = $state(null)
+  let pendingModeSend = null
+  let modeRequest = 0
+  const composerThreadId = $derived(freshThread ? null : currentThreadId)
+  const composerRuntime = $derived(threadMachine ?? runtimeList?.selected ?? LOCAL_RUNTIME_ID)
+  $effect(() => {
+    const runtime = composerRuntime
+    void modesRevision
+    let alive = true
+    void loadModes(tauri, runtime).then((listing) => { if (alive) modeListing = listing ? { runtime, listing } : null })
+    return () => { alive = false }
+  })
+  async function refreshThreadMode() {
+    const request = ++modeRequest
+    const threadId = composerThreadId
+    const runtime = composerRuntime
+    if (!threadId || !modeListing) { threadMode = null; return }
+    try {
+      const answer = await agentRequest(tauri, runtime, 'thread.permission_mode', { thread_id: threadId })
+      if (request === modeRequest) threadMode = answer
+    } catch (_) { if (request === modeRequest) threadMode = null }
+  }
+  // A plan approval switches the thread's mode during a reply, so the mode is read again when a reply starts or ends.
+  $effect(() => { void composerThreadId; void modeListing; void replyRunning; void refreshThreadMode() })
+  $effect(() => {
+    const threadId = composerThreadId
+    untrack(() => {
+      if (!threadId) return
+      const mode = pendingModeSend
+      pendingModeSend = null
+      pendingMode = null
+      if (mode) void setThreadMode(threadId, mode)
+    })
+  })
+  const composerMode = $derived(!modeListing ? null
+    : composerThreadId ? (threadMode?.thread_id === composerThreadId ? findMode(modeListing.listing, threadMode.mode) : null)
+      : findMode(modeListing.listing, pendingMode ?? modeListing.listing.default_thread_mode))
+  // Group threads and threads another machine runs take no mode from here.
+  const composerModeShown = $derived(!!composerMode && !threadGroup && !threadPostTarget)
+  async function setThreadMode(threadId, mode) {
+    ++modeRequest
+    try {
+      const answer = await agentRequest(tauri, composerRuntime, 'thread.permission_mode_set', { thread_id: threadId, mode })
+      if (threadId === composerThreadId) threadMode = answer
+    } catch (error) {
+      submitError = String(error?.message ?? error)
+    }
+  }
+  function closeModes(focus = true) {
+    modeOpen = false
+    if (focus) void tick().then(() => modeChip?.focus())
+  }
+  function chooseMode(id, focus = true) {
+    closeModes(focus)
+    const mode = findMode(modeListing?.listing, id)
+    if (!mode || mode.available === false || id === composerMode?.id) return
+    if (!composerThreadId) { pendingMode = id === modeListing.listing.default_thread_mode ? null : id; return }
+    void setThreadMode(composerThreadId, id)
+  }
+  // The plan a composer thread's plan gate waits on, from core's `thread.plan`.
+  let composerPlan = $state(null)
+  const planGateId = $derived(messages.findLast((message) => message.run?.phase === 'pending-permission' && isPlanGate(message.run.pendingPermission))?.run.pendingPermission.gateId ?? null)
+  $effect(() => {
+    const gateId = planGateId
+    const threadId = composerThreadId
+    const runtime = composerRuntime
+    if (!gateId || !threadId) { composerPlan = null; return }
+    let alive = true
+    agentRequest(tauri, runtime, 'thread.plan', { thread_id: threadId })
+      .then((answer) => { if (alive) composerPlan = answer?.plan ? { gateId, text: answer.plan.plan ?? '' } : null })
+      .catch(() => { if (alive) composerPlan = null })
+    return () => { alive = false }
+  })
+  // Shift+Tab in the composer moves to the next mode that can be chosen.
+  function cycleMode() {
+    const next = nextMode(modeListing?.listing, composerMode?.id)
+    if (next) chooseMode(next.id, false)
+  }
   async function compactThread(instructions, fromDraft = false) {
     if (compacting || active) return
     if (!currentThreadId) { submitError = 'Start a conversation before you compact it.'; return }
@@ -792,7 +882,10 @@
     const command = compactCommand(draft)
     if (command) void compactThread(command.instructions, true)
     else if (threadPostTarget) void postToThread(threadPostTarget)
-    else chatController.send()
+    else {
+      if (!composerThreadId && pendingMode) pendingModeSend = pendingMode
+      chatController.send()
+    }
   }
   // A group thread, or a replica of another machine's agent thread, takes a
   // message through `thread.post`. Core hands it to the group or to the
@@ -2396,7 +2489,7 @@
         settingsShortcutPressed()
         return
       }
-      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || usageOpen || machineOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
+      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || modeOpen || usageOpen || machineOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
       if (event.key === 'Escape' && projectsOpen) { projectsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && artifactsOpen) { artifactsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && agentsOpen) { agentsOpen = false; event.preventDefault() }
@@ -2572,6 +2665,11 @@
         else if (mentionFiles[mentionSelected]) void chooseMention(mentionFiles[mentionSelected])
         return
       }
+    }
+    if (event.key === 'Tab' && event.shiftKey && !event.isComposing && composerModeShown) {
+      event.preventDefault()
+      cycleMode()
+      return
     }
     const action = composerAction(event, draft, active)
     if (action) {
@@ -2984,8 +3082,10 @@
                 {:else if gate.kind === 'editor' && gate.title === 'muniment:browser'}
                   <p class="run-status" role="status">Using the browser…</p>
                 {:else}
+                {@const choices = composerGateOptions(gate, !!threadAgent)}
                 <div class="permission-card tool-card">
                   <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
+                  {#if isPlanGate(gate) && composerPlan?.gateId === gate.gateId && composerPlan.text}<div class="permission-plan" role="region" aria-label="Plan">{composerPlan.text}</div>{/if}
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
                   {#if gate.kind === 'code_diff' && gate.diff}{#await loadCodeDiff() then module}{@const CodeDiff = module.default}<CodeDiff codeDiff={gate.diff} />{/await}
                   {:else if gate.kind === 'code_diff'}<p>Muniment will not apply a change it cannot show. Deny is the only choice.</p>{/if}
@@ -3013,12 +3113,12 @@
                     <p id={hintId} class="permission-editor-hint">{permissionGateCommitHint(gate.kind)}</p>
                   {/if}
                   <div class="permission-actions">
-                    <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'cancelled' })}>Deny</button>
+                    <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, gate.kind === 'select' ? choices.deny : { type: 'cancelled' })}>Deny</button>
                     <div class="permission-approve-actions" role={gate.kind === 'select' ? 'group' : undefined} aria-label={gate.kind === 'select' ? gate.title : undefined}>
                       {#if gate.kind === 'confirm'}
                         <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'confirm', value: true })}>Allow</button>
                       {:else if gate.kind === 'select'}
-                        {#each gate.options ?? [] as option}
+                        {#each choices.options as option}
                           <button disabled={answerState?.pending} onclick={() => answerPermission(message.run, { type: 'select', value: option })}>{option}</button>
                         {/each}
                       {:else if gate.kind === 'input' || gate.kind === 'editor'}
@@ -3118,6 +3218,9 @@
         {/if}
         {#if thinkingOpen && chipThinking}
           <ThinkingPicker levels={chipThinking.levels} current={chipThinking.level} onchoose={chooseThinkingLevel} onclose={closeThinking} />
+        {/if}
+        {#if modeOpen && composerModeShown}
+          <ModePicker modes={modeListing.listing.modes} current={composerMode.id} onchoose={chooseMode} onclose={closeModes} />
         {/if}
         {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -3223,6 +3326,11 @@
                   {#snippet icon()}<LucideIcon name="gauge" size={14} />{/snippet}
                 </ComposerMenuButton>
               {/if}
+            {/if}
+            {#if composerModeShown}
+              <ComposerMenuButton menu="mode" open={modeOpen} chevrons label={`Permission mode: ${composerMode.title}`} text={composerMode.title} bind:element={modeChip} onclick={() => openComposerPanel(modeOpen ? null : 'mode')}>
+                {#snippet icon()}<LucideIcon name={modeIcon(composerMode)} size={14} />{/snippet}
+              </ComposerMenuButton>
             {/if}
             {#if compacting || contextOpen || contextMeterShown(contextUsage)}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
             {#if threadSwitching}
@@ -3350,7 +3458,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
@@ -3736,6 +3844,7 @@
   .applied-diff summary span { color: var(--muted); }
   .applied-diff[open] summary { margin-bottom: 8px; }
   .applied-diff button { min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+  .permission-plan { margin-top: 8px; padding: 8px 10px; max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-13) var(--font-human); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
   .permission-field { display: block; width: 100%; margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); outline: 0; background: var(--surface); color: var(--ink); font: inherit; }
   .permission-field:focus { border-color: var(--muted); }
   .permission-field::placeholder { color: var(--muted); }
