@@ -566,7 +566,7 @@ steering, gate answers and run starts through `SwarmHost`.
   older field write and lasts 90 days. Once an hour a member drops the
   tombstones older than that which every member heard from within 90 days
   holds, by the `record_vv` each `MemberRecord` carries, and refuses any later
-  row at or before the newest dropped clock for a field it no longer holds.
+  row at or before the newest dropped clock for a field whose rows it dropped.
   A member away longer marks `snapshot_needed_at`, forgets its records but
   its own writes no member held, and takes a fresh snapshot; the copies of
   threads whose records never come back are deleted. A set field keeps an
