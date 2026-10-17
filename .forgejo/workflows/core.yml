@@ -169,12 +169,13 @@ jobs:
   # Tags and publishes the next core version after every check of a main push
   # passed. It shares the pins update's group, so tags stay in order.
   #
-  # Before it tags, it builds the signed server archives the launcher
-  # installs: muniment-server for Linux x86_64 and aarch64, cross-compiled
-  # with cargo-zigbuild, SHA256SUMS over them and SHA256SUMS.minisig, signed
-  # with the MUNIMENT_RELEASE_SIGNING_KEY secret (and its optional
-  # MUNIMENT_RELEASE_SIGNING_PASSWORD). A release with no key, or a key the
-  # source's RELEASE_PUBLIC_KEY does not verify, fails before the tag.
+  # Before it tags, deploy/runtime/release-assets.sh builds the signed server
+  # archives the launcher installs: muniment-server for Linux x86_64 and
+  # aarch64, cross-compiled with cargo-zigbuild, SHA256SUMS over them and
+  # SHA256SUMS.minisig, signed with the MUNIMENT_RELEASE_SIGNING_KEY secret
+  # (and its optional MUNIMENT_RELEASE_SIGNING_PASSWORD). The pins update
+  # runs the same script. A release with no key, or a key the source's
+  # RELEASE_PUBLIC_KEY does not verify, fails before the tag.
   release:
     needs: [checks, router-server, router-image, runtime-image, macos, windows]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -216,26 +217,13 @@ jobs:
         id: plan
         if: github.event_name == 'push'
         run: echo "tag=$(python3 -B scripts/release.py --revision "$GITHUB_SHA" --print-tag)" >> "$GITHUB_OUTPUT"
-      - name: Build the server archives
-        if: github.event_name == 'push' && steps.plan.outputs.tag != ''
-        env:
-          TAG: ${{ steps.plan.outputs.tag }}
-        run: |
-          bash ci/rust-toolchain.sh
-          bash ci/zig-toolchain.sh
-          rm -rf dist
-          for arch in x86_64 aarch64; do
-            deploy/runtime/package.sh "${TAG#core-v}" "$arch" dist
-          done
-      - name: Sign the server archives
+      - name: Build and sign the server archives
         if: github.event_name == 'push' && steps.plan.outputs.tag != ''
         env:
           TAG: ${{ steps.plan.outputs.tag }}
           MUNIMENT_RELEASE_SIGNING_KEY: ${{ secrets.MUNIMENT_RELEASE_SIGNING_KEY }}
           MUNIMENT_RELEASE_SIGNING_PASSWORD: ${{ secrets.MUNIMENT_RELEASE_SIGNING_PASSWORD }}
-        run: |
-          command -v minisign >/dev/null || { apt-get update && apt-get install -y --no-install-recommends minisign; }
-          deploy/runtime/sign-release.sh "${TAG#core-v}" dist
+        run: deploy/runtime/release-assets.sh "${TAG#core-v}" dist
       - name: Tag and publish the next version
         if: github.event_name == 'push' && steps.plan.outputs.tag != ''
         env:

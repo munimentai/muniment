@@ -187,6 +187,9 @@ pub enum UpdateOutcome {
     Retry(String),
     /// The version will never install. The runtime runs its earlier one.
     Failed(String),
+    /// The release exists without its server files. The request is cleared
+    /// and the runtime keeps its version, with no retry and no failure.
+    Skipped(String),
     /// A stop request ended the attempt.
     Stopped,
 }
@@ -532,6 +535,12 @@ impl Launcher {
                     "muniment-server: launcher update failed target_version={target} error={error}"
                 );
             }
+            UpdateOutcome::Skipped(error) => {
+                self.retry = None;
+                eprintln!(
+                    "muniment-server: launcher update skipped target_version={target} error={error}"
+                );
+            }
             UpdateOutcome::Stopped => {
                 eprintln!("muniment-server: launcher update stopped target_version={target}");
             }
@@ -555,6 +564,23 @@ impl Launcher {
         })();
         let archive = match fetched {
             Ok(archive) => archive,
+            // A missing file of a release that exists means the release
+            // carries no server files, so waiting would not help.
+            Err(error @ ReleaseError::Missing(_))
+                if self
+                    .settings
+                    .feed
+                    .fetch(target, release::MARKER_NAME)
+                    .is_ok() =>
+            {
+                return self.skip(
+                    target,
+                    format!(
+                        "Version {target} has no server release, so the runtime keeps {}: {error}.",
+                        self.running_version()
+                    ),
+                )
+            }
             Err(error) if error.is_transient() => {
                 return UpdateOutcome::Retry(format!("Version {target}: {error}."))
             }
@@ -689,6 +715,13 @@ impl Launcher {
             eprintln!("muniment-server: launcher could not restart the server: {error}");
         }
         outcome
+    }
+
+    /// Clears `target`'s request and leaves the running version in place.
+    fn skip(&mut self, target: &str, error: String) -> UpdateOutcome {
+        let _ = clear_update_request_for(&self.layout.remote, target);
+        self.set_status(RuntimeUpdateState::Idle, Some(target), Some(error.clone()));
+        UpdateOutcome::Skipped(error)
     }
 
     /// Records that `target` never installs, clears its request and reports
@@ -1273,6 +1306,47 @@ esac
         assert!(status.error.unwrap().contains("retries in 60 seconds"));
         assert_eq!(launcher.due_request(), None);
         assert_eq!(Layout::new(&fixture.state).failed_version(), None);
+        launcher.stop();
+    }
+
+    #[test]
+    fn a_release_without_server_files_is_skipped() {
+        let fixture = Fixture::new("skipped");
+        fixture.publish("1.1.0", "1.1.0", true);
+        let name = release::archive_name("1.1.0", release::host_arch().unwrap());
+        let directory = fixture.feed.join("core-v1.1.0");
+        std::fs::write(directory.join(release::MARKER_NAME), b"[pins]\n").unwrap();
+        let mut launcher = started(&fixture);
+        let pid = launcher.child().unwrap().id();
+
+        for missing in [name.as_str(), release::SIGNATURE_NAME] {
+            fixture.publish("1.1.0", "1.1.0", true);
+            std::fs::remove_file(directory.join(missing)).unwrap();
+            let request = fixture.request("1.1.0");
+
+            let outcome = launcher.apply(&request, &AtomicBool::new(false));
+
+            assert!(
+                matches!(outcome, UpdateOutcome::Skipped(ref error) if error.contains(missing)),
+                "{outcome:?}"
+            );
+            assert_eq!(launcher.child().unwrap().id(), pid);
+            assert_eq!(fixture.serving(), IMAGE_VERSION);
+            assert_eq!(fixture.pending(), None);
+            let status = fixture.status();
+            assert_eq!(status.state, RuntimeUpdateState::Idle);
+            assert!(status.error.unwrap().contains("keeps"));
+            assert_eq!(Layout::new(&fixture.state).failed_version(), None);
+        }
+
+        // Once the files are attached, the same version installs.
+        fixture.publish("1.1.0", "1.1.0", true);
+        let request = fixture.request("1.1.0");
+        assert_eq!(launcher.due_request(), Some(request.clone()));
+        assert_eq!(
+            launcher.apply(&request, &AtomicBool::new(false)),
+            UpdateOutcome::Installed
+        );
         launcher.stop();
     }
 

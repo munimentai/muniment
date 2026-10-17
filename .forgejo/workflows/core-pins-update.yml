@@ -152,11 +152,14 @@ jobs:
         run: git push origin --delete "$CHECK_BRANCH" || true
 
       # Lands the bump and tags the release when every check passed, and files
-      # the blocked-pin issues.
+      # the blocked-pin issues. The release carries the signed server archives
+      # that deploy/runtime/release-assets.sh builds, as in core.yml.
       - name: Land the bump, tag the release, and file issues
         if: (steps.select.outputs.changed == 'true' || steps.select.outputs.blocked == 'true') && !inputs.dry_run
         env:
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          MUNIMENT_RELEASE_SIGNING_KEY: ${{ secrets.MUNIMENT_RELEASE_SIGNING_KEY }}
+          MUNIMENT_RELEASE_SIGNING_PASSWORD: ${{ secrets.MUNIMENT_RELEASE_SIGNING_PASSWORD }}
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           CHECKS: ${{ steps.checks.outcome == 'success' && steps.darwin.outcome == 'success' && 'success' || 'failure' }}
