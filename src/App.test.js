@@ -5606,8 +5606,8 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     view.unmount()
     // Every event listener ends, the agent run updates, swarm changes,
-    // approvals, agent activity and group posts among them.
-    expect(eventUnlisten).toHaveBeenCalledTimes(14)
+    // approvals, agent activity, group posts and preference changes among them.
+    expect(eventUnlisten).toHaveBeenCalledTimes(15)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
