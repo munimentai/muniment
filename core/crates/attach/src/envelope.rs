@@ -469,6 +469,13 @@ pub enum Operation {
     /// runtime's model connections with the fleet on or off.
     #[serde(rename = "fleet.credentials")]
     FleetCredentials,
+    /// Gives a fleet member another role, `full` or `worker`, with a
+    /// signed roster entry.
+    #[serde(rename = "swarm.set_role")]
+    SwarmSetRole,
+    /// Reads the fleet's audit log, newest first.
+    #[serde(rename = "fleet.audit")]
+    FleetAudit,
     /// Appends a user message to an agent or group thread on any member.
     #[serde(rename = "thread.post")]
     ThreadPost,
@@ -685,6 +692,8 @@ impl Operation {
             Self::SwarmResume => "swarm.resume",
             Self::FleetHoldSignIn => "fleet.hold_sign_in",
             Self::FleetCredentials => "fleet.credentials",
+            Self::SwarmSetRole => "swarm.set_role",
+            Self::FleetAudit => "fleet.audit",
             Self::ThreadPost => "thread.post",
             Self::AgentMove => "agent.move",
             Self::AgentApprovals => "agent.approvals",
@@ -730,6 +739,8 @@ impl Operation {
                 | Self::SwarmResume
                 | Self::FleetHoldSignIn
                 | Self::FleetCredentials
+                | Self::SwarmSetRole
+                | Self::FleetAudit
                 | Self::ThreadPost
                 | Self::AgentMove
                 | Self::AgentApprovals

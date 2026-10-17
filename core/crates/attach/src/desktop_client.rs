@@ -1478,6 +1478,8 @@ impl DesktopClient {
             Operation::GroupList => &["groups"],
             Operation::FleetHoldSignIn => &["status"],
             Operation::FleetCredentials => &["share_models"],
+            Operation::SwarmSetRole => &["role"],
+            Operation::FleetAudit => &["entries"],
             Operation::FleetOpStatus => &["op"],
             _ => &[],
         };
