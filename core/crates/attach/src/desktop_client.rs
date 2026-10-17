@@ -1492,7 +1492,8 @@ impl DesktopClient {
             Operation::ThreadHistoryFetch => &["status"],
             Operation::FleetHoldSignIn => &["status"],
             Operation::FleetCredentials => &["share_models"],
-            Operation::FleetOpStatus => &["op"],
+            Operation::FleetOpStatus | Operation::FleetOpCancel => &["op"],
+            Operation::FleetOps => &["ops"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)

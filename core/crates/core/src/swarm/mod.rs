@@ -567,8 +567,16 @@ impl Swarm {
             Operation::FleetOfflineSet => bootstrap::offline_set(inner, body),
             Operation::ThreadHistoryFetch => bootstrap::history_fetch(inner, body),
             Operation::FleetOpStatus => ops::status(inner, body),
+            Operation::FleetOpCancel => ops::cancel(inner, body),
+            Operation::FleetOps => ops::list(inner, body),
             _ => Err("The swarm operation is unknown.".into()),
         }
+    }
+
+    /// Whether an agent's primary `primary_runtime` is another member that
+    /// has been away long enough that this member offers to take the agent.
+    pub fn move_suggested(&self, primary_runtime: &str) -> bool {
+        ops::move_suggested(&self.inner, primary_runtime)
     }
 
     /// Where a client's call goes: `None` runs it here. When the item it

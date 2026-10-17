@@ -735,9 +735,15 @@ steering, gate answers and run starts through `SwarmHost`.
   "updated_at", "expires_at"}`. `state` is `queued` while the owner is
   offline (`reason.code` `owner_offline`, with the owner's name and
   `last_seen_at`) or no peer took it yet, `sent`, `applied` or `failed`
-  (`reason.code` `expired` after 7 days). `swarm.agents` marks
-  `move_suggested` on an agent whose primary was last seen 24 hours ago or
-  more; `agent.move` with `force` takes it.
+  (`reason.code` `expired` after 7 days), or `cancelled`.
+  `fleet.op_cancel` (`{"op_id"}` → `{"op"}`) cancels a `queued` op and
+  drops it from the outbox; a `sent` or finished op is refused. A copy a
+  relay already holds may still reach the owner, and its acknowledgement
+  then moves the op to `applied` or `failed`. `fleet.ops` (`{"state"?}` →
+  `{"ops"}`) lists this member's ops newest first, at most 200, by one
+  state or `open` for `queued` and `sent`. `swarm.agents`, `agent.list` and
+  `agent.read` mark `move_suggested` on an agent whose primary was last
+  seen 24 hours ago or more; `agent.move` with `force` takes it.
 
 A chat-event subscription that sends `{"swarm": true}` receives
 `swarm.changed`, `agent.approval_pending`, `agent.approval_resolved` and
@@ -749,9 +755,10 @@ back to the swarm events alone on a runtime that refuses the flag. With
 `DesktopClient::subscribe_chat_events_with_fleet` falls back to the live
 swarm events.
 Remotely, linking, `fleet.offline_set` and the fleet credential operations
-take `runtime.admin`, the reads, `fleet.op_status`, `fleet.sync_status` and
-`thread.history_fetch` take `thread.read`, `thread.post`, group changes and
-answers take `run.write`, and `agent.move` and `swarm.resume` take
+take `runtime.admin`, the reads, `fleet.op_status`, `fleet.ops`,
+`fleet.sync_status` and `thread.history_fetch` take `thread.read`,
+`thread.post`, `fleet.op_cancel`, group changes and answers take
+`run.write`, and `agent.move` and `swarm.resume` take
 `agents.manage`.
 
 ## Phone relay

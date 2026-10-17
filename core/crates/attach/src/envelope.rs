@@ -571,6 +571,14 @@ pub enum Operation {
     /// item stands.
     #[serde(rename = "fleet.op_status")]
     FleetOpStatus,
+    /// Cancels an action this member queued for another member before it
+    /// leaves this member.
+    #[serde(rename = "fleet.op_cancel")]
+    FleetOpCancel,
+    /// Lists the actions this member forwarded, newest first, optionally
+    /// by state.
+    #[serde(rename = "fleet.ops")]
+    FleetOps,
 }
 
 impl Operation {
@@ -729,6 +737,8 @@ impl Operation {
             Self::ThreadPlan => "thread.plan",
             Self::ThreadPlanAnswer => "thread.plan_answer",
             Self::FleetOpStatus => "fleet.op_status",
+            Self::FleetOpCancel => "fleet.op_cancel",
+            Self::FleetOps => "fleet.ops",
         }
     }
 
@@ -757,6 +767,8 @@ impl Operation {
                 | Self::GroupList
                 | Self::GroupUpdate
                 | Self::FleetOpStatus
+                | Self::FleetOpCancel
+                | Self::FleetOps
         )
     }
 

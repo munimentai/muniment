@@ -711,6 +711,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("fleet-sync-status", Operation::FleetSyncStatus),
         ("fleet-offline-set", Operation::FleetOfflineSet),
         ("thread-history-fetch", Operation::ThreadHistoryFetch),
+        ("fleet-op-cancel", Operation::FleetOpCancel),
+        ("fleet-ops", Operation::FleetOps),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -942,6 +944,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             json!({"status": "answered", "answer": "plan_edit_auto"}),
         ),
         ("fleet-op-status", json!({"op": fixture_op("applied")})),
+        ("fleet-op-cancel", json!({"op": fixture_op("cancelled")})),
+        ("fleet-ops", json!({"ops": [fixture_op("queued")]})),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1200,6 +1204,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     let mut listed_agent = fixture_agent();
     listed_agent["activity"] = fixture_activity();
     listed_agent["routines"][0]["next_fire_at"] = json!(1_767_362_400);
+    listed_agent["move_suggested"] = json!(false);
     insert(
         &mut fixtures,
         "response-agent-list.json",
@@ -1224,7 +1229,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             ok: Success,
             body: json!({
                 "agent": fixture_agent(),
-                "primary_thread_id": "00000000000000000000000000000192"
+                "primary_thread_id": "00000000000000000000000000000192",
+                "move_suggested": false
             }),
         },
     )?;
@@ -1675,7 +1681,8 @@ fn request_body(operation: Operation) -> serde_json::Value {
             json!({"id": FIXTURE_AGENT_ID, "to": FIXTURE_RUNTIME_B, "force": false})
         }
         Operation::AgentApprovals | Operation::GroupList => json!({}),
-        Operation::FleetOpStatus => json!({"op_id": FIXTURE_OP_ID}),
+        Operation::FleetOpStatus | Operation::FleetOpCancel => json!({"op_id": FIXTURE_OP_ID}),
+        Operation::FleetOps => json!({"state": "open"}),
         Operation::AgentApprovalAnswer => json!({
             "approval_id": FIXTURE_APPROVAL_ID,
             "answer": {"type": "confirm", "value": true}
@@ -1827,6 +1834,7 @@ const FIXTURE_OP_ID: &str = "019965a0-0000-7000-8000-0000000000d6";
 /// member is offline, or applied with the owner's answer.
 fn fixture_op(state: &str) -> serde_json::Value {
     let applied = state == "applied";
+    let waiting = state == "queued";
     json!({
         "op_id": FIXTURE_OP_ID,
         "operation": "thread.post",
@@ -1834,7 +1842,7 @@ fn fixture_op(state: &str) -> serde_json::Value {
         "owner_runtime": FIXTURE_RUNTIME_A,
         "owner_name": "Build box",
         "state": state,
-        "reason": if applied { serde_json::Value::Null } else { json!({
+        "reason": if !waiting { serde_json::Value::Null } else { json!({
             "code": "owner_offline",
             "text": "Build box is offline. It was last seen at 2026-01-01T13:00:00Z.",
             "last_seen_at": "2026-01-01T13:00:00Z"
@@ -1847,7 +1855,7 @@ fn fixture_op(state: &str) -> serde_json::Value {
         }) } else { serde_json::Value::Null },
         "error": null,
         "created_at": "2026-01-01T14:00:00Z",
-        "updated_at": if applied { "2026-01-01T14:00:03Z" } else { "2026-01-01T14:00:00Z" },
+        "updated_at": if waiting { "2026-01-01T14:00:00Z" } else { "2026-01-01T14:00:03Z" },
         "expires_at": "2026-01-08T14:00:00Z"
     })
 }
@@ -2662,6 +2670,8 @@ mod tests {
             Operation::ThreadPlan,
             Operation::ThreadPlanAnswer,
             Operation::FleetOpStatus,
+            Operation::FleetOpCancel,
+            Operation::FleetOps,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -2763,12 +2773,16 @@ mod tests {
             "response-fleet-op-status.json",
             "event-fleet-op-updated.json",
             "request-run-chat-events-fleet.json",
+            "request-fleet-op-cancel.json",
+            "response-fleet-op-cancel.json",
+            "request-fleet-ops.json",
+            "response-fleet-ops.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 4,
             "every canonical fixture must be inventoried"
         );
     }

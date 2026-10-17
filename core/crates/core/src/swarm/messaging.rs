@@ -298,7 +298,7 @@ pub(super) fn enqueue(inner: &Inner, message: &Message, relay: bool) -> Result<(
         .map_err(sql)
 }
 
-fn outbox_message(inner: &Inner, message_id: &str) -> Result<Option<Message>, String> {
+pub(super) fn outbox_message(inner: &Inner, message_id: &str) -> Result<Option<Message>, String> {
     inner
         .store
         .record("outbox", "message_id", "message", message_id)
