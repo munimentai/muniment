@@ -90,7 +90,7 @@ test('The bounded CI job keeps the steering and copy checks with their reuse gat
   assert.match(ci.checks, /needs: changes/)
   assert.match(ci.checks, /name: Steering check\n        if: needs.changes.outputs.reuse != 'true'\n        run: scripts\/check-steering.sh ./)
   assert.match(ci.checks, /name: Private address check\n        run: \|\n          scripts\/check-private-addresses.sh\n          python3 -B scripts\/test_private_addresses.py\n/)
-  assert.match(ci.checks, /name: UI copy law\n        if: needs.changes.outputs.reuse != 'true' && \(needs.changes.outputs.desktop == 'true' \|\| github.event_name != 'pull_request'\)\n        run: node test\/ui-copy-lint.mjs src src-tauri browser-control/)
+  assert.match(ci.checks, /name: UI copy law\n        if: needs.changes.outputs.reuse != 'true' && \(needs.changes.outputs.desktop == 'true'\)\n        run: node test\/ui-copy-lint.mjs src src-tauri browser-control/)
   assert.doesNotMatch(ci.checks, /\bnpm\b/)
   const copyCommand = ci.checks.match(/run: (node test\/ui-copy-lint.mjs [^\n]+)/)[1]
   const copyRun = spawnSync(process.execPath, copyCommand.split(' ').slice(1), {
@@ -116,5 +116,35 @@ test('PR proof writers and main readers bind the same off-tree configuration.', 
     assert.match(workflows[name], /CI_PROOF_CONFIGURATION: \$\{\{ toJSON\(vars\) \}\}/)
     assert.match(workflows[name], /reusePullRequest\(/)
     assert.match(workflows[name], /writeProof\(/)
+  }
+})
+
+test('Core runs on Forgejo only, in core/, off the desktop runners, with one release group.', () => {
+  const core = readFileSync('.forgejo/workflows/core.yml', 'utf8')
+  const pins = readFileSync('.forgejo/workflows/core-pins-update.yml', 'utf8')
+  assert.equal(workflows['core.yml'], undefined)
+  for (const text of [core, pins]) {
+    assert.match(text, /^defaults:\n  run:\n    working-directory: core\n/m)
+    assert.doesNotMatch(text, /\.forgejo\/[\w-]+\.sh|runs-on: (?:\[?self-hosted|muniment-checks)/)
+  }
+  for (const event of ['push', 'pull_request']) {
+    const filter = core.match(new RegExp(`^  ${event}:\\n(?:    branches: .*\\n)?    paths:\\n((?:      - .*\\n)+)`, 'm'))[1]
+    assert.deepEqual(filter.trim().split('\n').map(line => line.trim()),
+      ['- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"', '- ".forgejo/workflows/core*.yml"'])
+  }
+  const runners = Object.fromEntries(Object.entries(jobs(core))
+    .map(([name, body]) => [name, body.match(/^    runs-on: (.+)$/m)[1]]))
+  assert.deepEqual(runners, {
+    checks: '${{ vars.CI_LINUX_RUNNER }}', 'router-server': '${{ vars.CI_LINUX_RUNNER }}',
+    'router-image': 'image-smoke', 'runtime-image': 'image-smoke', macos: '${{ vars.CI_LINUX_RUNNER }}',
+    windows: '${{ vars.CI_LINUX_RUNNER }}', release: '${{ vars.CI_LINUX_RUNNER }}', 'runtime-image-publish': 'image-smoke',
+  })
+  assert.match(jobs(core).release, /group: core-release\n/)
+  assert.match(jobs(pins).update, /group: core-release\n/)
+  assert.match(core, /cargo metadata --locked --format-version 1 --manifest-path \.\.\/src-tauri\/Cargo.toml/)
+  assert.match(core, /--list 'core-v\*'/)
+  assert.match(pins, /cargo check --manifest-path \.\.\/src-tauri\/Cargo.toml --locked -p muniment-runtime/)
+  for (const vm of [jobs(core).macos, jobs(core).windows, jobs(pins).update]) {
+    assert.match(vm, /desktop-ci.sh (?:macos|windows)[\s\\]*\n?\s*"cd core &&/)
   }
 })
