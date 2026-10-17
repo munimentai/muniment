@@ -29,7 +29,8 @@
     void tick().then(() => {
       void ask('fleet.sync_status').then((answer) => { status = answer }).catch(() => {})
       void ask('fleet.pins').then((answer) => { pins = answer }).catch(() => {})
-      void Promise.resolve(tauri.invoke('project_list')).then((catalog) => { projects = catalog?.projects ?? {} }).catch(() => {})
+      // Only another member's project has files elsewhere to keep here.
+      void Promise.resolve(tauri.invoke('project_list')).then((catalog) => { projects = Object.fromEntries(Object.entries(catalog?.remote ?? {}).map(([key, project]) => [key, project.name])) }).catch(() => {})
     })
   })
 
@@ -79,7 +80,7 @@
         {#each Object.entries(projects) as [key, name] (key)}
           <label class="pick"><input type="checkbox" checked={scope.pinnedProjects.includes(key)} disabled={busy} onchange={(event) => pinProject(key, event.currentTarget.checked)} /><span>{name}</span></label>
         {:else}
-          <p class="picks-label">No projects yet.</p>
+          <p class="picks-label">No projects on other machines yet.</p>
         {/each}
       </div>
     {/if}

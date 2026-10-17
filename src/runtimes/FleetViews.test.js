@@ -14,7 +14,7 @@ const swarm = { self: { local: 'core-laptop' }, members: [{ runtime_id: 'core-la
 
 function agentBridge(answers) {
   const invoke = vi.fn(async (command, payload) => {
-    if (command === 'project_list') return { projects: { p1: 'Launch' }, threads: {} }
+    if (command === 'project_list') return { projects: { mine: 'Taxes' }, remote: { p1: { name: 'Launch', ownerRuntime: 'core-studio' } }, threads: {} }
     if (command !== 'agent_request') throw new Error(`unexpected command: ${command}`)
     const answer = answers[payload.operation]
     if (answer instanceof Error) throw answer
@@ -31,7 +31,7 @@ describe('the sync line', () => {
     const line = screen.getByRole('button', { name: /Syncing 1/ })
     expect(line).toHaveAttribute('aria-expanded', 'true')
     const panel = screen.getByRole('region', { name: 'Sync progress' })
-    expect(within(panel).getByRole('progressbar', { name: 'Thread history' })).toHaveAttribute('aria-valuenow', '30')
+    expect(within(panel).getByRole('progressbar', { name: 'History' })).toHaveAttribute('aria-valuenow', '30')
     expect(within(panel).getByText('arriving from Laptop')).toBeInTheDocument()
     expect(within(panel).getByText('waiting for a holder')).toBeInTheDocument()
     await fireEvent.click(line)

@@ -134,14 +134,14 @@ const CLASS_NAMES = {
   agent: 'Agents',
   group: 'Groups',
   thread: 'Threads',
-  history: 'Thread history',
+  history: 'History',
   project: 'Projects',
   'project-thread': 'Project threads',
   preference: 'Preferences',
   permission: 'Permissions',
   memory: 'Memory',
   artifact: 'Artifacts',
-  extension: 'Skills and plugins',
+  extension: 'Skills',
   account: 'Model accounts',
   route: 'Routing',
   'decision-model': 'Decision models',
@@ -223,6 +223,7 @@ export function auditRow(entry, swarm) {
     Array.isArray(record.recipients) ? `${record.recipients.length} recipients` : '',
     record.result,
   ].filter((part) => typeof part === 'string' && part).join(' · ')
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, (id) => swarm?.members?.find((member) => member.runtime_id === id)?.runtime_name ?? id)
   return {
     id: entry?.id ?? `${entry?.at}:${entry?.kind}`,
     at: entry?.at ?? '',

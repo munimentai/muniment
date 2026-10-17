@@ -139,4 +139,5 @@
   .manage { color: var(--muted) !important; }
   .heading { margin: 2px 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .machine-chip .state { margin-left: 0; color: var(--ochre); }
+  .machine-chip .state :global(.lucide) { color: inherit; }
 </style>

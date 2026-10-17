@@ -87,7 +87,7 @@ describe('offline and bootstrap', () => {
 
   it('lists each class with its progress and knows when the lists arrived', () => {
     const status = { state: 'bootstrapping', classes: [{ class: 'agent', held: 6, total: 6, percent: 100 }, { class: 'thread', held: 40, total: 412, percent: 9.7 }, { class: 'history', held: 0, total: 0, percent: 0 }] }
-    expect(bootstrapRows(status).map((row) => `${row.name}:${row.percent}:${row.done}`)).toEqual(['Agents:100:true', 'Threads:10:false', 'Thread history:0:false'])
+    expect(bootstrapRows(status).map((row) => `${row.name}:${row.percent}:${row.done}`)).toEqual(['Agents:100:true', 'Threads:10:false', 'History:0:false'])
     expect(listsArrived(status)).toBe(false)
     expect(listsArrived({ classes: [{ class: 'agent', percent: 100 }, { class: 'thread', percent: 100 }, { class: 'history', percent: 5 }] })).toBe(true)
   })
@@ -114,5 +114,7 @@ describe('the audit log', () => {
     const row = auditRow({ id: 'x', at: '2026-01-01T14:00:00Z', kind: 'role_changed', actor_runtime: LAPTOP, runtime_id: BOX, record: { from: 'full', to: 'worker' } }, swarm)
     expect(row).toMatchObject({ what: 'Changed a role', actor: 'Laptop', machine: 'Build box', detail: 'full to worker' })
     expect(auditRow({ at: 'x', kind: 'something_new', runtime_id: 'core-unknown-machine' }, swarm)).toMatchObject({ what: 'something new', machine: 'core-unk', time: '' })
+    const named = { members: [{ runtime_id: '018f0000-0000-7000-8000-000000000041', runtime_name: 'Laptop' }] }
+    expect(auditRow({ kind: 'sealed', record: { secret_id: 'models:018f0000-0000-7000-8000-000000000041', recipients: ['a', 'b'] } }, named).detail).toBe('models:Laptop · 2 recipients')
   })
 })
