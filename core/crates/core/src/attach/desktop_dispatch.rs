@@ -1966,6 +1966,8 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             thread_id: Option<String>,
             #[serde(default)]
             thinking_level: Option<String>,
+            #[serde(default)]
+            permission_mode: Option<crate::permission_gate::PermissionMode>,
         }
         let body: Body = serde_json::from_value(request.body).map_err(|_| {
             ProtocolError::invalid_request_with_reason("The run request body is invalid.")
@@ -2011,6 +2013,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
                 files: body.files,
                 thread_id: body.thread_id,
                 thinking_level: body.thinking_level,
+                permission_mode: body.permission_mode,
             },
             &request.request_id,
             idempotency_key,

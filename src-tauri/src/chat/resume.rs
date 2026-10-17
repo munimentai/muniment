@@ -53,6 +53,7 @@ pub async fn chat_submit(
     prompt: String,
     files: Option<Vec<SelectedFile>>,
     thinking_level: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<SubmitResult, SubmissionError> {
     #[cfg(any(unix, target_os = "windows"))]
     {
@@ -89,6 +90,7 @@ pub async fn chat_submit(
             &prompt,
             selected_files,
             thinking_level.as_deref(),
+            permission_mode.as_deref(),
         )
         .await
         .map_err(SubmissionError::at("submit"));

@@ -649,7 +649,17 @@ pub fn next_after<T: TimeZone>(
     }
     Err("The next schedule time could not be found.".into())
 }
-pub fn save(profile: &Path, agent: Agent) -> Result<Agent, String> {
+pub fn save(profile: &Path, mut agent: Agent) -> Result<Agent, String> {
+    // A new agent starts in the runtime's default agent mode, saved as its
+    // own choice.
+    if agent.id.is_empty() {
+        let rules = agent
+            .permissions
+            .get_or_insert_with(AgentPermissions::default);
+        if rules.mode.is_none() {
+            rules.mode = Some(crate::permission_gate::settings::new_agent_mode(profile));
+        }
+    }
     if let Some(mode) = agent.permissions.as_ref().and_then(|rules| rules.mode) {
         let previous_mode = get(profile, &agent.id)
             .ok()
@@ -2004,6 +2014,13 @@ mod tests {
         })
         .contains("exact absolute path"));
         assert!(invalid(&|a| a.primary_runtime = Some("../etc".into())).contains("runtime id"));
+        // A new choice of bypass is refused while bypass is off.
+        crate::permission_gate::settings::operation(
+            &profile,
+            "permission.settings_save",
+            serde_json::json!({"bypass_enabled": false}),
+        )
+        .unwrap();
         assert!(
             invalid(&|a| a.permissions.as_mut().unwrap().mode = Some(PermissionMode::Bypass))
                 .contains("Bypass is off")

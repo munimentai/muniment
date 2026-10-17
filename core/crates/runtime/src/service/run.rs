@@ -19,7 +19,7 @@ use muniment_core::chat_view::{chat_attachments, ChatAttachment};
 use muniment_core::engine::CompactionOutcome;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
-use muniment_core::permission_gate::ChatPermissionAnswer;
+use muniment_core::permission_gate::{ChatPermissionAnswer, PermissionMode};
 use muniment_core::pi_execution::{PiProcesses, PiRuntime};
 use muniment_core::run_events::SharedStorage;
 use muniment_core::run_preparation::{
@@ -414,6 +414,45 @@ impl PromptLaunch {
     pub fn with_thinking_level(mut self, thinking_level: Option<String>) -> Self {
         self.thinking_level = thinking_level;
         self
+    }
+
+    /// Journals `mode` as the thread's permission mode before the run
+    /// starts, so the run's first tool call already runs in it. A failed
+    /// write fails the accepted run, which then never starts.
+    pub fn with_permission_mode(mut self, mode: Option<PermissionMode>) -> Result<Self, String> {
+        let Some(mode) = mode else {
+            return Ok(self);
+        };
+        let mut storage = self
+            .storage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let provenance = runtime_provenance(self.host.runtime_version);
+        let set = muniment_core::permission_gate::set_thread_mode(
+            &mut storage.journal,
+            &self.thread_id,
+            mode,
+            "user",
+            "owner",
+            &provenance,
+        );
+        if let Err(error) = set {
+            record_persistence_failure(
+                &mut storage.journal,
+                &mut self.prepared.1,
+                &self.run_id,
+                self.prepared.0,
+                self.subject.as_deref(),
+                "muniment-runtime",
+                self.host.runtime_version,
+            );
+            drop(storage);
+            self.memory_runtime.close_session(&self.run_id);
+            clear_active_run(&self.active, &self.run_id);
+            return Err(error);
+        }
+        drop(storage);
+        Ok(self)
     }
 }
 

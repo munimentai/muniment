@@ -133,7 +133,8 @@ fn canonical_desktop_run_fixtures_round_trip_byte_for_byte() {
             json!({
                 "text": "Summarize the selected file.",
                 "files": ["/work/repo/src/main.rs"],
-                "thread_id": null
+                "thread_id": null,
+                "permission_mode": "plan"
             }),
         ),
         (

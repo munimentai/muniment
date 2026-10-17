@@ -62,8 +62,11 @@
       </Row>
     </Group>
     <Group heading="Bypass permissions">
-      <Row title="Allow bypass" description="Lets a thread or agent choose Bypass permissions.">
-        {#snippet detail()}<p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Meant for containers and disposable machines only. Everything runs except deny and ask-first rules, protected paths and critical commands.</p>{/snippet}
+      <Row title="Allow bypass" description="New threads and agents start in Bypass permissions while this is on.">
+        {#snippet detail()}
+          <p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.</p>
+          <p class="fallback">Turn it off and new threads and agents start in Ask before changes. A default set to Bypass permissions moves to Ask before changes.</p>
+        {/snippet}
         <Toggle checked={settings.bypass_enabled} label="Allow bypass permissions" disabled={busy} onchange={(enabled) => save({ bypass_enabled: enabled })} />
       </Row>
     </Group>
@@ -94,6 +97,7 @@
   p { margin: 0; font-size: var(--text-13); color: var(--muted); }
   .warning { display: flex; align-items: flex-start; gap: 6px; margin-top: 4px; color: var(--ink); font-size: var(--text-12); line-height: 1.45; }
   .warning > :global(svg) { flex: none; margin-top: 1px; color: var(--ochre); }
+  .fallback { margin-top: 4px; font-size: var(--text-12); line-height: 1.45; }
   .wait { display: flex; align-items: center; gap: 6px; }
   .unit { color: var(--muted); font: var(--text-12) var(--font-mono); }
   input[type="number"] { width: 96px; height: 32px; box-sizing: border-box; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-13) var(--font-mono); }

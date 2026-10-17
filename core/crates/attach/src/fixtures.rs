@@ -1453,7 +1453,8 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::RunSubmit => json!({
             "text": "Summarize the selected file.",
             "files": ["/work/repo/src/main.rs"],
-            "thread_id": null
+            "thread_id": null,
+            "permission_mode": "plan"
         }),
         Operation::RunResume => {
             json!({"run_id": "00000000000000000000000000000191"})
@@ -1634,7 +1635,7 @@ const FIXTURE_PLAN_SUMMARY: &str = "1. Add a `--dry-run` flag to the export scri
 const FIXTURE_PLAN: &str = "1. Add a `--dry-run` flag to the export script.\n2. Print each file it would write.\n3. Test it on the sample folder.";
 
 /// The permission modes as `permission.modes` lists them with the default
-/// settings: bypass is off.
+/// settings: bypass is on and is the default mode.
 fn fixture_permission_modes() -> serde_json::Value {
     json!({
         "modes": [
@@ -1643,19 +1644,19 @@ fn fixture_permission_modes() -> serde_json::Value {
             {"id": "plan", "title": "Plan first", "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "available": true},
             {"id": "auto", "title": "Auto review", "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "available": true},
             {"id": "dont_ask", "title": "Don't ask", "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "available": true},
-            {"id": "bypass", "title": "Bypass permissions", "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Use it only on a container or a disposable machine.", "available": false, "reason": "Bypass is off. Turn it on in the runtime's permission settings, and only on a container or a disposable machine."}
+            {"id": "bypass", "title": "Bypass permissions", "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.", "available": true}
         ],
-        "default_thread_mode": "manual",
-        "default_agent_mode": "manual"
+        "default_thread_mode": "bypass",
+        "default_agent_mode": "bypass"
     })
 }
 
 /// The runtime's permission settings, with one global rule of each kind.
 fn fixture_permission_settings(timeout: u64) -> serde_json::Value {
     json!({
-        "default_thread_mode": "manual",
-        "default_agent_mode": if timeout == PERMISSION_DEFAULT_TIMEOUT { "manual" } else { "edit_auto" },
-        "bypass_enabled": false,
+        "default_thread_mode": "bypass",
+        "default_agent_mode": if timeout == PERMISSION_DEFAULT_TIMEOUT { "bypass" } else { "edit_auto" },
+        "bypass_enabled": true,
         "unattended_timeout_seconds": timeout,
         "deny": [{"request_kind": "command", "resource": {
             "type": "command",

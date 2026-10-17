@@ -13,7 +13,7 @@ Open `markdown.html` for a completed Markdown reply.
 Open `onboarding.html` for first-run setup.
 Open `approved-files.html` for the approved-files review.
 Open `permission.html` for a run paused on a permission decision.
-Open `permission-modes.html` for a composer thread in Ask before changes, paused on core's gate for a command, with the mode on the composer button. `?state=menu` opens the composer's Modes menu, `?state=plan` pauses the thread in Plan first on a plan with its four answers, and `?state=settings` opens Settings → Permissions.
+Open `permission-modes.html` for a composer thread in Ask before changes, paused on core's gate for a command, with the mode on the composer button. `?state=menu` opens the composer's Modes menu, `?state=new` opens it on a new thread, which starts in Bypass permissions, `?state=plan` pauses the thread in Plan first on a plan with its four answers, and `?state=settings` opens Settings → Permissions.
 Open `code-diff.html` for a run paused on proposed file changes.
 Open `code-diff-unavailable.html` for a run whose proposed file changes cannot be shown.
 Open `applied-diff.html` for a settled run with applied file changes.

@@ -24,6 +24,9 @@ pub struct RunSubmitRequest {
     pub thread_id: Option<String>,
     /// The thinking level the run asks for. None runs the model at its default.
     pub thinking_level: Option<String>,
+    /// The permission mode the thread runs in from its first tool call. None
+    /// leaves the thread's mode as it is.
+    pub permission_mode: Option<crate::permission_gate::PermissionMode>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]

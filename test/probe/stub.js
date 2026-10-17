@@ -118,9 +118,10 @@ export const historyFixtures = {
     },
   ],
   // A composer thread in Ask before changes, paused on core's gate for a
-  // command. `?state=menu` opens the composer's Modes menu, `?state=plan`
-  // pauses it on a plan instead, and `?state=settings` opens Settings →
-  // Permissions.
+  // command. `?state=menu` opens the composer's Modes menu, `?state=new`
+  // opens it on a new thread, which starts in Bypass permissions,
+  // `?state=plan` pauses it on a plan instead, and `?state=settings` opens
+  // Settings → Permissions.
   'permission-modes': [
     {
       runId: 'probe-mode-gate',
@@ -374,7 +375,9 @@ function diffSummary(diff) {
 export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
-  const history = structuredClone(fixtureHistory)
+  // The permission-modes fixture's `?state=new` starts on a new thread.
+  const newThread = fixtureName === 'permission-modes' && new URLSearchParams(location.search).get('state') === 'new'
+  const history = newThread ? [] : structuredClone(fixtureHistory)
   // The bodies the stub answers through chat_run_detail.
   const runDetails = { appliedDiff: null }
   if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
@@ -444,6 +447,9 @@ export function buildProbeCommandTable(fixtureName) {
   const agentStores = probeAgentStores(agentsFixture, agentsState)
   const modesFixture = fixtureName === 'permission-modes'
   const modesState = modesFixture ? new URLSearchParams(location.search).get('state') ?? 'gate' : null
+  // The gate thread was set to Ask before changes; new threads start in
+  // the default, Bypass permissions.
+  if (modesFixture) agentStores.local.threadModes = { 'probe-thread': 'manual' }
   if (modesState === 'plan') {
     const plan = ['1. List the exports in exports/ by year.', '2. Move the 2025 files to archive/2025/ instead of deleting them.', '3. Report the files moved and the space freed.'].join('\n')
     history[0] = { ...history[0], prompt: 'Plan how to clear out last year\'s exports.', text: 'Here is the plan.', pendingPermission: { gateId: 'probe-plan-gate', kind: 'select', title: 'Approve this plan?', options: ['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'] } }
@@ -648,6 +654,10 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'chat_submit') {
       const runId = 'probe-new-run'
       currentThreadId = 'probe-new-thread'
+      // Core sets the new thread's mode before the run starts: the picked
+      // one, else the default.
+      const modes = handleAgentRequest(agentStores, { runtime: 'local', operation: 'permission.modes' })
+      agentStores.local.threadModes = { ...agentStores.local.threadModes, [currentThreadId]: payload.permissionMode ?? modes.default_thread_mode }
       threadSummaries.unshift({
         threadId: currentThreadId,
         title: payload.prompt,
@@ -1127,6 +1137,7 @@ function advanceAgentsFixture() {
 // menu, shows a plan gate, or opens Settings → Permissions.
 function modesRendered() {
   if (modesState === 'settings') return !!document.querySelector('.permission-settings .group') && !!document.querySelector('.permission-settings [role="switch"]')
+  if (modesState === 'new') return !!document.querySelector('[data-panel="mode-picker"] [data-mode="bypass"][aria-checked="true"]')
   const workspace = document.querySelector('.workspace')
   if (!workspace?.querySelector('.permission-card') || !document.querySelector('[data-menu="mode"]')) return false
   if (modesState === 'menu') return !!document.querySelector('[data-panel="mode-picker"]')
@@ -1137,6 +1148,7 @@ function modesRendered() {
 function advanceModesFixture() {
   if (!modesFixture || fixtureRendered()) return
   if (modesState === 'menu') return document.querySelector('[data-menu="mode"][aria-expanded="false"]')?.click()
+  if (modesState === 'new') return document.querySelector('[data-menu="mode"][aria-label="Permission mode: Bypass permissions"][aria-expanded="false"]')?.click()
   if (modesState !== 'settings') return
   if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
   const page = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Permissions')

@@ -12,7 +12,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null } = {}) {
   let messages = []
   let active = null
   let announced = null
@@ -46,6 +46,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     readDraft: () => draft,
     readFiles: () => files,
     readThinkingLevel: () => thinkingLevel,
+    readPermissionMode: () => permissionMode,
     readThreadId: () => openThreadId,
     readProject: () => projectId,
     readAgent: () => agentId,
@@ -472,6 +473,29 @@ describe('thinking level', () => {
       expect(invoke).toHaveBeenCalledWith('chat_submit', payload)
       ui.controller.cleanup()
     }
+  })
+})
+
+describe('permission mode', () => {
+  it('sends the mode picked for a new thread with its first message', async () => {
+    for (const [permissionMode, payload] of [
+      ['plan', { prompt: 'Hello', files: [], permissionMode: 'plan' }],
+      [null, { prompt: 'Hello', files: [] }],
+    ]) {
+      const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'run-1' } : undefined)
+      const ui = setup(invoke, { permissionMode })
+      await expect(ui.controller.send()).resolves.toBe(true)
+      expect(invoke).toHaveBeenCalledWith('chat_submit', payload)
+      ui.controller.cleanup()
+    }
+  })
+
+  it('leaves the mode out of a launcher thread', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_submit' ? { runId: 'launcher-run' } : undefined)
+    const ui = setup(invoke, { permissionMode: 'plan' })
+    await expect(ui.controller.sendNewThread('A separate thread')).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A separate thread', files: [] })
+    ui.controller.cleanup()
   })
 })
 

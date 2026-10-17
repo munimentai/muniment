@@ -256,8 +256,9 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   picked on every turn of the agent's thread as an automatic pick is.
 - `permissions`: `{"mode"?, "always_allow": [request], "ask_first":
   [request], "deny"?: [request]}`. `mode` is a permission mode (see
-  [Permission modes](#permission-modes)); without one the agent runs in the
-  runtime's `default_agent_mode`. The old ids read as the new ones: `ask` is
+  [Permission modes](#permission-modes)); a new agent saved without one is
+  saved in the runtime's `default_agent_mode`, and an older agent without
+  one runs in it. The old ids read as the new ones: `ask` is
   `manual`, `auto` is `auto` and `strict` is `dont_ask`, and the next save
   writes the new id. A request is a thread permission policy's
   `{"request_kind", "resource"}`: an exact absolute path and operation, an
@@ -467,7 +468,7 @@ asks the runtime before each call. The rules apply in this order:
 | `plan` | Plan first | Reads only; changes are refused. The agent submits a plan with `plan_submit`, and the approval picks the mode the thread continues in. |
 | `auto` | Auto review | A cheap model reviews each action that is not a read and allows it or pauses it with its reason. |
 | `dont_ask` | Don't ask | Reads and always-allowed actions run; the rest is denied without asking, and the denial is the tool's result. |
-| `bypass` | Bypass permissions | Everything runs past the first three steps. Only on a container or a disposable machine, and refused until enabled. |
+| `bypass` | Bypass permissions | Everything runs past the first three steps. It is the default while `bypass_enabled` is on, and refused while it is off. |
 
 - **Reads.** File reads, Muniment's memory and plan tools, and shell commands
   the reader proves read-only: the read-only command core (`cat`, `grep`,
@@ -503,8 +504,15 @@ asks the runtime before each call. The rules apply in this order:
 
 The thread's mode is journal state: `thread.permission.mode.set`
 (`{"mode", "actor", "source": "user"|"plan"}`), the latest one winning. A
-thread with none runs in its agent's mode, else the runtime's default. The
-runtime's settings live in `<profile>/permission-settings.json`.
+thread with none runs in its agent's mode, else the runtime's default.
+`run.submit` takes an optional `permission_mode`. The runtime journals it,
+else the default thread mode for a new thread that is no agent's, before the
+run starts, so it decides the run's first tool call. The runtime's settings
+live in `<profile>/permission-settings.json`. Bypass is on and both default
+modes are `bypass` until the owner saves other settings. A field the file
+leaves out takes that default, or `manual` for a mode while bypass is off.
+Turning bypass off moves a default that names it, and that the same save
+does not set, to `manual`.
 
 Operations: `permission.modes` (`{}` → `{"modes": [{"id", "title",
 "description", "available", "reason"?}], "default_thread_mode",

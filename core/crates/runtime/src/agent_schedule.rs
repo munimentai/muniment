@@ -525,6 +525,7 @@ impl RuntimeAttachState {
                 Vec::new(),
                 Some(thread),
                 None,
+                None,
             )
             .map(drop)
             .map_err(|error| error.into_message())

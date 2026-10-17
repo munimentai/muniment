@@ -8212,7 +8212,7 @@ it('draws the machine, model, thinking level, usage and permission mode menus wi
     model: await screen.findByRole('button', { name: 'Model: GPT 5.5' }),
     thinking: await screen.findByRole('button', { name: 'Thinking level: Medium' }),
     usage: await screen.findByRole('button', { name: 'Usage', exact: true }),
-    mode: await screen.findByRole('button', { name: 'Permission mode: Ask before changes' }),
+    mode: await screen.findByRole('button', { name: 'Permission mode: Bypass permissions' }),
   }
   const panels = { machine: () => screen.queryByRole('menu', { name: 'Machines' }), model: () => screen.queryByRole('dialog', { name: 'Model' }), thinking: () => screen.queryByRole('menu', { name: 'Thinking level' }), usage: () => screen.queryByRole('dialog', { name: 'Account usage' }), mode: () => screen.queryByRole('menu', { name: 'Modes' }) }
   // Every menu button is the one shared button, so none can drift from the others.
@@ -8995,16 +8995,25 @@ describe('the swarm', () => {
 
 describe('permission modes', () => {
   const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
-  // The composer's thread on this computer, with core's mode operations and
-  // an optional gate its run waits at.
-  function modesRuntime({ gate = null, mode = 'manual' } = {}) {
+  // The listing core answers once bypass is turned off: bypass cannot be
+  // chosen and both defaults fall back to manual.
+  function bypassOff() {
+    const listing = fixture('response-permission-modes.json')
+    const bypass = listing.modes.find((entry) => entry.id === 'bypass')
+    Object.assign(bypass, { available: false, reason: "Bypass is off. Turn it on in the runtime's permission settings." })
+    return { ...listing, default_thread_mode: 'manual', default_agent_mode: 'manual' }
+  }
+  // The composer's thread on this computer, or a new thread with `thread`
+  // null, with core's mode operations and an optional gate its run waits at.
+  function modesRuntime({ gate = null, mode = 'manual', thread = 'thread-1', listing = () => fixture('response-permission-modes.json') } = {}) {
     let threadMode = mode
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, payload) => {
-      if (command === 'chat_current_thread') return 'thread-1'
+      if (command === 'chat_current_thread') return thread
+      if (command === 'chat_submit') return { runId: 'run-1' }
       if (command === 'chat_thread_open' && gate) return [{ runId: 'run-gated', phase: 'pending-permission', text: 'I need access.', prompt: 'Clean the exports.', receipt: null, toolActivity: [], pendingPermission: gate }]
       if (command === 'chat_answer_permission') return undefined
-      if (command === 'agent_request' && payload.operation === 'permission.modes') return fixture('response-permission-modes.json')
+      if (command === 'agent_request' && payload.operation === 'permission.modes') return listing()
       if (command === 'agent_request' && payload.operation === 'thread.permission_mode') return { thread_id: payload.body.thread_id, mode: threadMode, title: '', source: 'default' }
       if (command === 'agent_request' && payload.operation === 'thread.permission_mode_set') { threadMode = payload.body.mode; return { thread_id: payload.body.thread_id, mode: threadMode, title: '', source: 'thread', set_by: 'user' } }
       if (command === 'agent_request' && payload.operation === 'thread.plan') return fixture('response-thread-plan.json')
@@ -9026,8 +9035,8 @@ describe('permission modes', () => {
     expect(button.querySelector('[data-icon=chevrons-down-up]')).not.toBeNull()
     expect(within(menu).getAllByRole('menuitemradio').map((item) => item.getAttribute('aria-label'))).toEqual(['Ask before changes', 'Edit automatically', 'Plan first', 'Auto review', "Don't ask", 'Bypass permissions'])
     expect(within(menu).getByRole('menuitemradio', { name: 'Ask before changes' })).toHaveAttribute('aria-checked', 'true')
-    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeDisabled()
-    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAccessibleDescription(/Bypass is off/)
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeEnabled()
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAccessibleDescription(/Nothing else asks first/)
     expect(menu).toHaveTextContent('Shift+Tabcycles modes')
     await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Plan first' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.permission_mode_set', body: { thread_id: 'thread-1', mode: 'plan' } }))
@@ -9035,9 +9044,30 @@ describe('permission modes', () => {
     expect(await screen.findByRole('button', { name: 'Permission mode: Plan first' })).toBeInTheDocument()
   })
 
-  it('cycles the available modes with Shift+Tab in the composer and skips bypass', async () => {
-    modesRuntime({ mode: 'dont_ask' })
-    await screen.findByRole('button', { name: "Permission mode: Don't ask" })
+  it('starts a new thread in Bypass permissions and sends a mode picked before its first message with it', async () => {
+    threadSummaryResult = []
+    modesRuntime({ thread: null })
+    const button = await screen.findByRole('button', { name: 'Permission mode: Bypass permissions' })
+    await fireEvent.click(button)
+    const menu = await screen.findByRole('menu', { name: 'Modes' })
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAttribute('aria-checked', 'true')
+    await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Plan first' }))
+    await screen.findByRole('button', { name: 'Permission mode: Plan first' })
+    const composer = await findReadyWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'Plan the export.' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Plan the export.', files: [], permissionMode: 'plan' }))
+    expect(invoke).not.toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'thread.permission_mode_set' }))
+  })
+
+  it('cycles the available modes with Shift+Tab in the composer and skips bypass while it is off', async () => {
+    modesRuntime({ mode: 'dont_ask', listing: bypassOff })
+    await fireEvent.click(await screen.findByRole('button', { name: "Permission mode: Don't ask" }))
+    const menu = await screen.findByRole('menu', { name: 'Modes' })
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeDisabled()
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAccessibleDescription(/Bypass is off/)
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Modes' })).not.toBeInTheDocument())
     const composer = await findWorkspaceComposer()
     await fireEvent.keyDown(composer, { key: 'Tab', shiftKey: true })
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.permission_mode_set', body: { thread_id: 'thread-1', mode: 'manual' } }))

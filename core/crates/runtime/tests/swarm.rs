@@ -526,7 +526,7 @@ fn threads_replicate_with_causal_posts_a_replica_read_and_catch_up() {
     // Only the primary writes runs into the thread.
     let mut writer = b.client(None);
     assert!(writer
-        .run_submit("Write here.", &[], Some(&thread), None)
+        .run_submit("Write here.", &[], Some(&thread), None, None)
         .is_err());
 
     // Causal order: B posts only after it holds A's post, so A consumes
