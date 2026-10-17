@@ -49,7 +49,7 @@ fn journal_error(error: impl std::fmt::Display) -> String {
     format!("The journal failed: {error}")
 }
 
-fn storage_lock(
+pub(super) fn storage_lock(
     storage: &SharedStorage,
 ) -> Result<std::sync::MutexGuard<'_, crate::run_events::ChatStorage>, String> {
     storage

@@ -1478,6 +1478,8 @@ impl DesktopClient {
             Operation::GroupList => &["groups"],
             Operation::FleetHoldSignIn => &["status"],
             Operation::FleetCredentials => &["share_models"],
+            Operation::FleetPins | Operation::FleetPinSet => &["pins", "offline"],
+            Operation::BlobRead => &["hash", "status"],
             Operation::FleetOpStatus => &["op"],
             _ => &[],
         };

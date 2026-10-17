@@ -221,12 +221,15 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::SwarmJoin
         | Operation::SwarmLeave
         | Operation::FleetHoldSignIn
-        | Operation::FleetCredentials => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
+        | Operation::FleetCredentials
+        | Operation::FleetPinSet => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
         Operation::SwarmMembers
         | Operation::SwarmAgents
         | Operation::AgentApprovals
         | Operation::GroupList
-        | Operation::FleetOpStatus => RemoteRule::Scope(SCOPE_THREAD_READ),
+        | Operation::FleetOpStatus
+        | Operation::FleetPins
+        | Operation::BlobRead => RemoteRule::Scope(SCOPE_THREAD_READ),
         Operation::ThreadPost
         | Operation::AgentApprovalAnswer
         | Operation::GroupCreate

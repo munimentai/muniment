@@ -708,6 +708,9 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("fleet-op-status", Operation::FleetOpStatus),
         ("fleet-hold-sign-in", Operation::FleetHoldSignIn),
         ("fleet-credentials", Operation::FleetCredentials),
+        ("fleet-pins", Operation::FleetPins),
+        ("fleet-pin-set", Operation::FleetPinSet),
+        ("blob-read", Operation::BlobRead),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -788,12 +791,56 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                     "for_this_runtime": true,
                     "keys": ["pi:anthropic", "router:work"]
                 }],
+                "accounts": [{
+                    "name": "router:work",
+                    "provider": "openai-codex",
+                    "family": "openai",
+                    "kind": "subscription",
+                    "label": "Work",
+                    "refresher": true,
+                    "enabled": true,
+                    "holder": FIXTURE_RUNTIME_A,
+                    "holder_name": "Studio",
+                    "shared": true,
+                    "this_machine": false,
+                    "usable_here": true
+                }],
                 "audit": [{
                     "at": "2026-01-01T14:00:00Z",
                     "kind": "revoked",
                     "runtime_id": FIXTURE_RUNTIME_B,
                     "record": {"keys": ["pi:anthropic"]}
                 }]
+            }),
+        ),
+        (
+            "fleet-pins",
+            json!({
+                "pins": [{"class": "artifact", "key": "report/index.html"}],
+                "offline": {"artifacts": "pinned", "budget_bytes": 5368709120u64, "prefetch": true},
+                "usage": {"fetched_bytes": 4096, "own_bytes": 1024}
+            }),
+        ),
+        (
+            "fleet-pin-set",
+            json!({
+                "pins": [
+                    {"class": "artifact", "key": "report/index.html"},
+                    {"class": "extension", "key": "*"}
+                ],
+                "offline": {"artifacts": "all", "budget_bytes": 5368709120u64, "prefetch": true},
+                "usage": {"fetched_bytes": 4096, "own_bytes": 1024}
+            }),
+        ),
+        (
+            "blob-read",
+            json!({
+                "hash": FIXTURE_BLOB_HASH,
+                "status": "held",
+                "offset": 0,
+                "total": 5,
+                "data": "aGVsbG8",
+                "done": true
             }),
         ),
         (
@@ -1640,6 +1687,12 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::SwarmMembers | Operation::SwarmAgents | Operation::SwarmResume => json!({}),
         Operation::FleetHoldSignIn => json!({"account": "router:work"}),
         Operation::FleetCredentials => json!({"share_models": true}),
+        Operation::FleetPins => json!({}),
+        Operation::FleetPinSet => json!({
+            "pins": [{"class": "extension", "key": "*", "pinned": true}],
+            "offline": {"artifacts": "all"}
+        }),
+        Operation::BlobRead => json!({"hash": FIXTURE_BLOB_HASH, "offset": 0}),
         Operation::SwarmExchange => fixture_exchange(),
         Operation::ThreadPost => json!({
             "thread_id": FIXTURE_THREAD_ID,
@@ -1786,6 +1839,8 @@ fn fixture_plan_approval() -> serde_json::Value {
     })
 }
 
+/// The SHA-256 of `hello`.
+const FIXTURE_BLOB_HASH: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 const FIXTURE_RUNTIME_A: &str = "018f0000-0000-7000-8000-0000000000c1";
 const FIXTURE_RUNTIME_B: &str = "018f0000-0000-7000-8000-0000000000c2";
 const FIXTURE_AGENT_B: &str = "018f0000-0000-4000-8000-0000000000a2";
@@ -2595,6 +2650,9 @@ mod tests {
             Operation::SwarmResume,
             Operation::FleetHoldSignIn,
             Operation::FleetCredentials,
+            Operation::FleetPins,
+            Operation::FleetPinSet,
+            Operation::BlobRead,
             Operation::ThreadPost,
             Operation::AgentMove,
             Operation::AgentApprovals,
@@ -2709,6 +2767,9 @@ mod tests {
             "event-agent-approval-pending-plan.json",
             "response-fleet-hold-sign-in.json",
             "response-fleet-credentials.json",
+            "response-fleet-pins.json",
+            "request-fleet-pin-set.json",
+            "response-blob-read.json",
             "response-fleet-op-status.json",
             "event-fleet-op-updated.json",
             "request-run-chat-events-fleet.json",
@@ -2717,7 +2778,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 6,
             "every canonical fixture must be inventoried"
         );
     }

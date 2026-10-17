@@ -19,6 +19,79 @@ pub fn inventory(root: &Path) -> Result<Value, String> {
         Err(_) => Err("Extension settings could not be read.".into()),
     }
 }
+/// Changes the inventory under the lock extension commands take, and writes
+/// it when `change` answers true.
+pub fn update_inventory(
+    root: &Path,
+    change: impl FnOnce(&mut Value) -> Result<bool, String>,
+) -> Result<(), String> {
+    let _lock = MUTATION
+        .lock()
+        .map_err(|_| "Extension settings are busy.")?;
+    let mut state = inventory(root)?;
+    if !change(&mut state)? {
+        return Ok(());
+    }
+    fs::create_dir_all(root.join("extensions"))
+        .map_err(|_| "The extension folder could not be created.")?;
+    crate::model_router::config::write_private(
+        &root.join("extensions/inventory.json"),
+        &serde_json::to_vec_pretty(&state).map_err(|_| "Invalid extension settings.")?,
+    )
+    .map_err(|_| "Extension settings could not be saved.".into())
+}
+
+/// Why an item cannot run on this machine, if it cannot: an MCP server
+/// started by a command this machine lacks, or a package that has not
+/// arrived from the member that installed it.
+pub fn availability(item: &Value) -> Option<&'static str> {
+    if item["kind"] == "mcp" {
+        let definition = &item["definition"];
+        if definition["url"].is_string() {
+            return None;
+        }
+        let command = definition["command"].as_str().unwrap_or("").trim();
+        return (!command_found(command)).then_some("not on this machine");
+    }
+    if item.get("fleet").is_some() && matches!(item["kind"].as_str(), Some("skill" | "plugin")) {
+        let present = item["base"]
+            .as_str()
+            .is_some_and(|base| Path::new(base).is_dir());
+        return (!present).then_some("package not on this machine");
+    }
+    None
+}
+
+/// Whether `command` names a program this machine can start: a path that
+/// exists, or a name on `PATH`.
+fn command_found(command: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+    let path = Path::new(command);
+    if path.components().count() > 1 || path.is_absolute() {
+        return path.is_file();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let extensions: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
+            .split(';')
+            .map(str::to_owned)
+            .chain(std::iter::once(String::new()))
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    std::env::split_paths(&paths).any(|directory| {
+        extensions
+            .iter()
+            .any(|extension| directory.join(format!("{command}{extension}")).is_file())
+    })
+}
+
 /// Open only managed package folders, never an arbitrary path from the UI.
 pub fn package_folder(root: &Path, id: Option<&str>) -> Result<std::path::PathBuf, String> {
     let packages = root.join("extensions/packages");
@@ -76,6 +149,11 @@ pub fn command(root: &Path, action: &str, mut data: Value) -> Result<Value, Stri
     }
     if action == "read" {
         let mut state = inventory(root)?;
+        for item in state["items"].as_array_mut().into_iter().flatten() {
+            if let Some(reason) = availability(item) {
+                item["availability"] = json!(reason);
+            }
+        }
         if let Some(name) = assist_name(&root.join("agent")) {
             state["assist"] = json!({ "name": name });
         }
@@ -194,7 +272,11 @@ pub fn snapshot(state: &Value, thread: &str, ambient: Value) -> Value {
         let Some(id) = item["id"].as_str() else {
             continue;
         };
-        if item["enabled"] == false || disabled.contains(&json!(id)) {
+        if item["enabled"] == false
+            || disabled.contains(&json!(id))
+            // An item from another member waits for what this machine lacks.
+            || (item.get("fleet").is_some() && availability(item).is_some())
+        {
             continue;
         }
         if item["kind"] == "mcp" {

@@ -436,6 +436,9 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::SwarmResume
         | Operation::FleetHoldSignIn
         | Operation::FleetCredentials
+        | Operation::FleetPins
+        | Operation::FleetPinSet
+        | Operation::BlobRead
         | Operation::ThreadPost
         | Operation::AgentMove
         | Operation::AgentApprovals

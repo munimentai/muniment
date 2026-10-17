@@ -29,8 +29,10 @@
 mod absence;
 mod accounts;
 mod approvals;
+mod artifacts;
 mod credentials;
 mod directory;
+mod extensions;
 mod fleet;
 mod groups;
 mod hlc;
@@ -39,6 +41,7 @@ mod link;
 mod messaging;
 mod moves;
 mod ops;
+mod pins;
 mod records;
 mod store;
 mod sync;
@@ -152,6 +155,8 @@ const CLOCK_BUDGET: usize = 128 * 1024;
 const DIGEST_SECONDS: i64 = 10 * 60;
 /// An exchange this large, or one that left items out, gets a log line.
 const LOG_EXCHANGE_BYTES: usize = 64 * 1024;
+/// How often the extension and artifact classes look for local edits.
+const CLASSES_INTERVAL: Duration = Duration::from_secs(5);
 /// The record classes the swarm keeps itself, which [`Records`] does not
 /// write.
 const SWARM_CLASSES: [&str; 3] = [directory::CLASS, groups::CLASS, sync::CLASS];
@@ -212,6 +217,9 @@ pub(crate) struct Inner {
     fleet: fleet::FleetState,
     /// Held while forwarded actions run, so each runs once.
     ops_running: Mutex<()>,
+    /// When the extension and artifact classes last ran, and whether
+    /// another member changed them since.
+    classes: Mutex<(Option<std::time::Instant>, bool)>,
 }
 
 /// What one member knows of a peer it exchanges with.
@@ -320,9 +328,13 @@ impl Swarm {
             activities: Mutex::new(HashMap::new()),
             fleet: fleet::FleetState::default(),
             ops_running: Mutex::new(()),
+            classes: Mutex::new((None, false)),
         });
         absence::initialize(&inner)?;
         fleet::initialize(&inner)?;
+        pins::initialize(&inner)?;
+        artifacts::initialize(&inner)?;
+        extensions::initialize(&inner)?;
         let mut registry = lock(&REGISTRY);
         registry.retain(|(path, swarm)| swarm.strong_count() > 0 && path != profile);
         registry.push((profile.to_path_buf(), Arc::downgrade(&inner)));
@@ -515,6 +527,9 @@ impl Swarm {
             }
             Operation::FleetHoldSignIn => credentials::hold_operation(inner, body),
             Operation::FleetCredentials => credentials::credentials_operation(inner, body),
+            Operation::FleetPins => pins::pins_operation(inner, body),
+            Operation::FleetPinSet => pins::pin_set_operation(inner, body),
+            Operation::BlobRead => pins::read_operation(inner, body),
             Operation::ThreadPost => sync::post_operation(inner, body),
             Operation::AgentMove => moves::move_operation(inner, body),
             Operation::AgentApprovals => {
@@ -831,6 +846,16 @@ impl Inner {
         if groups::on_changes(changes) {
             self.changed("groups");
         }
+        if changes.iter().any(|change| {
+            [
+                extensions::MCP_CLASS,
+                extensions::PACKAGE_CLASS,
+                artifacts::CLASS,
+            ]
+            .contains(&change.class.as_str())
+        }) {
+            lock(&self.classes).1 = true;
+        }
         Ok(())
     }
 
@@ -913,6 +938,7 @@ impl Inner {
                 crate::runtime_eprintln!("muniment-runtime: swarm notices failed: {error}");
             }
         }
+        self.classes_pass(false);
         // Forwarded actions run outside the merge: the operations they reach
         // take it themselves.
         for (name, step) in [
@@ -932,6 +958,38 @@ impl Inner {
             self.nudge();
         }
         Ok(())
+    }
+
+    /// Runs the extension and artifact classes when another member changed
+    /// them, every few seconds to catch local edits, or now when `force`.
+    fn classes_pass(&self, force: bool) {
+        {
+            let mut held = lock(&self.classes);
+            let due = held.0.is_none_or(|at| at.elapsed() >= CLASSES_INTERVAL);
+            if !(force || held.1 || due) {
+                return;
+            }
+            *held = (Some(std::time::Instant::now()), false);
+        }
+        if self.origin().is_err() {
+            return;
+        }
+        for (name, step) in [
+            (
+                "extensions",
+                extensions::sync as fn(&Self) -> Result<bool, String>,
+            ),
+            ("artifacts", artifacts::sync),
+            ("blobs", |inner: &Self| pins::evict(inner).map(|_| false)),
+        ] {
+            match step(self) {
+                Ok(true) => self.changed(name),
+                Ok(false) => {}
+                Err(error) => {
+                    crate::runtime_eprintln!("muniment-runtime: swarm {name} failed: {error}")
+                }
+            }
+        }
     }
 
     /// The exchange this runtime sends `peer`. Approvals, acknowledgements,
