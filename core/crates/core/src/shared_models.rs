@@ -997,11 +997,38 @@ fn cloud_call(
 }
 
 /// A Pi sign-in with a fresh access token when it has less than the lease
-/// margin left. A subscription copied into the router pool shares its refresh
-/// token, so the pool rotates it once and the Pi entry mirrors the result.
+/// margin left.
 fn fresh_pi_entry(agent: &Path, provider: &str, entry: &Value, now_ms: i64) -> Value {
-    let Some(credential) = Credential::from_pi_auth(provider, entry) else {
-        return entry.clone();
+    refresh_pi_sign_in(agent, provider, now_ms, LEASE_MARGIN_MS, REFRESH_TIMEOUT)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| entry.clone())
+}
+
+/// Refreshes Pi's sign-in `provider` in `auth.json` when it has less than
+/// `margin_ms` and a minute left, and answers the entry as it stands after.
+///
+/// The refresh runs under the lock Pi takes on `auth.json` for its own
+/// refresh, and reads the entry under it. Pi does the same and refreshes
+/// only a token about to expire, so a rotating refresh token is spent once,
+/// by whichever refresher locks first, and the other finds a fresh token.
+/// A subscription copied into the router pool shares its refresh token, so
+/// the pool rotates it once and the entry mirrors the pool.
+pub fn refresh_pi_sign_in(
+    agent: &Path,
+    provider: &str,
+    now_ms: i64,
+    margin_ms: i64,
+    timeout: Duration,
+) -> Result<Option<Value>, String> {
+    let auth_path = agent.join("auth.json");
+    let _lock = crate::pi_settings::lock_auth(&auth_path).map_err(|_| SAVE_ERROR.to_string())?;
+    let mut auth = pi_models::read_json(&auth_path).map_err(|_| SAVE_ERROR.to_string())?;
+    let Some(entry) = auth.get(provider).cloned() else {
+        return Ok(None);
+    };
+    let Some(credential) = Credential::from_pi_auth(provider, &entry) else {
+        return Ok(Some(entry));
     };
     let pooled = config::load(agent).ok().and_then(|settings| {
         settings.accounts.into_iter().find(|account| {
@@ -1017,26 +1044,26 @@ fn fresh_pi_entry(agent: &Path, provider: &str, entry: &Value, now_ms: i64) -> V
                 &Backend::files(agent),
                 &account.id,
                 now_ms,
-                LEASE_MARGIN_MS,
-                REFRESH_TIMEOUT,
+                margin_ms,
+                timeout,
             )
             .map(|account| account.credential),
         ),
-        None => native_auth::refresh_if_expiring_within(
-            &credential,
-            now_ms,
-            LEASE_MARGIN_MS,
-            REFRESH_TIMEOUT,
-        ),
+        None => native_auth::refresh_if_expiring_within(&credential, now_ms, margin_ms, timeout),
     };
-    let Some(Ok(Credential::Subscription {
+    let fresh = match refreshed {
+        None => return Ok(Some(entry)),
+        Some(Err(error)) => return Err(error),
+        Some(Ok(fresh)) => fresh,
+    };
+    let Credential::Subscription {
         access,
         refresh,
         expires_ms,
         ..
-    })) = refreshed
+    } = fresh
     else {
-        return entry.clone();
+        return Ok(Some(entry));
     };
     let mut current = entry.clone();
     current["access"] = access.into();
@@ -1046,23 +1073,11 @@ fn fresh_pi_entry(agent: &Path, provider: &str, entry: &Value, now_ms: i64) -> V
     if let Some(expires) = expires_ms {
         current["expires"] = expires.into();
     }
-    if current == *entry {
-        return current;
+    if current != entry {
+        auth.insert(provider.to_owned(), current.clone());
+        pi_models::write_json(&auth_path, &auth).map_err(|_| SAVE_ERROR.to_string())?;
     }
-    // Re-read under the lock so a sign-in made meanwhile survives.
-    let auth_path = agent.join("auth.json");
-    let Ok(_lock) = pi_models::lock(&auth_path) else {
-        return current;
-    };
-    let Ok(mut latest) = pi_models::read_json(&auth_path) else {
-        return current;
-    };
-    if latest.get(provider) != Some(entry) {
-        return latest.get(provider).cloned().unwrap_or(current);
-    }
-    latest.insert(provider.to_owned(), current.clone());
-    let _ = pi_models::write_json(&auth_path, &latest);
-    current
+    Ok(Some(current))
 }
 
 fn read_record(path: &Path) -> Result<Record, String> {
