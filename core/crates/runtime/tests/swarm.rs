@@ -2499,8 +2499,12 @@ fn a_thread_created_from_one_member_onto_another_runs_there() {
     let _environment = environment();
     let b = Member::new("offload-b");
     let c = Member::new("offload-c");
+    for member in [&b, &c] {
+        member.state().use_pi_artifact(member.artifact);
+    }
     c.join(&b);
     assert!(wait(|| online_on(&c, &b.runtime_id())));
+    std::env::set_var("PI_RESUME_STUB_REPLY", " offloaded answer");
     // A device on C starts a thread on B with its first message.
     let mut device = c.client(None);
     let key = muniment_core::attach::Id::new(uuid_string()).unwrap();
@@ -2543,6 +2547,21 @@ fn a_thread_created_from_one_member_onto_another_runs_there() {
     assert_eq!(op["owner_runtime"], b.runtime_id());
     assert_eq!(op["result"]["thread_id"], thread.as_str());
     assert!(op["result"]["run_id"].is_string(), "{op}");
-    // The thread and its run live on B, under the id C chose.
+    // The thread and its run live on B, under the id C chose, and C reads
+    // B's reply in its replica.
     assert!(wait(|| b.holds_thread(&thread)));
+    assert!(
+        wait(|| c.swarm().thread_owner(&thread) == Some(b.runtime_id())),
+        "C never learned that B runs the thread"
+    );
+    let mut reader = c.client(None);
+    assert!(
+        wait(|| history_entries(&mut reader, &thread)
+            .iter()
+            .any(|entry| entry["text"]
+                .as_str()
+                .unwrap_or("")
+                .contains("offloaded answer"))),
+        "C never read B's reply"
+    );
 }
