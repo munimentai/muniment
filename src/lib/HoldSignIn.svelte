@@ -34,7 +34,8 @@
 </span>
 
 <style>
-  .hold { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+  /* One row tall with or without the control, so cards side by side keep their lines level. */
+  .hold { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; min-height: 32px; }
   .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .error { flex-basis: 100%; color: var(--ink); font-size: var(--text-12); overflow-wrap: anywhere; }
 </style>

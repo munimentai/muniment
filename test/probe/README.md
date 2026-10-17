@@ -6,6 +6,7 @@ Run `npm run probe:check` to build the frontend and check every fixture in headl
 
 Open `index.html` for an empty signed-in workspace. Open `history.html` for completed and interrupted fixture runs.
 Open `local-mode.html?thinking` for local mode on a model with thinking levels, with the level control beside the model chip.
+Open `index.html?accounts&fleet` for Settings → Model providers on a fleet: one sign-in held on this machine and one held by Studio with Hold sign-in here. Add `&theme=light` or `&theme=dark`.
 Open `in-flight.html` for a thread whose newest run still streams its reply while a tool runs.
 Open `access.html` for the signed-in shell with the profile popover open.
 Open `signed-out.html` for the signed-out screen.
