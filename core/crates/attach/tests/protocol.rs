@@ -1393,6 +1393,8 @@ fn swarm_operations_and_events_have_canonical_fixtures() {
         (Operation::GroupList, "group.list"),
         (Operation::GroupUpdate, "group.update"),
         (Operation::FleetOpStatus, "fleet.op_status"),
+        (Operation::FleetOpCancel, "fleet.op_cancel"),
+        (Operation::FleetOps, "fleet.ops"),
     ] {
         assert_eq!(operation.as_str(), name);
         assert!(operation.is_swarm_operation());

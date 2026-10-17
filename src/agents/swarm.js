@@ -145,6 +145,7 @@ export function swarmRoster(listing, swarm, runtimeList = null) {
       primaryThread: entry.primary_thread ?? null,
       runtimeId: entry.runtimeId ?? LOCAL_RUNTIME_ID,
       replica: true,
+      move_suggested: !!entry.move_suggested,
     })
   }
   return roster.map((agent) => {
@@ -161,16 +162,16 @@ export function swarmThreads(swarm) {
 }
 
 // Whether a message to the open thread goes through `thread.post`: a group
-// thread, or an agent thread this machine holds as a replica of another
-// member's. Answers the request, or null for an ordinary run.
-export function postTarget({ threadId, threadRuntime, groups = [], agent = null, swarm }) {
+// thread, an agent thread this machine holds as a replica of another
+// member's, or an ordinary thread another member owns. Core sends a post on
+// to the owner. Answers the request, or null for an ordinary run.
+export function postTarget({ threadId, threadRuntime, groups = [], agent = null, swarm, owner = null }) {
   if (!threadId) return null
   const runtime = threadRuntime || LOCAL_RUNTIME_ID
   const group = groups.find((entry) => entry.thread_id === threadId)
   if (group) return { runtime, body: { thread_id: threadId }, group }
-  if (!agent) return null
   const holder = swarm?.self?.[runtime]
-  const primary = agent.primaryRuntime ?? agent.primary_runtime
+  const primary = agent ? agent.primaryRuntime ?? agent.primary_runtime : owner
   if (holder && primary && primary !== holder) return { runtime, body: { thread_id: threadId }, group: null }
   return null
 }

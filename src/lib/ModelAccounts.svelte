@@ -6,12 +6,15 @@
   // what it has left and what it has served, and it holds its own Disconnect. A
   // key is a one-line card with edit and disconnect icons. The sign-ins the
   // pool takes and a key form follow. Every command answers with the whole
-  // router settings, and the parent redraws from them.
+  // router settings, and the parent redraws from them. A shared sign-in
+  // names the fleet member that holds it, from `fleet`.
   import { onDestroy, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import Toggle from './Toggle.svelte'
+  import HoldSignIn from './HoldSignIn.svelte'
+  import { routerHold } from './fleet-accounts.js'
 
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings } = $props()
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings, fleet = null, onheld } = $props()
 
   let editingId = $state(null)
   let nameDraft = $state('')
@@ -219,6 +222,7 @@
             <span class="card-label">{account.label}</span>
             <span class="tag">{account.plan || 'Subscription'}</span>
           </header>
+          {#if routerHold(fleet, account.id)}<HoldSignIn {tauri} account={routerHold(fleet, account.id)} onmoved={onheld} />{/if}
           {@render routingNote(account)}
           {#if !account.allowance_readable}
             <p class="record">Allowance unavailable.</p>

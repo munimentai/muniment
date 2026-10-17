@@ -97,6 +97,9 @@ describe('posting', () => {
     expect(postTarget({ threadId: 't1', threadRuntime: 'box', groups: [], agent: { primaryRuntime: BOX }, swarm })).toBeNull()
     expect(postTarget({ threadId: 'x', threadRuntime: 'local', groups: [], agent: null, swarm })).toBeNull()
     expect(postTarget({ threadId: null, swarm })).toBeNull()
+    // An ordinary thread another member owns takes a post for its owner.
+    expect(postTarget({ threadId: 'p1', threadRuntime: 'local', groups: [], agent: null, swarm, owner: STUDIO })).toEqual({ runtime: 'local', body: { thread_id: 'p1' }, group: null })
+    expect(postTarget({ threadId: 'p2', threadRuntime: 'local', groups: [], agent: null, swarm, owner: LAPTOP })).toBeNull()
   })
 })
 
