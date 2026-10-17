@@ -83,6 +83,10 @@ pub struct Routine {
     /// ignores the value it receives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_poll: Option<PollRecord>,
+    /// When the routine fires or polls next, in Unix seconds. The runtime
+    /// keeps it, and a save ignores the value it receives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_fire_at: Option<i64>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -477,6 +481,7 @@ pub fn schedule_routine(schedule: &crate::agents::Schedule, tz: &str) -> Result<
         last_result: None,
         proposed: false,
         last_poll: None,
+        next_fire_at: None,
     })
 }
 
@@ -745,6 +750,7 @@ mod tests {
             last_result: None,
             proposed: false,
             last_poll: None,
+            next_fire_at: None,
         };
         validate_routine(&base).unwrap();
         let broken = |change: &dyn Fn(&mut Routine)| {
@@ -831,6 +837,7 @@ mod tests {
             last_result: None,
             proposed: false,
             last_poll: None,
+            next_fire_at: None,
         };
         let prompt = routine_prompt(&routine);
         assert!(prompt.contains("Morning check"));

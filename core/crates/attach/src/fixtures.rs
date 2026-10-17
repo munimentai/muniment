@@ -1109,6 +1109,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     )?;
     let mut listed_agent = fixture_agent();
     listed_agent["activity"] = fixture_activity();
+    listed_agent["routines"][0]["next_fire_at"] = json!(1_767_362_400);
     insert(
         &mut fixtures,
         "response-agent-list.json",

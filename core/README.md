@@ -283,7 +283,10 @@ only when the caller confirms it.
 
 A routine is `{"id", "name", "enabled", "trigger", "prompt",
 "created_from": "user"|"instructions"|"agent", "last_fired_at",
-"last_result", "proposed"?, "last_poll"?}`. Its trigger is `{"kind": "cron",
+"last_result", "proposed"?, "last_poll"?, "next_fire_at"?}`. The runtime
+keeps `last_fired_at`, `last_result`, `last_poll` and `next_fire_at`, the
+Unix second a cron routine fires or an MCP routine polls next, and a save
+ignores them. Its trigger is `{"kind": "cron",
 "expr", "tz"}`, a five-field cron expression in an IANA time zone that runs
 at most every five minutes; `{"kind": "webhook", "hook_id", "preset":
 "github"|"forgejo"|"generic", "secret_sha256"?}`; or `{"kind": "mcp",

@@ -310,6 +310,7 @@ fn proposal(action: &str, trigger: Trigger, prompt: String) -> Routine {
         last_result: None,
         proposed: true,
         last_poll: None,
+        next_fire_at: None,
     }
 }
 

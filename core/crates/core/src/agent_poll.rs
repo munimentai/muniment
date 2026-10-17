@@ -478,6 +478,7 @@ mod tests {
                     last_result: None,
                     proposed: false,
                     last_poll: None,
+                    next_fire_at: None,
                 }],
                 ..Default::default()
             },
