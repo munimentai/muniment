@@ -1226,6 +1226,8 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
         (Operation::RoutineWebhookInfo, "routine.webhook_info"),
         (Operation::AgentThreads, "agent.threads"),
         (Operation::AgentToolCatalog, "agent.tool_catalog"),
+        (Operation::AgentReplays, "agent.replays"),
+        (Operation::AgentReplay, "agent.replay"),
     ] {
         assert_eq!(operation.as_str(), name);
         assert!(operation.is_agent_operation());
@@ -1285,6 +1287,64 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
     assert!(response("response-routine-webhook-info.json")
         .get("secret")
         .is_none());
+    let replays = response("response-agent-replays.json");
+    assert!(replays["replays"][0]["prompt_preview"].is_string());
+    assert!(replays["replays"][0].get("prompt").is_none());
+    let replayed = response("response-agent-replay.json");
+    assert_eq!(replayed["run"]["trigger"]["source"], "replay");
+    assert_eq!(
+        replayed["run"]["origin_run_id"],
+        replayed["replay"]["replay_id"]
+    );
+    let listed = response("response-agent-list.json");
+    assert!(listed["agents"][0]["activity"]["state"].is_string());
+}
+
+#[test]
+fn polish_events_and_approvals_have_canonical_fixtures() {
+    for (file, event, key) in [
+        (
+            "event-agent-activity.json",
+            EventName::AgentActivity,
+            "activity",
+        ),
+        ("event-group-posted.json", EventName::GroupPosted, "post"),
+    ] {
+        let Envelope::Event(parsed) = serde_json::from_value(canonical_fixture(file)).unwrap()
+        else {
+            panic!("expected event fixture");
+        };
+        assert_eq!(parsed.event, event);
+        assert!(parsed.run_id.is_none() && parsed.run_seq.is_none());
+        assert!(parsed.body[key].is_object());
+    }
+    let Envelope::Request(subscribe) =
+        serde_json::from_value(canonical_fixture("request-run-chat-events-swarm-live.json"))
+            .unwrap()
+    else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(subscribe.body["swarm_live"], true);
+    let Envelope::Request(always) = serde_json::from_value(canonical_fixture(
+        "request-agent-approval-answer-always.json",
+    ))
+    .unwrap() else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(always.operation, Operation::AgentApprovalAnswer);
+    assert_eq!(always.body["answer"], "always_allow_agent");
+    let Envelope::Event(pending) =
+        serde_json::from_value(canonical_fixture("event-agent-approval-pending.json")).unwrap()
+    else {
+        panic!("expected event fixture");
+    };
+    assert_eq!(pending.body["rule"]["request_kind"], "command");
+    assert_eq!(
+        pending.body["rule"]["resource"],
+        pending.body["request"]["policy"]["resource"]
+    );
+    assert!(pending.body["summary"].is_string());
+    assert_eq!(pending.body["answers"][2], "always_allow_agent");
 }
 
 #[test]

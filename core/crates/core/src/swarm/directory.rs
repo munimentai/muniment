@@ -3,7 +3,8 @@
 //! `updated_at`, wins. A runtime that sees a higher epoch for an agent it
 //! runs steps down.
 
-use serde_json::Value;
+use muniment_attach::EventName;
+use serde_json::{json, Value};
 
 use super::{DirectoryEntry, Inner};
 use crate::agents::{self, Agent};
@@ -66,6 +67,33 @@ fn later_than(now: String, earlier: Option<&str>) -> String {
     }
 }
 
+/// Derives the activity of each agent this runtime runs and sends
+/// `agent.activity` to this runtime's clients for each one that changed.
+pub(super) fn refresh_activity(inner: &Inner) -> Result<bool, String> {
+    let ids: Vec<String> = local_agents(inner)
+        .into_iter()
+        .filter(|agent| runs_here(inner, agent))
+        .map(|agent| agent.id)
+        .collect();
+    let activities = crate::agent_runs::activities(&inner.profile, &ids, &|run_id| {
+        super::approvals::pending_summary(inner, run_id)
+    })?;
+    let runtime_id = inner.runtime_id();
+    let mut known = super::lock(&inner.activities);
+    known.retain(|agent_id, _| activities.contains_key(agent_id));
+    for (agent_id, activity) in activities {
+        if known.get(&agent_id) == Some(&activity) {
+            continue;
+        }
+        inner.emit(
+            EventName::AgentActivity,
+            json!({"agent_id": agent_id, "runtime_id": runtime_id, "activity": activity}),
+        );
+        known.insert(agent_id, activity);
+    }
+    Ok(false)
+}
+
 /// Describes this runtime's agents in the directory and marks the ones it
 /// no longer has as deleted.
 pub(super) fn refresh_local(inner: &Inner) -> Result<bool, String> {
@@ -94,6 +122,7 @@ pub(super) fn refresh_local(inner: &Inner) -> Result<bool, String> {
             deleted: false,
             primary_thread: state.primary_threads.get(&agent.id).cloned(),
             definition: definition(agent),
+            activity: super::lock(&inner.activities).get(&agent.id).cloned(),
         };
         if let Some(existing) = &existing {
             // A move to another runtime with a later epoch wins; the merge
@@ -156,6 +185,22 @@ pub(super) fn merge(inner: &Inner, entries: Vec<DirectoryEntry>) -> Result<bool,
             .is_none_or(|existing| entry.version() > existing.version());
         if !wins {
             continue;
+        }
+        let activity_changed = existing
+            .as_ref()
+            .is_none_or(|existing| existing.activity != entry.activity);
+        if activity_changed
+            && entry.activity.is_some()
+            && Some(&entry.primary_runtime) != inner.runtime_id().as_ref()
+        {
+            inner.emit(
+                EventName::AgentActivity,
+                json!({
+                    "agent_id": entry.agent_id,
+                    "runtime_id": entry.primary_runtime,
+                    "activity": entry.activity,
+                }),
+            );
         }
         if entry.definition.is_none() && !entry.deleted {
             entry.definition = existing.and_then(|existing| existing.definition);

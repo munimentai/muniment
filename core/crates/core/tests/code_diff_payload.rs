@@ -90,6 +90,7 @@ impl Fixture {
                     diff_sha256: diff_cas.sha256.clone(),
                     write_plan_sha256: plan_cas.sha256.clone(),
                 },
+                policy: None,
             };
             mismatch_gate(&mut gate, field);
             let mut event = started_event(&run_id);

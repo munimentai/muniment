@@ -171,6 +171,7 @@ fn golden_user_visible_states() {
                     message: "Proceed?".into(),
                     timeout: None,
                 },
+                policy: None,
             }),
         ),
         (

@@ -48,6 +48,9 @@ pub struct DirectoryEntry {
     /// primary is offline. Exchanges carry it; client reads leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<Value>,
+    /// What the agent does now, as its primary runtime last saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<crate::agent_runs::Activity>,
 }
 
 impl DirectoryEntry {
@@ -165,6 +168,17 @@ pub struct Approval {
     #[serde(default)]
     pub thread_id: Option<String>,
     pub request: Value,
+    /// The exact `{request_kind, resource}` an agent gate asks about, as
+    /// the agent profile's `always_allow` rules name it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<crate::permission_gate::PolicyRequest>,
+    /// A short human summary of the operation and its inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// The answer ids `agent.approval_answer` takes for this gate, such as
+    /// `allow_once` and `always_allow_agent`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<String>,
     /// `pending`, `answered` or `closed`.
     pub state: String,
     pub created_at: String,

@@ -253,8 +253,13 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   outranks every allow. A gate extension asks the runtime before each tool
   call; `auto` runs what no policy settles, `ask` runs reads and asks about
   the rest, `strict` asks about everything, and a run a webhook, an MCP poll
-  or another agent started asks before every write in `auto` too. Answering
-  "Allow for this thread" journals an allow policy in the thread.
+  or another agent started asks before every write in `auto` too. The gate
+  shows the call's exact request and a summary and offers "Allow once",
+  "Allow for this thread", "Always allow for this agent" and "Deny".
+  "Allow for this thread" journals an allow policy in the thread. "Always
+  allow for this agent" also appends the request to `always_allow` through
+  the agent save path. A call an ask policy covers never offers it, and the
+  save refuses a request `ask_first` names.
 - `primary_runtime`, the runtime id that runs the agent's routines;
   `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
   `paused_reason`, which stops the routines while set.
@@ -352,6 +357,20 @@ answer gets `reminded_at` after four hours and is cancelled after 24. A
 routine run whose reply is exactly `NO_RESPONSE` completes with
 `"silent": true` and leaves no entry in its thread's history.
 
+An agent's `activity`, `{"state": "idle"|"running"|"waiting"|"error",
+"action"?, "since"}`, derives from its runs in the queue and the gate a run
+waits at. A run that waits for an answer shows `waiting` with the approval's
+summary, a running or queued run shows `running`, and with none the last run
+shows `error` with its reason when it failed, else `idle`. `since` is null
+for an agent that never ran.
+
+A failed run's inputs stay in the agent's folder as
+`replays/<run id>.json`, the newest 20: the prompt, with a webhook, MCP or
+agent message payload still in its untrusted block, the trigger, the hop, the
+error, `agent_version` (the SHA-256 of the agent definition the run started
+with), the agent's `model` reference and `replayed_by`. Text the secret
+scanner flags is removed first and `redacted` says so.
+
 The runtime drives up to `MUNIMENT_MAX_PARALLEL_RUNS` runs at once (3 by
 default, at most 16), chat replies included, each with its own Pi process and
 at most one in each thread. Queued agent runs start oldest first in their
@@ -389,9 +408,16 @@ the built-in tools a launch offers as `{"id", "label", "read_only"}`, each
 enabled MCP server as `{"server", "tools": [{"name"}], "checked_at"?}` with
 the tools its last connection test listed, and each enabled skill as `{"id",
 "name", "description"}`, where `id` is what an agent's `skills` names.
+`agent.list` adds each agent's `activity`. `agent.replays` (`{"id"}` →
+`{"replays", "agent_version"}`) lists an agent's saved failed runs, newest
+first, each with `prompt_preview`, `prompt_bytes` and `definition_changed`
+in place of the prompt. `agent.replay` (`{"id", "replay_id"}` → `{"run",
+"replay"}`) queues the saved prompt again as a run of the agent's current
+definition with the failed run's trigger kind, `source: "replay"` and
+`origin_run_id` set to the replay id.
 Remotely the reads, `agent.routine_proposals`, `agent.threads`,
-`agent.tool_catalog` and `routine.webhook_info` take `thread.read`,
-`agent.run_now` takes
+`agent.tool_catalog`, `agent.replays` and `routine.webhook_info` take
+`thread.read`, `agent.run_now` and `agent.replay` take
 `run.write`, and the changes, imports and exports take `agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
 also receives `agent.run_updated` events whose body is the changed `Run`
 with `notify`, true when the change warrants a notification: the run
@@ -427,8 +453,10 @@ steering, gate answers and run starts through `SwarmHost`.
   with `online` (heard from within a minute) and this runtime's `link` to it.
 - **Directory.** Each runtime describes the agents it runs as `{"agent_id",
   "name", "label", "avatar", "primary_runtime", "epoch", "updated_at",
-  "deleted", "primary_thread"}`; the highest `epoch`, then the latest
-  `updated_at`, wins. `swarm.agents` answers it, and `swarm.changed` events
+  "deleted", "primary_thread", "activity"}`; the highest `epoch`, then the
+  latest `updated_at`, wins. Each member sends `agent.activity`
+  (`{"agent_id", "runtime_id", "activity"}`) to its clients when an agent it
+  runs changes activity or the directory brings another member's change. `swarm.agents` answers it, and `swarm.changed` events
   (`{"kind"}`) report changes to members, agents, groups, threads and the
   absence pause.
 - **Threads.** Agent and group threads replicate as journal events with
@@ -468,19 +496,30 @@ steering, gate answers and run starts through `SwarmHost`.
   the named ones, and no mention the first. A meeting runs a blind round, up
   to two debate rounds and the lead's summary. Each agent works in its own
   thread; only its reply, without credentials and with the start of a long
-  draft, reaches the group.
+  draft, reaches the group. A reply's author carries `round` and `phase`:
+  `chat` at round 0 outside a meeting, else `blind`, `debate` or `summary`.
+  Each member sends `group.posted` (`{"group_id", "thread_id", "post"}`, the
+  post as `thread.history` lists it) to its clients for every post to a
+  group thread it writes or replicates.
 - **Approvals.** A gate an agent run waits at reaches every member's clients
   as `agent.approval_pending`, and the phone relay of any member shows it.
   `agent.approvals` lists the pending ones and `agent.approval_answer`
   (`{"approval_id", "answer"}` → `{"status": "answered"|"already_answered"|"sent",
   "approval"}`) answers one; the member that runs the gate applies the first
-  answer. `agent.approval_resolved` follows.
+  answer. `agent.approval_resolved` follows. An agent gate's approval carries
+  `rule`, the exact `{"request_kind", "resource"}` an `always_allow` entry
+  takes, `summary`, and `answers`, the answer ids it offers: `allow_once`,
+  `allow_thread`, `always_allow_agent` and `deny`. `answer` is one of those
+  ids or a gate answer such as `{"type": "confirm", "value": true}`.
 - **Absence.** When no client used any member for 14 days, each member sets
   `paused_reason: "absence"` on the agents it runs. `swarm.resume` clears it
   on every member.
 
 A chat-event subscription that sends `{"swarm": true}` receives
 `swarm.changed`, `agent.approval_pending` and `agent.approval_resolved`.
+With `"swarm_live": true` too it also receives `agent.activity` and
+`group.posted`; `DesktopClient::subscribe_chat_events_with_swarm_live` falls
+back to the swarm events alone on a runtime that refuses the flag.
 Remotely, linking takes `runtime.admin`, the reads take `thread.read`,
 `thread.post`, group changes and answers take `run.write`, and `agent.move`
 and `swarm.resume` take `agents.manage`.

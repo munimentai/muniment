@@ -353,6 +353,7 @@ pub fn append_code_diff_permission_request(
             diff_sha256: diff_cas.sha256.clone(),
             write_plan_sha256: plan_cas.sha256.clone(),
         },
+        policy: None,
     };
     let expected_last_seq = events.last().map_or(0, |event| event.run_seq);
     let run_seq = expected_last_seq
@@ -1141,6 +1142,7 @@ mod tests {
                 diff_sha256: diff_cas.sha256.clone(),
                 write_plan_sha256: plan_cas.sha256.clone(),
             },
+            policy: None,
         };
 
         let error = verify(&mut store, &run_id, &gate).unwrap_err();

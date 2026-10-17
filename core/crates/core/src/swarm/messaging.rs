@@ -859,6 +859,7 @@ fn reply(inner: &Inner, message: &Message, run: &crate::agent_runs::Run) -> Resu
                     json!({
                         "group_id": message.body["group_id"],
                         "round": message.body["round"],
+                        "phase": message.body["phase"],
                         "agent_id": agent_id,
                         "agent_name": agent_name,
                         "status": run.status.as_str(),
