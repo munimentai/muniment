@@ -136,7 +136,7 @@ pub use remote_access::{
     PairingLinkRequest, RemoteAccess, RemoteAccessOpenError, RemoteAccessOptions,
     RuntimeUpdateRequest, MAX_OUTSTANDING_PAIRINGS, MAX_PAIRED_DEVICES, PAIRING_LINK_LIFETIME,
 };
-pub use remote_identity::DEFAULT_RUNTIME_NAME;
+pub use remote_identity::{verify_identity_signature, IdentitySigner, DEFAULT_RUNTIME_NAME};
 pub use remote_listener::{
     run_remote_listener, FailureBackoff, FailureBackoffPolicy, RemoteListener,
     RemoteListenerConfig, RemoteListenerError, RemoteStream,

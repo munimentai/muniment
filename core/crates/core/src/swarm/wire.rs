@@ -29,6 +29,74 @@ pub struct MemberRecord {
     /// as `store/1` for records and thread clock deltas.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    /// The member's fleet key, signed with its identity key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<FleetCard>,
+    /// The `host:port` endpoints the member's listener advertises.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<String>,
+}
+
+/// A member's keys as it states them: its P-256 identity key, the SHA-256 of
+/// the TLS certificate that key serves, and its X25519 fleet key, signed with
+/// the identity key. Members seal secrets to the fleet key the roster names.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetCard {
+    /// The uncompressed P-256 public key, base64url.
+    pub identity_pub: String,
+    /// Lowercase hex.
+    pub cert_sha256: String,
+    /// The X25519 public key, base64url.
+    pub fleet_pub: String,
+    /// The identity key's signature of the other fields, base64url.
+    pub sig: String,
+}
+
+/// One signed entry of the fleet roster. An `add` names a member, its card
+/// and its role, signed by the member that vouches for it; a `remove` ends a
+/// member. An entry counts when a member this runtime trusts signed it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RosterEntry {
+    /// The SHA-256 of the signed statement, lowercase hex.
+    pub entry_id: String,
+    /// `add` or `remove`.
+    pub kind: String,
+    pub runtime_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<FleetCard>,
+    /// `full` or `worker`, on an `add`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    pub signer: String,
+    pub clock: super::hlc::Hlc,
+    /// The signer's identity signature of the statement, base64url.
+    pub sig: String,
+}
+
+/// One version of a secret, sealed to each recipient's fleet key. Relays
+/// carry it without opening it. The owner signs it with its identity key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedSecret {
+    pub secret_id: String,
+    pub version: u64,
+    pub owner: String,
+    /// `models`, `mcp`, `vault` or `handover`.
+    pub class: String,
+    /// The X25519 public key the owner drew for this version, base64url.
+    pub ephemeral: String,
+    /// Each recipient runtime's copy.
+    #[serde(default)]
+    pub recipients: BTreeMap<String, SealedCopy>,
+    pub sealed_at: String,
+    /// The owner's identity signature of the other fields, base64url.
+    pub sig: String,
+}
+
+/// One recipient's AES-256-GCM copy of a sealed secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedCopy {
+    pub nonce: String,
+    pub ciphertext: String,
 }
 
 /// One agent in the swarm's directory. The entry with the highest epoch,
@@ -312,4 +380,20 @@ pub struct Exchange {
     /// receiver's watermark (`store/1`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watermarks: Option<Watermarks>,
+    /// The roster entries, when the receiver's roster digest differs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roster: Vec<RosterEntry>,
+    /// A hash of the sender's roster entry ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roster_digest: Option<String>,
+    /// The sealed secrets the receiver lacks, sent only to a roster member.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sealed: Vec<SealedSecret>,
+    /// The version of each sealed secret the sender holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_have: Option<BTreeMap<String, u64>>,
+    /// The hash of the invitation secret a joining member redeemed, which
+    /// the inviter answers with the joiner's roster entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<String>,
 }

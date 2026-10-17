@@ -748,7 +748,7 @@ fn inference_refresh(
     let client = agent(timeout);
     let call = if provider == "openai-codex" {
         client
-            .post("https://auth.openai.com/oauth/token")
+            .post(&refresh_endpoint("https://auth.openai.com/oauth/token"))
             .send_form(&[
                 ("client_id", "app_EMoamEEZ73f0CkXaXp7hrann"),
                 ("grant_type", "refresh_token"),
@@ -756,7 +756,9 @@ fn inference_refresh(
             ])
     } else {
         client
-            .post("https://platform.claude.com/v1/oauth/token")
+            .post(&refresh_endpoint(
+                "https://platform.claude.com/v1/oauth/token",
+            ))
             .send_json(serde_json::json!({
                 "client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e",
                 "grant_type":"refresh_token", "refresh_token":refresh,
@@ -780,6 +782,35 @@ fn inference_refresh(
         plan: None,
         renews_at_ms: None,
     })
+}
+
+/// Serializes the router's token rotations in this process.
+static REFRESH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs `work` while no router account refreshes in this process, so a
+/// credential read there is the newest one and stays so until `work` ends.
+pub fn without_refresh<T>(work: impl FnOnce() -> T) -> T {
+    let _held = REFRESH.lock().unwrap_or_else(|error| error.into_inner());
+    work()
+}
+
+/// The token endpoint every subscription refresh calls in place of the
+/// provider's own, for tests that stand up a fake provider.
+static REFRESH_ENDPOINT: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+#[doc(hidden)]
+pub fn set_refresh_endpoint_for_tests(endpoint: Option<String>) {
+    *REFRESH_ENDPOINT
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = endpoint;
+}
+
+fn refresh_endpoint(default: &str) -> String {
+    REFRESH_ENDPOINT
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+        .unwrap_or_else(|| default.to_owned())
 }
 
 /// Serializes token rotation across concurrent turns and merges only that credential.
@@ -813,7 +844,6 @@ pub fn refresh_account_within(
     margin_ms: i64,
     timeout: Duration,
 ) -> Result<super::config::Account, String> {
-    static REFRESH: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _held = REFRESH.lock().unwrap_or_else(|error| error.into_inner());
     let config = backend
         .config()

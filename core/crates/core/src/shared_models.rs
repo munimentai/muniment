@@ -282,6 +282,160 @@ pub fn drop_device(agent: &Path, device_id: &str) -> Result<bool, String> {
     Ok(shared)
 }
 
+/// Whether this computer uploaded its connections to the model vault and
+/// reads it with its own account session.
+pub fn holds_native_vault(agent: &Path) -> Result<bool, String> {
+    let record_path = agent.join(RECORD_FILE);
+    let _record_lock = pi_models::lock(&record_path).map_err(|_| SAVE_ERROR.to_string())?;
+    Ok(read_record(&record_path)?
+        .devices
+        .get(CLOUD_DEVICE)
+        .is_some_and(|share| share.native))
+}
+
+/// The connections other devices share here, named `pi:<provider>` and
+/// `router:<id>` as the bundle names them.
+pub fn received_connections(agent: &Path) -> Result<BTreeSet<String>, String> {
+    let record_path = agent.join(RECORD_FILE);
+    let _record_lock = pi_models::lock(&record_path).map_err(|_| SAVE_ERROR.to_string())?;
+    let record = read_record(&record_path)?;
+    let auth =
+        pi_models::read_json(&agent.join("auth.json")).map_err(|_| SAVE_ERROR.to_string())?;
+    let mut names = BTreeSet::new();
+    for share in record.devices.values() {
+        for (provider, digest) in &share.pi {
+            if auth.get(provider).map(entry_digest).as_deref() == Some(digest.as_str()) {
+                names.insert(format!("pi:{provider}"));
+            }
+        }
+        names.extend(share.router.iter().map(|id| format!("router:{id}")));
+    }
+    Ok(names)
+}
+
+/// The names a bundle's connections go by: `pi:<provider>` and
+/// `router:<id>`.
+pub fn connection_names(bundle: &Bundle) -> Vec<String> {
+    bundle
+        .pi
+        .keys()
+        .map(|provider| format!("pi:{provider}"))
+        .chain(
+            bundle
+                .router
+                .iter()
+                .map(|account| format!("router:{}", account.id)),
+        )
+        .collect()
+}
+
+/// Takes this computer's own sign-in `name` (`pi:<provider>` or
+/// `router:<id>`) out of its store with its refresh token, so another
+/// machine becomes its one refresher. Refuses a connection another device
+/// shares here and one without a refresh token.
+pub fn take_sign_in(agent: &Path, name: &str) -> Result<Value, String> {
+    const NOT_HELD: &str = "This computer does not hold that sign-in's refresh token.";
+    if received_connections(agent)?.contains(name) {
+        return Err(NOT_HELD.into());
+    }
+    if let Some(provider) = name.strip_prefix("pi:") {
+        let auth_path = agent.join("auth.json");
+        let _auth_lock = pi_models::lock(&auth_path).map_err(|_| SAVE_ERROR.to_string())?;
+        let mut auth = pi_models::read_json(&auth_path).map_err(|_| SAVE_ERROR.to_string())?;
+        let held = auth.get(provider).is_some_and(|entry| {
+            entry["type"] == "oauth"
+                && entry["refresh"]
+                    .as_str()
+                    .is_some_and(|refresh| !refresh.is_empty())
+        });
+        if !held {
+            return Err(NOT_HELD.into());
+        }
+        let entry = auth.remove(provider).unwrap_or_default();
+        pi_models::write_json(&auth_path, &auth).map_err(|_| SAVE_ERROR.to_string())?;
+        changed();
+        return Ok(entry);
+    }
+    let id = name.strip_prefix("router:").ok_or(NOT_HELD)?;
+    let config_path = config::config_path(agent);
+    let _router_lock = pi_models::lock(&config_path).map_err(|_| SAVE_ERROR.to_string())?;
+    let mut settings = config::load(agent).map_err(|_| SAVE_ERROR.to_string())?;
+    let index = settings
+        .accounts
+        .iter()
+        .position(|account| {
+            account.id == id
+                && !id.starts_with(SHARED_ACCOUNT_PREFIX)
+                && matches!(&account.credential,
+                    Credential::Subscription { refresh: Some(refresh), .. } if !refresh.is_empty())
+        })
+        .ok_or(NOT_HELD)?;
+    let account = settings.accounts.remove(index);
+    config::save(agent, &settings).map_err(|_| SAVE_ERROR.to_string())?;
+    changed();
+    serde_json::to_value(account).map_err(|_| SAVE_ERROR.to_string())
+}
+
+/// Whether this computer holds its own sign-in `name` with a refresh token,
+/// which makes it that sign-in's refresher.
+pub fn holds_sign_in(agent: &Path, name: &str) -> Result<bool, String> {
+    if received_connections(agent)?.contains(name) {
+        return Ok(false);
+    }
+    if let Some(provider) = name.strip_prefix("pi:") {
+        let auth =
+            pi_models::read_json(&agent.join("auth.json")).map_err(|_| SAVE_ERROR.to_string())?;
+        return Ok(auth.get(provider).is_some_and(|entry| {
+            entry["refresh"]
+                .as_str()
+                .is_some_and(|refresh| !refresh.is_empty())
+        }));
+    }
+    let Some(id) = name.strip_prefix("router:") else {
+        return Ok(false);
+    };
+    let settings = config::load(agent).map_err(|_| SAVE_ERROR.to_string())?;
+    Ok(settings.accounts.iter().any(|account| {
+        account.id == id
+            && matches!(&account.credential,
+                Credential::Subscription { refresh: Some(refresh), .. } if !refresh.is_empty())
+    }))
+}
+
+/// Keeps a sign-in another machine handed over as this computer's own, in
+/// place of the lease it held for it.
+pub fn install_sign_in(agent: &Path, name: &str, entry: &Value) -> Result<(), String> {
+    const INVALID: &str = "The handed-over sign-in is not valid.";
+    if let Some(provider) = name.strip_prefix("pi:") {
+        if !is_identifier(provider) || !entry.is_object() {
+            return Err(INVALID.into());
+        }
+        let auth_path = agent.join("auth.json");
+        std::fs::create_dir_all(agent).map_err(|_| SAVE_ERROR.to_string())?;
+        let _auth_lock = pi_models::lock(&auth_path).map_err(|_| SAVE_ERROR.to_string())?;
+        let mut auth = pi_models::read_json(&auth_path).map_err(|_| SAVE_ERROR.to_string())?;
+        auth.insert(provider.to_owned(), entry.clone());
+        pi_models::write_json(&auth_path, &auth).map_err(|_| SAVE_ERROR.to_string())?;
+        changed();
+        return Ok(());
+    }
+    let id = name.strip_prefix("router:").ok_or(INVALID)?;
+    let account: Account = serde_json::from_value(entry.clone()).map_err(|_| INVALID)?;
+    if account.id != id || !is_identifier(id) || family::family(&account.family).is_none() {
+        return Err(INVALID.into());
+    }
+    let config_path = config::config_path(agent);
+    std::fs::create_dir_all(agent).map_err(|_| SAVE_ERROR.to_string())?;
+    let _router_lock = pi_models::lock(&config_path).map_err(|_| SAVE_ERROR.to_string())?;
+    let mut settings = config::load(agent).map_err(|_| SAVE_ERROR.to_string())?;
+    settings.accounts.retain(|own| own.id != id);
+    settings.accounts.push(account);
+    settings.enabled = true;
+    config::save(agent, &settings).map_err(|_| SAVE_ERROR.to_string())?;
+    changed();
+    Ok(())
+}
+
 /// Checks a bundle and names each router account for this device. Answers the
 /// Pi entries and the router accounts to write.
 type Validated = (Map<String, Value>, Vec<Account>, Option<CloudLink>);
@@ -565,10 +719,20 @@ pub fn release_vault(agent: &Path, session: &CloudSession) -> Result<(), String>
 /// Issues the token one paired machine reads the vault with. The cloud
 /// counts the machine toward the account's pairing limit.
 pub fn vault_machine_token(session: &CloudSession, machine: &Value) -> Result<CloudLink, String> {
+    issue_machine_token(session, machine).map(|(link, _)| link)
+}
+
+/// [`vault_machine_token`], with the id of the account runtime pairing the
+/// token belongs to, which [`revoke_machine_pairing`] takes.
+pub fn issue_machine_token(
+    session: &CloudSession,
+    machine: &Value,
+) -> Result<(CloudLink, String), String> {
     let mut request = machine.clone();
     request["contract_version"] = VAULT_CONTRACT.into();
     let answer = vault_call(session, "POST", "/v1/model-vault/machine-tokens", request)?;
     let token = answer["token"].as_str().ok_or(VAULT_ANSWER)?.to_owned();
+    let pairing_id = answer["pairing_id"].as_str().unwrap_or_default().to_owned();
     let link = CloudLink {
         base_url: session.base_url.clone(),
         token,
@@ -576,7 +740,24 @@ pub fn vault_machine_token(session: &CloudSession, machine: &Value) -> Result<Cl
     if !valid_link(&link) {
         return Err(VAULT_ANSWER.into());
     }
-    Ok(link)
+    Ok((link, pairing_id))
+}
+
+/// The account runtime pairing contract revision.
+pub const RUNTIME_PAIRING_CONTRACT: &str = "muniment.runtime-pairing/1";
+
+/// Revokes the account runtime pairing a machine token belongs to, which
+/// ends that token.
+pub fn revoke_machine_pairing(session: &CloudSession, pairing_id: &str) -> Result<(), String> {
+    cloud_call(
+        session,
+        "DELETE",
+        "/v1/runtime-pairings",
+        serde_json::json!({"contract_version": RUNTIME_PAIRING_CONTRACT, "pairing_id": pairing_id}),
+        RUNTIME_PAIRING_CONTRACT,
+    )
+    .map(drop)
+    .map_err(String::from)
 }
 
 /// Fetches the model vault's leases and keeps them as [`CLOUD_DEVICE`]'s
@@ -769,6 +950,17 @@ fn vault_call(
     path: &str,
     body: Value,
 ) -> Result<Value, VaultError> {
+    cloud_call(session, method, path, body, VAULT_CONTRACT)
+}
+
+/// One call to a cloud contract whose answers name `contract`.
+fn cloud_call(
+    session: &CloudSession,
+    method: &str,
+    path: &str,
+    body: Value,
+    contract: &str,
+) -> Result<Value, VaultError> {
     let url = format!("{}{path}", session.base_url.trim_end_matches('/'));
     let agent = ureq::AgentBuilder::new().timeout(VAULT_TIMEOUT).build();
     let answer = agent
@@ -798,7 +990,7 @@ fn vault_call(
     let answer: Value = response
         .into_json()
         .map_err(|_| VaultError::Refused(VAULT_ANSWER.into()))?;
-    if answer["contract_version"] != VAULT_CONTRACT {
+    if answer["contract_version"] != contract {
         return Err(VaultError::Refused(VAULT_ANSWER.into()));
     }
     Ok(answer)
@@ -906,7 +1098,7 @@ fn is_identifier(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1180,10 +1372,20 @@ mod tests {
     }
 
     /// Answers each `METHOD /path` with its JSON until the test ends.
-    fn vault_stub(routes: Vec<(&'static str, Value)>) -> String {
+    pub(crate) fn vault_stub(routes: Vec<(&'static str, Value)>) -> String {
+        vault_stub_recording(routes).0
+    }
+
+    /// The requests a stub heard: each `METHOD /path` and its JSON body.
+    pub(crate) type Heard = std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+    /// [`vault_stub`], keeping each request it hears.
+    pub(crate) fn vault_stub_recording(routes: Vec<(&'static str, Value)>) -> (String, Heard) {
         use std::io::{BufRead, BufReader, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        let heard: Heard = Heard::default();
+        let kept = std::sync::Arc::clone(&heard);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -1203,6 +1405,10 @@ mod tests {
                 let mut data = vec![0; length];
                 reader.read_exact(&mut data).unwrap();
                 let route = head.split(' ').take(2).collect::<Vec<_>>().join(" ");
+                kept.lock().unwrap().push((
+                    route.clone(),
+                    serde_json::from_slice(&data).unwrap_or(Value::Null),
+                ));
                 let body = routes
                     .iter()
                     .find(|(known, _)| *known == route)
@@ -1216,7 +1422,7 @@ mod tests {
                 .unwrap();
             }
         });
-        url
+        (url, heard)
     }
 
     #[test]

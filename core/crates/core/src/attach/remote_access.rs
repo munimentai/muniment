@@ -98,6 +98,9 @@ pub trait OutboundLinks: Send + Sync {
     /// Drops the link whose device id is `device_id` and answers whether
     /// one did.
     fn revoke(&self, device_id: &str) -> bool;
+    /// Hears that a device paired to this runtime was revoked, which ends a
+    /// linked runtime's membership when the device was its link.
+    fn revoked_inbound(&self, _device_id: &str) {}
 }
 
 /// A version a client asked the host to install.
@@ -278,6 +281,12 @@ impl RemoteAccess {
         self.inner.identity.fingerprint
     }
 
+    /// A signer with the listener's identity key, for the runtime's fleet
+    /// statements.
+    pub fn identity_signer(&self) -> std::io::Result<super::IdentitySigner> {
+        self.inner.identity.signer()
+    }
+
     /// Sets the `host:port` endpoints pairing links name by default. An
     /// empty list leaves a link to name its own.
     pub fn set_advertised_endpoints(&self, endpoints: Vec<String>) -> Result<(), ProtocolError> {
@@ -434,6 +443,9 @@ impl RemoteAccess {
             store.devices.len() != before
         })?;
         lock(&self.inner.revoked).insert(device_id.to_owned());
+        if let Some(outbound) = lock(&self.inner.outbound).clone() {
+            outbound.revoked_inbound(device_id);
+        }
         // The model connections the device shared leave with it.
         if let Err(error) = crate::shared_models::drop_device(&self.agent_directory(), device_id) {
             crate::runtime_eprintln!(
