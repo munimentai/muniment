@@ -3,7 +3,7 @@
   import { floatingMenu } from './floating-menu.js'
   import { tick, onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { name, archived = false, onaction, disabled = false, extraActions = [], allowArchive = true, allowDelete = true, maxNameLength = 160 } = $props()
+  let { name, archived = false, onaction, disabled = false, extraActions = [], allowRename = true, allowArchive = true, allowDelete = true, maxNameLength = 160 } = $props()
   let open = $state(false), mode = $state('menu'), value = $state(''), error = $state(''), busy = $state(false)
   let trigger, menu
   onMount(() => {
@@ -42,7 +42,7 @@
   <div class="catalog-menu" data-panel="catalog-menu" data-panel-variant="overlay" bind:this={menu} use:portal use:floatingMenu role={mode === 'menu' ? 'menu' : 'dialog'} aria-label={`Actions for ${name}`}>
     {#if mode === 'menu'}
       {#each extraActions as action}<button role="menuitem" disabled={busy} onclick={() => choose(action.id)}><LucideIcon name={action.icon} size={16}/>{action.label}</button>{/each}
-      <button role="menuitem" onclick={async () => { value = name; mode = 'rename'; await tick(); menu.querySelector('input')?.select() }}><LucideIcon name="pencil" size={16}/>Rename</button>
+      {#if allowRename}<button role="menuitem" onclick={async () => { value = name; mode = 'rename'; await tick(); menu.querySelector('input')?.select() }}><LucideIcon name="pencil" size={16}/>Rename</button>{/if}
       {#if allowArchive}<button role="menuitem" onclick={() => choose(archived ? 'restore' : 'archive')} disabled={busy}><LucideIcon name="archive" size={16}/>{archived ? 'Restore' : 'Archive'}</button>{/if}
       {#if allowDelete}<button role="menuitem" onclick={() => mode = 'delete'}><LucideIcon name="trash-2" size={16}/>Delete</button>{/if}
     {:else if mode === 'rename'}

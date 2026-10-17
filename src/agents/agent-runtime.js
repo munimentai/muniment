@@ -7,6 +7,14 @@ export function agentRequest(tauri, runtime, operation, body = {}) {
   return tauri.invoke('agent_request', { runtime: runtime || LOCAL_RUNTIME_ID, operation, body })
 }
 
+// One change to an agent through core's `agent.save` on its machine. It reads
+// the agent first, so edits made elsewhere stay, and a null schedule leaves
+// the routines as they are. Core validates the change and refuses with its reason.
+export async function saveAgentPatch(tauri, agent, patch) {
+  const { agent: latest } = await agentRequest(tauri, agent.runtimeId, 'agent.read', { id: agent.id })
+  return agentRequest(tauri, agent.runtimeId, 'agent.save', { agent: { ...latest, ...patch, schedule: null } })
+}
+
 // This computer, then each paired machine that answers.
 export function agentRuntimes(list) {
   const runtimes = list?.runtimes?.length ? list.runtimes : [{ id: LOCAL_RUNTIME_ID, local: true }]

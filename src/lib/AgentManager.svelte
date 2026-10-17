@@ -7,26 +7,36 @@
   import Button from './ui/Button.svelte'
   import {onMount} from 'svelte'
   import CatalogActions from './CatalogActions.svelte'
-  import AgentAvatar from './AgentAvatar.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import StarterRow from './StarterRow.svelte'
   import { creationStarters } from './creation-prompts.js'
-  import MachineMark from '../agents/MachineMark.svelte'
+  import AgentCard from '../agents/AgentCard.svelte'
   import AgentImport from '../agents/AgentImport.svelte'
   import { agentMachine, agentRuntimes, emptyListing, listAgents } from '../agents/agent-runtime.js'
-  import { triggerSummary } from '../agents/routine-labels.js'
-  import { pairedRuntimes } from '../runtimes/runtimes.js'
-  let {tauri, projects=[], onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, isArchived=()=>false, onaction=()=>{}}=$props()
+  import { exportAgent } from '../agents/import.js'
+  // `onselect` opens the agent's chat and `onprofile` its profile alone.
+  let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onmanagemodels=()=>{}}=$props()
   let archived = $state(false)
   let importOpen = $state(false)
   // The machines an import can land on: this computer and each that answers.
   const importRuntimes = $derived(agentRuntimes(runtimeList).map(runtime => ({ id: runtime.id, name: runtime.local ? 'This computer' : runtime.name })))
   const machineOf = (agent) => agent.primaryMachine ?? agentMachine(runtimeList, agent)
-  const showMachines = $derived(pairedRuntimes(runtimeList).length > 0 || (agents ?? []).some(agent => agent.replica || (agent.primaryMachine && agent.primaryMachine.kind !== 'local')))
   let listing=$state(emptyListing()), error=$state(''), loading=$state(true)
-  onMount(()=>{let alive=true;listAgents(tauri, runtimeList).then(value=>{if(alive){listing=value;onchange(value)}}).catch(e=>error=String(e?.message ?? e)).finally(()=>loading=false);return()=>{alive=false}})
-  // The card's note: the project and the first routine that is on.
-  const cardNote = (agent) => [projects.find(([id])=>id===agent.projectId)?.[1], (agent.routines ?? []).filter(routine=>routine.enabled).map(routine=>triggerSummary(routine.trigger))[0]].filter(Boolean).join(' · ') || 'Runs when you ask'
+  let alive = true
+  onMount(()=>{listAgents(tauri, runtimeList).then(value=>{if(alive){listing=value;onchange(value)}}).catch(e=>error=String(e?.message ?? e)).finally(()=>loading=false);return()=>{alive=false}})
+  // A card's change lists the agents again, so every card shows what core saved.
+  async function refresh() {
+    const value = await listAgents(tauri, runtimeList)
+    if (!alive) return
+    listing = value
+    onchange(value)
+  }
+  // The card menu opens the profile and exports here; the rest is the catalog's.
+  async function cardAction(agent, action, name) {
+    if (action === 'profile') return onprofile(agent)
+    if (action === 'export') return exportAgent(tauri, agent, 'muniment')
+    return onaction('agent', agent, action, name)
+  }
 </script>
 <section data-panel="agents" class="panel" aria-label="Agents">
   <h2 class="visually-hidden">Agents</h2>
@@ -51,12 +61,10 @@
         </ul>
       {/if}
     {/if}
-    <CardGrid>
+    <CardGrid min={340} rows={300}>
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
-        <CatalogCard onclick={()=>onselect(agent)}>
-          {#snippet menu()}{#if !agent.replica}<CatalogActions name={agent.name} {archived} onaction={(action,name)=>onaction('agent',agent,action,name)}/>{/if}{/snippet}
-          <AgentAvatar {agent} activity={agent.activity} size={48} /><strong>{agent.name}</strong><span>{agent.label || agent.instructions}</span><small>{agent.replica ? 'Synced copy from another machine' : cardNote(agent)}</small>{#if showMachines}<div class="machine"><MachineMark machine={machineOf(agent)} />{#if agent.online === false}<span class="offline">Offline</span>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" size={12} /><span class="visually-hidden">Synced copy</span></span>{/if}</div>{/if}
-        </CatalogCard>
+        <AgentCard {agent} {tauri} {inventory} {archived} machine={machineOf(agent)} latestRun={(latestRuns ?? listing.latestRuns)[agent.id] ?? null}
+          onchat={onselect} {onprofile} {onrun} {onmanagemodels} onchange={refresh} onaction={(action,name)=>cardAction(agent,action,name)} />
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}
         <CatalogCard onclick={()=>onopen(plan)}>
@@ -74,7 +82,4 @@
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .benefits { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: var(--text-13); }
   .benefits li { display: inline-flex; align-items: center; gap: 8px; }
-  .machine { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .offline { color: var(--ochre); font: var(--text-12) var(--font-mono); }
-  .synced { display: inline-flex; color: var(--muted); }
 </style>

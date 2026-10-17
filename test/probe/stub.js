@@ -369,10 +369,11 @@ export function buildProbeCommandTable(fixtureName) {
   // activity, machines, move, transcript, group-create, meeting, approvals,
   // approval-inline, replays, import, absence, preferences, empty or
   // empty-activity, with agents on three machines that all answer and a
-  // synced copy from a fourth.
+  // synced copy from a fourth. `cards` opens the catalog's action cards, and
+  // `cards-offline` the same with the Studio machine offline.
   const agentsFixture = fixtureName === 'agents'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
-  let runtimeList = probeRuntimes(agentsFixture ? 'agents' : runtimesState)
+  let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' ? 'agents-offline' : 'agents') : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
   let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'
@@ -924,6 +925,8 @@ const AGENT_STATES = {
   replays: { agent: 'Lead scout' },
   'approval-inline': { agent: 'Inbox triage' },
   preferences: { agent: null },
+  cards: { agent: null },
+  'cards-offline': { agent: null },
   empty: { agent: null },
   'empty-activity': { agent: null },
 }
@@ -935,7 +938,9 @@ const AGENT_SCREENS = {
   'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
   replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="Failed runs"] .replay').length === 2,
   preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
-  empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .catalog-card .agent-avatar'),
+  empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .agent-card'),
+  cards: () => cardsRendered(5),
+  'cards-offline': () => cardsRendered(5) && !!document.querySelector('[data-agent-card="018f0000-0000-4000-8000-0000000000a3"].read-only [role="note"]'),
   'empty-activity': () => document.querySelector('[data-panel="activity"]')?.textContent.includes('No agent runs yet.'),
   machines: () => !!document.querySelector('.settings-runtimes [aria-label="Swarm member Office mini"]') && document.querySelector('.settings-runtimes')?.textContent.includes('retrying'),
   'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
@@ -944,6 +949,21 @@ const AGENT_SCREENS = {
   absence: () => !!document.querySelector('#sidebar [aria-label="Routines paused"]'),
   transcript: () => !!document.querySelector('.thread [aria-label="Message from Lead scout"]') && !!document.querySelector('.thread .silent-note'),
   move: () => !!document.querySelector('[data-panel="move"] [role="note"]') && !!document.querySelector('[data-panel="move"] input:checked'),
+}
+
+// `&panel=overview|model|permissions|routines|activity` opens that panel on
+// every card, and `&edit=name` opens the first card's name field.
+const cardOptions = new URLSearchParams(location.search)
+const CARD_PANEL = cardOptions.get('panel')
+const CARD_EDIT = cardOptions.get('edit') === 'name'
+
+function cardsRendered(count) {
+  const cards = Array.from(document.querySelectorAll('[data-panel="agents"] .agent-card'))
+  if (cards.length !== count) return false
+  if (CARD_PANEL && !cards.every((card) => card.querySelector(`[role="tabpanel"][data-panel-id="${CARD_PANEL}"]`))) return false
+  if (CARD_PANEL === 'activity' && cards.some((card) => card.textContent.includes('Loading runs'))) return false
+  if (CARD_EDIT && !cards[0].querySelector('input[aria-label="Agent name"]')) return false
+  return cards.every((card) => card.querySelector('.agent-avatar svg'))
 }
 
 function agentsRendered() {
@@ -964,6 +984,7 @@ const buttonNamed = (root, name) => Array.from(root?.querySelectorAll('button') 
 const probeImportRead = new WeakSet()
 let probeHistoryLoaded = false
 let probeGroupPicked = false
+let probeCardsOpened = false
 
 function advanceAgentsFixture() {
   if (!agentsFixture || fixtureRendered()) return
@@ -1007,6 +1028,22 @@ function advanceAgentsFixture() {
   }
   const expand = sidebarButton('Expand Agents')
   if (expand) return expand.click()
+  if (agentsState === 'cards' || agentsState === 'cards-offline') {
+    // Agents opens once: a second click would mount the catalog again and reset its cards.
+    const catalog = document.querySelector('[data-panel="agents"]')
+    if (!catalog) {
+      if (!probeCardsOpened) sidebarButton('Agents')?.click()
+      probeCardsOpened ||= !!sidebarButton('Agents')
+      return
+    }
+    const cards = Array.from(catalog.querySelectorAll('.agent-card'))
+    if (CARD_PANEL) for (const card of cards) {
+      const tab = Array.from(card.querySelectorAll('[role="tab"]')).find((button) => button.getAttribute('aria-label').toLowerCase() === CARD_PANEL)
+      if (tab?.getAttribute('aria-selected') === 'false') tab.click()
+    }
+    if (CARD_EDIT && cards.length && !cards[0].querySelector('input[aria-label="Agent name"]')) cards[0].querySelector('.head-name button')?.click()
+    return
+  }
   if (agentsState === 'list' || agentsState === 'import') {
     const catalog = document.querySelector('[data-panel="agents"]')
     if (!catalog) return sidebarButton('Agents')?.click()

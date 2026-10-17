@@ -418,7 +418,7 @@ async function checkComposerActions(browser, baseUrl) {
 // text, under a card's or header's center, and on its tile. Each surface shows one.
 async function checkAgentAvatars(browser, baseUrl) {
   const surfaces = {
-    '': ['.catalog-sidebar-row .side-action', '.catalog-card .card', '.starter .thumb'],
+    '': ['.catalog-sidebar-row .side-action', '.agent-card .head-avatar', '.starter .thumb'],
     profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .check'],
     transcript: ['.agent-message header'],
     meeting: ['.agent-post header', '#agent-mentions [role="option"]'],
