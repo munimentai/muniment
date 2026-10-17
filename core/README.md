@@ -4,8 +4,9 @@ The shared Rust core of Muniment. The Muniment desktop and headless router
 hosts build on the same crates, so local runtime behavior, model routing and
 runtime pins match in both.
 
-This GitHub repository is a read-only mirror. It hosts the releases. It takes no
-issues or pull requests.
+This directory is the core of the `munimentai/muniment` repository. Core
+releases are the `core-vX.Y.Z` tags and releases there. The desktop releases
+use the `vX.Y.Z` tags.
 
 ## Crates
 
@@ -67,19 +68,22 @@ compatibility suite on the host platform:
 - one `pi-claude-bridge` turn through the pinned Claude Code CLI against a fake
   Anthropic endpoint.
 
-The `pins-update` workflow runs daily. It bumps every pin that passes the suite
-on Linux, then runs the suite and the workspace tests on macOS and the CI checks
-on Linux against the bumped tree. When all of them pass, it rebases the bump
-onto `main`, pushes it with a `feat:` or `fix:` message, and tags the release
-with `pins.toml` and `packages.bun.lock` attached. A pin that fails gets one
+The `core-pins-update` workflow runs daily. It bumps every pin that passes the
+suite on Linux, then runs the suite and the workspace tests on macOS and the CI
+checks on Linux against the bumped tree. When all of them pass, it rebases the
+bump onto `main` and pushes it with a `feat:` or `fix:` message. The release job
+then tags the next `core-v*` release with `pins.toml` and `packages.bun.lock`
+attached. A pin that fails gets one
 `Pin update blocked: <component> <version>` issue and stays at its version.
 
 ## Consumers
 
-The desktop depends on a release tag:
+The desktop in this repository builds the core crates by path, so a desktop
+build always uses the core beside it. Another Rust host depends on a core
+release tag:
 
 ```toml
-muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v0.1.0", features = ["tls"] }
+muniment-core = { git = "https://github.com/munimentai/muniment", tag = "core-v1.15.0", features = ["tls"] }
 ```
 
 The repository carries no third-party OAuth client secrets. A host that offers
@@ -93,9 +97,13 @@ A headless host builds the router binaries from a release tag and reads the
 pins from the release asset:
 
 ```sh
-cargo install --git https://github.com/munimentai/muniment-core --tag v0.1.0 --features server muniment-router
-gh release download v0.1.0 --repo munimentai/muniment-core --pattern pins.toml
+cargo install --git https://github.com/munimentai/muniment --tag core-v1.15.0 --features server muniment-router
+gh release download core-v1.15.0 --repo munimentai/muniment --pattern pins.toml
 ```
+
+Core releases are never marked latest, so `releases/latest` on the repository
+always names a desktop release. List the `core-v*` tags to find the newest core
+release.
 
 ## Remote attach
 
@@ -782,7 +790,7 @@ docker run -d --name muniment -p 192.0.2.20:7443:7443 \
 docker exec muniment muniment-server pair
 ```
 
-Each release publishes the image for linux/amd64 and linux/arm64 as
+Each core release publishes the image for linux/amd64 and linux/arm64 as
 `ghcr.io/munimentai/muniment-runtime:<version>` and `:latest`:
 
 ```sh
@@ -792,7 +800,7 @@ docker run -d --name muniment -p 192.0.2.20:7443:7443 \
 ```
 
 The CI `runtime-image-publish` job runs `deploy/runtime/publish.sh` after the
-release job tags a version. It pushes to each image repository in the
+release job tags a `core-v*` version. It pushes to each image repository in the
 `RUNTIME_IMAGE_REPOSITORIES` variable (a space list) and logs in with the
 `RUNTIME_IMAGE_LOGINS` secret, one `<registry> <user> <password>` line per
 registry. A repository whose registry has no login is skipped with a warning.
@@ -827,7 +835,7 @@ pointers, and runs the current version, or its own when that is newer or
 nothing is installed. It reports `update_capability: launcher` when it can
 verify releases and write its versions directory, and `manual` otherwise.
 
-Each release publishes, beside `pins.toml`,
+Each core release publishes, beside `pins.toml`,
 `muniment-server-<version>-linux-x86_64.tar.gz` and
 `muniment-server-<version>-linux-aarch64.tar.gz`, each the server and the
 speech runtime libraries it loads from its own directory. `SHA256SUMS` lists
@@ -841,7 +849,7 @@ verify the signature, so no release goes out unsigned.
 While a request names a version newer than the running one, the launcher:
 
 1. Downloads the archive for its architecture, `SHA256SUMS` and the
-   signature from `<feed>/v<version>/`.
+   signature from `<feed>/core-v<version>/`.
 2. Checks the signature against the release public key, then the archive's
    SHA-256, and unpacks its regular files into a staging directory.
 3. Runs the new server's `--version`, which must name the version.
@@ -877,10 +885,12 @@ outcome is unknown, so it stays interrupted too.
 | `MUNIMENT_UPDATE_SHUTDOWN_SECS` | 60 | How long the server has to stop before it is killed. |
 | `MUNIMENT_UPDATE_TRIAL_SECS` | 120 | How long a new version has to pass `health`. |
 | `MUNIMENT_UPDATE_RETRY_SECS` | 60 | The first retry delay after a failed download. |
-| `MUNIMENT_UPDATE_FEED` | the public GitHub releases | The release feed base URL. `file://` reads a local directory. |
+| `MUNIMENT_UPDATE_FEED` | `https://github.com/munimentai/muniment/releases/download` | The release feed base URL. `file://` reads a local directory. |
 | `MUNIMENT_UPDATE_PUBLIC_KEY` | `RELEASE_PUBLIC_KEY` | The minisign public key releases verify against, for tests and mirrors that sign their own releases. |
 
 ## Development
+
+Run these from `core/`:
 
 ```sh
 cargo build --workspace
@@ -897,9 +907,10 @@ database they may create schemas in. The OpenBao integration test runs when
 shared libraries on first build. `third-party/` holds the ONNX Runtime
 libraries that the on-device tests load.
 
-Pushes to `main` cut a release. Conventional commit prefixes pick the version:
-`feat:` is minor, `fix:` and `perf:` are patch, `feat!:` or a `BREAKING CHANGE:`
-trailer is major, and other prefixes cut no release.
+Pushes to `main` that touch `core/` cut a `core-v*` release. The conventional
+prefixes of those commits pick the version: `feat:` is minor, `fix:` and
+`perf:` are patch, `feat!:` or a `BREAKING CHANGE:` trailer is major, and other
+prefixes cut no release. Commits outside `core/` never move the core version.
 
 ## License
 
