@@ -143,6 +143,8 @@ pub(super) struct ActiveChatSubscription {
     agent_runs: Option<std::sync::mpsc::Receiver<serde_json::Value>>,
     /// The swarm's client events when the subscriber asked for them.
     swarm: Option<std::sync::mpsc::Receiver<crate::swarm::ClientEvent>>,
+    /// Whether the subscriber also takes `agent.activity` and `group.posted`.
+    swarm_live: bool,
 }
 
 /// How often a subscription rereads the update status, which a launcher in
@@ -315,6 +317,12 @@ fn drain_swarm(subscription: &mut ActiveChatSubscription) -> Vec<Event> {
     let mut events = Vec::new();
     while let Some(receiver) = subscription.swarm.as_ref() {
         match receiver.try_recv() {
+            Ok(event)
+                if !subscription.swarm_live
+                    && matches!(
+                        event.name,
+                        EventName::AgentActivity | EventName::GroupPosted
+                    ) => {}
             Ok(event) => events.push(Event {
                 protocol: Protocol,
                 subscription_id: subscription.subscription_id.clone(),
@@ -988,6 +996,9 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             /// Also send `swarm.changed` and the agent approval events.
             #[serde(default)]
             swarm: bool,
+            /// With `swarm`, also send `agent.activity` and `group.posted`.
+            #[serde(default)]
+            swarm_live: bool,
         }
         let body: Body =
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
@@ -1040,6 +1051,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             update_status,
             agent_runs,
             swarm,
+            swarm_live: body.swarm_live,
         });
         return Ok(response_only(serde_json::json!({
             "subscription_id": subscription_id,

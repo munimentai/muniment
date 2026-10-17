@@ -54,6 +54,7 @@ fn pending_permission_uses_the_webview_contract() {
                 message: "Run the tool?".into(),
                 timeout: None,
             },
+            policy: None,
         }),
         None,
     );
@@ -78,6 +79,7 @@ fn pending_permission_uses_the_webview_contract() {
                 diff_sha256: "aa".into(),
                 write_plan_sha256: "bb".into(),
             },
+            policy: None,
         }),
         None,
     )
@@ -150,6 +152,7 @@ fn projection_phase_maps_every_status() {
             message: "Run the tool?".into(),
             timeout: None,
         },
+        policy: None,
     };
     let cases = [
         (None, "thinking"),

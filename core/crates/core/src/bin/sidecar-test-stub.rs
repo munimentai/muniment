@@ -350,6 +350,15 @@ fn pi_resume(args: Vec<String>) {
                 );
                 if std::env::var_os("PI_RESUME_STUB_STEER_CAPTURE").is_some() {
                     // Keep the run active until the test sends a queued message.
+                } else if let Ok(call) = std::env::var("PI_RESUME_STUB_AGENT_GATE") {
+                    // The agent permission extension's first step: the check.
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"gate-check", "method":"editor",
+                            "title":"muniment:permission-check", "prefill":call
+                        })
+                    );
                 } else if std::env::var_os("PI_RESUME_STUB_PERMISSION_CAPTURE").is_some() {
                     println!(
                         "{}",
@@ -467,6 +476,42 @@ fn pi_resume(args: Vec<String>) {
                         .open(path)
                         .unwrap();
                     writeln!(capture, "{request}").unwrap();
+                }
+                // The agent permission extension's later steps: the gate
+                // the check asks for, then the save its answer names.
+                if let Ok(call) = std::env::var("PI_RESUME_STUB_AGENT_GATE") {
+                    let next = match request["id"].as_str() {
+                        Some("gate-check") => {
+                            let verdict: serde_json::Value =
+                                serde_json::from_str(request["value"].as_str().unwrap_or("{}"))
+                                    .unwrap_or_default();
+                            (verdict["decision"] == "ask").then(|| {
+                                serde_json::json!({
+                                    "type":"extension_ui_request", "id":"gate-select",
+                                    "method":"select", "title":verdict["title"],
+                                    "options":verdict["options"]
+                                })
+                            })
+                        }
+                        Some("gate-select") => match request["value"].as_str() {
+                            Some("Always allow for this agent") => Some(serde_json::json!({
+                                "type":"extension_ui_request", "id":"gate-save",
+                                "method":"editor", "title":"muniment:permission-always",
+                                "prefill":call
+                            })),
+                            Some("Allow for this thread") => Some(serde_json::json!({
+                                "type":"extension_ui_request", "id":"gate-save",
+                                "method":"editor", "title":"muniment:permission-allow",
+                                "prefill":call
+                            })),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(next) = next {
+                        println!("{next}");
+                        continue;
+                    }
                 }
                 println!(
                     "{}",

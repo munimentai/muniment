@@ -68,6 +68,33 @@ pub(super) fn registration(inner: &Inner, thread_id: &str) -> Option<ThreadRegis
         .flatten()
 }
 
+/// Sends `group.posted` to this runtime's clients when `thread_id` is a
+/// group's thread: the post as `thread.history` lists it.
+fn announce_post(inner: &Inner, thread_id: &str, payload: &Value, posted_at: &str) {
+    let Some(group_id) = registration(inner, thread_id)
+        .filter(|registration| registration.kind == "group")
+        .and_then(|registration| registration.group_id)
+    else {
+        return;
+    };
+    inner.emit(
+        muniment_attach::EventName::GroupPosted,
+        json!({
+            "group_id": group_id,
+            "thread_id": thread_id,
+            "post": {
+                "message_id": payload["message_id"],
+                "author": payload["author"],
+                "text": payload["text"],
+                "origin_runtime": payload["origin_runtime"],
+                "posted_at": posted_at,
+                "consumed": false,
+                "run_id": null,
+            },
+        }),
+    );
+}
+
 fn ensure_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
     if registration_valid(registration)
         && self::registration(inner, &registration.thread_id).is_none()
@@ -544,6 +571,7 @@ pub(super) fn import(inner: &Inner, mut events: Vec<ReplicatedEvent>) -> Result<
     let connection = inner.store.connect()?;
     let mut blocked: Vec<(String, String)> = Vec::new();
     let mut imported = 0usize;
+    let mut posts: Vec<(String, Value, String)> = Vec::new();
     for event in events {
         let key = (event.thread_id.clone(), event.origin.clone());
         if event.origin == self_id
@@ -594,9 +622,21 @@ pub(super) fn import(inner: &Inner, mut events: Vec<ReplicatedEvent>) -> Result<
             )
             .map_err(sql)?;
         imported += 1;
+        if logged.event_type == THREAD_MESSAGE_POSTED {
+            if let Ok(envelope) = serde_json::from_value::<ThreadEventEnvelope>(event.envelope) {
+                posts.push((
+                    event.thread_id,
+                    envelope.payload().clone(),
+                    envelope.recorded_at().to_owned(),
+                ));
+            }
+        }
     }
     if imported > 0 {
         inner.changed("threads");
+    }
+    for (thread_id, payload, posted_at) in posts {
+        announce_post(inner, &thread_id, &payload, &posted_at);
     }
     Ok(())
 }
@@ -776,9 +816,10 @@ pub(super) fn post(
             }),
             local_provenance(scope.as_ref(), &profile),
         );
-        journal
+        let stored = journal
             .append_thread_event_with_id(envelope)
             .map_err(journal_error)?;
+        announce_post(inner, thread_id, stored.payload(), stored.recorded_at());
     }
     scan_thread(inner, &self_id, thread_id)?;
     let seq: u64 = inner
@@ -794,13 +835,14 @@ pub(super) fn post(
     Ok((message_id, seq))
 }
 
-/// Appends a thread event this runtime writes as the thread's primary.
+/// Appends a thread event this runtime writes as the thread's primary and
+/// answers its recorded time.
 fn append_local(
     inner: &Inner,
     thread_id: &str,
     event_type: &str,
     payload: Value,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let scope = inner.host.replica_scope();
     let mut storage = storage_lock(&inner.storage)?;
     let journal = &mut storage.journal;
@@ -813,7 +855,7 @@ fn append_local(
         .and_then(|(_, profile)| profile)
         .unwrap_or_default();
     let event_id = uuid::Uuid::now_v7().to_string();
-    journal
+    let stored = journal
         .append_thread_event_with_id(ThreadEventEnvelope::new(
             &event_id,
             thread_id,
@@ -823,7 +865,7 @@ fn append_local(
             local_provenance(scope.as_ref(), &profile),
         ))
         .map_err(journal_error)?;
-    Ok(())
+    Ok(stored.recorded_at().to_owned())
 }
 
 /// Posts a message an agent or this runtime writes, such as an agent's
@@ -848,18 +890,15 @@ pub(super) fn post_as(
         text.truncate(end);
         text.push('…');
     }
-    append_local(
-        inner,
-        thread_id,
-        THREAD_MESSAGE_POSTED,
-        json!({
-            "message_id": message_id,
-            "author": author,
-            "text": text,
-            "deps": deps,
-            "origin_runtime": inner.runtime_id(),
-        }),
-    )?;
+    let payload = json!({
+        "message_id": message_id,
+        "author": author,
+        "text": text,
+        "deps": deps,
+        "origin_runtime": inner.runtime_id(),
+    });
+    let posted_at = append_local(inner, thread_id, THREAD_MESSAGE_POSTED, payload.clone())?;
+    announce_post(inner, thread_id, &payload, &posted_at);
     if let Some(self_id) = inner.runtime_id() {
         scan_thread(inner, &self_id, thread_id)?;
     }

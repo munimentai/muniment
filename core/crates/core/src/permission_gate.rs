@@ -301,6 +301,95 @@ pub fn tool_request(
     })
 }
 
+/// The agent gate's answers, as the gate offers them and as
+/// `agent.approval_answer` names them.
+pub const GATE_ANSWERS: [(&str, &str); 4] = [
+    ("allow_once", "Allow once"),
+    ("allow_thread", "Allow for this thread"),
+    ("always_allow_agent", "Always allow for this agent"),
+    ("deny", "Deny"),
+];
+
+/// The gate option an answer id names, such as `Allow once` for `allow_once`.
+pub fn gate_option(answer: &str) -> Option<&'static str> {
+    GATE_ANSWERS
+        .iter()
+        .find(|(id, _)| *id == answer)
+        .map(|(_, option)| *option)
+}
+
+/// The answer id of a gate option, such as `allow_once` for `Allow once`.
+pub fn gate_answer(option: &str) -> Option<&'static str> {
+    GATE_ANSWERS
+        .iter()
+        .find(|(_, label)| *label == option)
+        .map(|(id, _)| *id)
+}
+
+/// The options the agent gate offers for one call. "Always allow for this
+/// agent" is left out when an ask policy covers the call, since ask-first
+/// outranks every allow.
+pub fn gate_options(always_allow: bool) -> Vec<String> {
+    GATE_ANSWERS
+        .iter()
+        .filter(|(id, _)| always_allow || *id != "always_allow_agent")
+        .map(|(_, option)| (*option).to_owned())
+        .collect()
+}
+
+/// Whether an ask policy, the agent's `ask_first` or a thread's own,
+/// matches the request exactly.
+pub fn asks_first(
+    permissions: &RunPermissions,
+    thread_policies: &[ThreadPermissionPolicyDecided],
+    request: &PolicyRequest,
+) -> bool {
+    permissions
+        .policies
+        .iter()
+        .chain(thread_policies)
+        .any(|policy| {
+            policy.decision == ThreadPermissionDecision::Ask
+                && policy.request_kind == request.request_kind
+                && policy.resource == request.resource
+        })
+}
+
+/// The most characters of a call summary.
+const MAX_SUMMARY_CHARS: usize = 240;
+
+/// A short human summary of one call's operation and inputs: the command
+/// and its folder, the file operation and its path, or the tool and its
+/// exact input.
+pub fn summary(request: &PolicyRequest) -> String {
+    let text = match &request.resource {
+        ThreadPermissionResource::Command {
+            arguments,
+            working_directory,
+        } => {
+            let (program, rest) = arguments
+                .split_first()
+                .map_or(("", &[][..]), |(first, rest)| (first.as_str(), rest));
+            format!("{program} `{}` in {working_directory}", rest.join(" "))
+        }
+        ThreadPermissionResource::Path { path, operation } => format!("{operation} {path}"),
+        ThreadPermissionResource::Tool { name, input } => {
+            let input = input.to_string();
+            if input == "{}" || input == "null" {
+                name.clone()
+            } else {
+                format!("{name} {input}")
+            }
+        }
+    };
+    if text.chars().count() <= MAX_SUMMARY_CHARS {
+        return text;
+    }
+    let mut short: String = text.chars().take(MAX_SUMMARY_CHARS - 1).collect();
+    short.push('…');
+    short
+}
+
 /// Decides one tool call from the policies in force, oldest first, and the
 /// run's mode. A matching ask policy always asks, even when an allow policy
 /// also matches. Otherwise the latest matching policy allows or denies.
@@ -556,6 +645,42 @@ mod tests {
             decide_tool_call(&deny, &[], &push, "bash", false),
             GateDecision::Deny { .. }
         ));
+    }
+
+    #[test]
+    fn the_gate_names_each_call_and_leaves_out_always_allow_under_ask_first() {
+        let directory = std::path::Path::new("/work");
+        let push = tool_request("bash", &json!({"command": "git push"}), directory);
+        assert_eq!(summary(&push), "bash `git push` in /work");
+        let write = tool_request("write", &json!({"path": "a.md"}), directory);
+        assert_eq!(summary(&write), "write /work/a.md");
+        let mcp = tool_request("mcp__crm__delete", &json!({"id": 7}), directory);
+        assert_eq!(summary(&mcp), "mcp__crm__delete {\"id\":7}");
+        let long = tool_request(
+            "mcp__crm__note",
+            &json!({"text": "x".repeat(400)}),
+            directory,
+        );
+        assert_eq!(summary(&long).chars().count(), 240);
+        assert!(summary(&long).ends_with('…'));
+        assert_eq!(gate_options(true).len(), 4);
+        assert!(!gate_options(false)
+            .iter()
+            .any(|option| option == "Always allow for this agent"));
+        for (id, option) in GATE_ANSWERS {
+            assert_eq!(gate_option(id), Some(option));
+            assert_eq!(gate_answer(option), Some(id));
+        }
+        assert_eq!(gate_option("allow_forever"), None);
+        let ask_first = RunPermissions {
+            mode: GateMode::Ask,
+            policies: vec![policy(ThreadPermissionDecision::Ask, &push)],
+            ..RunPermissions::default()
+        };
+        assert!(asks_first(&ask_first, &[], &push));
+        assert!(!asks_first(&ask_first, &[], &write));
+        let thread_ask = [policy(ThreadPermissionDecision::Ask, &write)];
+        assert!(asks_first(&RunPermissions::default(), &thread_ask, &write));
     }
 
     #[test]

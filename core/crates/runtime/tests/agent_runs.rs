@@ -23,7 +23,8 @@ use common::TemporaryProfile;
 /// The tests change process-wide stub settings, so they run one at a time.
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-const STUB_SETTINGS: [&str; 8] = [
+const STUB_SETTINGS: [&str; 9] = [
+    "PI_RESUME_STUB_AGENT_GATE",
     "PI_RESUME_STUB_STEER_CAPTURE",
     "PI_RESUME_STUB_PERMISSION_CAPTURE",
     "PI_RESUME_STUB_REPLY",
@@ -679,4 +680,219 @@ fn allow_for_this_thread_journals_a_thread_policy_the_next_check_reads() {
     .unwrap();
     let verdict: Value = serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
     assert_eq!(verdict["decision"], "allow");
+}
+
+/// Runs one agent run whose stub sends `title` with `call` to the agent
+/// permission bridge, and answers the runtime's reply.
+fn bridge_answer(setup: &Setup, agent: &str, title: &str, call: &Value) -> Value {
+    let capture = setup.temporary.root.join("editor.jsonl");
+    let _ = std::fs::remove_file(&capture);
+    std::env::set_var("PI_RESUME_STUB_EDITOR_CAPTURE", &capture);
+    std::env::set_var(
+        "PI_RESUME_STUB_EDITOR_REQUEST",
+        json!({"title": title, "prefill": call}).to_string(),
+    );
+    agents::queue_run(setup.profile(), agent).unwrap();
+    setup.tick();
+    assert!(wait(|| setup.live() == 0));
+    setup.tick();
+    let answer: Value = serde_json::from_str(
+        std::fs::read_to_string(&capture)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    serde_json::from_str(answer["value"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn always_allow_for_this_agent_saves_the_exact_rule_unless_ask_first_covers_it() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-always-allow", true, RuntimeHost::default());
+    let delete = json!({"tool": "mcp__crm__delete", "input": {"id": "lead-1"}});
+    let agent: Agent = serde_json::from_value(json!({
+        "name": "Releaser",
+        "instructions": "Release carefully.",
+        "permissions": {"mode": "ask", "ask_first": [{
+            "request_kind": "tool",
+            "resource": {"type": "tool", "name": "mcp__crm__delete", "input": {"id": "lead-1"}}
+        }]}
+    }))
+    .unwrap();
+    let agent = agents::save(setup.profile(), agent).unwrap();
+    let push = json!({"tool": "bash", "input": {"command": "git push origin main"}});
+
+    // The check names the exact request, a summary, and the gate's options.
+    let verdict = bridge_answer(&setup, &agent.id, "muniment:permission-check", &push);
+    assert_eq!(verdict["decision"], "ask");
+    let push_request = verdict["request"].clone();
+    assert_eq!(push_request["request_kind"], "command");
+    assert_eq!(
+        verdict["request"]["resource"]["arguments"],
+        json!(["bash", "git push origin main"])
+    );
+    assert!(verdict["summary"]
+        .as_str()
+        .unwrap()
+        .starts_with("bash `git push origin main` in "));
+    assert!(verdict["title"]
+        .as_str()
+        .unwrap()
+        .starts_with("Allow bash `git push origin main`"));
+    assert_eq!(
+        verdict["options"],
+        json!([
+            "Allow once",
+            "Allow for this thread",
+            "Always allow for this agent",
+            "Deny"
+        ])
+    );
+    // An ask-first request never offers the agent-wide answer.
+    let verdict = bridge_answer(&setup, &agent.id, "muniment:permission-check", &delete);
+    assert_eq!(verdict["decision"], "ask");
+    assert_eq!(
+        verdict["options"],
+        json!(["Allow once", "Allow for this thread", "Deny"])
+    );
+
+    // "Always allow for this agent" appends the exact rule to the profile
+    // and journals it in the thread for the run that asked.
+    let saved = bridge_answer(&setup, &agent.id, "muniment:permission-always", &push);
+    assert_eq!(saved["saved"], true, "{saved}");
+    let always = agents::get(setup.profile(), &agent.id)
+        .unwrap()
+        .permissions
+        .unwrap()
+        .always_allow;
+    assert_eq!(always.len(), 1);
+    assert_eq!(serde_json::to_value(&always[0]).unwrap(), push_request);
+    let thread = setup
+        .store()
+        .latest(&agent.id)
+        .unwrap()
+        .unwrap()
+        .thread_id
+        .unwrap();
+    let storage = open_profile_storage(setup.profile()).unwrap();
+    assert!(!storage
+        .lock()
+        .unwrap()
+        .journal
+        .active_thread_permission_policies(&thread)
+        .unwrap()
+        .is_empty());
+    drop(storage);
+    // Ask-first outranks it: the save is refused and the profile keeps one rule.
+    let refused = bridge_answer(&setup, &agent.id, "muniment:permission-always", &delete);
+    assert_eq!(refused["saved"], false, "{refused}");
+    assert!(refused["reason"].as_str().unwrap().contains("ask-first"));
+    assert_eq!(
+        agents::get(setup.profile(), &agent.id)
+            .unwrap()
+            .permissions
+            .unwrap()
+            .always_allow
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_failed_run_keeps_its_inputs_without_secrets_and_replays_against_the_current_agent() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    // A host with no chat grants fails every run before it starts.
+    let host = RuntimeHost {
+        account: Arc::new(SignedIn),
+        ..RuntimeHost::default()
+    };
+    let setup = Setup::new("agent-runs-replay", false, host);
+    setup
+        .state
+        .signed_workspace_approval()
+        .record("workspace-a".into());
+    let agent = setup.agent("Fragile");
+    let prompt = "Deploy with key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 now.";
+    let run = agents::run_now(setup.profile(), &agent.id, Some(prompt), Some("test")).unwrap();
+    setup.tick();
+    assert!(wait(|| setup.run(&run.id).status == RunStatus::Failed));
+
+    let listed =
+        agents::operation(setup.profile(), "agent.replays", json!({"id": agent.id})).unwrap();
+    let replays = listed["replays"].as_array().unwrap();
+    assert_eq!(replays.len(), 1, "{listed}");
+    let replay = &replays[0];
+    assert_eq!(replay["replay_id"], run.id.as_str());
+    assert_eq!(replay["trigger"]["kind"], "manual");
+    assert_eq!(replay["redacted"], true);
+    assert_eq!(replay["definition_changed"], false);
+    assert!(replay["error"].is_string());
+    let preview = replay["prompt_preview"].as_str().unwrap();
+    assert!(preview.starts_with("Deploy with key ") && !preview.contains("sk-ant-api03"));
+    let file = agents::folder(setup.profile(), &agent.id)
+        .unwrap()
+        .join("replays")
+        .join(format!("{}.json", run.id));
+    assert!(!std::fs::read_to_string(&file)
+        .unwrap()
+        .contains("sk-ant-api03"));
+
+    // The avatar shows the failure.
+    let listing = agents::operation(setup.profile(), "agent.list", json!({})).unwrap();
+    let activity = &listing["agents"][0]["activity"];
+    assert_eq!(activity["state"], "error", "{listing}");
+    assert!(activity["action"].is_string());
+
+    // A changed agent replays the same inputs; the new run names the old one.
+    let mut changed = agents::get(setup.profile(), &agent.id).unwrap();
+    changed.instructions = "Deploy only after the checks pass.".into();
+    agents::save(setup.profile(), changed).unwrap();
+    let answer = agents::operation(
+        setup.profile(),
+        "agent.replay",
+        json!({"id": agent.id, "replay_id": run.id}),
+    )
+    .unwrap();
+    let replayed = &answer["run"];
+    assert_eq!(replayed["origin_run_id"], run.id.as_str());
+    assert_eq!(replayed["trigger"]["kind"], "manual");
+    assert_eq!(replayed["trigger"]["source"], "replay");
+    assert_eq!(answer["replay"]["definition_changed"], true);
+    assert_eq!(answer["replay"]["replayed_by"][0], replayed["id"]);
+    let queued = setup.run(replayed["id"].as_str().unwrap());
+    assert!(queued.prompt.starts_with("Deploy with key ") && !queued.prompt.contains("sk-ant"));
+    let listing = agents::operation(setup.profile(), "agent.list", json!({})).unwrap();
+    assert_eq!(listing["agents"][0]["activity"]["state"], "running");
+    assert!(agents::operation(
+        setup.profile(),
+        "agent.replay",
+        json!({"id": agent.id, "replay_id": "not-a-replay"}),
+    )
+    .is_err());
+
+    // The library keeps the newest replays only.
+    for _ in 0..muniment_core::agent_replays::MAX_REPLAYS + 2 {
+        let mut failed = setup.run(&run.id);
+        failed.id = uuid::Uuid::now_v7().to_string();
+        muniment_core::agent_replays::record(setup.profile(), &failed).unwrap();
+    }
+    let listed =
+        agents::operation(setup.profile(), "agent.replays", json!({"id": agent.id})).unwrap();
+    assert_eq!(
+        listed["replays"].as_array().unwrap().len(),
+        muniment_core::agent_replays::MAX_REPLAYS
+    );
+    // Deleting the agent removes its replays.
+    let mut done = setup.run(queued.id.as_str());
+    done.status = RunStatus::Cancelled;
+    setup.store().save(&mut done).unwrap();
+    let folder = agents::folder(setup.profile(), &agent.id).unwrap();
+    agents::delete_agent(setup.profile(), &agent.id, false).unwrap();
+    assert!(!folder.exists());
 }

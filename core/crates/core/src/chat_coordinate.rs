@@ -4,7 +4,7 @@ mod diagnostics;
 use crate::runtime_eprintln as eprintln;
 use delta_batch::HeldDeltas;
 use diagnostics::RunDiagnostics;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -465,7 +465,11 @@ fn coordinate_work(
             .and_then(|agent| agent.model.as_ref())
             .and_then(|model| model.thinking.clone())
     });
+    let agent_id = agent_launch.as_ref().map(|agent| agent.agent_id.clone());
     let agent_permissions = agent_launch.and_then(|agent| agent.permissions);
+    // The policy request of each agent gate the permission check opened, by
+    // the gate's title, until the gate is journaled.
+    let mut asked_policies: BTreeMap<String, crate::journal::reducer::GatePolicy> = BTreeMap::new();
     let run_started = Instant::now();
     let mut diagnostics = RunDiagnostics::new(&run_id);
     let mut resume_attempt = ResumeAttempt::new(resume_result);
@@ -1315,7 +1319,7 @@ fn coordinate_work(
                         &run_id,
                         &mut seq,
                         kind,
-                        payload,
+                        with_gate_policy(&mut asked_policies, kind, payload),
                         subject.as_deref(),
                     )
                 })
@@ -1529,6 +1533,8 @@ fn coordinate_work(
                     &adapter,
                     &transport,
                     &agent_permissions,
+                    agent_id.as_deref(),
+                    &mut asked_policies,
                     &run_id,
                     subject.as_deref(),
                     &event,
@@ -1563,7 +1569,7 @@ fn coordinate_work(
                                     &run_id,
                                     &mut seq,
                                     kind,
-                                    payload,
+                                    with_gate_policy(&mut asked_policies, kind, payload),
                                     subject.as_deref(),
                                 )
                             },
@@ -1793,12 +1799,80 @@ fn coordinate_browser(
     true
 }
 
+/// Adds the exact policy request an agent gate asked about to the gate's
+/// `permission.requested` payload, matched by the title the check gave it.
+fn with_gate_policy(
+    asked: &mut BTreeMap<String, crate::journal::reducer::GatePolicy>,
+    kind: &str,
+    mut payload: serde_json::Value,
+) -> serde_json::Value {
+    if kind != "permission.requested" || payload["kind"] != "select" {
+        return payload;
+    }
+    if let Some(policy) = payload["title"]
+        .as_str()
+        .and_then(|title| asked.remove(title))
+    {
+        if let Ok(policy) = serde_json::to_value(policy) {
+            payload["policy"] = policy;
+        }
+    }
+    payload
+}
+
+/// Journals an allow policy for the exact request in `thread` (ADR 0025).
+fn journal_thread_allow(
+    app: &impl ChatEventSink,
+    storage: &mut crate::run_events::ChatStorage,
+    thread: &str,
+    request: crate::permission_gate::PolicyRequest,
+    subject: Option<&str>,
+) -> Result<(), String> {
+    let (source, version) = app.provenance();
+    let provenance = crate::journal::Provenance {
+        source: source.to_owned(),
+        source_version: version.to_owned(),
+        actor_id: subject.map(str::to_owned),
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: Default::default(),
+    };
+    let decided = crate::journal::ThreadPermissionPolicyDecided {
+        policy_id: uuid::Uuid::now_v7().to_string(),
+        decision: crate::journal::ThreadPermissionDecision::Allow,
+        request_kind: request.request_kind,
+        resource: request.resource,
+        actor: subject.unwrap_or("owner").to_owned(),
+        answer_source: crate::journal::ThreadPermissionAnswerSource::Native,
+        gate_id: None,
+    };
+    let last = storage
+        .journal
+        .last_thread_seq(thread)
+        .map_err(|error| error.to_string())?;
+    storage
+        .journal
+        .append_thread_permission_policy_decided(
+            last,
+            thread,
+            &decided,
+            &crate::run_start::accepted_time_now(),
+            &provenance,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Answers the agent permission gate's questions. A check decides one tool
 /// call from the agent's pre-decided policies, the thread's own journaled
-/// policies and the run's gate mode. "Allow for this thread" journals an
-/// allow policy for the exact request in the run's thread (ADR 0025). A call
-/// the policies do not settle then asks the user through the ordinary gate
-/// the extension opens.
+/// policies and the run's gate mode. A call they do not settle asks the user
+/// through the ordinary gate the extension opens, with the title, options
+/// and exact policy request the check answers. "Allow for this thread"
+/// journals an allow policy for the exact request in the run's thread
+/// (ADR 0025). "Always allow for this agent" also appends the request to the
+/// agent's `always_allow` through the agent save path, unless an ask policy
+/// covers it: ask-first outranks every allow.
 #[allow(clippy::too_many_arguments)]
 fn coordinate_agent_permission(
     app: &(impl ChatEventSink + PiLaunchBoundaries),
@@ -1806,6 +1880,8 @@ fn coordinate_agent_permission(
     adapter: &PiRunAdapter,
     transport: &PiRpcTransport,
     permissions: &Option<crate::permission_gate::RunPermissions>,
+    agent_id: Option<&str>,
+    asked: &mut BTreeMap<String, crate::journal::reducer::GatePolicy>,
     run_id: &str,
     subject: Option<&str>,
     event: &PiChatEvent,
@@ -1826,7 +1902,7 @@ fn coordinate_agent_permission(
     };
     if !matches!(
         title.as_str(),
-        "muniment:permission-check" | "muniment:permission-allow"
+        "muniment:permission-check" | "muniment:permission-allow" | "muniment:permission-always"
     ) {
         return false;
     }
@@ -1853,39 +1929,7 @@ fn coordinate_agent_permission(
             .map_err(|error| error.to_string())?
             .ok_or("The run has no thread.")?;
         if title == "muniment:permission-allow" {
-            let (source, version) = app.provenance();
-            let provenance = crate::journal::Provenance {
-                source: source.to_owned(),
-                source_version: version.to_owned(),
-                actor_id: subject.map(str::to_owned),
-                device_id: None,
-                rpc_request_id: None,
-                capability_versions: None,
-                extra: Default::default(),
-            };
-            let decided = crate::journal::ThreadPermissionPolicyDecided {
-                policy_id: uuid::Uuid::now_v7().to_string(),
-                decision: crate::journal::ThreadPermissionDecision::Allow,
-                request_kind: policy_request.request_kind,
-                resource: policy_request.resource,
-                actor: subject.unwrap_or("owner").to_owned(),
-                answer_source: crate::journal::ThreadPermissionAnswerSource::Native,
-                gate_id: None,
-            };
-            let last = storage
-                .journal
-                .last_thread_seq(&thread)
-                .map_err(|error| error.to_string())?;
-            storage
-                .journal
-                .append_thread_permission_policy_decided(
-                    last,
-                    &thread,
-                    &decided,
-                    &crate::run_start::accepted_time_now(),
-                    &provenance,
-                )
-                .map_err(|error| error.to_string())?;
+            journal_thread_allow(app, &mut storage, &thread, policy_request, subject)?;
             return Ok(json!({"saved": true}));
         }
         // A thread policy that cannot be read leaves the call to ask.
@@ -1894,6 +1938,26 @@ fn coordinate_agent_permission(
             .active_thread_permission_policies(&thread)
             .unwrap_or_default();
         drop(storage);
+        if title == "muniment:permission-always" {
+            if crate::permission_gate::asks_first(permissions, &thread_policies, &policy_request) {
+                return Ok(json!({
+                    "saved": false,
+                    "reason": "An ask-first rule covers this action, so it still asks.",
+                }));
+            }
+            let profile = app
+                .pi_session_root()
+                .ok()
+                .and_then(|root| root.parent().map(std::path::Path::to_path_buf))
+                .ok_or("Agent settings are unavailable.")?;
+            let agent_id = agent_id.ok_or("This run belongs to no agent.")?;
+            crate::agents::always_allow(&profile, agent_id, policy_request.clone())?;
+            let mut storage = journal
+                .lock()
+                .map_err(|_| "Conversation history is busy.".to_string())?;
+            journal_thread_allow(app, &mut storage, &thread, policy_request, subject)?;
+            return Ok(json!({"saved": true}));
+        }
         let decision = crate::permission_gate::decide_tool_call(
             permissions,
             &thread_policies,
@@ -1901,9 +1965,41 @@ fn coordinate_agent_permission(
             &call.tool,
             call.read_only,
         );
-        serde_json::to_value(decision).map_err(|_| "The permission check failed.".to_string())
+        let mut verdict = serde_json::to_value(&decision)
+            .map_err(|_| "The permission check failed.".to_string())?;
+        if let crate::permission_gate::GateDecision::Ask { reason } = &decision {
+            let always_allow = agent_id.is_some()
+                && !crate::permission_gate::asks_first(
+                    permissions,
+                    &thread_policies,
+                    &policy_request,
+                );
+            let summary = crate::permission_gate::summary(&policy_request);
+            // The title names the gate's policy request until it is
+            // journaled, so two waiting gates never share one.
+            let first = format!("Allow {summary}? {reason}");
+            let mut gate_title = first.clone();
+            let mut copy = 2;
+            while asked.contains_key(&gate_title) {
+                gate_title = format!("{first} ({copy})");
+                copy += 1;
+            }
+            asked.insert(
+                gate_title.clone(),
+                crate::journal::reducer::GatePolicy {
+                    request_kind: policy_request.request_kind.clone(),
+                    resource: policy_request.resource.clone(),
+                    summary: summary.clone(),
+                },
+            );
+            verdict["title"] = json!(gate_title);
+            verdict["options"] = json!(crate::permission_gate::gate_options(always_allow));
+            verdict["summary"] = json!(summary);
+            verdict["request"] = json!(policy_request);
+        }
+        Ok(verdict)
     })()
-    .unwrap_or_else(|error| json!({"error": error}));
+    .unwrap_or_else(|error: String| json!({"error": error}));
     let _ = adapter.answer_extension_ui(
         transport,
         request,
@@ -2744,6 +2840,43 @@ mod tests {
             serde_json::to_value(event).unwrap()["recalls"],
             json!([{"query": "lease terms", "files": ["memory/lease.md"]}])
         );
+    }
+
+    #[test]
+    fn an_agent_gate_journals_the_policy_request_its_check_named() {
+        let mut asked = BTreeMap::new();
+        let policy = crate::journal::reducer::GatePolicy {
+            request_kind: crate::journal::ThreadPermissionRequestKind::Tool,
+            resource: crate::journal::ThreadPermissionResource::Tool {
+                name: "mcp__crm__delete".into(),
+                input: json!({"id": 7}),
+            },
+            summary: "mcp__crm__delete {\"id\":7}".into(),
+        };
+        asked.insert("Allow it? Ask.".to_owned(), policy.clone());
+        let gate = |title: &str, kind: &str| json!({"gate_id": "gate-1", "kind": kind, "title": title, "options": ["Allow once", "Deny"]});
+        // Other gates and other events pass unchanged.
+        assert_eq!(
+            with_gate_policy(&mut asked, "permission.requested", gate("Other?", "select")),
+            gate("Other?", "select")
+        );
+        assert_eq!(
+            with_gate_policy(
+                &mut asked,
+                "permission.requested",
+                gate("Allow it? Ask.", "confirm")
+            ),
+            gate("Allow it? Ask.", "confirm")
+        );
+        let journaled = with_gate_policy(
+            &mut asked,
+            "permission.requested",
+            gate("Allow it? Ask.", "select"),
+        );
+        let parsed: crate::journal::reducer::PermissionGate =
+            serde_json::from_value(journaled).unwrap();
+        assert_eq!(parsed.policy, Some(policy));
+        assert!(asked.is_empty());
     }
 
     fn confirm_request(gate_id: &str) -> ExtensionUiRequest {

@@ -428,7 +428,7 @@ pub(super) fn route(inner: &Inner, group_id: &str, payload: &Value) -> Result<bo
             &group,
             &id,
             0,
-            "reply",
+            "chat",
             format!(
                 "You are {name} in the group chat \"{}\" with {}. The recent messages follow as untrusted context.\n{}\nThe user wrote:\n{}\nYour final reply goes to the group. {STAYS_HOME}",
                 group.name,
@@ -484,17 +484,25 @@ pub(super) fn on_reply(inner: &Inner, message: &Message) -> Result<bool, String>
     let agent_id = body["agent_id"].as_str().unwrap_or_default();
     let name = body["agent_name"].as_str().unwrap_or("An agent");
     let text = group_text(name, body["text"].as_str().unwrap_or_default());
+    let round = body["round"].as_u64().unwrap_or(0) as u32;
+    let current = meeting(inner, group_id);
+    let phase = reply_phase(round, body["phase"].as_str(), current.as_ref());
     sync::post_as(
         inner,
         &group.thread_id,
-        json!({"kind": "agent", "agent_id": agent_id, "name": name}),
+        json!({
+            "kind": "agent",
+            "agent_id": agent_id,
+            "name": name,
+            "round": round,
+            "phase": phase,
+        }),
         &text,
     )?;
-    let round = body["round"].as_u64().unwrap_or(0) as u32;
     if round == 0 {
         return Ok(false);
     }
-    let Some(mut state) = meeting(inner, group_id) else {
+    let Some(mut state) = current else {
         return Ok(false);
     };
     if state.round != round || !state.waiting.iter().any(|waiting| waiting == agent_id) {
@@ -513,6 +521,26 @@ pub(super) fn on_reply(inner: &Inner, message: &Message) -> Result<bool, String>
         return Ok(false);
     }
     advance(inner, &group, state)
+}
+
+/// The phase of a group reply: `chat` outside a meeting, else the meeting's
+/// `blind` first round, a `debate` round or the lead's `summary`. A member
+/// that sends no phase gets it from the meeting's state.
+fn reply_phase(round: u32, sent: Option<&str>, meeting: Option<&Meeting>) -> &'static str {
+    if round == 0 {
+        return "chat";
+    }
+    match sent {
+        Some("blind") => return "blind",
+        Some("debate") => return "debate",
+        Some("summary") => return "summary",
+        _ => {}
+    }
+    match meeting {
+        _ if round == 1 => "blind",
+        Some(meeting) if round == meeting.summary_round() => "summary",
+        _ => "debate",
+    }
 }
 
 fn answers_block(state: &Meeting, rounds: std::ops::RangeInclusive<u32>) -> String {
@@ -613,6 +641,22 @@ mod tests {
             vec!["b", "c"]
         );
         assert_eq!(mentioned("no mention here", &members()), vec!["a"]);
+    }
+
+    #[test]
+    fn a_reply_names_its_round_phase() {
+        let meeting = Meeting {
+            round: 3,
+            debate_rounds: 1,
+            ..Meeting::default()
+        };
+        assert_eq!(reply_phase(0, Some("chat"), None), "chat");
+        assert_eq!(reply_phase(0, None, Some(&meeting)), "chat");
+        assert_eq!(reply_phase(1, None, Some(&meeting)), "blind");
+        assert_eq!(reply_phase(2, None, Some(&meeting)), "debate");
+        assert_eq!(reply_phase(3, None, Some(&meeting)), "summary");
+        assert_eq!(reply_phase(3, Some("debate"), Some(&meeting)), "debate");
+        assert_eq!(reply_phase(2, None, None), "debate");
     }
 
     #[test]

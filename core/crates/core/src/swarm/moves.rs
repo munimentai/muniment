@@ -248,8 +248,10 @@ fn hand_over(inner: &Inner, agent_id: &str, to: &str) -> Result<DirectoryEntry, 
         deleted: false,
         primary_thread: None,
         definition: None,
+        activity: None,
     });
     entry.primary_runtime = to.to_owned();
+    entry.activity = None;
     entry.epoch = agent.epoch;
     entry.updated_at = later(inner, &entry.updated_at);
     entry.primary_thread = handover.primary_thread.clone();
@@ -387,6 +389,7 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
         deleted: false,
         primary_thread: handover.primary_thread.clone(),
         definition: serde_json::to_value(&agent).ok(),
+        activity: None,
     };
     inner
         .store

@@ -49,6 +49,13 @@ pub enum SubscriptionEvent {
     ApprovalPending(Value),
     /// A pending approval was answered or closed; the body is the approval.
     ApprovalResolved(Value),
+    /// An agent on a swarm member changed what it does: `{agent_id,
+    /// runtime_id, activity}`. Only a subscription that asked for
+    /// `swarm_live` receives it.
+    AgentActivity(Value),
+    /// A message was posted to a group thread: `{group_id, thread_id,
+    /// post}`. Only a subscription that asked for `swarm_live` receives it.
+    GroupPosted(Value),
 }
 
 /// A connection-bound client for the peer-authorized desktop session.
@@ -575,7 +582,7 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        self.subscribe_chat_events_with(cursor, false, false, false)
+        self.subscribe_chat_events_with(cursor, false, false, false, false)
     }
 
     /// Subscribes like [`Self::subscribe_chat_events_after`] and also asks
@@ -586,13 +593,13 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        match self.subscribe_chat_events_with(cursor, true, false, false) {
+        match self.subscribe_chat_events_with(cursor, true, false, false, false) {
             Err(_)
                 if self
                     .last_request_error()
                     .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest) =>
             {
-                self.subscribe_chat_events_with(cursor, false, false, false)
+                self.subscribe_chat_events_with(cursor, false, false, false, false)
             }
             result => result,
         }
@@ -611,7 +618,7 @@ impl DesktopClient {
                 .last_request_error()
                 .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
         };
-        match self.subscribe_chat_events_with(cursor, true, true, false) {
+        match self.subscribe_chat_events_with(cursor, true, true, false, false) {
             Err(_) if refused(self) => self.subscribe_chat_events_with_update_status(cursor),
             result => result,
         }
@@ -630,8 +637,27 @@ impl DesktopClient {
                 .last_request_error()
                 .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
         };
-        match self.subscribe_chat_events_with(cursor, true, true, true) {
+        match self.subscribe_chat_events_with(cursor, true, true, true, false) {
             Err(_) if refused(self) => self.subscribe_chat_events_with_agent_runs(cursor),
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_swarm`] and also
+    /// asks for `agent.activity` and `group.posted`. A runtime that sends
+    /// neither refuses the request, and the subscription then carries the
+    /// swarm events without them.
+    pub fn subscribe_chat_events_with_swarm_live(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true, true, true) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_swarm(cursor),
             result => result,
         }
     }
@@ -642,6 +668,7 @@ impl DesktopClient {
         update_status: bool,
         agent_runs: bool,
         swarm: bool,
+        swarm_live: bool,
     ) -> Result<String, ClientError> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -658,6 +685,9 @@ impl DesktopClient {
         }
         if swarm {
             base.insert("swarm".into(), Value::Bool(true));
+        }
+        if swarm_live {
+            base.insert("swarm_live".into(), Value::Bool(true));
         }
         let response = match cursor {
             Some(cursor) => {
@@ -754,6 +784,8 @@ impl DesktopClient {
                         | EventName::SwarmChanged
                         | EventName::AgentApprovalPending
                         | EventName::AgentApprovalResolved
+                        | EventName::AgentActivity
+                        | EventName::GroupPosted
                 )
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -802,6 +834,18 @@ impl DesktopClient {
                 } else {
                     SubscriptionEvent::ApprovalResolved(event.body)
                 });
+            }
+            if event.event == EventName::AgentActivity {
+                if !event.body["agent_id"].is_string() || !event.body["activity"].is_object() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::AgentActivity(event.body));
+            }
+            if event.event == EventName::GroupPosted {
+                if !event.body["group_id"].is_string() || !event.body["post"].is_object() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::GroupPosted(event.body));
             }
             if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
                 if let Some(seq) = body.get("seq").and_then(Value::as_u64) {
@@ -1236,6 +1280,8 @@ impl DesktopClient {
             Operation::RoutineWebhookInfo => &["hook"],
             Operation::AgentThreads => &["threads"],
             Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
+            Operation::AgentReplays => &["replays"],
+            Operation::AgentReplay => &["run", "replay"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)
@@ -1254,6 +1300,20 @@ impl DesktopClient {
     /// Lists the built-in tools, MCP servers and skills of this runtime.
     pub fn agent_tool_catalog(&mut self) -> Result<Value, ClientError> {
         self.agent_request(Operation::AgentToolCatalog, serde_json::json!({}))
+    }
+
+    /// Lists the saved inputs of an agent's failed runs, newest first.
+    pub fn agent_replays(&mut self, id: &str) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentReplays, serde_json::json!({"id": id}))
+    }
+
+    /// Runs a failed run's saved inputs again against the agent's current
+    /// definition and answers the new run and the replay.
+    pub fn agent_replay(&mut self, id: &str, replay_id: &str) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::AgentReplay,
+            serde_json::json!({"id": id, "replay_id": replay_id}),
+        )
     }
 
     pub fn read_agent(&mut self, id: &str) -> Result<Value, ClientError> {

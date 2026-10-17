@@ -293,6 +293,7 @@ mod tests {
                 message: "Proceed?".into(),
                 timeout: None,
             },
+            policy: None,
         });
         assert_eq!(
             resumable_locator(Some(&event(None)), &value, None, &root),

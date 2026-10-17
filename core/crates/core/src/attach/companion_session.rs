@@ -452,6 +452,8 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::RoutineWebhookInfo
         | Operation::AgentThreads
         | Operation::AgentToolCatalog
+        | Operation::AgentReplays
+        | Operation::AgentReplay
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }

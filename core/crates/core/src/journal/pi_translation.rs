@@ -65,8 +65,12 @@ pub fn permission_journal_payload(request: &ExtensionUiRequest) -> Value {
             timeout,
         },
     };
-    serde_json::to_value(PermissionGate { gate_id, request })
-        .expect("permission gate is serializable")
+    serde_json::to_value(PermissionGate {
+        gate_id,
+        request,
+        policy: None,
+    })
+    .expect("permission gate is serializable")
 }
 
 pub fn close_open_effects<E>(

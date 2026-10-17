@@ -294,7 +294,7 @@ pub fn folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
     }
     Ok(folder)
 }
-fn write(path: &Path, content: &[u8]) -> Result<(), String> {
+pub(crate) fn write(path: &Path, content: &[u8]) -> Result<(), String> {
     use std::io::Write;
     write_with(path, content, fs::File::write_all, fs::File::sync_all)
 }
@@ -800,6 +800,23 @@ pub(crate) fn save_definition(
     apply_routine_state(&mut agent, &state);
     Ok(agent)
 }
+/// Appends one exact request to an agent's `always_allow` through the agent
+/// save path. A request the agent's `ask_first` names is refused, since
+/// ask-first outranks every allow; one already listed changes nothing.
+pub fn always_allow(profile: &Path, id: &str, request: PolicyRequest) -> Result<Agent, String> {
+    let mut agent = get(profile, id)?;
+    let permissions = agent
+        .permissions
+        .get_or_insert_with(AgentPermissions::default);
+    if permissions.ask_first.contains(&request) {
+        return Err("An ask-first rule covers this action, so it still asks.".into());
+    }
+    if permissions.always_allow.contains(&request) {
+        return read(profile, id);
+    }
+    permissions.always_allow.push(request);
+    save(profile, agent)
+}
 /// The earliest next fire of an agent's enabled cron routines.
 pub fn next_routine_fire(agent: &Agent, after: chrono::DateTime<chrono::Utc>) -> Option<i64> {
     agent
@@ -1053,6 +1070,7 @@ pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(),
         return Err("The memory folder must not be a symbolic link.".into());
     }
     fs::remove_file(directory.join("agent.md")).map_err(|_| "The agent could not be deleted.")?;
+    crate::agent_replays::remove_all(profile, id)?;
     let _ = fs::remove_dir(directory);
     if remove_memory {
         match fs::remove_dir_all(memory.join(id)) {
@@ -1286,8 +1304,28 @@ pub fn operation(
                     latest.insert(agent.id.clone(), json!(run));
                 }
             }
+            let ids: Vec<String> = listing
+                .agents
+                .iter()
+                .map(|agent| agent.id.clone())
+                .collect();
+            let swarm = crate::swarm::Swarm::for_profile(profile);
+            let mut activities = crate::agent_runs::activities(profile, &ids, &|run_id| {
+                swarm
+                    .as_ref()
+                    .and_then(|swarm| swarm.approval_summary(run_id))
+            })?;
+            let agents: Vec<serde_json::Value> = listing
+                .agents
+                .iter()
+                .map(|agent| {
+                    let mut value = json!(agent);
+                    value["activity"] = json!(activities.remove(&agent.id));
+                    value
+                })
+                .collect();
             Ok(json!({
-                "agents": listing.agents,
+                "agents": agents,
                 "primary_threads": listing.state.primary_threads,
                 "latest_runs": latest,
                 "errors": listing.errors,
@@ -1331,6 +1369,20 @@ pub fn operation(
                 request.cursor.as_deref(),
             )?;
             Ok(json!(page))
+        }
+        "agent.replays" => {
+            let request: ById = parse(body)?;
+            crate::agent_replays::list(profile, &request.id)
+        }
+        "agent.replay" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Replay {
+                id: String,
+                replay_id: String,
+            }
+            let request: Replay = parse(body)?;
+            crate::agent_replays::replay(profile, &request.id, &request.replay_id)
         }
         "routine.list" => {
             let request: ForAgent = parse(body)?;

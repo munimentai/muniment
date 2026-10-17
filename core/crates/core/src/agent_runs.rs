@@ -279,6 +279,144 @@ pub fn publish_remote(profile: &Path, body: Value) {
     publish_body(&profile.join(STORE_FILE), body);
 }
 
+/// What an agent's avatar shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityState {
+    Idle,
+    Running,
+    Waiting,
+    Error,
+}
+
+/// What an agent is doing now, derived from its runs in the queue and the
+/// gate a run waits at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Activity {
+    pub state: ActivityState,
+    /// A short text of the current action, such as the approval a run waits
+    /// for or why the last run failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// When the agent entered this state. None for an agent that never ran.
+    pub since: Option<String>,
+}
+
+const MAX_ACTION_CHARS: usize = 120;
+
+fn short_action(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() <= MAX_ACTION_CHARS {
+        return text.to_owned();
+    }
+    let mut short: String = text.chars().take(MAX_ACTION_CHARS - 1).collect();
+    short.push('…');
+    short
+}
+
+fn running_action(run: &Run) -> String {
+    if run.trigger.source.as_deref() == Some(REPLAY_SOURCE) {
+        return "Replays a failed run".into();
+    }
+    match run.trigger.kind {
+        TriggerKind::Manual => "Runs on request",
+        TriggerKind::Cron => "Runs a scheduled routine",
+        TriggerKind::Webhook => "Handles a webhook",
+        TriggerKind::Mcp => "Handles an MCP trigger",
+        TriggerKind::AgentMessage => "Answers an agent message",
+    }
+    .into()
+}
+
+/// An agent's activity from its active runs, oldest first, and its newest
+/// ended run. A run that waits for an answer outranks a running one, which
+/// outranks a queued one; with none, a failed last run shows an error and
+/// anything else is idle. `gate` names the approval a run waits at.
+pub fn derive_activity(
+    active: &[Run],
+    latest: Option<&Run>,
+    gate: impl Fn(&str) -> Option<String>,
+) -> Activity {
+    if let Some(run) = active
+        .iter()
+        .find(|run| run.status == RunStatus::WaitingInput)
+    {
+        return Activity {
+            state: ActivityState::Waiting,
+            action: Some(short_action(
+                &gate(&run.id).unwrap_or_else(|| "Waits for an answer".into()),
+            )),
+            since: Some(
+                run.waiting_since
+                    .clone()
+                    .unwrap_or_else(|| run.updated_at.clone()),
+            ),
+        };
+    }
+    if let Some(run) = active
+        .iter()
+        .find(|run| matches!(run.status, RunStatus::Running | RunStatus::Leased))
+    {
+        return Activity {
+            state: ActivityState::Running,
+            action: Some(running_action(run)),
+            since: Some(run.created_at.clone()),
+        };
+    }
+    if let Some(run) = active.first() {
+        return Activity {
+            state: ActivityState::Running,
+            action: Some("Waits to start".into()),
+            since: Some(run.created_at.clone()),
+        };
+    }
+    match latest {
+        Some(run) if run.status == RunStatus::Failed => Activity {
+            state: ActivityState::Error,
+            action: Some(short_action(
+                run.error.as_deref().unwrap_or("The last run failed."),
+            )),
+            since: Some(run.updated_at.clone()),
+        },
+        latest => Activity {
+            state: ActivityState::Idle,
+            action: None,
+            since: latest.map(|run| run.updated_at.clone()),
+        },
+    }
+}
+
+/// The activity of each agent in `agent_ids`, from one read of the queue.
+pub fn activities(
+    profile: &Path,
+    agent_ids: &[String],
+    gate: &dyn Fn(&str) -> Option<String>,
+) -> Result<std::collections::BTreeMap<String, Activity>, String> {
+    let store = RunStore::open(profile)?;
+    let active = store.active()?;
+    let mut activities = std::collections::BTreeMap::new();
+    for agent_id in agent_ids {
+        let mine: Vec<Run> = active
+            .iter()
+            .filter(|run| &run.agent_id == agent_id)
+            .cloned()
+            .collect();
+        let latest = if mine.is_empty() {
+            store.latest(agent_id)?
+        } else {
+            None
+        };
+        activities.insert(
+            agent_id.clone(),
+            derive_activity(&mine, latest.as_ref(), gate),
+        );
+    }
+    Ok(activities)
+}
+
+/// The `source` of a run that replays a failed run's inputs.
+pub const REPLAY_SOURCE: &str = "replay";
+
 /// The run store of one profile.
 #[derive(Clone, Debug)]
 pub struct RunStore {
@@ -517,7 +655,8 @@ impl RunStore {
         if previous.as_ref() == Some(run) {
             return Ok(());
         }
-        let notify = warrants_notification(previous.map(|previous| previous.status), run);
+        let previous_status = previous.map(|previous| previous.status);
+        let notify = warrants_notification(previous_status, run);
         let now = now();
         run.updated_at = timestamp(now);
         if let Some(summary) = &run.result_summary {
@@ -546,6 +685,16 @@ impl RunStore {
             .map_err(|_| "The run could not be saved.".to_string())?;
         if !run.status.is_active() {
             prune(&connection, &run.agent_id)?;
+        }
+        if run.status == RunStatus::Failed && previous_status != Some(RunStatus::Failed) {
+            if let Some(profile) = self.path.parent() {
+                if let Err(error) = crate::agent_replays::record(profile, run) {
+                    crate::runtime_eprintln!(
+                        "muniment-runtime: failed run inputs not saved run_id={}: {error}",
+                        run.id
+                    );
+                }
+            }
         }
         publish(&self.path, run, notify);
         Ok(())
@@ -628,6 +777,55 @@ mod tests {
             hop: 0,
             origin_run_id: None,
         }
+    }
+
+    #[test]
+    fn an_agents_activity_follows_its_runs_and_gate() {
+        let (_root, store) = store();
+        let none = derive_activity(&[], None, |_| None);
+        assert_eq!(none.state, ActivityState::Idle);
+        assert!(none.since.is_none() && none.action.is_none());
+        let queued = store
+            .enqueue(new_run("agent-a", TriggerKind::Webhook))
+            .unwrap();
+        let waiting_start = derive_activity(std::slice::from_ref(&queued), None, |_| None);
+        assert_eq!(waiting_start.state, ActivityState::Running);
+        assert_eq!(waiting_start.action.as_deref(), Some("Waits to start"));
+        assert_eq!(waiting_start.since, Some(queued.created_at.clone()));
+        let mut running = queued.clone();
+        running.status = RunStatus::Running;
+        let busy = derive_activity(&[running.clone()], None, |_| None);
+        assert_eq!(busy.action.as_deref(), Some("Handles a webhook"));
+        let mut waiting = running.clone();
+        waiting.status = RunStatus::WaitingInput;
+        waiting.waiting_since = Some("2026-01-01T00:00:05Z".into());
+        // A waiting run outranks a running one and shows its approval.
+        let asked = derive_activity(&[running.clone(), waiting.clone()], None, |run_id| {
+            (run_id == waiting.id).then(|| "bash `git push` in /work".to_owned())
+        });
+        assert_eq!(asked.state, ActivityState::Waiting);
+        assert_eq!(asked.action.as_deref(), Some("bash `git push` in /work"));
+        assert_eq!(asked.since.as_deref(), Some("2026-01-01T00:00:05Z"));
+        let mut failed = running.clone();
+        failed.status = RunStatus::Failed;
+        failed.error = Some("x".repeat(300));
+        let error = derive_activity(&[], Some(&failed), |_| None);
+        assert_eq!(error.state, ActivityState::Error);
+        assert_eq!(
+            error.action.as_ref().unwrap().chars().count(),
+            MAX_ACTION_CHARS
+        );
+        let mut done = running;
+        done.status = RunStatus::Completed;
+        done.trigger.source = Some(REPLAY_SOURCE.into());
+        let idle = derive_activity(&[], Some(&done), |_| None);
+        assert_eq!(idle.state, ActivityState::Idle);
+        assert_eq!(idle.since, Some(done.updated_at.clone()));
+        done.status = RunStatus::Running;
+        assert_eq!(
+            derive_activity(&[done], None, |_| None).action.as_deref(),
+            Some("Replays a failed run")
+        );
     }
 
     #[test]

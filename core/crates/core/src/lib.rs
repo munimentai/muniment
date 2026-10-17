@@ -110,6 +110,7 @@ pub use muniment_attach::{
 pub mod agent_extract;
 pub mod agent_hooks;
 pub mod agent_poll;
+pub mod agent_replays;
 pub mod agent_routines;
 pub mod agent_runs;
 pub mod agent_templates;

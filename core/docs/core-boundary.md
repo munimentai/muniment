@@ -27,6 +27,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | agent_extract | It proposes agent routines from saved instructions. |
 | module | agent_hooks | It verifies webhook deliveries and queues their agent runs. |
 | module | agent_poll | It polls MCP routines and evaluates their conditions. |
+| module | agent_replays | It keeps failed agent runs' inputs and runs them again. |
 | module | agent_routines | It defines agent routines, their triggers and cron schedules. |
 | module | agent_runs | It stores the durable queue of agent runs. |
 | module | agent_templates | It imports and exports agent templates, Grok Bot share pages included. |

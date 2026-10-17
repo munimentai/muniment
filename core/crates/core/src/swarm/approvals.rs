@@ -78,6 +78,69 @@ fn current_gate(inner: &Inner, run_id: &str) -> Result<Option<Value>, String> {
     Ok(gate)
 }
 
+/// The exact policy request, summary and answer ids of an agent gate. Other
+/// gates have none.
+fn gate_rule(
+    gate: &Value,
+) -> (
+    Option<crate::permission_gate::PolicyRequest>,
+    Option<String>,
+    Vec<String>,
+) {
+    let Ok(policy) =
+        serde_json::from_value::<crate::journal::reducer::GatePolicy>(gate["policy"].clone())
+    else {
+        return (None, None, Vec::new());
+    };
+    let answers = gate["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(crate::permission_gate::gate_answer)
+        .map(str::to_owned)
+        .collect();
+    (
+        Some(crate::permission_gate::PolicyRequest {
+            request_kind: policy.request_kind,
+            resource: policy.resource,
+        }),
+        Some(policy.summary),
+        answers,
+    )
+}
+
+/// The gate answer a client's answer names: an answer id the approval
+/// offers, such as `always_allow_agent`, or a gate answer itself.
+fn resolve_answer(approval: &Approval, answer: &Value) -> Result<ChatPermissionAnswer, String> {
+    if let Some(id) = answer.as_str() {
+        if !approval.answers.iter().any(|offered| offered == id) {
+            return Err("This approval does not offer that answer.".into());
+        }
+        let option = crate::permission_gate::gate_option(id).ok_or("The answer is invalid.")?;
+        return Ok(ChatPermissionAnswer::Select(option.to_owned()));
+    }
+    serde_json::from_value(answer.clone()).map_err(|_| "The answer is invalid.".into())
+}
+
+/// The summary of the approval a run waits at, if any.
+pub(super) fn pending_summary(inner: &Inner, run_id: &str) -> Option<String> {
+    inner
+        .store
+        .records::<Approval>("approvals", "record")
+        .ok()?
+        .into_iter()
+        .find(|approval| approval.run_id == run_id && approval.state == "pending")
+        .map(|approval| {
+            approval.summary.unwrap_or_else(|| {
+                approval.request["title"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+        })
+}
+
 /// Records each gate this runtime's agent runs wait at, and closes the
 /// approvals whose gate went away.
 pub(super) fn scan(inner: &Inner) -> Result<(), String> {
@@ -101,6 +164,7 @@ pub(super) fn scan(inner: &Inner) -> Result<(), String> {
         let agent_name = crate::agents::get(&inner.profile, &run.agent_id)
             .map(|agent| agent.name)
             .unwrap_or_default();
+        let (rule, summary, answers) = gate_rule(&gate);
         let approval = Approval {
             approval_id,
             runtime_id: own.clone(),
@@ -110,6 +174,9 @@ pub(super) fn scan(inner: &Inner) -> Result<(), String> {
             agent_name,
             thread_id: run.thread_id.clone(),
             request: gate,
+            rule,
+            summary,
+            answers,
             state: "pending".into(),
             created_at: inner.now_text(),
             answered_at: None,
@@ -254,8 +321,6 @@ pub(super) fn answer_operation(
         answer: Value,
     }
     let body: Body = serde_json::from_value(body).map_err(|_| "The request is invalid.")?;
-    let answer: ChatPermissionAnswer =
-        serde_json::from_value(body.answer.clone()).map_err(|_| "The answer is invalid.")?;
     let answer_id = uuid::Uuid::now_v7().to_string();
     let own = self_id(inner);
     let answered = |approval: Approval, ours: bool| {
@@ -271,6 +336,7 @@ pub(super) fn answer_operation(
     if approval.state != "pending" {
         return Ok(answered(approval, false));
     }
+    let answer = resolve_answer(&approval, &body.answer)?;
     if approval.runtime_id == own {
         let claimed = {
             let _merge = lock(&inner.merge);
@@ -300,7 +366,7 @@ pub(super) fn answer_operation(
                 0,
                 json!({
                     "approval_id": body.approval_id,
-                    "answer": body.answer,
+                    "answer": answer.decision(),
                     "answer_id": answer_id,
                 }),
             ),
@@ -465,6 +531,9 @@ mod tests {
             agent_name: "Deployer".into(),
             thread_id: Some("thread-1".into()),
             request: json!({"gate_id": "gate-1", "kind": "confirm", "title": "Allow bash?", "message": "git push"}),
+            rule: None,
+            summary: None,
+            answers: Vec::new(),
             state: state.into(),
             created_at: "2026-01-01T00:00:00Z".into(),
             answered_at: None,

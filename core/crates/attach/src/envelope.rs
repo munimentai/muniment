@@ -517,6 +517,13 @@ pub enum Operation {
     /// runtime can use.
     #[serde(rename = "agent.tool_catalog")]
     AgentToolCatalog,
+    /// Lists the saved inputs of an agent's failed runs.
+    #[serde(rename = "agent.replays")]
+    AgentReplays,
+    /// Runs a failed run's saved inputs again against the agent's current
+    /// definition.
+    #[serde(rename = "agent.replay")]
+    AgentReplay,
 }
 
 impl Operation {
@@ -660,6 +667,8 @@ impl Operation {
             Self::RoutineWebhookInfo => "routine.webhook_info",
             Self::AgentThreads => "agent.threads",
             Self::AgentToolCatalog => "agent.tool_catalog",
+            Self::AgentReplays => "agent.replays",
+            Self::AgentReplay => "agent.replay",
         }
     }
 
@@ -709,6 +718,8 @@ impl Operation {
                 | Self::RoutineWebhookInfo
                 | Self::AgentThreads
                 | Self::AgentToolCatalog
+                | Self::AgentReplays
+                | Self::AgentReplay
         )
     }
 }
@@ -760,6 +771,16 @@ pub enum EventName {
     /// A pending agent approval was answered or closed.
     #[serde(rename = "agent.approval_resolved")]
     AgentApprovalResolved,
+    /// An agent on any swarm member changed what it does: `{agent_id,
+    /// runtime_id, activity}`, on a chat-event subscription that asked for
+    /// `swarm_live`.
+    #[serde(rename = "agent.activity")]
+    AgentActivity,
+    /// A message was posted to a group thread on any swarm member:
+    /// `{group_id, thread_id, post}`, on a chat-event subscription that
+    /// asked for `swarm_live`.
+    #[serde(rename = "group.posted")]
+    GroupPosted,
     #[serde(untagged)]
     Unknown(BoundedEventName),
 }

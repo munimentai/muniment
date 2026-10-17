@@ -29,7 +29,8 @@ use common::TemporaryProfile;
 /// The tests share process-wide stub settings, so they run one at a time.
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-const STUB_SETTINGS: [&str; 4] = [
+const STUB_SETTINGS: [&str; 5] = [
+    "PI_RESUME_STUB_AGENT_GATE",
     "PI_RESUME_STUB_STEER_CAPTURE",
     "PI_RESUME_STUB_PERMISSION_CAPTURE",
     "PI_RESUME_STUB_REPLY",
@@ -1088,6 +1089,19 @@ fn group_chats_route_mentions_and_hold_meetings_across_members() {
     assert_eq!(group["owner_runtime"], a.runtime_id());
     assert_eq!(group["lead"], pilot.id.as_str());
     let thread = group["thread_id"].as_str().unwrap().to_owned();
+    // A client of B hears each post to the group as it lands, without reading.
+    let mut watcher = b.client(None);
+    watcher.subscribe_chat_events_with_swarm_live(None).unwrap();
+    let (heard, posts_heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(event) = watcher.read_subscription_event() {
+            if let SubscriptionEvent::GroupPosted(body) = event {
+                if heard.send(body).is_err() {
+                    return;
+                }
+            }
+        }
+    });
     assert!(wait(|| b.op(Operation::GroupList, json!({})).unwrap()
         ["groups"]
         .as_array()
@@ -1141,6 +1155,23 @@ fn group_chats_route_mentions_and_hold_meetings_across_members() {
         "{:?}",
         group_posts(&mut reader, &thread)
     );
+    let chat = group_posts(&mut reader, &thread)
+        .into_iter()
+        .find(|post| post["author"]["name"] == "Navigator")
+        .unwrap();
+    assert_eq!(chat["author"]["phase"], "chat");
+    assert_eq!(chat["author"]["round"], 0);
+    let heard = loop {
+        let body = posts_heard
+            .recv_timeout(Duration::from_secs(30))
+            .expect("B's client never heard the group post");
+        if body["post"]["author"]["name"] == "Navigator" {
+            break body;
+        }
+    };
+    assert_eq!(heard["group_id"], group["group_id"]);
+    assert_eq!(heard["thread_id"], thread.as_str());
+    assert_eq!(heard["post"]["text"], "on it");
     // No mention: the first member answers.
     a.op(
         Operation::ThreadPost,
@@ -1212,15 +1243,39 @@ fn group_chats_route_mentions_and_hold_meetings_across_members() {
     }
     assert!(pilot_prompts[2].contains("the lead of the meeting"));
     assert!(pilot_prompts[2].contains("Round 2, Navigator: on it"));
-    // Five replies and the end note reach the meeting thread.
+    // Five replies and the end note reach the meeting thread, each reply
+    // with its round and phase.
     let posts = group_posts(&mut reader, &meeting_thread);
+    let mut phases: Vec<(u64, String)> = posts
+        .iter()
+        .filter(|post| post["author"]["kind"] == "agent")
+        .map(|post| {
+            (
+                post["author"]["round"].as_u64().unwrap(),
+                post["author"]["phase"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    phases.sort();
     assert_eq!(
-        posts
-            .iter()
-            .filter(|post| post["author"]["kind"] == "agent")
-            .count(),
-        5,
+        phases,
+        [
+            (1, "blind".to_owned()),
+            (1, "blind".to_owned()),
+            (2, "debate".to_owned()),
+            (2, "debate".to_owned()),
+            (3, "summary".to_owned()),
+        ],
         "{posts:#?}"
+    );
+    // B's client heard the meeting's posts too, the summary included.
+    assert!(
+        posts_heard
+            .iter()
+            .take(40)
+            .any(|body| body["thread_id"] == meeting_thread.as_str()
+                && body["post"]["author"]["phase"] == "summary"),
+        "B's client never heard the summary"
     );
 }
 
@@ -1295,6 +1350,122 @@ fn an_approval_reaches_every_member_and_the_first_answer_wins() {
         .unwrap()
         .contains("\"confirmed\":true"));
     std::env::remove_var("PI_RESUME_STUB_PERMISSION_CAPTURE");
+}
+
+#[test]
+fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent() {
+    let _environment = environment();
+    let a = Member::new("gate-a");
+    let b = Member::new("gate-b");
+    b.join(&a);
+    let releaser: Agent = muniment_core::serde_json::from_value(json!({
+        "name": "Releaser",
+        "instructions": "Release carefully.",
+        "permissions": {"mode": "ask"}
+    }))
+    .unwrap();
+    let releaser = agents::save(a.profile(), releaser).unwrap();
+    let mut watcher = b.client(None);
+    watcher.subscribe_chat_events_with_swarm_live(None).unwrap();
+    let (events, received) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(event) = watcher.read_subscription_event() {
+            if events.send(event).is_err() {
+                return;
+            }
+        }
+    });
+    std::env::set_var(
+        "PI_RESUME_STUB_AGENT_GATE",
+        json!({"tool": "bash", "input": {"command": "git push origin main"}}).to_string(),
+    );
+    let run = agents::run_now(a.profile(), &releaser.id, Some("Release."), Some("test")).unwrap();
+    assert!(
+        wait(|| {
+            a.tick();
+            b.op(Operation::AgentApprovals, json!({})).unwrap()["approvals"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 1
+        }),
+        "B never heard of the approval"
+    );
+    let pending = b.op(Operation::AgentApprovals, json!({})).unwrap()["approvals"][0].clone();
+    assert_eq!(pending["run_id"], run.id.as_str());
+    assert_eq!(pending["rule"]["request_kind"], "command");
+    assert_eq!(
+        pending["rule"]["resource"]["arguments"],
+        json!(["bash", "git push origin main"])
+    );
+    assert!(pending["summary"]
+        .as_str()
+        .unwrap()
+        .starts_with("bash `git push origin main` in "));
+    assert_eq!(
+        pending["answers"],
+        json!(["allow_once", "allow_thread", "always_allow_agent", "deny"])
+    );
+
+    // B's client sees the agent on A wait, with the approval as its action.
+    let waiting = loop {
+        match received.recv_timeout(Duration::from_secs(30)).unwrap() {
+            SubscriptionEvent::AgentActivity(body)
+                if body["agent_id"] == releaser.id.as_str()
+                    && body["activity"]["state"] == "waiting" =>
+            {
+                break body
+            }
+            _ => {}
+        }
+    };
+    assert_eq!(waiting["runtime_id"], a.runtime_id());
+    // The action is the approval's summary, shortened for an avatar.
+    let action = waiting["activity"]["action"].as_str().unwrap();
+    assert!(pending["summary"]
+        .as_str()
+        .unwrap()
+        .starts_with(action.trim_end_matches('…')));
+
+    // An answer the gate does not offer is refused; the agent-wide one saves
+    // the exact rule to the agent on A through its save path.
+    let approval_id = pending["approval_id"].as_str().unwrap().to_owned();
+    assert!(b
+        .op(
+            Operation::AgentApprovalAnswer,
+            json!({"approval_id": approval_id, "answer": "allow_forever"}),
+        )
+        .is_err());
+    let answered = b
+        .op(
+            Operation::AgentApprovalAnswer,
+            json!({"approval_id": approval_id, "answer": "always_allow_agent"}),
+        )
+        .unwrap();
+    assert_eq!(answered["status"], "answered", "{answered}");
+    assert!(wait(|| {
+        a.tick();
+        a.store().get(&run.id).unwrap().unwrap().status == RunStatus::Completed
+    }));
+    let always = agents::get(a.profile(), &releaser.id)
+        .unwrap()
+        .permissions
+        .unwrap()
+        .always_allow;
+    assert_eq!(
+        always
+            .iter()
+            .map(|rule| muniment_core::serde_json::to_value(rule).unwrap())
+            .collect::<Vec<_>>(),
+        vec![pending["rule"].clone()]
+    );
+    // Once the run ends, B's client sees the agent go idle.
+    assert!(wait(|| matches!(
+        received.try_recv(),
+        Ok(SubscriptionEvent::AgentActivity(body))
+            if body["agent_id"] == releaser.id.as_str() && body["activity"]["state"] == "idle"
+    )));
+    std::env::remove_var("PI_RESUME_STUB_AGENT_GATE");
 }
 
 #[test]

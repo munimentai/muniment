@@ -145,6 +145,8 @@ pub(crate) struct Inner {
     gates: Mutex<HashMap<String, (u64, Option<Value>)>>,
     /// Local agent run changes, which become notices for other members.
     run_changes: Mutex<Option<Receiver<Value>>>,
+    /// The activity of each agent this runtime runs, as last sent to clients.
+    activities: Mutex<HashMap<String, crate::agent_runs::Activity>>,
 }
 
 static REGISTRY: Mutex<Vec<(PathBuf, Weak<Inner>)>> = Mutex::new(Vec::new());
@@ -194,6 +196,7 @@ impl Swarm {
             poll: Mutex::new(Duration::from_secs(2)),
             gates: Mutex::new(HashMap::new()),
             run_changes: Mutex::new(None),
+            activities: Mutex::new(HashMap::new()),
         });
         absence::initialize(&inner)?;
         let mut registry = lock(&REGISTRY);
@@ -419,6 +422,11 @@ impl Swarm {
         )
     }
 
+    /// The summary of the approval the run `run_id` waits at, if any.
+    pub fn approval_summary(&self, run_id: &str) -> Option<String> {
+        approvals::pending_summary(&self.inner, run_id)
+    }
+
     /// Runs one exchange on every connected outbound link now, for tests.
     #[doc(hidden)]
     pub fn sync_now(&self) {
@@ -481,7 +489,8 @@ impl Inner {
         {
             let _merge = lock(&self.merge);
             type Step<'a> = (&'a str, &'a dyn Fn() -> Result<bool, String>);
-            let steps: [Step<'_>; 9] = [
+            let steps: [Step<'_>; 10] = [
+                ("activity", &|| directory::refresh_activity(self)),
                 ("directory", &|| directory::refresh_local(self)),
                 ("threads", &|| sync::register_local(self).map(|()| false)),
                 ("index", &|| sync::scan_local(self).map(|()| false)),
