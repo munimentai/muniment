@@ -61,7 +61,7 @@
         {
           "id": "machines",
           "title": "Shared connections",
-          "body": "Each paired machine keeps its own model connections, and a thread runs with the models of the machine it started on. Open Settings → Machines and turn on Share model connections to let your paired machines use the providers, sign-ins and API keys connected on this computer. They travel over each pairing's encrypted link. A shared subscription depends on this computer: when it sleeps or goes offline, a paired machine can lose it within 30 minutes. Shared API keys keep working. With a free MuniCloud account, turn on Keep them in MuniCloud: MuniCloud holds the connections encrypted and renews sign-ins, so paired machines keep them while this computer is off. A free account shares with up to five machines. Removing a machine deletes what this computer shared there."
+          "body": "Each paired machine keeps its own model connections, and a thread runs with the models of the machine it started on. Open Settings → Machines and turn on Share model connections to let your paired machines use the providers, sign-ins and API keys connected on this computer. Each machine linked into your fleet gets them sealed to its own key. A shared subscription depends on this computer: when it sleeps or goes offline, a paired machine can lose it within 30 minutes. Shared API keys keep working. With a free MuniCloud account, turn on Keep them in MuniCloud: MuniCloud holds the connections encrypted and renews sign-ins, so paired machines keep them while this computer is off. A free account shares with up to five machines. Removing a machine deletes what this computer shared there."
         }
       ]
     },

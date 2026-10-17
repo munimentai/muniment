@@ -14,6 +14,8 @@
   import SettingsTabs from './SettingsTabs.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
+  import HoldSignIn from './HoldSignIn.svelte'
+  import { piHold, readFleetAccounts } from './fleet-accounts.js'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
   import ClassifierEdit from './ClassifierEdit.svelte'
@@ -97,6 +99,16 @@
       .filter((family) => !needle || familyName(family).toLowerCase().includes(needle))
   })
 
+  // Who holds each shared sign-in in the fleet, or null when core lists none.
+  let fleet = $state(null)
+  async function loadFleet() { fleet = await readFleetAccounts(tauri) }
+  // A requested move lands once the holder hands the sign-in over.
+  function onHeld(status) {
+    void loadFleet()
+    void loadRouter()
+    if (status === 'requested') setTimeout(() => { void loadFleet(); void loadRouter() }, 5000)
+  }
+
   let refreshError = $state('')
   onMount(() => {
     const unsubscribe = accounts.subscribe(value => {
@@ -106,6 +118,7 @@
     })
     const stop = accounts.start()
     void load()
+    void loadFleet()
     if (connect === '') openConnector()
     else if (connect) chooseProvider(connect)
     return () => { unsubscribe(); stop() }
@@ -433,13 +446,14 @@
               <div class="line-card" data-testid="provider-connection">
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
+                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
                 {#if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
             {/if}
-            {#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />{/if}
+            {#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
           </section>
         {/each}
         {#each poolOnlyFamilies as family (family)}
@@ -447,7 +461,7 @@
             <Row title={familyName(family)}>
               {#snippet icon()}<ProviderLogo color provider={familyProvider(family)} size={16} />{/snippet}
             </Row>
-            <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />
+            <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />
           </section>
         {/each}
       </Group>

@@ -46,15 +46,15 @@ pub(crate) struct RuntimeIndex {
     pub(crate) selected: Option<String>,
     #[serde(default)]
     pub(crate) runtimes: BTreeMap<String, RuntimeEntry>,
-    /// Whether this computer shares its model connections with its paired
-    /// machines.
+    /// A sharing switch the app hands to `fleet.credentials` on this
+    /// computer's runtime, then clears.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) share_models: bool,
-    /// The paired machines that hold connections this computer shared, so
-    /// turning sharing off clears each one.
+    /// The paired machines that hold a bundle this computer sent over the
+    /// pairing link, so the app clears each one.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) shared_with: BTreeSet<String>,
-    /// Whether the shared connections live in the account's model vault.
+    /// Whether the account's model vault keeps this computer's connections.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) share_via_cloud: bool,
     /// Whether the model vault holds this computer's connections, so turning
@@ -244,7 +244,7 @@ impl Registry {
         })
     }
 
-    /// Whether this computer shares its model connections.
+    /// Whether a saved sharing switch waits to move to `fleet.credentials`.
     pub(crate) fn share_models(&self) -> bool {
         self.index().share_models
     }
@@ -278,12 +278,6 @@ impl Registry {
         })
     }
 
-    /// The machine token, with its vault URL, that the machine `id` reads the
-    /// model vault with.
-    pub(crate) fn vault_token(&self, id: &str) -> Option<serde_json::Value> {
-        self.vault_tokens().remove(id)
-    }
-
     pub(crate) fn set_vault_token(&self, id: &str, link: Option<serde_json::Value>) -> io::Result<()> {
         let mut tokens = self.vault_tokens();
         match link {
@@ -314,12 +308,12 @@ impl Registry {
             .unwrap_or_default()
     }
 
-    /// The paired machines that hold connections this computer shared.
+    /// The paired machines that hold a bundle this computer sent.
     pub(crate) fn shared_with(&self) -> BTreeSet<String> {
         self.index().shared_with
     }
 
-    /// Records whether the machine `id` holds connections this computer shared.
+    /// Records whether the machine `id` holds a bundle this computer sent.
     pub(crate) fn mark_shared(&self, id: &str, held: bool) -> io::Result<()> {
         if self.index().shared_with.contains(id) == held {
             return Ok(());
