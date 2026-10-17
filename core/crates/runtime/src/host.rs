@@ -61,7 +61,7 @@ impl Default for RuntimeHost {
             account: Arc::new(NoCloud),
             chat_grants: Arc::new(NoCloud),
             #[cfg(feature = "keyring")]
-            credentials: Arc::new(KeyringCredentialStore),
+            credentials: platform_credentials(),
             #[cfg(not(feature = "keyring"))]
             credentials: Arc::new(state_root_credentials()),
             expected_desktop_executable: None,
@@ -272,23 +272,40 @@ impl AccountService for NoCloud {}
 
 impl ChatGrantService for NoCloud {}
 
-/// The platform keychain through the system keyring.
+/// The platform keychain, or in a test run a file store in a temporary
+/// directory, so no test reaches the owner's real keychain.
+#[cfg(feature = "keyring")]
+pub fn platform_credentials() -> Arc<dyn CredentialStore> {
+    if muniment_core::state_root::keychain_allowed() {
+        Arc::new(KeyringCredentialStore)
+    } else {
+        Arc::new(FileCredentialStore::new(
+            muniment_core::state_root::test_credentials_directory(),
+        ))
+    }
+}
+
+/// The platform keychain through the system keyring. A test run that opens
+/// it panics unless it is marked as a keychain test.
 #[cfg(feature = "keyring")]
 pub struct KeyringCredentialStore;
 
 #[cfg(feature = "keyring")]
 impl CredentialStore for KeyringCredentialStore {
     fn read(&self, service: &str, name: &str) -> Option<String> {
+        muniment_core::state_root::guard_keychain(service);
         Entry::new(service, name).ok()?.get_password().ok()
     }
 
     fn write(&self, service: &str, name: &str, secret: &str) -> Result<(), String> {
+        muniment_core::state_root::guard_keychain(service);
         Entry::new(service, name)
             .and_then(|entry| entry.set_password(secret))
             .map_err(|error| format!("The keychain refused the secret: {error}."))
     }
 
     fn remove(&self, service: &str, name: &str) -> Result<(), String> {
+        muniment_core::state_root::guard_keychain(service);
         match Entry::new(service, name).and_then(|entry| entry.delete_credential()) {
             Ok(()) | Err(muniment_core::keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(format!("The keychain kept the secret: {error}.")),

@@ -441,3 +441,74 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// The variable that lets a test open the platform keychain. Only the
+/// desktop's keychain tests, which CI runs on its own machines, set it.
+pub const KEYCHAIN_TESTS_VARIABLE: &str = "MUNIMENT_KEYCHAIN_TESTS";
+/// The variable that marks a process as a test run, for a test binary
+/// Cargo did not build into its `deps` folder.
+pub const TEST_RUN_VARIABLE: &str = "MUNIMENT_TEST";
+
+/// Whether this process is a test run: a crate's own unit tests, a binary
+/// Cargo built into its `deps` folder, as every unit and integration test
+/// binary is, or a process with `MUNIMENT_TEST` set.
+pub fn is_test_run() -> bool {
+    cfg!(test)
+        || std::env::var_os(TEST_RUN_VARIABLE).is_some_and(|value| !value.is_empty())
+        || std::env::current_exe().ok().is_some_and(|executable| {
+            executable
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "deps")
+        })
+}
+
+static KEYCHAIN_MOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Notes that a test replaced the system keyring with an in-memory one, so
+/// keychain calls no longer reach the platform.
+pub fn note_keychain_mocked() {
+    KEYCHAIN_MOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether this process may open the platform keychain: any process but a
+/// test run, a test run whose keyring is in memory, and a test run marked
+/// as a keychain test.
+pub fn keychain_allowed() -> bool {
+    !is_test_run()
+        || KEYCHAIN_MOCKED.load(std::sync::atomic::Ordering::SeqCst)
+        || std::env::var_os(KEYCHAIN_TESTS_VARIABLE).is_some_and(|value| value == "1")
+}
+
+/// Stops a test run before it opens the owner's real keychain. A test that
+/// means to reach the keychain sets `MUNIMENT_KEYCHAIN_TESTS=1`.
+pub fn guard_keychain(what: &str) {
+    if !keychain_allowed() {
+        panic!(
+            "A test tried to open the platform keychain for {what}. Tests use a file credential \
+             store in a temporary directory; only keychain tests set {KEYCHAIN_TESTS_VARIABLE}=1."
+        );
+    }
+}
+
+/// The credential directory a test run uses in place of the keychain: one
+/// temporary directory per process.
+pub fn test_credentials_directory() -> PathBuf {
+    std::env::temp_dir().join(format!("muniment-test-credentials-{}", std::process::id()))
+}
+
+#[cfg(test)]
+mod keychain_guard_tests {
+    #[test]
+    fn a_test_run_never_reaches_the_keychain() {
+        assert!(super::is_test_run());
+        // Another test in this process may have put an in-memory keyring
+        // in place, which the guard lets through.
+        let mocked = super::KEYCHAIN_MOCKED.load(std::sync::atomic::Ordering::SeqCst);
+        if std::env::var_os(super::KEYCHAIN_TESTS_VARIABLE).is_none() && !mocked {
+            assert!(!super::keychain_allowed());
+            let refused = std::panic::catch_unwind(|| super::guard_keychain("a test"));
+            assert!(refused.is_err());
+        }
+    }
+}
