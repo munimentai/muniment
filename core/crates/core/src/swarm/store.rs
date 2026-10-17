@@ -1,7 +1,8 @@
 //! The swarm's own records in `<profile>/swarm.sqlite3`: links, members, the
 //! replicated records (the directory, groups and thread registrations among
 //! them), the replication index and thread versions, the outbox and inbox,
-//! approvals, meetings and pending moves.
+//! approvals, meetings and pending moves, the time of each thread's newest
+//! event, and the ordinary threads this runtime asked to hold in full.
 //!
 //! Thread content stays in the run journal. The replication index maps each
 //! `(thread, origin, seq)` to the journal event that holds it.
@@ -55,9 +56,15 @@ CREATE INDEX IF NOT EXISTS records_origin ON records(origin, seq);
 CREATE TABLE IF NOT EXISTS record_vv(origin TEXT PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS thread_versions(thread_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS thread_versions_version ON thread_versions(version);
-CREATE TRIGGER IF NOT EXISTS log_thread_version AFTER INSERT ON log BEGIN
-  INSERT OR REPLACE INTO thread_versions(thread_id, version)
-  VALUES(NEW.thread_id, (SELECT COALESCE(MAX(version), 0) + 1 FROM thread_versions));
+CREATE TABLE IF NOT EXISTS thread_activity(thread_id TEXT PRIMARY KEY, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pins(thread_id TEXT PRIMARY KEY, at TEXT NOT NULL);
+-- The version trigger upserts: an OR clause in a trigger gives way to the
+-- inserting statement's own, and the log inserts with OR IGNORE.
+DROP TRIGGER IF EXISTS log_thread_version;
+CREATE TRIGGER IF NOT EXISTS log_thread_version_upsert AFTER INSERT ON log BEGIN
+  INSERT INTO thread_versions(thread_id, version)
+  VALUES(NEW.thread_id, (SELECT COALESCE(MAX(version), 0) + 1 FROM thread_versions))
+  ON CONFLICT(thread_id) DO UPDATE SET version=excluded.version;
 END;
 ";
 
