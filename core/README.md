@@ -254,7 +254,7 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   writes the new id. A request is a thread permission policy's
   `{"request_kind", "resource"}`: an exact absolute path and operation, an
   exact command and working directory, or an exact tool name and input. The
-  lists hold in every thread of the agent as pre-decided deny, ask and allow
+  lists hold in every thread of the agent as preset deny, ask and allow
   policies beside the global rules and the thread's own journaled policies.
   The gate shows the call's exact request and a summary and offers "Allow
   once", "Allow for this thread", "Always allow for this agent" and "Deny".
