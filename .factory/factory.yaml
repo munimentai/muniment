@@ -22,7 +22,6 @@ risk_paths:
   - ".github/lib/**"
   - ".github/actions/**"
   - ".github/desktop-ci-command.py"
-  - "scripts/update-muniment-core.sh"
   - "SPEC.md"
   - "DESIGN.md"
 

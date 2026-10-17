@@ -54,13 +54,12 @@ const run = (args, env) => spawnSync(process.execPath, args, { cwd: repository, 
 
 // POSIX fixtures exercise the shell runners. Windows keeps its own process helper.
 describe.skipIf(process.platform === 'win32')('Installed E2E core pins', () => {
-  it('reads supplied pins without a default Cargo toolchain', () => {
+  it('reads the core pins without Cargo', () => {
     const { core, home, env } = fixture()
     env.HOME = home
-    const missing = run(['--input-type=module', '-e', readPins], env)
-    expect(missing.status).not.toBe(0)
-    expect(missing.stderr).toContain('rustup has no default toolchain')
-    fs.unlinkSync(env.CARGO_CALLS)
+    const checkout = run(['--input-type=module', '-e', readPins], env)
+    expect(checkout.status, checkout.stderr).toBe(0)
+    expect(JSON.parse(checkout.stdout).pi).toMatch(/^\d+\.\d+\.\d+/)
     const supplied = run(['--input-type=module', '-e', readPins], { ...env, MUNIMENT_CORE_ROOT: core })
     expect(supplied.status, supplied.stderr).toBe(0)
     expect(JSON.parse(supplied.stdout)).toEqual(expected)
@@ -84,7 +83,7 @@ describe.skipIf(process.platform === 'win32')('Installed E2E core pins', () => {
     const end = source.indexOf('\nexport MUNIMENT_CORE_ROOT', start) + '\nexport MUNIMENT_CORE_ROOT'.length
     const resolution = source.slice(start, end)
 
-    it.each(['', 'failure', 'empty'])('exports the build checkout or stops on Cargo result %s', cargoResult => {
+    it('exports the core tree without Cargo', () => {
       expect(start).toBeGreaterThan(-1)
       const isolation = runner === 'macos-wdio.sh' ? 'export HOME="$state_root/degraded"' : 'export XDG_DATA_HOME="$state_root/ready/data"'
       expect(end).toBeLessThan(source.indexOf(isolation))
@@ -97,16 +96,11 @@ run_step() { shift; "$@"; }
 run_setup() { "$@"; }
 ${resolution}
 export HOME="$SPEC_HOME"
-node --input-type=module -e "$READ_PINS" || status=1
-`], { cwd: repository, env: { ...env, CARGO_FIXTURE: cargoResult, READ_PINS: readPins }, encoding: 'utf8', timeout: 10000 })
-      expect(result.status, result.stderr).toBe(cargoResult ? 1 : 0)
-      if (cargoResult) {
-        expect(result.stdout).toBe('')
-        expect(result.stderr).toContain(cargoResult === 'empty' ? 'Cargo resolved no muniment-pins package' : 'rustup has no default toolchain')
-        if (runner === 'macos-wdio.sh') expect(result.stderr).toContain('first_failed_step=resolve-core-root')
-      } else expect(JSON.parse(result.stdout)).toEqual(expected)
-      const calls = fs.readFileSync(env.CARGO_CALLS, 'utf8').trim().split('\n').map(line => JSON.parse(line))
-      expect(calls).toEqual([['metadata', '--manifest-path', path.join(repository, 'src-tauri/Cargo.toml'), '--locked', '--format-version', '1']])
+printf '%s\\n' "$MUNIMENT_CORE_ROOT"
+`], { cwd: repository, env, encoding: 'utf8', timeout: 10000 })
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout.trim()).toBe(path.join(repository, 'core'))
+      expect(fs.existsSync(env.CARGO_CALLS)).toBe(false)
     })
   })
 })

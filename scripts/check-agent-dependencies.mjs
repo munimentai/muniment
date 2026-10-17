@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url'
 import semver from 'semver'
 import { readCorePins } from './muniment-core.mjs'
 
-// The pins come from pins/pins.toml in the muniment-core release Cargo resolves.
+// The pins come from core/pins/pins.toml.
 export function readPins() {
   const pins = readCorePins()
   const packages = Object.fromEntries(pins.packages.map(({ name, version }) => [name, version]))
