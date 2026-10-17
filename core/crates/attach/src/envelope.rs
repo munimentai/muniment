@@ -469,9 +469,22 @@ pub enum Operation {
     /// runtime's model connections with the fleet on or off.
     #[serde(rename = "fleet.credentials")]
     FleetCredentials,
-    /// Appends a user message to an agent or group thread on any member.
+    /// Appends a user message to an agent, group or ordinary thread on any
+    /// member.
     #[serde(rename = "thread.post")]
     ThreadPost,
+    /// Answers how much of the fleet's records and thread history this
+    /// runtime holds, per class.
+    #[serde(rename = "fleet.sync_status")]
+    FleetSyncStatus,
+    /// Sets how many days of ordinary threads, and which attachments, this
+    /// machine keeps offline.
+    #[serde(rename = "fleet.offline_set")]
+    FleetOfflineSet,
+    /// Fetches an ordinary thread's history from its owner or any member
+    /// that holds it.
+    #[serde(rename = "thread.history_fetch")]
+    ThreadHistoryFetch,
     /// Moves an agent to another primary runtime.
     #[serde(rename = "agent.move")]
     AgentMove,
@@ -697,6 +710,9 @@ impl Operation {
             Self::FleetHoldSignIn => "fleet.hold_sign_in",
             Self::FleetCredentials => "fleet.credentials",
             Self::ThreadPost => "thread.post",
+            Self::FleetSyncStatus => "fleet.sync_status",
+            Self::FleetOfflineSet => "fleet.offline_set",
+            Self::ThreadHistoryFetch => "thread.history_fetch",
             Self::AgentMove => "agent.move",
             Self::AgentApprovals => "agent.approvals",
             Self::AgentApprovalAnswer => "agent.approval_answer",
@@ -731,7 +747,7 @@ impl Operation {
     }
 
     /// Whether the swarm answers the operation: links, the directory, thread
-    /// posts, moves, approvals and group chats.
+    /// posts, moves, approvals, group chats and the fleet's sync status.
     pub fn is_swarm_operation(self) -> bool {
         matches!(
             self,
@@ -745,6 +761,9 @@ impl Operation {
                 | Self::FleetHoldSignIn
                 | Self::FleetCredentials
                 | Self::ThreadPost
+                | Self::FleetSyncStatus
+                | Self::FleetOfflineSet
+                | Self::ThreadHistoryFetch
                 | Self::AgentMove
                 | Self::AgentApprovals
                 | Self::AgentApprovalAnswer
@@ -876,6 +895,11 @@ pub enum EventName {
     /// asked for `swarm_live`.
     #[serde(rename = "group.posted")]
     GroupPosted,
+    /// This runtime's sync status changed while it caught up, with the
+    /// `fleet.sync_status` body, on a chat-event subscription that asked for
+    /// `swarm`.
+    #[serde(rename = "fleet.sync_changed")]
+    FleetSyncChanged,
     /// An action this member forwarded to the member that owns its item
     /// changed state: `queued`, `sent`, `applied` or `failed`, on a
     /// chat-event subscription that asked for `fleet`.

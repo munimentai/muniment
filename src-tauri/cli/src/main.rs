@@ -958,6 +958,8 @@ mod tests {
                 thread_id: "opaque-id".into(),
                 title: "A\nTitle".into(),
                 updated_at: "2026-07-17T00:00:00Z".into(),
+                owner_runtime: None,
+                replica: false,
             }],
             next_cursor: Some("secret-cursor".into()),
         });

@@ -15,6 +15,12 @@ pub struct ThreadSummary {
     pub thread_id: String,
     pub title: String,
     pub updated_at: String,
+    /// The swarm member that runs the thread, which the runtime fills in.
+    #[serde(rename = "owner_runtime", skip_serializing_if = "Option::is_none")]
+    pub owner_runtime: Option<String>,
+    /// Another member runs the thread and this runtime holds a replica.
+    #[serde(rename = "replica", skip_serializing_if = "std::ops::Not::not")]
+    pub replica: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -379,6 +385,8 @@ impl RunJournal {
                 thread_id,
                 title,
                 updated_at,
+                owner_runtime: None,
+                replica: false,
             });
         }
         let next_cursor = next_boundary
@@ -388,6 +396,8 @@ impl RunJournal {
                         thread_id,
                         title: String::new(),
                         updated_at,
+                        owner_runtime: None,
+                        replica: false,
                     },
                     workspace,
                     &self.cursor_key,
