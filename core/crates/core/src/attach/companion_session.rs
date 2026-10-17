@@ -461,6 +461,7 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::ThreadPermissionModeSet
         | Operation::ThreadPlan
         | Operation::ThreadPlanAnswer
+        | Operation::FleetOpStatus
         | Operation::RemoteSettings
         | Operation::RemoteSettingsSave => None,
     }

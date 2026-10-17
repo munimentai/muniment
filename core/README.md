@@ -642,15 +642,48 @@ steering, gate answers and run starts through `SwarmHost`.
 - **Absence.** When no client used any member for 14 days, each member sets
   `paused_reason: "absence"` on the agents it runs. `swarm.resume` clears it
   on every member.
+- **Forwarded actions.** A client that calls a forwardable operation on an
+  item another member owns gets `{"forwarded": true, "op_id", "state"}`
+  with the keys that operation's answer always has; an approval answer
+  still waits up to 8 seconds for its status. The forwardable operations
+  are `thread.post` (agent and group posts, which steer a live run),
+  `run.steer`, `run.follow_up`, `run.cancel`, `thread.permission_mode_set`,
+  `thread.plan_answer`, `agent.approval_answer`, `agent.run_now`,
+  `agent.save`, `routine.save`, `routine.delete` and
+  `agent.routine_proposal_accept` and `_dismiss`. The owner of a thread is
+  its primary, of an agent its primary runtime, of a run the member that
+  wrote it, and of an approval the member that holds the gate. The action
+  travels as a message of kind `op` (`{"operation", "body", "actor_device",
+  "actor_scopes", "idempotency_key"}`) through the outbox, retried and
+  relayed until the owner acknowledges it, for up to 7 days. The owner
+  refuses an operation off the list, an action older than 7 days, and an
+  actor whose scopes, intersected with the forwarding member's, lack the
+  scope the operation takes remotely. Otherwise it runs the request through
+  its own dispatch, once per forwarding member, device and key, and the
+  acknowledgement carries the answer, cut to its ids past 2 KiB. A member
+  names `ops/1` in its capabilities; an older owner takes posts and
+  approval answers the way it always did and refuses the rest.
+  `fleet.op_status` (`{"op_id"}` → `{"op"}`) and `fleet.op_updated` report
+  an op as `{"op_id", "operation", "item": {"kind", "id"}, "owner_runtime",
+  "owner_name", "state", "reason", "result", "error", "created_at",
+  "updated_at", "expires_at"}`. `state` is `queued` while the owner is
+  offline (`reason.code` `owner_offline`, with the owner's name and
+  `last_seen_at`) or no peer took it yet, `sent`, `applied` or `failed`
+  (`reason.code` `expired` after 7 days). `swarm.agents` marks
+  `move_suggested` on an agent whose primary was last seen 24 hours ago or
+  more; `agent.move` with `force` takes it.
 
 A chat-event subscription that sends `{"swarm": true}` receives
 `swarm.changed`, `agent.approval_pending` and `agent.approval_resolved`.
 With `"swarm_live": true` too it also receives `agent.activity` and
 `group.posted`; `DesktopClient::subscribe_chat_events_with_swarm_live` falls
-back to the swarm events alone on a runtime that refuses the flag.
-Remotely, linking takes `runtime.admin`, the reads take `thread.read`,
-`thread.post`, group changes and answers take `run.write`, and `agent.move`
-and `swarm.resume` take `agents.manage`.
+back to the swarm events alone on a runtime that refuses the flag. With
+`"fleet": true` as well it receives `fleet.op_updated`, and
+`DesktopClient::subscribe_chat_events_with_fleet` falls back to the live
+swarm events.
+Remotely, linking takes `runtime.admin`, the reads and `fleet.op_status`
+take `thread.read`, `thread.post`, group changes and answers take
+`run.write`, and `agent.move` and `swarm.resume` take `agents.manage`.
 
 ## Phone relay
 
@@ -676,7 +709,9 @@ their plaintext headers.
   and permission asks as sealed events. It opens the phone's sealed stop,
   steer, follow-up and permission answers, checks their header binding,
   counter and expiry, applies them through the runtime's own operations and
-  answers with a receipt or a failure. When the cloud answers that the pair
+  answers with a receipt or a failure. A stop, steer or follow-up for a run
+  another swarm member runs, and an answer to a gate it holds, goes there
+  as a forwarded action with the phone's scopes. When the cloud answers that the pair
   is unavailable, it closes the connection and asks the account for the pair
   again before it reconnects.
 - The runtime starts the publisher with its schedules when the host has a
