@@ -30,34 +30,71 @@ fn default_timeout() -> u64 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "StoredSettings")]
 pub struct PermissionSettings {
-    #[serde(default)]
     pub default_thread_mode: PermissionMode,
-    #[serde(default)]
     pub default_agent_mode: PermissionMode,
-    /// Whether `bypass` may be chosen. Off unless the owner turns it on.
-    #[serde(default)]
+    /// Whether `bypass` may be chosen. On unless the owner turns it off.
     pub bypass_enabled: bool,
-    #[serde(default = "default_timeout")]
     pub unattended_timeout_seconds: u64,
     /// Exact requests every thread refuses.
-    #[serde(default)]
     pub deny: Vec<PolicyRequest>,
     /// Exact requests every thread asks before.
-    #[serde(default)]
     pub ask_first: Vec<PolicyRequest>,
     /// Exact requests every thread runs without asking.
-    #[serde(default)]
     pub always_allow: Vec<PolicyRequest>,
+}
+
+/// The settings file as written. A field it leaves out takes its default:
+/// bypass on, and each default mode `bypass` while bypass is on, else
+/// `manual`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredSettings {
+    default_thread_mode: Option<PermissionMode>,
+    default_agent_mode: Option<PermissionMode>,
+    bypass_enabled: Option<bool>,
+    #[serde(default = "default_timeout")]
+    unattended_timeout_seconds: u64,
+    #[serde(default)]
+    deny: Vec<PolicyRequest>,
+    #[serde(default)]
+    ask_first: Vec<PolicyRequest>,
+    #[serde(default)]
+    always_allow: Vec<PolicyRequest>,
+}
+
+impl From<StoredSettings> for PermissionSettings {
+    fn from(stored: StoredSettings) -> Self {
+        let bypass_enabled = stored.bypass_enabled.unwrap_or(true);
+        let fallback = fallback_mode(bypass_enabled);
+        Self {
+            default_thread_mode: stored.default_thread_mode.unwrap_or(fallback),
+            default_agent_mode: stored.default_agent_mode.unwrap_or(fallback),
+            bypass_enabled,
+            unattended_timeout_seconds: stored.unattended_timeout_seconds,
+            deny: stored.deny,
+            ask_first: stored.ask_first,
+            always_allow: stored.always_allow,
+        }
+    }
+}
+
+/// The default mode while bypass is `enabled` or off.
+fn fallback_mode(enabled: bool) -> PermissionMode {
+    if enabled {
+        PermissionMode::Bypass
+    } else {
+        PermissionMode::Manual
+    }
 }
 
 impl Default for PermissionSettings {
     fn default() -> Self {
         Self {
-            default_thread_mode: PermissionMode::Manual,
-            default_agent_mode: PermissionMode::Manual,
-            bypass_enabled: false,
+            default_thread_mode: PermissionMode::Bypass,
+            default_agent_mode: PermissionMode::Bypass,
+            bypass_enabled: true,
             unattended_timeout_seconds: DEFAULT_UNATTENDED_TIMEOUT_SECONDS,
             deny: Vec::new(),
             ask_first: Vec::new(),
@@ -69,9 +106,8 @@ impl Default for PermissionSettings {
 impl PermissionSettings {
     /// Why `mode` cannot be chosen now, or `None` when it can.
     pub fn unavailable(&self, mode: PermissionMode) -> Option<&'static str> {
-        (mode == PermissionMode::Bypass && !self.bypass_enabled).then_some(
-            "Bypass is off. Turn it on in the runtime's permission settings, and only on a container or a disposable machine.",
-        )
+        (mode == PermissionMode::Bypass && !self.bypass_enabled)
+            .then_some("Bypass is off. Turn it on in the runtime's permission settings.")
     }
 
     /// The mode a run uses when `mode` is chosen: an unavailable mode runs
@@ -108,7 +144,7 @@ impl PermissionSettings {
 }
 
 /// The runtime's permission settings. A missing or unreadable file reads
-/// as the defaults: `manual` for threads and agents, bypass off.
+/// as the defaults: `bypass` for threads and agents, bypass on.
 pub fn load(profile: &Path) -> PermissionSettings {
     let path = profile.join(SETTINGS_FILE);
     match std::fs::read(&path) {
@@ -169,6 +205,18 @@ pub fn modes(settings: &PermissionSettings) -> Value {
     })
 }
 
+/// The mode a new thread starts in, journaled when the thread is created.
+pub fn new_thread_mode(profile: &Path) -> PermissionMode {
+    let settings = load(profile);
+    settings.effective(settings.default_thread_mode)
+}
+
+/// The mode a new agent is saved in when its save names none.
+pub fn new_agent_mode(profile: &Path) -> PermissionMode {
+    let settings = load(profile);
+    settings.effective(settings.default_agent_mode)
+}
+
 /// The gate of a thread that belongs to no agent: the default thread mode
 /// and the global rules.
 pub fn thread_permissions(profile: &Path) -> RunPermissions {
@@ -219,6 +267,20 @@ pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, 
             }
             if let Some(enabled) = change.bypass_enabled {
                 settings.bypass_enabled = enabled;
+                // Turning bypass off moves a default that names it, and
+                // that this change does not set, to `manual`.
+                if !enabled {
+                    if change.default_thread_mode.is_none()
+                        && settings.default_thread_mode == PermissionMode::Bypass
+                    {
+                        settings.default_thread_mode = PermissionMode::Manual;
+                    }
+                    if change.default_agent_mode.is_none()
+                        && settings.default_agent_mode == PermissionMode::Bypass
+                    {
+                        settings.default_agent_mode = PermissionMode::Manual;
+                    }
+                }
             }
             if let Some(seconds) = change.unattended_timeout_seconds {
                 settings.unattended_timeout_seconds = seconds;
@@ -266,58 +328,81 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_manual_and_bypass_is_off_until_enabled() {
+    fn defaults_are_bypass_and_turning_bypass_off_falls_back_to_manual() {
         let profile = profile();
         let settings = load(&profile);
-        assert_eq!(settings.default_thread_mode, PermissionMode::Manual);
-        assert_eq!(settings.default_agent_mode, PermissionMode::Manual);
-        assert!(!settings.bypass_enabled);
+        assert_eq!(settings.default_thread_mode, PermissionMode::Bypass);
+        assert_eq!(settings.default_agent_mode, PermissionMode::Bypass);
+        assert!(settings.bypass_enabled);
         assert_eq!(settings.unattended_timeout_seconds, 4 * 3600);
+        assert_eq!(
+            settings.effective(PermissionMode::Bypass),
+            PermissionMode::Bypass
+        );
         let listed = operation(&profile, "permission.modes", json!({})).unwrap();
-        let bypass = listed["modes"]
+        assert_eq!(listed["default_thread_mode"], "bypass");
+        assert_eq!(listed["default_agent_mode"], "bypass");
+        assert!(listed["modes"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|mode| mode["id"] == "bypass")
-            .unwrap();
-        assert_eq!(bypass["available"], false);
-        assert!(bypass["reason"].as_str().unwrap().contains("container"));
-        assert!(bypass["description"]
+            .all(|mode| mode["available"] == true && mode.get("reason").is_none()));
+        let bypass = |listed: &Value| {
+            listed["modes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|mode| mode["id"] == "bypass")
+                .unwrap()
+                .clone()
+        };
+        let description = bypass(&listed)["description"].as_str().unwrap().to_owned();
+        assert!(!description.contains("unavailable") && !description.contains("container"));
+
+        // Turning bypass off moves both defaults to manual.
+        let saved = operation(
+            &profile,
+            "permission.settings_save",
+            json!({"bypass_enabled": false}),
+        )
+        .unwrap();
+        assert_eq!(saved["bypass_enabled"], false);
+        assert_eq!(saved["default_thread_mode"], "manual");
+        assert_eq!(saved["default_agent_mode"], "manual");
+        let listed = operation(&profile, "permission.modes", json!({})).unwrap();
+        assert_eq!(bypass(&listed)["available"], false);
+        assert!(bypass(&listed)["reason"]
             .as_str()
             .unwrap()
-            .contains("container"));
+            .contains("Bypass is off"));
+        let settings = load(&profile);
         assert_eq!(
             settings.effective(PermissionMode::Bypass),
             PermissionMode::Manual
         );
-
         let refused = operation(
             &profile,
             "permission.settings_save",
             json!({"default_thread_mode": "bypass"}),
         );
         assert!(refused.unwrap_err().contains("Bypass is off"));
-        let saved = operation(
-            &profile,
-            "permission.settings_save",
-            json!({"bypass_enabled": true, "default_thread_mode": "bypass", "default_agent_mode": "edit_auto"}),
-        )
-        .unwrap();
-        assert_eq!(saved["default_thread_mode"], "bypass");
-        assert_eq!(saved["default_agent_mode"], "edit_auto");
-        let listed = operation(&profile, "permission.modes", json!({})).unwrap();
-        assert!(listed["modes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|mode| mode["available"] == true && mode.get("reason").is_none()));
-        // Bypass cannot be turned off while a default still names it.
+        // A default the same change names is never moved.
         assert!(operation(
             &profile,
             "permission.settings_save",
-            json!({"bypass_enabled": false})
+            json!({"bypass_enabled": false, "default_agent_mode": "bypass"})
         )
         .is_err());
+
+        // Turning it on again leaves the saved defaults as they are.
+        let saved = operation(
+            &profile,
+            "permission.settings_save",
+            json!({"bypass_enabled": true, "default_agent_mode": "edit_auto"}),
+        )
+        .unwrap();
+        assert_eq!(saved["default_thread_mode"], "manual");
+        assert_eq!(saved["default_agent_mode"], "edit_auto");
         assert!(operation(
             &profile,
             "permission.settings_save",
@@ -325,6 +410,44 @@ mod tests {
         )
         .is_err());
         assert!(operation(&profile, "permission.settings", json!({"x": 1})).is_err());
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn saved_settings_stay_and_a_field_left_out_takes_its_default() {
+        let profile = profile();
+        // A file a person saved keeps its modes and bypass switch.
+        std::fs::write(
+            profile.join(SETTINGS_FILE),
+            r#"{"default_thread_mode": "manual", "default_agent_mode": "auto", "bypass_enabled": false}"#,
+        )
+        .unwrap();
+        let settings = load(&profile);
+        assert_eq!(settings.default_thread_mode, PermissionMode::Manual);
+        assert_eq!(settings.default_agent_mode, PermissionMode::Auto);
+        assert!(!settings.bypass_enabled);
+        // A file without the modes follows its bypass switch.
+        std::fs::write(
+            profile.join(SETTINGS_FILE),
+            r#"{"bypass_enabled": false, "unattended_timeout_seconds": 600}"#,
+        )
+        .unwrap();
+        let settings = load(&profile);
+        assert_eq!(settings.default_thread_mode, PermissionMode::Manual);
+        assert_eq!(settings.default_agent_mode, PermissionMode::Manual);
+        assert_eq!(settings.unattended_timeout_seconds, 600);
+        std::fs::write(
+            profile.join(SETTINGS_FILE),
+            r#"{"default_agent_mode": "plan"}"#,
+        )
+        .unwrap();
+        let settings = load(&profile);
+        assert!(settings.bypass_enabled);
+        assert_eq!(settings.default_thread_mode, PermissionMode::Bypass);
+        assert_eq!(settings.default_agent_mode, PermissionMode::Plan);
+        // An unknown field still makes the file unreadable.
+        std::fs::write(profile.join(SETTINGS_FILE), r#"{"x": 1}"#).unwrap();
+        assert_eq!(load(&profile), PermissionSettings::default());
         std::fs::remove_dir_all(profile).unwrap();
     }
 }

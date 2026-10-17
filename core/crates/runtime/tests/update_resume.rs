@@ -202,6 +202,7 @@ fn a_drain_records_every_live_run_and_the_restart_resumes_each_one() {
                     Vec::new(),
                     None,
                     None,
+                    None,
                 )
                 .unwrap()
                 .run_id
@@ -211,7 +212,7 @@ fn a_drain_records_every_live_run_and_the_restart_resumes_each_one() {
     assert_eq!(registry.len(), 3);
     // A fourth reply waits for a free place, and a thread replies once at a time.
     let refused = boundaries
-        .submit_run("local", "One more.".into(), Vec::new(), None, None)
+        .submit_run("local", "One more.".into(), Vec::new(), None, None, None)
         .unwrap_err()
         .into_message();
     assert!(refused.contains("already running 3 replies"), "{refused}");
@@ -222,6 +223,7 @@ fn a_drain_records_every_live_run_and_the_restart_resumes_each_one() {
             "Again.".into(),
             Vec::new(),
             Some(busy_thread),
+            None,
             None,
         )
         .unwrap_err()

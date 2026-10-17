@@ -1014,9 +1014,13 @@ fn desktop_run_submit_matches_the_fixture_and_validates_the_result() {
     let worker = thread::spawn(move || {
         complete_desktop_client_handshake(&mut server);
         let mut keys = BTreeSet::new();
-        for (thread_id, thinking_level) in [
-            (None, None),
-            (Some("01900000-0000-7000-8000-000000000002"), Some("high")),
+        for (thread_id, thinking_level, permission_mode) in [
+            (None, None, Some("plan")),
+            (
+                Some("01900000-0000-7000-8000-000000000002"),
+                Some("high"),
+                None,
+            ),
         ] {
             let request = read_client_value(&mut server);
             let request_id = request["request_id"].as_str().unwrap().to_owned();
@@ -1027,9 +1031,13 @@ fn desktop_run_submit_matches_the_fixture_and_validates_the_result() {
                 "files": ["/work/repo/src/main.rs"],
                 "thread_id": thread_id
             });
-            // A run without a level sends the body the fixture holds.
+            // A new thread's run in a picked mode sends the body the
+            // fixture holds.
             if let Some(level) = thinking_level {
                 body["thinking_level"] = level.into();
+            }
+            if let Some(mode) = permission_mode {
+                body["permission_mode"] = mode.into();
             }
             assert_eq!(request["body"], body);
             assert_ne!(request_id, key);
@@ -1060,7 +1068,13 @@ fn desktop_run_submit_matches_the_fixture_and_validates_the_result() {
     let files = ["/work/repo/src/main.rs".to_owned()];
     let mut client = handshake_desktop_client_stream(client, "0.0.1", SHORT).unwrap();
     let accepted = client
-        .run_submit("Summarize the selected file.", &files, None, None)
+        .run_submit(
+            "Summarize the selected file.",
+            &files,
+            None,
+            None,
+            Some("plan"),
+        )
         .unwrap();
     assert_eq!(accepted.attachments[0].display_name, "main.rs");
     client
@@ -1069,6 +1083,7 @@ fn desktop_run_submit_matches_the_fixture_and_validates_the_result() {
             &files,
             Some("01900000-0000-7000-8000-000000000002"),
             Some("high"),
+            None,
         )
         .unwrap();
     worker.join().unwrap();
@@ -1104,6 +1119,7 @@ fn desktop_run_submit_rejects_invalid_results() {
                 "prompt",
                 &[],
                 Some("01900000-0000-7000-8000-000000000002"),
+                None,
                 None
             ),
             Err(ClientError::UnexpectedMessage)

@@ -107,6 +107,7 @@ pub trait RunAttachBoundaries {
         _files: Vec<SelectedFile>,
         _thread_id: Option<String>,
         _thinking_level: Option<String>,
+        _permission_mode: Option<crate::permission_gate::PermissionMode>,
     ) -> Result<AttachPromptAccepted, RunStartError> {
         Err(RunStartError::InvalidRequest(
             "This prompt cannot be accepted.".into(),

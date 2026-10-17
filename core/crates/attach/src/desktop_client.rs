@@ -276,13 +276,16 @@ impl DesktopClient {
     }
 
     /// Submits a prompt. `thinking_level` names the level the model thinks
-    /// at, and none runs the model at its default.
+    /// at, and none runs the model at its default. `permission_mode` names
+    /// the mode the thread runs in from the run's first tool call, and none
+    /// leaves the thread's mode as it is.
     pub fn run_submit(
         &mut self,
         text: &str,
         files: &[String],
         thread_id: Option<&str>,
         thinking_level: Option<&str>,
+        permission_mode: Option<&str>,
     ) -> Result<RunSubmitAccepted, ClientError> {
         if text.trim().is_empty()
             || text.len() > MAX_TEXT_LENGTH
@@ -291,12 +294,16 @@ impl DesktopClient {
                 .any(|file| file.trim().is_empty() || file.len() > MAX_TEXT_LENGTH)
             || thread_id.is_some_and(|thread_id| thread_id.is_empty() || thread_id.len() > 36)
             || thinking_level.is_some_and(|level| level.is_empty() || level.len() > 16)
+            || permission_mode.is_some_and(|mode| mode.is_empty() || mode.len() > 16)
         {
             return Err(ClientError::UnexpectedMessage);
         }
         let mut body = serde_json::json!({"text": text, "files": files, "thread_id": thread_id});
         if let Some(level) = thinking_level {
             body["thinking_level"] = level.into();
+        }
+        if let Some(mode) = permission_mode {
+            body["permission_mode"] = mode.into();
         }
         let response = self.request_before(
             Operation::RunSubmit,
@@ -1716,7 +1723,7 @@ mod tests {
         events.subscribe_chat_events().unwrap();
         assert_eq!(events.last_request_error(), None);
         assert_eq!(
-            control.run_submit("next", &[], Some("thread-1"), None),
+            control.run_submit("next", &[], Some("thread-1"), None, None),
             Err(ClientError::RequestRejected)
         );
         assert_eq!(

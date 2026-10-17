@@ -1,8 +1,8 @@
 #![cfg(unix)]
 //! The agent run queue: parallel runs with one run per thread, leases
 //! reconciled against the journal, silent routine replies, runs stuck at a
-//! question, an agent's settings at launch and the owner of the threads the
-//! queue creates.
+//! question, an agent's settings at launch, the owner of the threads the
+//! queue creates, and the permission mode a new thread's first message picks.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -912,6 +912,170 @@ fn permission_operation(setup: &Setup, operation: &str, body: Value) -> Result<V
 }
 
 #[test]
+fn a_mode_sent_with_a_new_threads_first_message_decides_its_first_tool_call() {
+    use muniment_core::permission_gate::PermissionMode;
+    use muniment_core::run_start::RunAttachBoundaries;
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("composer-first-mode", true, RuntimeHost::default());
+    let capture = setup.temporary.root.join("editor.jsonl");
+    std::env::set_var("PI_RESUME_STUB_EDITOR_CAPTURE", &capture);
+    // The run's first step is a tool call the gate decides.
+    std::env::set_var(
+        "PI_RESUME_STUB_EDITOR_REQUEST",
+        json!({
+            "title": "muniment:permission-check",
+            "prefill": {"tool": "bash", "input": {"command": "touch notes.txt"}}
+        })
+        .to_string(),
+    );
+    let boundaries = setup.state.boundaries().with_pi_artifact(setup.artifact);
+    let submit = |mode: Option<PermissionMode>| {
+        boundaries.submit_run(
+            "local",
+            "Make the notes file.".into(),
+            Vec::new(),
+            None,
+            None,
+            mode,
+        )
+    };
+    let first_call = |mode: Option<PermissionMode>| -> (Value, String) {
+        let _ = std::fs::remove_file(&capture);
+        let accepted = submit(mode).unwrap();
+        assert!(wait(|| setup.live() == 0));
+        let answer: Value = serde_json::from_str(
+            std::fs::read_to_string(&capture)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        (
+            serde_json::from_str(answer["value"].as_str().unwrap()).unwrap(),
+            accepted.thread_id,
+        )
+    };
+
+    // A new thread without a picked mode starts in the default, bypass, and
+    // carries it as its own mode.
+    let (verdict, thread) = first_call(None);
+    assert_eq!(verdict["decision"], "allow", "{verdict}");
+    let mode = permission_operation(
+        &setup,
+        "thread.permission_mode",
+        json!({"thread_id": thread}),
+    )
+    .unwrap();
+    assert_eq!(mode["mode"], "bypass");
+    assert_eq!(mode["source"], "thread");
+    assert_eq!(mode["set_by"], "user");
+
+    // A mode sent with the first message is the thread's mode before its
+    // run starts, so it decides the run's first tool call.
+    let (verdict, thread) = first_call(Some(PermissionMode::Manual));
+    assert_eq!(verdict["decision"], "ask", "{verdict}");
+    let mode = permission_operation(
+        &setup,
+        "thread.permission_mode",
+        json!({"thread_id": thread}),
+    )
+    .unwrap();
+    assert_eq!(mode["mode"], "manual");
+    assert_eq!(mode["source"], "thread");
+    assert_eq!(mode["set_by"], "user");
+    let (verdict, _) = first_call(Some(PermissionMode::DontAsk));
+    assert_eq!(verdict["decision"], "deny", "{verdict}");
+
+    // A new agent is saved in the default agent mode, bypass.
+    let agent = setup.agent("Fresh");
+    assert_eq!(
+        agent.permissions.as_ref().and_then(|rules| rules.mode),
+        Some(PermissionMode::Bypass)
+    );
+
+    // A thread created before its first message starts in the default too,
+    // unless it is an agent's thread, which follows its agent.
+    let provenance: muniment_core::journal::Provenance = serde_json::from_value(
+        json!({"source": "test", "source_version": "0", "attach_profile": "desktop-owner"}),
+    )
+    .unwrap();
+    let created = |agent: Option<&str>| {
+        let thread = boundaries
+            .create_thread("local", provenance.clone())
+            .unwrap();
+        if let Some(agent) = agent {
+            agents::assign(setup.profile(), &thread, agent).unwrap();
+        }
+        boundaries
+            .submit_run(
+                "local",
+                "Make the notes file.".into(),
+                Vec::new(),
+                Some(thread.clone()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(wait(|| setup.live() == 0));
+        permission_operation(
+            &setup,
+            "thread.permission_mode",
+            json!({"thread_id": thread}),
+        )
+        .unwrap()
+    };
+    let mode = created(None);
+    assert_eq!(
+        (&mode["mode"], &mode["source"]),
+        (&json!("bypass"), &json!("thread"))
+    );
+    let planner: Agent = serde_json::from_value(json!({
+        "name": "Planner",
+        "instructions": "Plan first.",
+        "permissions": {"mode": "plan"}
+    }))
+    .unwrap();
+    let planner = agents::save(setup.profile(), planner).unwrap();
+    let mode = created(Some(&planner.id));
+    assert_eq!(
+        (&mode["mode"], &mode["source"]),
+        (&json!("plan"), &json!("agent"))
+    );
+
+    // With bypass off, new threads and agents start in manual, an existing
+    // thread keeps its mode, and bypass is refused.
+    permission_operation(
+        &setup,
+        "permission.settings_save",
+        json!({"bypass_enabled": false}),
+    )
+    .unwrap();
+    let (verdict, thread) = first_call(None);
+    assert_eq!(verdict["decision"], "ask", "{verdict}");
+    let mode = permission_operation(
+        &setup,
+        "thread.permission_mode",
+        json!({"thread_id": thread}),
+    )
+    .unwrap();
+    assert_eq!(mode["mode"], "manual");
+    assert_eq!(mode["source"], "thread");
+    let agent = setup.agent("Careful");
+    assert_eq!(
+        agent.permissions.and_then(|rules| rules.mode),
+        Some(PermissionMode::Manual)
+    );
+    let refused = submit(Some(PermissionMode::Bypass))
+        .unwrap_err()
+        .into_message();
+    assert!(refused.contains("Bypass is off"), "{refused}");
+    assert_eq!(setup.live(), 0);
+}
+
+#[test]
 fn a_plan_waits_as_an_approval_and_its_answer_switches_the_thread_mode() {
     let _environment = ENVIRONMENT
         .lock()
@@ -999,6 +1163,12 @@ fn a_plan_waits_as_an_approval_and_its_answer_switches_the_thread_mode() {
     );
 
     // A person sets the mode too, but never to bypass while it is off.
+    permission_operation(
+        &setup,
+        "permission.settings_save",
+        json!({"bypass_enabled": false}),
+    )
+    .unwrap();
     let refused = permission_operation(
         &setup,
         "thread.permission_mode_set",

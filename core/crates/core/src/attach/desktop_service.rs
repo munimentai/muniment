@@ -1432,6 +1432,9 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
         if let Some(level) = &request.thinking_level {
             canonical_input["thinking_level"] = json!(level);
         }
+        if let Some(mode) = request.permission_mode {
+            canonical_input["permission_mode"] = json!(mode);
+        }
         let ledger_request = AttachRequest {
             protocol: Protocol,
             request_id: request_id.clone(),
@@ -1461,6 +1464,7 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
                             .collect(),
                         request.thread_id,
                         request.thinking_level,
+                        request.permission_mode,
                     )
                     .map_err(|error| error.desktop_protocol_error())?;
                 Ok(CommittedResult {
@@ -2278,6 +2282,7 @@ mod tests {
             files: Vec<SelectedFile>,
             thread_id: Option<String>,
             _thinking_level: Option<String>,
+            _permission_mode: Option<crate::permission_gate::PermissionMode>,
         ) -> Result<crate::run_start::AttachPromptAccepted, RunStartError> {
             self.submit_calls.fetch_add(1, Ordering::SeqCst);
             Ok(crate::run_start::AttachPromptAccepted {
@@ -2956,6 +2961,7 @@ mod tests {
             files: vec!["main.rs".into()],
             thread_id: None,
             thinking_level: None,
+            permission_mode: None,
         };
 
         let first = service
@@ -2983,7 +2989,15 @@ mod tests {
         assert_eq!(replay.accepted_at, first.accepted_at);
         assert_eq!(service.boundaries.submit_calls.load(Ordering::SeqCst), 1);
 
-        for (text, thinking_level) in [("changed", None), ("hello", Some("high".to_owned()))] {
+        for (text, thinking_level, permission_mode) in [
+            ("changed", None, None),
+            ("hello", Some("high".to_owned()), None),
+            (
+                "hello",
+                None,
+                Some(crate::permission_gate::PermissionMode::Plan),
+            ),
+        ] {
             let conflict = service
                 .submit_run(
                     "workspace-a",
@@ -2992,6 +3006,7 @@ mod tests {
                         files: vec!["main.rs".into()],
                         thread_id: None,
                         thinking_level,
+                        permission_mode,
                     },
                     &request_id,
                     &key,

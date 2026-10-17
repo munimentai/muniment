@@ -51,7 +51,7 @@ use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 #[cfg(any(unix, target_os = "windows"))]
-use muniment_core::permission_gate::ChatPermissionAnswer;
+use muniment_core::permission_gate::{ChatPermissionAnswer, PermissionMode};
 use muniment_core::pi_execution::PiProcesses;
 use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
@@ -793,9 +793,42 @@ impl RuntimeAttachBoundaries {
 
 #[cfg(any(unix, target_os = "windows"))]
 impl RuntimeAttachBoundaries {
+    /// The mode a thread's first message starts it in when the message picks
+    /// none: the default thread mode, for a new thread or one created for
+    /// this message. An agent's thread follows its agent, and a thread with
+    /// runs or a mode keeps what it has.
+    fn first_message_mode(&self, thread: Option<&str>) -> Option<PermissionMode> {
+        let default =
+            || muniment_core::permission_gate::settings::new_thread_mode(&self.profile_directory);
+        let Some(thread) = thread else {
+            return Some(default());
+        };
+        if !matches!(
+            muniment_core::agents::thread_agent(&self.profile_directory, thread),
+            Ok(None)
+        ) {
+            return None;
+        }
+        let mut storage = self.storage.lock().ok()?;
+        let unstarted = storage
+            .journal
+            .thread_run_ids(thread, 1, None)
+            .ok()?
+            .run_ids
+            .is_empty();
+        let unset = storage
+            .journal
+            .thread_permission_mode(thread)
+            .ok()?
+            .is_none();
+        (unstarted && unset).then(default)
+    }
+
     /// Accepts a prompt as the run `run_id` and drives it on its own thread.
     /// The agent run queue names the run, so its record and the journal share
-    /// one id.
+    /// one id. `permission_mode` becomes the thread's mode before the run
+    /// starts.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_run_with_id(
         &self,
         run_id: String,
@@ -804,6 +837,7 @@ impl RuntimeAttachBoundaries {
         files: Vec<SelectedFile>,
         thread_id: Option<String>,
         thinking_level: Option<String>,
+        permission_mode: Option<PermissionMode>,
     ) -> Result<AttachPromptAccepted, RunStartError> {
         let prompt = text.trim().to_owned();
         if prompt.is_empty() {
@@ -819,6 +853,14 @@ impl RuntimeAttachBoundaries {
                 ));
             }
         }
+        if let Some(reason) = permission_mode.and_then(|mode| {
+            muniment_core::permission_gate::settings::load(&self.profile_directory)
+                .unavailable(mode)
+        }) {
+            return Err(RunStartError::InvalidRequest(reason.into()));
+        }
+        let permission_mode =
+            permission_mode.or_else(|| self.first_message_mode(thread_id.as_deref()));
         self.admit_run(thread_id.as_deref())?;
         let tokens = self.fresh_tokens()?;
         let grant = self.configure_run(
@@ -849,6 +891,9 @@ impl RuntimeAttachBoundaries {
             self.pi_artifact,
         )
         .map_err(run_service_error)?;
+        let launch = launch
+            .with_permission_mode(permission_mode)
+            .map_err(RunStartError::Persistence)?;
         let contexts = self.contexts.clone();
         let context_thread = accepted.thread_id.clone();
         std::thread::spawn(move || {
@@ -874,6 +919,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         files: Vec<SelectedFile>,
         thread_id: Option<String>,
         thinking_level: Option<String>,
+        permission_mode: Option<PermissionMode>,
     ) -> Result<AttachPromptAccepted, RunStartError> {
         self.submit_run_with_id(
             new_run_id(),
@@ -882,6 +928,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             files,
             thread_id,
             thinking_level,
+            permission_mode,
         )
     }
 

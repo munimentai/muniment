@@ -240,7 +240,7 @@ impl PermissionMode {
             Self::Plan => "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.",
             Self::Auto => "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.",
             Self::DontAsk => "Only reads and always-allowed actions run. Everything else is denied without asking.",
-            Self::Bypass => "Everything runs except deny and ask-first rules, protected paths and critical commands. Use it only on a container or a disposable machine.",
+            Self::Bypass => "Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.",
         }
     }
 }
