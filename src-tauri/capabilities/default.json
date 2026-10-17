@@ -160,6 +160,7 @@
     "allow-app-update-interruptions",
     "allow-launcher-register",
     "allow-agent-request",
+    "allow-fleet-thread-create",
     "allow-agent-memory",
     "allow-agent-export-template",
     "allow-agent-open",

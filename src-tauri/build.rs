@@ -146,6 +146,7 @@ const APP_COMMANDS: &[&str] = &[
     "launcher_is_visible",
     "launcher_present_main",
     "agent_request",
+    "fleet_thread_create",
     "agent_memory",
     "agent_export_template",
     "agent_open",
