@@ -129,7 +129,7 @@ test -f src-tauri/cli/src/main.rs
 grep -Fxq 'muniment-attach = { path = "../../core/crates/attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
 grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
 grep -Fq 'src-tauri/integration/*|src-tauri/integration/**)' "$ci"
-grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
+grep -Fq 'core/protocol-fixtures/*|core/protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "needs.changes.outputs.companion == 'true'" "$ci"
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-cli --package muniment-acp --check' "$ci"
@@ -143,11 +143,11 @@ grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-r
 grep -Fq 'run: test/runtime-dependency-boundary.sh' "$ci"
 test -d core/protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
-grep -Fq -- '--package muniment-attach --bin export-attach-fixtures -- "$PWD/protocol-fixtures" --check' "$ci"
+grep -Fq -- '--package muniment-attach --bin export-attach-fixtures -- "$PWD/core/protocol-fixtures" --check' "$ci"
 grep -Fq 'attach-fixtures-current:' "$ci"
 test -d core/protocol-fixtures/code-diff/1
 grep -Fq 'name: code-diff-fixtures-current' "$ci"
-grep -Fq -- '--package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/protocol-fixtures" --check' "$ci"
+grep -Fq -- '--package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/core/protocol-fixtures" --check' "$ci"
 test -f core/protocol-fixtures/muniment.attach/1/negotiation-hello.json
 test -x test/cli-dependency-boundary.sh
 grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh
@@ -213,6 +213,6 @@ grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
 grep -Fq 'cmd="$preflight_cmd && $cmd"' "$ci"
-test "$(grep -Fc "if: needs.changes.outputs.desktop == 'true'" "$ci")" -eq 1
+test "$(grep -Fxc "    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'" "$ci")" -eq 1
 test -z "$(git ls-files 'core/protocol-fixtures/muniment.attach/**' | grep -v '^core/protocol-fixtures/muniment.attach/1/')"
 echo "smoke OK"
