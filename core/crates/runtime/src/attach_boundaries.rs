@@ -219,12 +219,17 @@ impl RuntimeAttachBoundaries {
                 .as_ref()
                 .and_then(|swarm| swarm.is_replica_thread(thread))
         };
+        let forward_mode = |thread: &str, mode| match &self.swarm {
+            Some(swarm) => swarm.forward_mode(thread, mode).map(drop),
+            None => Err("This runtime is not part of a swarm.".to_string()),
+        };
         let scope = muniment_core::permission_gate::threads::ThreadScope {
             profile: &self.profile_directory,
             storage: &self.storage,
             active: &self.active,
             provenance: service::runtime_provenance(self.host.runtime_version),
             replica_of: &replica_of,
+            forward_mode: &forward_mode,
         };
         muniment_core::permission_gate::threads::operation(&scope, operation.as_str(), body)
             .map_err(ProtocolError::invalid_request_with_reason)
@@ -241,6 +246,16 @@ impl RuntimeAttachBoundaries {
         self.swarm
             .as_ref()
             .ok_or_else(ProtocolError::unsupported_operation)
+    }
+
+    /// The swarm member that runs a thread, and whether it is another one.
+    fn thread_owner(&self, thread_id: &str) -> (Option<String>, bool) {
+        let Some(swarm) = &self.swarm else {
+            return (None, false);
+        };
+        let owner = swarm.thread_owner(thread_id);
+        let replica = owner.is_some() && owner != swarm.runtime_id();
+        (owner, replica)
     }
 
     /// Replaces the production browser opener for tests and alternate hosts.
@@ -849,7 +864,7 @@ impl RuntimeAttachBoundaries {
         if let (Some(thread), Some(swarm)) = (thread_id.as_deref(), &self.swarm) {
             if swarm.is_replica_thread(thread).is_some() {
                 return Err(RunStartError::InvalidRequest(
-                    "This agent runs on another machine. Post the message with thread.post.".into(),
+                    "Another machine runs this thread. Post the message with thread.post.".into(),
                 ));
             }
         }
@@ -1371,11 +1386,17 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         workspace: &str,
         request: ThreadListRequest,
     ) -> Result<ThreadListPage, ProtocolError> {
-        let mut storage = self
-            .storage
-            .lock()
-            .map_err(|_| ProtocolError::persistence_failed())?;
-        ThreadListService::list_threads(&mut storage.journal, workspace, request)
+        let mut page = {
+            let mut storage = self
+                .storage
+                .lock()
+                .map_err(|_| ProtocolError::persistence_failed())?;
+            ThreadListService::list_threads(&mut storage.journal, workspace, request)?
+        };
+        for thread in &mut page.threads {
+            (thread.owner_runtime, thread.replica) = self.thread_owner(&thread.thread_id);
+        }
+        Ok(page)
     }
 
     fn open_thread(
@@ -1398,13 +1419,17 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?
             .subject;
-        service::thread_summaries(
+        let mut page = service::thread_summaries(
             Arc::clone(&self.storage),
             subject,
             usize::from(request.limit),
             request.cursor,
         )
-        .map_err(ProtocolError::persistence_failed_with_reason)
+        .map_err(ProtocolError::persistence_failed_with_reason)?;
+        for summary in &mut page.summaries {
+            (summary.owner_runtime, summary.replica) = self.thread_owner(&summary.thread_id);
+        }
+        Ok(page)
     }
 
     fn select_thread(&self, thread_id: &str) -> Result<bool, ProtocolError> {
@@ -1776,9 +1801,26 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         body: serde_json::Value,
         client: Option<&str>,
     ) -> Result<serde_json::Value, ProtocolError> {
-        self.swarm()?
+        let before = (operation == muniment_core::attach::Operation::ThreadHistoryFetch)
+            .then(|| body["before"].as_str().map(str::to_owned));
+        let mut answer = self
+            .swarm()?
             .operation(operation, body, client)
-            .map_err(ProtocolError::invalid_request_with_reason)
+            .map_err(ProtocolError::invalid_request_with_reason)?;
+        // A fetched history that is held answers its page at once.
+        if let Some(before) = before {
+            if answer["status"] == "held" {
+                let thread_id = answer["thread_id"].as_str().unwrap_or_default().to_owned();
+                let page = self.thread_history(ThreadOpenRequest {
+                    thread_id,
+                    limit: 20,
+                    cursor: before,
+                })?;
+                answer["page"] =
+                    serde_json::to_value(page).map_err(|_| ProtocolError::persistence_failed())?;
+            }
+        }
+        Ok(answer)
     }
 
     fn swarm_exchange(

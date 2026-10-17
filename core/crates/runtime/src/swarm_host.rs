@@ -1,6 +1,7 @@
 //! What the runtime does for its swarm: the scope replica threads take,
-//! steering a live run, answering a run's gate, and starting queued agent
-//! runs soon after a message queues one.
+//! steering a live run, answering a run's gate, starting queued agent runs
+//! soon after a message queues one, and running a message another member
+//! posted to an ordinary thread this runtime owns.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -108,6 +109,33 @@ impl SwarmHost for RuntimeSwarmHost {
         self.host
             .credentials
             .write(muniment_core::agent_hooks::SECRET_SERVICE, hook_id, secret)
+    }
+
+    fn submit(&self, thread_id: &str, text: &str) -> Result<String, String> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade()
+            .ok_or("The runtime is stopping.")?;
+        let boundaries = state.boundaries();
+        let workspace = boundaries
+            .signed_workspace_approval()
+            .approval()
+            .map(|approval| approval.workspace)
+            .ok_or("Open Muniment and connect a model before running threads.")?;
+        boundaries
+            .submit_run_with_id(
+                muniment_core::run_start::new_run_id(),
+                &workspace,
+                text.to_owned(),
+                Vec::new(),
+                Some(thread_id.to_owned()),
+                None,
+                None,
+            )
+            .map(|accepted| accepted.run_id)
+            .map_err(|error| error.into_message())
     }
 
     fn kick_runs(&self) {
