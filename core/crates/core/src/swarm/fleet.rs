@@ -143,7 +143,7 @@ pub(super) struct StatusState {
 /// One class's progress: what this runtime holds of what its peers hold.
 fn progress(class: &str, held: u64, total: u64) -> Value {
     let total = total.max(held);
-    let percent = if total == 0 { 100 } else { held * 100 / total };
+    let percent = (held * 100).checked_div(total).unwrap_or(100);
     json!({"class": class, "held": held, "total": total, "percent": percent})
 }
 
