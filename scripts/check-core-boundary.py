@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the core boundary in core/docs/core-boundary.md without a GUI toolchain."""
+"""Enforce the desktop side of core/docs/core-boundary.md without a GUI toolchain."""
 
 import json
 from pathlib import Path
@@ -12,8 +12,7 @@ MANIFEST = "src-tauri/Cargo.toml"
 SHELL = "muniment-desktop"
 INTEGRATION = "muniment-desktop-integration"
 DESKTOP_ONLY_MODULES = ("auth", "browser_control", "chat_grant")
-CORE_SOURCE = re.compile(
-    r"git\+https://github\.com/munimentai/muniment-core\?tag=(v\d+\.\d+\.\d+)#[0-9a-f]{40}")
+CORE_CRATES = Path("core/crates")
 
 
 def require(condition, message):
@@ -22,7 +21,8 @@ def require(condition, message):
 
 
 def inventory(text):
-    tables = {"Shared": set(), "Desktop": set()}
+    """Read the port crates from the Port table and the desktop crates from the Desktop table."""
+    tables = {"Port": set(), "Desktop": set()}
     section = None
     seen = set()
     for line in text.splitlines():
@@ -34,14 +34,17 @@ def inventory(text):
                 continue
             require(len(cells) == 3, "The boundary table needs three columns.")
             kind, name, reason = cells
-            require(kind == "crate" and reason, "The boundary row needs a crate and a reason.")
+            kinds = ("crate", "module") if section == "Port" else ("crate",)
+            require(kind in kinds and reason, f"The {section} row needs a kind and a reason.")
+            if kind == "module":
+                continue
             require(re.fullmatch(r"[a-z][a-z0-9-]*", name),
                     f"The boundary name is invalid: {name}")
             require(name not in seen, f"The boundary repeats {name}.")
             seen.add(name)
             tables[section].add(name)
     for section, names in tables.items():
-        require(names, f"The {section} table has no entries.")
+        require(names, f"The {section} table has no crate entries.")
     return tables
 
 
@@ -52,18 +55,18 @@ def check_workspace(tables, members):
             "The workspace needs the shell and the integration crate.")
 
 
-def check_sources(tables, packages):
-    """Every shared crate resolves from the muniment-core repository at one tag."""
-    tags = set()
-    for name in sorted(tables["Shared"]):
-        sources = {package["source"] for package in packages if package["name"] == name}
-        require(sources, f"Cargo resolved no {name}.")
-        for source in sources:
-            match = CORE_SOURCE.fullmatch(source or "")
-            require(match, f"{name} must come from a muniment-core release tag, not {source}.")
-            tags.add(match[1])
-    require(len(tags) == 1, f"The shared crates must use one muniment-core tag: {sorted(tags)}")
-    return tags.pop()
+def check_sources(tables, packages, crates):
+    """Every port crate Cargo resolves is a path crate under core/crates/."""
+    crates = Path(crates).resolve()
+    resolved = [package for package in packages if package["name"] in tables["Port"]]
+    require(resolved, "Cargo resolved no port crate.")
+    for package in resolved:
+        name, source = package["name"], package["source"]
+        require(source is None, f"{name} must come from core/crates/, not {source}.")
+        manifest = Path(package["manifest_path"]).resolve()
+        require(manifest.is_relative_to(crates),
+                f"{name} must come from core/crates/, not {manifest}.")
+    return sorted({package["name"] for package in resolved})
 
 
 def check_modules(lib):
@@ -88,7 +91,7 @@ def main():
         text=True))
     members = {p["name"]: p for p in metadata["packages"] if p["id"] in metadata["workspace_members"]}
     check_workspace(tables, members)
-    tag = check_sources(tables, metadata["packages"])
+    port = check_sources(tables, metadata["packages"], CORE_CRATES)
     integration = Path(members[INTEGRATION]["manifest_path"]).parent
     check_modules((integration / "src/lib.rs").read_text())
     for name in sorted(tables["Desktop"] - {SHELL}):
@@ -97,12 +100,12 @@ def main():
             "--target", "all", "--edges", "normal,build,dev", "--prefix", "none",
             "--format", "{p}"], text=True)
         check_tree(tree, {SHELL}, name)
-    print(f"Core boundary checks passed with muniment-core {tag}.")
+    print(f"Desktop boundary checks passed with {len(port)} port crates from {CORE_CRATES}.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (ValueError, subprocess.CalledProcessError) as error:
-        print(f"Core boundary failed: {error}", file=sys.stderr)
+        print(f"Desktop boundary failed: {error}", file=sys.stderr)
         sys.exit(1)

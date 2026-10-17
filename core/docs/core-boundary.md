@@ -131,7 +131,7 @@ The boundary does not authorize wider reader access or a protocol change.
 
 ## Desktop
 
-The desktop workspace in `../src-tauri/` builds on the port crates through path dependencies under `crates/`.
+The desktop's Cargo workspace builds on the port crates through path dependencies under `crates/`.
 The repository root's `scripts/check-core-boundary.sh` reads the Port table and this table.
 
 | Kind | Name | Why |
@@ -169,6 +169,8 @@ It rejects a staying module declared in `muniment-core` and a core default featu
 It checks every port crate with Cargo's all-target dependency tree, including build and test dependencies.
 It rejects the shell, Tauri packages, and other staying crates.
 It rejects the `keyring` crate in `muniment-server`'s tree, so the headless runtime never opens a keychain.
+It rejects a path dependency of a workspace crate outside the core directory.
+It rejects a file in the core directory that names the desktop shell directory.
 It tests each port crate without default features.
 The core test enables `keyring` to include prompt and thread-history tests.
 CI runs this check on every push and pull request.
@@ -182,7 +184,9 @@ Cargo compilation checks the enabled code paths as well.
 Linux and macOS tests do not prove Windows compilation, so CI checks the workspace on Windows.
 
 The root `scripts/check-core-boundary.sh` checks the desktop workspace.
+It runs the core check first.
 It requires every desktop workspace crate in the Desktop table and no port crate in that workspace.
+It requires every port crate Cargo resolves to have no source and a manifest under `crates/`.
 It requires the three desktop-only modules in `muniment-desktop-integration`.
 It checks every desktop crate except the shell with Cargo's all-target dependency tree, including build and test dependencies.
 It rejects the shell and Tauri packages in those trees.
