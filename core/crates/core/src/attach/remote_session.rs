@@ -246,6 +246,42 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
     }
 }
 
+/// Runs one request for a client that holds only `actor`'s scopes, as a
+/// paired device's request runs: the remote allow list and the scopes
+/// first, then an action on an item another swarm member owns goes to that
+/// member, and the rest runs here. Operations that only a linked runtime or
+/// the runtime's own remote access handle are refused. The phone relay's
+/// control session calls it.
+pub fn dispatch_scoped<S: ThreadListService>(
+    service: &mut S,
+    request: Request,
+    workspace: &str,
+    provenance: CompanionProvenance,
+    actor: &crate::swarm::FleetActor,
+) -> Result<Value, ProtocolError> {
+    match remote_rule(request.operation, &request.body) {
+        RemoteRule::Excluded | RemoteRule::RemoteAccess | RemoteRule::SwarmPeer => {
+            return Err(ProtocolError::unsupported_operation())
+        }
+        RemoteRule::Refused(reason) => {
+            return Err(ProtocolError::invalid_request_with_reason(reason))
+        }
+        RemoteRule::Scope(scope) if !muniment_attach::scopes_grant(&actor.scopes, scope) => {
+            return Err(ProtocolError::unauthorized_with_reason(
+                missing_scope_reason(scope),
+            ))
+        }
+        RemoteRule::AnyScope | RemoteRule::Scope(_) => {}
+    }
+    if let Some(body) = super::desktop_dispatch::route_to_owner(service, &request, actor)? {
+        return Ok(body);
+    }
+    let mut state = DesktopSessionService::new_session_state(service);
+    DesktopSessionService::dispatch_request(service, request, workspace, provenance, &mut state)
+        .map(|result| result.body)
+        .map_err(|failure| failure.error)
+}
+
 /// Closed outcomes from remote client admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteAdmissionError {

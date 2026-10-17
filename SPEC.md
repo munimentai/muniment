@@ -118,6 +118,8 @@ encrypted, and its account tiers belong to phase two.
 **muniment-mobile, phase two.** After QR pairing, mobile drives this runtime through the relay
 and sees the live tool stream, Stop, queued follow-ups and the permission-gate card
 that becomes a run receipt. Approving a proposal from the phone is that card.
+Through the pair's control session the phone reads the whole fleet, and its posts, answers, Run now,
+stops and new threads reach the owning machine through this runtime. Nothing runs on the phone.
 
 **muniment-qa.** The local-mode chat smoke is the first installed nightly spec
 on Linux, Windows and macOS, and real sign-in gates no other spec.
