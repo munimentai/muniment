@@ -19,6 +19,13 @@ id = "generic-api-key"
   # credential. A real credential's captured secret carries no NAME= prefix.
   [[rules.allowlists]]
   regexes = ['''^[A-Z][A-Z0-9_]{2,}=[A-Za-z0-9_.\-]*$''']
+  # The relay encryption conformance vectors hold synthetic test keys.
+  # The browser control tests send the RFC 6455 sample WebSocket key.
+  [[rules.allowlists]]
+  paths = [
+    '''^core/protocol-fixtures/muniment\.relay-encryption/1/relay-encryption-v1\.json$''',
+    '''^src-tauri/core/src/browser_control/linux_transport\.rs$''',
+  ]
 
 [[rules]]
 id = "jwt"
@@ -28,4 +35,8 @@ id = "jwt"
 [[rules]]
 id = "private-key"
   [[rules.allowlists]]
-  paths = ['''^test/fixtures/provider-egress-key\.pem$''']
+  paths = [
+    '''^test/fixtures/provider-egress-key\.pem$''',
+    # Secret scanner tests build PEM blocks with placeholder bodies.
+    '''^src-tauri/core/tests/assistant_text_secrets\.rs$''',
+  ]
