@@ -61,7 +61,7 @@
   .class-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .class-count { color: var(--muted); white-space: nowrap; }
   .class-count.waiting { color: var(--ochre); }
-  .account { grid-template-columns: minmax(0, 1fr); }
+  .classes li.account { grid-template-columns: minmax(0, 1fr); }
   .bar { grid-column: 1 / -1; display: block; height: 3px; border-radius: var(--radius-chip); background: var(--faint); overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--muted); }
   .done .bar span { background: var(--ink); }
