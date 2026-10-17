@@ -745,20 +745,55 @@ steering, gate answers and run starts through `SwarmHost`.
   `agent.read` mark `move_suggested` on an agent whose primary was last
   seen 24 hours ago or more; `agent.move` with `force` takes it.
 
+- **Settings, projects and memory.** `fleet_sync` keeps nine classes on
+  records, each through an adapter that maps its own storage both ways:
+  `preference` (one record per fleet-wide key), `permission` (default modes
+  and the unattended wait per field, deny and ask-first rules as sets keyed
+  by the request hash, always-allow rules one field per hash), `retention`,
+  `route` (one record per route name), `decision-model` (a connection's
+  fields without its key), `search` (the provider order and engines),
+  `project` (`{"name", "owner_runtime", "path"}`), `project-thread` (each
+  thread's project) and `memory` (each file under `<Home>/memory`, with the
+  hash of the version its writer edited). A pass writes local changes to the
+  records and applies other members' records to the storage; the hashes it
+  keeps in `<profile>/fleet-sync/<class>.json` make an applied value never
+  travel back. Passes wait for the first exchange, and a class's first pass
+  takes the fleet's values. Bypass, machine-local preferences, provider and
+  connection keys, connections to a loopback address, project files, the
+  memory index, recall counts and pending memories stay on their machine.
+  Another member's project lists under `remote` in the project catalog. A
+  concurrent edit to one memory file keeps the losing text as `name (from
+  <machine>).md`; a fact's copy is a new fact titled `<title> (from
+  <machine>)`. `SwarmHost::settings_applied` tells the runtime to reapply the
+  router, the search server or retention.
+- **Preferences.** `preferences.get` (`{}` → `{"values", "fleet_keys",
+  "local_keys"}`), `preferences.set` (`{"values": {key: value or null}}` →
+  the same) and `preferences.import` (`{"values"}` from a client's own
+  storage, keys with or without the `muniment.` prefix → the same plus
+  `"imported"` and `"skipped"`; a key the runtime holds keeps its value).
+  Fleet-wide keys are `theme`, `agent-avatars`, `type`, `thinking-mark`,
+  `browser.search`, `browser.homepage` and `memory-recall`, which reads and
+  writes the memory recall settings. `sidebar-collapsed`, `sidebar-width`,
+  `window`, `frame`, `local-mode` and `voice-shortcut` stay local. Every
+  change sends `preferences.changed` (`{"values", "source"}`, `source`
+  `local` or `fleet`).
+
 A chat-event subscription that sends `{"swarm": true}` receives
 `swarm.changed`, `agent.approval_pending`, `agent.approval_resolved` and
 `fleet.sync_changed`.
 With `"swarm_live": true` too it also receives `agent.activity` and
 `group.posted`; `DesktopClient::subscribe_chat_events_with_swarm_live` falls
 back to the swarm events alone on a runtime that refuses the flag. With
-`"fleet": true` as well it receives `fleet.op_updated`, and
+`"fleet": true` as well it receives `fleet.op_updated` and
+`preferences.changed`, and
 `DesktopClient::subscribe_chat_events_with_fleet` falls back to the live
 swarm events.
-Remotely, linking, `fleet.offline_set` and the fleet credential operations
-take `runtime.admin`, the reads, `fleet.op_status`, `fleet.ops`,
-`fleet.sync_status` and `thread.history_fetch` take `thread.read`,
-`thread.post`, `fleet.op_cancel`, group changes and answers take
-`run.write`, and `agent.move` and `swarm.resume` take
+Remotely, linking, `fleet.offline_set`, the fleet credential operations,
+`preferences.set` and `preferences.import` take `runtime.admin`, the reads,
+`fleet.op_status`, `fleet.ops`, `fleet.sync_status`, `thread.history_fetch`
+and `preferences.get` take `thread.read`, `thread.post`, `fleet.op_cancel`,
+group changes and answers take `run.write`, and `agent.move` and
+`swarm.resume` take
 `agents.manage`.
 
 ## Phone relay

@@ -1754,6 +1754,14 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         if operation.is_permission_operation() {
             return self.permission_operation(operation, body);
         }
+        if operation.is_preferences_operation() {
+            return muniment_core::preferences::operation(
+                &self.profile_directory,
+                operation.as_str(),
+                body,
+            )
+            .map_err(ProtocolError::invalid_request_with_reason);
+        }
         if operation == muniment_core::attach::Operation::AgentToolCatalog {
             return muniment_core::agents::operation(
                 &self.profile_directory,

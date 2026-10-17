@@ -34,7 +34,7 @@
 
 <!-- An open catalog marks its row the way the open thread marks its own. -->
 <div class="project-row" class:current={panelOpen === true} bind:this={row}>
-  <button class="project-title" aria-label={running ? `${label}, running` : label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span>{#if owner}<OwnerChip machine={owner} compact />{/if}{#if running}<i class="run-mark" aria-hidden="true"></i>{/if}</button>
+  <button class="project-title" aria-label={running ? `${label}, running` : label} aria-current={panelOpen === true ? 'true' : undefined} aria-expanded={panelOpen ?? (icon === 'folder' ? expanded : undefined)} onclick={onactivate} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon === 'folder' && expanded ? 'folder-open' : icon} /><span>{name}</span>{#if owner}<OwnerChip machine={owner} prefix="files on" compact />{/if}{#if running}<i class="run-mark" aria-hidden="true"></i>{/if}</button>
   <!-- A project folder starts a thread with the pencil. The Agents, Artifacts and Projects rows create with the plus. -->
   <button class="project-control" aria-label={newLabel} {disabled} onclick={onnew}><LucideIcon name={icon === 'folder' ? 'square-pen' : 'plus'} size={14} /></button>
   <!-- A section with nothing in it has nothing to expand, so it shows no chevron. -->

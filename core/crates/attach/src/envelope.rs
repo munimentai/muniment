@@ -571,6 +571,17 @@ pub enum Operation {
     /// item stands.
     #[serde(rename = "fleet.op_status")]
     FleetOpStatus,
+    /// Reads the user's preferences, with which keys every swarm member
+    /// shares and which stay on this machine.
+    #[serde(rename = "preferences.get")]
+    PreferencesGet,
+    /// Sets or, with `null`, removes preferences by key.
+    #[serde(rename = "preferences.set")]
+    PreferencesSet,
+    /// Moves preferences a client kept in its own storage into the runtime
+    /// once. A key the runtime already holds keeps its value.
+    #[serde(rename = "preferences.import")]
+    PreferencesImport,
     /// Cancels an action this member queued for another member before it
     /// leaves this member.
     #[serde(rename = "fleet.op_cancel")]
@@ -737,6 +748,9 @@ impl Operation {
             Self::ThreadPlan => "thread.plan",
             Self::ThreadPlanAnswer => "thread.plan_answer",
             Self::FleetOpStatus => "fleet.op_status",
+            Self::PreferencesGet => "preferences.get",
+            Self::PreferencesSet => "preferences.set",
+            Self::PreferencesImport => "preferences.import",
             Self::FleetOpCancel => "fleet.op_cancel",
             Self::FleetOps => "fleet.ops",
         }
@@ -805,6 +819,18 @@ impl Operation {
                 | Self::ThreadPermissionModeSet
                 | Self::ThreadPlan
                 | Self::ThreadPlanAnswer
+                | Self::PreferencesGet
+                | Self::PreferencesSet
+                | Self::PreferencesImport
+        )
+    }
+
+    /// Whether the operation reads or changes the user's preferences. Each
+    /// is also an agent operation.
+    pub fn is_preferences_operation(self) -> bool {
+        matches!(
+            self,
+            Self::PreferencesGet | Self::PreferencesSet | Self::PreferencesImport
         )
     }
 
@@ -891,6 +917,12 @@ pub enum EventName {
     /// chat-event subscription that asked for `fleet`.
     #[serde(rename = "fleet.op_updated")]
     FleetOpUpdated,
+    /// Preferences changed, here or on another swarm member: `{values,
+    /// source}`, where a removed key's value is `null` and `source` is
+    /// `local` or `fleet`, on a chat-event subscription that asked for
+    /// `fleet`.
+    #[serde(rename = "preferences.changed")]
+    PreferencesChanged,
     #[serde(untagged)]
     Unknown(BoundedEventName),
 }

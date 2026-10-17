@@ -711,6 +711,90 @@ pub fn fact_restore_in(profile: &Path, home: &Path, id: &str) -> Result<(), Stri
     fs::remove_file(source).map_err(|_| "The deleted copy could not be removed.".into())
 }
 
+/// The deepest folder inside `<Home>/memory` fleet sync reads.
+const SYNC_DEPTH: usize = 4;
+
+/// Every memory file under `<Home>/memory` by its path inside that folder,
+/// as fleet sync shares them. Hidden files and folders stay out, and so
+/// does the README each Home scaffolds for itself.
+pub(crate) fn sync_files(
+    profile: &Path,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let home = home(profile)?;
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![(String::new(), 0)];
+    while let Some((folder, depth)) = pending.pop() {
+        let relative = if folder.is_empty() {
+            "memory".to_owned()
+        } else {
+            format!("memory/{folder}")
+        };
+        let directory = checked_path(&home, &relative)?;
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("The memories could not be read.".into()),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|_| "A memory could not be read.")?;
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if name.starts_with('.') || (folder.is_empty() && name == "README.md") {
+                continue;
+            }
+            let inner = if folder.is_empty() {
+                name.clone()
+            } else {
+                format!("{folder}/{name}")
+            };
+            let kind = entry
+                .file_type()
+                .map_err(|_| "A memory could not be read.")?;
+            if kind.is_dir() && depth + 1 < SYNC_DEPTH {
+                pending.push((inner, depth + 1));
+            } else if kind.is_file() && name.ends_with(".md") {
+                if let Ok(text) = read(&home, &format!("memory/{inner}")) {
+                    files.insert(inner, text);
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// Writes one memory file another member changed, by its path inside
+/// `<Home>/memory`.
+pub(crate) fn sync_write(profile: &Path, relative: &str, content: &str) -> Result<(), String> {
+    if !relative.ends_with(".md") {
+        return Err("The memory path is invalid.".into());
+    }
+    let _guard = WRITE.lock().map_err(|_| "Memory is busy.")?;
+    let _file_lock = lock(profile)?;
+    write(&home(profile)?, &format!("memory/{relative}"), content)
+}
+
+/// Removes one memory file another member removed. A fact goes to the
+/// deleted memories, where it can be restored.
+pub(crate) fn sync_remove(profile: &Path, relative: &str) -> Result<(), String> {
+    let _guard = WRITE.lock().map_err(|_| "Memory is busy.")?;
+    let _file_lock = lock(profile)?;
+    let home = home(profile)?;
+    if let Some(id) = relative
+        .strip_prefix("facts/")
+        .and_then(|name| name.strip_suffix(".md"))
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+    {
+        return delete_unlocked(profile, &home, id);
+    }
+    match fs::remove_file(checked_path(&home, &format!("memory/{relative}"))?) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err("The memory could not be deleted.".into())
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

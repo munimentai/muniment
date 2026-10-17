@@ -115,6 +115,8 @@ pub mod agent_routines;
 pub mod agent_runs;
 pub mod agent_templates;
 pub mod agents;
+pub mod fleet_sync;
+pub mod preferences;
 pub mod project_context;
 pub mod projects;
 pub mod swarm;

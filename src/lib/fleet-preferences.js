@@ -79,9 +79,13 @@ export function startFleetPreferences(tauri, listen) {
   })).then((unlisten) => { if (stopped) unlisten?.(); else stops.push(unlisten) }).catch(() => {})
 
   void (async () => {
+    // A refused import leaves the marker unset, so the next start tries it
+    // again, and core's values still apply now.
     if (stored(IMPORTED_MARKER) === null) {
-      await request('preferences.import', { values: storedFleetValues() })
-      try { localStorage.setItem(IMPORTED_MARKER, '1') } catch (_) {}
+      try {
+        await request('preferences.import', { values: storedFleetValues() })
+        try { localStorage.setItem(IMPORTED_MARKER, '1') } catch (_) {}
+      } catch (_) {}
     }
     const answer = await request('preferences.get', {})
     if (stopped) return
