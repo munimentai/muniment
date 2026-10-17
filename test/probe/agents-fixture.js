@@ -201,6 +201,8 @@ export function probeAgentStores(seed, state = null) {
   if (!seed) return { local: { agents: [], primaryThreads: {}, runs: [] } }
   if (state === 'empty' || state === 'empty-activity') return Object.fromEntries(['local', STUDIO, BOX].map((runtime) => [runtime, { agents: [], primaryThreads: {}, runs: [] }]))
   const stores = seeded()
+  // The Studio machine stops answering, so its agent shows as a read-only synced copy.
+  if (state === 'cards-offline') stores.swarm.members.find((member) => member.runtime_id === STUDIO).online = false
   if (state === 'absence') {
     stores.swarm.absence = { paused: true, paused_at: at(60 * 24), last_client_at: at(60 * 24 * 15) }
     for (const runtime of ['local', STUDIO, BOX]) for (const agent of stores[runtime].agents) agent.paused_reason = 'absence'
