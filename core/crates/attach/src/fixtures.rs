@@ -711,6 +711,9 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("fleet-sync-status", Operation::FleetSyncStatus),
         ("fleet-offline-set", Operation::FleetOfflineSet),
         ("thread-history-fetch", Operation::ThreadHistoryFetch),
+        ("preferences-get", Operation::PreferencesGet),
+        ("preferences-set", Operation::PreferencesSet),
+        ("preferences-import", Operation::PreferencesImport),
         ("swarm-set-role", Operation::SwarmSetRole),
         ("fleet-audit", Operation::FleetAudit),
     ];
@@ -974,6 +977,14 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
             json!({"status": "answered", "answer": "plan_edit_auto"}),
         ),
         ("fleet-op-status", json!({"op": fixture_op("applied")})),
+        ("preferences-get", fixture_preferences(false)),
+        ("preferences-set", fixture_preferences(false)),
+        ("preferences-import", {
+            let mut body = fixture_preferences(true);
+            body["imported"] = json!(["browser.homepage"]);
+            body["skipped"] = json!(["muniment.theme"]);
+            body
+        }),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1442,6 +1453,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("group-posted", EventName::GroupPosted),
         ("fleet-op-updated", EventName::FleetOpUpdated),
         ("fleet-sync-changed", EventName::FleetSyncChanged),
+        ("preferences-changed", EventName::PreferencesChanged),
     ];
     for (index, (name, event)) in events.into_iter().enumerate() {
         let body = event_body(&event);
@@ -1461,6 +1473,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                 | EventName::GroupPosted
                 | EventName::FleetOpUpdated
                 | EventName::FleetSyncChanged
+                | EventName::PreferencesChanged
         );
         insert(
             &mut fixtures,
@@ -1710,6 +1723,14 @@ fn request_body(operation: Operation) -> serde_json::Value {
         }
         Operation::AgentApprovals | Operation::GroupList => json!({}),
         Operation::FleetOpStatus => json!({"op_id": FIXTURE_OP_ID}),
+        Operation::PreferencesGet => json!({}),
+        Operation::PreferencesSet => {
+            json!({"values": {"theme": "dark", "sidebar-width": 280, "browser.search": null}})
+        }
+        Operation::PreferencesImport => json!({"values": {
+            "muniment.theme": "light",
+            "muniment.browser.homepage": "https://example.com/"
+        }}),
         Operation::AgentApprovalAnswer => json!({
             "approval_id": FIXTURE_APPROVAL_ID,
             "answer": {"type": "confirm", "value": true}
@@ -1855,6 +1876,40 @@ const FIXTURE_APPROVAL_ID: &str =
     "019965a0-0000-7000-8000-0000000000b3:019965a0-0000-7000-8000-0000000000b4";
 
 const FIXTURE_OP_ID: &str = "019965a0-0000-7000-8000-0000000000d6";
+
+/// The preferences `preferences.get`, `preferences.set` and
+/// `preferences.import` answer, with the import's homepage when `imported`.
+fn fixture_preferences(imported: bool) -> serde_json::Value {
+    let mut values = json!({
+        "theme": "dark",
+        "agent-avatars": "beam",
+        "memory-recall": {"learn": true, "use": true, "ask": false},
+        "sidebar-width": 280
+    });
+    if imported {
+        values["browser.homepage"] = json!("https://example.com/");
+    }
+    json!({
+        "values": values,
+        "fleet_keys": [
+            "theme",
+            "agent-avatars",
+            "type",
+            "thinking-mark",
+            "browser.search",
+            "browser.homepage",
+            "memory-recall"
+        ],
+        "local_keys": [
+            "sidebar-collapsed",
+            "sidebar-width",
+            "window",
+            "frame",
+            "local-mode",
+            "voice-shortcut"
+        ]
+    })
+}
 
 /// One action forwarded to the member that owns its item, as
 /// `fleet.op_status` and `fleet.op_updated` report it: queued while that
@@ -2497,6 +2552,10 @@ fn event_body(event: &EventName) -> serde_json::Value {
             "activity": fixture_activity()
         }),
         EventName::FleetOpUpdated => fixture_op("queued"),
+        EventName::PreferencesChanged => json!({
+            "values": {"theme": "dark", "browser.search": null},
+            "source": "fleet"
+        }),
         EventName::GroupPosted => json!({
             "group_id": FIXTURE_GROUP_ID,
             "thread_id": FIXTURE_GROUP_THREAD_ID,
@@ -2698,6 +2757,9 @@ mod tests {
             Operation::ThreadPlan,
             Operation::ThreadPlanAnswer,
             Operation::FleetOpStatus,
+            Operation::PreferencesGet,
+            Operation::PreferencesSet,
+            Operation::PreferencesImport,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -2801,12 +2863,15 @@ mod tests {
             "response-fleet-op-status.json",
             "event-fleet-op-updated.json",
             "request-run-chat-events-fleet.json",
+            "response-preferences-get.json",
+            "response-preferences-import.json",
+            "event-preferences-changed.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 4,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4,
             "every canonical fixture must be inventoried"
         );
     }
