@@ -936,7 +936,8 @@ fn timed<T>(work: impl FnOnce() -> T) -> (T, std::time::Duration) {
 #[test]
 fn ordinary_threads_at_5000_with_50000_events_cost_little_per_tick() {
     let a = Node::scoped("a");
-    let threads = a.seed_journal_threads(5000, 10);
+    let count = 5000;
+    let threads = a.seed_journal_threads(count, 10);
     // The first pass indexes every event and writes every summary.
     let ((), first) = timed(|| a.inner().tick().unwrap());
     let events: i64 = a
@@ -946,8 +947,8 @@ fn ordinary_threads_at_5000_with_50000_events_cost_little_per_tick() {
         .unwrap()
         .query_row("SELECT COUNT(*) FROM log", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(events, 50_000);
-    assert_eq!(sync::summaries(a.inner()).unwrap().len(), 5000);
+    assert_eq!(events as usize, count * 10);
+    assert_eq!(sync::summaries(a.inner()).unwrap().len(), count);
     // Idle passes read only what changed.
     let idle: Vec<std::time::Duration> = (0..5)
         .map(|_| timed(|| a.inner().tick().unwrap()).1)
@@ -970,7 +971,7 @@ fn ordinary_threads_at_5000_with_50000_events_cost_little_per_tick() {
         .map(|round| round.request_bytes + round.response_bytes)
         .sum();
     assert!(largest <= FRAME_BUDGET, "a frame of {largest} bytes");
-    assert_eq!(sync::registrations(b.inner()).unwrap().len(), 5000);
+    assert_eq!(sync::registrations(b.inner()).unwrap().len(), count);
 
     // Idle exchanges carry no records, clocks or events.
     let (idle_round, idle_time) = timed(|| round(&b, &a));

@@ -179,28 +179,55 @@ fn put_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<
 /// its owner deleted. Answers whether the thread list changed.
 pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool, String> {
     let mut changed = false;
+    let mut keys: Vec<&str> = Vec::new();
     for change in changes
         .iter()
         .filter(|change| change.class == CLASS && !change.local)
     {
         if change.deleted && change.field.is_empty() {
             changed |= forget_thread(inner, &change.key)?;
-            continue;
+        } else if !change.deleted && !keys.contains(&change.key.as_str()) {
+            keys.push(&change.key);
         }
-        if change.deleted {
-            continue;
-        }
-        let record = inner.records.get(CLASS, &change.key)?;
-        let registration = record
-            .as_ref()
-            .and_then(|record| record.value(REGISTRATION).cloned())
-            .and_then(|value| serde_json::from_value::<ThreadRegistration>(value).ok())
-            .filter(|registration| registration.thread_id == change.key);
-        if let Some(registration) = registration {
-            changed |= keep_registration(inner, &registration)?;
-            if registration.kind == PLAIN {
-                changed |= show_summary(inner, &registration.thread_id)?;
+    }
+    if keys.is_empty() {
+        return Ok(changed);
+    }
+    // One transaction registers a page of threads at once.
+    let mut plain = Vec::new();
+    {
+        let mut connection = inner.store.connect()?;
+        let transaction = connection.transaction().map_err(sql)?;
+        for key in keys {
+            let registration = super::records::get_with(&transaction, CLASS, key)?
+                .and_then(|record| record.value(REGISTRATION).cloned())
+                .and_then(|value| serde_json::from_value::<ThreadRegistration>(value).ok())
+                .filter(|registration| registration.thread_id == key);
+            let Some(registration) = registration else {
+                continue;
+            };
+            if registration_valid(&registration) {
+                let added = transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO threads(thread_id, record) VALUES(?1, ?2)",
+                        params![
+                            registration.thread_id,
+                            serde_json::to_string(&registration)
+                                .map_err(|error| error.to_string())?
+                        ],
+                    )
+                    .map_err(sql)?;
+                changed |= added > 0;
             }
+            if registration.kind == PLAIN {
+                plain.push(registration.thread_id);
+            }
+        }
+        transaction.commit().map_err(sql)?;
+    }
+    if inner.host.replica_scope().is_some() {
+        for thread_id in plain {
+            changed |= show_summary(inner, &thread_id)?;
         }
     }
     Ok(changed)
@@ -648,7 +675,7 @@ pub(super) fn thread_clock(
     inner: &Inner,
     thread_id: &str,
 ) -> Result<BTreeMap<String, u64>, String> {
-    clock_of(&inner.store.connect()?, thread_id)
+    clock_of(&*inner.store.connect()?, thread_id)
 }
 
 /// The highest sequence held from each origin in one thread.
@@ -744,6 +771,9 @@ pub(super) struct ScanMarks {
     run: i64,
     thread: i64,
     full_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The log row up to which every posted message was consumed or is
+    /// another member's to consume.
+    posts: i64,
 }
 
 /// Indexes the events this runtime wrote into each registered thread the
@@ -799,6 +829,7 @@ pub(super) fn scan_local(inner: &Inner) -> Result<(), String> {
     marks.thread = thread_max;
     if full {
         marks.full_at = Some(now);
+        marks.posts = 0;
     }
     drop(marks);
     if added {
@@ -1796,20 +1827,46 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
         return Ok(false);
     };
     let mut kick = false;
-    // Only threads with a posted message not yet consumed have work.
-    let waiting: Vec<String> = {
+    // Only threads with a posted message not yet consumed have work. The
+    // pass reads the posts after its mark, and a thread another member runs
+    // never has work here.
+    let mark = super::lock(&inner.scan).posts;
+    let posted: Vec<(i64, String, bool)> = {
         let connection = inner.store.connect()?;
         let mut statement = connection
-            .prepare(
-                "SELECT DISTINCT thread_id FROM log l WHERE kind='thread' AND event_type=?1 \
-                 AND NOT EXISTS(SELECT 1 FROM consumed c WHERE c.event_id=l.event_id)",
+            .prepare_cached(
+                "SELECT l.rowid, l.thread_id, EXISTS(SELECT 1 FROM consumed c WHERE c.event_id=l.event_id) \
+                 FROM log l WHERE l.rowid>?1 AND l.event_type=?2 AND l.kind='thread' ORDER BY l.rowid",
             )
             .map_err(sql)?;
         let rows = statement
-            .query_map([THREAD_MESSAGE_POSTED], |row| row.get(0))
+            .query_map(params![mark, THREAD_MESSAGE_POSTED], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .map_err(sql)?;
         rows.collect::<Result<_, _>>().map_err(sql)?
     };
+    let mut ours: BTreeMap<String, bool> = BTreeMap::new();
+    let mut waiting: Vec<String> = Vec::new();
+    let mut next_mark = posted.last().map_or(mark, |(rowid, _, _)| *rowid);
+    for (rowid, thread, consumed) in posted {
+        if consumed {
+            continue;
+        }
+        let primary = *ours.entry(thread.clone()).or_insert_with(|| {
+            registration(inner, &thread)
+                .and_then(|registration| thread_primary(inner, &registration))
+                .as_deref()
+                == Some(self_id.as_str())
+        });
+        if primary {
+            next_mark = next_mark.min(rowid - 1);
+            if !waiting.contains(&thread) {
+                waiting.push(thread);
+            }
+        }
+    }
+    super::lock(&inner.scan).posts = next_mark;
     for registration in waiting
         .iter()
         .filter_map(|thread| registration(inner, thread))

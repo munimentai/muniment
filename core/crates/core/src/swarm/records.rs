@@ -567,19 +567,7 @@ impl RecordStore {
 
     /// The record `(class, key)`, if this runtime holds any write to it.
     pub(super) fn get(&self, class: &str, key: &str) -> Result<Option<Record>, String> {
-        let connection = self.store.connect()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT class, key, field, value, clock, origin, seq, deleted, rank FROM records \
-                 WHERE class=?1 AND key=?2",
-            )
-            .map_err(sql)?;
-        let rows = statement
-            .query_map(params![class, key], read_row)
-            .map_err(sql)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(sql)?;
-        Ok(assemble(class, key, rows))
+        get_with(&*self.store.connect()?, class, key)
     }
 
     /// The records of a class in key order after `after`, at most `limit`.
@@ -723,6 +711,27 @@ impl RecordStore {
             .map_err(sql)?;
         rows.collect::<Result<_, _>>().map_err(sql)
     }
+}
+
+/// The record `(class, key)` read over `connection`, so a caller that reads
+/// many records opens the store once.
+pub(super) fn get_with(
+    connection: &rusqlite::Connection,
+    class: &str,
+    key: &str,
+) -> Result<Option<Record>, String> {
+    let mut statement = connection
+        .prepare_cached(
+            "SELECT class, key, field, value, clock, origin, seq, deleted, rank FROM records \
+             WHERE class=?1 AND key=?2",
+        )
+        .map_err(sql)?;
+    let rows = statement
+        .query_map(params![class, key], read_row)
+        .map_err(sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql)?;
+    Ok(assemble(class, key, rows))
 }
 
 fn check_name(class: &str, key: &str) -> Result<(), String> {

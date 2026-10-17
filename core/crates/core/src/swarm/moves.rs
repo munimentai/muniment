@@ -279,6 +279,8 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
     let self_id = inner
         .runtime_id()
         .ok_or("This runtime is not part of a swarm.")?;
+    // The agent's threads now have posts for this runtime to consume.
+    sync::rescan(inner);
     let mut agent: Agent = serde_json::from_value(handover.agent.clone())
         .map_err(|_| "The agent definition is invalid.".to_string())?;
     agent.primary_runtime = Some(self_id.clone());
