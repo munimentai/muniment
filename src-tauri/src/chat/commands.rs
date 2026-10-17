@@ -164,6 +164,7 @@ pub(super) fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
                 display_name: attachment.display_name,
                 byte_length: attachment.byte_length,
                 media_type: attachment.media_type,
+                sha256: attachment.sha256,
             })
             .collect(),
         committed_seq: accepted.committed_seq,

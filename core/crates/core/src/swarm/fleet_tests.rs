@@ -573,6 +573,35 @@ fn op_message(from: &Node, to: &Node, operation: &str, body: Value) -> Message {
 }
 
 #[test]
+fn a_thread_for_a_named_machine_never_starts_on_a_runtime_outside_a_fleet() {
+    let a = Node::new("alone");
+    *lock(&a.inner().identity) = None;
+    let named = json!({"runtime_id": uuid::Uuid::now_v7().to_string(), "text": "Hi."});
+    let refused = a
+        .swarm
+        .route(
+            Operation::ThreadCreate,
+            &named,
+            &FleetActor::phone(),
+            Some("req_create_0001"),
+        )
+        .unwrap_err();
+    assert!(refused.contains("not in a fleet"), "{refused}");
+    // A thread without a named machine starts here.
+    assert_eq!(
+        a.swarm
+            .route(
+                Operation::ThreadCreate,
+                &json!({"text": "Hi."}),
+                &FleetActor::phone(),
+                Some("req_create_0002"),
+            )
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
 fn an_owner_refuses_admin_actions_from_a_worker_and_logs_every_action() {
     let a = Node::new("a");
     let b = Node::new("b");

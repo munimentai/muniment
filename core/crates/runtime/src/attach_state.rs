@@ -427,7 +427,7 @@ impl RuntimeAttachState {
             capability: String::new(),
             idempotency_key: operation
                 .requires_idempotency_key()
-                .then(|| id(request_id.to_owned()))
+                .then(|| id(phone_idempotency_key(request_id)))
                 .transpose()?,
             body,
         };
@@ -508,6 +508,19 @@ pub(crate) fn apply_recorded_retention(
         crate::service::apply_retention(Arc::clone(storage), max_age_seconds)
     })
     .map(|_| ())
+}
+
+/// The idempotency key of a phone request: a UUID made from its request
+/// id, since attach keys are UUIDs and the phone's ids are not. A repeat of
+/// the request id gets the same key, so it names the same action.
+fn phone_idempotency_key(request_id: &str) -> String {
+    use muniment_core::sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("phone\u{1f}{request_id}"));
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .to_string()
 }
 
 impl Drop for RuntimeAttachState {

@@ -386,6 +386,54 @@ fn a_package_is_fetched_only_when_enabled_or_pinned_and_checked_by_its_hash() {
         .is_file());
 }
 
+#[test]
+fn a_large_blob_travels_in_slices_that_an_attach_frame_carries() {
+    use base64::Engine as _;
+    let a = Node::new("slices");
+    let bytes: Vec<u8> = (0..300_000u32)
+        .map(|index| (index.wrapping_mul(2_654_435_761) >> 13) as u8)
+        .collect();
+    let hash = pins::put(a.inner(), &bytes).unwrap();
+    let mut budget = EXCHANGE_BUDGET;
+    let want = BlobWant {
+        hash: hash.clone(),
+        offset: 0,
+    };
+    let (chunks, _) = sync::blob_traffic(a.inner(), &[want], &mut budget).unwrap();
+    assert!(chunks.len() > 1, "{} slices", chunks.len());
+    let exchange = Exchange {
+        blobs: chunks.clone(),
+        ..Exchange::default()
+    };
+    muniment_attach::encode_frame(&exchange).unwrap();
+    // The slices follow each other, so the receiver appends them in order.
+    let mut joined = Vec::new();
+    for chunk in &chunks {
+        assert_eq!(chunk.offset, joined.len() as u64);
+        joined.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data)
+                .unwrap(),
+        );
+    }
+    assert_eq!(joined, bytes[..joined.len()]);
+    // The next exchange goes on from where this one stopped.
+    let mut budget = EXCHANGE_BUDGET;
+    let rest = BlobWant {
+        hash,
+        offset: joined.len() as u64,
+    };
+    let (chunks, _) = sync::blob_traffic(a.inner(), &[rest], &mut budget).unwrap();
+    for chunk in &chunks {
+        joined.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data)
+                .unwrap(),
+        );
+    }
+    assert_eq!(joined, bytes);
+}
+
 fn with_home(node: &Node) -> std::path::PathBuf {
     let home = node.root.join("home");
     crate::home::confirm_home(&node.root, &home).unwrap();

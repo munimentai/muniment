@@ -26,18 +26,21 @@ fn attachments_use_the_webview_contract() {
             display_name: "note.txt".into(),
             byte_length: 42,
             media_type: Some("text/plain".into()),
+            sha256: Some("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into()),
         },
         ProjectedAttachment {
             display_name: "unknown".into(),
             byte_length: 0,
             media_type: None,
+            sha256: None,
         },
     ]);
 
     assert_eq!(
         serde_json::to_value(attachments).unwrap(),
         json!([
-            {"displayName": "note.txt", "byteLength": 42, "mediaType": "text/plain"},
+            {"displayName": "note.txt", "byteLength": 42, "mediaType": "text/plain",
+             "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"},
             {"displayName": "unknown", "byteLength": 0}
         ])
     );

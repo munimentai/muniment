@@ -26,5 +26,7 @@ url = "2"
 uuid = { version = "1", features = ["v4", "v7"] }
 
 [dev-dependencies]
+# The fleet tests read blob chunks the way the phone does.
+base64 = "0.23"
 # The journal tests drop tables to build missing-table fixtures.
 rusqlite = { version = "0.40", features = ["bundled"] }
