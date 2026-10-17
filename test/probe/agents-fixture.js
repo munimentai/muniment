@@ -272,12 +272,12 @@ export const probeExtensions = {
 
 const newestFirst = (a, b) => b.updated_at.localeCompare(a.updated_at)
 
-// Core's permission modes and each runtime's permission settings. The build
-// box is a container, so it turns bypass on.
-const MODES = [{"available": true, "description": "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.", "id": "manual", "title": "Ask before changes"}, {"available": true, "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "id": "edit_auto", "title": "Edit automatically"}, {"available": true, "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "id": "plan", "title": "Plan first"}, {"available": true, "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "id": "auto", "title": "Auto review"}, {"available": true, "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "id": "dont_ask", "title": "Don't ask"}, {"available": false, "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Use it only on a container or a disposable machine.", "id": "bypass", "reason": "Bypass is off. Turn it on in the runtime's permission settings, and only on a container or a disposable machine.", "title": "Bypass permissions"}]
+// Core's permission modes and each runtime's permission settings. Bypass is
+// on and is the default mode, as core starts every runtime.
+const MODES = [{"available": true, "description": "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.", "id": "manual", "title": "Ask before changes"}, {"available": true, "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "id": "edit_auto", "title": "Edit automatically"}, {"available": true, "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "id": "plan", "title": "Plan first"}, {"available": true, "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "id": "auto", "title": "Auto review"}, {"available": true, "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "id": "dont_ask", "title": "Don't ask"}, {"available": true, "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.", "id": "bypass", "title": "Bypass permissions"}]
 function permissionSettings(store, runtime) {
   store.permissions ??= {
-    default_thread_mode: 'manual', default_agent_mode: 'manual', bypass_enabled: runtime === BOX, unattended_timeout_seconds: 14400,
+    default_thread_mode: 'bypass', default_agent_mode: 'bypass', bypass_enabled: true, unattended_timeout_seconds: 14400,
     deny: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push --force'], working_directory: '/Users/alice/Documents/muniment' } }],
     ask_first: [{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__mail__send', input: {} } }],
     always_allow: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git status'], working_directory: '/Users/alice/Documents/muniment' } }],
@@ -285,7 +285,7 @@ function permissionSettings(store, runtime) {
   return store.permissions
 }
 function permissionModes(settings) {
-  return MODES.map((mode) => mode.id === 'bypass' && settings.bypass_enabled ? { ...mode, available: true, reason: undefined } : mode)
+  return MODES.map((mode) => mode.id === 'bypass' && !settings.bypass_enabled ? { ...mode, available: false, reason: "Bypass is off. Turn it on in the runtime's permission settings." } : mode)
 }
 function threadMode(store, runtime, threadId) {
   const settings = permissionSettings(store, runtime)
@@ -315,7 +315,12 @@ export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
   if (operation === 'permission.settings_save') {
     const settings = permissionSettings(store, runtime)
     if (body.unattended_timeout_seconds !== undefined && (body.unattended_timeout_seconds < 60 || body.unattended_timeout_seconds > 604800)) throw 'Choose an unattended wait between one minute and seven days.'
+    if ((body.default_thread_mode === 'bypass' || body.default_agent_mode === 'bypass') && !(body.bypass_enabled ?? settings.bypass_enabled)) throw "Bypass is off. Turn it on in the runtime's permission settings."
     Object.assign(settings, clone(body))
+    // Turning bypass off moves a default that names it to manual.
+    if (body.bypass_enabled === false) {
+      for (const key of ['default_thread_mode', 'default_agent_mode']) if (settings[key] === 'bypass' && !(key in body)) settings[key] = 'manual'
+    }
     return clone(settings)
   }
   if (operation === 'thread.permission_mode') return threadMode(store, runtime, body.thread_id)
@@ -330,6 +335,11 @@ export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
   if (operation === 'agent.read') return { agent: clone(find(body.id)), primary_thread_id: store.primaryThreads[body.id] ?? null }
   if (operation === 'agent.save') {
     const agent = clone({ ...body.agent, id: body.agent.id || crypto.randomUUID() })
+    // A new agent is saved in the default agent mode.
+    if (!body.agent.id && !agent.permissions?.mode) {
+      const settings = permissionSettings(store, runtime)
+      agent.permissions = { always_allow: [], ask_first: [], ...agent.permissions, mode: settings.bypass_enabled || settings.default_agent_mode !== 'bypass' ? settings.default_agent_mode : 'manual' }
+    }
     store.agents = [...store.agents.filter((entry) => entry.id !== agent.id), agent]
     return { agent: clone(agent) }
   }

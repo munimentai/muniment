@@ -15,7 +15,7 @@ fn submit_after_idle(endpoint: &Path, idle: Duration) -> Result<String, String> 
     // Keep this connection open without retries or keepalive requests.
     std::thread::sleep(idle);
     let accepted = client
-        .run_submit("Start the installed local run-start probe.", &[], None, None)
+        .run_submit("Start the installed local run-start probe.", &[], None, None, None)
         .map_err(|error| {
             let detail = client
                 .last_request_error()

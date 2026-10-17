@@ -774,14 +774,14 @@
   $effect(() => { void currentThreadId; if (!replyRunning) void refreshContextUsage() })
   // The composer's permission mode. Core lists the modes of the thread's
   // machine, or of the picked machine for a new thread, and answers the
-  // open thread's mode. A mode picked on a new thread waits for its first
-  // message, then goes to the thread the message starts.
+  // open thread's mode. A new thread shows the default thread mode checked.
+  // A mode picked on it waits for its first message, which carries it, and
+  // core sets it before the run starts.
   let modeChip = $state()
   let modeListing = $state(null)
   let modesRevision = $state(0)
   let threadMode = $state(null)
   let pendingMode = $state(null)
-  let pendingModeSend = null
   let modeRequest = 0
   const composerThreadId = $derived(freshThread ? null : currentThreadId)
   const composerRuntime = $derived(threadMachine ?? runtimeList?.selected ?? LOCAL_RUNTIME_ID)
@@ -804,16 +804,7 @@
   }
   // A plan approval switches the thread's mode during a reply, so the mode is read again when a reply starts or ends.
   $effect(() => { void composerThreadId; void modeListing; void replyRunning; void refreshThreadMode() })
-  $effect(() => {
-    const threadId = composerThreadId
-    untrack(() => {
-      if (!threadId) return
-      const mode = pendingModeSend
-      pendingModeSend = null
-      pendingMode = null
-      if (mode) void setThreadMode(threadId, mode)
-    })
-  })
+  $effect(() => { if (composerThreadId) untrack(() => { pendingMode = null }) })
   const composerMode = $derived(!modeListing ? null
     : composerThreadId ? (threadMode?.thread_id === composerThreadId ? findMode(modeListing.listing, threadMode.mode) : null)
       : findMode(modeListing.listing, pendingMode ?? modeListing.listing.default_thread_mode))
@@ -882,10 +873,7 @@
     const command = compactCommand(draft)
     if (command) void compactThread(command.instructions, true)
     else if (threadPostTarget) void postToThread(threadPostTarget)
-    else {
-      if (!composerThreadId && pendingMode) pendingModeSend = pendingMode
-      chatController.send()
-    }
+    else chatController.send()
   }
   // A group thread, or a replica of another machine's agent thread, takes a
   // message through `thread.post`. Core hands it to the group or to the
@@ -1176,6 +1164,7 @@
     readDraft: () => draft,
     readFiles: () => selectedFiles,
     readThinkingLevel: () => chipThinking?.level ?? null,
+    readPermissionMode: () => composerThreadId ? null : pendingMode,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,

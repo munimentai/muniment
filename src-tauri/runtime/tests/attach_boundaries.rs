@@ -423,7 +423,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
                 .unwrap()
                 .is_empty());
             let accepted = client
-                .run_submit("cold local prompt", &[], None, None)
+                .run_submit("cold local prompt", &[], None, None, None)
                 .unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
