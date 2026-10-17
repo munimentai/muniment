@@ -7,7 +7,7 @@ use muniment_core::chat_launch::{ChatGrant, FetchGrantError, FetchReceiptError};
 use muniment_core::sidecar::pi_chat::Receipt;
 use muniment_desktop_integration::auth::api_base_url;
 use muniment_desktop_integration::chat_grant;
-use muniment_runtime_core::host::{ChatGrantService, KeyringCredentialStore};
+use muniment_runtime_core::host::{platform_credentials, ChatGrantService};
 use muniment_runtime_core::RuntimeHost;
 
 use crate::account::DesktopAccount;
@@ -20,7 +20,8 @@ const READER_NAME: &str = if cfg!(windows) {
     "muniment-reader"
 };
 
-/// The desktop's cloud account and grants, the platform keychain, the
+/// The desktop's cloud account and grants, the platform keychain (a file
+/// store in a temporary directory in a test run), the
 /// installed desktop executable, the reader sidecar beside this binary, this
 /// binary's package version, which the runtime announces on attach, the
 /// desktop's provider OAuth clients and Muniment's sign-in page.
@@ -29,7 +30,7 @@ pub fn desktop_host() -> RuntimeHost {
     RuntimeHost {
         account: Arc::new(DesktopAccount::default()),
         chat_grants: Arc::new(DesktopChatGrants),
-        credentials: Arc::new(KeyringCredentialStore),
+        credentials: platform_credentials(),
         expected_desktop_executable: crate::installed_desktop_executable(),
         reader_executable: runtime_executable.as_deref().and_then(reader_beside),
         runtime_version: env!("CARGO_PKG_VERSION"),
