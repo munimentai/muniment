@@ -1490,6 +1490,8 @@ impl DesktopClient {
             Operation::AgentApprovals => &["approvals"],
             Operation::GroupCreate | Operation::GroupUpdate => &["group"],
             Operation::GroupList => &["groups"],
+            Operation::FleetHoldSignIn => &["status"],
+            Operation::FleetCredentials => &["share_models"],
             Operation::FleetOpStatus => &["op"],
             _ => &[],
         };

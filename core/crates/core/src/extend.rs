@@ -609,6 +609,60 @@ pub fn export_mcp_servers(root: &Path, servers: &[String]) -> (Vec<Value>, Value
     (items, Value::Object(tokens))
 }
 
+/// The MCP bearer tokens this runtime saved, by token key.
+pub fn mcp_tokens(root: &Path) -> serde_json::Map<String, Value> {
+    fs::read(root.join(MCP_TOKENS))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// Replaces the MCP tokens one fleet member shares here. Each token in
+/// `previous` (key and digest) that no one changed since goes, then each
+/// token in `tokens` this runtime lacks is added. Answers the digest of
+/// each token written.
+pub fn share_mcp_tokens(
+    root: &Path,
+    previous: &std::collections::BTreeMap<String, String>,
+    tokens: &serde_json::Map<String, Value>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let _lock = MUTATION
+        .lock()
+        .map_err(|_| "Extension settings are busy.")?;
+    let mut saved = mcp_tokens(root);
+    let before = saved.clone();
+    for (key, digest) in previous {
+        if saved.get(key).map(token_digest).as_deref() == Some(digest.as_str()) {
+            saved.remove(key);
+        }
+    }
+    let mut written = std::collections::BTreeMap::new();
+    for (key, token) in tokens {
+        if !key.starts_with("extend-") || saved.contains_key(key) {
+            continue;
+        }
+        saved.insert(key.clone(), token.clone());
+        written.insert(key.clone(), token_digest(token));
+    }
+    if saved != before {
+        fs::create_dir_all(root.join("extensions"))
+            .map_err(|_| "The extension folder could not be created.")?;
+        crate::model_router::config::write_private(
+            &root.join(MCP_TOKENS),
+            &serde_json::to_vec(&saved).map_err(|_| "Invalid extension settings.")?,
+        )
+        .map_err(|_| "The MCP tokens could not be saved.")?;
+    }
+    Ok(written)
+}
+
+/// The SHA-256 of one saved token, which shows whether it changed.
+pub fn token_digest(token: &Value) -> String {
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(token.to_string().as_bytes()))
+}
+
 /// Adds MCP servers another runtime handed over, with their tokens. A server
 /// this runtime already has under the same id or name stays as it is.
 pub fn import_mcp_servers(root: &Path, items: &[Value], tokens: &Value) -> Result<(), String> {

@@ -28,7 +28,9 @@
 
 mod absence;
 mod approvals;
+mod credentials;
 mod directory;
+mod fleet;
 mod groups;
 mod hlc;
 mod link;
@@ -42,6 +44,8 @@ pub mod wire;
 
 #[cfg(test)]
 mod exchange_tests;
+#[cfg(test)]
+mod fleet_tests;
 #[cfg(test)]
 pub(crate) mod test_members;
 
@@ -60,6 +64,7 @@ use crate::attach::RemoteAccess;
 use crate::permission_gate::ChatPermissionAnswer;
 use crate::run_events::SharedStorage;
 
+pub use fleet::{RecipientSet, Role};
 pub use hlc::Hlc;
 pub use link::PEER_KIND;
 pub use ops::{
@@ -112,6 +117,16 @@ pub trait SwarmHost: Send + Sync {
     /// Keeps the secret of a webhook another member handed over.
     fn store_hook_secret(&self, _hook_id: &str, _secret: &str) -> Result<(), String> {
         Err("This runtime keeps no webhook secrets.".into())
+    }
+    /// The store this runtime keeps its fleet key in. `None` keeps it in
+    /// owner-only files under the profile.
+    fn credentials(&self) -> Option<Arc<dyn crate::model_router::credentials::CredentialStore>> {
+        None
+    }
+    /// The signed-in account's cloud session, with which a desktop issues
+    /// and revokes the members' model vault tokens.
+    fn cloud_session(&self) -> Option<crate::shared_models::CloudSession> {
+        None
     }
     /// Runs an action another member forwarded through the same operation a
     /// client of this runtime reaches, and answers its body.
@@ -194,6 +209,8 @@ pub(crate) struct Inner {
     run_changes: Mutex<Option<Receiver<Value>>>,
     /// The activity of each agent this runtime runs, as last sent to clients.
     activities: Mutex<HashMap<String, crate::agent_runs::Activity>>,
+    /// Fleet keys, the roster and sealed secrets.
+    fleet: fleet::FleetState,
     /// Held while forwarded actions run, so each runs once.
     ops_running: Mutex<()>,
 }
@@ -302,9 +319,11 @@ impl Swarm {
             gates: Mutex::new(HashMap::new()),
             run_changes: Mutex::new(None),
             activities: Mutex::new(HashMap::new()),
+            fleet: fleet::FleetState::default(),
             ops_running: Mutex::new(()),
         });
         absence::initialize(&inner)?;
+        fleet::initialize(&inner)?;
         let mut registry = lock(&REGISTRY);
         registry.retain(|(path, swarm)| swarm.strong_count() > 0 && path != profile);
         registry.push((profile.to_path_buf(), Arc::downgrade(&inner)));
@@ -336,6 +355,12 @@ impl Swarm {
             access: Some(access.clone()),
         });
         access.set_outbound_links(Arc::new(link::OutboundHook(Arc::downgrade(&self.inner))));
+        match access.identity_signer() {
+            Ok(signer) => fleet::set_signer(&self.inner, Some(Arc::new(signer))),
+            Err(error) => {
+                crate::runtime_eprintln!("muniment-runtime: swarm holds no fleet keys: {error}")
+            }
+        }
         self.inner.migrate_records()?;
         link::start_saved(&self.inner)?;
         self.ensure_worker();
@@ -345,6 +370,31 @@ impl Swarm {
     /// This runtime's id, once remote access gave it one.
     pub fn runtime_id(&self) -> Option<String> {
         self.inner.runtime_id()
+    }
+
+    /// Gives the swarm an identity signer without remote access, as tests
+    /// of members without a listener do.
+    #[doc(hidden)]
+    pub fn set_identity_signer(&self, signer: crate::attach::IdentitySigner) {
+        fleet::set_signer(&self.inner, Some(Arc::new(signer)));
+    }
+
+    /// Reseals this runtime's own secrets now: its model connections and
+    /// MCP tokens to the fleet's full members, and the model vault tokens
+    /// it issues. The worker does this about once a minute.
+    pub fn fleet_pass(&self) -> Result<(), String> {
+        credentials::pass(&self.inner)
+    }
+
+    /// Sets how long the worker waits between reseal passes.
+    #[doc(hidden)]
+    pub fn set_fleet_interval(&self, interval: Duration) {
+        credentials::set_interval(&self.inner, interval);
+    }
+
+    /// The members a secret that serves `agents` may reach.
+    pub fn recipient_set(&self, agents: &[String]) -> Result<RecipientSet, String> {
+        fleet::recipient_set(&self.inner, agents)
     }
 
     /// Sets how long an idle link waits between exchanges.
@@ -391,6 +441,7 @@ impl Swarm {
             if let Err(error) = inner.tick() {
                 crate::runtime_eprintln!("muniment-runtime: swarm tick failed: {error}");
             }
+            credentials::maybe_pass(&inner);
             crate::fleet_sync::tick(&Records {
                 inner: Arc::clone(&inner),
             });
@@ -466,6 +517,8 @@ impl Swarm {
                 empty(&body)?;
                 absence::resume(inner)
             }
+            Operation::FleetHoldSignIn => credentials::hold_operation(inner, body),
+            Operation::FleetCredentials => credentials::credentials_operation(inner, body),
             Operation::ThreadPost => sync::post_operation(inner, body),
             Operation::AgentMove => moves::move_operation(inner, body),
             Operation::AgentApprovals => {
@@ -869,7 +922,7 @@ impl Inner {
             type Step<'a> = (&'a str, &'a dyn Fn() -> Result<bool, String>);
             // Approvals come before activity, so a waiting agent's activity
             // names its approval rather than a bare wait.
-            let steps: [Step<'_>; 10] = [
+            let steps: [Step<'_>; 11] = [
                 ("approvals", &|| approvals::scan(self).map(|()| false)),
                 ("activity", &|| directory::refresh_activity(self)),
                 ("directory", &|| directory::refresh_local(self)),
@@ -880,6 +933,7 @@ impl Inner {
                 ("results", &|| messaging::send_results(self)),
                 ("moves", &|| moves::activate_pending(self)),
                 ("absence", &|| absence::check(self).map(|()| false)),
+                ("fleet", &|| credentials::settle(self).map(|()| false)),
             ];
             for (name, step) in steps {
                 match step() {
@@ -990,6 +1044,10 @@ impl Inner {
             (Vec::new(), true)
         };
         let (blobs, wants) = sync::blob_traffic(self, &serve, &mut budget)?;
+        let fleet = fleet::outgoing(self, peer, &mut budget).unwrap_or_else(|error| {
+            crate::runtime_eprintln!("muniment-runtime: swarm fleet exchange failed: {error}");
+            fleet::Outgoing::default()
+        });
         let full = wire != Wire::Store;
         let mut exchange = Exchange {
             members: link::member_records(self)?,
@@ -1014,10 +1072,15 @@ impl Inner {
             blobs,
             client_seen_at: absence::swarm_last_client(self)?,
             resumed_at: self.store.meta("resumed_at")?,
-            more: more_events || more_messages || more_records || more_clocks,
+            more: more_events || more_messages || more_records || more_clocks || fleet.more,
             records,
             record_vv,
             watermarks,
+            roster: fleet.roster,
+            roster_digest: fleet.roster_digest,
+            sealed: fleet.sealed,
+            sealed_have: fleet.sealed_have,
+            admission: fleet.admission,
             from,
         };
         // A frame never grows past the protocol's limit: what does not fit
@@ -1029,6 +1092,7 @@ impl Inner {
         if bytes > FRAME_BUDGET {
             exchange.blobs.clear();
             exchange.events.clear();
+            exchange.sealed.clear();
             exchange.more = true;
             bytes = length(&exchange);
         }
@@ -1138,7 +1202,7 @@ impl Inner {
     }
 
     /// Takes in what `peer` sent.
-    fn merge_exchange(&self, peer: &str, exchange: Exchange) -> Result<bool, String> {
+    fn merge_exchange(&self, peer: &str, mut exchange: Exchange) -> Result<bool, String> {
         let _merge = lock(&self.merge);
         let mut kick = false;
         let store = !self.legacy()
@@ -1149,6 +1213,24 @@ impl Inner {
                 .any(|capability| capability == STORE_CAPABILITY);
         self.note_peer_wire(peer, store)?;
         self.note_synced()?;
+        let fleet = fleet::Incoming {
+            roster: std::mem::take(&mut exchange.roster),
+            roster_digest: exchange.roster_digest.take(),
+            sealed: std::mem::take(&mut exchange.sealed),
+            sealed_have: exchange.sealed_have.take(),
+            admission: exchange.admission.take(),
+        };
+        match fleet::merge(self, peer, &exchange.from, fleet) {
+            Ok(true) => {
+                if let Err(error) = credentials::settle(self) {
+                    crate::runtime_eprintln!("muniment-runtime: swarm fleet failed: {error}");
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                crate::runtime_eprintln!("muniment-runtime: swarm fleet merge failed: {error}")
+            }
+        }
         link::merge_members(self, &exchange.from, &exchange.members)?;
         let records_received = exchange.records.len() as u64;
         if store {

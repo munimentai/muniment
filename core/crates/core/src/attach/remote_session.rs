@@ -222,9 +222,11 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::RoutineWebhookRotate => RemoteRule::Scope(SCOPE_AGENTS_MANAGE),
         Operation::SwarmExchange => RemoteRule::SwarmPeer,
         // Linking runtimes pairs devices, which only the runtime's admin does.
-        Operation::SwarmInvite | Operation::SwarmJoin | Operation::SwarmLeave => {
-            RemoteRule::Scope(SCOPE_RUNTIME_ADMIN)
-        }
+        Operation::SwarmInvite
+        | Operation::SwarmJoin
+        | Operation::SwarmLeave
+        | Operation::FleetHoldSignIn
+        | Operation::FleetCredentials => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
         Operation::SwarmMembers
         | Operation::SwarmAgents
         | Operation::AgentApprovals

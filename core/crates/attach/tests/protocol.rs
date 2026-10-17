@@ -1383,6 +1383,8 @@ fn swarm_operations_and_events_have_canonical_fixtures() {
         (Operation::SwarmAgents, "swarm.agents"),
         (Operation::SwarmExchange, "swarm.exchange"),
         (Operation::SwarmResume, "swarm.resume"),
+        (Operation::FleetHoldSignIn, "fleet.hold_sign_in"),
+        (Operation::FleetCredentials, "fleet.credentials"),
         (Operation::ThreadPost, "thread.post"),
         (Operation::AgentMove, "agent.move"),
         (Operation::AgentApprovals, "agent.approvals"),
