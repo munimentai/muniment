@@ -10,9 +10,9 @@ Phase two adds cloud availability with paid accounts. Cloud development does
 not block the desktop release. The company record and graph remain a separate,
 hidden feature while the desktop harness earns adoption.
 
-This repo contains the Tauri v2 shell, the runtime binary with its host and service registration, the Pi sidecar and the on-device voice stack.
+The shared core, the platform-neutral runtime, model router and runtime pins live in `core/`, and the desktop builds them through path dependencies.
 The shared core, the platform-neutral runtime, model router and runtime pins come from one `munimentai/muniment-core` release tag.
-`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control. [docs/core-boundary.md](docs/core-boundary.md) lists the shared and desktop crates.
+`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control. [core/docs/core-boundary.md](core/docs/core-boundary.md) lists the shared and desktop crates.
 Existing company data and cloud credentials remain on disk when those features are hidden.
 The release license is FSL-1.1-Apache-2.0. Each version converts to Apache 2.0 two years after its release. Third-party notices ship with the app.
 
@@ -558,7 +558,7 @@ the pull request. Depth stops at 3 levels below the source root. Related files
 share a prefix stem, and a family of 15 or more is the designated split. Tests
 mirror source except where a harness needs a layout. Append-only stores,
 generated, vendored and asset trees are exempt. `docs/public-evidence/`
-and `protocol-fixtures/` are frozen machine-read paths that
+and `core/protocol-fixtures/` are frozen machine-read paths that
 move only with a consumer sweep. A directory over the ceiling is a recorded
 gap, closed gate-first with a check that holds the new shape, and related changes include their readers when a family moves.
 

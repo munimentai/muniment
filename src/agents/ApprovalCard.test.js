@@ -6,7 +6,7 @@ import '@testing-library/jest-dom/vitest'
 import ApprovalCard from './ApprovalCard.svelte'
 afterEach(cleanup)
 
-const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/muniment.attach/1', name), 'utf8')).body
+const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
 const pending = { ...fixture('response-agent-approvals.json').approvals[0], runtimeId: 'box' }
 const buttons = () => screen.getAllByRole('button').map((button) => button.textContent.trim())
 

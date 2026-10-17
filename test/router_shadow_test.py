@@ -15,7 +15,7 @@ spec = importlib.util.spec_from_file_location("router_shadow", ROOT / "scripts/r
 router = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = router
 spec.loader.exec_module(router)
-# CI builds the binary from the muniment-core checkout into this target directory.
+# CI builds the binary from core/ into this target directory.
 EXECUTABLE = Path(os.environ.get(
     "ROUTER_SHADOW_BIN", ROOT / "src-tauri/target/muniment-core/debug/muniment-router-shadow"))
 # Contract fixtures allow scheduler slack without changing the production deadline.
@@ -27,7 +27,7 @@ class ShadowContract(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.state = Path(self.directory.name) / "shadow.sqlite"
-        self.request = json.loads((ROOT / "protocol-fixtures/muniment-routing-shadow/1/reserve.json").read_text())
+        self.request = json.loads((ROOT / "core/protocol-fixtures/muniment-routing-shadow/1/reserve.json").read_text())
 
     def test_fixture_restart_and_release(self):
         original = copy.deepcopy(self.request)
@@ -49,7 +49,7 @@ class ShadowContract(unittest.TestCase):
         self.assertNotIn(self.request["job"]["task_context"], json.dumps(result))
 
     def test_classifier_fixtures_keep_the_live_baseline(self):
-        cases = json.loads((ROOT / "protocol-fixtures/muniment-routing-shadow/1/observations.json").read_text())
+        cases = json.loads((ROOT / "core/protocol-fixtures/muniment-routing-shadow/1/observations.json").read_text())
         for index, case in enumerate(cases):
             with self.subTest(index=index):
                 state = self.state.with_name(f"case-{index}.sqlite")

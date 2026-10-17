@@ -56,7 +56,7 @@ const openDeleteMenu = async (title) => {
   await fireEvent.contextMenu(row)
   await fireEvent.click(screen.getByRole('menuitem', { name: `Delete ${title}` }))
 }
-const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
+const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
 
 import App from './App.svelte'
 let invoke

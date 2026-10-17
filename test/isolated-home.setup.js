@@ -5,8 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// Cargo and rustup keep their real homes, so a test can still locate the
-// muniment-core checkout that Cargo resolves.
+// Cargo and rustup keep their real homes, so a test can still run Cargo.
 for (const [variable, directory] of [['CARGO_HOME', '.cargo'], ['RUSTUP_HOME', '.rustup']]) {
   const real = path.join(os.homedir(), directory)
   if (!process.env[variable] && fs.existsSync(real)) process.env[variable] = real

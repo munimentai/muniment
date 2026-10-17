@@ -1,0 +1,1059 @@
+use std::fs;
+use std::io::{self, BufRead, Write};
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let first = args.next();
+    if first.as_deref() == Some("--model") {
+        llama_server_stub(args);
+        return;
+    }
+    if first.as_deref() == Some("--mode") {
+        if std::env::var_os("PI_STUB_STAY_STARTING").is_some() {
+            eprintln!("Pi stub cannot finish cloud extension setup.");
+            io::stderr().flush().unwrap();
+            thread::sleep(Duration::from_secs(60));
+            return;
+        }
+        if std::env::var_os("PI_STUB_BLOCK_STDIN").is_some() {
+            pi_rpc_blocked_stdin();
+            return;
+        }
+        pi_resume(args.collect());
+        return;
+    }
+    if first.as_deref() == Some("install") && std::env::var_os("BUN_BE_BUN").is_some() {
+        bun_install(args.collect());
+        return;
+    }
+    match first.as_deref() {
+        Some("hold-stderr") => thread::sleep(Duration::from_secs(10)),
+        Some("stderr-descendant") => {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("hold-stderr")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            thread::spawn(move || child.wait().unwrap());
+            eprintln!("Pi stub left a descendant with stderr open.");
+            io::stderr().flush().unwrap();
+            if args.next().as_deref() == Some("hang") {
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+        Some("echo") => echo(),
+        Some("json-rpc") => json_rpc(args.next()),
+        Some("pi-rpc-interleaved") => pi_rpc_interleaved(),
+        Some("pi-rpc-blocked-stdin") => pi_rpc_blocked_stdin(),
+        Some("pi-rpc-slow-probes") => {
+            for line in io::stdin().lock().lines() {
+                let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+                thread::sleep(Duration::from_millis(200));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "response", "command": "get_state", "success": true, "id": request["id"]
+                    })
+                );
+                io::stdout().flush().unwrap();
+            }
+        }
+        Some("pi-chat-queue") => pi_chat_queue(),
+        Some("pi-chat-capture") => pi_chat_capture(args.next().unwrap()),
+        Some("pi-thinking") => pi_thinking(args.next().unwrap(), args.next().unwrap()),
+        Some("pi-chat-extension-ui") => pi_chat_extension_ui(args.next().unwrap()),
+        Some("pi-chat-late-response") => pi_chat_late_response(args.next().unwrap()),
+        Some("pi-session-deferred") => {
+            pi_session_deferred(args.next().unwrap(), args.next(), false)
+        }
+        Some("pi-session-streaming") => pi_session_deferred(args.next().unwrap(), None, true),
+        Some("pi-rpc-restart-once") => {
+            let marker = args.next().unwrap();
+            if fs::create_dir(marker).is_ok() {
+                for line in io::stdin().lock().lines() {
+                    let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+                    if request["type"] != "get_state" {
+                        std::process::exit(24);
+                    }
+                    println!(
+                        "{}",
+                        serde_json::json!({"type": "response", "command": "get_state", "success": true, "id": request["id"]})
+                    );
+                    io::stdout().flush().unwrap();
+                }
+            }
+            pi_rpc_interleaved();
+        }
+        Some("json-rpc-stale-once") => {
+            let marker = args.next().unwrap();
+            if fs::create_dir(&marker).is_ok() {
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc": "2.0", "result": "stale", "id": "previous"})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc": "2.0", "method": "stale.progress", "params": {"value": "stale"}})
+                );
+                io::stdout().flush().unwrap();
+                std::process::exit(19);
+            }
+            eprintln!("replacement-ready");
+            io::stderr().flush().unwrap();
+            json_rpc(None);
+        }
+        Some("json-rpc-crash-call-once") => {
+            let marker = args.next().unwrap();
+            if fs::create_dir(&marker).is_ok() {
+                let _ = io::stdin().lock().lines().next();
+                std::process::exit(20);
+            }
+            json_rpc(None);
+        }
+        Some("crash") => std::process::exit(17),
+        Some("stderr-spam") => {
+            let count: usize = args.next().unwrap().parse().unwrap();
+            for index in 0..count {
+                eprintln!("stderr-{index}");
+            }
+            io::stderr().flush().unwrap();
+            println!("stderr-done");
+            io::stdout().flush().unwrap();
+            echo();
+        }
+        Some("stderr-generation") => {
+            let marker = args.next().unwrap();
+            if fs::create_dir(&marker).is_ok() {
+                eprintln!("old-generation");
+                io::stderr().flush().unwrap();
+                std::process::exit(21);
+            }
+            eprintln!("new-generation");
+            io::stderr().flush().unwrap();
+            echo();
+        }
+        Some("stderr-hang") => {
+            eprintln!("health failure detail");
+            io::stderr().flush().unwrap();
+            echo();
+        }
+        Some("once") => {
+            let marker = args.next().unwrap();
+            if fs::create_dir(&marker).is_ok() {
+                std::process::exit(18);
+            }
+            echo();
+        }
+        Some("probe-once") => {
+            let marker = args.next().unwrap();
+            let bad = fs::create_dir(&marker).is_ok();
+            for line in io::stdin().lock().lines() {
+                let line = line.unwrap();
+                if line == "ping" && !bad {
+                    println!("pong");
+                } else if line != "ping" {
+                    println!("{line}");
+                }
+                io::stdout().flush().unwrap();
+            }
+        }
+        Some("pid") => {
+            fs::write(args.next().unwrap(), std::process::id().to_string()).unwrap();
+            echo();
+        }
+        Some("env-names") => {
+            let names: Vec<String> = std::env::vars_os()
+                .map(|(name, _)| name.to_string_lossy().into_owned())
+                .collect();
+            fs::write(args.next().unwrap(), names.join("\n")).unwrap();
+            echo();
+        }
+        Some("hang") => {
+            fs::write(args.next().unwrap(), std::process::id().to_string()).unwrap();
+            loop {
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+        _ => std::process::exit(2),
+    }
+}
+
+fn pi_rpc_blocked_stdin() {
+    let line = io::stdin().lock().lines().next().unwrap().unwrap();
+    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request["type"], "get_state");
+    if let Ok(delay) = std::env::var("PI_STUB_READY_DELAY_MS") {
+        thread::sleep(Duration::from_millis(delay.parse().unwrap()));
+    }
+    if let Ok(address) = std::env::var("PI_STUB_READY_SIGNAL") {
+        use std::io::Read;
+        let mut signal =
+            std::net::TcpStream::connect_timeout(&address.parse().unwrap(), Duration::from_secs(5))
+                .unwrap();
+        signal
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut acknowledgment = [0];
+        signal.read_exact(&mut acknowledgment).unwrap();
+        assert_eq!(acknowledgment, [1]);
+    }
+    eprintln!("Pi stub stopped reading stdin.");
+    io::stderr().flush().unwrap();
+    println!(
+        "{}",
+        serde_json::json!({
+            "type": "response", "command": "get_state", "success": true, "id": request["id"]
+        })
+    );
+    io::stdout().flush().unwrap();
+    // Exit after the test deadline so a regression fails instead of hanging the suite.
+    thread::sleep(Duration::from_secs(60));
+}
+
+fn pi_resume(args: Vec<String>) {
+    if let Ok(path) = std::env::var("PI_RESUME_STUB_ARGS") {
+        fs::write(path, args.join("\n")).unwrap();
+    }
+    if let Ok(path) = std::env::var("PI_RESUME_STUB_ENV_CAPTURE") {
+        let captured = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "PI_DEFAULT_MODEL"]
+            .into_iter()
+            .filter_map(|name| std::env::var(name).ok().map(|value| (name, value)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        fs::write(path, serde_json::to_vec(&captured).unwrap()).unwrap();
+    }
+    let session_file = args
+        .windows(2)
+        .find(|pair| pair[0] == "--session")
+        .map(|pair| std::path::PathBuf::from(&pair[1]))
+        .or_else(|| {
+            args.windows(2)
+                .find(|pair| pair[0] == "--session-dir")
+                .map(|pair| {
+                    std::path::Path::new(&pair[1])
+                        .join(format!("stub-{}.jsonl", std::process::id()))
+                })
+        })
+        .unwrap();
+    let mut compacted = false;
+    // A reasoning stub model starts at medium and takes each level it is sent.
+    let reasoning = std::env::var_os("PI_RESUME_STUB_REASONING").is_some();
+    let mut thinking_level = if reasoning { "medium" } else { "off" }.to_owned();
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        match request["type"].as_str().unwrap() {
+            "get_state" => println!(
+                "{}",
+                serde_json::json!({
+                    "type":"response", "command":"get_state", "success":true,
+                    "id":request["id"], "data":{
+                        "sessionFile":session_file,
+                        "model":{"provider":"stub","id":"stub-model","contextWindow":200000,"reasoning":reasoning},
+                        "thinkingLevel":thinking_level
+                    }
+                })
+            ),
+            "set_thinking_level" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_REQUESTS") {
+                    let mut requests = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(requests, "{request}").unwrap();
+                }
+                thinking_level = request["level"].as_str().unwrap().to_owned();
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"set_thinking_level", "success":true, "id":request["id"]})
+                );
+            }
+            "get_session_stats" => println!(
+                "{}",
+                serde_json::json!({
+                    "type":"response", "command":"get_session_stats", "success":true,
+                    "id":request["id"], "data":{
+                        "sessionFile":session_file,
+                        "contextUsage":{
+                            "tokens": if compacted { serde_json::Value::Null } else { 60000.into() },
+                            "contextWindow":200000,
+                            "percent": if compacted { serde_json::Value::Null } else { 30.into() }
+                        }
+                    }
+                })
+            ),
+            "compact" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_REQUESTS") {
+                    let mut requests = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(requests, "{request}").unwrap();
+                }
+                let result = serde_json::json!({
+                    "summary":"Keep the goal", "firstKeptEntryId":"entry-1",
+                    "tokensBefore":152400, "estimatedTokensAfter":31900
+                });
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"compaction_start", "reason":"manual"})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type":"compaction_end", "reason":"manual", "result":result,
+                        "aborted":false, "willRetry":false
+                    })
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type":"response", "command":"compact", "success":true,
+                        "id":request["id"], "data":result
+                    })
+                );
+                compacted = true;
+            }
+            "prompt" => {
+                if let Ok(delay) = std::env::var("PI_RESUME_STUB_PROMPT_DELAY_MS") {
+                    thread::sleep(Duration::from_millis(delay.parse().unwrap()));
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_REQUESTS") {
+                    let mut requests = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(requests, "{request}").unwrap();
+                }
+                if !session_file.exists() {
+                    if let Some(parent) = session_file.parent() {
+                        fs::create_dir_all(parent).unwrap();
+                    }
+                    fs::write(&session_file, "{}\n").unwrap();
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPTS") {
+                    let mut prompts = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(prompts, "{}", request["message"].as_str().unwrap()).unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"prompt", "success":true, "id":request["id"]})
+                );
+                if std::env::var_os("PI_RESUME_STUB_STEER_CAPTURE").is_some() {
+                    // Keep the run active until the test sends a queued message.
+                } else if let Ok(plan) = std::env::var("PI_RESUME_STUB_PLAN") {
+                    // The plan tool's first step: the plan check.
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"plan-check", "method":"editor",
+                            "title":"muniment:plan-check",
+                            "prefill":serde_json::json!({"plan": plan}).to_string()
+                        })
+                    );
+                } else if let Ok(call) = std::env::var("PI_RESUME_STUB_AGENT_GATE") {
+                    // The agent permission extension's first step: the check.
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"gate-check", "method":"editor",
+                            "title":"muniment:permission-check", "prefill":call
+                        })
+                    );
+                } else if std::env::var_os("PI_RESUME_STUB_PERMISSION_CAPTURE").is_some() {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"permission-1", "method":"confirm",
+                            "title":"Allow this action?", "message":"The test stub needs permission."
+                        })
+                    );
+                } else if let Ok(denial) = std::env::var("PI_RESUME_STUB_GRANT_DENIAL") {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "extension_ui_request", "id": "grant-1", "method": "editor",
+                            "title": "muniment:chat-grant", "prefill": denial
+                        })
+                    );
+                } else if let Ok(fact) = std::env::var("PI_RESUME_STUB_MEMORY_SAVE") {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"memory-save-1", "method":"editor",
+                            "title":"muniment:memory-save", "prefill":fact
+                        })
+                    );
+                } else if let Ok(request) = std::env::var("PI_RESUME_STUB_EDITOR_REQUEST") {
+                    // A bridge request such as the agent permission check.
+                    let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"editor-1", "method":"editor",
+                            "title":request["title"], "prefill":request["prefill"].to_string()
+                        })
+                    );
+                } else if let Ok(query) = std::env::var("PI_RESUME_STUB_MEMORY_QUERY") {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"memory-1", "method":"editor",
+                            "title":"muniment:memory-search",
+                            "prefill":serde_json::json!({"query":query}).to_string()
+                        })
+                    );
+                } else {
+                    let reply = std::env::var("PI_RESUME_STUB_REPLY")
+                        .unwrap_or_else(|_| " resumed".to_owned());
+                    println!(
+                        "{}",
+                        serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":reply}})
+                    );
+                    if std::env::var_os("PI_RESUME_STUB_TOOL_EVENTS").is_some() {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type":"tool_execution_start", "toolCallId":"tool-1",
+                                "toolName":"read", "args":{"path":"test.txt"}
+                            })
+                        );
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type":"tool_execution_end", "toolCallId":"tool-1",
+                                "toolName":"read", "result":{"content":[]}, "isError":false
+                            })
+                        );
+                    }
+                    match std::env::var("PI_RESUME_STUB_STOP_REASON") {
+                        Ok(reason) => println!(
+                            "{}",
+                            serde_json::json!({"type":"agent_end", "messages":[
+                                {"role":"assistant", "stopReason":reason}
+                            ]})
+                        ),
+                        Err(_) => println!("{}", serde_json::json!({"type":"agent_end"})),
+                    }
+                }
+            }
+            command @ ("steer" | "follow_up") => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_STEER_CAPTURE") {
+                    fs::write(path, request.to_string()).unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":command, "success":true, "id":request["id"]})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":format!(" {command}")}})
+                );
+                if std::env::var_os("PI_RESUME_STUB_PERMISSION_CAPTURE").is_some() {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"permission-1", "method":"confirm",
+                            "title":"Allow this action?", "message":"The test stub needs permission."
+                        })
+                    );
+                } else {
+                    println!("{}", serde_json::json!({"type":"agent_end"}));
+                }
+            }
+            "extension_ui_response" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_EDITOR_CAPTURE") {
+                    let mut capture = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(capture, "{request}").unwrap();
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_PERMISSION_CAPTURE") {
+                    let mut capture = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(capture, "{request}").unwrap();
+                }
+                // The plan tool's later steps: the gate the check asks for,
+                // then the approval its answer names.
+                if std::env::var_os("PI_RESUME_STUB_PLAN").is_some() {
+                    let next = match request["id"].as_str() {
+                        Some("plan-check") => {
+                            let verdict: serde_json::Value =
+                                serde_json::from_str(request["value"].as_str().unwrap_or("{}"))
+                                    .unwrap_or_default();
+                            (verdict["decision"] == "ask").then(|| {
+                                serde_json::json!({
+                                    "type":"extension_ui_request", "id":"plan-select",
+                                    "method":"select", "title":verdict["title"],
+                                    "options":verdict["options"]
+                                })
+                            })
+                        }
+                        Some("plan-select") => request["value"]
+                            .as_str()
+                            .filter(|choice| *choice != "Keep planning")
+                            .map(|choice| {
+                                serde_json::json!({
+                                    "type":"extension_ui_request", "id":"plan-approve",
+                                    "method":"editor", "title":"muniment:plan-approve",
+                                    "prefill":serde_json::json!({"choice": choice}).to_string()
+                                })
+                            }),
+                        _ => None,
+                    };
+                    if let Some(next) = next {
+                        println!("{next}");
+                        io::stdout().flush().unwrap();
+                        continue;
+                    }
+                }
+                // The agent permission extension's later steps: the gate
+                // the check asks for, then the save its answer names.
+                if let Ok(call) = std::env::var("PI_RESUME_STUB_AGENT_GATE") {
+                    let next = match request["id"].as_str() {
+                        Some("gate-check") => {
+                            let verdict: serde_json::Value =
+                                serde_json::from_str(request["value"].as_str().unwrap_or("{}"))
+                                    .unwrap_or_default();
+                            (verdict["decision"] == "ask").then(|| {
+                                serde_json::json!({
+                                    "type":"extension_ui_request", "id":"gate-select",
+                                    "method":"select", "title":verdict["title"],
+                                    "options":verdict["options"]
+                                })
+                            })
+                        }
+                        Some("gate-select") => match request["value"].as_str() {
+                            Some("Always allow for this agent") => Some(serde_json::json!({
+                                "type":"extension_ui_request", "id":"gate-save",
+                                "method":"editor", "title":"muniment:permission-always",
+                                "prefill":call
+                            })),
+                            Some("Allow for this thread") => Some(serde_json::json!({
+                                "type":"extension_ui_request", "id":"gate-save",
+                                "method":"editor", "title":"muniment:permission-allow",
+                                "prefill":call
+                            })),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(next) = next {
+                        println!("{next}");
+                        continue;
+                    }
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":" resumed"}})
+                );
+                println!("{}", serde_json::json!({"type":"agent_end"}));
+            }
+            "abort" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_ABORT_CAPTURE") {
+                    fs::write(path, request.to_string()).unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"abort", "success":true, "id":request["id"]})
+                );
+            }
+            command => panic!("unexpected command: {command}"),
+        }
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn pi_session_deferred(session_file: String, cancel_marker: Option<String>, streaming: bool) {
+    let mut prompt_accepted = false;
+    let mut state_calls = 0;
+    let mut stream_started = std::time::Instant::now();
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let command = request["type"].as_str().unwrap();
+        match command {
+            "get_state" => {
+                state_calls += 1;
+                let ready = if streaming {
+                    stream_started.elapsed() >= Duration::from_secs(2)
+                } else {
+                    state_calls >= 3
+                };
+                if prompt_accepted && ready && cancel_marker.is_none() {
+                    fs::write(&session_file, "{}\n").unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type":"response", "command":"get_state", "success":true,
+                        "id":request["id"], "data":{"sessionFile":session_file}
+                    })
+                );
+                if prompt_accepted && streaming && !ready {
+                    println!(
+                        "{}",
+                        serde_json::json!({"type":"message_update",
+                        "assistantMessageEvent":{"type":"thinking_delta", "delta":"progress"}})
+                    );
+                    io::stdout().flush().unwrap();
+                    thread::sleep(Duration::from_millis(50));
+                }
+                if prompt_accepted && state_calls == 2 {
+                    println!(
+                        "{}",
+                        serde_json::json!({"type":"message_update",
+                        "assistantMessageEvent":{"type":"text_delta", "delta":"buffered"}})
+                    );
+                }
+            }
+            "prompt" => {
+                prompt_accepted = true;
+                stream_started = std::time::Instant::now();
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"prompt",
+                    "success":true, "id":request["id"]})
+                );
+            }
+            "abort" => {
+                if let Some(marker) = &cancel_marker {
+                    fs::write(marker, "cancelled").unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"abort",
+                    "success":true, "id":request["id"]})
+                );
+                println!("{}", serde_json::json!({"type":"cancelled"}));
+            }
+            _ => unreachable!(),
+        }
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn pi_chat_queue() {
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let command = request["type"].as_str().unwrap();
+        if matches!(command, "steer" | "follow_up") {
+            println!("{}", serde_json::json!({"type":"tool_execution_start"}));
+        }
+        let response_command = if request["message"] == "mismatch" {
+            "other"
+        } else {
+            command
+        };
+        let success = request["message"] != "failed";
+        println!(
+            "{}",
+            serde_json::json!({
+                "type":"response", "command":response_command, "success":success,
+                "message":"private upstream detail", "id":request["id"]
+            })
+        );
+        if matches!(command, "steer" | "follow_up") {
+            println!(
+                "{}",
+                serde_json::json!({"type":"message_update", "assistantMessageEvent":{
+                    "type":"text_delta", "delta":"still streaming"
+                }})
+            );
+        }
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn pi_chat_capture(output: String) {
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let command = request["type"].as_str().unwrap();
+        if command == "prompt" {
+            fs::write(&output, line).unwrap();
+        }
+        println!(
+            "{}",
+            serde_json::json!({
+                "type":"response", "command":command, "success":true, "id":request["id"]
+            })
+        );
+        io::stdout().flush().unwrap();
+    }
+}
+
+/// Answers `get_state` with the model and level in `state`, and appends each
+/// `set_thinking_level` command to `output` before it takes the new level.
+fn pi_thinking(output: String, state: String) {
+    let state: serde_json::Value = serde_json::from_str(&state).unwrap();
+    let mut level = state["thinkingLevel"].clone();
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let command = request["type"].as_str().unwrap();
+        let response = match command {
+            "get_state" => serde_json::json!({
+                "type":"response", "command":command, "success":true, "id":request["id"],
+                "data":{"model":state["model"], "thinkingLevel":level}
+            }),
+            "set_thinking_level" => {
+                let mut capture = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&output)
+                    .unwrap();
+                writeln!(capture, "{line}").unwrap();
+                level = request["level"].clone();
+                serde_json::json!({"type":"response", "command":command, "success":true, "id":request["id"]})
+            }
+            _ => serde_json::json!({
+                "type":"response", "command":command, "success":false, "id":request["id"]
+            }),
+        };
+        println!("{response}");
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn pi_chat_extension_ui(output: String) {
+    let mut pending_prompt = None;
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        match request["type"].as_str().unwrap() {
+            "get_state" => println!(
+                "{}",
+                serde_json::json!({
+                    "type":"response", "command":"get_state", "success":true, "id":request["id"]
+                })
+            ),
+            "prompt" if request["message"] == "wait" => {
+                fs::write(format!("{output}.waiting"), "").unwrap();
+                continue;
+            }
+            "prompt" if request["message"] == "name-first" => {
+                pending_prompt = Some(request["id"].clone());
+                println!("{}", serde_json::json!({"type":"agent_start"}));
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"extension_ui_request", "id":"name-1", "method":"editor", "title":"muniment:thread-title", "prefill":"{\"action\":\"request\"}"})
+                );
+            }
+            "prompt" => println!(
+                "{}",
+                serde_json::json!({
+                    "type":"response", "command":"prompt", "success":true, "id":request["id"]
+                })
+            ),
+            "extension_ui_response" => {
+                let mut capture = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&output)
+                    .unwrap();
+                writeln!(capture, "{line}").unwrap();
+                if let Some(id) = pending_prompt.take() {
+                    println!(
+                        "{}",
+                        serde_json::json!({"type":"response", "command":"prompt", "success":true, "id":id})
+                    );
+                    println!("{}", serde_json::json!({"type":"agent_end"}));
+                }
+            }
+            command => panic!("unexpected command: {command}"),
+        }
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn pi_chat_late_response(release_marker: String) {
+    let mut prompted = false;
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let command = request["type"].as_str().unwrap();
+        if command == "prompt" {
+            prompted = true;
+        } else if command == "get_state" && prompted {
+            while !Path::new(&release_marker).exists() {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        println!(
+            "{}",
+            serde_json::json!({
+                "type":"response", "command":command, "success":true, "id":request["id"]
+            })
+        );
+        if command == "get_state" && prompted {
+            println!(
+                "{}",
+                serde_json::json!({"type":"message_update", "assistantMessageEvent":{
+                    "type":"text_delta", "delta":"after late response"
+                }})
+            );
+        }
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn llama_server_stub(args: impl Iterator<Item = String>) {
+    let args: Vec<_> = args.collect();
+    if let Ok(path) = std::env::var("LLAMA_STUB_ARGS") {
+        fs::write(path, args.join("\n")).unwrap();
+    }
+    if let Ok(marker) = std::env::var("LLAMA_STUB_EXIT_ONCE") {
+        if fs::create_dir(marker).is_ok() {
+            std::process::exit(23);
+        }
+    }
+    echo();
+}
+
+fn echo() {
+    for line in io::stdin().lock().lines() {
+        println!("{}", line.unwrap());
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn json_rpc(ping_marker: Option<String>) {
+    let stop_answering_ping = ping_marker
+        .as_deref()
+        .is_some_and(|marker| fs::create_dir(marker).is_ok());
+    let mut answered_ping = false;
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if request.get("id").is_none() {
+            eprintln!("{request}");
+            io::stderr().flush().unwrap();
+            continue;
+        }
+        let id = request["id"].clone();
+        match request["method"].as_str() {
+            Some("ping") if !stop_answering_ping || !answered_ping => {
+                answered_ping = true;
+                eprintln!("ping");
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc": "2.0", "result": "pong", "id": id})
+                );
+            }
+            Some("ping") => continue,
+            Some("delayed") => {
+                let delay_ms = request["params"]["delay_ms"].as_u64().unwrap_or(100);
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc": "2.0", "method": "delayed.started"})
+                );
+                io::stdout().flush().unwrap();
+                thread::sleep(Duration::from_millis(delay_ms));
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc": "2.0", "result": "delayed", "id": id})
+                );
+            }
+            Some("round_trip") => println!(
+                "{}",
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "result": request.get("params").cloned().unwrap_or(serde_json::Value::Null),
+                    "id": id
+                })
+            ),
+            Some("fail") => println!(
+                "{}",
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32001, "message": "stub failure", "data": {"retry": false}},
+                    "id": id
+                })
+            ),
+            Some("malformed") => println!("{{not json"),
+            Some("invalid_version") => println!(
+                "{}",
+                serde_json::json!({"jsonrpc": "1.0", "result": null, "id": id})
+            ),
+            Some("invalid_shape") => println!(
+                "{}",
+                serde_json::json!({"jsonrpc": "2.0", "result": null, "error": {"code": 1, "message": "both"}, "id": id})
+            ),
+            Some("mismatch") => println!(
+                "{}",
+                serde_json::json!({"jsonrpc": "2.0", "result": null, "id": "wrong"})
+            ),
+            Some("count") => {
+                let count = request["params"]["count"].as_u64().unwrap();
+                for value in 0..count {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "count.progress",
+                            "params": {"value": value}
+                        })
+                    );
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"jsonrpc": "2.0", "result": count, "id": id})
+                );
+            }
+            Some("normalized") => {
+                print!("\r\n\r\n");
+                print!(
+                    "{}\r\n",
+                    serde_json::json!({"jsonrpc": "2.0", "result": "ok", "id": id})
+                );
+            }
+            Some("timeout") => continue,
+            Some("late_success") => delayed_response(
+                id,
+                serde_json::json!({"jsonrpc": "2.0", "result": "late"}),
+                Duration::from_millis(100),
+            ),
+            Some("late_error") => delayed_response(
+                id,
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32800, "message": "cancelled"}
+                }),
+                Duration::from_millis(100),
+            ),
+            Some("cancel_race") => delayed_response(
+                id,
+                serde_json::json!({"jsonrpc": "2.0", "result": "raced"}),
+                Duration::ZERO,
+            ),
+            _ => println!(
+                "{}",
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32601, "message": "method not found"},
+                    "id": id
+                })
+            ),
+        }
+        io::stdout().flush().unwrap();
+    }
+}
+
+fn pi_rpc_interleaved() {
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let id = request["id"].clone();
+        println!(
+            "{}",
+            serde_json::json!({"type": "agent_start", "requestId": "unrelated"})
+        );
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "response",
+                "command": request["type"],
+                "success": true,
+                "id": "another-call"
+            })
+        );
+        println!(
+            "{}",
+            serde_json::json!({
+                "type": "response",
+                "command": request["type"],
+                "success": true,
+                "id": id
+            })
+        );
+        io::stdout().flush().unwrap();
+        if request["type"] == "prompt" {
+            thread::sleep(Duration::from_millis(10));
+            println!(
+                "{}",
+                serde_json::json!({"type": "message_update", "requestId": "after-response"})
+            );
+            io::stdout().flush().unwrap();
+        }
+    }
+}
+
+fn delayed_response(id: serde_json::Value, mut response: serde_json::Value, delay: Duration) {
+    thread::spawn(move || {
+        thread::sleep(delay);
+        response["id"] = id;
+        println!("{response}");
+        io::stdout().flush().unwrap();
+    });
+}
+
+/// Panics unless `path` lies under the system temporary directory, so a test
+/// that resolves the user's real state directory fails before the stub writes
+/// fixture packages there.
+fn require_temporary(path: &Path) {
+    let temporary = std::env::temp_dir();
+    let inside = path.starts_with(&temporary)
+        || fs::canonicalize(path)
+            .ok()
+            .zip(fs::canonicalize(&temporary).ok())
+            .is_some_and(|(path, temporary)| path.starts_with(temporary));
+    assert!(
+        inside,
+        "The test stub refuses {}, which is outside the temporary directory.",
+        path.display()
+    );
+}
+
+/// Stands in for Bun's package manager: it writes each dependency the manifest
+/// names at its pinned version, plus the source lines the runtime brands.
+fn bun_install(args: Vec<String>) {
+    let directory = args
+        .windows(2)
+        .find(|pair| pair[0] == "--cwd")
+        .map(|pair| Path::new(&pair[1]).to_owned())
+        .expect("the install names its directory");
+    require_temporary(&directory);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.join("package.json")).unwrap()).unwrap();
+    let modules = directory.join("node_modules");
+    for (name, version) in manifest["dependencies"].as_object().unwrap() {
+        let package = modules.join(name);
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("package.json"),
+            serde_json::json!({ "name": name, "version": version, "pi": { "extensions": ["./fixture.js"] } }).to_string(),
+        )
+        .unwrap();
+    }
+    for name in manifest["dependencies"].as_object().unwrap().keys() {
+        fs::write(
+            modules.join(name).join("fixture.js"),
+            "export default () => {};\n",
+        )
+        .unwrap();
+    }
+    let sources = [
+        ("pi-background-tasks/src/core/registry.ts", "'.pi'"),
+        ("pi-background-tasks/src/extension.ts", ".pi/tasks"),
+        (
+            "pi-background-tasks/src/core/attested-pi-run.ts",
+            "parts[0] === '.pi'",
+        ),
+    ];
+    for (relative, source) in sources {
+        let path = modules.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, source).unwrap();
+    }
+}

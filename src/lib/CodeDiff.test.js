@@ -49,7 +49,7 @@ describe('code diff view', () => {
     ['deleted.json', 'old.txt deleted'],
     ['renamed.json', 'old-name.txt → new-name.txt renamed'],
   ])('renders the %s fixture header', (fixtureName, expectedHeader) => {
-    const fixturePath = join(process.cwd(), 'protocol-fixtures/code-diff/1', fixtureName)
+    const fixturePath = join(process.cwd(), 'core/protocol-fixtures/code-diff/1', fixtureName)
     const codeDiff = JSON.parse(readFileSync(fixturePath, 'utf8'))
     const { container } = render(CodeDiff, { props: { codeDiff } })
     const header = container.querySelector('.d2h-file-header')

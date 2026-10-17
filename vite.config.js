@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
+import { configDefaults } from 'vitest/config'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
@@ -31,6 +32,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./test/isolated-home.setup.js', './test/model-registry.setup.js'],
+    // The core tree runs its own node:test suites.
+    exclude: [...configDefaults.exclude, 'core/**'],
     // Lazy component compilation and process fixtures share the CI worker budget.
     testTimeout: 30_000,
   },

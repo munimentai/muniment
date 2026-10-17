@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the core boundary in docs/core-boundary.md without a GUI toolchain."""
+"""Enforce the core boundary in core/docs/core-boundary.md without a GUI toolchain."""
 
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-BOUNDARY = Path("docs/core-boundary.md")
+BOUNDARY = Path("core/docs/core-boundary.md")
 MANIFEST = "src-tauri/Cargo.toml"
 SHELL = "muniment-desktop"
 INTEGRATION = "muniment-desktop-integration"

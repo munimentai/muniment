@@ -1,0 +1,592 @@
+//! What each account has served: the counters Settings shows and the cooldown
+//! the balancer honors.
+//!
+//! The ledger carries no prompt and no reply. It counts turns, tokens and
+//! failures, and it names the last failure so a user can see why an account
+//! stopped taking its share.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+/// The ledger's file in the agent directory.
+pub const USAGE_FILE: &str = "muniment-router-usage.json";
+/// How many daily buckets the ledger keeps for the usage bar.
+pub const DAYS_KEPT: usize = 30;
+/// The first cooldown after a refusal, and the ceiling repeated refusals reach.
+pub const FIRST_COOLDOWN_MS: i64 = 15_000;
+pub const MAX_COOLDOWN_MS: i64 = 15 * 60 * 1000;
+/// The half-life of the recent-turn count the balancer compares. A turn this
+/// old counts half as much as a turn served now.
+pub const RECENT_HALF_LIFE_MS: i64 = 10 * 60 * 1000;
+/// The longest cooldown an upstream's own reset time may set.
+pub const MAX_RETRY_AFTER_MS: i64 = 24 * 60 * 60 * 1000;
+/// How long a model an account's plan refused stays out of that account's
+/// running. Plans change, so the model is tried again after this.
+pub const MODEL_REFUSAL_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// One day of one account's work.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayUsage {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub errors: u64,
+}
+
+/// One account's whole record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountUsage {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub errors: u64,
+    /// Unix milliseconds of the last turn this account served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_ms: Option<i64>,
+    /// The upstream's own words for the last refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Unix milliseconds until which the balancer skips this account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_until_ms: Option<i64>,
+    /// Refusals in a row. It sets the next cooldown and a success clears it.
+    #[serde(default)]
+    pub strikes: u32,
+    /// `YYYY-MM-DD` to that day's work, newest day last, [`DAYS_KEPT`] at most.
+    #[serde(default)]
+    pub days: BTreeMap<String, DayUsage>,
+    /// Turns served lately in thousandths, as of `recent_at_ms`, decayed with
+    /// [`RECENT_HALF_LIFE_MS`]. The balancer compares this count instead of
+    /// the lifetime one, so an account that joins a long-lived pool takes its
+    /// share rather than every turn until its lifetime count catches up.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub recent_milli: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_at_ms: Option<i64>,
+    /// Each model the account's plan refused, with the Unix milliseconds of
+    /// the latest refusal. The account takes no turn on the model for
+    /// [`MODEL_REFUSAL_MS`] after it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refused_models: BTreeMap<String, i64>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+impl AccountUsage {
+    /// Whether the balancer may send a turn to this account at `now_ms`.
+    pub fn available(&self, now_ms: i64) -> bool {
+        self.cooldown_until_ms.is_none_or(|until| now_ms >= until)
+    }
+
+    /// The decayed count of turns served lately, as of `now_ms`.
+    pub fn recent(&self, now_ms: i64) -> f64 {
+        let count = self.recent_milli as f64 / 1000.0;
+        let Some(at) = self.recent_at_ms else {
+            return count;
+        };
+        let age = now_ms.saturating_sub(at).max(0) as f64;
+        count * 0.5_f64.powf(age / RECENT_HALF_LIFE_MS as f64)
+    }
+}
+
+/// Every account's record, keyed by account id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ledger {
+    #[serde(default)]
+    pub cache: BTreeMap<String, super::wire::Tokens>,
+    #[serde(default)]
+    pub accounts: BTreeMap<String, AccountUsage>,
+}
+
+impl Ledger {
+    pub fn record_cache(&mut self, id: &str, tokens: super::wire::Tokens) {
+        let sum = self.cache.entry(id.into()).or_default();
+        sum.input = sum.input.saturating_add(tokens.input);
+        sum.output = sum.output.saturating_add(tokens.output);
+        sum.cache_read = sum.cache_read.saturating_add(tokens.cache_read);
+        sum.cache_write = sum.cache_write.saturating_add(tokens.cache_write);
+        sum.cache_write_1h = sum.cache_write_1h.saturating_add(tokens.cache_write_1h);
+        sum.reasoning = sum.reasoning.saturating_add(tokens.reasoning);
+    }
+
+    pub fn account(&self, id: &str) -> Option<&AccountUsage> {
+        self.accounts.get(id)
+    }
+
+    /// Whether the balancer may send a turn to `id` at `now_ms`. An account
+    /// with no record has served nothing and is available.
+    pub fn available(&self, id: &str, now_ms: i64) -> bool {
+        self.accounts
+            .get(id)
+            .is_none_or(|usage| usage.available(now_ms))
+    }
+
+    /// Counts one served turn and clears the account's cooldown.
+    pub fn record_success(
+        &mut self,
+        id: &str,
+        day: &str,
+        now_ms: i64,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        let usage = self.accounts.entry(id.to_owned()).or_default();
+        usage.requests += 1;
+        usage.recent_milli = ((usage.recent(now_ms) + 1.0) * 1000.0).round() as u64;
+        usage.recent_at_ms = Some(now_ms);
+        usage.input_tokens += input_tokens;
+        usage.output_tokens += output_tokens;
+        usage.last_used_ms = Some(now_ms);
+        usage.last_error = None;
+        usage.cooldown_until_ms = None;
+        usage.strikes = 0;
+        let bucket = usage.days.entry(day.to_owned()).or_default();
+        bucket.requests += 1;
+        bucket.input_tokens += input_tokens;
+        bucket.output_tokens += output_tokens;
+        trim(&mut usage.days);
+    }
+
+    /// Counts one refusal and puts the account in cooldown when `cools` says
+    /// the upstream refused the account itself, not the request.
+    pub fn record_error(&mut self, id: &str, day: &str, now_ms: i64, message: &str, cools: bool) {
+        let usage = self.accounts.entry(id.to_owned()).or_default();
+        usage.errors += 1;
+        usage.last_error = Some(clip(message));
+        usage.last_used_ms = Some(now_ms);
+        if cools {
+            usage.strikes = usage.strikes.saturating_add(1);
+            usage.cooldown_until_ms = Some(now_ms + cooldown_ms(usage.strikes));
+        }
+        let bucket = usage.days.entry(day.to_owned()).or_default();
+        bucket.errors += 1;
+        trim(&mut usage.days);
+    }
+
+    /// Records that the plan of account `id` does not offer `model`. Records
+    /// past [`MODEL_REFUSAL_MS`] are dropped on the way.
+    pub fn record_refusal(&mut self, id: &str, model: &str, now_ms: i64) {
+        let usage = self.accounts.entry(id.to_owned()).or_default();
+        usage
+            .refused_models
+            .retain(|_, at| now_ms.saturating_sub(*at) < MODEL_REFUSAL_MS);
+        usage.refused_models.insert(model.to_owned(), now_ms);
+    }
+
+    /// The models each account's plan refused within [`MODEL_REFUSAL_MS`] of
+    /// `now_ms`, by account id.
+    pub fn refusals(&self, now_ms: i64) -> BTreeMap<String, BTreeSet<String>> {
+        self.accounts
+            .iter()
+            .filter_map(|(id, usage)| {
+                let models: BTreeSet<String> = usage
+                    .refused_models
+                    .iter()
+                    .filter(|(_, at)| now_ms.saturating_sub(**at) < MODEL_REFUSAL_MS)
+                    .map(|(model, _)| model.clone())
+                    .collect();
+                (!models.is_empty()).then(|| (id.clone(), models))
+            })
+            .collect()
+    }
+
+    /// Drops the record of an account the user removed.
+    pub fn forget(&mut self, id: &str) {
+        self.accounts.remove(id);
+        self.cache.remove(id);
+    }
+}
+
+/// The cooldown a run of `strikes` refusals earns: 15 seconds doubling to 15
+/// minutes, so one refusing account stops taking its share without going away.
+pub fn cooldown_ms(strikes: u32) -> i64 {
+    let doublings = strikes.saturating_sub(1).min(16);
+    FIRST_COOLDOWN_MS
+        .saturating_mul(1_i64 << doublings)
+        .min(MAX_COOLDOWN_MS)
+}
+
+/// Whether an upstream status means the account itself is refused, so the
+/// balancer should pass it over: rate limits, auth failures and quota.
+pub fn status_cools(status: u16) -> bool {
+    matches!(status, 401 | 402 | 403 | 429) || status >= 500
+}
+
+/// Whether an upstream error answer says the account's plan does not offer
+/// the model it was asked for, as opposed to a fault in the request. Only a
+/// 400 or 404 whose message names the model as what is missing or
+/// unsupported counts, so a refused parameter or input never does.
+pub fn model_refused(status: u16, body: &str) -> bool {
+    if !matches!(status, 400 | 404) {
+        return false;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let error = parsed.get("error").unwrap_or(&serde_json::Value::Null);
+    let text = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase)
+    };
+    let code = text(error.get("code")).unwrap_or_default();
+    let kind = text(error.get("type")).unwrap_or_default();
+    if matches!(code.as_str(), "model_not_found" | "model_not_supported") {
+        return true;
+    }
+    let message = text(parsed.get("detail"))
+        .or_else(|| text(error.get("message")))
+        .or_else(|| text(Some(error)))
+        .or_else(|| text(parsed.get("message")))
+        .unwrap_or_else(|| body.to_ascii_lowercase());
+    if kind == "not_found_error" && message.starts_with("model:") {
+        return true;
+    }
+    if message.contains("parameter") {
+        return false;
+    }
+    if message.contains("unsupported model") {
+        return true;
+    }
+    // The model comes first and the refusal follows in the same sentence:
+    // "The 'x' model is not supported", "The model `x` does not exist".
+    message.split(". ").any(|sentence| {
+        sentence.find("model").is_some_and(|at| {
+            let rest = &sentence[at..];
+            [
+                " not supported",
+                " not available",
+                " does not exist",
+                " not found",
+            ]
+            .iter()
+            .any(|refusal| rest.contains(refusal))
+        })
+    })
+}
+
+/// The moment a `retry-after` value lets the account back in: a count of
+/// seconds or an HTTP date. A date in the past answers `now_ms`, and no value
+/// reaches past [`MAX_RETRY_AFTER_MS`] from now.
+pub fn retry_after_ms(value: &str, now_ms: i64) -> Option<i64> {
+    let value = value.trim();
+    let until = if let Ok(seconds) = value.parse::<u64>() {
+        now_ms.saturating_add(seconds.min(i64::MAX as u64 / 1000) as i64 * 1000)
+    } else {
+        http_date_ms(value)?
+    };
+    Some(until.clamp(now_ms, now_ms.saturating_add(MAX_RETRY_AFTER_MS)))
+}
+
+/// Unix milliseconds of an HTTP date in any of the three forms RFC 9110 lets
+/// a recipient read.
+fn http_date_ms(value: &str) -> Option<i64> {
+    if let Ok(moment) = chrono::DateTime::parse_from_rfc2822(value) {
+        return Some(moment.timestamp_millis());
+    }
+    ["%A, %d-%b-%y %H:%M:%S GMT", "%a %b %e %H:%M:%S %Y"]
+        .iter()
+        .find_map(|format| chrono::NaiveDateTime::parse_from_str(value, format).ok())
+        .map(|moment| moment.and_utc().timestamp_millis())
+}
+
+fn clip(message: &str) -> String {
+    let message = message.trim();
+    if message.chars().count() <= 240 {
+        return message.to_owned();
+    }
+    message.chars().take(240).collect()
+}
+
+fn trim(days: &mut BTreeMap<String, DayUsage>) {
+    while days.len() > DAYS_KEPT {
+        let Some(oldest) = days.keys().next().cloned() else {
+            break;
+        };
+        days.remove(&oldest);
+    }
+}
+
+/// The ledger's file inside an agent directory.
+pub fn usage_path(agent: &Path) -> PathBuf {
+    agent.join(USAGE_FILE)
+}
+
+/// Reads the ledger, or an empty one when nothing has been served yet. A
+/// ledger that cannot be parsed reads as empty: counters are not the product,
+/// and a lost count must never stop a turn.
+pub fn load(agent: &Path) -> Ledger {
+    fs::read(usage_path(agent))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Replaces the ledger.
+pub fn save(agent: &Path, ledger: &Ledger) -> io::Result<()> {
+    fs::create_dir_all(agent)?;
+    let bytes = serde_json::to_vec_pretty(ledger)?;
+    super::config::write_private(&usage_path(agent), &bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_served_turn_counts_once_in_the_total_and_in_its_day() {
+        let mut ledger = Ledger::default();
+        ledger.record_success("a1", "2026-09-17", 1_000, 300, 40);
+        ledger.record_success("a1", "2026-09-17", 2_000, 100, 10);
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.requests, 2);
+        assert_eq!(usage.input_tokens, 400);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.last_used_ms, Some(2_000));
+        assert_eq!(usage.days["2026-09-17"].requests, 2);
+        assert_eq!(usage.days["2026-09-17"].input_tokens, 400);
+    }
+
+    #[test]
+    fn a_refusal_cools_the_account_and_a_success_clears_it() {
+        let mut ledger = Ledger::default();
+        ledger.record_error("a1", "2026-09-17", 1_000, "429 rate limit", true);
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.errors, 1);
+        assert_eq!(usage.strikes, 1);
+        assert_eq!(usage.cooldown_until_ms, Some(1_000 + FIRST_COOLDOWN_MS));
+        assert!(!ledger.available("a1", 1_000));
+        assert!(ledger.available("a1", 1_000 + FIRST_COOLDOWN_MS));
+        assert!(ledger.available("a2", 1_000));
+        ledger.record_error("a1", "2026-09-17", 2_000, "429 again", true);
+        assert_eq!(
+            ledger.account("a1").unwrap().cooldown_until_ms,
+            Some(2_000 + FIRST_COOLDOWN_MS * 2)
+        );
+        ledger.record_success("a1", "2026-09-17", 3_000, 10, 2);
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.strikes, 0);
+        assert_eq!(usage.cooldown_until_ms, None);
+        assert_eq!(usage.last_error, None);
+        assert_eq!(usage.errors, 2);
+        assert_eq!(usage.days["2026-09-17"].errors, 2);
+    }
+
+    #[test]
+    fn a_plan_that_does_not_offer_the_model_reads_as_a_model_refusal() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"detail":"The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."}"#,
+            ),
+            (
+                400,
+                r#"{"detail":"The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account."}"#,
+            ),
+            (
+                404,
+                r#"{"error":{"message":"The model `gpt-9` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}"#,
+            ),
+            (
+                404,
+                r#"{"type":"error","error":{"type":"not_found_error","message":"model: claude-opus-9"}}"#,
+            ),
+            (400, r#"{"detail":"Unsupported model"}"#),
+            (
+                400,
+                r#"{"error":{"message":"This model is not available on your plan."}}"#,
+            ),
+        ] {
+            assert!(model_refused(status, body), "{status} {body}");
+        }
+    }
+
+    #[test]
+    fn a_refused_request_or_a_refused_account_is_no_model_refusal() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model."}}"#,
+            ),
+            (
+                400,
+                r#"{"error":{"message":"Image input is not supported for this model."}}"#,
+            ),
+            (400, r#"{"error":"no such model"}"#),
+            (404, "model unavailable"),
+            (
+                429,
+                r#"{"detail":"The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."}"#,
+            ),
+            (
+                401,
+                r#"{"error":{"code":"model_not_found","message":"The model does not exist."}}"#,
+            ),
+        ] {
+            assert!(!model_refused(status, body), "{status} {body}");
+        }
+    }
+
+    #[test]
+    fn a_model_refusal_holds_for_a_day_and_for_that_account_alone() {
+        let mut ledger = Ledger::default();
+        ledger.record_refusal("a1", "gpt-5.5", 1_000);
+        let refusals = ledger.refusals(1_000 + MODEL_REFUSAL_MS - 1);
+        assert_eq!(refusals.len(), 1);
+        assert!(refusals["a1"].contains("gpt-5.5"));
+        assert!(ledger.refusals(1_000 + MODEL_REFUSAL_MS).is_empty());
+        // A refusal neither cools the account nor counts as an error.
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.cooldown_until_ms, None);
+        assert_eq!(usage.errors, 0);
+        // A later refusal drops the expired record.
+        ledger.record_refusal("a1", "gpt-5.3-codex-spark", 1_000 + MODEL_REFUSAL_MS);
+        let models: Vec<_> = ledger
+            .account("a1")
+            .unwrap()
+            .refused_models
+            .keys()
+            .collect();
+        assert_eq!(models, ["gpt-5.3-codex-spark"]);
+        // The record survives a save and a load.
+        let back: Ledger = serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+        assert_eq!(back, ledger);
+        ledger.forget("a1");
+        assert!(ledger.refusals(1_000 + MODEL_REFUSAL_MS).is_empty());
+    }
+
+    #[test]
+    fn a_bad_request_counts_without_cooling_the_account() {
+        let mut ledger = Ledger::default();
+        ledger.record_error("a1", "2026-09-17", 1_000, "400 bad model", false);
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.errors, 1);
+        assert_eq!(usage.strikes, 0);
+        assert_eq!(usage.cooldown_until_ms, None);
+        assert!(ledger.available("a1", 1_000));
+    }
+
+    #[test]
+    fn the_cooldown_doubles_to_its_ceiling_and_stops_there() {
+        assert_eq!(cooldown_ms(1), FIRST_COOLDOWN_MS);
+        assert_eq!(cooldown_ms(2), FIRST_COOLDOWN_MS * 2);
+        assert_eq!(cooldown_ms(3), FIRST_COOLDOWN_MS * 4);
+        assert_eq!(cooldown_ms(40), MAX_COOLDOWN_MS);
+        assert_eq!(cooldown_ms(0), FIRST_COOLDOWN_MS);
+    }
+
+    #[test]
+    fn only_an_account_refusal_cools_the_account() {
+        for status in [401, 402, 403, 429, 500, 503] {
+            assert!(status_cools(status), "{status} must cool");
+        }
+        for status in [400, 404, 422] {
+            assert!(!status_cools(status), "{status} must not cool");
+        }
+    }
+
+    #[test]
+    fn the_ledger_keeps_its_last_thirty_days() {
+        let mut ledger = Ledger::default();
+        for day in 1..=40 {
+            ledger.record_success("a1", &format!("2026-09-{day:02}"), 1_000, 1, 1);
+        }
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.days.len(), DAYS_KEPT);
+        assert!(!usage.days.contains_key("2026-09-01"));
+        assert!(usage.days.contains_key("2026-09-40"));
+        assert_eq!(usage.requests, 40);
+    }
+
+    #[test]
+    fn a_ledger_reads_back_and_a_damaged_one_reads_as_empty() {
+        let agent = std::env::temp_dir().join(format!("muniment-usage-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(&agent).unwrap();
+        let mut ledger = Ledger::default();
+        ledger.record_success("a1", "2026-09-17", 1_000, 5, 1);
+        save(&agent, &ledger).unwrap();
+        assert_eq!(load(&agent), ledger);
+        fs::write(usage_path(&agent), b"not json").unwrap();
+        assert_eq!(load(&agent), Ledger::default());
+    }
+
+    #[test]
+    fn a_removed_account_loses_its_record() {
+        let mut ledger = Ledger::default();
+        ledger.record_success("a1", "2026-09-17", 1_000, 5, 1);
+        ledger.forget("a1");
+        assert!(ledger.account("a1").is_none());
+    }
+
+    #[test]
+    fn a_long_upstream_message_is_clipped() {
+        let mut ledger = Ledger::default();
+        ledger.record_error("a1", "2026-09-17", 1_000, &"x".repeat(1_000), true);
+        assert_eq!(
+            ledger
+                .account("a1")
+                .unwrap()
+                .last_error
+                .as_ref()
+                .unwrap()
+                .chars()
+                .count(),
+            240
+        );
+    }
+
+    #[test]
+    fn the_recent_count_decays_with_its_half_life() {
+        let mut ledger = Ledger::default();
+        ledger.record_success("a1", "2026-09-17", 0, 1, 1);
+        ledger.record_success("a1", "2026-09-17", 0, 1, 1);
+        let usage = ledger.account("a1").unwrap();
+        assert_eq!(usage.recent(0), 2.0);
+        assert!((usage.recent(RECENT_HALF_LIFE_MS) - 1.0).abs() < 1e-9);
+        assert!(usage.recent(RECENT_HALF_LIFE_MS * 20) < 1e-5);
+        ledger.record_success("a1", "2026-09-17", RECENT_HALF_LIFE_MS, 1, 1);
+        assert_eq!(
+            ledger.account("a1").unwrap().recent(RECENT_HALF_LIFE_MS),
+            2.0
+        );
+        assert_eq!(ledger.account("a1").unwrap().requests, 3);
+        // An old ledger without the count reads as nothing served lately.
+        let old: AccountUsage =
+            serde_json::from_str(r#"{"requests":9,"input_tokens":0,"output_tokens":0,"errors":0}"#)
+                .unwrap();
+        assert_eq!(old.recent(1_000), 0.0);
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_and_http_dates() {
+        let now = 1_445_412_480_000; // Wed, 21 Oct 2015 07:28:00 GMT
+        assert_eq!(retry_after_ms("120", now), Some(now + 120_000));
+        assert_eq!(
+            retry_after_ms("Wed, 21 Oct 2015 07:30:00 GMT", now),
+            Some(now + 120_000)
+        );
+        assert_eq!(
+            retry_after_ms("Wednesday, 21-Oct-15 07:29:00 GMT", now),
+            Some(now + 60_000)
+        );
+        assert_eq!(
+            retry_after_ms("Wed Oct 21 07:28:30 2015", now),
+            Some(now + 30_000)
+        );
+        // A date already past lets the account straight back in.
+        assert_eq!(
+            retry_after_ms("Wed, 21 Oct 2015 07:00:00 GMT", now),
+            Some(now)
+        );
+        assert_eq!(
+            retry_after_ms("99999999", now),
+            Some(now + MAX_RETRY_AFTER_MS)
+        );
+        assert_eq!(retry_after_ms("soon", now), None);
+        assert_eq!(retry_after_ms("-5", now), None);
+    }
+}

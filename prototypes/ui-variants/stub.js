@@ -645,7 +645,7 @@ window.__PROBE__ = {
   },
   async loadBundle() {
     if (fixtureName === 'code-diff' || fixtureName === 'applied-diff') {
-      const response = await fetch('/protocol-fixtures/code-diff/1/modified.json')
+      const response = await fetch('/core/protocol-fixtures/code-diff/1/modified.json')
       if (!response.ok) throw new Error(`Could not load the code diff fixture: ${response.status}`)
       const diff = await response.json()
       if (fixtureName === 'code-diff') history[0].pendingPermission.diff = diff

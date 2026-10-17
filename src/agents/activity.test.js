@@ -3,7 +3,7 @@ import path from 'node:path'
 import { expect, it } from 'vitest'
 import { activityLabel, activityState, agentActivity, applyActivity } from './activity.js'
 
-const event = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'protocol-fixtures/muniment.attach/1/event-agent-activity.json'), 'utf8')).body
+const event = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/event-agent-activity.json'), 'utf8')).body
 
 it('names each state and its action', () => {
   expect(activityLabel(event.activity)).toBe('Waiting for you: bash `git push origin main` in /work/agents/Lead-scout')

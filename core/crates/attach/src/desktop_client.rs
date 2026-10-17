@@ -1,0 +1,1982 @@
+use crate::client::{
+    AuthorizationSummary, ChatPermissionAnswer, ClientError, RunCancelAccepted, RunMessageAccepted,
+    RunPermissionAnswerAccepted, RunResumeAccepted, RunSubmitAccepted,
+};
+use crate::client_stream::{read_value, write_all_before, ClientStream};
+use crate::protocol_helpers::{
+    deadline, fresh_nonce, fresh_request_id, is_hex_secret, is_rfc3339, map_frame_error,
+    map_protocol_error, parse_message, reject_protocol_error, validate_capability_revocation,
+};
+use crate::{
+    encode_frame, Authorization, Client, DesktopClientAuthorizedGrant, Envelope, EventName, Hello,
+    Id, ModelAction, Operation, PairingLink, Protocol, Request, Response, RuntimeInfo,
+    SnapshotAssembly, VersionRange, Welcome, MAX_TEXT_LENGTH, PROTOCOL,
+};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
+
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
+// Grant issuance can take longer than the default desktop request deadline.
+pub(crate) const RUN_SUBMIT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_THREAD_ID_LENGTH: usize = 36;
+const MAX_CURSOR_LENGTH: usize = 1024;
+const MAX_RUN_MESSAGE_TEXT_LENGTH: usize = 32 * 1024;
+const MAX_PERMISSION_GATE_ID_LENGTH: usize = 256;
+
+/// One event of the chat-event subscription.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SubscriptionEvent {
+    /// A run's chat event.
+    Chat(Value),
+    /// One step of a provider sign-in, the `local-mode-login` payload.
+    ModelsLogin(Value),
+    /// A client asked the host to update the runtime: `version`,
+    /// `requested_at` and `requested_by`. The local owner route only.
+    RuntimeUpdateRequested(Value),
+    /// The runtime's update moved to a new state, a `RuntimeUpdateStatus`
+    /// body. Only a subscription that asked for update status receives it.
+    RuntimeUpdateStatus(Value),
+    /// An agent run changed; the body is the run. Only a subscription that
+    /// asked for agent runs receives it.
+    AgentRunUpdated(Value),
+    /// The swarm's members, links, directory, groups or absence pause
+    /// changed; the body names `kind`. Only a subscription that asked for
+    /// the swarm receives it.
+    SwarmChanged(Value),
+    /// An agent run on a swarm member waits at an approval; the body is the
+    /// approval.
+    ApprovalPending(Value),
+    /// A pending approval was answered or closed; the body is the approval.
+    ApprovalResolved(Value),
+    /// An agent on a swarm member changed what it does: `{agent_id,
+    /// runtime_id, activity}`. Only a subscription that asked for
+    /// `swarm_live` receives it.
+    AgentActivity(Value),
+    /// A message was posted to a group thread: `{group_id, thread_id,
+    /// post}`. Only a subscription that asked for `swarm_live` receives it.
+    GroupPosted(Value),
+}
+
+/// A connection-bound client for the peer-authorized desktop session.
+pub struct DesktopClient {
+    stream: Box<dyn ClientStream + Send>,
+    runtime_version: String,
+    profile_id: String,
+    workspace_scopes: BTreeMap<String, BTreeSet<String>>,
+    capability: String,
+    summary: AuthorizationSummary,
+    authorized_at: Instant,
+    chat_subscription_id: Option<Id>,
+    /// The `seq` of the newest chat event this client read.
+    chat_cursor: Option<u64>,
+    io_timeout: Duration,
+    last_request_error: Option<crate::ProtocolError>,
+    runtime: Option<RuntimeInfo>,
+    scopes: Option<BTreeSet<String>>,
+}
+
+impl std::fmt::Debug for DesktopClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DesktopClient { .. }")
+    }
+}
+
+impl DesktopClient {
+    pub fn capability(&self) -> &str {
+        &self.capability
+    }
+
+    pub fn runtime_version(&self) -> &str {
+        &self.runtime_version
+    }
+
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    pub fn workspace_scopes(&self) -> &BTreeMap<String, BTreeSet<String>> {
+        &self.workspace_scopes
+    }
+
+    pub fn authorization_summary(&self) -> AuthorizationSummary {
+        self.summary.clone()
+    }
+
+    /// The runtime's id, name, version and install kind from its welcome,
+    /// when the runtime sent them.
+    pub fn runtime_info(&self) -> Option<&RuntimeInfo> {
+        self.runtime.as_ref()
+    }
+
+    /// The scopes a remote runtime granted this device. A local session
+    /// answers `None`.
+    pub fn remote_scopes(&self) -> Option<&BTreeSet<String>> {
+        self.scopes.as_ref()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admitted(
+        stream: Box<dyn ClientStream + Send>,
+        welcome: Welcome,
+        profile_id: String,
+        workspace_scopes: BTreeMap<String, BTreeSet<String>>,
+        capability: String,
+        summary: AuthorizationSummary,
+        scopes: Option<BTreeSet<String>>,
+        io_timeout: Duration,
+    ) -> Self {
+        Self {
+            stream,
+            runtime_version: welcome.desktop_version,
+            profile_id,
+            workspace_scopes,
+            capability,
+            summary,
+            authorized_at: Instant::now(),
+            chat_subscription_id: None,
+            chat_cursor: None,
+            io_timeout,
+            last_request_error: None,
+            runtime: welcome.runtime,
+            scopes,
+        }
+    }
+
+    /// Returns the protocol error from the most recent wire request, if it failed.
+    pub fn last_request_error(&self) -> Option<&crate::ProtocolError> {
+        self.last_request_error.as_ref()
+    }
+
+    pub(crate) fn take_request_error(&mut self) -> Option<crate::ProtocolError> {
+        self.last_request_error.take()
+    }
+
+    pub fn request(
+        &mut self,
+        operation: Operation,
+        idempotency_key: Option<Id>,
+        body: Value,
+    ) -> Result<Response, ClientError> {
+        self.request_before(operation, idempotency_key, body, deadline(self.io_timeout))
+    }
+
+    fn request_before(
+        &mut self,
+        operation: Operation,
+        idempotency_key: Option<Id>,
+        body: Value,
+        request_deadline: Instant,
+    ) -> Result<Response, ClientError> {
+        self.last_request_error = None;
+        let request_id = fresh_request_id()?;
+        let request = Request {
+            protocol: Protocol,
+            request_id: request_id.clone(),
+            operation,
+            capability: self.capability.clone(),
+            idempotency_key,
+            body,
+        };
+        let bytes = encode_frame(&request).map_err(map_frame_error)?;
+        write_all_before(self.stream.as_mut(), &bytes, request_deadline)?;
+        let mut snapshot = SnapshotAssembly::default();
+        loop {
+            match serde_json::from_value(read_value(self.stream.as_mut(), request_deadline)?)
+                .map_err(|_| ClientError::UnexpectedMessage)?
+            {
+                Envelope::Response(mut response) if response.request_id == request_id => {
+                    if operation == Operation::ThreadHistory {
+                        let Some(body) = snapshot.push(response.body).map_err(map_frame_error)?
+                        else {
+                            continue;
+                        };
+                        response.body = body;
+                    }
+                    return Ok(response);
+                }
+                Envelope::Error(error) if error.request_id.as_ref() == Some(&request_id) => {
+                    let outcome = map_protocol_error(error.error.code());
+                    self.last_request_error = Some(error.error);
+                    return Err(outcome);
+                }
+                _ => return Err(ClientError::UnexpectedMessage),
+            }
+        }
+    }
+
+    pub fn create_thread(&mut self) -> Result<String, ClientError> {
+        let response = self.request(
+            Operation::ThreadCreate,
+            Some(fresh_request_id()?),
+            serde_json::json!({}),
+        )?;
+        let thread = response
+            .body
+            .get("thread_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(ClientError::UnexpectedMessage)?;
+        if thread.is_empty() || thread.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(thread.to_owned())
+    }
+
+    pub fn rename_thread(&mut self, thread_id: &str, title: &str) -> Result<(), ClientError> {
+        if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH || title.is_empty() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let response = self.request(
+            Operation::ThreadRename,
+            Some(fresh_request_id()?),
+            serde_json::json!({"thread_id": thread_id, "title": title}),
+        )?;
+        if response.body != serde_json::json!({}) {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(())
+    }
+
+    pub fn delete_thread(&mut self, thread_id: &str) -> Result<(), ClientError> {
+        if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let response = self.request(
+            Operation::ThreadDelete,
+            Some(fresh_request_id()?),
+            serde_json::json!({"thread_id": thread_id}),
+        )?;
+        if response.body != serde_json::json!({}) {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(())
+    }
+
+    pub fn thread_select(&mut self, thread_id: &str) -> Result<(), ClientError> {
+        if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let response = self.request(
+            Operation::ThreadSelect,
+            None,
+            serde_json::json!({"thread_id": thread_id}),
+        )?;
+        if response.body != serde_json::json!({}) {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(())
+    }
+
+    pub fn recheck_retention(&mut self) -> Result<(), ClientError> {
+        let response = self.request(Operation::RetentionRecheck, None, serde_json::json!({}))?;
+        if response.body != serde_json::json!({}) {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(())
+    }
+
+    /// Submits a prompt. `thinking_level` names the level the model thinks
+    /// at, and none runs the model at its default.
+    pub fn run_submit(
+        &mut self,
+        text: &str,
+        files: &[String],
+        thread_id: Option<&str>,
+        thinking_level: Option<&str>,
+    ) -> Result<RunSubmitAccepted, ClientError> {
+        if text.trim().is_empty()
+            || text.len() > MAX_TEXT_LENGTH
+            || files
+                .iter()
+                .any(|file| file.trim().is_empty() || file.len() > MAX_TEXT_LENGTH)
+            || thread_id.is_some_and(|thread_id| thread_id.is_empty() || thread_id.len() > 36)
+            || thinking_level.is_some_and(|level| level.is_empty() || level.len() > 16)
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let mut body = serde_json::json!({"text": text, "files": files, "thread_id": thread_id});
+        if let Some(level) = thinking_level {
+            body["thinking_level"] = level.into();
+        }
+        let response = self.request_before(
+            Operation::RunSubmit,
+            Some(fresh_request_id()?),
+            body,
+            deadline(RUN_SUBMIT_TIMEOUT),
+        )?;
+        let accepted: RunSubmitAccepted =
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        if Id::new(accepted.run_id.clone()).is_err()
+            || Id::new(accepted.thread_id.clone()).is_err()
+            || thread_id.is_some_and(|thread_id| accepted.thread_id != thread_id)
+            || accepted.committed_seq == 0
+            || accepted.accepted_at.len() > MAX_TEXT_LENGTH
+            || !is_rfc3339(&accepted.accepted_at)
+            || accepted.attachments.len() != files.len()
+            || accepted.attachments.iter().any(|attachment| {
+                attachment.display_name.trim().is_empty()
+                    || attachment.display_name.len() > MAX_TEXT_LENGTH
+                    || attachment.media_type.as_ref().is_some_and(|media_type| {
+                        media_type.trim().is_empty() || media_type.len() > MAX_TEXT_LENGTH
+                    })
+            })
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(accepted)
+    }
+
+    pub fn run_cancel(&mut self, run_id: &str) -> Result<RunCancelAccepted, ClientError> {
+        let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
+        let response = self.request(
+            Operation::RunCancel,
+            Some(fresh_request_id()?),
+            serde_json::json!({"run_id": run_id.as_str()}),
+        )?;
+        let accepted: RunCancelAccepted =
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        if accepted.run_id != run_id.as_str()
+            || accepted.accepted_at.is_empty()
+            || accepted.accepted_at.len() > MAX_TEXT_LENGTH
+            || !is_rfc3339(&accepted.accepted_at)
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(accepted)
+    }
+
+    pub fn run_resume(&mut self, run_id: &str) -> Result<RunResumeAccepted, ClientError> {
+        let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
+        let response = self.request(
+            Operation::RunResume,
+            Some(fresh_request_id()?),
+            serde_json::json!({"run_id": run_id.as_str()}),
+        )?;
+        let accepted: RunResumeAccepted =
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        if accepted.run_id != run_id.as_str()
+            || Id::new(accepted.thread_id.clone()).is_err()
+            || accepted.committed_seq == 0
+            || accepted.accepted_at.is_empty()
+            || accepted.accepted_at.len() > MAX_TEXT_LENGTH
+            || !is_rfc3339(&accepted.accepted_at)
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(accepted)
+    }
+
+    pub fn run_permission_answer(
+        &mut self,
+        run_id: &str,
+        gate_id: &str,
+        answer: ChatPermissionAnswer,
+    ) -> Result<RunPermissionAnswerAccepted, ClientError> {
+        let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
+        if gate_id.trim().is_empty() || gate_id.len() > MAX_PERMISSION_GATE_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let response = self.request(
+            Operation::RunPermissionAnswer,
+            Some(fresh_request_id()?),
+            serde_json::json!({
+                "run_id": run_id.as_str(),
+                "gate_id": gate_id,
+                "answer": &answer,
+            }),
+        )?;
+        let accepted: RunPermissionAnswerAccepted =
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        if accepted.run_id != run_id.as_str()
+            || accepted.gate_id != gate_id
+            || accepted.answer != answer
+            || accepted.committed_seq == 0
+            || accepted.accepted_at.is_empty()
+            || accepted.accepted_at.len() > MAX_TEXT_LENGTH
+            || !is_rfc3339(&accepted.accepted_at)
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(accepted)
+    }
+
+    pub fn run_steer(
+        &mut self,
+        run_id: &str,
+        text: &str,
+    ) -> Result<RunMessageAccepted, ClientError> {
+        self.run_message(Operation::RunSteer, run_id, text)
+    }
+
+    pub fn run_follow_up(
+        &mut self,
+        run_id: &str,
+        text: &str,
+    ) -> Result<RunMessageAccepted, ClientError> {
+        self.run_message(Operation::RunFollowUp, run_id, text)
+    }
+
+    fn run_message(
+        &mut self,
+        operation: Operation,
+        run_id: &str,
+        text: &str,
+    ) -> Result<RunMessageAccepted, ClientError> {
+        let run_id = Id::new(run_id.to_owned()).map_err(|_| ClientError::UnexpectedMessage)?;
+        if text.trim().is_empty() || text.len() > MAX_RUN_MESSAGE_TEXT_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let response = self.request(
+            operation,
+            Some(fresh_request_id()?),
+            serde_json::json!({"run_id": run_id.as_str(), "text": text}),
+        )?;
+        let accepted: RunMessageAccepted =
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        if accepted.run_id != run_id.as_str()
+            || accepted.accepted_at.is_empty()
+            || accepted.accepted_at.len() > MAX_TEXT_LENGTH
+            || !is_rfc3339(&accepted.accepted_at)
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(accepted)
+    }
+
+    pub fn session_status(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::SessionStatus,
+            None,
+            serde_json::json!({}),
+            &["signed_in", "subject", "expires_at"],
+        )
+    }
+
+    pub fn entitlement_snapshot(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::EntitlementSnapshot,
+            None,
+            serde_json::json!({}),
+            &["snapshot", "changed_snapshot_version"],
+        )
+    }
+
+    pub fn list_devices(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::DeviceList,
+            None,
+            serde_json::json!({}),
+            &["devices"],
+        )
+    }
+
+    pub fn pairing_status(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::PairingStatus,
+            None,
+            serde_json::json!({}),
+            &["pair"],
+        )
+    }
+
+    pub fn create_pairing_challenge(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::PairingChallenge,
+            Some(fresh_request_id()?),
+            serde_json::json!({}),
+            &["expires_at", "qr_svg"],
+        )
+    }
+
+    pub fn revoke_pairing(&mut self, pair_id: &str) -> Result<Value, ClientError> {
+        if uuid::Uuid::parse_str(pair_id).is_err() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        self.request_body(
+            Operation::PairingRevoke,
+            Some(fresh_request_id()?),
+            serde_json::json!({ "pair_id": pair_id }),
+            &["revoked"],
+        )
+    }
+
+    pub fn sign_out(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::SessionSignOut,
+            Some(fresh_request_id()?),
+            serde_json::json!({}),
+            &["status"],
+        )
+    }
+
+    pub fn sign_in(&mut self) -> Result<Value, ClientError> {
+        let body = self
+            .request_before(
+                Operation::SessionSignIn,
+                Some(fresh_request_id()?),
+                serde_json::json!({}),
+                deadline(SIGN_IN_TIMEOUT),
+            )?
+            .body;
+        let object = body.as_object().ok_or(ClientError::UnexpectedMessage)?;
+        if !object.contains_key("status") {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(body)
+    }
+
+    pub fn thread_summaries(
+        &mut self,
+        limit: u8,
+        cursor: Option<&str>,
+    ) -> Result<Value, ClientError> {
+        let body = thread_read_body(limit, cursor)?;
+        Ok(self.request(Operation::ThreadSummaries, None, body)?.body)
+    }
+
+    pub fn thread_history(
+        &mut self,
+        thread_id: &str,
+        limit: u8,
+        cursor: Option<&str>,
+    ) -> Result<Value, ClientError> {
+        if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let mut body = thread_read_body(limit, cursor)?;
+        body["thread_id"] = Value::String(thread_id.into());
+        Ok(self.snapshot_request(Operation::ThreadHistory, body)?.body)
+    }
+
+    fn snapshot_request(
+        &mut self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Response, ClientError> {
+        let request_deadline = deadline(self.io_timeout);
+        let mut chunk_body = body.clone();
+        chunk_body["snapshot_chunks"] = Value::Bool(true);
+        let result = self.request_before(operation, None, chunk_body, request_deadline);
+        if result.is_err()
+            && self
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        {
+            // An older runtime can keep active runs alive during an upgrade.
+            // Retry its original request shape within the same deadline.
+            return self.request_before(operation, None, body, request_deadline);
+        }
+        result
+    }
+
+    pub fn subscribe_chat_events(&mut self) -> Result<String, ClientError> {
+        self.subscribe_chat_events_after(None)
+    }
+
+    /// Subscribes to chat events after `cursor`, the [`Self::chat_cursor`] of
+    /// an earlier subscription. The runtime first sends the events this
+    /// client missed within its replay budget, or past it the whole state of
+    /// each run that changed. A runtime that takes no cursor subscribes from
+    /// now.
+    pub fn subscribe_chat_events_after(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        self.subscribe_chat_events_with(cursor, false, false, false, false)
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_after`] and also asks
+    /// for `runtime.update_status` events, the first of them the current
+    /// status. A runtime that sends no update status refuses the request,
+    /// and the subscription then carries no status.
+    pub fn subscribe_chat_events_with_update_status(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        match self.subscribe_chat_events_with(cursor, true, false, false, false) {
+            Err(_)
+                if self
+                    .last_request_error()
+                    .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest) =>
+            {
+                self.subscribe_chat_events_with(cursor, false, false, false, false)
+            }
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_update_status`]
+    /// and also asks for `agent.run_updated` events. A runtime without the
+    /// agent run queue refuses the request, and the subscription then
+    /// carries no agent runs.
+    pub fn subscribe_chat_events_with_agent_runs(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true, false, false) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_update_status(cursor),
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_agent_runs`] and
+    /// also asks for the swarm's `swarm.changed`, `agent.approval_pending`
+    /// and `agent.approval_resolved` events. A runtime without a swarm
+    /// refuses the request, and the subscription then carries none.
+    pub fn subscribe_chat_events_with_swarm(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true, true, false) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_agent_runs(cursor),
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_swarm`] and also
+    /// asks for `agent.activity` and `group.posted`. A runtime that sends
+    /// neither refuses the request, and the subscription then carries the
+    /// swarm events without them.
+    pub fn subscribe_chat_events_with_swarm_live(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true, true, true) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_swarm(cursor),
+            result => result,
+        }
+    }
+
+    fn subscribe_chat_events_with(
+        &mut self,
+        cursor: Option<u64>,
+        update_status: bool,
+        agent_runs: bool,
+        swarm: bool,
+        swarm_live: bool,
+    ) -> Result<String, ClientError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Subscription {
+            subscription_id: String,
+        }
+
+        let mut base = serde_json::Map::new();
+        if update_status {
+            base.insert("update_status".into(), Value::Bool(true));
+        }
+        if agent_runs {
+            base.insert("agent_runs".into(), Value::Bool(true));
+        }
+        if swarm {
+            base.insert("swarm".into(), Value::Bool(true));
+        }
+        if swarm_live {
+            base.insert("swarm_live".into(), Value::Bool(true));
+        }
+        let response = match cursor {
+            Some(cursor) => {
+                let mut body = base.clone();
+                body.insert("cursor".into(), cursor.into());
+                match self.snapshot_request(Operation::RunChatEvents, Value::Object(body)) {
+                    Err(_)
+                        if self.last_request_error().is_some_and(|error| {
+                            error.code() == crate::ErrorCode::InvalidRequest
+                        }) =>
+                    {
+                        self.snapshot_request(Operation::RunChatEvents, Value::Object(base))?
+                    }
+                    response => response?,
+                }
+            }
+            None => self.snapshot_request(Operation::RunChatEvents, Value::Object(base))?,
+        };
+        self.chat_cursor = cursor;
+        let subscription: Subscription =
+            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        let subscription_id =
+            Id::new(subscription.subscription_id).map_err(|_| ClientError::UnexpectedMessage)?;
+        let result = subscription_id.as_str().to_owned();
+        self.chat_subscription_id = Some(subscription_id);
+        Ok(result)
+    }
+
+    /// The `seq` of the newest chat event this client read, which a later
+    /// subscription passes to resume after it.
+    pub fn chat_cursor(&self) -> Option<u64> {
+        self.chat_cursor
+    }
+
+    /// Reads the next chat event, passing over the sign-in steps the same
+    /// subscription carries.
+    pub fn read_chat_event(&mut self) -> Result<Value, ClientError> {
+        loop {
+            if let SubscriptionEvent::Chat(event) = self.read_subscription_event()? {
+                return Ok(event);
+            }
+        }
+    }
+
+    /// Reads the next event of the chat-event subscription: a chat event, or
+    /// one step of a provider sign-in the model service runs.
+    pub fn read_subscription_event(&mut self) -> Result<SubscriptionEvent, ClientError> {
+        let subscription_id = self
+            .chat_subscription_id
+            .as_ref()
+            .ok_or(ClientError::UnexpectedMessage)?;
+        let authorization_remaining = Duration::from_secs(self.summary.expires_in_seconds)
+            .saturating_sub(self.authorized_at.elapsed());
+        let wait =
+            authorization_remaining.min(Duration::from_secs(self.summary.idle_timeout_seconds));
+        if wait.is_zero() {
+            return Err(ClientError::AuthorizationExpired);
+        }
+        let mut snapshot = SnapshotAssembly::default();
+        let mut read_deadline = deadline(wait);
+        loop {
+            let value = read_value(self.stream.as_mut(), read_deadline).map_err(|error| {
+                if error == ClientError::ConnectionClosed {
+                    ClientError::DesktopUnavailable
+                } else {
+                    error
+                }
+            })?;
+            if value
+                .get("protocol")
+                .and_then(Value::as_str)
+                .is_some_and(|protocol| protocol != PROTOCOL)
+            {
+                return Err(ClientError::ProtocolIncompatible);
+            }
+            let event =
+                match serde_json::from_value(value).map_err(|_| ClientError::UnexpectedMessage)? {
+                    Envelope::Event(event) => event,
+                    Envelope::Error(error) => return Err(map_protocol_error(error.error.code())),
+                    _ => return Err(ClientError::UnexpectedMessage),
+                };
+            if event.event == EventName::CapabilityRevoked {
+                validate_capability_revocation(&event)?.ok_or(ClientError::UnexpectedMessage)?;
+                return Err(ClientError::CapabilityRevoked);
+            }
+            if &event.subscription_id != subscription_id
+                || !matches!(
+                    event.event,
+                    EventName::ChatEvent
+                        | EventName::ModelsLogin
+                        | EventName::RuntimeUpdateRequested
+                        | EventName::RuntimeUpdateStatus
+                        | EventName::AgentRunUpdated
+                        | EventName::SwarmChanged
+                        | EventName::AgentApprovalPending
+                        | EventName::AgentApprovalResolved
+                        | EventName::AgentActivity
+                        | EventName::GroupPosted
+                )
+                || event.run_id.is_some()
+                || event.run_seq.is_some()
+            {
+                return Err(ClientError::UnexpectedMessage);
+            }
+            if event.event == EventName::ModelsLogin {
+                if !event.body.is_object() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::ModelsLogin(event.body));
+            }
+            if event.event == EventName::RuntimeUpdateRequested {
+                if !event.body["version"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::RuntimeUpdateRequested(event.body));
+            }
+            if event.event == EventName::RuntimeUpdateStatus {
+                if !event.body["state"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::RuntimeUpdateStatus(event.body));
+            }
+            if event.event == EventName::AgentRunUpdated {
+                if !event.body["id"].is_string() || !event.body["status"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::AgentRunUpdated(event.body));
+            }
+            if event.event == EventName::SwarmChanged {
+                if !event.body["kind"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::SwarmChanged(event.body));
+            }
+            if matches!(
+                event.event,
+                EventName::AgentApprovalPending | EventName::AgentApprovalResolved
+            ) {
+                if !event.body["approval_id"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(if event.event == EventName::AgentApprovalPending {
+                    SubscriptionEvent::ApprovalPending(event.body)
+                } else {
+                    SubscriptionEvent::ApprovalResolved(event.body)
+                });
+            }
+            if event.event == EventName::AgentActivity {
+                if !event.body["agent_id"].is_string() || !event.body["activity"].is_object() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::AgentActivity(event.body));
+            }
+            if event.event == EventName::GroupPosted {
+                if !event.body["group_id"].is_string() || !event.body["post"].is_object() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::GroupPosted(event.body));
+            }
+            if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
+                if let Some(seq) = body.get("seq").and_then(Value::as_u64) {
+                    self.chat_cursor = Some(self.chat_cursor.map_or(seq, |cursor| cursor.max(seq)));
+                }
+                return Ok(SubscriptionEvent::Chat(body));
+            }
+            // The first chunk ends the idle wait. Bound the remaining snapshot I/O.
+            read_deadline = read_deadline.min(deadline(self.io_timeout));
+        }
+    }
+
+    pub fn list_companions(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::CompanionList,
+            None,
+            serde_json::json!({}),
+            &["companions"],
+        )
+    }
+
+    pub fn list_companies(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::CompanyList,
+            None,
+            serde_json::json!({}),
+            &["companies", "current"],
+        )
+    }
+
+    pub fn create_company(&mut self, name: &str) -> Result<Value, ClientError> {
+        if name.trim().is_empty() || name.len() > MAX_TEXT_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        self.request_body(
+            Operation::CompanyCreate,
+            Some(fresh_request_id()?),
+            serde_json::json!({"name": name}),
+            &["company"],
+        )
+    }
+
+    pub fn select_company(&mut self, company_id: &str) -> Result<Value, ClientError> {
+        if company_id.is_empty() || company_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        self.request_body(
+            Operation::CompanySelect,
+            Some(fresh_request_id()?),
+            serde_json::json!({"company_id": company_id}),
+            &["company"],
+        )
+    }
+
+    pub fn rename_company(&mut self, company_id: &str, name: &str) -> Result<Value, ClientError> {
+        if company_id.is_empty()
+            || company_id.len() > MAX_THREAD_ID_LENGTH
+            || name.trim().is_empty()
+            || name.len() > MAX_TEXT_LENGTH
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        self.request_body(
+            Operation::CompanyRename,
+            Some(fresh_request_id()?),
+            serde_json::json!({"company_id": company_id, "name": name}),
+            &["company"],
+        )
+    }
+
+    pub fn delete_company(&mut self, company_id: &str) -> Result<Value, ClientError> {
+        if company_id.is_empty() || company_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        self.request_body(
+            Operation::CompanyDelete,
+            Some(fresh_request_id()?),
+            serde_json::json!({"company_id": company_id}),
+            &["company"],
+        )
+    }
+
+    /// Reads one body that chat events leave out: the output of the tool
+    /// `effect_id` ran (`kind` `tool_output`) or the diff it applied
+    /// (`code_diff`).
+    pub fn run_detail(
+        &mut self,
+        run_id: &str,
+        effect_id: &str,
+        kind: &str,
+    ) -> Result<Value, ClientError> {
+        if Id::new(run_id).is_err()
+            || effect_id.is_empty()
+            || effect_id.len() > MAX_TEXT_LENGTH
+            || !matches!(kind, "tool_output" | "code_diff")
+        {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let body = self.request_body(
+            Operation::RunDetail,
+            None,
+            serde_json::json!({"run_id": run_id, "effect_id": effect_id, "kind": kind}),
+            &["kind"],
+        )?;
+        if body["kind"] != kind {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(body)
+    }
+
+    /// Reads one thread's context usage, whether a read runs, and its last
+    /// manual compaction.
+    pub fn thread_context_usage(&mut self, thread_id: &str) -> Result<Value, ClientError> {
+        if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        self.request_body(
+            Operation::ThreadContextUsage,
+            None,
+            serde_json::json!({"thread_id": thread_id}),
+            &["usage", "reading", "compacting"],
+        )
+    }
+
+    /// Starts a manual compaction of one thread and answers its run.
+    pub fn compact_thread(
+        &mut self,
+        thread_id: &str,
+        instructions: Option<&str>,
+    ) -> Result<Value, ClientError> {
+        if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let mut body = serde_json::json!({"thread_id": thread_id});
+        if let Some(instructions) = instructions {
+            body["instructions"] = Value::String(instructions.to_owned());
+        }
+        self.request_body(
+            Operation::ThreadCompact,
+            Some(fresh_request_id()?),
+            body,
+            &["run_id"],
+        )
+    }
+
+    pub fn context_settings(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::ContextSettings,
+            None,
+            serde_json::json!({}),
+            &["enabled", "reserve_tokens", "keep_recent_tokens"],
+        )
+    }
+
+    pub fn save_context_settings(
+        &mut self,
+        enabled: bool,
+        reserve_tokens: u64,
+        keep_recent_tokens: u64,
+    ) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::ContextSettingsSave,
+            None,
+            serde_json::json!({
+                "enabled": enabled,
+                "reserve_tokens": reserve_tokens,
+                "keep_recent_tokens": keep_recent_tokens,
+            }),
+            &["enabled", "reserve_tokens", "keep_recent_tokens"],
+        )
+    }
+
+    /// Runs one model service action and answers its result. A mutating
+    /// action carries a fresh idempotency key, and the wait is the action's.
+    pub fn models_request(
+        &mut self,
+        action: ModelAction,
+        data: Value,
+    ) -> Result<Value, ClientError> {
+        if !data.is_object() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let idempotency_key = if action.mutates() {
+            Some(fresh_request_id()?)
+        } else {
+            None
+        };
+        let body = self
+            .request_before(
+                Operation::ModelsRequest,
+                idempotency_key,
+                serde_json::json!({"action": action, "data": data}),
+                deadline(action.timeout()),
+            )?
+            .body;
+        let mut object = match body {
+            Value::Object(object) => object,
+            _ => return Err(ClientError::UnexpectedMessage),
+        };
+        object
+            .remove("result")
+            .ok_or(ClientError::UnexpectedMessage)
+    }
+
+    pub fn record_sql(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::RecordSql, None, body, &[])
+    }
+
+    pub fn record_propose(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::RecordPropose, None, body, &[])
+    }
+
+    pub fn record_commit(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::RecordCommit,
+            Some(fresh_request_id()?),
+            body,
+            &[],
+        )
+    }
+
+    pub fn record_kinds(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::RecordKinds, None, body, &["kinds"])
+    }
+
+    pub fn record_query(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::RecordQuery, None, body, &[])
+    }
+
+    pub fn record_entity(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::RecordEntity, None, body, &[])
+    }
+
+    pub fn record_report(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::RecordReport, None, body, &[])
+    }
+
+    pub fn reader_describe(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::ReaderDescribe, None, body, &[])
+    }
+
+    pub fn reader_run(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::ReaderRun, Some(fresh_request_id()?), body, &[])
+    }
+
+    pub fn reader_queue(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::ReaderQueue, None, body, &[])
+    }
+
+    pub fn reader_objects(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::ReaderObjects, None, body, &[])
+    }
+
+    pub fn reader_connect(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::ReaderConnect,
+            Some(fresh_request_id()?),
+            body,
+            &[],
+        )
+    }
+
+    pub fn revoke_companion(&mut self, client_identity: &str) -> Result<Value, ClientError> {
+        if client_identity.is_empty() || client_identity.len() > MAX_TEXT_LENGTH {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let body = self.request_body(
+            Operation::CompanionRevoke,
+            Some(fresh_request_id()?),
+            serde_json::json!({"client_identity": client_identity}),
+            &[],
+        )?;
+        if body != serde_json::json!({}) {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(body)
+    }
+
+    /// Reads the runtime's identity and any recorded update request.
+    pub fn read_runtime_info(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::RuntimeInfo,
+            None,
+            serde_json::json!({}),
+            &["runtime_id", "runtime_name", "runtime_version"],
+        )
+    }
+
+    /// Creates a one-time pairing link. `scopes` narrows the default scopes
+    /// and `endpoints` replaces the runtime's advertised addresses.
+    pub fn create_pairing_link(
+        &mut self,
+        scopes: Option<&BTreeSet<String>>,
+        endpoints: Option<&[String]>,
+    ) -> Result<PairingLink, ClientError> {
+        let mut body = serde_json::json!({});
+        if let Some(scopes) = scopes {
+            body["scopes"] = serde_json::json!(scopes);
+        }
+        if let Some(endpoints) = endpoints {
+            body["endpoints"] = serde_json::json!(endpoints);
+        }
+        let body = self.request_body(
+            Operation::RemotePairingCreate,
+            None,
+            body,
+            &["link", "expires_at", "scopes"],
+        )?;
+        body["link"]
+            .as_str()
+            .and_then(|link| PairingLink::parse(link).ok())
+            .ok_or(ClientError::UnexpectedMessage)
+    }
+
+    /// Lists the paired remote devices.
+    pub fn list_remote_devices(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::RemoteDeviceList,
+            None,
+            serde_json::json!({}),
+            &["devices"],
+        )
+    }
+
+    /// Revokes one paired device and answers whether it was paired.
+    pub fn revoke_remote_device(&mut self, device_id: &str) -> Result<bool, ClientError> {
+        Id::new(device_id).map_err(|_| ClientError::UnexpectedMessage)?;
+        self.request_body(
+            Operation::RemoteDeviceRevoke,
+            None,
+            serde_json::json!({"device_id": device_id}),
+            &["revoked"],
+        )?["revoked"]
+            .as_bool()
+            .ok_or(ClientError::UnexpectedMessage)
+    }
+
+    /// Reads the remote access settings, the runtime's id and certificate
+    /// fingerprint, and the listener's live address and endpoints.
+    pub fn remote_settings(&mut self) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::RemoteSettings,
+            None,
+            serde_json::json!({}),
+            &["settings", "runtime_id", "certificate_sha256", "endpoints"],
+        )
+    }
+
+    /// Saves the remote access settings. The runtime starts or stops its
+    /// listener to match and answers as `remote_settings` does. `listen`
+    /// `None` keeps the default address and an empty `endpoints` lets the
+    /// runtime list its own.
+    pub fn save_remote_settings(
+        &mut self,
+        enabled: bool,
+        listen: Option<&str>,
+        endpoints: &[String],
+    ) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::RemoteSettingsSave,
+            None,
+            serde_json::json!({"enabled": enabled, "listen": listen, "endpoints": endpoints}),
+            &["settings", "runtime_id", "certificate_sha256", "endpoints"],
+        )
+    }
+
+    /// Replaces the model connections this device shares with the runtime. An
+    /// empty bundle stops sharing. Answers the Pi providers the runtime took,
+    /// its router account count and the providers it kept its own entry for.
+    pub fn share_models(&mut self, bundle: Value) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::ModelsShare,
+            None,
+            bundle,
+            &["pi", "router", "kept"],
+        )
+    }
+
+    /// Reads the model connections this computer's runtime shares, secrets
+    /// included. The local owner route only.
+    pub fn shared_models_bundle(&mut self) -> Result<Value, ClientError> {
+        Ok(self.request_body(
+            Operation::ModelsShareBundle,
+            None,
+            serde_json::json!({}),
+            &["bundle"],
+        )?["bundle"]
+            .take())
+    }
+
+    /// Runs one model vault action on this computer's runtime: `upload`,
+    /// `release`, or `machine_token` with the machine's identity. The local
+    /// owner route only.
+    pub fn model_vault(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.request_body(Operation::ModelsVault, None, body, &[])
+    }
+
+    /// Asks the runtime's host to update the runtime to `version`.
+    pub fn request_runtime_update(&mut self, version: &str) -> Result<Value, ClientError> {
+        self.request_body(
+            Operation::RuntimeUpdate,
+            None,
+            serde_json::json!({"version": version}),
+            &["version", "requested_at"],
+        )
+    }
+
+    /// Sends one agent operation, such as `agent.list` or `routine.save`,
+    /// with its body, and answers the runtime's body.
+    pub fn agent_request(
+        &mut self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, ClientError> {
+        if !operation.is_agent_operation() || !body.is_object() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let expected: &[&str] = match operation {
+            Operation::AgentList => &["agents"],
+            Operation::AgentRead | Operation::AgentSave => &["agent"],
+            Operation::AgentRunNow => &["run"],
+            Operation::AgentRuns => &["runs"],
+            Operation::RoutineList => &["routines"],
+            Operation::RoutineSave | Operation::AgentRoutineProposalAccept => &["routine"],
+            Operation::AgentRoutineProposals => &["proposals"],
+            Operation::AgentImport => &["agent", "memories", "skills", "tools"],
+            Operation::AgentImportCommit => &["agent"],
+            Operation::AgentExport => &["format", "file_name", "content"],
+            Operation::RoutineWebhookCreate | Operation::RoutineWebhookRotate => {
+                &["routine", "secret", "hook"]
+            }
+            Operation::RoutineWebhookInfo => &["hook"],
+            Operation::AgentThreads => &["threads"],
+            Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
+            Operation::AgentReplays => &["replays"],
+            Operation::AgentReplay => &["run", "replay"],
+            Operation::PermissionModes => &["modes", "default_thread_mode", "default_agent_mode"],
+            Operation::PermissionSettings | Operation::PermissionSettingsSave => &[
+                "default_thread_mode",
+                "default_agent_mode",
+                "bypass_enabled",
+                "unattended_timeout_seconds",
+            ],
+            Operation::ThreadPermissionMode | Operation::ThreadPermissionModeSet => {
+                &["thread_id", "mode", "source"]
+            }
+            Operation::ThreadPlan => &["plan"],
+            Operation::ThreadPlanAnswer => &["status"],
+            _ => &[],
+        };
+        self.request_body(operation, None, body, expected)
+    }
+
+    /// Lists the runtime's agents with their routines and latest runs.
+    pub fn list_agents(&mut self) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentList, serde_json::json!({}))
+    }
+
+    /// Lists every thread of one agent, newest first, with its title.
+    pub fn agent_threads(&mut self, id: &str) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentThreads, serde_json::json!({"id": id}))
+    }
+
+    /// Lists the built-in tools, MCP servers and skills of this runtime.
+    pub fn agent_tool_catalog(&mut self) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentToolCatalog, serde_json::json!({}))
+    }
+
+    /// Lists the saved inputs of an agent's failed runs, newest first.
+    pub fn agent_replays(&mut self, id: &str) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentReplays, serde_json::json!({"id": id}))
+    }
+
+    /// Runs a failed run's saved inputs again against the agent's current
+    /// definition and answers the new run and the replay.
+    pub fn agent_replay(&mut self, id: &str, replay_id: &str) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::AgentReplay,
+            serde_json::json!({"id": id, "replay_id": replay_id}),
+        )
+    }
+
+    /// Lists the permission modes and which can be chosen now.
+    pub fn permission_modes(&mut self) -> Result<Value, ClientError> {
+        self.agent_request(Operation::PermissionModes, serde_json::json!({}))
+    }
+
+    /// Sets the permission mode a thread runs in.
+    pub fn set_thread_permission_mode(
+        &mut self,
+        thread_id: &str,
+        mode: &str,
+    ) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::ThreadPermissionModeSet,
+            serde_json::json!({"thread_id": thread_id, "mode": mode}),
+        )
+    }
+
+    pub fn read_agent(&mut self, id: &str) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentRead, serde_json::json!({"id": id}))
+    }
+
+    /// Creates an agent, or replaces the one its `id` names.
+    pub fn save_agent(&mut self, agent: Value) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentSave, serde_json::json!({"agent": agent}))
+    }
+
+    /// Removes an agent. `remove_memory` also removes its private memory,
+    /// which the user confirms first.
+    pub fn delete_agent(&mut self, id: &str, remove_memory: bool) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::AgentDelete,
+            serde_json::json!({"id": id, "remove_memory": remove_memory}),
+        )
+    }
+
+    /// Queues a manual run of an agent and answers the run.
+    pub fn run_agent_now(&mut self, id: &str, prompt: Option<&str>) -> Result<Value, ClientError> {
+        let mut body = serde_json::json!({"id": id});
+        if let Some(prompt) = prompt {
+            body["prompt"] = Value::String(prompt.to_owned());
+        }
+        self.agent_request(Operation::AgentRunNow, body)
+    }
+
+    /// One page of run history, newest first, for one agent or all agents.
+    pub fn agent_runs(
+        &mut self,
+        agent_id: Option<&str>,
+        limit: u32,
+        cursor: Option<&str>,
+    ) -> Result<Value, ClientError> {
+        let mut body = serde_json::json!({"limit": limit});
+        if let Some(agent_id) = agent_id {
+            body["agent_id"] = Value::String(agent_id.to_owned());
+        }
+        if let Some(cursor) = cursor {
+            body["cursor"] = Value::String(cursor.to_owned());
+        }
+        self.agent_request(Operation::AgentRuns, body)
+    }
+
+    pub fn list_routines(&mut self, agent_id: &str) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::RoutineList,
+            serde_json::json!({"agent_id": agent_id}),
+        )
+    }
+
+    /// Adds a routine, or replaces the one its `id` names.
+    pub fn save_routine(&mut self, agent_id: &str, routine: Value) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::RoutineSave,
+            serde_json::json!({"agent_id": agent_id, "routine": routine}),
+        )
+    }
+
+    pub fn delete_routine(
+        &mut self,
+        agent_id: &str,
+        routine_id: &str,
+    ) -> Result<Value, ClientError> {
+        self.agent_request(
+            Operation::RoutineDelete,
+            serde_json::json!({"agent_id": agent_id, "routine_id": routine_id}),
+        )
+    }
+
+    /// Sends one swarm operation, such as `swarm.members` or `thread.post`,
+    /// with its body, and answers the runtime's body.
+    pub fn swarm_request(
+        &mut self,
+        operation: Operation,
+        body: Value,
+    ) -> Result<Value, ClientError> {
+        if !operation.is_swarm_operation() || !body.is_object() {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        let expected: &[&str] = match operation {
+            Operation::SwarmInvite => &["link"],
+            Operation::SwarmJoin => &["member"],
+            Operation::SwarmMembers => &["members"],
+            Operation::SwarmAgents => &["agents"],
+            Operation::ThreadPost => &["message_id"],
+            Operation::AgentMove | Operation::AgentApprovalAnswer => &["status"],
+            Operation::AgentApprovals => &["approvals"],
+            Operation::GroupCreate | Operation::GroupUpdate => &["group"],
+            Operation::GroupList => &["groups"],
+            _ => &[],
+        };
+        self.request_body(operation, None, body, expected)
+    }
+
+    fn request_body(
+        &mut self,
+        operation: Operation,
+        idempotency_key: Option<Id>,
+        body: Value,
+        expected_keys: &[&str],
+    ) -> Result<Value, ClientError> {
+        let body = self.request(operation, idempotency_key, body)?.body;
+        let object = body.as_object().ok_or(ClientError::UnexpectedMessage)?;
+        if !expected_keys.iter().all(|key| object.contains_key(*key)) {
+            return Err(ClientError::UnexpectedMessage);
+        }
+        Ok(body)
+    }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn desktop_client_for_test(
+    stream: Box<dyn ClientStream + Send>,
+    runtime_version: String,
+    io_timeout: Duration,
+) -> DesktopClient {
+    DesktopClient {
+        stream,
+        runtime_version,
+        profile_id: "profile".to_string(),
+        workspace_scopes: BTreeMap::new(),
+        capability: "capability".to_string(),
+        summary: AuthorizationSummary {
+            expires_in_seconds: 60,
+            idle_timeout_seconds: 60,
+        },
+        authorized_at: Instant::now(),
+        chat_subscription_id: None,
+        chat_cursor: None,
+        io_timeout,
+        last_request_error: None,
+        runtime: None,
+        scopes: None,
+    }
+}
+
+fn thread_read_body(limit: u8, cursor: Option<&str>) -> Result<Value, ClientError> {
+    if limit == 0
+        || limit > 100
+        || cursor.is_some_and(|cursor| cursor.is_empty() || cursor.len() > MAX_CURSOR_LENGTH)
+    {
+        return Err(ClientError::UnexpectedMessage);
+    }
+    let mut body = serde_json::json!({"limit": limit});
+    if let Some(cursor) = cursor {
+        body["cursor"] = Value::String(cursor.into());
+    }
+    Ok(body)
+}
+
+#[doc(hidden)]
+pub fn handshake_desktop_client(
+    mut stream: Box<dyn ClientStream + Send>,
+    client_version: &str,
+    io_timeout: Duration,
+) -> Result<DesktopClient, ClientError> {
+    let hello = Hello {
+        protocol: Protocol,
+        client: Client {
+            kind: "desktop-client".into(),
+            version: client_version.into(),
+        },
+        supported: VersionRange { min: 1, max: 1 },
+        client_nonce: fresh_nonce()?,
+        authorized_client_id: Id::new(fresh_request_id()?.as_str())
+            .map_err(|_| ClientError::UnexpectedMessage)?,
+        authorized_client_credential: None,
+        pairing: None,
+    };
+    let bytes = encode_frame(&hello).map_err(map_frame_error)?;
+    write_all_before(stream.as_mut(), &bytes, deadline(io_timeout))?;
+
+    let welcome_value = read_value(stream.as_mut(), deadline(io_timeout))?;
+    reject_protocol_error(&welcome_value)?;
+    let welcome: Welcome = parse_message(welcome_value)?;
+    if welcome.selected != 1
+        || welcome.authorization != Authorization::Authorized
+        || !is_hex_secret(&welcome.server_nonce, 32)
+    {
+        return Err(ClientError::UnexpectedMessage);
+    }
+
+    let authorized_value = read_value(stream.as_mut(), deadline(io_timeout))?;
+    reject_protocol_error(&authorized_value)?;
+    if authorized_value
+        .get("authorized_client_credential")
+        .is_some()
+    {
+        return Err(ClientError::UnexpectedMessage);
+    }
+    let authorized: DesktopClientAuthorizedGrant = parse_message(authorized_value)?;
+    if authorized.workspace_scopes.len() > 1
+        || !is_hex_secret(&authorized.capability, 64)
+        || authorized.expires_at == 0
+        || authorized.expires_at > 8 * 60 * 60
+        || authorized.idle_timeout_seconds == 0
+        || authorized.idle_timeout_seconds > 15 * 60
+    {
+        return Err(ClientError::UnexpectedMessage);
+    }
+    Ok(DesktopClient::admitted(
+        stream,
+        welcome,
+        authorized.profile_id,
+        authorized.workspace_scopes,
+        authorized.capability,
+        AuthorizationSummary {
+            expires_in_seconds: authorized.expires_at,
+            idle_timeout_seconds: authorized.idle_timeout_seconds,
+        },
+        None,
+        io_timeout,
+    ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    fn snapshot_request(server: &mut UnixStream, operation: Operation, body: Value) -> Request {
+        let request: Request =
+            serde_json::from_value(read_value(server, deadline(Duration::from_secs(5))).unwrap())
+                .unwrap();
+        assert_eq!(request.operation, operation);
+        assert_eq!(request.body, body);
+        request
+    }
+
+    fn snapshot_reply(server: &mut UnixStream, request: &Request, body: Value) {
+        server
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: request.request_id.clone(),
+                    ok: crate::Success,
+                    body,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn snapshot_reject(server: &mut UnixStream, request: &Request, error: crate::ProtocolError) {
+        server
+            .write_all(
+                &encode_frame(&crate::ErrorEnvelope {
+                    protocol: Protocol,
+                    request_id: Some(request.request_id.clone()),
+                    ok: crate::Failure,
+                    error,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn legacy_snapshot_request(
+        server: &mut UnixStream,
+        operation: Operation,
+        body: Value,
+    ) -> Request {
+        let mut chunk_body = body.clone();
+        chunk_body["snapshot_chunks"] = Value::Bool(true);
+        let first = snapshot_request(server, operation, chunk_body);
+        snapshot_reject(server, &first, crate::ProtocolError::invalid_request());
+        let retry = snapshot_request(server, operation, body);
+        assert_ne!(first.request_id, retry.request_id);
+        assert!(retry.idempotency_key.is_none());
+        retry
+    }
+
+    #[test]
+    fn snapshot_legacy_runtime_drain_keeps_history_events_and_stop_usable() {
+        let (control_socket, mut control) = UnixStream::pair().unwrap();
+        let (event_socket, mut events) = UnixStream::pair().unwrap();
+        let run_id = "018f0000-0000-7000-8000-000000000201";
+        let subscription = fresh_request_id().unwrap();
+        let worker = std::thread::spawn(move || {
+            let history_body = serde_json::json!({
+                "thread_id": "thread-1", "limit": 100, "cursor": "message-cursor-1"
+            });
+            let request = legacy_snapshot_request(
+                &mut control,
+                Operation::ThreadHistory,
+                history_body.clone(),
+            );
+            snapshot_reply(
+                &mut control,
+                &request,
+                serde_json::json!({
+                    "thread_id": "thread-1", "entries": [{"run_id": run_id, "phase": "running"}],
+                    "next_cursor": null
+                }),
+            );
+            let request = legacy_snapshot_request(
+                &mut events,
+                Operation::RunChatEvents,
+                serde_json::json!({}),
+            );
+            snapshot_reply(
+                &mut events,
+                &request,
+                serde_json::json!({
+                    "subscription_id": subscription
+                }),
+            );
+            let request = snapshot_request(
+                &mut control,
+                Operation::RunSubmit,
+                serde_json::json!({
+                    "text": "next", "files": [], "thread_id": "thread-1"
+                }),
+            );
+            snapshot_reject(
+                &mut control,
+                &request,
+                crate::ProtocolError::runtime_draining(),
+            );
+            let request = snapshot_request(
+                &mut control,
+                Operation::RunCancel,
+                serde_json::json!({
+                    "run_id": run_id
+                }),
+            );
+            assert!(request.idempotency_key.is_some());
+            snapshot_reply(
+                &mut control,
+                &request,
+                serde_json::json!({
+                    "run_id": run_id, "accepted_at": "2026-01-01T00:00:00Z"
+                }),
+            );
+            events.write_all(&encode_frame(&serde_json::json!({
+                "protocol": PROTOCOL, "event": "chat.event", "subscription_id": subscription,
+                "body": {"runId": run_id, "phase": "complete"}
+            })).unwrap()).unwrap();
+            let request =
+                legacy_snapshot_request(&mut control, Operation::ThreadHistory, history_body);
+            snapshot_reply(
+                &mut control,
+                &request,
+                serde_json::json!({
+                    "thread_id": "thread-1", "entries": [{"run_id": run_id, "phase": "complete"}],
+                    "next_cursor": null
+                }),
+            );
+        });
+        let mut control = desktop_client_for_test(
+            Box::new(control_socket),
+            "0.0.1".into(),
+            Duration::from_secs(5),
+        );
+        let mut events = desktop_client_for_test(
+            Box::new(event_socket),
+            "0.0.1".into(),
+            Duration::from_secs(5),
+        );
+        assert_eq!(
+            control
+                .thread_history("thread-1", 100, Some("message-cursor-1"))
+                .unwrap()["entries"][0]["phase"],
+            "running"
+        );
+        assert_eq!(control.last_request_error(), None);
+        events.subscribe_chat_events().unwrap();
+        assert_eq!(events.last_request_error(), None);
+        assert_eq!(
+            control.run_submit("next", &[], Some("thread-1"), None),
+            Err(ClientError::RequestRejected)
+        );
+        assert_eq!(
+            control.last_request_error(),
+            Some(&crate::ProtocolError::runtime_draining())
+        );
+        assert_eq!(control.run_cancel(run_id).unwrap().run_id, run_id);
+        assert_eq!(control.last_request_error(), None);
+        assert_eq!(
+            events.read_chat_event().unwrap(),
+            serde_json::json!({"runId": run_id, "phase": "complete"})
+        );
+        assert_eq!(
+            control
+                .thread_history("thread-1", 100, Some("message-cursor-1"))
+                .unwrap()["entries"][0]["phase"],
+            "complete"
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn snapshot_fallback_retries_only_invalid_request_once() {
+        for chat in [false, true] {
+            for error in [
+                crate::ProtocolError::invalid_request(),
+                crate::ProtocolError::runtime_draining(),
+                crate::ProtocolError::unauthorized(),
+            ] {
+                let (socket, mut server) = UnixStream::pair().unwrap();
+                let expected = error.clone();
+                let worker = std::thread::spawn(move || {
+                    let (operation, body) = if chat {
+                        (Operation::RunChatEvents, serde_json::json!({}))
+                    } else {
+                        (
+                            Operation::ThreadHistory,
+                            serde_json::json!({"thread_id": "thread-1", "limit": 1}),
+                        )
+                    };
+                    let mut chunk_body = body.clone();
+                    chunk_body["snapshot_chunks"] = Value::Bool(true);
+                    let request = snapshot_request(&mut server, operation, chunk_body);
+                    snapshot_reject(&mut server, &request, error.clone());
+                    if error.code() == crate::ErrorCode::InvalidRequest {
+                        let request = snapshot_request(&mut server, operation, body);
+                        snapshot_reject(&mut server, &request, error);
+                    }
+                    // The next request must remain usable after either rejection.
+                    let request = snapshot_request(
+                        &mut server,
+                        Operation::SessionStatus,
+                        serde_json::json!({}),
+                    );
+                    snapshot_reply(
+                        &mut server,
+                        &request,
+                        serde_json::json!({"signed_in": false, "subject": null, "expires_at": null}),
+                    );
+                });
+                let mut client = desktop_client_for_test(
+                    Box::new(socket),
+                    "0.0.1".into(),
+                    Duration::from_secs(5),
+                );
+                let result = if chat {
+                    client.subscribe_chat_events().map(Value::String)
+                } else {
+                    client.thread_history("thread-1", 1, None)
+                };
+                assert_eq!(result, Err(map_protocol_error(expected.code())));
+                assert_eq!(client.last_request_error(), Some(&expected));
+                assert!(client.chat_subscription_id.is_none());
+                client.session_status().unwrap();
+                assert_eq!(client.last_request_error(), None);
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_reads_validate_every_envelope_and_discard_partial_state() {
+        for chat in [false, true] {
+            for fault in ["none", "disconnect", "identity", "order", "timeout"] {
+                let (socket, mut server) = UnixStream::pair().unwrap();
+                let body = serde_json::json!({"runId": "018f0000-0000-7000-8000-000000000201",
+                    "phase": "complete", "text": "🦀".repeat(10_000)});
+                let expected = body.clone();
+                let subscription = fresh_request_id().unwrap();
+                let subscription_id = subscription.clone();
+                let worker = std::thread::spawn(move || {
+                    let request_id = if chat {
+                        None
+                    } else {
+                        let value =
+                            read_value(&mut server, deadline(Duration::from_secs(5))).unwrap();
+                        assert_eq!(value["body"]["snapshot_chunks"], true);
+                        Some(value["request_id"].clone())
+                    };
+                    let chunks = crate::snapshot_chunks(&body).unwrap();
+                    for (index, chunk) in chunks.iter().enumerate() {
+                        if index == 1 && fault == "disconnect" {
+                            return;
+                        }
+                        if index == 1 && fault == "timeout" {
+                            std::thread::sleep(Duration::from_millis(500));
+                            return;
+                        }
+                        let chunk = if index == 1 && fault == "order" {
+                            &chunks[0]
+                        } else {
+                            chunk
+                        };
+                        let wrong_id = index == 1 && fault == "identity";
+                        let value = if chat {
+                            serde_json::json!({"protocol": PROTOCOL, "event": "chat.event",
+                                "subscription_id": if wrong_id { fresh_request_id().unwrap() } else { subscription_id.clone() },
+                                "body": chunk})
+                        } else {
+                            serde_json::json!({"protocol": PROTOCOL, "ok": true,
+                                "request_id": if wrong_id { serde_json::to_value(fresh_request_id().unwrap()).unwrap() } else { request_id.clone().unwrap() },
+                                "body": chunk})
+                        };
+                        if server.write_all(&encode_frame(&value).unwrap()).is_err() {
+                            return;
+                        }
+                    }
+                    if chat && fault == "none" {
+                        server
+                            .write_all(
+                                &encode_frame(&serde_json::json!({"protocol": PROTOCOL,
+                            "event": "chat.event", "subscription_id": subscription_id,
+                            "body": {"phase": "complete", "text": "next"}}))
+                                .unwrap(),
+                            )
+                            .unwrap();
+                    }
+                });
+                let mut client = desktop_client_for_test(
+                    Box::new(socket),
+                    "1.0.0".into(),
+                    if fault == "timeout" {
+                        Duration::from_millis(200)
+                    } else {
+                        Duration::from_secs(5)
+                    },
+                );
+                if chat {
+                    client.chat_subscription_id = Some(subscription);
+                }
+                let result = if chat {
+                    client.read_chat_event()
+                } else {
+                    client.thread_history("thread-1", 100, None)
+                };
+                if fault == "none" {
+                    assert_eq!(result.unwrap(), expected);
+                    if chat {
+                        assert_eq!(client.read_chat_event().unwrap()["text"], "next");
+                    }
+                } else {
+                    let expected = match fault {
+                        "disconnect" if chat => ClientError::DesktopUnavailable,
+                        "disconnect" => ClientError::ConnectionClosed,
+                        "identity" => ClientError::UnexpectedMessage,
+                        "order" => ClientError::MalformedFrame,
+                        "timeout" => ClientError::Timeout,
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(result.unwrap_err(), expected, "{fault}");
+                }
+                drop(client);
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn sign_in_keeps_the_authorization_code_for_the_shell() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let failure = crate::ProtocolError::authorization_failed(
+            "native authorization failed: HttpStatus status=400 error_code=invalid_device_proof cf_ray=0123456789abcdef-IAD",
+        );
+        let expected = failure.clone();
+        let worker = std::thread::spawn(move || {
+            let mut prefix = [0; 4];
+            server.read_exact(&mut prefix).unwrap();
+            let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+            server.read_exact(&mut body).unwrap();
+            let request: Request = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request.operation, Operation::SessionSignIn);
+            let response = serde_json::json!({
+                "protocol": "muniment.attach/1", "request_id": request.request_id,
+                "ok": false, "error": failure,
+            });
+            server.write_all(&encode_frame(&response).unwrap()).unwrap();
+        });
+        let mut client =
+            desktop_client_for_test(Box::new(client), "1.0.0".into(), Duration::from_secs(5));
+        assert_eq!(client.sign_in(), Err(ClientError::AuthorizationFailed));
+        assert_eq!(client.last_request_error(), Some(&expected));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn request_errors_do_not_survive_success_mismatched_responses_or_disconnects() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let worker = std::thread::spawn(move || {
+            for index in 0..4 {
+                let mut prefix = [0; 4];
+                server.read_exact(&mut prefix).unwrap();
+                let mut body = vec![0; u32::from_be_bytes(prefix) as usize];
+                server.read_exact(&mut body).unwrap();
+                let request: Request = serde_json::from_slice(&body).unwrap();
+                let response = if index == 1 {
+                    serde_json::json!({
+                        "protocol": "muniment.attach/1", "request_id": request.request_id,
+                        "ok": true, "body": {},
+                    })
+                } else {
+                    serde_json::json!({
+                        "protocol": "muniment.attach/1",
+                        "request_id": if index == 3 { fresh_request_id().unwrap() } else { request.request_id },
+                        "ok": false, "error": crate::ProtocolError::runtime_draining(),
+                    })
+                };
+                server.write_all(&encode_frame(&response).unwrap()).unwrap();
+            }
+        });
+        let mut client =
+            desktop_client_for_test(Box::new(client), "1.0.0".into(), Duration::from_secs(5));
+        for expected in [
+            Some(ClientError::RequestRejected),
+            None,
+            Some(ClientError::RequestRejected),
+            Some(ClientError::UnexpectedMessage),
+        ] {
+            assert_eq!(
+                client
+                    .request(Operation::SessionStatus, None, serde_json::json!({}))
+                    .err(),
+                expected
+            );
+            assert_eq!(
+                client.last_request_error().cloned(),
+                (expected == Some(ClientError::RequestRejected))
+                    .then(crate::ProtocolError::runtime_draining)
+            );
+        }
+        worker.join().unwrap();
+        assert_eq!(
+            client.request(Operation::SessionStatus, None, serde_json::json!({})),
+            Err(ClientError::ConnectionClosed)
+        );
+        assert_eq!(client.last_request_error(), None);
+    }
+}

@@ -126,7 +126,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixture_directory() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../protocol-fixtures/code-diff/1")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../core/protocol-fixtures/code-diff/1")
     }
 
     fn expected(name: &str) -> &'static str {

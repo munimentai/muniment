@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""Daily pin update: pick the newest versions that pass the compatibility suite.
+
+`select` checks for newer releases, bumps every newer pin at once, and runs
+`muniment-pins compat`. When that fails it tries each newer pin alone, keeps
+the ones that pass, and records the others as blocked. The kept pins also pass
+the workspace tests. The result goes to `update.json`, and the bumped files stay
+in the working tree.
+
+`publish` reads `update.json`, the macOS compat report, and the outcome of the
+workspace checks. When everything passed it commits the bump on the newest
+main, pushes it, and tags the release with `scripts/release.py`. It opens or
+comments on one `Pin update blocked: <component> <version>` Forgejo issue per
+blocked pin, and closes blocked issues for pins that now pass. It calls the
+issue API at `FORGEJO_API` with `FORGEJO_TOKEN`. Only the release command gets
+`GH_RELEASE_TOKEN`, as `GH_TOKEN`.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+PUSH_ATTEMPTS = 3
+# The checks rerun on the bump after a rebase onto a newer main.
+FAST_CHECKS = [
+    ["cargo", "fmt", "--all", "--check"],
+    ["cargo", "test", "--locked", "-p", "muniment-pins", "--features", "cli"],
+    ["cargo", "check", "--workspace", "--all-targets", "--locked", "--features", "muniment-pins/cli"],
+]
+PIN_FILES = ["pins/pins.toml", "pins/packages.bun.lock"]
+BLOCKED = "Pin update blocked: "
+OUTPUT_TAIL = 20000
+ISSUE_PAGE = 50
+WORKSPACE_TESTS = ["cargo", "test", "--workspace", "--locked",
+                   "--features", "muniment-core/network-tests,muniment-pins/cli",
+                   "--", "--test-threads=1"]
+
+
+def run(argv, check=True, capture=True, **kwargs):
+    print("+", " ".join(argv), file=sys.stderr, flush=True)
+    result = subprocess.run(argv, cwd=ROOT, text=True, capture_output=capture, **kwargs)
+    if capture and result.stderr:
+        sys.stderr.write(result.stderr[-OUTPUT_TAIL:])
+    if check and result.returncode != 0:
+        raise SystemExit(f"{argv[0]} exited {result.returncode}\n{(result.stdout or '')[-4000:]}")
+    return result
+
+
+def tail(text, limit=OUTPUT_TAIL):
+    return text[-limit:]
+
+
+def candidates(report):
+    """The newer pins in `check` output, one bump argument list per component."""
+    groups = []
+    if report["pi"]["newer"]:
+        groups.append(("Pi", report["pi"]["latest"], ["--pi", report["pi"]["latest"]]))
+    for package in report["packages"]:
+        if package["newer"]:
+            spec = f"{package['name']}@{package['latest']}"
+            groups.append((package["name"], package["latest"], ["--package", spec]))
+    if report["claude_code"]["newer"]:
+        latest = report["claude_code"]["latest"]
+        groups.append(("Claude Code", latest, ["--claude-code", latest]))
+    return groups
+
+
+def issue_title(component, version):
+    return f"{BLOCKED}{component} {version}"
+
+
+def failure_text(report):
+    """The failing steps of a compat report, with their output tails."""
+    parts = []
+    for step in report.get("steps", []):
+        if not step["passed"]:
+            parts.append(f"### {step['name']}\n\n```\n{step['output'].strip()}\n```")
+    return "\n\n".join(parts) or "The compatibility suite failed before it ran a step."
+
+
+class Pins:
+    """Drives the `muniment-pins` binary in a checkout."""
+
+    def __init__(self, binary, cache):
+        self.binary = str(binary)
+        self.cache = str(cache)
+
+    def check(self):
+        return json.loads(run([self.binary, "check", "--root", str(ROOT)]).stdout)
+
+    def restore(self):
+        run(["git", "checkout", "--", *PIN_FILES])
+
+    def bump(self, args):
+        result = run([self.binary, "bump", "--root", str(ROOT), "--cache", self.cache, *args])
+        return json.loads(result.stdout)
+
+    def compat(self, name):
+        path = Path(self.cache) / f"compat-{name}.json"
+        path.unlink(missing_ok=True)
+        result = run([self.binary, "compat", "--root", str(ROOT), "--cache", self.cache,
+                      "--report", str(path)], check=False)
+        if path.exists():
+            return json.loads(path.read_text())
+        return {"passed": False, "steps": [{"name": "compat", "passed": False,
+                                            "output": tail(result.stdout + result.stderr)}]}
+
+
+def select(pins, workspace_tests=True, tests=None):
+    report = pins.check()
+    groups = candidates(report)
+    result = {"check": report, "changes": [], "title": None, "blocked": [], "passed": []}
+    if not groups:
+        return result
+    everything = [arg for _, _, args in groups for arg in args]
+    pins.restore()
+    bumped = pins.bump(everything)
+    outcome = pins.compat("all")
+    kept = groups if outcome["passed"] else []
+    if not outcome["passed"]:
+        failures = {}
+        for component, version, args in groups:
+            pins.restore()
+            pins.bump(args)
+            alone = pins.compat(component.replace(" ", "-"))
+            if alone["passed"]:
+                kept.append((component, version, args))
+            else:
+                failures[component] = (version, alone)
+        # Passing pins can still fail together. Add them one at a time.
+        accepted = []
+        for group in kept:
+            pins.restore()
+            trial = accepted + [group]
+            pins.bump([arg for _, _, args in trial for arg in args])
+            together = pins.compat("together")
+            if together["passed"]:
+                accepted.append(group)
+            else:
+                failures[group[0]] = (group[1], together)
+        kept = accepted
+        for component, (version, failed) in failures.items():
+            result["blocked"].append({"component": component, "version": version,
+                                      "title": issue_title(component, version),
+                                      "output": failure_text(failed)})
+        pins.restore()
+        bumped = pins.bump([arg for _, _, args in kept for arg in args]) if kept else {"changes": []}
+    if kept and workspace_tests:
+        tests = (tests or (lambda: run(WORKSPACE_TESTS, check=False)))()
+        if tests.returncode != 0:
+            # One issue names the leading pin. Its body lists every pin in the failed set.
+            component, version, _ = kept[0]
+            pins_list = ", ".join(f"{c} {v}" for c, v, _ in kept)
+            output = (f"The workspace tests failed with {pins_list}.\n\n### workspace tests\n\n"
+                      f"```\n{tail(tests.stdout + tests.stderr).strip()}\n```")
+            result["blocked"].append({"component": component, "version": version,
+                                      "title": issue_title(component, version), "output": output})
+            pins.restore()
+            kept, bumped = [], {"changes": []}
+    result["changes"] = bumped["changes"]
+    result["title"] = bumped.get("title")
+    result["passed"] = [component for component, _, _ in kept]
+    return result
+
+
+def message(result):
+    """The commit message: the conventional title, then the pins it moves."""
+    lines = [result["title"], ""]
+    lines += [f"- {c['component']} {c['from']} -> {c['to']}" for c in result["changes"]]
+    lines += ["", "muniment-pins compat passed on Linux and macOS, and so did the workspace checks."]
+    return "\n".join(lines) + "\n"
+
+
+class Forgejo:
+    """The git calls and Forgejo issue calls `publish` makes. Tests replace it with a recorder."""
+
+    def __init__(self, api, token, release_token):
+        self.api = api.rstrip("/")
+        self.token = token
+        self.release_token = release_token
+
+    def call(self, method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        request = urllib.request.Request(f"{self.api}{path}", data=data, method=method)
+        request.add_header("Authorization", f"token {self.token}")
+        request.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(request, timeout=60) as response:
+            text = response.read()
+        return json.loads(text) if text else None
+
+    def open_issues(self):
+        issues = []
+        for page in range(1, 100):
+            batch = self.call("GET", f"/issues?state=open&type=issues&limit={ISSUE_PAGE}&page={page}")
+            issues += [{"number": i["number"], "title": i["title"]} for i in batch if i["title"].startswith(BLOCKED)]
+            if len(batch) < ISSUE_PAGE:
+                break
+        return issues
+
+    def create_issue(self, title, text):
+        self.call("POST", "/issues", {"title": title, "body": text})
+
+    def comment(self, number, text):
+        self.call("POST", f"/issues/{number}/comments", {"body": text})
+
+    def close(self, number, text):
+        self.comment(number, text)
+        self.call("PATCH", f"/issues/{number}", {"state": "closed"})
+
+    def land(self, text):
+        """Commits the bump on the newest main, pushes it, and tags the release."""
+        run(["git", "add", *PIN_FILES])
+        run(["git", "commit", "-m", text])
+        base = run(["git", "rev-parse", "HEAD~1"]).stdout.strip()
+        for _ in range(PUSH_ATTEMPTS):
+            run(["git", "fetch", "origin", "main"])
+            if run(["git", "rev-parse", "origin/main"]).stdout.strip() != base:
+                run(["git", "rebase", "origin/main"])
+                for check in FAST_CHECKS:
+                    run(check, capture=False)
+                base = run(["git", "rev-parse", "HEAD~1"]).stdout.strip()
+            if run(["git", "push", "origin", "HEAD:main"], check=False).returncode == 0:
+                break
+        else:
+            raise SystemExit(f"main moved {PUSH_ATTEMPTS} times during the push")
+        # A push with the job token starts no workflow, so the release runs here.
+        env = {**os.environ, "GH_TOKEN": self.release_token, "GH_HOST": "github.com"}
+        run(["python3", "-B", "scripts/release.py", "--revision", "HEAD", "--publish",
+             "--asset", "pins/pins.toml", "--asset", "pins/packages.bun.lock"], capture=False, env=env)
+
+
+def publish(result, verification, forge):
+    """Lands the bump when every check passed and files the blocked-pin issues.
+
+    `verification` is `{"passed": bool, "output": str}` for the checks that ran
+    after `select`: macOS compat and the workspace checks.
+    """
+    blocked = list(result["blocked"])
+    changes = result["changes"]
+    if changes and not verification["passed"]:
+        # One issue names the leading pin. Its body lists every pin in the failed set.
+        by_component = {c["component"]: c["to"] for c in changes}
+        kept = [(c, by_component[c]) for c in result["passed"] if c in by_component]
+        component, version = kept[0]
+        pins_list = ", ".join(f"{c} {v}" for c, v in kept)
+        blocked.append({"component": component, "version": version, "title": issue_title(component, version),
+                        "output": f"The checks failed with {pins_list}.\n\n{verification['output']}"})
+        changes = []
+    actions = []
+    if changes:
+        forge.land(message(result))
+        actions.append(("land", result["title"]))
+    existing = forge.open_issues()
+    for item in blocked:
+        text = (f"The pin update to {item['component']} {item['version']} failed. "
+                f"The current pins stay in place.\n\n{item['output']}")
+        match = next((issue for issue in existing if issue["title"] == item["title"]), None)
+        if match:
+            forge.comment(match["number"], text)
+            actions.append(("comment", match["number"]))
+        else:
+            forge.create_issue(item["title"], text)
+            actions.append(("issue", item["title"]))
+    shipped = {c["component"]: c["to"] for c in changes}
+    for issue in existing:
+        for component, version in shipped.items():
+            if issue["title"].startswith(f"{BLOCKED}{component} "):
+                forge.close(issue["number"], f"{component} {version} passes the compatibility suite.")
+                actions.append(("close", issue["number"]))
+    return actions
+
+
+def verification(darwin_path, checks_passed, run_url):
+    darwin = None
+    if darwin_path and Path(darwin_path).exists():
+        darwin = json.loads(Path(darwin_path).read_text())
+    parts = []
+    if darwin is None:
+        parts.append("The macOS job produced no compat report.")
+    elif not darwin.get("passed"):
+        parts.append("### macOS compat\n\n" + failure_text(darwin))
+    if not checks_passed:
+        parts.append("The workspace checks failed.")
+    if parts and run_url:
+        parts.append(f"Run: {run_url}")
+    return {"passed": not parts, "output": "\n\n".join(parts)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+    chooser = sub.add_parser("select")
+    chooser.add_argument("--bin", default=str(ROOT / "target/release/muniment-pins"))
+    chooser.add_argument("--cache", default=str(ROOT / "target/muniment-pins"))
+    chooser.add_argument("--out", default="update.json")
+    chooser.add_argument("--skip-workspace-tests", action="store_true")
+    publisher = sub.add_parser("publish")
+    publisher.add_argument("--result", default="update.json")
+    publisher.add_argument("--darwin", help="the macOS compat report")
+    publisher.add_argument("--checks", choices=["success", "failure"], default="failure",
+                           help="the outcome of the workspace checks on Linux and macOS")
+    publisher.add_argument("--run-url", default="")
+    args = parser.parse_args()
+    if args.command == "select":
+        result = select(Pins(args.bin, args.cache), workspace_tests=not args.skip_workspace_tests)
+        Path(args.out).write_text(json.dumps(result, indent=2))
+        print(json.dumps({"title": result["title"], "blocked": [b["title"] for b in result["blocked"]]}))
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                out.write(f"changed={'true' if result['changes'] else 'false'}\n")
+                out.write(f"blocked={'true' if result['blocked'] else 'false'}\n")
+    else:
+        # Removed from the environment first, so no command but the release sees it.
+        release_token = os.environ.pop("GH_RELEASE_TOKEN", "")
+        forgejo = Forgejo(os.environ["FORGEJO_API"], os.environ["FORGEJO_TOKEN"], release_token)
+        result = json.loads(Path(args.result).read_text())
+        checked = verification(args.darwin, args.checks == "success", args.run_url)
+        for action in publish(result, checked, forgejo):
+            print(*action)
+
+if __name__ == "__main__":
+    main()

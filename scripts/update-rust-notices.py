@@ -3,8 +3,7 @@
 
 Each non-workspace crate in the lockfile gets one line with its license
 expression from `cargo metadata`, or from crates.io for an optional crate that
-no enabled feature resolves. Crates from the muniment-core repository carry its
-FSL license, which their manifests do not declare.
+no enabled feature resolves.
 """
 
 import json
@@ -15,8 +14,6 @@ import urllib.request
 
 NOTICES = Path("THIRD_PARTY_RUST_NOTICES.md")
 LOCKFILE = Path("src-tauri/Cargo.lock")
-CORE_SOURCE = "git+https://github.com/munimentai/muniment-core?"
-CORE_LICENSE = "FSL-1.1-ALv2"
 
 
 def registry_license(name, version):
@@ -36,9 +33,7 @@ def main():
     licenses = {(p["name"], p["version"]): p["license"] for p in metadata["packages"]}
     lines = []
     for name, version, source in locked:
-        if source.startswith(CORE_SOURCE):
-            license = CORE_LICENSE
-        elif (name, version) in licenses:
+        if (name, version) in licenses:
             license = licenses[(name, version)]
         else:
             license = registry_license(name, version)

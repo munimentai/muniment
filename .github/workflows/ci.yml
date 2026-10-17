@@ -50,7 +50,7 @@ jobs:
           python3 -B scripts/test_private_addresses.py
       - name: Forgejo workflow copy
         run: |
-          for workflow in ci.yml secret-scan.yml muniment-core-update.yml nightly.yml release.yml; do
+          for workflow in ci.yml secret-scan.yml nightly.yml release.yml; do
             cmp ".github/workflows/$workflow" ".forgejo/workflows/$workflow"
           done
       - name: UI copy law

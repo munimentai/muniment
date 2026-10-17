@@ -14,10 +14,12 @@ pattern="${pattern}|[Rr][Oo][Oo]\\.[Rr][Uu][Nn]"
 status=0
 git -C "$root" grep -nIE -e "$pattern" -- . \
   ':(exclude,glob)src-tauri/third-party/**' \
+  ':(exclude,glob)core/third-party/**' \
   ':(exclude,glob)**/Cargo.lock' \
   ':(exclude,glob)**/*.lock' \
   ':(exclude,glob)**/*.lock.*' \
-  ':(exclude,glob)**/package-lock.json' || status=$?
+  ':(exclude,glob)**/package-lock.json' \
+  ':(exclude,glob)**/packages.bun.lock' || status=$?
 
 case "$status" in
   0)
