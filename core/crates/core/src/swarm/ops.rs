@@ -966,6 +966,7 @@ pub(super) fn execute_pending(inner: &Inner) -> Result<(), String> {
             .get("actor_device")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let _merge = lock(&inner.merge);
         let logged = super::audit::append(
             inner,
             "op",
@@ -982,7 +983,6 @@ pub(super) fn execute_pending(inner: &Inner) -> Result<(), String> {
         if let Err(error) = logged {
             crate::runtime_eprintln!("muniment-runtime: fleet audit of an action failed: {error}");
         }
-        let _merge = lock(&inner.merge);
         messaging::finish(inner, &message.message_id, &ack, None)?;
         inner
             .store

@@ -1104,7 +1104,12 @@ impl Inner {
             // holds, is catching up and learns how much there is.
             let catching_up = !rows.is_empty()
                 && (more || vector.keys().any(|origin| !peer_vv.contains_key(origin)));
-            self.note_snapshot(peer, catching_up, rows.len(), more)?;
+            // A peer that holds nothing of any other member takes a
+            // snapshot: a new member, or one that forgot its records.
+            let others: Vec<&String> = vector.keys().filter(|origin| *origin != peer).collect();
+            let fresh =
+                !others.is_empty() && others.iter().all(|origin| !peer_vv.contains_key(*origin));
+            self.note_snapshot(peer, fresh, rows.len(), more)?;
             let snapshot = if catching_up {
                 Some(bootstrap::snapshot_mark(self, !more)?)
             } else {
@@ -1266,23 +1271,23 @@ impl Inner {
         lock(&self.peers).remove(peer);
     }
 
-    /// Logs in the audit log, once per catch-up, that this runtime serves
-    /// `peer` a snapshot: rows of an origin the peer said it holds nothing
-    /// of, or more rows than one exchange holds.
+    /// Logs in the audit log, once per snapshot, that this runtime serves
+    /// `peer` one: `fresh` when the peer said it holds nothing of any other
+    /// member.
     fn note_snapshot(
         &self,
         peer: &str,
-        catching_up: bool,
+        fresh: bool,
         rows: usize,
         more: bool,
     ) -> Result<(), String> {
         let log = {
             let mut peers = lock(&self.peers);
             let sync = peers.entry(peer.to_owned()).or_default();
-            if !catching_up {
+            if !fresh {
                 sync.snapshot_logged = false;
                 false
-            } else if !sync.record_vv_heard || sync.snapshot_logged {
+            } else if rows == 0 || !sync.record_vv_heard || sync.snapshot_logged {
                 false
             } else {
                 sync.snapshot_logged = true;

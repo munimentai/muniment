@@ -27,7 +27,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -286,7 +286,9 @@ impl RecordStore {
             return Ok(None);
         }
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         let seq = next_seq(&transaction, origin)?;
         let row = RecordRow {
             class: class.to_owned(),
@@ -317,7 +319,9 @@ impl RecordStore {
         check_field(set)?;
         let prefix = format!("{set}{SET_SEPARATOR}");
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         let tags: Vec<String> = {
             let mut statement = transaction
                 .prepare(
@@ -390,7 +394,9 @@ impl RecordStore {
             }
         }
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         // A write an existing one outranks would lose, and a write that
         // repeats the live value changes nothing.
         let current = current_row(&transaction, class, key, &field)?;
@@ -466,7 +472,9 @@ impl RecordStore {
         let now_millis = now.timestamp_millis();
         let horizon = self.horizon()?;
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         let mut changes = Vec::new();
         let mut skew = 0;
         for mut row in rows {
@@ -599,7 +607,9 @@ impl RecordStore {
     /// numbers never move.
     pub(super) fn raise(&self, own: &str, floor: &VersionVector) -> Result<(), String> {
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         for (origin, seq) in floor {
             if origin == own || origin.is_empty() {
                 continue;
@@ -633,7 +643,9 @@ impl RecordStore {
         keep: &dyn Fn(&RecordRow) -> bool,
     ) -> Result<usize, String> {
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         let rows: Vec<RecordRow> = {
             let mut statement = transaction
                 .prepare(
@@ -721,7 +733,9 @@ impl RecordStore {
         covered: impl Fn(&str, u64) -> bool,
     ) -> Result<usize, String> {
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         let candidates: Vec<RecordRow> = {
             let mut statement = transaction
                 .prepare(
@@ -768,7 +782,9 @@ impl RecordStore {
     /// so it never reuses one.
     pub(super) fn forget(&self, own: &str, delivered: u64) -> Result<(), String> {
         let mut connection = self.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         transaction
             .execute(
                 "DELETE FROM records WHERE NOT (origin=?1 AND seq>?2)",
