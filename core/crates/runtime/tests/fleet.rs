@@ -352,8 +352,11 @@ fn model_connections_apply_on_members_and_drop_when_a_member_leaves() {
             && c.auth().contains_key("openai")
             && a.auth().contains_key("xai")
     }));
-    let record = std::fs::read_to_string(b.agent().join("muniment-shared.json")).unwrap();
-    assert!(record.contains(&format!("swarm:{}", a.runtime_id())));
+    // The record of the device names follows the keys, under its own lock.
+    assert!(wait(|| {
+        std::fs::read_to_string(b.agent().join("muniment-shared.json"))
+            .is_ok_and(|record| record.contains(&format!("swarm:{}", a.runtime_id())))
+    }));
 
     // A ends C's membership: every member drops C's connections, and C
     // drops what the others shared once it hears of its removal.
