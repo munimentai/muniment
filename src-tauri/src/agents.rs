@@ -434,6 +434,7 @@ mod tests {
             ("group.create", Operation::GroupCreate),
             ("group.list", Operation::GroupList),
             ("group.update", Operation::GroupUpdate),
+            ("fleet.op_status", Operation::FleetOpStatus),
             ("agent.routine_proposals", Operation::AgentRoutineProposals),
             (
                 "agent.routine_proposal_accept",

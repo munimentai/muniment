@@ -102,6 +102,9 @@ pub struct RuntimeAttachBoundaries {
     contexts: ThreadContexts,
     models: Arc<ModelService>,
     swarm: Option<muniment_core::swarm::Swarm>,
+    /// Whether an action on another member's item goes to that member. An
+    /// action that member forwarded here runs here.
+    routes_to_owners: bool,
 }
 
 impl RuntimeAttachBoundaries {
@@ -188,6 +191,7 @@ impl RuntimeAttachBoundaries {
             contexts: ThreadContexts::new(),
             models,
             swarm: None,
+            routes_to_owners: true,
         }
     }
 
@@ -219,17 +223,12 @@ impl RuntimeAttachBoundaries {
                 .as_ref()
                 .and_then(|swarm| swarm.is_replica_thread(thread))
         };
-        let forward_mode = |thread: &str, mode| match &self.swarm {
-            Some(swarm) => swarm.forward_mode(thread, mode).map(drop),
-            None => Err("This runtime is not part of a swarm.".to_string()),
-        };
         let scope = muniment_core::permission_gate::threads::ThreadScope {
             profile: &self.profile_directory,
             storage: &self.storage,
             active: &self.active,
             provenance: service::runtime_provenance(self.host.runtime_version),
             replica_of: &replica_of,
-            forward_mode: &forward_mode,
         };
         muniment_core::permission_gate::threads::operation(&scope, operation.as_str(), body)
             .map_err(ProtocolError::invalid_request_with_reason)
@@ -238,6 +237,12 @@ impl RuntimeAttachBoundaries {
     /// Answers swarm operations through `swarm`.
     pub fn with_swarm(mut self, swarm: muniment_core::swarm::Swarm) -> Self {
         self.swarm = Some(swarm);
+        self
+    }
+
+    /// Runs every action here, as for an action another member forwarded.
+    pub(crate) fn without_routing(mut self) -> Self {
+        self.routes_to_owners = false;
         self
     }
 
@@ -1843,6 +1848,21 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         if let Some(swarm) = &self.swarm {
             swarm.note_client_activity();
         }
+    }
+
+    fn fleet_route(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: &serde_json::Value,
+        actor: &muniment_core::swarm::FleetActor,
+        idempotency_key: Option<&str>,
+    ) -> Result<Option<serde_json::Value>, ProtocolError> {
+        let Some(swarm) = self.swarm.as_ref().filter(|_| self.routes_to_owners) else {
+            return Ok(None);
+        };
+        swarm
+            .route(operation, body, actor, idempotency_key)
+            .map_err(ProtocolError::invalid_request_with_reason)
     }
 
     fn hook_operation(

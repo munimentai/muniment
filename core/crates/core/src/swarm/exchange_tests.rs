@@ -176,6 +176,7 @@ impl Node {
             updated_at: String::new(),
             deleted: false,
             primary_thread: None,
+            move_suggested: false,
             definition: Some(json!({"name": name})),
             activity: None,
         };

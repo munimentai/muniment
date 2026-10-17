@@ -1390,6 +1390,7 @@ fn swarm_operations_and_events_have_canonical_fixtures() {
         (Operation::GroupCreate, "group.create"),
         (Operation::GroupList, "group.list"),
         (Operation::GroupUpdate, "group.update"),
+        (Operation::FleetOpStatus, "fleet.op_status"),
     ] {
         assert_eq!(operation.as_str(), name);
         assert!(operation.is_swarm_operation());
@@ -1422,6 +1423,7 @@ fn swarm_operations_and_events_have_canonical_fixtures() {
             "event-agent-approval-resolved.json",
             EventName::AgentApprovalResolved,
         ),
+        ("event-fleet-op-updated.json", EventName::FleetOpUpdated),
     ] {
         let Envelope::Event(parsed) = serde_json::from_value(canonical_fixture(file)).unwrap()
         else {
@@ -1430,6 +1432,19 @@ fn swarm_operations_and_events_have_canonical_fixtures() {
         assert_eq!(parsed.event, event);
         assert!(parsed.run_id.is_none() && parsed.run_seq.is_none());
     }
+    let Envelope::Event(queued) =
+        serde_json::from_value(canonical_fixture("event-fleet-op-updated.json")).unwrap()
+    else {
+        panic!("expected event fixture");
+    };
+    assert_eq!(queued.body["state"], "queued");
+    assert_eq!(queued.body["reason"]["code"], "owner_offline");
+    let Envelope::Request(fleet) =
+        serde_json::from_value(canonical_fixture("request-run-chat-events-fleet.json")).unwrap()
+    else {
+        panic!("expected request fixture");
+    };
+    assert_eq!(fleet.body["fleet"], true);
     let Envelope::Response(exchange) =
         serde_json::from_value(canonical_fixture("response-swarm-exchange.json")).unwrap()
     else {

@@ -1,8 +1,9 @@
 //! The swarm's own records in `<profile>/swarm.sqlite3`: links, members, the
 //! replicated records (the directory, groups and thread registrations among
 //! them), the replication index and thread versions, the outbox and inbox,
-//! approvals, meetings and pending moves, the time of each thread's newest
-//! event, and the ordinary threads this runtime asked to hold in full.
+//! forwarded actions, approvals, meetings and pending moves, the time of
+//! each thread's newest event, and the ordinary threads this runtime asked
+//! to hold in full.
 //!
 //! Thread content stays in the run journal. The replication index maps each
 //! `(thread, origin, seq)` to the journal event that holds it.
@@ -55,6 +56,18 @@ CREATE TABLE IF NOT EXISTS records(
   PRIMARY KEY(class, key, field));
 CREATE INDEX IF NOT EXISTS records_origin ON records(origin, seq);
 CREATE TABLE IF NOT EXISTS record_vv(origin TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS ops(
+  op_id TEXT PRIMARY KEY, record TEXT NOT NULL, actor_device TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL, operation TEXT NOT NULL, open INTEGER NOT NULL,
+  handed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS ops_key ON ops(actor_device, idempotency_key, operation);
+CREATE INDEX IF NOT EXISTS ops_open ON ops(open, created_at);
+CREATE TABLE IF NOT EXISTS op_inbox(
+  op_id TEXT PRIMARY KEY, message TEXT NOT NULL, received_at TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS op_results(
+  key TEXT PRIMARY KEY, op_id TEXT NOT NULL, state TEXT NOT NULL, result TEXT, note TEXT,
+  at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS thread_versions(thread_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS thread_versions_version ON thread_versions(version);
 CREATE TABLE IF NOT EXISTS thread_activity(thread_id TEXT PRIMARY KEY, at TEXT NOT NULL);

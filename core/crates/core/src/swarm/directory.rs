@@ -90,6 +90,7 @@ fn from_record(record: &Record) -> Option<DirectoryEntry> {
             updated_at: updated(tombstone.clock),
             deleted: true,
             primary_thread: None,
+            move_suggested: false,
             definition: None,
             activity: None,
         });
@@ -106,6 +107,7 @@ fn from_record(record: &Record) -> Option<DirectoryEntry> {
         updated_at: updated(record.fields_clock().unwrap_or(entry.clock)),
         deleted: false,
         primary_thread: body.primary_thread,
+        move_suggested: false,
         definition: record
             .value(DEFINITION)
             .filter(|value| !value.is_null())
@@ -242,6 +244,7 @@ pub(super) fn refresh_local(inner: &Inner) -> Result<bool, String> {
             updated_at: String::new(),
             deleted: false,
             primary_thread: state.primary_threads.get(&agent.id).cloned(),
+            move_suggested: false,
             definition: definition(agent),
             activity: super::lock(&inner.activities).get(&agent.id).cloned(),
         };

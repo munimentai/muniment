@@ -559,6 +559,10 @@ pub enum Operation {
     /// Approves a thread's waiting plan in a mode, or keeps planning.
     #[serde(rename = "thread.plan_answer")]
     ThreadPlanAnswer,
+    /// Reads where an action forwarded to the swarm member that owns its
+    /// item stands.
+    #[serde(rename = "fleet.op_status")]
+    FleetOpStatus,
 }
 
 impl Operation {
@@ -714,6 +718,7 @@ impl Operation {
             Self::ThreadPermissionModeSet => "thread.permission_mode_set",
             Self::ThreadPlan => "thread.plan",
             Self::ThreadPlanAnswer => "thread.plan_answer",
+            Self::FleetOpStatus => "fleet.op_status",
         }
     }
 
@@ -739,6 +744,7 @@ impl Operation {
                 | Self::GroupCreate
                 | Self::GroupList
                 | Self::GroupUpdate
+                | Self::FleetOpStatus
         )
     }
 
@@ -856,6 +862,11 @@ pub enum EventName {
     /// `swarm`.
     #[serde(rename = "fleet.sync_changed")]
     FleetSyncChanged,
+    /// An action this member forwarded to the member that owns its item
+    /// changed state: `queued`, `sent`, `applied` or `failed`, on a
+    /// chat-event subscription that asked for `fleet`.
+    #[serde(rename = "fleet.op_updated")]
+    FleetOpUpdated,
     #[serde(untagged)]
     Unknown(BoundedEventName),
 }

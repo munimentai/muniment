@@ -683,6 +683,17 @@ pub trait ThreadListService {
 
     /// Records that a client used this runtime.
     fn note_client_activity(&mut self) {}
+    /// Sends an action on an item another swarm member owns to that member,
+    /// and answers `{forwarded: true, op_id, ...}`. `None` runs it here.
+    fn fleet_route(
+        &mut self,
+        _operation: super::Operation,
+        _body: &serde_json::Value,
+        _actor: &crate::swarm::FleetActor,
+        _idempotency_key: Option<&str>,
+    ) -> Result<Option<serde_json::Value>, ProtocolError> {
+        Ok(None)
+    }
     /// Receives one `POST /hooks/<hook_id>` delivery and answers the id of
     /// the run it queued. Header names are lowercase.
     fn receive_webhook(

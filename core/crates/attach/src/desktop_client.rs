@@ -60,6 +60,9 @@ pub enum SubscriptionEvent {
     /// the `fleet.sync_status` answer. Only a subscription that asked for
     /// the swarm receives it.
     FleetSyncChanged(Value),
+    /// An action this runtime forwarded to the member that owns its item
+    /// changed state. Only a subscription that asked for `fleet` receives it.
+    FleetOpUpdated(Value),
 }
 
 /// A connection-bound client for the peer-authorized desktop session.
@@ -344,8 +347,8 @@ impl DesktopClient {
             Some(fresh_request_id()?),
             serde_json::json!({"run_id": run_id.as_str()}),
         )?;
-        let accepted: RunCancelAccepted =
-            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+        let accepted: RunCancelAccepted = serde_json::from_value(without_forwarding(response.body))
+            .map_err(|_| ClientError::UnexpectedMessage)?;
         if accepted.run_id != run_id.as_str()
             || accepted.accepted_at.is_empty()
             || accepted.accepted_at.len() > MAX_TEXT_LENGTH
@@ -443,7 +446,8 @@ impl DesktopClient {
             serde_json::json!({"run_id": run_id.as_str(), "text": text}),
         )?;
         let accepted: RunMessageAccepted =
-            serde_json::from_value(response.body).map_err(|_| ClientError::UnexpectedMessage)?;
+            serde_json::from_value(without_forwarding(response.body))
+                .map_err(|_| ClientError::UnexpectedMessage)?;
         if accepted.run_id != run_id.as_str()
             || accepted.accepted_at.is_empty()
             || accepted.accepted_at.len() > MAX_TEXT_LENGTH
@@ -593,7 +597,7 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        self.subscribe_chat_events_with(cursor, false, false, false, false)
+        self.subscribe_chat_events_with(cursor, false, false, false, false, false)
     }
 
     /// Subscribes like [`Self::subscribe_chat_events_after`] and also asks
@@ -604,13 +608,13 @@ impl DesktopClient {
         &mut self,
         cursor: Option<u64>,
     ) -> Result<String, ClientError> {
-        match self.subscribe_chat_events_with(cursor, true, false, false, false) {
+        match self.subscribe_chat_events_with(cursor, true, false, false, false, false) {
             Err(_)
                 if self
                     .last_request_error()
                     .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest) =>
             {
-                self.subscribe_chat_events_with(cursor, false, false, false, false)
+                self.subscribe_chat_events_with(cursor, false, false, false, false, false)
             }
             result => result,
         }
@@ -629,7 +633,7 @@ impl DesktopClient {
                 .last_request_error()
                 .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
         };
-        match self.subscribe_chat_events_with(cursor, true, true, false, false) {
+        match self.subscribe_chat_events_with(cursor, true, true, false, false, false) {
             Err(_) if refused(self) => self.subscribe_chat_events_with_update_status(cursor),
             result => result,
         }
@@ -648,7 +652,7 @@ impl DesktopClient {
                 .last_request_error()
                 .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
         };
-        match self.subscribe_chat_events_with(cursor, true, true, true, false) {
+        match self.subscribe_chat_events_with(cursor, true, true, true, false, false) {
             Err(_) if refused(self) => self.subscribe_chat_events_with_agent_runs(cursor),
             result => result,
         }
@@ -667,8 +671,27 @@ impl DesktopClient {
                 .last_request_error()
                 .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
         };
-        match self.subscribe_chat_events_with(cursor, true, true, true, true) {
+        match self.subscribe_chat_events_with(cursor, true, true, true, true, false) {
             Err(_) if refused(self) => self.subscribe_chat_events_with_swarm(cursor),
+            result => result,
+        }
+    }
+
+    /// Subscribes like [`Self::subscribe_chat_events_with_swarm_live`] and
+    /// also asks for `fleet.op_updated`. A runtime that forwards no actions
+    /// refuses the request, and the subscription then carries the live swarm
+    /// events without it.
+    pub fn subscribe_chat_events_with_fleet(
+        &mut self,
+        cursor: Option<u64>,
+    ) -> Result<String, ClientError> {
+        let refused = |client: &Self| {
+            client
+                .last_request_error()
+                .is_some_and(|error| error.code() == crate::ErrorCode::InvalidRequest)
+        };
+        match self.subscribe_chat_events_with(cursor, true, true, true, true, true) {
+            Err(_) if refused(self) => self.subscribe_chat_events_with_swarm_live(cursor),
             result => result,
         }
     }
@@ -680,6 +703,7 @@ impl DesktopClient {
         agent_runs: bool,
         swarm: bool,
         swarm_live: bool,
+        fleet: bool,
     ) -> Result<String, ClientError> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -699,6 +723,9 @@ impl DesktopClient {
         }
         if swarm_live {
             base.insert("swarm_live".into(), Value::Bool(true));
+        }
+        if fleet {
+            base.insert("fleet".into(), Value::Bool(true));
         }
         let response = match cursor {
             Some(cursor) => {
@@ -798,6 +825,7 @@ impl DesktopClient {
                         | EventName::AgentActivity
                         | EventName::GroupPosted
                         | EventName::FleetSyncChanged
+                        | EventName::FleetOpUpdated
                 )
                 || event.run_id.is_some()
                 || event.run_seq.is_some()
@@ -864,6 +892,12 @@ impl DesktopClient {
                     return Err(ClientError::UnexpectedMessage);
                 }
                 return Ok(SubscriptionEvent::FleetSyncChanged(event.body));
+            }
+            if event.event == EventName::FleetOpUpdated {
+                if !event.body["op_id"].is_string() || !event.body["state"].is_string() {
+                    return Err(ClientError::UnexpectedMessage);
+                }
+                return Ok(SubscriptionEvent::FleetOpUpdated(event.body));
             }
             if let Some(body) = snapshot.push(event.body).map_err(map_frame_error)? {
                 if let Some(seq) = body.get("seq").and_then(Value::as_u64) {
@@ -1456,6 +1490,7 @@ impl DesktopClient {
             Operation::FleetSyncStatus => &["state", "classes"],
             Operation::FleetOfflineSet => &["offline"],
             Operation::ThreadHistoryFetch => &["status"],
+            Operation::FleetOpStatus => &["op"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)
@@ -1475,6 +1510,19 @@ impl DesktopClient {
         }
         Ok(body)
     }
+}
+
+/// A body without the `forwarded` and `op_id` a runtime adds when it sent
+/// the action on to the swarm member that runs the run.
+fn without_forwarding(mut body: Value) -> Value {
+    if let Some(object) = body.as_object_mut() {
+        if object.get("forwarded") == Some(&Value::Bool(true)) {
+            object.remove("forwarded");
+            object.remove("op_id");
+            object.remove("state");
+        }
+    }
+    body
 }
 
 #[cfg(all(test, unix))]

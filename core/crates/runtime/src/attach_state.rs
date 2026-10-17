@@ -1,7 +1,7 @@
 //! Shared state for runtime attach connections.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use muniment_core::active_run::{ActiveIdentity, RunRegistry};
@@ -94,6 +94,7 @@ impl RuntimeAttachState {
             host: host.clone(),
             runtime_activity: runtime_activity.clone(),
             state: Mutex::new(std::sync::Weak::new()),
+            kicks: AtomicBool::new(false),
             kicking: AtomicBool::new(false),
         });
         let swarm = muniment_core::swarm::Swarm::open(
@@ -149,6 +150,7 @@ impl RuntimeAttachState {
     /// one, instead of at the next pass.
     pub fn bind_swarm(self: &Arc<Self>) {
         self.swarm_host.bind(self);
+        self.swarm_host.kicks.store(true, Ordering::SeqCst);
         self.swarm.ensure_worker();
     }
 
@@ -221,6 +223,25 @@ impl RuntimeAttachState {
         service.drain_state = self.drain_state.clone();
         service.remote_access = self.remote_access();
         service.remote_route = self.remote_route();
+        Ok(service)
+    }
+
+    /// Composes a service that runs an action the swarm member
+    /// `from_runtime` forwarded: it acts for that member and sends nothing on.
+    pub(crate) fn forwarded_service(
+        &self,
+        from_runtime: &str,
+    ) -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> {
+        let mut service = compose_attach_service(
+            self.boundaries().without_routing(),
+            &self.companion_registry,
+            &self.profile_directory,
+            &self.config_directory,
+        )?;
+        service.drain_state = self.drain_state.clone();
+        service.remote_access = self.remote_access();
+        service.remote_route = self.remote_route();
+        service.client_identity = Some(from_runtime.to_owned());
         Ok(service)
     }
 
@@ -308,6 +329,8 @@ impl RuntimeAttachState {
         access: RemoteAccess,
         stop: std::sync::mpsc::Receiver<()>,
     ) -> Result<(), RemoteListenerError> {
+        // Actions other members forward run through this state.
+        self.swarm_host.bind(self);
         let state = Arc::clone(self);
         listener.serve(
             access,
