@@ -780,7 +780,10 @@ impl Inner {
         {
             let _merge = lock(&self.merge);
             type Step<'a> = (&'a str, &'a dyn Fn() -> Result<bool, String>);
+            // Approvals come before activity, so a waiting agent's activity
+            // names its approval rather than a bare wait.
             let steps: [Step<'_>; 10] = [
+                ("approvals", &|| approvals::scan(self).map(|()| false)),
                 ("activity", &|| directory::refresh_activity(self)),
                 ("directory", &|| directory::refresh_local(self)),
                 ("threads", &|| sync::register_local(self).map(|()| false)),
@@ -788,7 +791,6 @@ impl Inner {
                 ("posts", &|| sync::consume_posts(self)),
                 ("messages", &|| messaging::deliver_pending(self)),
                 ("results", &|| messaging::send_results(self)),
-                ("approvals", &|| approvals::scan(self).map(|()| false)),
                 ("moves", &|| moves::activate_pending(self)),
                 ("absence", &|| absence::check(self).map(|()| false)),
             ];
