@@ -2016,7 +2016,7 @@ pub(super) fn consume_posts(inner: &Inner) -> Result<bool, String> {
 }
 
 /// The messages posted to a thread, oldest first, each with whether its
-/// primary consumed it and the run that answered it.
+/// primary consumed it, the run that answered it, and why it started none.
 pub fn posted_messages(
     storage: &SharedStorage,
     thread_id: &str,
@@ -2027,7 +2027,7 @@ pub fn posted_messages(
         .thread_events_after(thread_id, 0)
         .map_err(journal_error)?;
     let mut posts: Vec<Value> = Vec::new();
-    let mut consumed: BTreeMap<String, Value> = BTreeMap::new();
+    let mut consumed: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
     for event in events {
         let payload = event.payload();
         match event.event_type.as_str() {
@@ -2042,16 +2042,22 @@ pub fn posted_messages(
             })),
             THREAD_MESSAGE_CONSUMED => {
                 if let Some(id) = payload["message_id"].as_str() {
-                    consumed.insert(id.to_owned(), payload["run_id"].clone());
+                    consumed.insert(
+                        id.to_owned(),
+                        (payload["run_id"].clone(), payload.get("error").cloned()),
+                    );
                 }
             }
             _ => {}
         }
     }
     for post in &mut posts {
-        if let Some(run_id) = post["message_id"].as_str().and_then(|id| consumed.get(id)) {
+        if let Some((run_id, error)) = post["message_id"].as_str().and_then(|id| consumed.get(id)) {
             post["consumed"] = Value::Bool(true);
             post["run_id"] = run_id.clone();
+            if let Some(error) = error {
+                post["error"] = error.clone();
+            }
         }
     }
     let excess = posts.len().saturating_sub(limit);

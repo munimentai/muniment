@@ -112,12 +112,14 @@ impl SwarmHost for RuntimeSwarmHost {
     }
 
     fn submit(&self, thread_id: &str, text: &str) -> Result<String, String> {
+        // Before the runtime binds its state the post waits, as for a busy
+        // thread.
         let state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .upgrade()
-            .ok_or("The runtime is stopping.")?;
+            .ok_or(muniment_core::active_run::THREAD_BUSY)?;
         let boundaries = state.boundaries();
         let workspace = boundaries
             .signed_workspace_approval()
