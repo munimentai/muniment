@@ -1,36 +1,59 @@
-name: CI
+name: Core
 
-# Every push runs the checks. On main, the release job then tags the next
-# version on Forgejo, the push mirror carries the tag to GitHub, and
+# The checks of the core workspace under core/, on every push to main and every
+# pull request that touches it. On main, the release job then tags the next
+# core-vX.Y.Z on Forgejo, the push mirror carries the tag to GitHub, and
 # GH_RELEASE_TOKEN publishes the GitHub release. A dispatch runs every check
 # and prints the release plan without publishing.
+#
+# The root .cargo/config.toml links core builds against the libraries under
+# src-tauri/third-party, so both paths start this workflow.
 on:
-  # Branches only: a tag names a commit that CI already checked.
   push:
-    branches: ["**"]
+    branches: [main]
+    paths:
+      - "core/**"
+      - ".cargo/**"
+      - "src-tauri/third-party/**"
+      - ".forgejo/workflows/core*.yml"
+  pull_request:
+    paths:
+      - "core/**"
+      - ".cargo/**"
+      - "src-tauri/third-party/**"
+      - ".forgejo/workflows/core*.yml"
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
-# The Linux jobs run on the runner label in CI_LINUX_RUNNER, which the
-# image-smoke runner lacks.
+defaults:
+  run:
+    working-directory: core
+
+# The Linux jobs run on the runner label in CI_LINUX_RUNNER. The image-smoke
+# runner carries only the image-smoke label, so it takes no other job.
 jobs:
   checks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
     timeout-minutes: 120
     env:
-      CARGO_TARGET_DIR: /root/.cache/muniment-core/checks
+      CARGO_TARGET_DIR: /root/.cache/muniment/core-checks
     steps:
       - uses: actions/checkout@v7
       # The memory runtime tests load an ES module extension without a package.json.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: bash .forgejo/rust-toolchain.sh rustfmt clippy
+      - run: bash ci/rust-toolchain.sh rustfmt clippy
       - run: cargo fmt --all --check
       - run: scripts/check-core-boundary.sh
+      # The desktop builds the core crates by path, so its lockfile must
+      # still resolve without a change.
+      - name: Desktop lockfile coherence
+        run: cargo metadata --locked --format-version 1 --manifest-path ../src-tauri/Cargo.toml > /dev/null
       - run: cargo clippy --workspace --all-targets --locked --features muniment-pins/cli -- -D warnings
       # Stub child processes starve under default test parallelism. The runner
       # puts the Forgejo job token in the environment, and muniment-pins would
@@ -38,31 +61,31 @@ jobs:
       - run: env -u GITHUB_TOKEN -u GH_TOKEN cargo test --workspace --locked --features muniment-core/network-tests,muniment-pins/cli -- --test-threads=1
       - run: python3 -B scripts/test_release.py
       - run: python3 -B scripts/pins/test_update.py
-      - run: scripts/check-private-addresses.sh
-      - run: python3 -B scripts/test_private_addresses.py
       - run: python3 -B scripts/test_desktop_ci.py
 
   router-server:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
     timeout-minutes: 90
     env:
-      CARGO_TARGET_DIR: /root/.cache/muniment-core/router-server
+      CARGO_TARGET_DIR: /root/.cache/muniment/core-router-server
     steps:
       - uses: actions/checkout@v7
-      - run: bash .forgejo/rust-toolchain.sh clippy
+      - run: bash ci/rust-toolchain.sh clippy
       # OpenBao integration runs only when MUNIMENT_ROUTER_TEST_OPENBAO_ADDR is
       # set. The OpenBao client tests run against a stand-in server always.
       - name: Start Postgres
-        run: echo "MUNIMENT_ROUTER_TEST_DATABASE_URL=$(bash .forgejo/postgres.sh start)" >> "$GITHUB_ENV"
+        run: echo "MUNIMENT_ROUTER_TEST_DATABASE_URL=$(bash ci/postgres.sh start)" >> "$GITHUB_ENV"
       - run: cargo clippy -p muniment-router --all-targets --features server --locked -- -D warnings
       - run: cargo test -p muniment-router --features server --locked -- --test-threads=1
       - name: Stop Postgres
         if: always()
-        run: bash .forgejo/postgres.sh stop
+        run: bash ci/postgres.sh stop
 
-  # The image-smoke runner has the host Docker daemon.
+  # The image-smoke runner has the host Docker daemon. The build context is core/.
   router-image:
-    runs-on: [self-hosted, image-smoke]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: image-smoke
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -73,7 +96,8 @@ jobs:
   # The runtime image builds the server and installs the pinned Pi and its
   # packages, then serves once, stops and starts again on its volume.
   runtime-image:
-    runs-on: [self-hosted, image-smoke]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: image-smoke
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -85,15 +109,16 @@ jobs:
   # The workspace tests on a desktop-ci macOS VM. The VM is x86_64, whose linker
   # signs nothing unless asked, and the attach tests check the test binary's
   # own code signature. The flag gives each binary the ad-hoc signature that
-  # Apple Silicon links in by default.
+  # Apple Silicon links in by default. The VM starts at the repository root.
   macos:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
       - name: Test on macOS through desktop-ci
         env:
-          REF: ${{ github.ref_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
           SOURCE_SHA: ${{ github.sha }}
           REPO_TOKEN: ${{ github.token }}
           SERVER_URL: ${{ github.server_url }}
@@ -102,20 +127,22 @@ jobs:
           DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
           BUILD_TIMEOUT: "5400"
         run: >-
-          bash .forgejo/desktop-ci.sh macos
-          "export CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=-Clink-arg=-Wl,-adhoc_codesign &&
+          bash ci/desktop-ci.sh macos
+          "cd core &&
+          export CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=-Clink-arg=-Wl,-adhoc_codesign &&
           cargo test --workspace --locked --features muniment-core/network-tests,muniment-pins/cli -- --test-threads=1"
 
   # The Windows-only core paths on a desktop-ci Windows VM: known folders, the
-  # runtime task, attach pipes and ACLs.
+  # runtime task, attach pipes and ACLs. The VM starts at the repository root.
   windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v7
       - name: Check and test on Windows through desktop-ci
         env:
-          REF: ${{ github.ref_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
           SOURCE_SHA: ${{ github.sha }}
           REPO_TOKEN: ${{ github.token }}
           SERVER_URL: ${{ github.server_url }}
@@ -124,8 +151,9 @@ jobs:
           DESKTOP_CI_KNOWN_HOSTS: ${{ vars.DESKTOP_CI_KNOWN_HOSTS }}
           BUILD_TIMEOUT: "5400"
         run: >-
-          bash .forgejo/desktop-ci.sh windows
-          "cargo check --workspace --all-targets --locked &&
+          bash ci/desktop-ci.sh windows
+          "cd core &&
+          cargo check --workspace --all-targets --locked &&
           cargo test --locked --package muniment-atomic-file --package muniment-pins --package muniment-attach --features muniment-attach/client &&
           cargo test --locked --package muniment-core
           --test windows_known_folders --test windows_sid --test windows_task_service
@@ -138,7 +166,7 @@ jobs:
           windows_task_service windows_user_diagnostics agents::tests memory_files::tests
           pi_settings::tests home::tests retention_record::tests"
 
-  # Tags and publishes the next version after every check of a main push
+  # Tags and publishes the next core version after every check of a main push
   # passed. It shares the pins update's group, so tags stay in order.
   #
   # Before it tags, it builds the signed server archives the launcher
@@ -149,18 +177,20 @@ jobs:
   # source's RELEASE_PUBLIC_KEY does not verify, fails before the tag.
   release:
     needs: [checks, router-server, router-image, runtime-image, macos, windows]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
     timeout-minutes: 150
     env:
-      CARGO_TARGET_DIR: /root/.cache/muniment-core/release
+      CARGO_TARGET_DIR: /root/.cache/muniment/core-release
     concurrency:
-      group: release
+      group: core-release
       cancel-in-progress: false
     steps:
       # A branch workflow can ask for any secret, so the first step admits
-      # only main of this repository before a later step reads one.
+      # only main of this repository before a later step reads one. It runs
+      # before the checkout, so it runs outside core/.
       - name: Admit only main of the release repository
+        working-directory: .
         env:
           REPOSITORY: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
@@ -191,11 +221,11 @@ jobs:
         env:
           TAG: ${{ steps.plan.outputs.tag }}
         run: |
-          bash .forgejo/rust-toolchain.sh
-          bash .forgejo/zig-toolchain.sh
+          bash ci/rust-toolchain.sh
+          bash ci/zig-toolchain.sh
           rm -rf dist
           for arch in x86_64 aarch64; do
-            deploy/runtime/package.sh "${TAG#v}" "$arch" dist
+            deploy/runtime/package.sh "${TAG#core-v}" "$arch" dist
           done
       - name: Sign the server archives
         if: github.event_name == 'push' && steps.plan.outputs.tag != ''
@@ -205,7 +235,7 @@ jobs:
           MUNIMENT_RELEASE_SIGNING_PASSWORD: ${{ secrets.MUNIMENT_RELEASE_SIGNING_PASSWORD }}
         run: |
           command -v minisign >/dev/null || { apt-get update && apt-get install -y --no-install-recommends minisign; }
-          deploy/runtime/sign-release.sh "${TAG#v}" dist
+          deploy/runtime/sign-release.sh "${TAG#core-v}" dist
       - name: Tag and publish the next version
         if: github.event_name == 'push' && steps.plan.outputs.tag != ''
         env:
@@ -224,8 +254,8 @@ jobs:
           GH_HOST: github.com
         run: |
           python3 -B scripts/release.py --revision "$GITHUB_SHA"
-          echo "The release token can publish to $(gh api repos/munimentai/muniment-core --jq 'select(.permissions.push) | .full_name')."
-          echo "The newest GitHub release is $(gh release view --repo munimentai/muniment-core --json tagName --jq .tagName)."
+          echo "The release token can publish to $(gh api repos/munimentai/muniment --jq 'select(.permissions.push) | .full_name')."
+          echo "The newest core release is $(gh release list --repo munimentai/muniment --json tagName --jq '[.[].tagName | select(startswith("core-v"))][0]')."
 
   # Builds the runtime image of the version the release job tagged and pushes
   # it to each repository in RUNTIME_IMAGE_REPOSITORIES. A main push that cut
@@ -233,10 +263,11 @@ jobs:
   runtime-image-publish:
     needs: [release]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: [self-hosted, image-smoke]
+    runs-on: image-smoke
     timeout-minutes: 90
     steps:
       - name: Admit only main of the release repository
+        working-directory: .
         env:
           REPOSITORY: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
@@ -263,9 +294,9 @@ jobs:
           RUNTIME_IMAGE_REPOSITORIES: ${{ vars.RUNTIME_IMAGE_REPOSITORIES }}
           RUNTIME_IMAGE_LOGINS: ${{ secrets.RUNTIME_IMAGE_LOGINS }}
         run: |
-          tag=$(git tag --points-at "$GITHUB_SHA" --list 'v*' | sort -V | tail -n 1)
+          tag=$(git tag --points-at "$GITHUB_SHA" --list 'core-v*' | sort -V | tail -n 1)
           if [ -z "$tag" ]; then
-            echo "No release tag names $GITHUB_SHA, so no image is published."
+            echo "No core release tag names $GITHUB_SHA, so no image is published."
             exit 0
           fi
           if [ -z "$RUNTIME_IMAGE_REPOSITORIES" ]; then

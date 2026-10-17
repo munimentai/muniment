@@ -99,10 +99,12 @@ jobs:
             exit 1
           fi
 
+      # The full history carries the core-v tags that name the paired core release.
       - name: Check out updater signing helpers
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 0
 
       - name: Build and upload (${{ matrix.platform }}) via desktop-ci
         env:
@@ -141,6 +143,10 @@ jobs:
           trap 'rm -f "$key" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
           : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
+          # The guest's shallow clone has no tags, so the core release the app
+          # pairs with comes from this checkout.
+          core_tag=$(git describe --tags --match 'core-v[0-9]*' --abbrev=0 "$SOURCE_SHA") \
+            || { echo 'No core-v tag precedes the source.' >&2; exit 1; }
 
           # Build VMs install packages without install scripts, and no step
           # before signing sees a signing secret. The updater key never enters
@@ -202,7 +208,7 @@ jobs:
               "APPLE_API_ISSUER=$APPLE_API_ISSUER")
           fi
           # Compile the candidate into the app and runtime for installed E2E.
-          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if [ -n "$signing_env" ]; then printf '%s\n' "$signing_env"; fi; } \
+          { printf '%s\n' "GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1" "MUNIMENT_CORE_VERSION=${core_tag#core-v}"; if [ -n "$signing_env" ]; then printf '%s\n' "$signing_env"; fi; } \
           | ssh -i "$key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" \
                 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=8 \
                 "$DESKTOP_CI_HOST" "$ssh_cmd"
