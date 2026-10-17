@@ -11,7 +11,7 @@
 {#if machine}
   <span class="owner-chip" data-offline={offline ? 'true' : undefined}>
     <LucideIcon name={kindIcon(machine)} size={12} />
-    <span class={compact ? 'visually-hidden' : 'owner-name'}>{prefix ? `${prefix} ` : ''}{machine.name}</span>
+    {#if compact}<span class="visually-hidden">{prefix ? `${prefix} ` : ''}{machine.name}</span>{:else}<span class="owner-name">{prefix ? `${prefix} ` : ''}{machine.name}</span>{/if}
     {#if offline}<span class="owner-offline"><LucideIcon name="globe-off" size={12} variant="action" /><span class="visually-hidden">, offline</span></span>{/if}
   </span>
 {/if}
