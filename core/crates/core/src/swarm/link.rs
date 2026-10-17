@@ -445,6 +445,9 @@ pub(super) fn self_record(inner: &Inner) -> Result<MemberRecord, String> {
     };
     if fleet.is_some() {
         capabilities.push(super::fleet::CAPABILITY.to_owned());
+        if super::credentials::uses_vault(inner)? {
+            capabilities.push(super::credentials::VAULT_CAPABILITY.to_owned());
+        }
     }
     Ok(MemberRecord {
         runtime_id: identity.runtime_id.clone(),

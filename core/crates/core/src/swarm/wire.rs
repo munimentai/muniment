@@ -408,4 +408,9 @@ pub struct Exchange {
     /// sender kept from it (`store/1`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_floor: Option<VersionVector>,
+    /// The receiver's record version vector the sender took `records` from
+    /// (`store/1`). A receiver that forgot rows since, as after its role
+    /// changed, keeps none of an origin whose base it no longer holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_base: Option<VersionVector>,
 }

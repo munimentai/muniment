@@ -962,6 +962,7 @@ impl Inner {
             .saturating_sub(json_bytes(&acks) + json_bytes(&notices) + json_bytes(&approvals));
         let (messages, more_messages) =
             messaging::outgoing(self, access.message_target(), &mut budget)?;
+        let record_base = (wire != Wire::Full && !peer_vv.is_empty()).then(|| peer_vv.clone());
         let (records, record_vv, more_records, record_floor) = if wire == Wire::Full {
             (Vec::new(), None, false, None)
         } else {
@@ -972,7 +973,15 @@ impl Inner {
                 access.holds_row(row) && roles::leaf_sends_row(leaf.as_ref(), row)
             };
             let (rows, more) = self.records.delta_where(&peer_vv, &mut budget, &allow)?;
-            let floor = (matches!(access, roles::Access::Worker(_)) && !more).then(|| held.clone());
+            // A worker learns how far it holds every row it may hold, and
+            // that the rows were filtered for it.
+            let floor = matches!(access, roles::Access::Worker(_)).then(|| {
+                if more {
+                    VersionVector::new()
+                } else {
+                    held.clone()
+                }
+            });
             self.note_snapshot(peer, &peer_vv, &held, rows.len(), more)?;
             (rows, Some(self.records.version_vector()?), more, floor)
         };
@@ -1061,6 +1070,7 @@ impl Inner {
             sealed_have: fleet.sealed_have,
             admission: fleet.admission,
             record_floor,
+            record_base,
             from,
         };
         roles::restrict_outgoing(self, &access, leaf.as_ref(), &mut exchange)?;
@@ -1266,10 +1276,21 @@ impl Inner {
             return Ok(false);
         }
         link::merge_members(self, &exchange.from, &exchange.members)?;
-        if let Some(floor) = exchange.record_floor.take() {
-            if let Some(own) = roles::leaf(self)? {
-                self.records.raise(&own.runtime_id, &floor)?;
-            }
+        let leaf = roles::leaf(self)?;
+        roles::keep_for_leaf(leaf.as_ref(), &mut exchange);
+        match (exchange.record_floor.take(), &leaf) {
+            (Some(floor), Some(own)) => self.records.raise(&own.runtime_id, &floor)?,
+            // The peer built this exchange for this runtime as a worker; its
+            // rows are a filtered part that would claim the rows it left out.
+            (Some(_), None) => exchange.records.clear(),
+            (None, _) => {}
+        }
+        if let Some(base) = exchange.record_base.take() {
+            let held = self.records.version_vector()?;
+            exchange.records.retain(|row| {
+                base.get(&row.origin).copied().unwrap_or(0)
+                    <= held.get(&row.origin).copied().unwrap_or(0)
+            });
         }
         let records_received = exchange.records.len() as u64;
         if store {

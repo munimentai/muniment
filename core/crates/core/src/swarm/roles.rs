@@ -128,6 +128,41 @@ impl Grant {
         }
     }
 
+    /// Widens the grant by what the worker writes in `rows`: an agent it
+    /// creates, which no member held before, and the threads of its agents.
+    fn with_writes(mut self, inner: &Inner, rows: &[RecordRow]) -> Self {
+        for row in rows {
+            let creates = row.class == directory::CLASS
+                && row.field == directory::ENTRY
+                && row.origin == self.runtime_id
+                && row
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| value["primary_runtime"] == self.runtime_id.as_str())
+                && inner
+                    .records
+                    .get(directory::CLASS, &row.key)
+                    .ok()
+                    .flatten()
+                    .is_none();
+            if creates {
+                self.agents.insert(row.key.clone());
+            }
+        }
+        for row in rows {
+            if let Visibility::Thread {
+                thread_id,
+                agent_id: Some(agent),
+            } = visibility(row)
+            {
+                if row.origin == self.runtime_id && self.agents.contains(&agent) {
+                    self.threads.insert(thread_id);
+                }
+            }
+        }
+        self
+    }
+
     /// Whether the worker may write a row a full member takes in: its own
     /// audit records, and the fields and thread registrations of the
     /// agents it runs, as their primary. It may neither delete one of those
@@ -147,9 +182,8 @@ impl Grant {
                     .get(directory::CLASS, &row.key)
                     .ok()
                     .flatten()
-                    .and_then(|record| record.fields.get(directory::ENTRY).map(|entry| entry.rank))
-                    .unwrap_or(0);
-                row.rank <= held_rank
+                    .and_then(|record| record.fields.get(directory::ENTRY).map(|entry| entry.rank));
+                held_rank.is_none_or(|held| row.rank <= held)
                     && (row.field != directory::ENTRY
                         || row.value.as_ref().is_some_and(|value| {
                             value["primary_runtime"] == self.runtime_id.as_str()
@@ -405,7 +439,8 @@ pub(super) fn restrict_outgoing(
 }
 
 /// Keeps from the fleet fields a worker sent what it wrote itself: the
-/// roster entries it signed, and no sealed secret.
+/// roster entries it signed, and no sealed secret. A leaf keeps only the
+/// secrets sealed to it.
 pub(super) fn restrict_fleet_incoming(
     inner: &Inner,
     peer: &str,
@@ -415,9 +450,15 @@ pub(super) fn restrict_fleet_incoming(
     if fleet::keys(inner).is_err() {
         return Ok(());
     }
-    if fleet::view(inner)?.role(peer) == Some(Role::Worker) {
+    let view = fleet::view(inner)?;
+    if view.role(peer) == Some(Role::Worker) {
         roster.retain(|entry| entry.signer == peer);
         sealed.clear();
+    }
+    // A leaf keeps only the secrets sealed to it, whatever a peer that has
+    // not learned its role yet sends.
+    if view.role(&view.self_id) == Some(Role::Worker) {
+        sealed.retain(|secret| secret.recipients.contains_key(&view.self_id));
     }
     Ok(())
 }
@@ -440,6 +481,7 @@ pub(super) fn restrict_incoming(
             Ok(false)
         }
         Access::Worker(grant) => {
+            let grant = grant.clone().with_writes(inner, &exchange.records);
             exchange.members.clear();
             // A worker speaks `store/1`; the full-state fields of an older
             // member carry nothing it may write.
@@ -476,6 +518,26 @@ pub(super) fn restrict_incoming(
     }
 }
 
+/// Keeps from an exchange that reaches a leaf only what it may hold, as a
+/// peer that has not learned of its new role yet may send more.
+pub(super) fn keep_for_leaf(leaf: Option<&Grant>, exchange: &mut Exchange) {
+    let Some(own) = leaf else {
+        return;
+    };
+    exchange
+        .records
+        .retain(|row| row.origin == own.runtime_id || own.holds_row(row));
+    exchange
+        .events
+        .retain(|event| own.threads.contains(&event.thread_id));
+    exchange
+        .clocks
+        .retain(|thread, _| own.threads.contains(thread));
+    exchange
+        .approvals
+        .retain(|approval| own.agents.contains(&approval.agent_id));
+}
+
 /// Whether this runtime acknowledged `message_id` itself, as its target.
 fn delivered_here(inner: &Inner, message_id: &str) -> Result<bool, String> {
     Ok(inner
@@ -493,8 +555,7 @@ fn delivered_here(inner: &Inner, message_id: &str) -> Result<bool, String> {
 
 /// Brings this runtime in line with a new role of its own. Every peer's
 /// sync starts over, and peers send again every record the role holds. A
-/// worker drops the records, thread copies and sealed secrets it may no
-/// longer hold.
+/// worker drops the records and thread copies it may no longer hold.
 pub(super) fn change_own_role(inner: &Inner, role: Role) -> Result<(), String> {
     let own = inner.origin()?;
     inner.peers_reset();
@@ -507,18 +568,6 @@ pub(super) fn change_own_role(inner: &Inner, role: Role) -> Result<(), String> {
             let owned = sync::thread_primary(inner, &registration).as_deref() == Some(own.as_str());
             if !owned && !grant.threads.contains(&registration.thread_id) {
                 sync::drop_replica(inner, &registration.thread_id)?;
-            }
-        }
-        for secret in fleet::sealed_rows(inner)? {
-            if secret.owner != own && !secret.recipients.contains_key(&own) {
-                inner
-                    .store
-                    .connect()?
-                    .execute(
-                        "DELETE FROM fleet_sealed WHERE secret_id=?1",
-                        [&secret.secret_id],
-                    )
-                    .map_err(sql)?;
             }
         }
     }
