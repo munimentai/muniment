@@ -14,6 +14,11 @@
 //!   output; a user message posted on any member is a `thread.message.posted`
 //!   event with that member as origin, which the primary consumes in causal
 //!   order.
+//! - **Records.** The directory, groups and thread registrations, and the
+//!   classes other parts of core keep through [`Records`], replicate as
+//!   field-level last-writer-wins records ordered by a hybrid logical clock.
+//!   Members that name `store/1` trade only the records and thread clocks a
+//!   peer lacks; an older member gets the full state.
 //!
 //! The runtime supplies what only it can do through [`SwarmHost`].
 
@@ -21,12 +26,17 @@ mod absence;
 mod approvals;
 mod directory;
 mod groups;
+mod hlc;
 mod link;
 mod messaging;
 mod moves;
+mod records;
 mod store;
 mod sync;
 pub mod wire;
+
+#[cfg(test)]
+mod exchange_tests;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -43,6 +53,10 @@ use crate::attach::RemoteAccess;
 use crate::permission_gate::ChatPermissionAnswer;
 use crate::run_events::SharedStorage;
 
+pub use hlc::Hlc;
+pub use records::{
+    ClassCount, Field, Record, RecordChange, Tombstone, STORE_CAPABILITY, TOMBSTONE_DAYS,
+};
 pub use sync::{posted_messages, SWARM_ORIGIN};
 pub use wire::*;
 
@@ -97,6 +111,16 @@ const GOSSIP_TTL_SECONDS: i64 = 24 * 60 * 60;
 const EXCHANGE_BUDGET: usize = 448 * 1024;
 /// The most bytes of one exchange body, under the protocol's frame limit.
 const FRAME_BUDGET: usize = muniment_attach::MAX_FRAME_LENGTH - 16 * 1024;
+/// The most bytes of thread clocks one exchange carries, so events still
+/// flow while a new peer pages through many threads.
+const CLOCK_BUDGET: usize = 128 * 1024;
+/// How often a member sends each peer a hash of all its thread clocks.
+const DIGEST_SECONDS: i64 = 10 * 60;
+/// An exchange this large, or one that left items out, gets a log line.
+const LOG_EXCHANGE_BYTES: usize = 64 * 1024;
+/// The record classes the swarm keeps itself, which [`Records`] does not
+/// write.
+const SWARM_CLASSES: [&str; 3] = [directory::CLASS, groups::CLASS, sync::CLASS];
 
 /// The swarm of one runtime.
 #[derive(Clone)]
@@ -114,7 +138,8 @@ impl std::fmt::Debug for Swarm {
 }
 
 struct Identity {
-    access: RemoteAccess,
+    /// `None` only for in-process exchange tests.
+    access: Option<RemoteAccess>,
     runtime_id: String,
     runtime_name: String,
     runtime_version: String,
@@ -130,10 +155,12 @@ pub(crate) struct Inner {
     /// Serializes merges, scans and local processing.
     merge: Mutex<()>,
     links: Mutex<BTreeMap<String, link::LinkHandle>>,
-    /// Each peer's clocks from its last exchange, which pick what to send it.
-    peer_clocks: Mutex<HashMap<String, Clocks>>,
-    /// The content-store objects each peer asked for in its last exchange.
-    peer_wants: Mutex<HashMap<String, Vec<BlobWant>>>,
+    /// The replicated records.
+    records: records::RecordStore,
+    /// What this runtime knows of each peer it exchanges with.
+    peers: Mutex<HashMap<String, PeerSync>>,
+    /// Speaks only the full-state exchange of members before `store/1`.
+    legacy_wire: AtomicBool,
     subscribers: Mutex<Vec<Sender<ClientEvent>>>,
     wake: Mutex<u64>,
     woken: Condvar,
@@ -147,6 +174,60 @@ pub(crate) struct Inner {
     run_changes: Mutex<Option<Receiver<Value>>>,
     /// The activity of each agent this runtime runs, as last sent to clients.
     activities: Mutex<HashMap<String, crate::agent_runs::Activity>>,
+}
+
+/// What one member knows of a peer it exchanges with.
+#[derive(Default)]
+struct PeerSync {
+    /// Whether the peer names `store/1`, once it said.
+    store: Option<bool>,
+    /// The peer's thread clocks, which pick the events to send it.
+    clocks: Clocks,
+    /// The peer's thread version up to which this runtime holds its clocks.
+    clocks_mark: u64,
+    /// The peer's clocks reach its newest thread version.
+    clocks_complete: bool,
+    /// The peer's clocks were complete once since this runtime last reset
+    /// them, so events sent from them are mostly ones the peer lacks.
+    clocks_synced: bool,
+    /// This runtime's thread version the peer holds, as it last said.
+    acked: u64,
+    /// The peer's record version vector.
+    record_vv: VersionVector,
+    /// When this runtime last sent the peer a clock digest.
+    digest_at: Option<DateTime<Utc>>,
+    /// The content-store objects the peer asked for in its last exchange.
+    wants: Vec<BlobWant>,
+    stats: PeerStats,
+}
+
+/// What a member sent one peer and took in from it, for `swarm.members`
+/// and the logs.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PeerStats {
+    pub exchanges: u64,
+    /// The bytes of the last exchange this runtime sent the peer.
+    pub sent_bytes: u64,
+    pub max_sent_bytes: u64,
+    pub records_sent: u64,
+    pub records_received: u64,
+    pub clocks_sent: u64,
+    pub clocks_received: u64,
+    pub events_sent: u64,
+    pub events_received: u64,
+    /// The peer trades records and clock deltas.
+    pub store: bool,
+}
+
+/// How an exchange speaks to a peer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wire {
+    /// Records and thread clock deltas.
+    Store,
+    /// The full state an older member reads.
+    Full,
+    /// Both, until the peer says which it speaks.
+    Both,
 }
 
 static REGISTRY: Mutex<Vec<(PathBuf, Weak<Inner>)>> = Mutex::new(Vec::new());
@@ -177,6 +258,7 @@ impl Swarm {
         host: Arc<dyn SwarmHost>,
     ) -> Result<Self, String> {
         let store = store::Store::open(profile)?;
+        let records = records::RecordStore::open(store.clone())?;
         let inner = Arc::new(Inner {
             profile: profile.to_path_buf(),
             storage,
@@ -185,8 +267,9 @@ impl Swarm {
             identity: Mutex::new(None),
             merge: Mutex::new(()),
             links: Mutex::new(BTreeMap::new()),
-            peer_clocks: Mutex::new(HashMap::new()),
-            peer_wants: Mutex::new(HashMap::new()),
+            records,
+            peers: Mutex::new(HashMap::new()),
+            legacy_wire: AtomicBool::new(false),
             subscribers: Mutex::new(Vec::new()),
             wake: Mutex::new(0),
             woken: Condvar::new(),
@@ -227,9 +310,10 @@ impl Swarm {
             runtime_name: info.runtime_name,
             runtime_version: info.runtime_version,
             form_factor: info.form_factor.map(|form| form.as_str().to_owned()),
-            access: access.clone(),
+            access: Some(access.clone()),
         });
         access.set_outbound_links(Arc::new(link::OutboundHook(Arc::downgrade(&self.inner))));
+        self.inner.migrate_records()?;
         link::start_saved(&self.inner)?;
         self.ensure_worker();
         Ok(())
@@ -244,6 +328,21 @@ impl Swarm {
     pub fn set_poll_interval(&self, poll: Duration) {
         *lock(&self.inner.poll) = poll;
         self.inner.nudge();
+    }
+
+    /// The records every member replicates.
+    pub fn records(&self) -> Records {
+        Records {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    /// Makes this runtime speak only the full-state exchange of members
+    /// before `store/1`, as a test of the fallback does.
+    #[doc(hidden)]
+    pub fn set_legacy_wire(&self, legacy: bool) {
+        self.inner.legacy_wire.store(legacy, Ordering::SeqCst);
+        lock(&self.inner.peers).clear();
     }
 
     /// Moves the swarm's clock forward, as a test of time-based behavior does.
@@ -439,6 +538,132 @@ impl Swarm {
     }
 }
 
+/// The records every member replicates, for the classes other parts of core
+/// keep on them. Each field is a last-writer-wins register ordered by a
+/// hybrid logical clock; a set holds elements that a concurrent add keeps.
+/// The swarm's own classes (`agent`, `group`, `thread`) are read-only here.
+#[derive(Clone)]
+pub struct Records {
+    inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for Records {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Records").finish_non_exhaustive()
+    }
+}
+
+impl Records {
+    fn writable(&self, class: &str) -> Result<String, String> {
+        if SWARM_CLASSES.contains(&class) {
+            return Err("The swarm keeps this record class itself.".into());
+        }
+        self.inner.origin()
+    }
+
+    fn written(&self, change: Option<RecordChange>) -> bool {
+        if change.is_some() {
+            self.inner.nudge();
+        }
+        change.is_some()
+    }
+
+    /// Sets a field. Answers whether the record changed.
+    pub fn put(&self, class: &str, key: &str, field: &str, value: Value) -> Result<bool, String> {
+        let origin = self.writable(class)?;
+        let change =
+            self.inner
+                .records
+                .put(&origin, self.inner.now(), class, key, field, value, 0)?;
+        Ok(self.written(change))
+    }
+
+    /// Removes a field.
+    pub fn remove(&self, class: &str, key: &str, field: &str) -> Result<bool, String> {
+        let origin = self.writable(class)?;
+        let change =
+            self.inner
+                .records
+                .remove_field(&origin, self.inner.now(), class, key, field, 0)?;
+        Ok(self.written(change))
+    }
+
+    /// Deletes a record. Its tombstone wins over every older write and lasts
+    /// [`TOMBSTONE_DAYS`].
+    pub fn delete(&self, class: &str, key: &str) -> Result<bool, String> {
+        let origin = self.writable(class)?;
+        let change = self
+            .inner
+            .records
+            .delete(&origin, self.inner.now(), class, key, 0, None)?;
+        Ok(self.written(change))
+    }
+
+    /// Adds an element to a set field.
+    pub fn set_add(
+        &self,
+        class: &str,
+        key: &str,
+        set: &str,
+        element: &str,
+        value: Value,
+    ) -> Result<bool, String> {
+        let origin = self.writable(class)?;
+        let change = self.inner.records.set_add(
+            &origin,
+            self.inner.now(),
+            class,
+            key,
+            set,
+            element,
+            value,
+        )?;
+        Ok(self.written(change))
+    }
+
+    /// Removes an element from a set field. An add another member made at
+    /// the same time keeps it.
+    pub fn set_remove(
+        &self,
+        class: &str,
+        key: &str,
+        set: &str,
+        element: &str,
+    ) -> Result<bool, String> {
+        let origin = self.writable(class)?;
+        let change =
+            self.inner
+                .records
+                .set_remove(&origin, self.inner.now(), class, key, set, element)?;
+        Ok(self.written(change))
+    }
+
+    pub fn get(&self, class: &str, key: &str) -> Result<Option<Record>, String> {
+        self.inner.records.get(class, key)
+    }
+
+    /// The records of a class in key order after `after`, at most `limit`.
+    pub fn scan(
+        &self,
+        class: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Record>, String> {
+        self.inner.records.scan(class, after, limit)
+    }
+
+    /// Every change to a record from now on, local or from another member.
+    pub fn subscribe(&self) -> Receiver<RecordChange> {
+        self.inner.records.subscribe()
+    }
+
+    /// When this runtime found it was away past [`TOMBSTONE_DAYS`] and so
+    /// needs a fresh snapshot of the records.
+    pub fn snapshot_needed_at(&self) -> Option<String> {
+        self.inner.store.meta("snapshot_needed_at").ok().flatten()
+    }
+}
+
 fn empty(body: &Value) -> Result<(), String> {
     if body.as_object().is_some_and(serde_json::Map::is_empty) {
         Ok(())
@@ -462,10 +687,71 @@ impl Inner {
             .map(|identity| identity.runtime_id.clone())
     }
 
+    /// The member id this runtime writes records under.
+    pub(crate) fn origin(&self) -> Result<String, String> {
+        match self.runtime_id() {
+            Some(id) => Ok(id),
+            None => self
+                .store
+                .meta("runtime_id")?
+                .ok_or_else(|| "Turn on remote access to share records.".to_owned()),
+        }
+    }
+
+    fn legacy(&self) -> bool {
+        self.legacy_wire.load(Ordering::SeqCst)
+    }
+
+    /// Moves the directory, groups and thread registrations a store held
+    /// before records onto records.
+    fn migrate_records(&self) -> Result<(), String> {
+        let _merge = lock(&self.merge);
+        directory::migrate(self)?;
+        groups::migrate(self)?;
+        sync::migrate(self)
+    }
+
+    /// Lets the swarm's own classes react to records another member wrote.
+    fn dispatch(&self, changes: &[RecordChange]) -> Result<(), String> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        if sync::on_changes(self, changes)? {
+            self.changed("threads");
+        }
+        if directory::on_changes(self, changes) {
+            self.changed("agents");
+        }
+        if groups::on_changes(changes) {
+            self.changed("groups");
+        }
+        Ok(())
+    }
+
+    /// How this runtime speaks to `peer`.
+    fn wire_for(&self, peer: &str) -> Result<Wire, String> {
+        if self.legacy() {
+            return Ok(Wire::Full);
+        }
+        let known = lock(&self.peers).get(peer).and_then(|sync| sync.store);
+        let known = match known {
+            Some(known) => Some(known),
+            None => self
+                .store
+                .meta(&format!("peer_store:{peer}"))?
+                .map(|saved| saved == "1"),
+        };
+        Ok(match known {
+            Some(true) => Wire::Store,
+            Some(false) => Wire::Full,
+            None => Wire::Both,
+        })
+    }
+
     fn access(&self) -> Option<RemoteAccess> {
         lock(&self.identity)
             .as_ref()
-            .map(|identity| identity.access.clone())
+            .and_then(|identity| identity.access.clone())
     }
 
     /// Wakes the worker and every idle link.
@@ -525,72 +811,347 @@ impl Inner {
         Ok(())
     }
 
-    /// The exchange this runtime sends `peer`, whose clocks it last saw.
-    fn build_exchange(&self, peer: &str, peer_clocks: Option<&Clocks>) -> Result<Exchange, String> {
+    /// The exchange this runtime sends `peer`. Approvals, acknowledgements,
+    /// notices and messages go first, then records, then thread clocks and
+    /// events, then content-store objects, within the exchange budget.
+    fn build_exchange(&self, peer: &str) -> Result<Exchange, String> {
         let from = link::self_record(self)?;
-        let mut budget = EXCHANGE_BUDGET;
-        let (events, more_events) =
-            sync::export(self, peer_clocks.cloned().unwrap_or_default(), &mut budget)?;
+        let wire = self.wire_for(peer)?;
+        let now = self.now();
+        let (peer_vv, acked, held_mark, peer_clocks, clocks_ready, digest_due, serve) = {
+            let mut peers = lock(&self.peers);
+            let sync = peers.entry(peer.to_owned()).or_default();
+            (
+                sync.record_vv.clone(),
+                sync.acked,
+                sync.clocks_mark,
+                sync.clocks.clone(),
+                wire != Wire::Store || sync.clocks_synced,
+                sync.digest_at
+                    .is_none_or(|at| (now - at).num_seconds() >= DIGEST_SECONDS),
+                std::mem::take(&mut sync.wants),
+            )
+        };
+        let acks = messaging::recent_acks(self)?;
+        let notices = approvals::recent_notices(self)?;
+        let approvals = approvals::recent(self)?;
+        let mut budget = EXCHANGE_BUDGET
+            .saturating_sub(json_bytes(&acks) + json_bytes(&notices) + json_bytes(&approvals));
         let (messages, more_messages) = messaging::outgoing(self, peer, &mut budget)?;
-        let serve = lock(&self.peer_wants).remove(peer).unwrap_or_default();
+        let (records, record_vv, more_records) = if wire == Wire::Full {
+            (Vec::new(), None, false)
+        } else {
+            let (rows, more) = self.records.delta(&peer_vv, &mut budget)?;
+            (rows, Some(self.records.version_vector()?), more)
+        };
+        let (clocks, watermarks, more_clocks) = match wire {
+            Wire::Full => (sync::clocks(self)?, None, false),
+            Wire::Both => {
+                let clocks = sync::clocks(self)?;
+                let watermarks = Watermarks {
+                    base: 0,
+                    mark: sync::clock_version(self)?,
+                    complete: true,
+                    ack: held_mark,
+                    digest: None,
+                };
+                (clocks, Some(watermarks), false)
+            }
+            Wire::Store => {
+                let mut clock_budget = budget.min(CLOCK_BUDGET);
+                let before = clock_budget;
+                let (delta, mark, complete) = sync::clock_delta(self, acked, &mut clock_budget)?;
+                budget -= before - clock_budget;
+                let digest = if complete && digest_due {
+                    lock(&self.peers)
+                        .entry(peer.to_owned())
+                        .or_default()
+                        .digest_at = Some(now);
+                    Some(sync::clock_digest(&sync::clocks(self)?))
+                } else {
+                    None
+                };
+                let watermarks = Watermarks {
+                    base: acked,
+                    mark,
+                    complete,
+                    ack: held_mark,
+                    digest,
+                };
+                (delta, Some(watermarks), !complete)
+            }
+        };
+        let (events, more_events) = if clocks_ready {
+            sync::export(self, &peer_clocks, &mut budget)?
+        } else {
+            (Vec::new(), true)
+        };
         let (blobs, wants) = sync::blob_traffic(self, &serve, &mut budget)?;
+        let full = wire != Wire::Store;
         let mut exchange = Exchange {
             members: link::member_records(self)?,
-            directory: directory::entries(self, true)?,
-            groups: groups::all(self)?,
-            threads: sync::registrations(self)?,
-            clocks: sync::clocks(self)?,
+            directory: if full {
+                directory::entries(self, true)?
+            } else {
+                Vec::new()
+            },
+            groups: if full { groups::all(self)? } else { Vec::new() },
+            threads: if full {
+                sync::registrations(self)?
+            } else {
+                Vec::new()
+            },
+            clocks,
             events,
             messages,
-            acks: messaging::recent_acks(self)?,
-            notices: approvals::recent_notices(self)?,
-            approvals: approvals::recent(self)?,
+            acks,
+            notices,
+            approvals,
             wants,
             blobs,
             client_seen_at: absence::swarm_last_client(self)?,
             resumed_at: self.store.meta("resumed_at")?,
-            more: more_events || more_messages,
+            more: more_events || more_messages || more_records || more_clocks,
+            records,
+            record_vv,
+            watermarks,
             from,
         };
         // A frame never grows past the protocol's limit: what does not fit
         // waits for the next exchange.
-        let fits = |exchange: &Exchange| {
-            serde_json::to_vec(exchange).is_ok_and(|bytes| bytes.len() <= FRAME_BUDGET)
+        let length = |exchange: &Exchange| {
+            serde_json::to_vec(exchange).map_or(usize::MAX, |bytes| bytes.len())
         };
-        if !fits(&exchange) {
+        let mut bytes = length(&exchange);
+        if bytes > FRAME_BUDGET {
             exchange.blobs.clear();
             exchange.events.clear();
             exchange.more = true;
+            bytes = length(&exchange);
         }
-        if !fits(&exchange) {
+        if bytes > FRAME_BUDGET {
             exchange.messages.truncate(8);
             exchange.notices.clear();
+            bytes = length(&exchange);
         }
+        if bytes > FRAME_BUDGET && full {
+            // An older member's full state outgrew the frame; it gets the
+            // directory and groups now and threads later.
+            exchange.threads.clear();
+            exchange.clocks.clear();
+            if let Some(watermarks) = &mut exchange.watermarks {
+                watermarks.mark = 0;
+                watermarks.complete = false;
+            }
+            exchange.more = true;
+            bytes = length(&exchange);
+        }
+        self.note_sent(peer, wire, &exchange, bytes);
         Ok(exchange)
+    }
+
+    /// Counts what an exchange carried and logs a large one.
+    fn note_sent(&self, peer: &str, wire: Wire, exchange: &Exchange, bytes: usize) {
+        let summary = {
+            let mut peers = lock(&self.peers);
+            let stats = &mut peers.entry(peer.to_owned()).or_default().stats;
+            stats.exchanges += 1;
+            stats.sent_bytes = bytes as u64;
+            stats.max_sent_bytes = stats.max_sent_bytes.max(bytes as u64);
+            stats.records_sent += exchange.records.len() as u64;
+            stats.clocks_sent += exchange.clocks.len() as u64;
+            stats.events_sent += exchange.events.len() as u64;
+            stats.store = wire == Wire::Store;
+            exchange
+                .watermarks
+                .as_ref()
+                .and_then(|watermarks| watermarks.digest.as_ref())
+                .map(|_| stats.clone())
+        };
+        if bytes >= LOG_EXCHANGE_BYTES || exchange.more {
+            crate::runtime_eprintln!(
+                "muniment-runtime: swarm exchange peer={peer} wire={wire:?} bytes={bytes} records={} clocks={} events={} messages={} more={}",
+                exchange.records.len(),
+                exchange.clocks.len(),
+                exchange.events.len(),
+                exchange.messages.len(),
+                exchange.more
+            );
+        }
+        if let Some(stats) = summary {
+            let counts = self.records.counts().unwrap_or_default();
+            let records: Vec<String> = counts
+                .iter()
+                .map(|(class, count)| format!("{class}:{}/{}", count.rows, count.tombstones))
+                .collect();
+            crate::runtime_eprintln!(
+                "muniment-runtime: swarm sync peer={peer} exchanges={} last_bytes={} max_bytes={} records_sent={} records_received={} clocks_sent={} events_sent={} records={}",
+                stats.exchanges,
+                stats.sent_bytes,
+                stats.max_sent_bytes,
+                stats.records_sent,
+                stats.records_received,
+                stats.clocks_sent,
+                stats.events_sent,
+                records.join(",")
+            );
+        }
+    }
+
+    /// What this runtime sent and took in per peer, and its record counts.
+    fn sync_view(&self) -> Result<Value, String> {
+        let peers: BTreeMap<String, PeerStats> = lock(&self.peers)
+            .iter()
+            .map(|(peer, sync)| (peer.clone(), sync.stats.clone()))
+            .collect();
+        Ok(json!({
+            "records": self.records.counts()?,
+            "clock": self.records.clock(),
+            "peers": peers,
+            "snapshot_needed_at": self.store.meta("snapshot_needed_at")?,
+        }))
+    }
+
+    /// Notes that this runtime heard from the swarm, and marks it as needing
+    /// a fresh snapshot when it was away past the tombstone lifetime.
+    fn note_synced(&self) -> Result<(), String> {
+        let now = self.now();
+        let last = self
+            .store
+            .meta("last_sync_at")?
+            .as_deref()
+            .and_then(parse_time);
+        if last.is_some_and(|last| (now - last).num_days() >= TOMBSTONE_DAYS) {
+            self.store
+                .set_meta("snapshot_needed_at", Some(&timestamp(now)))?;
+            crate::runtime_eprintln!(
+                "muniment-runtime: swarm member was away past {TOMBSTONE_DAYS} days and needs a fresh snapshot"
+            );
+        }
+        if last.is_none_or(|last| (now - last).num_seconds() >= ONLINE_SECONDS) {
+            self.store.set_meta("last_sync_at", Some(&timestamp(now)))?;
+        }
+        Ok(())
     }
 
     /// Takes in what `peer` sent.
     fn merge_exchange(&self, peer: &str, exchange: Exchange) -> Result<bool, String> {
         let _merge = lock(&self.merge);
         let mut kick = false;
+        let store = !self.legacy()
+            && exchange
+                .from
+                .capabilities
+                .iter()
+                .any(|capability| capability == STORE_CAPABILITY);
+        self.note_peer_wire(peer, store)?;
+        self.note_synced()?;
         link::merge_members(self, &exchange.from, &exchange.members)?;
-        sync::merge_registrations(self, &exchange.threads)?;
-        if directory::merge(self, exchange.directory)? {
-            self.changed("agents");
+        let records_received = exchange.records.len() as u64;
+        if store {
+            let changes = self.records.merge(self.now(), exchange.records)?;
+            self.dispatch(&changes)?;
+        } else {
+            sync::merge_registrations(self, &exchange.threads)?;
+            if directory::merge_full(self, exchange.directory)? {
+                self.changed("agents");
+            }
+            if groups::merge_full(self, exchange.groups)? {
+                self.changed("groups");
+            }
         }
-        if groups::merge(self, exchange.groups)? {
-            self.changed("groups");
+        let watermarks = exchange.watermarks.filter(|_| store);
+        let clocks_received = exchange.clocks.len() as u64;
+        let digest_failed = {
+            let mut peers = lock(&self.peers);
+            let sync = peers.entry(peer.to_owned()).or_default();
+            sync.stats.records_received += records_received;
+            sync.stats.clocks_received += clocks_received;
+            sync.stats.events_received += exchange.events.len() as u64;
+            if let Some(record_vv) = exchange.record_vv.filter(|_| store) {
+                sync.record_vv = record_vv;
+            }
+            sync.merge_clocks(exchange.clocks, watermarks.as_ref())
+        };
+        if digest_failed {
+            crate::runtime_eprintln!(
+                "muniment-runtime: swarm clock digest differs peer={peer}; asking for every thread clock again"
+            );
         }
-        lock(&self.peer_clocks).insert(peer.to_owned(), exchange.clocks);
         sync::import(self, exchange.events)?;
         messaging::merge_acks(self, exchange.acks)?;
         kick |= messaging::receive(self, exchange.messages)?;
         approvals::merge_notices(self, exchange.notices)?;
         approvals::merge(self, exchange.approvals)?;
         sync::receive_blobs(self, exchange.blobs)?;
-        lock(&self.peer_wants).insert(peer.to_owned(), exchange.wants);
+        lock(&self.peers).entry(peer.to_owned()).or_default().wants = exchange.wants;
         absence::merge(self, exchange.client_seen_at, exchange.resumed_at)?;
         kick |= sync::consume_posts(self)?;
         Ok(kick)
     }
+
+    /// Keeps whether `peer` names `store/1`, so the next exchange after a
+    /// restart speaks the same way.
+    fn note_peer_wire(&self, peer: &str, store: bool) -> Result<(), String> {
+        let changed = {
+            let mut peers = lock(&self.peers);
+            let sync = peers.entry(peer.to_owned()).or_default();
+            let changed = sync.store != Some(store);
+            sync.store = Some(store);
+            changed
+        };
+        if changed && !self.legacy() {
+            self.store.set_meta(
+                &format!("peer_store:{peer}"),
+                Some(if store { "1" } else { "0" }),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl PeerSync {
+    /// Takes in a peer's thread clocks: the full map from an older member,
+    /// or the threads changed since this runtime's watermark. Answers
+    /// whether a digest showed the held copy drifted, which resets it.
+    fn merge_clocks(&mut self, clocks: Clocks, watermarks: Option<&Watermarks>) -> bool {
+        let Some(watermarks) = watermarks else {
+            self.clocks = clocks;
+            self.clocks_complete = true;
+            self.clocks_synced = true;
+            return false;
+        };
+        self.acked = watermarks.ack;
+        for (thread, origins) in clocks {
+            let held = self.clocks.entry(thread).or_default();
+            for (origin, seq) in origins {
+                let entry = held.entry(origin).or_default();
+                *entry = (*entry).max(seq);
+            }
+        }
+        if watermarks.base <= self.clocks_mark {
+            self.clocks_mark = self.clocks_mark.max(watermarks.mark);
+            self.clocks_complete = watermarks.complete && self.clocks_mark == watermarks.mark;
+        } else {
+            self.clocks_complete = false;
+        }
+        let drifted = self.clocks_complete
+            && watermarks
+                .digest
+                .as_ref()
+                .is_some_and(|digest| *digest != sync::clock_digest(&self.clocks));
+        if drifted {
+            self.clocks.clear();
+            self.clocks_mark = 0;
+            self.clocks_complete = false;
+            self.clocks_synced = false;
+        }
+        self.clocks_synced |= self.clocks_complete;
+        drifted
+    }
+}
+
+/// The serialized size of a value, for the exchange budget.
+fn json_bytes<T: serde::Serialize>(value: &T) -> usize {
+    serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
 }

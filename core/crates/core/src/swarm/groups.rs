@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::hlc::Hlc;
+use super::records::{Record, RecordChange};
 use super::{directory, lock, messaging, sync, Group, Inner, Message};
 
 pub const MIN_MEMBERS: usize = 2;
@@ -25,26 +27,98 @@ pub const MAX_DEBATE_ROUNDS: u32 = 2;
 const MAX_GROUP_REPLY_BYTES: usize = 8 * 1024;
 const TRANSCRIPT_MESSAGES: usize = 12;
 
+/// The record class of groups. Each group setting is its own field, so
+/// edits of different settings on different members both hold.
+pub(super) const CLASS: &str = "group";
+const FIELDS: [&str; 9] = [
+    "name",
+    "members",
+    "lead",
+    "meeting_mode",
+    "debate_rounds",
+    "owner_runtime",
+    "thread_id",
+    "created_at",
+    "deleted",
+];
+
+/// The group a record holds. A lead that a concurrent edit dropped from the
+/// members falls back to the first member.
+fn from_record(record: &Record) -> Option<Group> {
+    let field = |name: &str| record.value(name).cloned().unwrap_or(Value::Null);
+    let mut value = serde_json::Map::new();
+    for name in FIELDS {
+        let held = field(name);
+        if !held.is_null() {
+            value.insert(name.to_owned(), held);
+        }
+    }
+    value.insert("group_id".into(), Value::from(record.key.as_str()));
+    let updated = record.fields_clock()?;
+    value.insert(
+        "updated_at".into(),
+        Value::from(super::timestamp(updated.time())),
+    );
+    if !value.contains_key("lead") {
+        value.insert("lead".into(), Value::from(""));
+    }
+    let mut group: Group = serde_json::from_value(Value::Object(value)).ok()?;
+    if !group.members.contains(&group.lead) {
+        group.lead = group.members.first().cloned().unwrap_or_default();
+    }
+    Some(group)
+}
+
 pub(super) fn all(inner: &Inner) -> Result<Vec<Group>, String> {
-    inner.store.records("groups", "record")
+    Ok(inner
+        .records
+        .scan(CLASS, None, usize::MAX)?
+        .iter()
+        .filter_map(from_record)
+        .collect())
 }
 
 pub(super) fn get(inner: &Inner, group_id: &str) -> Option<Group> {
     inner
-        .store
-        .record("groups", "group_id", "record", group_id)
+        .records
+        .get(CLASS, group_id)
         .ok()
         .flatten()
+        .as_ref()
+        .and_then(from_record)
 }
 
-fn put(inner: &Inner, group: &Group) -> Result<(), String> {
-    inner
-        .store
-        .put_record("groups", "group_id", "record", &group.group_id, group)
+/// Writes the settings of `group` that differ from the ones held. `clock`
+/// replaces this runtime's clock for a group an older member sent.
+fn put_at(inner: &Inner, group: &Group, clock: Option<Hlc>) -> Result<bool, String> {
+    let origin = inner.origin()?;
+    let now = inner.now();
+    let value = serde_json::to_value(group).map_err(|error| error.to_string())?;
+    let mut changed = false;
+    for name in FIELDS {
+        let field = value[name].clone();
+        let written = match clock {
+            Some(clock) => {
+                inner
+                    .records
+                    .put_at(&origin, now, CLASS, &group.group_id, name, field, 0, clock)?
+            }
+            None => inner
+                .records
+                .put(&origin, now, CLASS, &group.group_id, name, field, 0)?,
+        };
+        changed |= written.is_some();
+    }
+    Ok(changed)
 }
 
-/// Keeps the latest version of each group.
-pub(super) fn merge(inner: &Inner, groups: Vec<Group>) -> Result<bool, String> {
+pub(super) fn put(inner: &Inner, group: &Group) -> Result<bool, String> {
+    put_at(inner, group, None)
+}
+
+/// Takes in the full-state groups of a member without `store/1`: each group
+/// whose time beats every setting held is written with its own time.
+pub(super) fn merge_full(inner: &Inner, groups: Vec<Group>) -> Result<bool, String> {
     let mut changed = false;
     for group in groups {
         if uuid::Uuid::parse_str(&group.group_id).is_err()
@@ -52,16 +126,45 @@ pub(super) fn merge(inner: &Inner, groups: Vec<Group>) -> Result<bool, String> {
         {
             continue;
         }
-        let newer = get(inner, &group.group_id).is_none_or(|existing| {
-            (&group.updated_at, &group.owner_runtime)
-                > (&existing.updated_at, &existing.owner_runtime)
-        });
-        if newer {
-            put(inner, &group)?;
-            changed = true;
+        let Some(time) = super::parse_time(&group.updated_at) else {
+            continue;
+        };
+        let clock = Hlc::at(time.timestamp_millis());
+        let held = inner
+            .records
+            .get(CLASS, &group.group_id)?
+            .map(|record| record.clock);
+        if held.is_some_and(|held| clock <= held) {
+            continue;
         }
+        changed |= put_at(inner, &group, Some(clock))?;
     }
     Ok(changed)
+}
+
+/// Whether another member changed a group.
+pub(super) fn on_changes(changes: &[RecordChange]) -> bool {
+    changes
+        .iter()
+        .any(|change| change.class == CLASS && !change.local)
+}
+
+/// Moves the groups a store held before records into records, once.
+pub(super) fn migrate(inner: &Inner) -> Result<(), String> {
+    let old: Vec<Group> = inner.store.records("groups", "record")?;
+    for group in &old {
+        if let Some(time) = super::parse_time(&group.updated_at) {
+            put_at(inner, group, Some(Hlc::at(time.timestamp_millis())))?;
+        }
+    }
+    if !old.is_empty() {
+        inner
+            .store
+            .connect()?
+            .execute("DELETE FROM groups", [])
+            .map_err(super::store::sql)?;
+    }
+    Ok(())
 }
 
 fn validate(inner: &Inner, group: &Group) -> Result<(), String> {
@@ -171,6 +274,7 @@ pub(super) fn create(inner: &Inner, body: Value) -> Result<Value, String> {
             .map_err(|error| format!("The group thread could not be named: {error}"))?;
     }
     put(inner, &group)?;
+    let group = get(inner, &group.group_id).unwrap_or(group);
     sync::register_local(inner)?;
     inner.changed("groups");
     inner.nudge();
@@ -233,17 +337,11 @@ pub(super) fn update(inner: &Inner, body: Value) -> Result<Value, String> {
         group.deleted = deleted;
     }
     validate(inner, &group)?;
-    let now = inner.now_text();
-    group.updated_at = if now > group.updated_at {
-        now
-    } else {
-        super::parse_time(&group.updated_at)
-            .map(|time| super::timestamp(time + chrono::Duration::seconds(1)))
-            .unwrap_or(now)
-    };
-    put(inner, &group)?;
-    inner.changed("groups");
-    inner.nudge();
+    if put(inner, &group)? {
+        inner.changed("groups");
+        inner.nudge();
+    }
+    let group = get(inner, &group.group_id).unwrap_or(group);
     Ok(json!({"group": group}))
 }
 

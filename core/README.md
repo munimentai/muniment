@@ -551,12 +551,34 @@ steering, gate answers and run starts through `SwarmHost`.
   either side; `swarm.leave` (`{"runtime_id"}`) drops every link to a member.
 - **Relay.** Members gossip to every linked member, which passes everything
   on, so each member reaches every other through any chain of links.
-  `swarm.members` (`{}` → `{"self", "members", "absence"}`) lists each member
-  with `online` (heard from within a minute) and this runtime's `link` to it.
+  `swarm.members` (`{}` → `{"self", "members", "absence", "sync"}`) lists each
+  member with `online` (heard from within a minute), `stale` (not heard from
+  for 90 days) and this runtime's `link` to it. `sync` holds the record
+  counts per class, this runtime's clock, each peer's exchange sizes and
+  counts, and `snapshot_needed_at`.
+- **Records.** The directory, groups and thread registrations, and any class
+  another part of core keeps through `Swarm::records()`, live in one
+  `records` table: `(class, key, field, value, clock, origin, seq, deleted,
+  rank)`. Each field is a last-writer-wins register ordered by `(rank, clock,
+  origin)`, where the clock is a hybrid logical clock the runtime persists, so
+  a write made after seeing another member's write orders after it even when
+  that member's wall clock runs ahead. A record's tombstone wins over every
+  older field write and lasts 90 days; a member away longer marks
+  `snapshot_needed_at`. A set field keeps an element that one member added
+  while another removed it. `Records` offers `put`, `remove`, `delete`,
+  `set_add`, `set_remove`, `get`, `scan` and `subscribe`.
+- **Exchange.** A member whose `MemberRecord.capabilities` names `store/1`
+  sends `records` (the rows a peer's `record_vv` lacks), its own `record_vv`,
+  and in `clocks` only the threads whose clock changed since the peer's
+  `watermarks.ack`, with a digest of every clock each 10 minutes. A member
+  without `store/1` gets the full `directory`, `groups`, `threads` and
+  `clocks`. Each exchange stays under 448 KiB of content: approvals,
+  acknowledgements, notices and messages first, then records, then thread
+  clocks and events, then stored payloads.
 - **Directory.** Each runtime describes the agents it runs as `{"agent_id",
   "name", "label", "avatar", "primary_runtime", "epoch", "updated_at",
-  "deleted", "primary_thread", "activity"}`; the highest `epoch`, then the
-  latest `updated_at`, wins. Each member sends `agent.activity`
+  "deleted", "primary_thread", "activity"}`, kept as records of class `agent`
+  ranked by `epoch`: the highest `epoch`, then the latest clock, wins. Each member sends `agent.activity`
   (`{"agent_id", "runtime_id", "activity"}`) to its clients when an agent it
   runs changes activity or the directory brings another member's change. `swarm.agents` answers it, and `swarm.changed` events
   (`{"kind"}`) report changes to members, agents, groups, threads and the
@@ -593,7 +615,8 @@ steering, gate answers and run starts through `SwarmHost`.
   to the agent that sent the task is refused.
 - **Groups.** `group.create` (`{"name", "members", "lead"?,
   "meeting_mode"?, "debate_rounds"?}`), `group.list` and `group.update` (`{"group_id", ...}`)
-  answer `{"group"}` or `{"groups"}`. A group holds two to six agents and its
+  answer `{"group"}` or `{"groups"}`. Each setting is its own record field,
+  so edits of different settings on two members both hold. A group holds two to six agents and its
   creator's runtime owns its thread. `@everyone` wakes every member, `@Name`
   the named ones, and no mention the first. A meeting runs a blind round, up
   to two debate rounds and the lead's summary. Each agent works in its own

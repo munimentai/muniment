@@ -735,7 +735,30 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
                     fixture_member(FIXTURE_RUNTIME_B, "Laptop", true),
                     fixture_member(FIXTURE_RUNTIME_A, "Build box", false)
                 ],
-                "absence": {"paused": false, "last_client_at": "2026-01-01T14:00:00Z", "paused_at": null}
+                "absence": {"paused": false, "last_client_at": "2026-01-01T14:00:00Z", "paused_at": null},
+                "sync": {
+                    "records": {
+                        "agent": {"rows": 6, "tombstones": 0},
+                        "group": {"rows": 9, "tombstones": 0},
+                        "thread": {"rows": 4, "tombstones": 0}
+                    },
+                    "clock": "019b79dbb3000003",
+                    "peers": {
+                        FIXTURE_RUNTIME_A: {
+                            "exchanges": 214,
+                            "sent_bytes": 1088,
+                            "max_sent_bytes": 461093,
+                            "records_sent": 12,
+                            "records_received": 19,
+                            "clocks_sent": 5,
+                            "clocks_received": 7,
+                            "events_sent": 31,
+                            "events_received": 48,
+                            "store": true
+                        }
+                    },
+                    "snapshot_needed_at": null
+                }
             }),
         ),
         (
@@ -1726,6 +1749,7 @@ fn fixture_member(runtime_id: &str, name: &str, this: bool) -> serde_json::Value
         "form_factor": if this { "laptop" } else { "server" },
         "self": this,
         "online": true,
+        "stale": false,
         "heartbeat_at": "2026-01-01T14:00:00Z",
         "last_client_at": "2026-01-01T13:58:00Z",
         "links": [if this { FIXTURE_RUNTIME_A } else { FIXTURE_RUNTIME_B }],
@@ -1878,7 +1902,8 @@ fn fixture_exchange() -> serde_json::Value {
             "heartbeat_at": "2026-01-01T14:00:00Z",
             "last_client_at": "2026-01-01T13:58:00Z",
             "links": [FIXTURE_RUNTIME_A],
-            "updated_at": "2026-01-01T14:00:00Z"
+            "updated_at": "2026-01-01T14:00:00Z",
+            "capabilities": ["store/1"]
         },
         "members": [],
         "directory": [fixture_directory_entry()],
@@ -1942,7 +1967,42 @@ fn fixture_exchange() -> serde_json::Value {
         "blobs": [],
         "client_seen_at": "2026-01-01T13:58:00Z",
         "resumed_at": null,
-        "more": false
+        "more": false,
+        "records": [
+            {
+                "class": "agent",
+                "key": FIXTURE_AGENT_ID,
+                "field": "entry",
+                "value": {
+                    "name": "Lead scout",
+                    "label": "Researcher",
+                    "avatar": {"style": "muniment-v2", "seed": "scout"},
+                    "primary_runtime": FIXTURE_RUNTIME_A,
+                    "primary_thread": FIXTURE_THREAD_ID
+                },
+                "clock": "019b79dbb3000002",
+                "origin": FIXTURE_RUNTIME_A,
+                "seq": 41,
+                "rank": 2
+            },
+            {
+                "class": "group",
+                "key": "019965a0-0000-7000-8000-0000000000f1",
+                "field": "",
+                "clock": "019b79dbb3000003",
+                "origin": FIXTURE_RUNTIME_B,
+                "seq": 7,
+                "deleted": true
+            }
+        ],
+        "record_vv": {FIXTURE_RUNTIME_A: 41, FIXTURE_RUNTIME_B: 7},
+        "watermarks": {
+            "base": 118,
+            "mark": 120,
+            "complete": true,
+            "ack": 64,
+            "digest": "4f2a8c0e6b1d3f5a7c9e0b2d4f6a8c1e3b5d7f9a0c2e4b6d8f1a3c5e7b9d0f2a"
+        }
     })
 }
 

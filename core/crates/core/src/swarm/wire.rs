@@ -1,6 +1,8 @@
 //! The values members trade in `swarm.exchange` and answer in the swarm
 //! operations. Every field a later version adds reads with a default, so a
-//! newer member can link to an older one.
+//! newer member can link to an older one. A member that names `store/1`
+//! trades records and thread clock deltas; an older one gets the full-state
+//! `directory`, `groups`, `threads` and `clocks`.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +25,10 @@ pub struct MemberRecord {
     #[serde(default)]
     pub links: Vec<String>,
     pub updated_at: String,
+    /// What the member's exchanges speak beyond the full-state fields, such
+    /// as `store/1` for records and thread clock deltas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
 }
 
 /// One agent in the swarm's directory. The entry with the highest epoch,
@@ -98,6 +104,54 @@ pub struct ThreadRegistration {
 
 /// Per thread, the highest sequence held from each origin runtime.
 pub type Clocks = BTreeMap<String, BTreeMap<String, u64>>;
+
+/// The highest record number held from each origin runtime.
+pub type VersionVector = BTreeMap<String, u64>;
+
+/// One replicated record row: a field's value, or its removal, and the write
+/// that set it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RecordRow {
+    pub class: String,
+    pub key: String,
+    /// The field, `""` for the record's tombstone.
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Value>,
+    pub clock: super::hlc::Hlc,
+    pub origin: String,
+    /// The origin's own number for the write.
+    pub seq: u64,
+    /// What the class ranks above the clock, such as an agent's epoch.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rank: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Where the thread clocks of one exchange stand. The sender numbers each
+/// change to a thread's clock; `clocks` holds the threads changed after
+/// `base`, up to `mark`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Watermarks {
+    /// The sender's version the receiver held, as the receiver last said.
+    pub base: u64,
+    /// The sender's version these clocks reach.
+    pub mark: u64,
+    /// No thread changed after `mark`.
+    #[serde(default)]
+    pub complete: bool,
+    /// The receiver's version the sender holds.
+    pub ack: u64,
+    /// A hash of all the sender's clocks, sent every 10 minutes so a
+    /// receiver whose copy drifted asks for them again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
 
 /// One journal event of a replicated thread with its `(origin, seq)`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -248,4 +302,14 @@ pub struct Exchange {
     /// The sender left items out to keep the frame bounded.
     #[serde(default)]
     pub more: bool,
+    /// The record rows the receiver lacks (`store/1`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<RecordRow>,
+    /// The sender's record version vector (`store/1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_vv: Option<VersionVector>,
+    /// Present when `clocks` holds only the threads changed since the
+    /// receiver's watermark (`store/1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermarks: Option<Watermarks>,
 }

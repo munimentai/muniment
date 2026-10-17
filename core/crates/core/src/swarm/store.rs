@@ -1,5 +1,6 @@
 //! The swarm's own records in `<profile>/swarm.sqlite3`: links, members, the
-//! directory, groups, the replication index, the outbox and inbox,
+//! replicated records (the directory, groups and thread registrations among
+//! them), the replication index and thread versions, the outbox and inbox,
 //! approvals, meetings and pending moves.
 //!
 //! Thread content stays in the run journal. The replication index maps each
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS log(
   event_id TEXT NOT NULL, run_id TEXT, run_seq INTEGER, event_type TEXT,
   PRIMARY KEY(thread_id, origin, seq));
 CREATE UNIQUE INDEX IF NOT EXISTS log_event ON log(event_id);
+CREATE INDEX IF NOT EXISTS log_type ON log(event_type, thread_id);
 CREATE TABLE IF NOT EXISTS runs(
   run_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, origin TEXT NOT NULL, indexed_seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS thread_marks(thread_id TEXT PRIMARY KEY, scanned_seq INTEGER NOT NULL);
@@ -44,6 +46,29 @@ CREATE TABLE IF NOT EXISTS moves(agent_id TEXT PRIMARY KEY, bundle TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS blobs(
   hash TEXT PRIMARY KEY, thread_id TEXT, total INTEGER, requested INTEGER NOT NULL DEFAULT 0,
   done INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS records(
+  class TEXT NOT NULL, key TEXT NOT NULL, field TEXT NOT NULL, value TEXT,
+  clock INTEGER NOT NULL, origin TEXT NOT NULL, seq INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0, rank INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(class, key, field));
+CREATE INDEX IF NOT EXISTS records_origin ON records(origin, seq);
+CREATE TABLE IF NOT EXISTS record_vv(origin TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS thread_versions(thread_id TEXT PRIMARY KEY, version INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS thread_versions_version ON thread_versions(version);
+CREATE TRIGGER IF NOT EXISTS log_thread_version AFTER INSERT ON log BEGIN
+  INSERT OR REPLACE INTO thread_versions(thread_id, version)
+  VALUES(NEW.thread_id, (SELECT COALESCE(MAX(version), 0) + 1 FROM thread_versions));
+END;
+";
+
+/// Numbers the threads a store indexed before thread versions existed, so
+/// clock deltas reach them.
+const BACKFILL_THREAD_VERSIONS: &str = "
+INSERT OR IGNORE INTO thread_versions(thread_id, version)
+SELECT thread_id, (SELECT COALESCE(MAX(version), 0) FROM thread_versions)
+  + ROW_NUMBER() OVER (ORDER BY thread_id)
+FROM (SELECT DISTINCT thread_id FROM log
+  WHERE thread_id NOT IN (SELECT thread_id FROM thread_versions));
 ";
 
 /// The swarm store of one profile.
@@ -57,9 +82,11 @@ impl Store {
         let store = Self {
             path: profile.join(STORE_FILE),
         };
-        Connection::open(&store.path)
-            .map_err(|error| format!("The swarm store could not be opened: {error}"))?
+        let connection = Connection::open(&store.path)
+            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+        connection
             .execute_batch(SCHEMA)
+            .and_then(|()| connection.execute_batch(BACKFILL_THREAD_VERSIONS))
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
         Ok(store)
     }

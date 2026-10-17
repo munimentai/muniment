@@ -1,7 +1,8 @@
 #![cfg(unix)]
 //! Runtimes linked into a swarm over loopback: links and their revocation,
-//! the agent directory, thread replication on the journal, moves, agent
-//! messaging, group chats, approvals across members and the absence pause.
+//! the agent directory and groups on replicated records, thread replication
+//! on the journal, moves, agent messaging, group chats, approvals across
+//! members and the absence pause.
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -470,6 +471,66 @@ fn the_directory_converges_through_a_relay() {
         .directory()
         .iter()
         .all(|entry| entry["agent_id"] != critic.id.as_str())));
+
+    // Groups ride the same records: one created on C, renamed on A and
+    // given a new lead on B, converges everywhere with both edits.
+    let group = c
+        .op(
+            Operation::GroupCreate,
+            json!({"name": "Field team", "members": ["Lead scout", writer.id]}),
+        )
+        .unwrap()["group"]
+        .clone();
+    let group_id = group["group_id"].as_str().unwrap().to_owned();
+    let listed = |member: &Member| -> Option<Value> {
+        member.op(Operation::GroupList, json!({})).unwrap()["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|listed| listed["group_id"] == group_id.as_str())
+            .cloned()
+    };
+    for member in [&a, &b] {
+        assert!(
+            wait(|| listed(member).is_some()),
+            "{} never saw the group",
+            member.name
+        );
+    }
+    a.op(
+        Operation::GroupUpdate,
+        json!({"group_id": group_id, "name": "Scouting party"}),
+    )
+    .unwrap();
+    b.op(
+        Operation::GroupUpdate,
+        json!({"group_id": group_id, "lead": writer.id}),
+    )
+    .unwrap();
+    for member in [&a, &b, &c] {
+        assert!(
+            wait(|| listed(member)
+                .is_some_and(|group| group["name"] == "Scouting party"
+                    && group["lead"] == writer.id.as_str())),
+            "{} saw {:?}",
+            member.name,
+            listed(member)
+        );
+    }
+    a.op(
+        Operation::GroupUpdate,
+        json!({"group_id": group_id, "deleted": true}),
+    )
+    .unwrap();
+    for member in [&a, &b, &c] {
+        assert!(wait(|| listed(member).is_none()));
+    }
+    // Every member keeps the directory and groups as records and trades
+    // them as deltas with its links.
+    let sync = c.op(Operation::SwarmMembers, json!({})).unwrap()["sync"].clone();
+    assert!(sync["records"]["agent"]["rows"].as_u64().unwrap() >= 6);
+    assert!(sync["records"]["group"]["rows"].as_u64().unwrap() >= 8);
+    assert_eq!(sync["peers"][b.runtime_id()]["store"], true);
 }
 
 fn routine(name: &str) -> Routine {

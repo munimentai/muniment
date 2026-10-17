@@ -212,3 +212,21 @@ fn the_permission_fixtures_are_the_cores_own_shapes() {
     )
     .is_some());
 }
+
+#[test]
+fn the_exchange_fixture_is_the_cores_store_exchange() {
+    use muniment_core::swarm::{Exchange, STORE_CAPABILITY};
+    let exchange: Exchange = round_trip(&fixture("request-swarm-exchange.json")["body"]);
+    assert!(exchange
+        .from
+        .capabilities
+        .iter()
+        .any(|capability| capability == STORE_CAPABILITY));
+    let entry = &exchange.records[0];
+    assert_eq!((entry.class.as_str(), entry.rank), ("agent", 2));
+    assert_eq!(entry.clock.to_string(), "019b79dbb3000002");
+    assert!(exchange.records[1].deleted && exchange.records[1].field.is_empty());
+    let watermarks = exchange.watermarks.unwrap();
+    assert!(watermarks.base <= watermarks.mark && watermarks.complete);
+    assert_eq!(exchange.record_vv.unwrap()[&entry.origin], entry.seq,);
+}

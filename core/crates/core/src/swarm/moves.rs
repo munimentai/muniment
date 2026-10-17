@@ -256,9 +256,7 @@ fn hand_over(inner: &Inner, agent_id: &str, to: &str) -> Result<DirectoryEntry, 
     entry.updated_at = later(inner, &entry.updated_at);
     entry.primary_thread = handover.primary_thread.clone();
     entry.definition = Some(handover.agent.clone());
-    inner
-        .store
-        .put_record("directory", "agent_id", "entry", agent_id, &entry)?;
+    directory::put_entry(inner, &entry, None)?;
     messaging::send(
         inner,
         messaging::new_message(
@@ -391,9 +389,7 @@ fn install(inner: &Inner, handover: &Handover, epoch: u64) -> Result<DirectoryEn
         definition: serde_json::to_value(&agent).ok(),
         activity: None,
     };
-    inner
-        .store
-        .put_record("directory", "agent_id", "entry", &agent.id, &entry)?;
+    directory::put_entry(inner, &entry, None)?;
     if !handover.left_behind.is_empty() {
         messaging::note_in_agent_thread(
             inner,
