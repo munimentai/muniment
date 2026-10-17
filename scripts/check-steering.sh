@@ -14,6 +14,8 @@ prune='-name .git -o -name node_modules -o -name target -o -name dist -o -name b
 
 check_forbidden() {
   local dir="$1"
+  local hit
+  while IFS= read -r hit; do finding "ledger file or folder: ${hit#"$root"/}"; done < <(
   find "$dir" \( $prune \) -prune -o -type f -print 2>/dev/null \
     | while IFS= read -r path; do
         base="$(basename "$path")"; stem="${base%.*}"; ext="${base##*.}"
@@ -26,18 +28,18 @@ check_forbidden() {
           printf '%s\n' "$parent"
         fi
       done \
-    | sort -u \
-    | while IFS= read -r hit; do finding "ledger file or folder: ${hit#"$root"/}"; done
+    | sort -u
+  )
 }
 
 check_history() {
   local file="$1"
   [ -f "$file" ] || return 0
-  local rel="${file#"$root"/}"
-  grep -nE '\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b' "$file" | head -3 | while IFS= read -r line; do finding "date in steering file $rel: ${line:0:90}"; done
-  grep -nE '\b(MUNISITE|MUNICLOUD|MUNIDESK|MUNIMOBILE|MUNIQA|MUNISOCIAL|FACTORY)-[0-9]+\b' "$file" | head -3 | while IFS= read -r line; do finding "ticket id in steering file $rel: ${line:0:90}"; done
-  grep -nE '\b[0-9a-f]{7,40}\b' "$file" | grep -vE 'sha256|sha-256|[0-9a-f]{64}' | grep -E '\b[0-9a-f]{7,12}\b' | grep -E '(commit|sha|@)' | head -3 | while IFS= read -r line; do finding "commit sha in steering file $rel: ${line:0:90}"; done
-  grep -niE 'owner (ruling|decision)|\bdecided\b|\bwithdrawn\b|\bsuperseded\b|\bpreviously\b|\bno longer\b' "$file" | grep -vi 'history phrase' | head -3 | while IFS= read -r line; do finding "history phrase in steering file $rel: ${line:0:90}"; done
+  local rel="${file#"$root"/}" line
+  while IFS= read -r line; do finding "date in steering file $rel: ${line:0:90}"; done < <(grep -nE '\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b' "$file" | head -3)
+  while IFS= read -r line; do finding "ticket id in steering file $rel: ${line:0:90}"; done < <(grep -nE '\b(MUNISITE|MUNICLOUD|MUNIDESK|MUNIMOBILE|MUNIQA|MUNISOCIAL|FACTORY)-[0-9]+\b' "$file" | head -3)
+  while IFS= read -r line; do finding "commit sha in steering file $rel: ${line:0:90}"; done < <(grep -nE '\b[0-9a-f]{7,40}\b' "$file" | grep -vE 'sha256|sha-256|[0-9a-f]{64}' | grep -E '\b[0-9a-f]{7,12}\b' | grep -E '(commit|sha|@)' | head -3)
+  while IFS= read -r line; do finding "history phrase in steering file $rel: ${line:0:90}"; done < <(grep -niE 'owner (ruling|decision)|\bdecided\b|\bwithdrawn\b|\bsuperseded\b|\bpreviously\b|\bno longer\b' "$file" | grep -vi 'history phrase' | head -3)
 }
 
 check_cap() {

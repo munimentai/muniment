@@ -44,6 +44,8 @@ jobs:
       - name: Steering check
         if: needs.changes.outputs.reuse != 'true'
         run: scripts/check-steering.sh .
+      - name: Steering check tests
+        run: python3 -B scripts/test_check_steering.py
       - name: Private address check
         run: |
           scripts/check-private-addresses.sh

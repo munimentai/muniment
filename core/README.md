@@ -71,9 +71,9 @@ compatibility suite on the host platform:
 The `core-pins-update` workflow runs daily. It bumps every pin that passes the
 suite on Linux, then runs the suite and the workspace tests on macOS and the CI
 checks on Linux against the bumped tree. When all of them pass, it rebases the
-bump onto `main` and pushes it with a `feat:` or `fix:` message. The release job
-then tags the next `core-v*` release with `pins.toml` and `packages.bun.lock`
-attached. A pin that fails gets one
+bump onto `main` and pushes it with a `feat:` or `fix:` message. It then tags
+the next `core-v*` release with `pins.toml`, `packages.bun.lock` and the signed
+server archives attached, as the release job does. A pin that fails gets one
 `Pin update blocked: <component> <version>` issue and stays at its version.
 
 ## Consumers
@@ -840,8 +840,9 @@ Each core release publishes, beside `pins.toml`,
 `muniment-server-<version>-linux-aarch64.tar.gz`, each the server and the
 speech runtime libraries it loads from its own directory. `SHA256SUMS` lists
 them, and `SHA256SUMS.minisig` is a minisign signature over it. The release
-job cross-compiles both with cargo-zigbuild against glibc 2.36 and signs
-with the `MUNIMENT_RELEASE_SIGNING_KEY` secret, and the optional
+job and the pins update both run `deploy/runtime/release-assets.sh`, which
+cross-compiles both with cargo-zigbuild against glibc 2.36 and signs with the
+`MUNIMENT_RELEASE_SIGNING_KEY` secret, and the optional
 `MUNIMENT_RELEASE_SIGNING_PASSWORD`. It fails before tagging when the key is
 missing or `RELEASE_PUBLIC_KEY` in `crates/server/src/release.rs` does not
 verify the signature, so no release goes out unsigned.
@@ -868,7 +869,10 @@ While a request names a version newer than the running one, the launcher:
 
 A failed download leaves the request queued, with the error in
 `update_status`, and retries after the retry delay, doubling each time up to
-an hour, so a runtime that was offline still converges. A launcher that
+an hour, so a runtime that was offline still converges. When a release
+that carries `pins.toml` lacks the archive, `SHA256SUMS` or the signature,
+the launcher logs `launcher update skipped`, clears the request, reports
+`idle` with the reason and keeps its version. A launcher that
 stops during a trial rolls it back when it starts again.
 
 After the new version starts and the launcher keeps it, the runtime resumes

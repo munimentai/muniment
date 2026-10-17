@@ -35,6 +35,9 @@ pub const DEFAULT_FEED: &str = "https://github.com/munimentai/muniment/releases/
 pub const TAG_PREFIX: &str = "core-v";
 pub const SUMS_NAME: &str = "SHA256SUMS";
 pub const SIGNATURE_NAME: &str = "SHA256SUMS.minisig";
+/// A file every core release carries, so its presence shows that a release
+/// exists even when its server files are missing.
+pub const MARKER_NAME: &str = "pins.toml";
 /// The server binary inside an archive.
 pub const SERVER_NAME: &str = "muniment-server";
 
@@ -43,11 +46,14 @@ const MAX_LISTING_BYTES: u64 = 64 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Why a release did not install. A download error may pass on its own, so
-/// the launcher retries it. The others name a release it never installs.
+/// Why a release did not install. A download error or a missing file may
+/// pass on its own, so the launcher retries it. The others name a release it
+/// never installs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseError {
     Download(String),
+    /// The feed has no such file: a 404 or a missing local file.
+    Missing(String),
     Signature(String),
     Digest(String),
     Archive(String),
@@ -55,7 +61,7 @@ pub enum ReleaseError {
 
 impl ReleaseError {
     pub fn is_transient(&self) -> bool {
-        matches!(self, Self::Download(_))
+        matches!(self, Self::Download(_) | Self::Missing(_))
     }
 }
 
@@ -63,6 +69,7 @@ impl std::fmt::Display for ReleaseError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Download(detail) => write!(formatter, "the download failed: {detail}"),
+            Self::Missing(detail) => write!(formatter, "the release file is missing: {detail}"),
             Self::Signature(detail) => write!(formatter, "the signature did not verify: {detail}"),
             Self::Digest(detail) => write!(formatter, "the archive digest did not match: {detail}"),
             Self::Archive(detail) => write!(formatter, "the archive is unusable: {detail}"),
@@ -125,17 +132,20 @@ impl Feed {
 
     /// The bytes of one release file.
     pub fn fetch(&self, version: &str, name: &str) -> Result<Vec<u8>, ReleaseError> {
-        let limit = if name == SUMS_NAME || name == SIGNATURE_NAME {
+        let limit = if [SUMS_NAME, SIGNATURE_NAME, MARKER_NAME].contains(&name) {
             MAX_LISTING_BYTES
         } else {
             MAX_ARCHIVE_BYTES
         };
         let url = self.url(version, name);
         let reader: Box<dyn Read> = match url.strip_prefix("file://") {
-            Some(path) => Box::new(
-                std::fs::File::open(path)
-                    .map_err(|error| ReleaseError::Download(format!("{url}: {error}")))?,
-            ),
+            Some(path) => Box::new(std::fs::File::open(path).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    ReleaseError::Missing(url.clone())
+                } else {
+                    ReleaseError::Download(format!("{url}: {error}"))
+                }
+            })?),
             None => {
                 let response = ureq::AgentBuilder::new()
                     .timeout_connect(CONNECT_TIMEOUT)
@@ -143,7 +153,10 @@ impl Feed {
                     .build()
                     .get(&url)
                     .call()
-                    .map_err(|error| ReleaseError::Download(format!("{url}: {error}")))?;
+                    .map_err(|error| match error {
+                        ureq::Error::Status(404, _) => ReleaseError::Missing(url.clone()),
+                        error => ReleaseError::Download(format!("{url}: {error}")),
+                    })?;
                 Box::new(response.into_reader())
             }
         };
@@ -475,7 +488,9 @@ pub(crate) mod tests {
         std::fs::write(directory.join("core-v2.0.0").join(SUMS_NAME), b"sums").unwrap();
         let feed = Feed::new(&format!("file://{}/", directory.display()));
         assert_eq!(feed.fetch("2.0.0", SUMS_NAME).unwrap(), b"sums");
-        assert!(feed.fetch("2.0.1", SUMS_NAME).unwrap_err().is_transient());
+        let missing = feed.fetch("2.0.1", SUMS_NAME).unwrap_err();
+        assert!(matches!(missing, ReleaseError::Missing(_)));
+        assert!(missing.is_transient());
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

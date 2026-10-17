@@ -2,6 +2,7 @@
 """Tests for the pin update selection and publishing in `update.py`."""
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -162,6 +163,30 @@ class PublishTest(unittest.TestCase):
         update.publish(self.result(), checked, github)
         self.assertEqual(github.landed, [])
         self.assertEqual(github.calls, [("create", "Pin update blocked: Claude Code 2.1.289")])
+
+    def test_a_release_carries_the_signed_server_archives(self):
+        with tempfile.TemporaryDirectory() as name:
+            dist = Path(name)
+            for file in ["muniment-server-1.2.3-linux-x86_64.tar.gz",
+                         "muniment-server-1.2.3-linux-aarch64.tar.gz", "SHA256SUMS", "SHA256SUMS.minisig"]:
+                (dist / file).write_text("x")
+            argv = update.release_assets(dist)
+            assets = argv[1::2]
+            self.assertEqual(argv[0::2], ["--asset"] * len(assets))
+            self.assertEqual(assets[:2], update.PIN_FILES)
+            self.assertEqual([Path(a).name for a in assets[2:]], [
+                "muniment-server-1.2.3-linux-aarch64.tar.gz", "muniment-server-1.2.3-linux-x86_64.tar.gz",
+                "SHA256SUMS", "SHA256SUMS.minisig"])
+
+    def test_a_release_without_signed_archives_is_refused(self):
+        for absent in ["muniment-server-1.2.3-linux-x86_64.tar.gz", "SHA256SUMS.minisig"]:
+            with self.subTest(absent=absent), tempfile.TemporaryDirectory() as name:
+                dist = Path(name)
+                for file in ["muniment-server-1.2.3-linux-x86_64.tar.gz", "SHA256SUMS", "SHA256SUMS.minisig"]:
+                    if file != absent:
+                        (dist / file).write_text("x")
+                with self.assertRaises(SystemExit):
+                    update.release_assets(dist)
 
     def test_candidates_list_only_newer_pins(self):
         groups = update.candidates(report(mcp="2.37.0"))
