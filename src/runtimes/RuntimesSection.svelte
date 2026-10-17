@@ -9,7 +9,7 @@
   // through `fleet.credentials`, and for a signed-in account a second keeps
   // them in MuniCloud. The swarm
   // follows: linked machines and their links. Below that, Pair shares this
-  // computer and adds another machine.
+  // computer and adds another machine, and Log lists the fleet's audit log.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
@@ -20,6 +20,7 @@
   import RuntimeRow from './RuntimeRow.svelte'
   import RuntimeAdd from './RuntimeAdd.svelte'
   import ThisComputer from './ThisComputer.svelte'
+  import AuditLog from './AuditLog.svelte'
   import SwarmSection from '../agents/SwarmSection.svelte'
   import { errorLine, skipLabel } from './runtimes.js'
   import { agentRequest } from '../agents/agent-runtime.js'
@@ -233,6 +234,8 @@
       <RuntimeAdd {tauri} deviceName={list?.deviceName ?? ''} onpaired={(next) => { if (next?.runtimes) list = next; error = ''; notice = '' }} />
     {/snippet}
   </ThisComputer>
+
+  <AuditLog {tauri} />
 </section>
 
 <style>
