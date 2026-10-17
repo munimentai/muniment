@@ -1,10 +1,10 @@
 // Build, sign and install the macOS desktop app for the local proof.
-// Direct CEF uses the v2 shell. The Apple signing certificate comes from
-// OpenBao at sign time into a throwaway keychain, every Mach-O is signed leaf
+// Direct CEF uses the v2 shell. The Apple signing certificate comes from the
+// environment at sign time into a throwaway keychain, every Mach-O is signed leaf
 // first, then the runtime, then the app, with the nightly's codesign arguments
 // from .github/build-macos-app.mjs, and the keychain is deleted on exit.
 // Nothing here stores the certificate, and no hand codesign follows.
-import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, rmSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, renameSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -21,8 +21,11 @@ import {
 } from "../.github/lib/macos-signing.mjs";
 
 const home = homedir();
-// The signing certificate lives in an OpenBao KV v2 secret. Every location
-// comes from the environment, so no host or path sits in the repository.
+// The signing certificate comes from the environment, so no host, path or
+// secret store sits in the repository:
+//   MUNIMENT_SIGNING_CERTIFICATE_FILE      path to the Developer ID .p12 file
+//   MUNIMENT_SIGNING_CERTIFICATE           base64 of that .p12, used when no file is named
+//   MUNIMENT_SIGNING_CERTIFICATE_PASSWORD  the .p12 password
 const requireEnv = (name, meaning) => {
   const value = process.env[name];
   if (!value) {
@@ -31,22 +34,13 @@ const requireEnv = (name, meaning) => {
   }
   return value;
 };
-const openbao = requireEnv("MUNIMENT_OPENBAO_ADDR", "the OpenBao base URL, for example https://bao.example.com:8200");
-// The AppRole credential sits in an Ansible project's encrypted
-// inventory/group_vars/all/vault.yml. ansible-vault runs in that project, so
-// the project's ansible.cfg supplies the vault password.
-const vaultProject = requireEnv("MUNIMENT_OPENBAO_VAULT_DIR", "the Ansible project directory whose inventory/group_vars/all/vault.yml holds openbao_ansible_role_id and openbao_ansible_secret_id");
-// The KV v2 read path, base64 of the .p12 in one field and its password in another.
-const secretPath = requireEnv("MUNIMENT_OPENBAO_SECRET_PATH", "the KV v2 read path of the signing secret, for example secret/data/apple");
-const certificateField = requireEnv("MUNIMENT_OPENBAO_CERTIFICATE_FIELD", "the secret field that holds the base64 Developer ID .p12");
-const passwordField = requireEnv("MUNIMENT_OPENBAO_PASSWORD_FIELD", "the secret field that holds the .p12 password");
-// OpenBao may serve a self-signed certificate, so curl trusts that certificate
-// alone instead of skipping verification.
-const openbaoCa = requireEnv("MUNIMENT_OPENBAO_CA", "a local copy of the OpenBao server's TLS certificate");
-if (!existsSync(openbaoCa)) {
-  console.error(`MUNIMENT_OPENBAO_CA names ${openbaoCa}, which does not exist.`);
+const certificateFile = process.env.MUNIMENT_SIGNING_CERTIFICATE_FILE;
+if (certificateFile && !existsSync(certificateFile)) {
+  console.error(`MUNIMENT_SIGNING_CERTIFICATE_FILE names ${certificateFile}, which does not exist.`);
   process.exit(1);
 }
+const certificateBase64 = certificateFile ? undefined : requireEnv("MUNIMENT_SIGNING_CERTIFICATE", "the base64 Developer ID .p12, or set MUNIMENT_SIGNING_CERTIFICATE_FILE to its path");
+const certificatePassword = requireEnv("MUNIMENT_SIGNING_CERTIFICATE_PASSWORD", "the .p12 password");
 
 const target = join("src-tauri", "target");
 const runtimeSource = join(target, "aarch64-apple-darwin", "release", "muniment-runtime");
@@ -104,11 +98,9 @@ for (const file of nativeFiles(app)) {
 const workDir = mkdtempSync(join(tmpdir(), "muniment-local-signing-"));
 const keychain = join(workDir, "muniment-local-signing.keychain-db");
 const keychainPassword = randomBytes(24).toString("hex");
-const headerFile = join(workDir, "token.header");
 const certificatePath = join(workDir, "certificate.p12");
 const priorKeychains = capture("read keychain search list", "security", ["list-keychains", "-d", "user"]);
 let keychainCreated = false;
-let tokenIssued = false;
 // trustd builds the signer's chain from the login keychain, not from a keychain
 // the run adds to the search list, so the public Developer ID G2 intermediate
 // sits in the login keychain for the run and leaves with it. The identity never does.
@@ -117,7 +109,6 @@ const intermediateCertificate = join(".github", "certs", "DeveloperIDG2CA.cer");
 const intermediateSha1 = capture("read intermediate fingerprint", "openssl", ["x509", "-inform", "der", "-in", intermediateCertificate, "-noout", "-fingerprint", "-sha1"]).replace(/^.*=/s, "").replace(/:/g, "").trim();
 let intermediatePlaced = false;
 process.on("exit", () => {
-  if (tokenIssued) spawnSync("curl", ["-s", "--cacert", openbaoCa, "-X", "POST", "-H", `@${headerFile}`, `${openbao}/v1/auth/token/revoke-self`]);
   if (keychainCreated) {
     spawnSync("security", keychainSearchListArguments("", priorKeychains).filter((arg) => arg !== ""));
     spawnSync("security", ["delete-keychain", keychain]);
@@ -126,32 +117,10 @@ process.on("exit", () => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
-const vault = capture("read AppRole credential", "ansible-vault", ["view", join("inventory", "group_vars", "all", "vault.yml")], { cwd: vaultProject });
-const roleId = vault.match(/^openbao_ansible_role_id:\s*"?([^"\s]+)/m)?.[1];
-const secretId = vault.match(/^openbao_ansible_secret_id:\s*"?([^"\s]+)/m)?.[1];
-if (!roleId || !secretId) {
-  console.error("vault.yml carries no openbao_ansible_role_id and openbao_ansible_secret_id");
-  process.exit(1);
-}
-const login = capture("OpenBao login", "curl", ["-s", "--cacert", openbaoCa, "-X", "POST", "--data-binary", "@-", `${openbao}/v1/auth/approle/login`], { input: JSON.stringify({ role_id: roleId, secret_id: secretId }) });
-const token = JSON.parse(login)?.auth?.client_token;
-if (!token) {
-  console.error("OpenBao login answered no client token");
-  process.exit(1);
-}
-writeFileSync(headerFile, `X-Vault-Token: ${token}\n`, { mode: 0o600 });
-tokenIssued = true;
-const secret = JSON.parse(capture("read signing certificate", "curl", ["-s", "--cacert", openbaoCa, "-H", `@${headerFile}`, `${openbao}/v1/${secretPath}`]))?.data?.data ?? {};
-for (const field of [certificateField, passwordField]) {
-  if (!secret[field]) {
-    console.error(`OpenBao ${secretPath} has no field ${field}. An admin writes it with: bao kv patch ${secretPath.replace("/data/", "/")} ${field}=<value>`);
-    process.exit(1);
-  }
-}
 // A PKCS#12 file is a DER sequence, so its first byte is 0x30.
-const certificate = Buffer.from(secret[certificateField].trim(), "base64");
+const certificate = certificateFile ? readFileSync(certificateFile) : Buffer.from(certificateBase64.trim(), "base64");
 if (certificate[0] !== 0x30) {
-  console.error(`OpenBao ${certificateField} is not the base64 of a .p12 file`);
+  console.error(certificateFile ? `MUNIMENT_SIGNING_CERTIFICATE_FILE ${certificateFile} is not a .p12 file` : "MUNIMENT_SIGNING_CERTIFICATE is not the base64 of a .p12 file");
   process.exit(1);
 }
 writeFileSync(certificatePath, certificate, { mode: 0o600 });
@@ -161,7 +130,7 @@ mustRun("create keychain", "security", ["create-keychain", "-p", keychainPasswor
 keychainCreated = true;
 mustRun("keychain settings", "security", ["set-keychain-settings", keychain]);
 mustRun("unlock keychain", "security", ["unlock-keychain", "-p", keychainPassword, keychain]);
-mustRun("import certificate", "security", signingCertificateImportArguments(certificatePath, keychain, secret[passwordField]), { stdio: ["ignore", "ignore", "inherit"] });
+mustRun("import certificate", "security", signingCertificateImportArguments(certificatePath, keychain, certificatePassword), { stdio: ["ignore", "ignore", "inherit"] });
 mustRun("authorize codesign", "security", signingKeyPartitionListArguments(keychain, keychainPassword), { stdio: ["ignore", "ignore", "inherit"] });
 const intermediatePresent = spawnSync("security", ["find-certificate", "-Z", "-c", "Developer ID Certification Authority", loginKeychain], { encoding: "utf8" });
 if (intermediatePresent.error) throw intermediatePresent.error;
