@@ -288,15 +288,27 @@ function probeAccounts() {
 
 // ?accounts&fleet opens Settings → Model providers on a fleet: this machine
 // holds the team sign-in and Studio holds the personal one, which offers Hold
-// sign-in here. Core answers `fleet.credentials` and `fleet.hold_sign_in`.
+// sign-in here. Studio also holds a Codex sign-in it shares, still on its
+// way, and Pod a Claude sign-in it keeps to itself. Core answers
+// `fleet.credentials` and `fleet.hold_sign_in`.
 const FLEET_PROBE = new URLSearchParams(location.search).has('fleet')
+const FLEET_LAPTOP = '018f0000-0000-7000-8000-000000000041'
 const FLEET_STUDIO = '018f0000-0000-7000-8000-000000000042'
-const fleetAccount = (name, label, holder, holderName) => ({ name, provider: 'anthropic', family: 'anthropic', kind: 'subscription', label, refresher: true, enabled: true, holder, holder_name: holderName, shared: true, this_machine: holder === 'local', usable_here: true })
+const FLEET_POD = '018f0000-0000-7000-8000-000000000046'
+const fleetAccount = (name, label, holder, holderName, extra = {}) => ({ name, provider: 'anthropic', family: 'anthropic', kind: 'subscription', label, refresher: true, enabled: true, holder, holder_name: holderName, shared: true, this_machine: holder === FLEET_LAPTOP, usable_here: true, ...extra })
 function fleetAnswer({ operation }) {
   if (operation === 'fleet.hold_sign_in') return { status: 'requested', holder: FLEET_STUDIO }
-  return { share_models: true, role: 'full', removed: false, secrets: [], audit: [], accounts: [fleetAccount('router:team', 'team', 'local', 'Laptop'), fleetAccount('router:personal', 'personal', FLEET_STUDIO, 'Studio')] }
+  return {
+    share_models: true, use_vault: false, role: 'full', removed: false, secrets: [], audit: [], vault: [],
+    accounts: [
+      fleetAccount('router:team', 'team', FLEET_LAPTOP, 'Laptop'),
+      fleetAccount('pi:anthropic', 'anthropic', FLEET_POD, 'Pod', { kind: 'oauth', shared: false, usable_here: false }),
+      fleetAccount('router:personal', 'personal', FLEET_STUDIO, 'Studio'),
+      fleetAccount('pi:openai-codex', 'openai-codex', FLEET_STUDIO, 'Studio', { provider: 'openai-codex', family: undefined, kind: 'oauth', usable_here: false }),
+    ],
+  }
 }
-const fleetRendered = () => document.querySelectorAll('[data-hold]').length === 2 && !!document.querySelector('[data-hold] button')
+const fleetRendered = () => document.querySelectorAll('[data-hold]').length === 2 && !!document.querySelector('[data-hold] button') && document.body.textContent.includes('Signed in on Studio, arriving')
 function advanceFleetFixture() {
   if (!FLEET_PROBE || fleetRendered()) return
   if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()

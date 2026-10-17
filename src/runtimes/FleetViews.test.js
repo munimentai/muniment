@@ -81,9 +81,23 @@ describe('available offline', () => {
     await waitFor(() => expect(within(threads).getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true'))
     await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Artifacts' })).getByRole('radio', { name: 'All' }))
     expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.pin_set', body: { offline: { artifacts: 'all' } } })
-    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Projects' })).getByRole('radio', { name: 'Chosen' }))
-    await fireEvent.click(await screen.findByRole('checkbox', { name: 'Launch' }))
-    expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.pin_set', body: { pins: [{ class: 'project', key: 'p1', pinned: true }] } })
+  })
+
+  it('shows projects and skills as fixed rows that ask core for nothing', async () => {
+    const tauri = agentBridge({
+      'fleet.sync_status': { state: 'synced', classes: [], offline: { thread_days: 30, attachments: 'open' } },
+      'fleet.pins': { pins: [], offline: { artifacts: 'pinned' }, usage: {} },
+    })
+    render(OfflineSettings, { tauri })
+    await screen.findByRole('radiogroup', { name: 'Threads' })
+    expect(screen.getByText('Details only. Files stay on the machine that owns the project.')).toBeInTheDocument()
+    expect(screen.getByText('Details')).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup', { name: 'Projects' })).toBeNull()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.getByText('All', { selector: '.fixed' })).toBeInTheDocument()
+    const asked = tauri.invoke.mock.calls.map(([command, payload]) => payload?.operation ?? command)
+    expect(asked).not.toContain('project_list')
+    expect(asked).not.toContain('fleet.pin_set')
   })
 
   it('stays hidden outside a fleet', async () => {
@@ -95,20 +109,52 @@ describe('available offline', () => {
 })
 
 describe('the fleet log', () => {
-  it('lists each entry with its machines, and hides when the runtime refuses', async () => {
-    const tauri = agentBridge({
-      'fleet.audit': { entries: [{ id: 'e1', at: '2026-01-01T14:00:00Z', kind: 'role_changed', actor_runtime: 'core-laptop', runtime_id: 'core-studio', record: { from: 'full', to: 'worker' } }], more: false },
-      'swarm.members': swarm,
-    })
+  const entries = [
+    { id: 'core-laptop:0192a', at: '2026-01-01T14:00:00Z', kind: 'op', actor_runtime: 'core-laptop', runtime_id: 'core-studio', record: { op_id: 'o1', operation: 'thread.post', actor_device: 'local', origin: 'core-studio', result: 'applied', note: null } },
+    { id: 'core-laptop:0192b', at: '2026-01-01T13:00:00Z', kind: 'role_changed', actor_runtime: 'core-laptop', runtime_id: 'core-studio', record: { from: 'full', to: 'worker' } },
+  ]
+
+  it('lists each fleet.audit entry with its machines from swarm.members', async () => {
+    const tauri = agentBridge({ 'fleet.audit': { entries, more: false }, 'swarm.members': swarm, 'fleet.sync_status': { state: 'synced', classes: [] } })
     render(AuditLog, { tauri })
     const log = await screen.findByRole('list', { name: 'Fleet log' })
-    expect(log).toHaveTextContent('Changed a role')
-    expect(log).toHaveTextContent('Laptop → Studio')
-    expect(log).toHaveTextContent('full to worker')
-    cleanup()
-    render(AuditLog, { tauri: agentBridge({ 'fleet.audit': new Error('unknown'), 'swarm.members': swarm }) })
+    expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.audit', body: { limit: 50 } })
+    const [op, role] = within(log).getAllByRole('listitem')
+    expect(op).toHaveTextContent('Ran a forwarded action')
+    expect(op).toHaveTextContent('Studio → Laptop')
+    expect(op).toHaveTextContent('thread.post · applied')
+    expect(role).toHaveTextContent('Changed a role')
+    expect(role).toHaveTextContent('Laptop → Studio')
+    expect(role).toHaveTextContent('full to worker')
+  })
+
+  it('raises the limit for Show more and stops at the most core answers', async () => {
+    const limits = []
+    const tauri = agentBridge({
+      'fleet.audit': (body) => { limits.push(body.limit); return { entries, more: true } },
+      'swarm.members': swarm,
+      'fleet.sync_status': { state: 'synced', classes: [] },
+    })
+    render(AuditLog, { tauri })
+    for (let page = 0; page < 9; page += 1) {
+      await fireEvent.click(await screen.findByRole('button', { name: 'Show more' }))
+      await waitFor(() => expect(limits).toHaveLength(page + 2))
+    }
+    expect(limits.at(-1)).toBe(500)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull())
+  })
+
+  it('stays hidden outside a fleet with no entries, and when the runtime refuses', async () => {
+    const alone = agentBridge({ 'fleet.audit': { entries: [], more: false }, 'swarm.members': new Error('Turn on remote access to see the swarm.'), 'fleet.sync_status': { state: 'alone', classes: [] } })
+    render(AuditLog, { tauri: alone })
+    await waitFor(() => expect(alone.invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'fleet.audit' })))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByText('Log')).toBeNull()
+    cleanup()
+    render(AuditLog, { tauri: agentBridge({ 'fleet.audit': new Error('The runtime does not know this operation.'), 'swarm.members': swarm, 'fleet.sync_status': { state: 'synced', classes: [] } }) })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByText('Log')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 
