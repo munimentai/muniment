@@ -1,6 +1,6 @@
-//! The factory router server and its account commands.
+//! The router gateway and its account commands.
 //!
-//! `muniment-router serve` answers the factory's API until SIGTERM, then
+//! `muniment-router serve` answers the gateway API until SIGTERM, then
 //! drains. `muniment-router accounts …` manages the account pool in the same
 //! store and secret source. Settings come from `--config <file>` or
 //! `MUNIMENT_ROUTER_CONFIG`, with `MUNIMENT_ROUTER_*` variables over them.
@@ -10,12 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use muniment_router::factory::openbao::OpenBao;
-use muniment_router::factory::postgres::PgStore;
-use muniment_router::factory::settings::{Settings, Storage};
-use muniment_router::factory::{self, accounts, token::SigningKey, NoSecrets, Options};
+use muniment_router::credentials::FileCredentialStore;
+use muniment_router::gateway::postgres::PgStore;
+use muniment_router::gateway::settings::{Settings, Storage};
+use muniment_router::gateway::{self, accounts, otlp, token::SigningKey, Options};
 use muniment_router::model_catalog::{self, Reload};
-use muniment_router::store::{Backend, FileSecrets, FileStore, RouterStore, SecretSource};
+use muniment_router::store::{
+    Backend, FileSecrets, FileStore, RouterStore, SecretSource, StoredSecrets,
+};
 
 const USAGE: &str = "\
 usage: muniment-router [--config <file>] <command>
@@ -87,10 +89,16 @@ fn backend(settings: &Settings) -> Result<Backend, String> {
                     .into(),
             ),
         };
-    let secrets: Arc<dyn SecretSource> = match (&settings.openbao, &settings.storage) {
-        (Some(openbao), _) => Arc::new(OpenBao::new(openbao.clone())),
-        (None, Some(Storage::Files(dir))) => Arc::new(FileSecrets::new(dir)),
-        (None, _) => Arc::new(NoSecrets),
+    // The desktop's state files keep each credential inside its account
+    // record. A Postgres store keeps them in the host credential store.
+    let secrets: Arc<dyn SecretSource> = match (&settings.storage, &settings.credentials_dir) {
+        (Some(Storage::Files(dir)), _) => Arc::new(FileSecrets::new(dir)),
+        (_, Some(dir)) => Arc::new(StoredSecrets::new(Arc::new(FileCredentialStore::new(
+            dir.clone(),
+        )))),
+        (_, None) => Arc::new(StoredSecrets::new(Arc::new(
+            FileCredentialStore::environment_only(),
+        ))),
     };
     let classifier = settings.classifier.clone();
     let mode = settings.policy_mode;
@@ -135,8 +143,14 @@ fn serve(settings: Settings) -> Result<(), String> {
             .as_deref()
             .ok_or("Set MUNIMENT_ROUTER_RUN_TOKEN_SIGNING_KEY.")?,
     )?;
-    if settings.openbao.is_none() && matches!(settings.storage, Some(Storage::Postgres(_))) {
-        eprintln!("muniment-router: no OpenBao address is set, so no account can take a turn");
+    match (&settings.storage, &settings.credentials_dir) {
+        (Some(Storage::Postgres(_)), Some(dir)) => {
+            eprintln!("muniment-router: credentials in {}", dir.display())
+        }
+        (Some(Storage::Postgres(_)), None) => eprintln!(
+            "muniment-router: no credentials_dir is set, so account credentials come from MUNIMENT_SECRET_* variables alone"
+        ),
+        _ => {}
     }
     let mut reloader = settings.catalog.as_ref().map(model_catalog::Reloader::new);
     let report = |result: &Reload| match result {
@@ -151,7 +165,7 @@ fn serve(settings: Settings) -> Result<(), String> {
         report(result);
     }
     let backend = backend(&settings)?;
-    let mut handle = factory::start(
+    let mut handle = gateway::start(
         &settings.listen,
         backend.clone(),
         Options {
@@ -159,10 +173,10 @@ fn serve(settings: Settings) -> Result<(), String> {
             signing_key,
             success: settings.success,
             metrics: settings.metrics,
-            langfuse: settings
-                .langfuse
-                .clone()
-                .map(factory::langfuse::Langfuse::start),
+            otlp: settings.otlp.clone().map(|otlp| {
+                eprintln!("muniment-router: exporting traces to {}", otlp.endpoint);
+                otlp::Exporter::start(otlp)
+            }),
         },
     )
     .map_err(|error| format!("{}: {error}", settings.listen))?;
@@ -180,7 +194,7 @@ fn serve(settings: Settings) -> Result<(), String> {
         let backend = backend.clone();
         let interval = settings.quota_probe_interval;
         std::thread::spawn(move || loop {
-            for (id, result) in factory::probe_quotas(&backend, None) {
+            for (id, result) in gateway::probe_quotas(&backend, None) {
                 if let Err(error) = result {
                     eprintln!("muniment-router: quota probe for {id}: {error}");
                 }

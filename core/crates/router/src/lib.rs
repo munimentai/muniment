@@ -16,8 +16,9 @@ pub mod classify;
 pub mod config;
 pub mod constraints;
 pub mod context;
+pub mod credentials;
 #[cfg(feature = "server")]
-pub mod factory;
+pub mod gateway;
 pub mod headless;
 pub mod native_auth;
 pub mod pi_provider;

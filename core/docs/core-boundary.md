@@ -161,6 +161,7 @@ The desktop shell and runtime register the Antigravity OAuth client with the rou
 `muniment-runtime-core` takes the host's cloud account, chat grants, credential store, provider OAuth clients, sign-in page and executable paths as one `RuntimeHost` value.
 Its defaults answer that the cloud is unavailable, and the host binary registers the runtime with the OS service manager.
 `muniment-server` is the host with no keychain and no service manager. It builds `muniment-runtime-core` without its `keyring` feature and keeps secrets in `FileCredentialStore`.
+`CredentialStore` and `FileCredentialStore` live in `muniment_router::credentials`, so the router gateway keeps account credentials in the same store. `muniment-runtime-core` re-exports them from its `host` module.
 
 ## Check
 

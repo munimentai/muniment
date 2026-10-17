@@ -10,8 +10,8 @@ edition = "2021"
 [features]
 # HTTPS uses the OS certificate verifier.
 tls = ["ureq/tls", "ureq/proxy-from-env", "dep:rustls", "dep:rustls-platform-verifier", "muniment-models/tls"]
-# The `muniment-router` server binary: the Postgres store, OpenBao secrets,
-# run tokens and metrics. The desktop never enables it.
+# The `muniment-router` server binary, the router gateway: the Postgres store,
+# run tokens, metrics and OTLP traces. The desktop never enables it.
 server = ["tls", "dep:hmac", "dep:postgres", "dep:signal-hook"]
 
 [[bin]]
