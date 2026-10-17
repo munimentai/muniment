@@ -414,6 +414,91 @@ async function checkComposerActions(browser, baseUrl) {
   }
 }
 
+// Every agent avatar is a square box its drawing fills, centered in its slot: across a row's
+// text, under a card's or header's center, and on its tile. Each surface shows one.
+async function checkAgentAvatars(browser, baseUrl) {
+  const surfaces = {
+    '': ['.catalog-sidebar-row .side-action', '.catalog-card .card', '.starter .thumb'],
+    profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .check'],
+    transcript: ['.agent-message header'],
+    meeting: ['.agent-post header', '#agent-mentions [role="option"]'],
+    approvals: ['.approval .who', '.run .who'],
+    import: ['.body .profile'],
+    'group-create': ['.members .check'],
+    move: ['.catalog-sidebar-row .side-action', '.profile .avatar'],
+  }
+  for (const colorScheme of ['light', 'dark']) {
+    for (const [state, slots] of Object.entries(surfaces)) {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 720 }, colorScheme })
+      try {
+        await page.addInitScript((theme) => localStorage.setItem('muniment.theme', theme), colorScheme)
+        await page.goto(`${baseUrl}/test/probe/agents.html${state ? `?state=${state}` : ''}`)
+        await page.waitForSelector('[data-probe-ready]')
+        await page.evaluate(() => document.fonts.ready)
+        if (state === 'meeting') {
+          await page.locator('#composer-message').click()
+          await page.keyboard.type('@')
+          await page.waitForSelector('#agent-mentions [role="option"]')
+        }
+        const failures = await page.evaluate((slots) => {
+          const failures = []
+          const near = (a, b) => Math.abs(a - b) < 0.6
+          const content = (element) => {
+            const box = element.getBoundingClientRect()
+            const style = getComputedStyle(element)
+            const left = box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft)
+            const right = box.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight)
+            const top = box.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop)
+            const bottom = box.bottom - parseFloat(style.borderBottomWidth) - parseFloat(style.paddingBottom)
+            return { x: (left + right) / 2, y: (top + bottom) / 2 }
+          }
+          for (const slot of slots) {
+            const avatars = [...document.querySelectorAll(slot)].map((element) => element.querySelector(':scope > .agent-avatar')).filter(Boolean)
+            if (!avatars.length) failures.push(`${slot} shows no avatar.`)
+            for (const avatar of avatars) {
+              const box = avatar.getBoundingClientRect()
+              const drawing = avatar.querySelector('svg').getBoundingClientRect()
+              const parent = avatar.parentElement
+              const center = content(parent)
+              const name = `${slot} ${box.width}px`
+              if (box.width !== box.height || box.width < 16) failures.push(`${name} is not a square box.`)
+              if (!['left', 'top', 'width', 'height'].every((side) => near(drawing[side], box[side]))) failures.push(`${name}: the drawing does not fill its box.`)
+              const column = getComputedStyle(parent).flexDirection === 'column'
+              // A row centers the avatar across its text; a card or header column centers it under the middle.
+              if (column || slot === '.profile .avatar' || slot === '.starter .thumb') {
+                if (!near(box.left + box.width / 2, center.x)) failures.push(`${name} is off center by ${(box.left + box.width / 2 - center.x).toFixed(2)}px across.`)
+              }
+              if (!column) {
+                if (!near(box.top + box.height / 2, center.y)) failures.push(`${name} is off center by ${(box.top + box.height / 2 - center.y).toFixed(2)}px down.`)
+                const text = avatar.nextElementSibling
+                if (text && slot.includes('side-action')) {
+                  const line = text.getBoundingClientRect()
+                  if (!near(box.top + box.height / 2, line.top + line.height / 2)) failures.push(`${name} is off its row's text.`)
+                }
+              }
+            }
+          }
+          return failures
+        }, slots)
+        assert.deepEqual(failures, [], `agents.html?state=${state} in ${colorScheme}`)
+      } finally {
+        await page.close()
+      }
+    }
+  }
+  const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
+  try {
+    await page.goto(`${baseUrl}/test/probe/avatars.html`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.equal(await page.getAttribute('body', 'data-seeds'), '48')
+    // Each drawing's own bounds center on its 92px box, within a pixel.
+    assert.ok(Number(await page.getAttribute('body', 'data-worst-offset')) < 1)
+  } finally {
+    await page.close()
+  }
+  console.log('Agent avatar checks passed.')
+}
+
 async function main() {
   const fixtures = (await readdir(probeDirectory))
     .filter((entry) => entry.endsWith('.html'))
@@ -429,6 +514,7 @@ async function main() {
     await checkWindowChrome(browser, baseUrl)
     await checkPaperFrame(browser, baseUrl)
     await checkComposerActions(browser, baseUrl)
+    await checkAgentAvatars(browser, baseUrl)
     for (const fixture of fixtures) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {

@@ -1192,6 +1192,11 @@ window.__PROBE__ = {
       entry.listener({ event, payload })
     }
   },
+  // A page that draws itself without the app, such as the avatar gallery, renders here.
+  async loadPage(render) {
+    await render()
+    await markProbeReady()
+  },
   async loadBundle() {
     if (fixtureName === 'code-diff' || fixtureName === 'applied-diff') {
       const response = await fetch('/protocol-fixtures/code-diff/1/modified.json')

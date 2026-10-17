@@ -23,6 +23,8 @@ Open `runtimes.html` for Settings → Runtimes with two paired runtimes, one off
 
 Open `agents.html` for agents on three machines in the catalog and sidebar, with a synced copy from a fourth swarm member that does not answer. `?state=profile` opens an agent's profile, `?state=cron` and `?state=mcp` open a routine's trigger editor, `?state=webhook` opens a webhook routine's address with a rotated secret, `?state=proposals` shows routines proposed from instructions, and `?state=activity` opens Activity. `?state=machines` opens Settings → Machines with the swarm, `?state=move` opens a forced move off an offline primary, `?state=transcript` opens a thread with another agent's message, a handoff and a silent run, `?state=group-create` fills New group, `?state=meeting` opens a group's meeting rounds, `?state=approvals` lists approvals in Activity, `?state=import` previews an imported agent, and `?state=absence` shows the resume prompt.
 
+Open `avatars.html` for 48 agent avatars at the sidebar, card and profile sizes in Moss light and Moss dark, with center guides and each drawing's bounds.
+
 Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners` in the browser console. Emit an event with `window.__PROBE__.emit(event, payload)`.
 
 Capture every fixture at the default desktop size:

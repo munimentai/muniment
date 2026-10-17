@@ -373,6 +373,7 @@ label tracking, the 1.45 provenance line height, and every opacity.
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
+| Agent avatar | `.agent-avatar` in `AgentAvatar.svelte` | Every agent avatar: sidebar, title, catalog, profile, transcript, group posts, mentions, Activity, approvals, New group, import | MunimentAvatar tile from `agent-avatar.js`, square at the size given, `--radius-control`, 1px `--border` hairline inside, `align-self: center`, decorative | The drawing's bounds center on the tile |
 | Agent dialog | `AgentDialog.svelte` | Shared shell of Move agent, New group and Import agent | Overlay panel, `PopupClose`, scrolling body, actions under a 1px `--border` | Escape, X and a click outside close it unless busy |
 | Agent message | `.agent-message` in `AgentMessage.svelte` | Another agent's message in a transcript | `--surface` card, 1px `--border`, `--radius-panel`, sender avatar at 20px, mono intent chip at `--radius-chip`, hop count in `--muted` mono | A handoff is a `.system-note` line with its context folded |
 | Silent run | `.silent-note` | A routine run that had nothing to say | `--muted`, `--text-12 --font-mono` | None |

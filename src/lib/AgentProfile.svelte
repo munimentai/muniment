@@ -242,7 +242,8 @@
 
   h2 { margin: 0; font-size: var(--text-13); }
   .body { overflow: auto; padding: 8px 16px 24px; }
-  .avatar { display: flex; align-items: end; margin-bottom: 8px; }
+  .avatar { position: relative; display: flex; justify-content: center; margin-bottom: 8px; }
+  .avatar .edit { position: absolute; bottom: 0; left: calc(50% + 50px); }
   .avatar:hover .edit, .avatar:focus-within .edit { opacity: 1; }
   .template { margin-top: 12px; font-size: var(--text-12); }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-12); }

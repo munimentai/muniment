@@ -99,7 +99,7 @@ writes, raises its front on the hind hip with both feet down and curls its trunk
 
 Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
 Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. The Agents, Artifacts and Projects catalogs share PanelPage and PageHead with Settings, so an intro, not a title, leads each. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
-messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Responses sit plain on
+messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Agent avatars are the brand's MunimentAvatar tiles, whose fixed brand palette stands outside the color law. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the

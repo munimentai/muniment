@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muniment probe · Agent avatars</title>
+  <link rel="stylesheet" href="/src/styles/tokens.css">
+  <script type="module" src="./stub.js" data-history="empty"></script>
+  <style>
+    /* The avatar box repeats AgentAvatar.svelte's rules, so the gallery shows the drawing as the app boxes it. */
+    .agent-avatar { display: block; flex: none; align-self: center; box-sizing: border-box; overflow: hidden; border-radius: var(--radius-control); outline: 1px solid var(--border); outline-offset: -1px; line-height: 0; }
+    .agent-avatar svg { display: block; width: 100%; height: 100%; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #808080; font: var(--text-13) var(--font-human); }
+    .theme { padding: 16px; background: var(--paper); color: var(--ink); }
+    h2 { margin: 0 0 12px; font-size: var(--text-15); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .cell { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+    .profile { position: relative; width: 92px; height: 92px; }
+    .stack { display: grid; gap: 8px; align-content: start; min-width: 0; }
+    /* The sidebar row: a 20px avatar on a 28px row, centered on the name's text block. */
+    .row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-radius: var(--radius-control); background: var(--faint); }
+    .row span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    /* The card head: a 48px avatar centered at the top of a catalog card. */
+    .card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
+    .card small { color: var(--muted); }
+    /* Guides: the box's center lines and the drawing's bounds. */
+    .guide { position: absolute; pointer-events: none; }
+    .guide.h { left: 0; right: 0; height: 0; border-top: 1px dashed var(--oxide); }
+    .guide.v { top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--oxide); }
+    .bounds { position: absolute; pointer-events: none; outline: 1px dashed var(--signal); }
+    .seed { font: var(--text-12) var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main id="gallery"></main>
+  <script type="module">
+    await window.__PROBE__.loadPage(async () => {
+      const { avatarSvg } = await import('/src/lib/agent-avatar.js')
+      const { DIMS, traits } = await import('/src/lib/muniment-avatar.js')
+
+      // One seed for every head and top pair, then more until every side piece and theme shows.
+      const seeds = []
+      const pairs = new Set()
+      for (let n = 0; seeds.length < DIMS.head.length * DIMS.top.length; n++) {
+        const t = traits(`agent-${n}`)
+        if (!pairs.has(`${t.head}:${t.top}`)) { pairs.add(`${t.head}:${t.top}`); seeds.push(`agent-${n}`) }
+      }
+      const shown = new Set(seeds.map((seed) => { const t = traits(seed); return `${t.sides}:${t.theme}` }))
+      for (let n = 0; seeds.length < 48; n++) {
+        const t = traits(`more-${n}`)
+        if (!shown.has(`${t.sides}:${t.theme}`)) { shown.add(`${t.sides}:${t.theme}`); seeds.push(`more-${n}`) }
+        else if (n > 4000) seeds.push(`more-${n}`)
+      }
+
+      const box = (seed, size) => `<span class="agent-avatar" aria-hidden="true" style="width:${size}px;height:${size}px">${avatarSvg({ style: 'muniment', seed })}</span>`
+      const guides = '<i class="guide h" style="top:50%"></i><i class="guide v" style="left:50%"></i>'
+      const panel = (theme, heading) => `<section class="theme" data-swatch data-theme="${theme}" aria-label="${heading}"><h2>${heading}</h2><div class="grid">${seeds.map((seed) => {
+        const t = traits(seed)
+        return `<article class="cell" data-seed="${seed}">
+          <div class="profile">${box(seed, 92)}${guides}<i class="bounds"></i></div>
+          <div class="stack">
+            <div class="row">${box(seed, 20)}<span>Lead scout</span><i class="guide h" style="top:50%"></i></div>
+            <div class="card">${box(seed, 48)}<strong>Lead scout</strong><small>Researcher</small><i class="guide v" style="left:50%"></i></div>
+            <span class="seed">${seed} · ${t.head} ${t.top} ${t.sides} ${t.theme}</span>
+          </div>
+        </article>`
+      }).join('')}</div></section>`
+      document.getElementById('gallery').innerHTML = panel('moss-light', 'Light') + panel('moss-dark', 'Dark')
+
+      // Outline each 92px drawing's bounds, and record the worst offset of a drawing's center from its box's center.
+      let worst = 0
+      for (const profile of document.querySelectorAll('.profile')) {
+        const drawing = profile.querySelector('svg g').getBoundingClientRect()
+        const frame = profile.getBoundingClientRect()
+        const outline = profile.querySelector('.bounds')
+        Object.assign(outline.style, { left: `${drawing.left - frame.left}px`, top: `${drawing.top - frame.top}px`, width: `${drawing.width}px`, height: `${drawing.height}px` })
+        const offset = Math.max(Math.abs(drawing.left + drawing.width / 2 - (frame.left + frame.width / 2)), Math.abs(drawing.top + drawing.height / 2 - (frame.top + frame.height / 2)))
+        worst = Math.max(worst, offset)
+      }
+      document.body.dataset.seeds = String(seeds.length)
+      document.body.dataset.worstOffset = worst.toFixed(2)
+    })
+  </script>
+</body>
+</html>
