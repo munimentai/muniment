@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Tag the next release from conventional commit prefixes since the last tag.
+"""Tag the next core release from conventional commit prefixes since the last tag.
 
-`feat:` is minor, `fix:` and `perf:` are patch, a `!` before the colon or a
-`BREAKING CHANGE:` trailer is major, and every other commit cuts no release.
-Without `--publish` the script prints the plan and changes nothing.
+Core releases are `core-vX.Y.Z` tags, and only commits that touch `core/`
+count. `feat:` is minor, `fix:` and `perf:` are patch, a `!` before the colon
+or a `BREAKING CHANGE:` trailer is major, and every other commit cuts no
+release. Without `--publish` the script prints the plan and changes nothing.
 
 `--publish` pushes the tag to `origin`, the Forgejo record, waits until the
 push mirror carries it to the GitHub repository, and creates the GitHub release
-there with `gh`, which reads its token from `GH_TOKEN`.
+there with `gh`, which reads its token from `GH_TOKEN`. The desktop's `vX.Y.Z`
+releases share the repository and own its latest release, so no core release
+is marked latest.
 
 `--print-tag` prints only the next tag, or nothing when no release is due, so
 a job can build the release assets for that version before it publishes.
@@ -20,12 +23,15 @@ import sys
 import tempfile
 import time
 
-TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+PREFIX = "core-v"
+TAG = re.compile(re.escape(PREFIX) + r"(\d+)\.(\d+)\.(\d+)")
 SUBJECT = re.compile(r"(?P<type>[a-z]+)(?:\([^)]*\))?(?P<bang>!)?: \S")
 BREAKING = re.compile(r"^BREAKING[ -]CHANGE: ", re.M)
 LEVELS = {"feat": 2, "fix": 1, "perf": 1}
 RECORD, FIELD = "\x1e", "\x1f"
-GITHUB_REPOSITORY = "munimentai/muniment-core"
+GITHUB_REPOSITORY = "munimentai/muniment"
+# A top-level pathspec, so the scope holds from any working directory.
+SCOPE = ":(top)core/"
 MIRROR_POLLS = 60
 MIRROR_WAIT_S = 10
 
@@ -35,7 +41,7 @@ def git(*args):
 
 
 def last_tag(revision):
-    tags = git("tag", "--merged", revision, "--list", "v*").split()
+    tags = git("tag", "--merged", revision, "--list", f"{PREFIX}*").split()
     versions = [tuple(map(int, m.groups())) for t in tags if (m := TAG.fullmatch(t))]
     return max(versions, default=None)
 
@@ -59,7 +65,7 @@ def bump(version, change):
 
 def commits(base, revision):
     log = git("log", "--no-merges", f"--format=%h{FIELD}%s{FIELD}%b{RECORD}",
-              f"{base}..{revision}")
+              f"{base}..{revision}", "--", SCOPE)
     for record in log.split(RECORD):
         if record.strip():
             short, subject, body = record.strip("\n").split(FIELD, 2)
@@ -82,6 +88,12 @@ def wait_for_mirror(url, tag, revision, ls_remote=None, sleep=time.sleep, polls=
     raise SystemExit(f"The push mirror did not carry {tag} to {url}.")
 
 
+def release_command(tag, repo, notes_file, assets):
+    """The `gh` call that creates the GitHub release for an existing tag."""
+    return ["gh", "release", "create", tag, "--repo", repo, "--title", tag,
+            "--notes-file", notes_file, "--verify-tag", "--latest=false", *assets]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", default="HEAD")
@@ -98,15 +110,15 @@ def main():
 
     version = last_tag(args.revision)
     if version is None:
-        print("No v* tag exists. Create the first release tag by hand.", file=report)
+        print(f"No {PREFIX}* tag exists. Create the first release tag by hand.", file=report)
         return
-    base = "v%d.%d.%d" % version
+    base = PREFIX + "%d.%d.%d" % version
     entries = list(commits(base, args.revision))
     change = max((level(s, b) for _, s, b in entries), default=0)
     if change == 0:
         print(f"No release: no feat, fix, perf, or breaking commit since {base}.", file=report)
         return
-    tag = "v%d.%d.%d" % bump(version, change)
+    tag = PREFIX + "%d.%d.%d" % bump(version, change)
     if args.print_tag:
         print(tag)
         return
@@ -121,9 +133,7 @@ def main():
     with tempfile.NamedTemporaryFile("w", suffix=".md") as file:
         file.write(f"Changes since {base}:\n\n{notes}")
         file.flush()
-        subprocess.run(["gh", "release", "create", tag, "--repo", args.github_repo, "--title", tag,
-                        "--notes-file", file.name, "--verify-tag", *args.asset],
-                       check=True)
+        subprocess.run(release_command(tag, args.github_repo, file.name, args.asset), check=True)
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ ENTRYPOINT ["/usr/local/bin/remote-smoke"]
 
 FROM ${RUNTIME_IMAGE}
 # A registry links the image to its source repository through this label.
-LABEL org.opencontainers.image.source=https://github.com/munimentai/muniment-core \
+LABEL org.opencontainers.image.source=https://github.com/munimentai/muniment \
       org.opencontainers.image.title=muniment-runtime
 # Pi's tools run shell commands, git and curl. tini reaps the processes they
 # leave behind and passes SIGTERM to the launcher, which passes it to the

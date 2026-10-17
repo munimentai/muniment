@@ -24,11 +24,15 @@ pub const RELEASE_PUBLIC_KEY: &str = "RWRhWqZZgdTwfIOji0I2jBTPsMHRQI8EGTROXXo9Zu
 /// Overrides the release public key, for tests and for a mirror that signs
 /// its own releases.
 pub const PUBLIC_KEY_VARIABLE: &str = "MUNIMENT_UPDATE_PUBLIC_KEY";
-/// Overrides the base URL of the release feed. `<feed>/v<version>/<file>`
-/// names each file. A `file://` feed reads a local directory.
+/// Overrides the base URL of the release feed.
+/// `<feed>/core-v<version>/<file>` names each file. A `file://` feed reads a
+/// local directory.
 pub const FEED_VARIABLE: &str = "MUNIMENT_UPDATE_FEED";
 /// The public releases of this repository.
-pub const DEFAULT_FEED: &str = "https://github.com/munimentai/muniment-core/releases/download";
+pub const DEFAULT_FEED: &str = "https://github.com/munimentai/muniment/releases/download";
+/// Core release tags are `core-v<version>`. The desktop's releases in the same
+/// repository use bare `v<version>` tags.
+pub const TAG_PREFIX: &str = "core-v";
 pub const SUMS_NAME: &str = "SHA256SUMS";
 pub const SIGNATURE_NAME: &str = "SHA256SUMS.minisig";
 /// The server binary inside an archive.
@@ -116,7 +120,7 @@ impl Feed {
     }
 
     pub fn url(&self, version: &str, name: &str) -> String {
-        format!("{}/v{version}/{name}", self.base)
+        format!("{}/{TAG_PREFIX}{version}/{name}", self.base)
     }
 
     /// The bytes of one release file.
@@ -467,8 +471,8 @@ pub(crate) mod tests {
     #[test]
     fn a_file_feed_reads_a_local_directory() {
         let directory = temporary_directory("feed");
-        std::fs::create_dir_all(directory.join("v2.0.0")).unwrap();
-        std::fs::write(directory.join("v2.0.0").join(SUMS_NAME), b"sums").unwrap();
+        std::fs::create_dir_all(directory.join("core-v2.0.0")).unwrap();
+        std::fs::write(directory.join("core-v2.0.0").join(SUMS_NAME), b"sums").unwrap();
         let feed = Feed::new(&format!("file://{}/", directory.display()));
         assert_eq!(feed.fetch("2.0.0", SUMS_NAME).unwrap(), b"sums");
         assert!(feed.fetch("2.0.1", SUMS_NAME).unwrap_err().is_transient());
@@ -483,7 +487,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             Feed::new(DEFAULT_FEED).url("1.15.0", SUMS_NAME),
-            "https://github.com/munimentai/muniment-core/releases/download/v1.15.0/SHA256SUMS"
+            "https://github.com/munimentai/muniment/releases/download/core-v1.15.0/SHA256SUMS"
         );
     }
 }
