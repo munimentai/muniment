@@ -4,11 +4,11 @@
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import { onMount } from 'svelte'
-  import { COLORS, STYLES, THEME_STORAGE_KEY, applyTheme, paletteId, paletteName, readStoredTheme, serializeTheme, themeId } from './theme-state.js'
+  import { COLORS, STYLES, THEME_EVENT, commitTheme, paletteId, paletteName, readStoredTheme, themeId } from './theme-state.js'
   import RunMark from './RunMark.svelte'
-  import { MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
+  import { MARK_EVENT, MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
   import { FRAME_OPTIONS, commitFrame, readStoredFrame } from './frame-state.js'
-  import { AVATAR_STYLE_OPTIONS, commitAvatarStyle, readStoredAvatarStyle } from './avatar-style-state.js'
+  import { AVATAR_STYLE_EVENT, AVATAR_STYLE_OPTIONS, commitAvatarStyle, readStoredAvatarStyle } from './avatar-style-state.js'
   import AgentAvatar from './AgentAvatar.svelte'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
@@ -42,8 +42,14 @@
   const registers = [['human', 'Conversation'], ['heading', 'Headers'], ['mono', 'Records']]
 
   onMount(() => {
-    const follow = (event) => { type = event.detail }
-    window.addEventListener(TYPE_EVENT, follow)
+    // A change that starts elsewhere, such as on another machine, shows here too.
+    const follows = [
+      [TYPE_EVENT, (event) => { type = event.detail }],
+      [THEME_EVENT, (event) => { theme = event.detail }],
+      [MARK_EVENT, (event) => { mark = event.detail }],
+      [AVATAR_STYLE_EVENT, (event) => { avatarStyle = event.detail }],
+    ]
+    for (const [name, follow] of follows) window.addEventListener(name, follow)
     void (async () => {
       try {
         const names = await tauri?.invoke('installed_fonts')
@@ -53,7 +59,7 @@
       }
       fontsRead = true
     })()
-    return () => window.removeEventListener(TYPE_EVENT, follow)
+    return () => { for (const [name, follow] of follows) window.removeEventListener(name, follow) }
   })
 
   function step(delta) {
@@ -71,9 +77,7 @@
   }
 
   function commit(next) {
-    theme = next
-    applyTheme(document.documentElement, theme)
-    try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(theme)) } catch (_) {}
+    theme = commitTheme(next)
   }
 
   // Mode picks the light or dark version, and a palette keeps its mode.

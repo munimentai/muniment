@@ -1,4 +1,5 @@
 export const THEME_STORAGE_KEY = 'muniment.theme'
+export const THEME_EVENT = 'muniment:theme'
 export const THEME_SYSTEM = 'system'
 export const THEME_LIGHT = 'light'
 export const THEME_DARK = 'dark'
@@ -98,4 +99,14 @@ export function readStoredTheme() {
   } catch (_) {
     return parseTheme(null)
   }
+}
+
+// Applies, stores and announces one change, so Preferences follows a change
+// that starts elsewhere.
+export function commitTheme(theme, root = document.documentElement) {
+  const next = parseTheme(theme)
+  applyTheme(root, next)
+  try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(next)) } catch (_) {}
+  try { window.dispatchEvent(new CustomEvent(THEME_EVENT, { detail: next })) } catch (_) {}
+  return next
 }
