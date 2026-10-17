@@ -17,7 +17,7 @@
         <button type="button" class="starter" onclick={() => oncreate?.(item)}>
           <span class="thumb" aria-hidden="true">
             {#if kind === 'agent'}
-              <AgentAvatar agent={{ id: item.id, avatar: { style: 'muniment-v2', seed: `starter-${item.id}` } }} size={compact ? 28 : 40} />
+              <AgentAvatar agent={{ id: item.id, avatar: { style: 'muniment', seed: `starter-${item.id}` } }} size={compact ? 28 : 40} />
             {:else}
               <LucideIcon name={item.icon} size={compact ? 20 : 28} />
             {/if}

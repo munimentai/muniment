@@ -120,7 +120,7 @@
   textarea { resize: vertical; line-height: 1.5; }
   .mono, .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .record { color: var(--muted); }
-  .profile { display: flex; align-items: center; gap: 12px; }
+  .profile { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
   .profile div { display: grid; gap: 2px; }
   .muted { color: var(--muted); font-size: var(--text-13); }
   .instructions { margin: 0; max-height: 120px; overflow-y: auto; white-space: pre-wrap; font-size: var(--text-13); line-height: 1.5; }
