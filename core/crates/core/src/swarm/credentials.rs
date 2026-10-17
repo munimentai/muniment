@@ -126,6 +126,9 @@ fn fleet_pub(view: &View, runtime_id: &str) -> Option<(String, String)> {
 /// it hands over is never refreshed here at the same time.
 pub(super) fn pass(inner: &Inner) -> Result<(), String> {
     let _refresh = lock(&inner.fleet.refresh);
+    if let Err(error) = super::accounts::publish(inner, sharing(inner)?) {
+        crate::runtime_eprintln!("muniment-runtime: swarm account records failed: {error}");
+    }
     let keys = fleet::keys(inner)?;
     let view = fleet::view(inner)?;
     if view.self_removed() || view.role(&view.self_id) != Some(Role::Full) {
@@ -140,9 +143,11 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
     let self_id = view.self_id.clone();
     let models_id = format!("models:{self_id}");
     let mcp_id = format!("mcp:{self_id}");
+    let keys_id = format!("keys:{self_id}");
     if !sharing(inner)? {
         withdraw(inner, &keys, &models_id, "models")?;
         withdraw(inner, &keys, &mcp_id, "mcp")?;
+        withdraw(inner, &keys, &keys_id, "keys")?;
         seal_leases(inner, &keys, &view, &Bundle::default(), &agent)?;
         return Ok(());
     }
@@ -162,11 +167,30 @@ pub(super) fn pass(inner: &Inner) -> Result<(), String> {
         names,
     )?;
     let tokens = own_mcp_tokens(inner)?;
-    let names: Vec<String> = tokens.keys().map(|key| format!("mcp:{key}")).collect();
+    let oauth = super::mcp_oauth::own_leases(&agent, &received_oauth(inner)?, now_ms);
+    let names: Vec<String> = tokens
+        .keys()
+        .map(|key| format!("mcp:{key}"))
+        .chain(oauth.keys().map(|key| format!("mcp-oauth:{key}")))
+        .collect();
     let plaintext = Zeroizing::new(
-        serde_json::to_vec(&json!({"tokens": tokens})).map_err(|error| error.to_string())?,
+        serde_json::to_vec(&json!({"tokens": tokens, "oauth": oauth}))
+            .map_err(|error| error.to_string())?,
     );
     reseal(inner, &keys, &mcp_id, "mcp", &recipients, &plaintext, names)?;
+    let (own_keys, names) = super::keys::own(&inner.profile, &received_written(inner, "keys:")?)?;
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(&json!({"keys": own_keys})).map_err(|error| error.to_string())?,
+    );
+    reseal(
+        inner,
+        &keys,
+        &keys_id,
+        "keys",
+        &recipients,
+        &plaintext,
+        names,
+    )?;
     issue_vault_tokens(inner, &keys, &view, &agent)?;
     seal_leases(inner, &keys, &view, &bundle, &agent)
 }
@@ -380,6 +404,19 @@ fn own_mcp_tokens(inner: &Inner) -> Result<serde_json::Map<String, Value>, Strin
         }
     }
     Ok(tokens)
+}
+
+/// The MCP sign-in leases other members' secrets wrote here.
+fn received_oauth(inner: &Inner) -> Result<BTreeMap<String, String>, String> {
+    let mut written = BTreeMap::new();
+    for state in opened_states(inner, "mcp:")? {
+        if let Ok(slots) =
+            serde_json::from_value::<BTreeMap<String, String>>(state["oauth_written"].clone())
+        {
+            written.extend(slots);
+        }
+    }
+    Ok(written)
 }
 
 fn member_record(inner: &Inner, runtime_id: &str) -> Option<MemberRecord> {
@@ -603,6 +640,28 @@ fn opened(inner: &Inner) -> Result<BTreeMap<String, (u64, Value)>, String> {
     Ok(opened)
 }
 
+/// The connection names this runtime applied from one sealed secret.
+pub(super) fn opened_keys(inner: &Inner, secret_id: &str) -> Result<Vec<String>, String> {
+    Ok(opened(inner)?
+        .remove(secret_id)
+        .and_then(|(_, state)| serde_json::from_value(state["keys"].clone()).ok())
+        .unwrap_or_default())
+}
+
+/// Every key slot the secrets under `prefix` wrote here, with the digest
+/// of what each wrote.
+fn received_written(inner: &Inner, prefix: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut written = BTreeMap::new();
+    for state in opened_states(inner, prefix)? {
+        if let Ok(slots) =
+            serde_json::from_value::<BTreeMap<String, String>>(state["written"].clone())
+        {
+            written.extend(slots);
+        }
+    }
+    Ok(written)
+}
+
 fn opened_states(inner: &Inner, prefix: &str) -> Result<Vec<Value>, String> {
     Ok(opened(inner)?
         .into_iter()
@@ -653,6 +712,12 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
     let opened = opened(inner)?;
     let mut models = BTreeSet::new();
     let mut mcp = BTreeSet::new();
+    // Keys whose connection had no record here yet are tried again.
+    let mut key_owners: BTreeSet<String> = opened
+        .iter()
+        .filter(|(id, (_, state))| id.starts_with("keys:") && state["waiting"] == true)
+        .filter_map(|(id, _)| id.strip_prefix("keys:").map(str::to_owned))
+        .collect();
     for secret in fleet::sealed_rows(inner)? {
         if secret.owner == self_id
             || !view.trusts(&secret.owner)
@@ -672,6 +737,9 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
             }
             "mcp" => {
                 mcp.insert(secret.owner.clone());
+            }
+            "keys" => {
+                key_owners.insert(secret.owner.clone());
             }
             "handover" => receive_handover(inner, &keys, &self_id, &secret)?,
             // Another member's vault token, or a class a later stage opens
@@ -699,7 +767,51 @@ pub(super) fn settle(inner: &Inner) -> Result<(), String> {
             );
         }
     }
+    for owner in key_owners {
+        if owner == self_id || !view.trusts(&owner) {
+            continue;
+        }
+        if let Err(error) = apply_keys(inner, &keys, &self_id, &owner) {
+            crate::runtime_eprintln!("muniment-runtime: keys from {owner} stayed out: {error}");
+        }
+    }
     Ok(())
+}
+
+/// Applies the decision-model and search keys one owner shares, in place of
+/// those it shared before.
+fn apply_keys(inner: &Inner, keys: &Keys, self_id: &str, owner: &str) -> Result<(), String> {
+    let secret_id = format!("keys:{owner}");
+    let Some(secret) = fleet::sealed(inner, &secret_id)? else {
+        return Ok(());
+    };
+    let value = open_json(keys, self_id, &secret)?
+        .map(|value| value["keys"].clone())
+        .unwrap_or(Value::Null);
+    let previous: BTreeMap<String, String> = opened(inner)?
+        .remove(&secret_id)
+        .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())
+        .unwrap_or_default();
+    let (written, waiting) = super::keys::apply(&inner.profile, &value, &previous)?;
+    let names: Vec<&String> = written.keys().collect();
+    mark_opened(
+        inner,
+        &secret_id,
+        secret.version,
+        owner,
+        &json!({"keys": names, "written": written, "waiting": waiting}),
+    )?;
+    fleet::audit(
+        inner,
+        "opened",
+        Some(owner),
+        json!({
+            "secret_id": secret_id,
+            "version": secret.version,
+            "recipients": secret.recipients.keys().collect::<Vec<_>>(),
+            "keys": names,
+        }),
+    )
 }
 
 /// Applies one owner's model connections and the vault token it issued for
@@ -778,17 +890,28 @@ fn apply_mcp(inner: &Inner, keys: &Keys, self_id: &str, owner: &str) -> Result<(
     let Some(secret) = fleet::sealed(inner, &secret_id)? else {
         return Ok(());
     };
-    let tokens = open_json(keys, self_id, &secret)?
+    let opened_value = open_json(keys, self_id, &secret)?;
+    let tokens = opened_value
+        .as_ref()
         .and_then(|value| value["tokens"].as_object().cloned())
         .unwrap_or_default();
+    let leases = opened_value
+        .as_ref()
+        .and_then(|value| value["oauth"].as_object().cloned())
+        .unwrap_or_default();
     let written = share_mcp(inner, &secret_id, &tokens)?;
-    let names: Vec<String> = tokens.keys().map(|key| format!("mcp:{key}")).collect();
+    let oauth_written = share_oauth(inner, &secret_id, &leases)?;
+    let names: Vec<String> = tokens
+        .keys()
+        .map(|key| format!("mcp:{key}"))
+        .chain(leases.keys().map(|key| format!("mcp-oauth:{key}")))
+        .collect();
     mark_opened(
         inner,
         &secret_id,
         secret.version,
         owner,
-        &json!({"keys": names, "written": written}),
+        &json!({"keys": names, "written": written, "oauth_written": oauth_written}),
     )?;
     fleet::audit(
         inner,
@@ -814,6 +937,19 @@ fn share_mcp(
         .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())
         .unwrap_or_default();
     crate::extend::share_mcp_tokens(&inner.profile, &previous, tokens)
+}
+
+/// Replaces the MCP sign-in leases `secret_id` wrote here with `leases`.
+fn share_oauth(
+    inner: &Inner,
+    secret_id: &str,
+    leases: &serde_json::Map<String, Value>,
+) -> Result<BTreeMap<String, String>, String> {
+    let previous: BTreeMap<String, String> = opened(inner)?
+        .remove(secret_id)
+        .and_then(|(_, state)| serde_json::from_value(state["oauth_written"].clone()).ok())
+        .unwrap_or_default();
+    super::mcp_oauth::apply(&agent_directory(inner), &previous, leases)
 }
 
 /// Keeps a sign-in another member handed to this runtime as its own, so
@@ -959,6 +1095,14 @@ fn drop_owner(inner: &Inner, owner: &str) -> Result<(), String> {
         );
     }
     share_mcp(inner, &format!("mcp:{owner}"), &serde_json::Map::new())?;
+    share_oauth(inner, &format!("mcp:{owner}"), &serde_json::Map::new())?;
+    let previous: BTreeMap<String, String> = opened(inner)?
+        .remove(&format!("keys:{owner}"))
+        .and_then(|(_, state)| serde_json::from_value(state["written"].clone()).ok())
+        .unwrap_or_default();
+    if !previous.is_empty() {
+        super::keys::apply(&inner.profile, &Value::Null, &previous)?;
+    }
     let connection = inner.store.connect()?;
     connection
         .execute("DELETE FROM fleet_opened WHERE owner=?1", [owner])
@@ -1143,7 +1287,8 @@ pub(super) fn on_hold_request(inner: &Inner, message: &Message) -> Result<(), St
 
 /// `fleet.credentials {share_models?}`: turns sharing this runtime's model
 /// connections with the fleet on or off, and shows the sealed secrets this
-/// runtime holds and its recent fleet log.
+/// runtime holds, every account in the fleet with its holder, and its recent
+/// fleet log.
 pub(super) fn credentials_operation(inner: &Inner, body: Value) -> Result<Value, String> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -1206,6 +1351,7 @@ pub(super) fn credentials_operation(inner: &Inner, body: Value) -> Result<Value,
         "role": view.role(&view.self_id).map(Role::as_str),
         "removed": view.self_removed(),
         "secrets": secrets,
+        "accounts": super::accounts::view(inner),
         "audit": audit,
         "vault": vault,
     }))

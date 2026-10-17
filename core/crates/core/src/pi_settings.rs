@@ -234,6 +234,9 @@ pub fn store_mcp_server(agent_directory: &Path, cli_executable: &Path) -> io::Re
 // proper-lockfile defaults to a 10-second stale threshold and a 5-second heartbeat.
 const LOCK_STALE: Duration = Duration::from_secs(10);
 const LOCK_UPDATE: Duration = Duration::from_secs(5);
+/// Pi locks `auth.json` with a 30-second stale threshold for a refresh, so a
+/// lock it holds while a provider answers is not broken as abandoned.
+const AUTH_LOCK_STALE: Duration = Duration::from_secs(30);
 
 pub struct SettingsLock {
     path: PathBuf,
@@ -280,7 +283,23 @@ pub fn lock_settings(path: &Path) -> io::Result<SettingsLock> {
     lock_settings_with_timeout(path, Duration::from_secs(30))
 }
 
+/// Takes the lock Pi takes on `auth.json` before it refreshes a sign-in,
+/// with the heartbeat that keeps it live while a provider answers.
+pub fn lock_auth(path: &Path) -> io::Result<SettingsLock> {
+    lock_with_stale(path, Duration::from_secs(30), AUTH_LOCK_STALE)
+}
+
+/// Takes the lock Pi takes on `file` before it refreshes an MCP sign-in,
+/// with Pi's 20-second stale threshold.
+pub fn lock_mcp_refresh(file: &Path) -> io::Result<SettingsLock> {
+    lock_with_stale(file, Duration::from_secs(25), Duration::from_secs(20))
+}
+
 fn lock_settings_with_timeout(path: &Path, timeout: Duration) -> io::Result<SettingsLock> {
+    lock_with_stale(path, timeout, LOCK_STALE)
+}
+
+fn lock_with_stale(path: &Path, timeout: Duration, stale: Duration) -> io::Result<SettingsLock> {
     let mut name = path.as_os_str().to_os_string();
     name.push(".lock");
     let path = PathBuf::from(name);
@@ -290,7 +309,7 @@ fn lock_settings_with_timeout(path: &Path, timeout: Duration) -> io::Result<Sett
             Ok(()) => break,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 match fs::metadata(&path).and_then(|metadata| metadata.modified()) {
-                    Ok(modified) if modified.elapsed().is_ok_and(|age| age > LOCK_STALE) => {
+                    Ok(modified) if modified.elapsed().is_ok_and(|age| age > stale) => {
                         // Recheck the heartbeat before removing an abandoned directory.
                         if fs::metadata(&path)?.modified()? == modified {
                             match fs::remove_dir(&path) {

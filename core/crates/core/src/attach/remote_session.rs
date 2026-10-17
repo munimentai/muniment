@@ -227,6 +227,7 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::SwarmLeave
         | Operation::FleetHoldSignIn
         | Operation::FleetCredentials
+        | Operation::FleetPinSet
         | Operation::SwarmSetRole
         | Operation::FleetAudit => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
         Operation::SwarmMembers
@@ -234,6 +235,8 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::AgentApprovals
         | Operation::GroupList
         | Operation::FleetOpStatus
+        | Operation::FleetPins
+        | Operation::BlobRead
         | Operation::FleetOps
         | Operation::FleetSyncStatus
         | Operation::ThreadHistoryFetch => RemoteRule::Scope(SCOPE_THREAD_READ),

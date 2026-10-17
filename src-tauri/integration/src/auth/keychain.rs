@@ -47,6 +47,7 @@ fn refused(error: &keyring::Error) -> bool {
 
 impl NativeCredentialBackend for PlatformKeychain {
     fn get(&self, user: &str) -> Result<Option<String>, String> {
+        muniment_core::state_root::guard_keychain(SERVICE);
         #[cfg(target_os = "macos")]
         if ACCESS_REFUSED.load(Ordering::SeqCst) {
             return Ok(None);
@@ -72,6 +73,7 @@ impl NativeCredentialBackend for PlatformKeychain {
     }
 
     fn set(&self, user: &str, value: &str) -> Result<(), String> {
+        muniment_core::state_root::guard_keychain(SERVICE);
         let entry = Entry::new(SERVICE, user).map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
         let result = if entry.get_credential().is::<keyring::macos::MacCredential>() {
@@ -89,6 +91,7 @@ impl NativeCredentialBackend for PlatformKeychain {
     }
 
     fn delete(&self, user: &str) -> Result<(), String> {
+        muniment_core::state_root::guard_keychain(SERVICE);
         match Entry::new(SERVICE, user)
             .map_err(|error| error.to_string())?
             .delete_credential()

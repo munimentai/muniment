@@ -1,0 +1,1 @@
+{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000e2","ok":true,"body":{"offline":{"artifacts":"all","budget_bytes":5368709120,"prefetch":true},"pins":[{"class":"artifact","key":"report/index.html"},{"class":"extension","key":"*"}],"usage":{"fetched_bytes":4096,"own_bytes":1024}}}

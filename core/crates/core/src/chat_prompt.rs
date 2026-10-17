@@ -30,12 +30,20 @@ fn local_prompt_directory() -> Option<PathBuf> {
     let root = LOCAL_PROMPT_ROOT
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    local_prompt_directory_under(root.as_deref()?)
+    match root.as_deref() {
+        Some(root) => local_prompt_directory_under(root),
+        // A test run without a state root keeps prompts in its own
+        // temporary directory, never in the keychain.
+        None => (!crate::state_root::keychain_allowed())
+            .then(|| crate::state_root::test_credentials_directory().join("prompts")),
+    }
 }
 
 fn local_prompt_directory_under(config_directory: &Path) -> Option<PathBuf> {
-    (!cfg!(feature = "keyring") || crate::local_mode::is_local_mode(config_directory))
-        .then(|| config_directory.join("muniment").join("prompts"))
+    (!cfg!(feature = "keyring")
+        || crate::local_mode::is_local_mode(config_directory)
+        || !crate::state_root::keychain_allowed())
+    .then(|| config_directory.join("muniment").join("prompts"))
 }
 
 fn local_prompt_path(directory: &Path, user: &str) -> PathBuf {
@@ -118,6 +126,7 @@ mod keychain {
     const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
 
     fn entry(user: &str) -> Result<Entry, ChatPromptError> {
+        crate::state_root::guard_keychain(PROMPT_SERVICE);
         Entry::new(PROMPT_SERVICE, user).map_err(ChatPromptError::Entry)
     }
 
@@ -172,6 +181,7 @@ mod keychain {
 #[cfg(feature = "keyring")]
 #[doc(hidden)]
 pub fn use_mock_keyring_for_tests() {
+    crate::state_root::note_keychain_mocked();
     type Secrets = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
 
     struct SharedCredentialBuilder(Secrets);
@@ -249,6 +259,7 @@ pub fn use_refused_keyring_for_tests(
     refuse_entry: bool,
     writes: Arc<AtomicUsize>,
 ) {
+    crate::state_root::note_keychain_mocked();
     #[derive(Clone, Debug)]
     struct RefusedKeyring {
         code: i32,
@@ -386,6 +397,9 @@ mod local_store_tests {
     #[cfg(feature = "keyring")]
     #[test]
     fn the_marker_selects_the_file_store_under_the_state_root() {
+        // With an in-memory keyring the marker alone picks the store; a test
+        // run without one keeps every prompt in files.
+        use_mock_keyring_for_tests();
         let root = temporary_root("marker");
         assert_eq!(local_prompt_directory_under(&root), None);
         fs::write(root.join(crate::local_mode::LOCAL_MODE_MARKER), "1").unwrap();

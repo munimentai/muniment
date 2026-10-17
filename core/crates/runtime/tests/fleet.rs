@@ -401,6 +401,8 @@ struct ProviderState {
     holding: bool,
     held: u32,
     drop_held: bool,
+    /// How long each refresh waits before the provider answers it.
+    delay: Duration,
 }
 
 impl Provider {
@@ -442,6 +444,8 @@ impl Provider {
             .find_map(|pair| pair.strip_prefix("refresh_token="))
             .unwrap_or_default()
             .to_owned();
+        let delay = self.state.lock().unwrap().delay;
+        std::thread::sleep(delay);
         let mut state = self.state.lock().unwrap();
         if state.holding {
             state.held += 1;
@@ -481,6 +485,10 @@ impl Provider {
 
     fn hold(&self) {
         self.state.lock().unwrap().holding = true;
+    }
+
+    fn slow(&self, delay: Duration) {
+        self.state.lock().unwrap().delay = delay;
     }
 
     fn held(&self) -> u32 {
@@ -640,4 +648,151 @@ fn a_holder_killed_mid_refresh_never_double_spends_and_hold_sign_in_recovers() {
             member.accounts()
         );
     }
+}
+
+/// Refreshes Pi's `openai-codex` sign-in the way the Pi sidecar does: under
+/// proper-lockfile's directory lock on `auth.json`, with Pi's 30-second stale
+/// threshold, it reads the entry and refreshes only a token with less than
+/// five minutes left. Answers whether it called the provider.
+fn pi_refresh(agent: &std::path::Path, url: &str) -> bool {
+    let auth = agent.join("auth.json");
+    let lock = agent.join("auth.json.lock");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match std::fs::create_dir(&lock) {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stale = std::fs::metadata(&lock)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age > Duration::from_secs(30));
+                if stale {
+                    let _ = std::fs::remove_dir(&lock);
+                    continue;
+                }
+                assert!(Instant::now() < deadline, "Pi never took the auth lock");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("{error}"),
+        }
+    }
+    let mut entries = muniment_core::models::pi_models::read_json(&auth).unwrap();
+    let entry = entries["openai-codex"].clone();
+    let now = muniment_core::chrono::Utc::now().timestamp_millis();
+    let expiring = entry["expires"].as_i64().unwrap() - 5 * 60_000 <= now;
+    if expiring {
+        let address = url
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap()
+            .to_owned();
+        let body = format!(
+            "grant_type=refresh_token&refresh_token={}",
+            entry["refresh"].as_str().unwrap()
+        );
+        let mut stream = std::net::TcpStream::connect(&address).unwrap();
+        write!(
+            stream,
+            "POST /oauth/token HTTP/1.1\r\nhost: {address}\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+        let (head, text) = answer.split_once("\r\n\r\n").unwrap();
+        if head.starts_with("HTTP/1.1 200") {
+            let tokens: Value = muniment_core::serde_json::from_str(text).unwrap();
+            entries.insert(
+                "openai-codex".into(),
+                json!({
+                    "type": "oauth",
+                    "access": tokens["access_token"],
+                    "refresh": tokens["refresh_token"],
+                    "expires": now + tokens["expires_in"].as_i64().unwrap() * 1000,
+                }),
+            );
+            muniment_core::models::pi_models::write_json(&auth, &entries).unwrap();
+        }
+    }
+    std::fs::remove_dir(&lock).unwrap();
+    expiring
+}
+
+#[test]
+fn core_and_the_pi_sidecar_refreshing_one_sign_in_never_spend_a_token_twice() {
+    let _environment = environment();
+    let (provider, url) = Provider::start("r0");
+    muniment_core::model_router::native_auth::set_refresh_endpoint_for_tests(Some(url.clone()));
+    let _endpoint = Endpoint;
+    // Each refresh takes a while at the provider, so the two refreshers
+    // overlap.
+    provider.slow(Duration::from_millis(150));
+    let holder = Member::new("pi-holder");
+    let b = Member::new("pi-b");
+    b.join(&holder);
+    assert!(wait(|| holder.trusts(&b) && b.trusts(&holder)));
+    holder.write_auth(json!({}));
+    holder.share();
+    holder.swarm().fleet_pass().unwrap();
+    // Only the passes the test runs refresh from here on.
+    holder.swarm().set_fleet_interval(Duration::from_secs(3600));
+    let agent = holder.agent();
+    let lock = agent.join("auth.json.lock");
+    for round in 0..6 {
+        // The sign-in has four minutes left: inside Pi's five-minute window
+        // and core's lease margin, so both refreshers want it.
+        let (current, _, _) = provider.snapshot();
+        let now = muniment_core::chrono::Utc::now().timestamp_millis();
+        holder.write_auth(json!({"openai-codex": {
+            "type": "oauth",
+            "access": format!("a-round-{round}"),
+            "refresh": current,
+            "expires": now + 4 * 60_000,
+        }}));
+        let pi_first = round % 2 == 0;
+        let pi = {
+            let agent = agent.clone();
+            let url = url.clone();
+            let lock = lock.clone();
+            std::thread::spawn(move || {
+                if !pi_first {
+                    // Pi asks while core's refresh holds the lock.
+                    assert!(wait(|| lock.is_dir()), "core never took the auth lock");
+                }
+                pi_refresh(&agent, &url)
+            })
+        };
+        if pi_first {
+            assert!(wait(|| lock.is_dir()), "Pi never took the auth lock");
+        }
+        holder.swarm().fleet_pass().unwrap();
+        let pi_refreshed = pi.join().unwrap();
+        let (_, reused, spent) = provider.snapshot();
+        assert_eq!(
+            reused, 0,
+            "round {round} spent a refresh token twice: {spent:?}"
+        );
+        assert_eq!(
+            pi_refreshed, pi_first,
+            "round {round}: Pi refreshed {pi_refreshed}"
+        );
+        assert!(!lock.exists(), "round {round} left the auth lock behind");
+    }
+    let (current, reused, spent) = provider.snapshot();
+    assert_eq!(reused, 0, "a refresh token was spent twice: {spent:?}");
+    assert!(spent.values().all(|count| *count == 1), "{spent:?}");
+    assert!(spent.len() >= 6, "{spent:?}");
+    let held = holder.auth()["openai-codex"].clone();
+    assert_eq!(held["refresh"], current.as_str());
+    // The other member holds a lease without the refresh token, so its own
+    // Pi never refreshes it.
+    assert!(
+        wait(|| b.auth().get("openai-codex").is_some_and(|entry| {
+            entry.get("refresh").is_none() && entry["access"] == held["access"]
+        })),
+        "B holds {:?}",
+        b.auth().get("openai-codex")
+    );
 }

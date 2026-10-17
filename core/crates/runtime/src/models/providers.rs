@@ -464,51 +464,18 @@ fn refresh_provider_models(
             .get(&cache_key)
             .is_some_and(|c| now >= c.checked_ms && now - c.checked_ms < provider_models::TTL_MS);
         if force || !fresh {
-            // Refresh a supported subscription before listing models. Re-read
-            // and compare under the auth lock so a concurrent sign-in survives.
+            // Refresh a supported subscription before listing models, under
+            // the lock Pi refreshes it under, so one refresh token is spent once.
             let mut current = entry.clone();
-            if let Some(credential) = Credential::from_pi_auth(provider, entry) {
-                // A subscription copied into the pool shares its refresh token.
-                // Let the pool rotate it once, then mirror it to the provider slot.
-                let pooled = muniment_core::model_router::config::load(agent)
-                    .ok()
-                    .and_then(|config| {
-                        config.accounts.into_iter().find(|account| {
-                            matches!(&account.credential,
-                        Credential::Subscription { provider: p, access, refresh, .. }
-                        if p == provider && (entry["access"] == *access || refresh.as_deref().is_some_and(|r| entry["refresh"] == r)))
-                        })
-                    });
-                let refreshed = if let Some(account) = pooled {
-                    Some(
-                        native_auth::refresh_account(agent, &account.id, now, DISCOVERY_TIMEOUT)
-                            .map(|a| a.credential),
-                    )
-                } else {
-                    native_auth::refresh_if_expiring(&credential, now, DISCOVERY_TIMEOUT)
-                };
-                if let Some(Ok(Credential::Subscription {
-                    access,
-                    refresh,
-                    expires_ms,
-                    ..
-                })) = refreshed
-                {
-                    let _lock = lock_pi_auth_file(&auth_file)?;
-                    let mut latest = read_json_for_update(&auth_file)?;
-                    if latest.get(provider) == Some(entry) {
-                        current["access"] = access.into();
-                        if let Some(refresh) = refresh {
-                            current["refresh"] = refresh.into();
-                        }
-                        if let Some(expires) = expires_ms {
-                            current["expires"] = expires.into();
-                        }
-                        latest.insert(provider.clone(), current.clone());
-                        write_json_for_update(&auth_file, &latest)?;
-                    } else {
-                        current = latest.get(provider).cloned().unwrap_or_default();
-                    }
+            if Credential::from_pi_auth(provider, entry).is_some() {
+                if let Ok(Some(fresh)) = muniment_core::shared_models::refresh_pi_sign_in(
+                    agent,
+                    provider,
+                    now,
+                    0,
+                    DISCOVERY_TIMEOUT,
+                ) {
+                    current = fresh;
                 }
             }
             if let Some(token) = current

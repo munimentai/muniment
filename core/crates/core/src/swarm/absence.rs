@@ -108,6 +108,9 @@ pub(super) fn check(inner: &Inner) -> Result<(), String> {
 
 /// Clears this runtime's absence pauses and answers the agents it resumed.
 fn clear(inner: &Inner) -> Result<Vec<String>, String> {
+    // The pause leaves the record before any agent resumes, so a reader
+    // that sees a resumed agent also sees the pause gone.
+    inner.store.set_meta("absence_paused_at", None)?;
     let mut resumed = Vec::new();
     for mut agent in directory::local_agents(inner) {
         if agent.paused_reason.as_deref() != Some(ABSENCE_REASON) {
@@ -119,7 +122,6 @@ fn clear(inner: &Inner) -> Result<Vec<String>, String> {
         agents::save(&inner.profile, agent)?;
         resumed.push(id);
     }
-    inner.store.set_meta("absence_paused_at", None)?;
     inner.emit(
         muniment_attach::EventName::SwarmChanged,
         json!({"kind": "absence", "paused": false, "agents": resumed}),

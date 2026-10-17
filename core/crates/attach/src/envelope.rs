@@ -469,6 +469,18 @@ pub enum Operation {
     /// runtime's model connections with the fleet on or off.
     #[serde(rename = "fleet.credentials")]
     FleetCredentials,
+    /// Shows this machine's pins, its offline settings for fleet blobs and
+    /// the bytes it keeps.
+    #[serde(rename = "fleet.pins")]
+    FleetPins,
+    /// Pins or unpins fleet items on this machine and changes its offline
+    /// settings for fleet blobs.
+    #[serde(rename = "fleet.pin_set")]
+    FleetPinSet,
+    /// Reads a slice of a blob a fleet record or thread names, fetching it
+    /// from the fleet when this machine lacks it.
+    #[serde(rename = "blob.read")]
+    BlobRead,
     /// Gives a fleet member another role, `full` or `worker`, with a
     /// signed roster entry.
     #[serde(rename = "swarm.set_role")]
@@ -724,6 +736,9 @@ impl Operation {
             Self::SwarmResume => "swarm.resume",
             Self::FleetHoldSignIn => "fleet.hold_sign_in",
             Self::FleetCredentials => "fleet.credentials",
+            Self::FleetPins => "fleet.pins",
+            Self::FleetPinSet => "fleet.pin_set",
+            Self::BlobRead => "blob.read",
             Self::SwarmSetRole => "swarm.set_role",
             Self::FleetAudit => "fleet.audit",
             Self::ThreadPost => "thread.post",
@@ -779,6 +794,9 @@ impl Operation {
                 | Self::SwarmResume
                 | Self::FleetHoldSignIn
                 | Self::FleetCredentials
+                | Self::FleetPins
+                | Self::FleetPinSet
+                | Self::BlobRead
                 | Self::SwarmSetRole
                 | Self::FleetAudit
                 | Self::ThreadPost

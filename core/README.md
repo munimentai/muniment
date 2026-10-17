@@ -715,21 +715,31 @@ steering, gate answers and run starts through `SwarmHost`.
   exchange carries `sealed` with `sealed_have`, only to a full member over
   its pinned link or admitted device. Classes: `models:<owner>` (the bundle
   `models.share` sends, applied as the device `swarm:<owner>`), `mcp:<owner>`
-  (MCP bearer tokens), `vault:<issuer>:<member>` (a model vault machine
-  token), `handover:<owner>:<sign-in>` and `lease:<owner>:<member>`: to a
+  (MCP bearer tokens, and MCP OAuth sign-ins as leases without their refresh
+  token), `keys:<owner>` (decision-model connection keys and web search
+  provider keys, which land where the receiver holds no key of its own),
+  `vault:<issuer>:<member>` (a model vault machine token),
+  `handover:<owner>:<sign-in>` and `lease:<owner>:<member>`: to a
   worker, the connections its agents' models name, and to a member the
   model vault refused a machine token, the vault's connections, each
   without a refresh token. `fleet.credentials` (`{"share_models"?,
   "use_vault"?}` → `{"share_models", "use_vault", "role", "removed",
-  "secrets", "audit", "vault"}`) turns sharing on, says whether this member
-  uses connections the vault manages, and lists the secrets, recent audit
-  entries and each member's vault state (`token`, or `leases` with the
-  refusal).
+  "secrets", "accounts", "audit", "vault"}`) turns sharing on, says whether
+  this member uses connections the vault manages, and lists the secrets,
+  every account in the fleet, recent audit entries and each member's vault
+  state (`token`, or `leases` with the refusal). An account is a record of
+  class `account` keyed `<holder>/<name>` that only its holder writes:
+  `{"name", "provider", "kind", "label", "refresher", "holder",
+  "holder_name", "shared", "this_machine", "usable_here"}` without any
+  secret.
   The owner reseals about once a minute, so a rotating sign-in travels as a
   lease the owner refreshes before the lease margin. `fleet.hold_sign_in`
   (`{"account": "pi:<provider>"|"router:<id>"}` → `{"status": "requested"|"held",
   "holder"}`) moves the refresher: the holder seals the sign-in with its
-  refresh token to the caller and drops it. A desktop that holds the model
+  refresh token to the caller and drops it. Core refreshes a Pi sign-in in
+  `auth.json` and an MCP sign-in in `mcp-auth.json` under the lock Pi takes
+  for the same refresh, and reads the entry under it, so core and the Pi
+  sidecar never spend one rotating refresh token twice. A desktop that holds the model
   vault issues a machine token only to a full member that names `vault/1`
   (`use_vault`); every other connection reaches members sealed over the
   swarm, which no pairing limit caps. When the vault refuses a token, as at
@@ -746,6 +756,32 @@ steering, gate answers and run starts through `SwarmHost`.
   replaces one it holds. `fleet.audit` (`{"since"?, "limit"?}` →
   `{"entries": [{"id", "at", "kind", "actor_runtime", "runtime_id",
   "record"}], "more"}`, `runtime.admin`) reads it newest first.
+- **Extensions.** MCP servers are records of class `mcp` and skills and
+  plugins of class `extension`, keyed by inventory item id, last writer
+  wins. An item from another member carries `fleet: {"origin", "name"}`,
+  arrives turned on or off as its owner chose, and keeps a toggle made here
+  after that. A package travels as a tar archive in the content store,
+  named by its SHA-256 in the record's `package`; a member fetches it once
+  the item is enabled or pinned there, checks the hash and unpacks it under
+  `extensions/packages`. `.git` and `node_modules` stay with the member that
+  installed it. The extension `read` action marks an item `availability: "not on this
+  machine"` when its stdio command is missing, or `"package not on this
+  machine"` before its package arrives, and runs leave such an item out.
+- **Artifacts and blobs.** Each file under `<Home>/artifacts` is a record of
+  class `artifact` keyed by its path, `{"hash", "owner", "owner_name",
+  "size"}`, last writer wins; its bytes go into the owner's content store.
+  A member writes an artifact into its own folder when it is pinned, or
+  when `artifacts` is `all` and the member prefetches, and reads any other
+  through `blob.read` (`{"hash", "offset"?}` → `{"hash", "status":
+  "fetching"}`, or `"held"` with `"offset", "total", "data", "done"`, 256
+  KiB at most), which fetches it over the content-store want path.
+  `fleet.pins` (`{}`) and `fleet.pin_set` (`{"pins"?: [{"class", "key",
+  "pinned"}], "offline"?: {"artifacts"?, "budget_bytes"?, "prefetch"?}}`)
+  answer `{"pins", "offline", "usage"}`. A pin names `artifact` or
+  `extension` and a key, or `*` for the whole class. Fetched blobs past
+  `budget_bytes` (5 GiB by default) leave the content store, least recently
+  used first; pinned blobs and a member's own stay. A laptop or desktop
+  prefetches by default, a server or container does not.
 - **Forwarded actions.** A client that calls a forwardable operation on an
   item another member owns gets `{"forwarded": true, "op_id", "state"}`
   with the keys that operation's answer always has; an approval answer
@@ -829,13 +865,13 @@ back to the swarm events alone on a runtime that refuses the flag. With
 `preferences.changed`, and
 `DesktopClient::subscribe_chat_events_with_fleet` falls back to the live
 swarm events.
-Remotely, linking, `fleet.offline_set`, the fleet credential operations,
-`preferences.set` and `preferences.import` take `runtime.admin`, the reads,
-`fleet.op_status`, `fleet.ops`, `fleet.sync_status`, `thread.history_fetch`
-and `preferences.get` take `thread.read`, `thread.post`, `fleet.op_cancel`,
-group changes and answers take `run.write`, and `agent.move` and
-`swarm.resume` take
-`agents.manage`.
+Remotely, linking, `fleet.offline_set`, `fleet.pin_set`, the fleet
+credential operations, `preferences.set` and `preferences.import` take
+`runtime.admin`, the reads, `fleet.op_status`, `fleet.ops`,
+`fleet.sync_status`, `thread.history_fetch`, `preferences.get`,
+`fleet.pins` and `blob.read` take `thread.read`, `thread.post`,
+`fleet.op_cancel`, group changes and answers take `run.write`, and
+`agent.move` and `swarm.resume` take `agents.manage`.
 
 ## Phone relay
 
