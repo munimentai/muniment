@@ -1,15 +1,20 @@
-# The AI factory's contract for the muniment desktop. The factory reads it from
-# the default branch, and only a human commit changes anything under .factory/.
+# The AI factory's contract for the muniment desktop at the root and the core
+# workspace under core/. The factory reads it from the default branch, and only
+# a human commit changes anything under .factory/.
 version: 1
 forge: forgejo
 default_branch: main
 language: rust
 
 # The agent rules are the owner's, and the secret-scan config judges every change.
+# Core's CI, release and pins update live in .forgejo/workflows/core*.yml.
 protected:
   - "AGENTS.md"
   - "CLAUDE.md"
+  - "core/AGENTS.md"
+  - "core/CLAUDE.md"
   - ".gitleaks.toml"
+  - ".forgejo/workflows/core*.yml"
 
 # Packaging, signing, the desktop-ci and release tooling, and the runtime
 # boundary decide what reaches an installed app.
@@ -24,25 +29,54 @@ risk_paths:
   - ".github/desktop-ci-command.py"
   - "SPEC.md"
   - "DESIGN.md"
+  # A releasing core merge ships to the desktop, the router and the sandbox
+  # image. The pins, the release tooling, the router image and the public
+  # boundary decide what they get.
+  - "core/pins/**"
+  - "core/scripts/release.py"
+  - "core/scripts/pins/**"
+  - "core/scripts/check-core-boundary.*"
+  - "core/deploy/**"
+  - "core/docs/core-boundary.md"
+  - "core/crates/pins/**"
+  - "core/crates/router/src/server.rs"
+  - "core/crates/router/src/store.rs"
+  - "core/Cargo.toml"
 
+# The core commands run in core/. Its toolchain needs rustfmt and clippy, which
+# the image lacks, and the image's RUSTUP_HOME and CARGO_HOME are read-only, so
+# setup copies the toolchain under HOME, adds both components, and fetches the
+# locked crates into a CARGO_HOME under HOME. Every core command sets both
+# variables.
 gates:
   build:
-    commands: ["npm run build"]
-    timeout_s: 900
+    commands:
+      - "npm run build"
+      - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo build --workspace --all-targets --locked --features muniment-pins/cli"
+    timeout_s: 3300
   lint:
     commands:
       - "bash scripts/check-steering.sh ."
       - "node test/ui-copy-lint.mjs src src-tauri browser-control"
-    timeout_s: 600
+      - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo fmt --all --check"
+      - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy --workspace --all-targets --locked --features muniment-pins/cli -- -D warnings"
+      - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy -p muniment-router --all-targets --features server --locked -- -D warnings"
+      # The core boundary check runs the port tests. One test thread keeps the
+      # router's timing tests stable on the sandbox's four CPUs.
+      - "cd core && RUST_TEST_THREADS=1 RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo scripts/check-core-boundary.sh"
+    timeout_s: 3000
   # The sandbox has no GTK, WebKit, browser, rustfmt, clippy or desktop-ci
   # access. The gate runs the main vitest suite, the CI routing tests, the
   # browser-control relay core tests, the Go reader tests and the tests of the
   # Rust crates that build without Tauri. The
   # image's CARGO_HOME is read-only, so cargo uses one under HOME, where setup
-  # fetches the locked crates and the muniment-core checkout that the frontend
-  # suite reads. One vitest retry absorbs a render wait that a busy sandbox
-  # outlasts. CI runs the browser suite, the Rust checks of the Tauri crate and
-  # the three-platform compile preflight on every pull request.
+  # fetches the locked crates. The frontend suite reads core/ in the checkout.
+  # One vitest retry absorbs a render wait that a busy sandbox outlasts. CI
+  # runs the browser suite, the Rust checks of the Tauri crate and the
+  # three-platform compile preflight on every pull request. The core tests
+  # skip the network tests, which download Pi, and the router's Postgres
+  # tests. Core CI runs both, the macOS tests, the Windows checks and the
+  # router image build.
   unit_tests:
     commands:
       - "CARGO_HOME=$HOME/.cargo npx vitest run --root . --exclude 'test/e2e/**' --exclude 'prototypes/**' --exclude 'browser-control/**' --exclude '**/*.browser.test.js' --retry=1"
@@ -56,7 +90,10 @@ gates:
         --package muniment-desktop-integration --package muniment-cli --package muniment-acp
         --package muniment-runtime --features muniment-desktop-integration/keyring
         -- --test-threads=1 --skip real_diagnostic_selects_the_browser_client_half
-    timeout_s: 3600
+      - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo test --workspace --locked --features muniment-pins/cli -- --test-threads=1"
+      - "cd core && python3 -B scripts/test_release.py"
+      - "cd core && python3 -B scripts/pins/test_update.py"
+    timeout_s: 7200
   # Set explicitly, so a change of the contract defaults leaves these gates as they are.
   complexity:
     enabled: false
@@ -74,7 +111,8 @@ gates:
     # `CI / Desktop compile preflight (<platform>) (pull_request)` reports when
     # desktop code changes and then gates the merge as well.
     required: []
-    # The desktop matrix queues behind the shared desktop-ci slot.
+    # The desktop matrix and the core macOS and Windows jobs queue behind the
+  # shared desktop-ci slot.
     timeout_s: 14400
 
 budgets:
@@ -87,22 +125,52 @@ sandbox:
   lane: desktop
   cpus: 4
   memory_mib: 8192
-  # crates.io for the locked crates, and GitHub for the muniment-core git dependency.
+  # npm, crates.io for the locked crates, GitHub release downloads for the
+  # sherpa-onnx libraries, and the Rust dist server for rustfmt and clippy.
   egress:
     - "registry.npmjs.org:443"
     - "index.crates.io:443"
     - "static.crates.io:443"
     - "github.com:443"
+    - "objects.githubusercontent.com:443"
+    - "release-assets.githubusercontent.com:443"
+    - "static.rust-lang.org:443"
+  # The core sherpa-onnx build script downloads its libraries with bundled TLS
+  # roots, which reject the sandbox egress proxy, so setup fetches the archive
+  # with curl and points the build script at it through the CARGO_HOME config.
+  # The sandbox's writable layer is small, so the same config drops debug info
+  # and incremental builds. Each setup step skips what is already in place, so
+  # setup also runs on an image that ships its result.
   setup:
     - "for n in 1 2 3; do npm ci --no-audit --no-fund --fetch-retries=5 && exit 0; sleep 20; done; exit 1"
     - "for n in 1 2 3; do CARGO_HOME=$HOME/.cargo cargo fetch --locked --manifest-path src-tauri/Cargo.toml && exit 0; sleep 20; done; exit 1"
     - "for n in 1 2 3; do npm ci --prefix browser-control --no-audit --no-fund --fetch-retries=5 && exit 0; sleep 20; done; exit 1"
+    - "cd core && { test -f $HOME/.rustup/.copied || { rm -rf $HOME/.rustup && cp -R /opt/rust/rustup $HOME/.rustup && touch $HOME/.rustup/.copied; }; }"
+    - >-
+      cd core &&
+      if RUSTUP_HOME=$HOME/.rustup cargo fmt --version >/dev/null 2>&1 &&
+      RUSTUP_HOME=$HOME/.rustup cargo clippy --version >/dev/null 2>&1; then exit 0; fi;
+      for n in 1 2 3; do RUSTUP_HOME=$HOME/.rustup rustup component add rustfmt clippy && exit 0; sleep 20; done; exit 1
+    - "cd core && for n in 1 2 3; do RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo fetch --locked && exit 0; sleep 20; done; exit 1"
+    - >-
+      cd core &&
+      v=$(grep -A1 '^name = "sherpa-onnx-sys"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p') &&
+      f=sherpa-onnx-v$v-linux-x64-shared-lib.tar.bz2 && mkdir -p $HOME/sherpa-onnx &&
+      { test -s $HOME/sherpa-onnx/$f ||
+      curl -fsSL --retry 3 -o $HOME/sherpa-onnx/$f https://github.com/k2-fsa/sherpa-onnx/releases/download/v$v/$f; }
+    - >-
+      cd core &&
+      { grep -qs SHERPA_ONNX_ARCHIVE_DIR $HOME/.cargo/config.toml ||
+      printf '[build]\nincremental = false\n[profile.dev]\ndebug = 0\n[env]\nSHERPA_ONNX_ARCHIVE_DIR = "%s/sherpa-onnx"\n' "$HOME"
+      >> $HOME/.cargo/config.toml; }
 
-# Releases are owner-gated workflow_dispatch runs, so a merge ships nothing.
+# Desktop releases are owner-gated workflow_dispatch runs. A releasing core
+# merge publishes through core CI on main, so verify builds the core workspace.
 verify:
   commands:
     - "npm run build"
-  timeout_s: 900
+    - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo build --workspace --locked"
+  timeout_s: 3300
 
 # The owner files every task: no automatic cleanup task.
 cleanup:
