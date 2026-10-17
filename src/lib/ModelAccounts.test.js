@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import ModelAccounts from './ModelAccounts.svelte'
+import Settings from './Settings.svelte'
 
 afterEach(cleanup)
 
@@ -25,10 +26,10 @@ describe('Hold sign-in here', () => {
     const onheld = vi.fn()
     render(ModelAccounts, { tauri: { invoke }, settings, family: 'openai', fleet, onheld })
 
-    expect(within(card('Work')).getByText('Held here')).toBeInTheDocument()
+    expect(within(card('Work')).getByText('Signed in here')).toBeInTheDocument()
     expect(within(card('Work')).queryByRole('button', { name: 'Hold sign-in here' })).toBeNull()
     const team = card('Team')
-    expect(within(team).getByText('Held by Studio')).toBeInTheDocument()
+    expect(within(team).getByText('Signed in on Studio')).toBeInTheDocument()
 
     await fireEvent.click(within(team).getByRole('button', { name: 'Hold sign-in here' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.hold_sign_in', body: { account: 'router:team' } }))
@@ -42,13 +43,38 @@ describe('Hold sign-in here', () => {
     render(ModelAccounts, { tauri: { invoke }, settings, family: 'openai', fleet })
     await fireEvent.click(within(card('Team')).getByRole('button', { name: 'Hold sign-in here' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Studio does not answer.')
-    expect(within(card('Team')).getByText('Held by Studio')).toBeInTheDocument()
+    expect(within(card('Team')).getByText('Signed in on Studio')).toBeInTheDocument()
     expect(within(card('Team')).getByRole('button', { name: 'Hold sign-in here' })).toBeEnabled()
   })
 
   it('shows no holder and no control without the fleet accounts', () => {
     render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings, family: 'openai', fleet: null })
-    expect(screen.queryByText(/^Held/)).toBeNull()
+    expect(screen.queryByText(/^Signed in/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Hold sign-in here' })).toBeNull()
+  })
+})
+
+describe('sign-ins on other machines', () => {
+  it('lists each sign-in another machine holds that this machine cannot use yet, with no hold control', async () => {
+    const inventory = { providers: [], hidden: [] }
+    const router = { enabled: true, running: true, is_default: false, base_url: 'http://127.0.0.1:1234/v1', accounts: [], subscriptions: [], families: [], options: [], fallback: null, min_confidence: 0.6, classifier: { kind: 'none', configured: false, model: '' } }
+    const accounts = [
+      { name: 'pi:anthropic', provider: 'anthropic', kind: 'oauth', label: 'anthropic', holder: STUDIO, holder_name: 'Studio', shared: true, this_machine: false, usable_here: false },
+      { name: 'router:home', provider: 'openai', family: 'openai', kind: 'subscription', label: 'Home', holder: STUDIO, holder_name: 'Studio', shared: false, this_machine: false, usable_here: false },
+      { name: 'router:key', provider: 'openai', family: 'openai', kind: 'api_key', label: 'Key', holder: STUDIO, holder_name: 'Studio', shared: true, this_machine: false, usable_here: false },
+    ]
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'agent_request' && payload.operation === 'fleet.credentials') return { share_models: true, accounts }
+      if (command === 'model_router_settings') return router
+      return inventory
+    })
+    render(Settings, { tauri: { invoke }, inventory, section: 'models', onclose: vi.fn() })
+    const group = (await screen.findByRole('heading', { name: 'Signed in on other machines' })).closest('section')
+    expect(within(group).getByText('anthropic')).toBeInTheDocument()
+    expect(within(group).getByText('Signed in on Studio, arriving')).toBeInTheDocument()
+    expect(within(group).getByText('Home')).toBeInTheDocument()
+    expect(within(group).getByText('Signed in on Studio, not shared')).toBeInTheDocument()
+    expect(within(group).queryByText('Key')).toBeNull()
+    expect(within(group).queryByRole('button', { name: 'Hold sign-in here' })).toBeNull()
   })
 })

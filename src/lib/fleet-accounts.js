@@ -1,8 +1,9 @@
-// The fleet's model accounts from core's `fleet.credentials`, and the record
-// that names who holds one sign-in. Core lists each account under the member
-// that holds it, keyed `pi:<provider>` or `router:<id>`, with `holder_name`,
-// `this_machine` and `usable_here`. A router account another member shares
-// lands here as `shared:swarm:<holder>:<id>`.
+// The fleet's model accounts from core's `fleet.credentials`, and the line
+// that names the machine each sign-in is signed in on. Core lists each
+// account under the member that holds it, keyed `pi:<provider>` or
+// `router:<id>`, with `holder`, `holder_name`, `this_machine`, `usable_here`
+// and `shared`. A router account another member shares lands here as
+// `shared:swarm:<holder>:<id>`.
 import { agentRequest } from '../agents/agent-runtime.js'
 
 const SIGN_IN_KINDS = new Set(['oauth', 'subscription'])
@@ -13,7 +14,7 @@ const HARNESS_SIGN_IN = /^pi:(.+)$/
 export async function readFleetAccounts(tauri) {
   try {
     const answer = await agentRequest(tauri, 'local', 'fleet.credentials', {})
-    // TODO(S4b): `accounts` plugs in here. A runtime that does not list it shows no hold control.
+    // An older runtime lists no accounts and shows no holder.
     return Array.isArray(answer?.accounts) ? answer.accounts : null
   } catch (_) {
     return null
@@ -47,7 +48,22 @@ export function piHold(accounts, provider) {
 
 // The one state line of a sign-in's holder.
 export function holdLine(account, requested = false) {
-  if (account.this_machine) return 'Held here'
+  if (account.this_machine) return 'Signed in here'
   if (requested) return 'Moving the sign-in here.'
-  return `Held by ${account.holder_name || 'another machine'}`
+  return `Signed in on ${account.holder_name || 'another machine'}`
+}
+
+// The sign-ins other members hold that this machine cannot use yet, so no
+// provider row shows them: each with its label, provider and one line. A
+// shared one is on its way here. Hold sign-in here needs a sign-in that
+// arrived, so these rows carry no control.
+export function otherSignIns(accounts) {
+  return (accounts ?? [])
+    .filter((account) => SIGN_IN_KINDS.has(account.kind) && !account.this_machine && !account.usable_here)
+    .map((account) => ({
+      id: `${account.holder}/${account.name}`,
+      label: account.label || account.name,
+      provider: account.provider || account.family || '',
+      line: `${holdLine(account)}${account.shared ? ', arriving' : ', not shared'}`,
+    }))
 }

@@ -15,7 +15,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import HoldSignIn from './HoldSignIn.svelte'
-  import { piHold, readFleetAccounts } from './fleet-accounts.js'
+  import { otherSignIns, piHold, readFleetAccounts } from './fleet-accounts.js'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
   import ClassifierEdit from './ClassifierEdit.svelte'
@@ -101,6 +101,7 @@
 
   // Who holds each shared sign-in in the fleet, or null when core lists none.
   let fleet = $state(null)
+  const elsewhere = $derived(otherSignIns(fleet))
   async function loadFleet() { fleet = await readFleetAccounts(tauri) }
   // A requested move lands once the holder hands the sign-in over.
   function onHeld(status) {
@@ -463,6 +464,15 @@
             </Row>
             <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />
           </section>
+        {/each}
+      </Group>
+    {/if}
+    {#if elsewhere.length}
+      <Group heading="Signed in on other machines" description="A shared sign-in arrives here on its own.">
+        {#each elsewhere as signIn (signIn.id)}
+          <Row title={signIn.label} meta={signIn.line}>
+            {#snippet icon()}<ProviderLogo color provider={signIn.provider} size={16} />{/snippet}
+          </Row>
         {/each}
       </Group>
     {/if}

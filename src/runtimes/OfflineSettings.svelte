@@ -1,25 +1,23 @@
 <script>
   // What this computer keeps available offline: threads, attachments,
   // artifacts, projects and skills. Core keeps the thread window and the
-  // attachments with `fleet.offline_set`, and pins and the artifact choice
-  // with `fleet.pin_set`. A runtime outside a fleet refuses, and the group
-  // stays hidden.
+  // attachments with `fleet.offline_set`, and the artifact choice with
+  // `fleet.pin_set`. Projects and skills are fixed rows: a project's details
+  // and membership sync and its files stay on the machine that owns it, and
+  // every skill syncs. The group hides outside a fleet.
   import { onMount, tick } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
   import SegmentedField from '../lib/ui/SegmentedField.svelte'
   import { agentRequest } from '../agents/agent-runtime.js'
   import { LOCAL_RUNTIME_ID } from './runtimes.js'
-  import { ARTIFACT_CHOICES, ATTACHMENT_CHOICES, PROJECT_CHOICES, THREAD_CHOICES, offlineScope } from './fleet.js'
+  import { ARTIFACT_CHOICES, ATTACHMENT_CHOICES, THREAD_CHOICES, offlineScope } from './fleet.js'
 
   let { tauri } = $props()
-  const id = $props.id()
   let status = $state(null)
   let pins = $state(null)
-  let projects = $state({})
   let error = $state('')
   let busy = $state(false)
-  let choosing = $state(false)
   const scope = $derived(offlineScope(status, pins))
   const shown = $derived(!!status && status.state !== 'alone')
   const ask = (operation, body = {}) => agentRequest(tauri, LOCAL_RUNTIME_ID, operation, body)
@@ -29,8 +27,6 @@
     void tick().then(() => {
       void ask('fleet.sync_status').then((answer) => { status = answer }).catch(() => {})
       void ask('fleet.pins').then((answer) => { pins = answer }).catch(() => {})
-      // Only another member's project has files elsewhere to keep here.
-      void Promise.resolve(tauri.invoke('project_list')).then((catalog) => { projects = Object.fromEntries(Object.entries(catalog?.remote ?? {}).map(([key, project]) => [key, project.name])) }).catch(() => {})
     })
   })
 
@@ -49,15 +45,6 @@
     status = { ...status, offline: answer.offline }
   })
   const setArtifacts = (artifacts) => save(async () => { pins = await ask('fleet.pin_set', { offline: { artifacts } }) })
-  // TODO(core): `fleet.pin_set` pins artifacts and extensions; a project
-  // pin keeps a read-only snapshot of its files once core takes the class.
-  const pinProject = (key, pinned) => save(async () => { pins = await ask('fleet.pin_set', { pins: [{ class: 'project', key, pinned }] }) })
-
-  function setProjects(value) {
-    if (value === 'chosen') { choosing = true; return }
-    choosing = false
-    for (const key of scope.pinnedProjects) void pinProject(key, false)
-  }
 </script>
 
 {#if shown}
@@ -71,19 +58,9 @@
     <Row title="Artifacts" description="Pin an artifact to keep its files here.">
       <SegmentedField label="Artifacts" hideLabel value={scope.artifacts} options={ARTIFACT_CHOICES} onchange={(value) => { if (!busy) void setArtifacts(value) }} />
     </Row>
-    <Row title="Projects" description="Project lists always sync. Chosen projects also keep their files.">
-      <SegmentedField label="Projects" hideLabel value={choosing ? 'chosen' : scope.projects} options={PROJECT_CHOICES} onchange={setProjects} />
+    <Row title="Projects" description="Details only. Files stay on the machine that owns the project.">
+      <span class="fixed">Details</span>
     </Row>
-    {#if choosing || scope.projects === 'chosen'}
-      <div class="project-picks" role="group" aria-labelledby="{id}-projects">
-        <p id="{id}-projects" class="picks-label">Keep these projects offline</p>
-        {#each Object.entries(projects) as [key, name] (key)}
-          <label class="pick"><input type="checkbox" checked={scope.pinnedProjects.includes(key)} disabled={busy} onchange={(event) => pinProject(key, event.currentTarget.checked)} /><span>{name}</span></label>
-        {:else}
-          <p class="picks-label">No projects on other machines yet.</p>
-        {/each}
-      </div>
-    {/if}
     <Row title="Skills and plugins" description="Every skill and plugin enabled here stays available.">
       <span class="fixed">All</span>
     </Row>
@@ -92,9 +69,6 @@
 {/if}
 
 <style>
-  .project-picks { display: grid; gap: 6px; padding: 10px 0; }
-  .picks-label { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .pick { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--ink); font-size: var(--text-13); }
   .fixed { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .offline-error { margin: 0; color: var(--ink); font-size: var(--text-13); }
 </style>
