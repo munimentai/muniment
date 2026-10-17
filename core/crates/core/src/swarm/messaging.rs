@@ -498,6 +498,7 @@ pub(super) fn deliver(inner: &Inner, message: &Message) -> Result<(Option<Ack>, 
         "approval_answer" => super::approvals::on_answer(inner, message),
         "handover" => super::moves::on_handover(inner, message),
         "move_request" => super::moves::on_move_request(inner, message),
+        "mode_set" => super::sync::on_mode_set(inner, message),
         _ => Err("The message kind is unknown.".into()),
     };
     let ack = match outcome {

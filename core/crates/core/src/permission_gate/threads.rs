@@ -27,6 +27,8 @@ pub struct ThreadScope<'a> {
     /// Whether another member runs the thread, so a mode set here would
     /// never reach its runs.
     pub replica_of: &'a dyn Fn(&str) -> Option<String>,
+    /// Sends a mode set on a replica to the member that runs the thread.
+    pub forward_mode: &'a dyn Fn(&str, PermissionMode) -> Result<(), String>,
 }
 
 #[derive(Deserialize)]
@@ -137,10 +139,15 @@ pub fn operation(scope: &ThreadScope<'_>, operation: &str, body: Value) -> Resul
             if let Some(reason) = settings::load(scope.profile).unavailable(request.mode) {
                 return Err(reason.into());
             }
-            if (scope.replica_of)(&request.thread_id).is_some() {
-                return Err(
-                    "Another machine runs this thread. Set its mode on that machine.".into(),
-                );
+            // The member that runs the thread sets the mode, and the set
+            // replicates back here.
+            if let Some(owner) = (scope.replica_of)(&request.thread_id) {
+                (scope.forward_mode)(&request.thread_id, request.mode)?;
+                let mut answer = describe(scope, &request.thread_id)?;
+                answer["forwarded_to"] = Value::from(owner);
+                answer["requested_mode"] =
+                    serde_json::to_value(request.mode).map_err(|error| error.to_string())?;
+                return Ok(answer);
             }
             describe(scope, &request.thread_id)?;
             {
