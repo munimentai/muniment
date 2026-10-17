@@ -48,8 +48,11 @@ const RESULT_KEYS: [&str; 9] = [
 
 /// The operations a member forwards to the owner of their item, and the
 /// only ones an owner runs for another member. The phone's actions are all
-/// here: posts, approval answers, agent runs, stop and steer.
-pub const FORWARDABLE: [Operation; 13] = [
+/// here: posts, approval answers, agent runs, stop and steer. A
+/// `thread.create` that names another member's `runtime_id` starts the
+/// thread there.
+pub const FORWARDABLE: [Operation; 14] = [
+    Operation::ThreadCreate,
     Operation::ThreadPost,
     Operation::RunSteer,
     Operation::RunFollowUp,
@@ -226,6 +229,7 @@ fn item(kind: &str, id: Option<String>) -> Option<OpItem> {
 /// The item a forwardable operation names in its body.
 fn item_of(operation: Operation, body: &Value) -> Option<OpItem> {
     match operation {
+        Operation::ThreadCreate => item("runtime", text(body, "runtime_id")),
         Operation::ThreadPost => item("thread", text(body, "thread_id"))
             .or_else(|| item("agent", text(body, "agent_id"))),
         Operation::RunSteer | Operation::RunFollowUp | Operation::RunCancel => {
@@ -279,6 +283,7 @@ fn owner_of(inner: &Inner, item: &OpItem) -> Option<String> {
             .ok()
             .flatten()
             .map(|approval| approval.runtime_id),
+        "runtime" => Some(item.id.clone()),
         _ => None,
     }
 }
@@ -347,9 +352,19 @@ pub(super) fn route(
     if owner == own {
         return Ok(None);
     }
+    if item.kind == "runtime" && !link::known_member(inner, &owner) {
+        return Err("The fleet has no such machine.".into());
+    }
     if let Some(refusal) = own_refusal(inner, &own, operation, body) {
         return Err(refusal);
     }
+    // A new thread on another member takes its id here, so the answer
+    // names it at once.
+    let mut body = body.clone();
+    if operation == Operation::ThreadCreate && text(&body, "thread_id").is_none() {
+        body["thread_id"] = Value::String(uuid::Uuid::now_v7().to_string());
+    }
+    let mut body = &body;
     if !speaks_ops(inner, &owner) {
         // An older owner takes posts and approval answers the way it always
         // did, through replicated posts and answer messages.
@@ -365,6 +380,11 @@ pub(super) fn route(
         ));
     }
     let op = forward(inner, operation, body, actor, idempotency_key, item, &owner)?;
+    // A repeat of the key answers the op it queued first, with that body.
+    let queued = messaging::outbox_message(inner, &op.op_id)?.map(|message| message.body);
+    if let Some(queued) = queued.as_ref().and_then(|queued| queued.get("body")) {
+        body = queued;
+    }
     if operation == Operation::AgentApprovalAnswer {
         return answer_after_wait(inner, op).map(Some);
     }
@@ -375,6 +395,10 @@ pub(super) fn route(
 /// operation's answer always has, and `forwarded` with the op's id.
 fn placeholder(inner: &Inner, op: &Op, operation: Operation, body: &Value) -> Value {
     let mut answer = match operation {
+        Operation::ThreadCreate => json!({
+            "thread_id": body["thread_id"],
+            "run_id": null,
+        }),
         Operation::ThreadPost => json!({
             "message_id": op.op_id,
             "thread_id": body.get("thread_id").cloned().unwrap_or(Value::Null),

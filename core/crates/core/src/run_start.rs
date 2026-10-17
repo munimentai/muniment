@@ -408,6 +408,17 @@ pub trait RunAttachBoundaries {
     ) -> Result<String, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
+    /// Creates a thread under the id another fleet member chose for it, as
+    /// for a thread that member asked this runtime to run.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn create_thread_with_id(
+        &self,
+        _thread_id: &str,
+        _workspace: &str,
+        _provenance: Provenance,
+    ) -> Result<String, ProtocolError> {
+        Err(ProtocolError::unsupported_operation())
+    }
     #[cfg(any(unix, target_os = "windows"))]
     fn rename_thread(
         &self,

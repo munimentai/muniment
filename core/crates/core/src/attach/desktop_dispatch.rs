@@ -1322,21 +1322,109 @@ pub(super) fn dispatch_request<S: ThreadListService>(
         })));
     }
     if request.operation == Operation::ThreadCreate {
-        if request.body != serde_json::json!({}) {
-            return Err(ProtocolError::invalid_request().into());
+        // `runtime_id` names the fleet member that runs the thread; the
+        // routing before dispatch sent a request for another member there.
+        // That member creates the thread under the `thread_id` the asking
+        // member chose and runs its first message.
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Body {
+            #[serde(default)]
+            runtime_id: Option<String>,
+            #[serde(default)]
+            thread_id: Option<String>,
+            #[serde(default)]
+            text: Option<String>,
+            #[serde(default)]
+            thinking_level: Option<String>,
+            #[serde(default)]
+            permission_mode: Option<crate::permission_gate::PermissionMode>,
+        }
+        let body: Body =
+            serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
+        let reason = if body
+            .runtime_id
+            .as_ref()
+            .is_some_and(|value| super::Id::new(value.clone()).is_err())
+            || body
+                .thread_id
+                .as_ref()
+                .is_some_and(|value| super::Id::new(value.clone()).is_err())
+        {
+            Some("The thread or machine ID is invalid.")
+        } else if body.text.is_none()
+            && (body.permission_mode.is_some() || body.thinking_level.is_some())
+        {
+            Some("A permission mode or thinking level goes with a first message.")
+        } else if body
+            .text
+            .as_ref()
+            .is_some_and(|text| text.trim().is_empty())
+        {
+            Some("Enter a message before sending.")
+        } else if body
+            .text
+            .as_ref()
+            .is_some_and(|text| text.len() > MAX_RUN_START_TEXT_LENGTH)
+        {
+            Some("The message exceeds the allowed size.")
+        } else if body
+            .thinking_level
+            .as_deref()
+            .is_some_and(|level| crate::engine::thinking_level(level).is_none())
+        {
+            Some("Choose a thinking level the model offers.")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ProtocolError::invalid_request_with_reason(reason).into());
         }
         let idempotency_key = request
             .idempotency_key
             .as_ref()
             .ok_or_else(ProtocolError::idempotency_key_required)?;
-        let accepted =
-            service.create_thread(workspace, &request.request_id, idempotency_key, provenance)?;
-        if super::Id::new(accepted.thread_id.clone()).is_err() {
+        let accepted = match &body.thread_id {
+            Some(thread_id) => service.create_thread_with_id(
+                workspace,
+                &super::Id::new(thread_id.clone()).map_err(|_| ProtocolError::invalid_request())?,
+                &request.request_id,
+                idempotency_key,
+                provenance.clone(),
+            )?,
+            None => service.create_thread(
+                workspace,
+                &request.request_id,
+                idempotency_key,
+                provenance.clone(),
+            )?,
+        };
+        if super::Id::new(accepted.thread_id.clone()).is_err()
+            || body
+                .thread_id
+                .as_ref()
+                .is_some_and(|thread_id| *thread_id != accepted.thread_id)
+        {
             return Err(ProtocolError::persistence_failed().into());
         }
-        return Ok(response_only(serde_json::json!({
-            "thread_id": accepted.thread_id,
-        })));
+        let mut answer = serde_json::json!({"thread_id": accepted.thread_id});
+        if let Some(text) = body.text {
+            let run = service.submit_run(
+                workspace,
+                RunSubmitRequest {
+                    text,
+                    files: Vec::new(),
+                    thread_id: Some(accepted.thread_id.clone()),
+                    thinking_level: body.thinking_level,
+                    permission_mode: body.permission_mode,
+                },
+                &request.request_id,
+                idempotency_key,
+                provenance,
+            )?;
+            answer["run_id"] = serde_json::Value::String(run.run_id);
+        }
+        return Ok(response_only(answer));
     }
     if request.operation == Operation::ThreadRename {
         let idempotency_key = request

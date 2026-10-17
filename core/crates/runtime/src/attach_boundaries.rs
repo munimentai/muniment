@@ -1480,6 +1480,36 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(|error| persistence_error("journal", error).desktop_protocol_error())
     }
 
+    fn create_thread_with_id(
+        &self,
+        thread_id: &str,
+        workspace: &str,
+        mut provenance: Provenance,
+    ) -> Result<String, ProtocolError> {
+        provenance.actor_id = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        provenance.source = "muniment-runtime".into();
+        provenance.source_version = self.host.runtime_version.into();
+        let mut storage = self.storage.lock().map_err(|error| {
+            persistence_error("lock", error.to_string()).desktop_protocol_error()
+        })?;
+        let default_workspace = ChatGrant::local().workspace;
+        let workspace = if workspace.is_empty() {
+            &default_workspace
+        } else {
+            workspace
+        };
+        let now = muniment_core::chrono::Utc::now()
+            .to_rfc3339_opts(muniment_core::chrono::SecondsFormat::AutoSi, true);
+        storage
+            .journal
+            .create_thread_with_id(thread_id, workspace, &now, provenance)
+            .map_err(|error| persistence_error("journal", error).desktop_protocol_error())?;
+        Ok(thread_id.to_owned())
+    }
+
     fn rename_thread(
         &self,
         thread_id: &str,

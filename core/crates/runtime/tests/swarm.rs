@@ -2371,3 +2371,56 @@ fn a_promotion_bootstraps_and_a_demotion_reseals_and_drops() {
         2
     );
 }
+
+#[test]
+fn a_thread_created_from_one_member_onto_another_runs_there() {
+    let _environment = environment();
+    let b = Member::new("offload-b");
+    let c = Member::new("offload-c");
+    c.join(&b);
+    assert!(wait(|| online_on(&c, &b.runtime_id())));
+    // A device on C starts a thread on B with its first message.
+    let mut device = c.client(None);
+    let key = muniment_core::attach::Id::new(uuid_string()).unwrap();
+    let created = device
+        .request(
+            Operation::ThreadCreate,
+            Some(key.clone()),
+            json!({
+                "runtime_id": b.runtime_id(),
+                "text": "Summarize the logs.",
+                "permission_mode": "bypass",
+            }),
+        )
+        .unwrap()
+        .body;
+    assert_eq!(created["forwarded"], true, "{created}");
+    let thread = created["thread_id"].as_str().unwrap().to_owned();
+    let op_id = created["op_id"].as_str().unwrap().to_owned();
+    // A repeat of the key names the same thread and op.
+    let again = device
+        .request(
+            Operation::ThreadCreate,
+            Some(key),
+            json!({
+                "runtime_id": b.runtime_id(),
+                "text": "Summarize the logs.",
+                "permission_mode": "bypass",
+            }),
+        )
+        .unwrap()
+        .body;
+    assert_eq!(again["thread_id"], thread.as_str());
+    assert_eq!(again["op_id"], op_id.as_str());
+    assert!(
+        wait(|| op_status(&mut device, &op_id)["state"] == "applied"),
+        "{}",
+        op_status(&mut device, &op_id)
+    );
+    let op = op_status(&mut device, &op_id);
+    assert_eq!(op["owner_runtime"], b.runtime_id());
+    assert_eq!(op["result"]["thread_id"], thread.as_str());
+    assert!(op["result"]["run_id"].is_string(), "{op}");
+    // The thread and its run live on B, under the id C chose.
+    assert!(wait(|| b.holds_thread(&thread)));
+}
