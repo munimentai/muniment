@@ -40,6 +40,7 @@
   import CatalogActions from './lib/CatalogActions.svelte'
   import ArtifactCatalog from './lib/ArtifactCatalog.svelte'
   import {creationStarters, creationDefaults, creationName, creationPrompt, sentCreation} from './lib/creation-prompts.js'
+  import ThreadStarters from './lib/ThreadStarters.svelte'
   import { overflowLabels } from './lib/overflow-labels.js'
   import AgentManager from './lib/AgentManager.svelte'
   import WorkspacePanel from './lib/WorkspacePanel.svelte'
@@ -319,6 +320,20 @@
     draft = ''
     await tick()
     composer?.focus()
+  }
+  // A new thread's starter card: a creation chat, or a prompt in the composer,
+  // after the file picker for a starter about files.
+  async function pickThreadStarter(starter) {
+    if (starter.kind === 'artifact') return startCreation('artifact', { goal: starter.goal, output: starter.output })
+    if (starter.kind === 'agent') return startCreation('agent')
+    if (starter.kind === 'files') {
+      await chooseFiles()
+      if (!selectedFiles.length) return
+    }
+    draft = starter.prompt
+    await tick()
+    composer?.focus()
+    composer?.setSelectionRange?.(draft.length, draft.length)
   }
   async function useCreationSuggestion(chosen) {
     if (pendingCreation) {
@@ -3144,7 +3159,7 @@
         <div class="thread-shell" data-panel-fade="chat">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : threadAgent ? `Chat with ${threadAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}{/if}</p>{/if}
+          {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation}{#if !threadGroup && !threadAgent && !(auth.name === 'local' && (inventoryError || !inventory || !chipModel || !currentModelAvailable(inventory)))}<ThreadStarters disabled={switchLocked || !!active} onpick={pickThreadStarter} />{:else}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : `Chat with ${threadAgent?.name} using ${modelSourceLabel}.`}{/if}</p>{/if}{/if}
           {#if currentCreation}
             {#if !pendingCreation}<details class="creation-goal" aria-label="Creation goal"><summary><strong>{creationName(currentCreation.kind, currentCreation)}</strong> <span>{currentCreation.goal}</span></summary><p>Output: {currentCreation.output}</p></details>{/if}
             {#if !messages.length && pendingCreation && creationStarters[currentCreation.kind].concat(creationDefaults(currentCreation.kind)).some(option=>option.goal===currentCreation.goal)}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationStarters[currentCreation.kind] as option (option.id)}<button aria-pressed={option.goal===currentCreation.goal} onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}

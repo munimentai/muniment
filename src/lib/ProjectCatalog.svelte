@@ -12,6 +12,8 @@
   import CatalogActions from './CatalogActions.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import OwnerChip from '../runtimes/OwnerChip.svelte'
+  import StarterRow from './StarterRow.svelte'
+  import { projectStarters } from './creation-prompts.js'
   let { selected = $bindable(null), projects = [], remote = [], threads = [], assignments = {}, busy = false, error = '', loading = false, oncreate, onthread, onnewthread, onrename, onopen } = $props()
   let creating = $state(false)
   let name = $state('')
@@ -67,7 +69,8 @@
           </CatalogCard>
         {/each}
       </CardGrid>
-      {#if !matches.length && !remoteMatches.length}<p>{search ? 'No matching projects.' : 'Create a project to keep related threads together.'}</p>{/if}
+      {#if search && !matches.length && !remoteMatches.length}<p>No matching projects.</p>{/if}
+      {#if !search && !projects.length && !remote.length && !creating}<StarterRow heading="Start a project" kind="project" items={projectStarters} oncreate={(item) => { name = item.name; creating = true }} />{/if}
     {/if}
   </PanelPage>
 </section>

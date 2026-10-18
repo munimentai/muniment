@@ -556,6 +556,18 @@
   --focus-edge: var(--muted);
 }
 
+/* Starter tints: each starter card on an empty screen draws its icon in one
+   of these, over a soft fill of it. They stand outside the color law like the
+   agent palettes, and each clears 3:1 on every theme's surfaces. */
+:root {
+  --tint-green: light-dark(#1F7A4D, #5FD39A);
+  --tint-blue: light-dark(#2563C9, #7DB0FF);
+  --tint-amber: light-dark(#8A5A00, #F0B54A);
+  --tint-rose: light-dark(#B83A62, #FF8FB0);
+  --tint-teal: light-dark(#0F7680, #5ED6E3);
+  --tint-orange: light-dark(#A84B14, #FF9E5E);
+}
+
 /* State colors for the states core reports: online and done in success,
    running in active, failures in danger, queued and waiting in warning.
    Each clears 4.5:1 on paper, surface, faint and its own chip fill. */

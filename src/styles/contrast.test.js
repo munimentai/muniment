@@ -131,3 +131,21 @@ it('keeps every state color readable in every theme and on its chip', () => {
     }
   }
 })
+
+// Starter tints are icon colors: each clears 3:1 on the paper, surface and
+// faint of every theme in its scheme, and on its own soft fill.
+const tints = Object.fromEntries([...source.matchAll(/--tint-([a-z]+):\s*light-dark\((#[\dA-F]{6}),\s*(#[\dA-F]{6})\)/gi)]
+  .map(([, token, light, dark]) => [token, { light, dark }]))
+
+it('keeps every starter tint visible in every theme', () => {
+  expect(Object.keys(tints)).toEqual(['green', 'blue', 'amber', 'rose', 'teal', 'orange'])
+  for (const [name, palette] of Object.entries(palettes)) {
+    const scheme = name.endsWith('dark') ? 'dark' : 'light'
+    for (const [token, values] of Object.entries(tints)) {
+      const color = values[scheme]
+      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14)]) {
+        expect(contrastRatio(color, background), `${name} --tint-${token} on ${background}`).toBeGreaterThanOrEqual(3)
+      }
+    }
+  }
+})

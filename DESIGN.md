@@ -60,7 +60,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    polish flash, the green globe of a machine that answers in the machine menu, and workflow-run
    indicators. Settings tabs, selected capability filters, verified updates and the Confirm check on an unconfirmed memory row use the theme signal.
    `--accent` fills each view's primary action (a `Button` marked primary or a submit) and an enabled switch. `StatusChip` colors a reported state: success online and done, active running, danger failed, warning queued and waiting, neutral offline and idle.
-   Other buttons, links, icons at rest and badges are ink on paper, and selection reads `--selected`.
+   Other buttons, links, icons at rest and badges are ink on paper, and selection reads `--selected`. A starter card's icon takes its `--tint-*` hue over a soft fill of it.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
    entries, costs, ids, versions, code, file paths and keyboard chips render in Commit
@@ -75,7 +75,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
 4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
    or, for the composer's send and stop control, in a glyph with an accessible
    name that says it. Errors state what happened and the next step and never
-   apologize. Empty states are one line and no illustration. The one
+   apologize. Empty states are one line and no illustration, or a few starter cards that each start a flow: a new thread offers Make a page, Research a topic, Summarize a file and Set up an agent. The one
    exception is the record panel's first screen on a machine that holds no
    company: it carries a headline, one sentence, a proof line in mono, the
    create form, the sources and the sample company, and it still

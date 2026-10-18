@@ -7880,11 +7880,11 @@ describe('signed-in access popover', () => {
 
     expect(within(dialog).getByText('Checking your current access…')).toBeInTheDocument()
     expect(profile).toHaveTextContent('Acme · owner')
-    expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Start with' })).toBeInTheDocument()
 
     rejectOpen(new Error('offline'))
     const retry = await within(dialog.querySelector('.entitlements-section')).findByRole('button', { name: 'Try again' })
-    expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Start with' })).toBeInTheDocument()
     await fireEvent.click(retry)
     expect(accessCalls).toBe(3)
 
@@ -8151,6 +8151,29 @@ describe('dedicated creation chats', () => {
     expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
+  })
+
+  it('starts a new thread from its starter cards', async () => {
+    const original=invoke.getMockImplementation()
+    invoke.mockImplementation((command,payload)=>{
+      if(command==='creation_list') return Promise.resolve([])
+      if(command==='artifact_list') return Promise.resolve([])
+      if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
+      if(command==='chat_new_thread') return Promise.resolve('01900000-0000-7000-8000-000000000098')
+      return original(command,payload)
+    })
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    const starters = await screen.findByRole('region', { name: 'Start with' })
+    expect(within(starters).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Make a page', 'Research a topic', 'Summarize a file', 'Set up an agent'])
+    // Each card's icon takes its own tint.
+    expect([...starters.querySelectorAll('button.starter')].map((button) => button.style.getPropertyValue('--tint'))).toEqual(['var(--tint-blue)', 'var(--tint-green)', 'var(--tint-amber)', 'var(--tint-rose)'])
+    await fireEvent.click(within(starters).getByRole('button', { name: 'Research a topic' }))
+    await waitFor(() => expect(composer).toHaveValue('Research this topic and cite your sources: '))
+    expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
+    await fireEvent.input(composer, { target: { value: '' } })
+    await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Set up an agent' }))
+    expect(await screen.findByRole('group', { name: 'Template' })).toHaveTextContent('Goal: Create a reusable agent for my work.')
   })
 
   it.each(['Artifacts','Agents'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
