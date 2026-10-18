@@ -10,8 +10,9 @@ import { galleryCalls, galleryGates } from './presentations.js'
 const GALLERY = (id) => !/^(probe|trust|preview)-/.test(id)
 const at = (seconds) => new Date(Date.parse('2026-10-18T12:00:00Z') + seconds * 1000).toISOString()
 
-// Script calls as core sends them: each names its script, and a script with
-// one call shows as that call with its note. The second script nests two.
+// Script calls as core sends them: each names its script with its note, and
+// each script takes its calls' kind and counts as none. The second script
+// makes two.
 function scriptCalls(calls) {
   const like = (id, effectId, extra = {}) => ({ ...structuredClone(calls.find((call) => call.effectId === id)), effectId, ...extra })
   const made = (id, effectId, parentEffectId) => {
@@ -19,9 +20,14 @@ function scriptCalls(calls) {
     call.presentation.via = 'via script'
     return call
   }
+  const script = (effectId, kind) => {
+    const call = like('script', effectId, { uncounted: true })
+    call.presentation.kind = kind
+    return call
+  }
   return [
-    like('script', 'script-search'), made('web', 'script-search/1', 'script-search'),
-    like('script', 'script-reads'), made('read', 'script-reads/1', 'script-reads'), made('grep', 'script-reads/2', 'script-reads'),
+    script('script-search', 'web'), made('web', 'script-search/1', 'script-search'),
+    script('script-reads', 'other'), made('read', 'script-reads/1', 'script-reads'), made('grep', 'script-reads/2', 'script-reads'),
   ]
 }
 
@@ -95,6 +101,6 @@ export function toolsRendered() {
   if (!feedback) return false
   const details = [...feedback.querySelectorAll('.tool-groups details:not(.tool-raw)')]
   return details.length > 0 && details.every((entry) => entry.open)
-    && workspace.querySelectorAll('details.run-line[open] .timeline li').length === galleryCalls().filter((call) => GALLERY(call.effectId)).length + 3
+    && workspace.querySelectorAll('details.run-line[open] .timeline li').length === galleryCalls().filter((call) => GALLERY(call.effectId)).length + 5
     && !!workspace.querySelector('.permission-card .tool-call-card')
 }

@@ -44,27 +44,19 @@
   <ToolCall variant="detail" presentation={action.presentation} state={`${action.state}${action.startedAt && (action.finishedAt || action.running) ? ` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}` : ''}`} input={action.detailInput} raw={output} />
 {/snippet}
 
-<!-- One row. A script's calls nest under its row, and a script that made one call shows as that call, with the script in its detail. -->
+<!-- One row. A script is the parent row, and its calls nest under it with their via note. -->
 {#snippet actionRow(action)}
-  {#if action.path && onopenfile && !action.script}
-    <button type="button" class="file-action" aria-label={action.label.replaceAll('`', '')} onclick={() => onopenfile({ path: action.path })}>{@render line(action)}</button>
-  {:else if !action.hasDetails && !action.script}
-    <div class="plain-action">{@render line(action)}</div>
+  {#if action.path && onopenfile}
+    <button type="button" class="file-action" aria-label={action.label.replaceAll('`', '')} onclick={() => onopenfile({ path: action.path })}>{@render line(action, action.parentEffectId ? action.presentation.via : '')}</button>
+  {:else if !action.hasDetails}
+    <div class="plain-action">{@render line(action, action.parentEffectId ? action.presentation.via : '')}</div>
   {:else}
-    <details ontoggle={(event) => { if (event.currentTarget.open) { readOutput(action); if (action.script) readOutput(action.script) } }}>
+    <details ontoggle={(event) => { if (event.currentTarget.open) readOutput(action) }}>
       <summary>
-        {@render line(action, action.via)}
+        {@render line(action, action.parentEffectId ? action.presentation.via : '')}
         <span class="chevron"><LucideIcon name="chevron-right" /></span>
       </summary>
-      <div class="action-detail">
-        {@render detail(action)}
-        {#if action.script}
-          <div class="action-script">
-            <p class="script-line"><ToolCall presentation={action.script.presentation} label={action.script.label} result={action.script.result} failed={action.script.failed} state={action.script.state} iconSize={14} /></p>
-            {@render detail(action.script)}
-          </div>
-        {/if}
-      </div>
+      <div class="action-detail">{@render detail(action)}</div>
     </details>
   {/if}
   {#if action.children}
@@ -121,8 +113,6 @@
   .tool-groups { padding-left: 14px; }
   details[open] > summary > .chevron { transform: rotate(90deg); }
   .action-list.grouped, .action-list.nested { padding-left: 12px; }
-  .action-script { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
-  .script-line { display: flex; min-height: 24px; align-items: center; }
   .action-detail { margin: 6px 0 12px 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
   .action-detail p { margin: 0 0 8px; }
   .action-detail strong { font-weight: 500; }

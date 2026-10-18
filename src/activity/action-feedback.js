@@ -28,7 +28,7 @@ function actionOf(activity, live) {
     ...activity,
     presentation,
     kind,
-    calls: 1,
+    calls: activity.uncounted ? 0 : 1,
     label: line.label,
     result: line.result,
     failed: line.failed,
@@ -43,27 +43,22 @@ function actionOf(activity, live) {
 }
 
 // The rows of a run's calls. Core names the script that made a call in
-// `parentEffectId`. A script's calls nest under it and count in its place.
-// A script that made one call shows as that call with core's `via` note, and
-// the script stays in the call's detail.
+// `parentEffectId`, gives the script its calls' kind and marks it
+// `uncounted`, so the script is the parent row and its calls nest under it.
 export function actionRows(activities = [], live = false) {
-  // A script starts before its calls, so only an earlier call is a parent.
-  const order = new Map(activities.map((activity, index) => [activity.effectId, index]))
-  const madeBy = (activity) => (order.get(activity.parentEffectId) ?? Infinity) < order.get(activity.effectId) ? activity.parentEffectId : null
+  const ids = new Set(activities.map((activity) => activity.effectId))
+  const nested = (activity) => !!activity.parentEffectId && ids.has(activity.parentEffectId)
   const children = new Map()
   for (const activity of activities) {
-    const parent = madeBy(activity)
-    if (parent) children.set(parent, [...(children.get(parent) ?? []), activity])
+    if (nested(activity)) children.set(activity.parentEffectId, [...(children.get(activity.parentEffectId) ?? []), activity])
   }
   const row = (activity) => {
     const action = actionOf(activity, live)
     const made = (children.get(activity.effectId) ?? []).map(row)
     if (!made.length) return action
-    if (made.length === 1) return { ...made[0], via: made[0].presentation.via ?? '', script: action, running: made[0].running || action.running }
-    const kinds = new Set(made.map((child) => child.kind))
-    return { ...action, kind: kinds.size === 1 ? made[0].kind : 'other', children: made, calls: made.reduce((sum, child) => sum + child.calls, 0), running: action.running || made.some((child) => child.running) }
+    return { ...action, children: made, calls: action.calls + made.reduce((sum, child) => sum + child.calls, 0), running: action.running || made.some((child) => child.running) }
   }
-  return activities.filter((activity) => !madeBy(activity)).map(row)
+  return activities.filter((activity) => !nested(activity)).map(row)
 }
 
 // Consecutive rows of one kind fold into a group, in order.

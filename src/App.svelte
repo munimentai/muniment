@@ -4548,9 +4548,10 @@
   .receipt-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   .live-receipt { min-height: 28px; }
   .copy-slot { width: 32px; height: 28px; flex: none; }
-  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
-  /* The line names a model and a time, so it takes the UI face; its figures
-     line up. The shorthand resets font-variant-numeric, so tabular-nums follows it. */
+  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); text-align: left; overflow-wrap: anywhere; }
+  /* The line names a model and a time, so it takes the UI face with its
+     proportional figures: tabular figures in that face set a decimal point
+     as wide as a digit. */
   /* The receipt toggle takes the copy control's padding and hover, and its negative margin keeps the line's text on the prose edge. */
   button.provenance { padding: 4px 8px; margin-left: -8px; border-radius: var(--radius-control); }
   button.provenance:hover:not(:disabled) { background: var(--faint); color: var(--ink); }

@@ -67,40 +67,34 @@ it('places actions between the text that precedes and follows them', () => {
   ])
 })
 
-// A web answer whose model ran two scripts of one search each and one script
-// of one fetch, as core sends it: each script call names its script.
-const script = (effectId, uses) => ({ effectId, displayName: 'codemode', status: 'completed', input: JSON.stringify({ code: `await tools.${uses}({})` }), output: 'done', presentation: { category: 'code', kind: 'command', icon: 'file-code', headline: `Run a script that uses ${uses}`, progress: 'Running a script', result: 'Script completed' } })
-const made = (effectId, parentEffectId, headline, result) => ({ effectId, parentEffectId, displayName: 'web_search', status: 'completed', input: '{"query":"x"}', presentation: { category: 'web', kind: 'web', icon: 'globe', headline, progress: 'Searching the web', result, via: 'via script' } })
+// The drive's answer as core sends it: two scripts of one web search each.
+// Core gives each script its call's kind and marks it uncounted.
+const script = (effectId, kind = 'web') => ({ effectId, displayName: 'codemode', status: 'completed', uncounted: true, input: JSON.stringify({ code: 'const r = await tools.web_search({}); text(r);' }), output: 'done', presentation: { category: 'code', kind, icon: 'file-code', headline: 'Run a script that uses Web search', progress: 'Running a script', result: 'Script completed', details: [{ label: 'Script', value: '1 line' }] } })
+const made = (effectId, parentEffectId, headline, kind = 'web') => ({ effectId, parentEffectId, displayName: 'web_search', status: 'completed', input: '{"query":"x"}', presentation: { category: 'web', kind, icon: 'globe', headline, progress: 'Searching the web', result: 'Found 3 results', via: 'via script' } })
 export const webAnswer = [
-  script('s1', 'Web search'), made('s1/1', 's1', 'Search the web for “AI desktop 2026”', 'Found 15 results'),
-  script('s2', 'Web search'), made('s2/1', 's2', 'Search the web for “Show HN desktop”', 'Found 19 results'),
-  script('s3', 'Fetch content'), made('s3/1', 's3', 'Fetch 3 pages', 'Fetched'),
+  script('call_a'), made('call_a/1', 'call_a', 'Search the web for “Tauri 2 release notes”'),
+  script('call_b'), made('call_b/1', 'call_b', 'Search the web for “Tauri 2 release notes”'),
 ]
 
 describe('script calls', () => {
-  it('shows a script of one call as that call with its via note and counts the call', () => {
+  it('shows each script as the parent row with its one search under it', () => {
     const groups = actionGroups(webAnswer)
-    expect(groups.map((group) => [group.kind, group.calls])).toEqual([['web', 3]])
-    expect(groups[0].actions.map((action) => [action.label, action.via, action.script.label])).toEqual([
-      ['Search the web for “AI desktop 2026”', 'via script', 'Run a script that uses Web search'],
-      ['Search the web for “Show HN desktop”', 'via script', 'Run a script that uses Web search'],
-      ['Fetch 3 pages', 'via script', 'Run a script that uses Fetch content'],
+    expect(groups.map((group) => [group.kind, group.calls])).toEqual([['web', 2]])
+    expect(groups[0].actions.map((action) => [action.label, action.calls, action.children.map((child) => [child.label, child.presentation.via])])).toEqual([
+      ['Run a script that uses Web search', 1, [['Search the web for “Tauri 2 release notes”', 'via script']]],
+      ['Run a script that uses Web search', 1, [['Search the web for “Tauri 2 release notes”', 'via script']]],
     ])
-    // The script's raw record stays with the call.
-    expect(groups[0].actions[0].script).toMatchObject({ detailInput: '{\n  "code": "await tools.Web search({})"\n}', output: 'done' })
   })
 
-  it('nests the calls of a script that made several and counts each call', () => {
-    const groups = actionGroups([script('s1', 'Web search'), made('s1/1', 's1', 'Search A', 'Found 2 results'), made('s1/2', 's1', 'Search B', 'Found 3 results'), call('read')])
-    expect(groups.map((group) => [group.kind, group.calls])).toEqual([['web', 2], ['read', 1]])
-    const [row] = groups[0].actions
-    expect(row.label).toBe('Run a script that uses Web search')
-    expect(row.children.map((child) => child.label)).toEqual(['Search A', 'Search B'])
+  it('nests every call of a script under it and counts each call', () => {
+    const groups = actionGroups([script('s1', 'other'), made('s1/1', 's1', 'Search A'), { ...made('s1/2', 's1', 'Read a.md', 'read') }, call('read')])
+    expect(groups.map((group) => [group.kind, group.calls])).toEqual([['other', 2], ['read', 1]])
+    expect(groups[0].actions[0].children.map((child) => child.label)).toEqual(['Search A', 'Read a.md'])
   })
 
   it('keeps a call whose script the list does not hold as its own row', () => {
-    const groups = actionGroups([made('x/1', 'x', 'Search C', 'Found 1 result')])
+    const groups = actionGroups([made('x/1', 'x', 'Search C')])
     expect(groups[0].actions[0]).toMatchObject({ label: 'Search C', calls: 1 })
-    expect(groups[0].actions[0].script).toBeUndefined()
+    expect(groups[0].actions[0].children).toBeUndefined()
   })
 })

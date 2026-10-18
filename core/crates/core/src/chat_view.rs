@@ -32,6 +32,10 @@ pub struct ChatToolActivity {
     /// script whose tool call it is. A host nests the call under it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_effect_id: Option<String>,
+    /// Whether the call counts toward the tools a reply used. A script that
+    /// made calls does not: its calls count in its place.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub uncounted: bool,
     pub display_name: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -201,29 +205,61 @@ pub fn chat_pending_permission(
 }
 
 /// Each call of a run as the webview shows it. A call another call of the
-/// run made names that call and notes how it ran, so a host nests a script's
-/// tool calls under the script.
+/// run made, such as a codemode script's tool call, names that call and
+/// notes how it ran, so a host nests it under the script. A script that made
+/// calls takes their group, or `other` when they differ, and does not count
+/// as a call of its own.
 pub fn chat_tool_activity(activities: &[ToolActivity]) -> Vec<ChatToolActivity> {
-    let presentations: Vec<_> = activities
+    let mut presentations: Vec<_> = activities
         .iter()
         .map(crate::tool_presentation::describe_activity)
         .collect();
+    // A call starts after the call that made it, so only an earlier call is
+    // a parent, which also keeps a malformed record from forming a cycle.
+    let parents: Vec<Option<usize>> = activities
+        .iter()
+        .enumerate()
+        .map(|(index, activity)| {
+            let id = activity.parent_effect_id.as_deref()?;
+            activities[..index]
+                .iter()
+                .position(|candidate| candidate.effect_id == id)
+        })
+        .collect();
+    let mut made: Vec<Vec<usize>> = vec![Vec::new(); activities.len()];
+    for (index, parent) in parents.iter().enumerate() {
+        if let Some(parent) = parent {
+            made[*parent].push(index);
+        }
+    }
+    let vias: Vec<Option<String>> = parents
+        .iter()
+        .map(|parent| parent.map(|index| crate::tool_presentation::via(&presentations[index])))
+        .collect();
+    // Children come after their parent, so a parent's group is set from
+    // children whose own groups are already final when walked backwards.
+    for index in (0..activities.len()).rev() {
+        let Some((first, rest)) = made[index].split_first() else {
+            continue;
+        };
+        let kind = presentations[*first].kind.clone();
+        presentations[index].kind = if rest.iter().all(|child| presentations[*child].kind == kind) {
+            kind
+        } else {
+            "other".into()
+        };
+    }
     activities
         .iter()
-        .zip(&presentations)
-        .map(|(activity, presentation)| {
-            let parent = activity.parent_effect_id.as_deref().and_then(|id| {
-                activities
-                    .iter()
-                    .position(|candidate| candidate.effect_id == id)
-            });
-            let mut presentation = presentation.clone();
-            presentation.via =
-                parent.map(|index| crate::tool_presentation::via(&presentations[index]));
+        .zip(presentations)
+        .enumerate()
+        .map(|(index, (activity, mut presentation))| {
+            presentation.via = vias[index].clone();
             ChatToolActivity {
                 text_offset: activity.text_offset,
                 effect_id: activity.effect_id.clone(),
-                parent_effect_id: parent.map(|index| activities[index].effect_id.clone()),
+                parent_effect_id: parents[index].map(|parent| activities[parent].effect_id.clone()),
+                uncounted: !made[index].is_empty(),
                 input: activity.input.clone(),
                 output: activity
                     .output

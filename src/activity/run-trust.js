@@ -66,10 +66,10 @@ export function runLineLabel(parts) {
 }
 
 // Every tool call of a turn in order, with its state and duration. A
-// script's calls stand in its place with their `via` note.
+// script comes first and its calls follow with their `via` note.
 export function runTimeline(toolActivity = [], live = false) {
-  const leaves = (action) => action.children ? action.children.flatMap(leaves) : [action]
-  return actionGroups(toolActivity, live).flatMap((group) => group.actions.flatMap(leaves).map((action) => ({
+  const calls = (action) => [action, ...(action.children ?? []).flatMap(calls)]
+  return actionGroups(toolActivity, live).flatMap((group) => group.actions.flatMap(calls).map((action) => ({
     id: action.effectId,
     presentation: action.presentation,
     icon: action.icon,
@@ -79,7 +79,7 @@ export function runTimeline(toolActivity = [], live = false) {
     running: action.running,
     state: action.state,
     duration: action.startedAt && action.finishedAt ? actionDuration(action.startedAt, action.finishedAt) : '',
-    ...(action.presentation?.via ? { via: action.presentation.via } : {}),
+    ...(action.parentEffectId && action.presentation?.via ? { via: action.presentation.via } : {}),
   })))
 }
 

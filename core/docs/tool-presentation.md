@@ -26,9 +26,10 @@ summary is its headline.
 
 Pi runs a codemode script's tool calls as calls of their own, each naming
 the script's call. A `ChatToolActivity` names that call in
-`parent_effect_id` and its presentation carries `via`. A host nests the
-calls under their script, shows a script with one call as that call with
-its `via` note, and counts the calls a script makes in place of the script.
+`parent_effect_id`, an earlier call of the run, and its presentation
+carries `via`. A script that made calls takes their `kind`, or `other` when
+they differ, and is `uncounted`: its calls count in its place. A host shows
+the script as the parent row with its calls nested under it.
 
 ## Describers
 

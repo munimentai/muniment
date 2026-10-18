@@ -229,3 +229,109 @@ fn a_script_tool_call_names_its_script_and_notes_how_it_ran() {
     assert!(value[2].get("parentEffectId").is_none());
     assert!(value[2]["presentation"].get("via").is_none());
 }
+
+/// The drive's run: two codemode scripts, each making one web search, as the
+/// journal recorded them.
+#[test]
+fn a_script_with_one_search_is_one_parent_with_one_child() {
+    let call = |effect_id: &str, parent: Option<&str>, name: &str, input: serde_json::Value| {
+        ToolActivity {
+            text_offset: 0,
+            effect_id: effect_id.into(),
+            parent_effect_id: parent.map(Into::into),
+            display_name: Some(name.into()),
+            status: ToolActivityStatus::Completed,
+            input: Some(input.to_string()),
+            output: None,
+            started_at: None,
+            finished_at: None,
+        }
+    };
+    let search = json!({"numResults": 3, "query": "Tauri 2 release notes"});
+    let activity = chat_tool_activity(&[
+        call(
+            "call_a",
+            None,
+            "codemode",
+            json!({"code": "const r = await tools.web_search({query: \"Tauri 2 release notes\", numResults: 3}); text(r);"}),
+        ),
+        call("call_a/1", Some("call_a"), "web_search", search.clone()),
+        call(
+            "call_b",
+            None,
+            "codemode",
+            json!({"code": "const r = await tools.web_search({query: \"Tauri 2 release notes\", numResults: 3});\nfor (const result of r.queries[0].results.slice(0, 3)) text(result.title);"}),
+        ),
+        call("call_b/1", Some("call_b"), "web_search", search),
+    ]);
+    let value = serde_json::to_value(&activity).unwrap();
+    let rows: Vec<_> = value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["parentEffectId"].as_str(),
+                row["uncounted"].as_bool().unwrap_or(false),
+                row["presentation"]["kind"].as_str().unwrap(),
+                row["presentation"]["via"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (None, true, "web", None),
+            (Some("call_a"), false, "web", Some("via script")),
+            (None, true, "web", None),
+            (Some("call_b"), false, "web", Some("via script")),
+        ]
+    );
+    // Each script names its own lines: the first is one line, the second two.
+    let lines = |row: &serde_json::Value| {
+        row["presentation"]["details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|detail| detail["label"] == "Script")
+            .map(|detail| detail["value"].clone())
+    };
+    assert_eq!(lines(&value[0]), Some(json!("1 line")));
+    assert_eq!(lines(&value[2]), Some(json!("2 lines")));
+}
+
+#[test]
+fn a_script_counts_its_real_lines_and_a_call_cannot_name_a_later_parent() {
+    let code = "const r = await tools.web_search({\n  query: \"x\",\n  numResults: 3\n});\nfor (const result of r) {\n  text(result.title);\n}";
+    let activity = chat_tool_activity(&[
+        ToolActivity {
+            text_offset: 0,
+            effect_id: "loop".into(),
+            parent_effect_id: Some("script".into()),
+            display_name: Some("read".into()),
+            status: ToolActivityStatus::Completed,
+            input: Some(r#"{"path":"/work/a.md"}"#.into()),
+            output: None,
+            started_at: None,
+            finished_at: None,
+        },
+        ToolActivity {
+            text_offset: 0,
+            effect_id: "script".into(),
+            parent_effect_id: Some("loop".into()),
+            display_name: Some("codemode".into()),
+            status: ToolActivityStatus::Completed,
+            input: Some(json!({ "code": code }).to_string()),
+            output: None,
+            started_at: None,
+            finished_at: None,
+        },
+    ]);
+    let value = serde_json::to_value(&activity).unwrap();
+    assert!(value[0].get("parentEffectId").is_none());
+    assert_eq!(value[1]["parentEffectId"], "loop");
+    assert!(value[1]["presentation"]["details"]
+        .as_array()
+        .unwrap()
+        .contains(&json!({"label": "Script", "value": "7 lines"})));
+}
