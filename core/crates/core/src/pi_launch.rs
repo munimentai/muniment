@@ -213,6 +213,17 @@ pub trait PiLaunchBoundaries {
         crate::launch_facts::working_directory(profile)
     }
 
+    /// Whether the operating system lets Pi read its working folder, waiting
+    /// `bound` at most for the user to answer a consent prompt.
+    fn folder_access(
+        &self,
+        directory: &Path,
+        bound: std::time::Duration,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> crate::folder_access::FolderAccess {
+        crate::folder_access::check(directory, bound, cancelled)
+    }
+
     /// Models that answered earlier runs of this thread, once each, in order.
     fn earlier_models(&self) -> Vec<String> {
         Vec::new()
@@ -236,8 +247,17 @@ pub enum PiLaunchError {
     MissingRoot,
     UnresolvableExecutable,
     UnavailableSessionRoot,
-    RejectedConfig { step: &'static str, cause: String },
+    RejectedConfig {
+        step: &'static str,
+        cause: String,
+    },
     Acquisition(crate::sidecar::pi_install::CoordinatedPiInstallError),
+    /// The operating system held or refused Pi's working folder. `folder`
+    /// names the protected folder that holds it.
+    FolderAccess {
+        access: crate::folder_access::FolderAccess,
+        folder: Option<&'static str>,
+    },
 }
 
 impl PiLaunchError {
