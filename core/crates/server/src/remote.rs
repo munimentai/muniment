@@ -10,6 +10,7 @@ use muniment_core::attach::{
     advertised_endpoints, interface_addresses, is_valid_endpoint, load_remote_settings,
     read_listener_status, InstallKind, PairingLinkRequest, RemoteAccess, RemoteAccessOptions,
     RemoteRouteOptions, RemoteSettingsOverrides, MAX_PAIRING_ENDPOINTS, REMOTE_SCOPES,
+    SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE, SCOPE_RUN_WRITE, SCOPE_THREAD_READ,
 };
 use muniment_core::serde_json::{self, json, Value};
 
@@ -25,6 +26,17 @@ const PUBLIC_VARIABLE: &str = "MUNIMENT_REMOTE_ALLOW_PUBLIC";
 const INSTALL_KIND_VARIABLE: &str = "MUNIMENT_INSTALL_KIND";
 /// The name pairing links and paired devices show for this runtime.
 const NAME_VARIABLE: &str = "MUNIMENT_REMOTE_NAME";
+
+/// The scopes `pair` grants when `--scopes` names none. Whoever runs it holds
+/// the state directory, so the link pairs the owner's own device as a full
+/// member: it runs, reads, updates, pairs and links this runtime into the
+/// fleet. `--scopes` pairs a limited device.
+const OWNER_SCOPES: [&str; 4] = [
+    SCOPE_THREAD_READ,
+    SCOPE_RUN_WRITE,
+    SCOPE_RUNTIME_UPDATE,
+    SCOPE_RUNTIME_ADMIN,
+];
 
 /// The release this build announces: the workspace version, which the
 /// desktop app, the CLI and every server of one release share.
@@ -222,7 +234,7 @@ pub fn pair(state: &Path, args: &[String]) -> Result<(), String> {
     let access = open_access(state)?;
     let created = access
         .create_pairing_link(PairingLinkRequest {
-            scopes,
+            scopes: Some(scopes.unwrap_or_else(owner_scopes)),
             endpoints: Some(endpoints),
         })
         .map_err(|error| format!("the pairing link could not be created: {error}"))?;
@@ -241,6 +253,13 @@ pub fn pair(state: &Path, args: &[String]) -> Result<(), String> {
         println!("{}", created.link.to_uri());
         Ok(())
     }
+}
+
+fn owner_scopes() -> BTreeSet<String> {
+    OWNER_SCOPES
+        .iter()
+        .map(|scope| (*scope).to_owned())
+        .collect()
 }
 
 fn parse_scopes(list: &str) -> Result<BTreeSet<String>, String> {
@@ -440,6 +459,20 @@ mod tests {
         assert_eq!(switch(PUBLIC_VARIABLE, Some("on")), Ok(Some(true)));
         assert_eq!(switch(PUBLIC_VARIABLE, Some(" ")), Ok(None));
         assert!(switch(PUBLIC_VARIABLE, Some("public")).is_err());
+    }
+
+    #[test]
+    fn a_link_without_scopes_pairs_a_full_member_that_can_link_machines() {
+        let scopes = owner_scopes();
+        assert!(scopes.contains(SCOPE_RUNTIME_ADMIN));
+        assert!(muniment_core::attach::scopes_grant(
+            &scopes,
+            muniment_core::attach::SCOPE_AGENTS_MANAGE
+        ));
+        assert!(!scopes.contains(muniment_core::attach::SCOPE_SWARM_PEER));
+        assert!(scopes
+            .iter()
+            .all(|scope| REMOTE_SCOPES.contains(&scope.as_str())));
     }
 
     #[test]

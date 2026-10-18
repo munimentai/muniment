@@ -497,6 +497,70 @@ pub fn test_credentials_directory() -> PathBuf {
     std::env::temp_dir().join(format!("muniment-test-credentials-{}", std::process::id()))
 }
 
+/// The variable that names the directory the runtime logs go to in place of
+/// the platform's. A test that starts a runtime binary sets it for the child,
+/// which is no test run itself, and reads the child's log there.
+pub const LOG_DIRECTORY_VARIABLE: &str = "MUNIMENT_LOG_DIR";
+
+/// The log directory that replaces the platform's: the one
+/// `MUNIMENT_LOG_DIR` names, else, in a test run, a temporary directory per
+/// process, so no test writes the owner's real runtime logs.
+pub fn log_directory_override() -> Option<PathBuf> {
+    match std::env::var_os(LOG_DIRECTORY_VARIABLE) {
+        Some(directory) if !directory.is_empty() => Some(PathBuf::from(directory)),
+        _ => is_test_run().then(test_log_directory),
+    }
+}
+
+/// The log directory a test run uses: one temporary directory per process.
+pub fn test_log_directory() -> PathBuf {
+    std::env::temp_dir().join(format!("muniment-test-logs-{}", std::process::id()))
+}
+
+/// Stops a test run before it appends to a log under the owner's real log
+/// directory, `~/Library/Logs/Muniment` on macOS.
+pub fn guard_log_directory(directory: &Path) {
+    #[cfg(target_os = "macos")]
+    if is_test_run() {
+        let real = crate::user_diagnostics::effective_user_home()
+            .map(|home| home.join("Library/Logs/Muniment"))
+            .ok();
+        if real.is_some_and(|real| directory.starts_with(real)) {
+            panic!(
+                "A test tried to write the owner's runtime log in {}. Tests write their logs \
+                 under {LOG_DIRECTORY_VARIABLE} or a temporary directory.",
+                directory.display()
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = directory;
+}
+
+#[cfg(test)]
+mod log_guard_tests {
+    #[test]
+    fn a_test_run_logs_to_a_temporary_directory_and_never_the_owners() {
+        assert!(super::is_test_run());
+        if std::env::var_os(super::LOG_DIRECTORY_VARIABLE).is_none() {
+            assert_eq!(
+                super::log_directory_override(),
+                Some(super::test_log_directory())
+            );
+        }
+        assert!(super::test_log_directory().starts_with(std::env::temp_dir()));
+        super::guard_log_directory(&super::test_log_directory());
+        #[cfg(target_os = "macos")]
+        {
+            let real = crate::user_diagnostics::effective_user_home()
+                .unwrap()
+                .join("Library/Logs/Muniment");
+            let refused = std::panic::catch_unwind(|| super::guard_log_directory(&real));
+            assert!(refused.is_err());
+        }
+    }
+}
+
 #[cfg(test)]
 mod keychain_guard_tests {
     #[test]

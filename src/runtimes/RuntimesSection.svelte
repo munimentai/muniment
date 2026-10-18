@@ -231,7 +231,7 @@
 
   <ThisComputer {tauri}>
     {#snippet add()}
-      <RuntimeAdd {tauri} deviceName={list?.deviceName ?? ''} onpaired={(next) => { if (next?.runtimes) list = next; error = ''; notice = '' }} />
+      <RuntimeAdd {tauri} deviceName={list?.deviceName ?? ''} onpaired={(next) => { if (next?.runtimes) list = next; error = ''; notice = next?.notice ?? '' }} />
     {/snippet}
   </ThisComputer>
 

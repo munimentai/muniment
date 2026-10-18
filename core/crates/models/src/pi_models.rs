@@ -377,9 +377,39 @@ pub fn store_endpoint(
     Ok(provider)
 }
 
+/// Each server Pi reaches through `models.json`, a local server or a custom
+/// endpoint, as its provider id, the name the record gives it and its base URL.
+pub fn endpoints(agent: &Path) -> Result<Vec<(String, String, String)>, String> {
+    let root = match read_json(&models_file(agent)) {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(READ_ERROR.into()),
+    };
+    let record = read_record(agent)?;
+    Ok(root
+        .get("providers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| {
+            id.as_str() != ROUTER_PROVIDER && !key_providers().any(|(known, _)| known == *id)
+        })
+        .filter_map(|(id, entry)| {
+            let base_url = entry.get("baseUrl").and_then(Value::as_str)?;
+            let name = record
+                .get("names")
+                .and_then(|names| names.get(id))
+                .and_then(Value::as_str)
+                .unwrap_or(id);
+            Some((id.clone(), name.to_owned(), base_url.to_owned()))
+        })
+        .collect())
+}
+
 /// Rewrites each endpoint's model list from what its server serves now, with
 /// each model's window, and answers whether any list changed. A model the
-/// server still serves keeps the settings the user gave it.
+/// server still serves keeps the settings the user gave it. A server that
+/// lists no chat model keeps its saved list.
 pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
     let models_file = models_file(agent);
     if !models_file.is_file() {
@@ -405,7 +435,12 @@ pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
                 .get("apiKey")
                 .and_then(Value::as_str)
                 .filter(|key| !matches!(*key, "ollama" | "local"));
-            let Some(found) = discover_endpoint_models(base_url, key, DISCOVERY_TIMEOUT) else {
+            // A server that answers with no chat model is still loading, as
+            // a local server does for a while after it starts, so the saved
+            // list stays until it serves one.
+            let Some(found) = discover_endpoint_models(base_url, key, DISCOVERY_TIMEOUT)
+                .filter(|found| !found.chat.is_empty())
+            else {
                 continue;
             };
             decisions.push((id.clone(), found.decisions));
@@ -582,6 +617,22 @@ mod tests {
         );
         assert_eq!(root["providers"]["openai"]["models"][0]["id"], "kept");
         assert!(!refresh_endpoints(&agent).unwrap());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_server_that_lists_no_model_yet_keeps_the_saved_list() {
+        let agent = temporary_directory();
+        let url = serve_routes(vec![(
+            "GET /v1/models",
+            json!({"object": "list", "data": []}),
+        )]);
+        let saved = json!({"providers": {
+            "custom-omlx": {"baseUrl": url, "apiKey": "k", "models": [{"id": "qwen3"}]}
+        }});
+        fs::write(models_file(&agent), saved.to_string()).unwrap();
+        assert!(!refresh_endpoints(&agent).unwrap());
+        assert_eq!(models(&agent), saved);
         fs::remove_dir_all(agent).unwrap();
     }
 

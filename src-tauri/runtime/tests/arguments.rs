@@ -6,6 +6,10 @@ fn runtime(argument: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
         .arg(argument)
         .env(INVALID_WAIT_TIMEOUT.0, INVALID_WAIT_TIMEOUT.1)
+        .env(
+            muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+            muniment_core::state_root::test_log_directory(),
+        )
         .output()
         .unwrap()
 }

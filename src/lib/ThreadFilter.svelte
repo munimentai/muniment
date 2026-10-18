@@ -25,7 +25,7 @@
 </div>
 <style>
 .thread-filter { position: relative; display: flex; align-items: center; justify-content: space-between; margin: 10px 8px 4px; }
-h3 { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+h3 { margin: 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
 button { border: 0; background: transparent; color: var(--muted); padding: 4px; border-radius: var(--radius-control); cursor: pointer; font: var(--text-12) var(--font-human); }
 button:hover { background: var(--faint); color: var(--ink); }
 .filter-popover { position: absolute; right: 0; top: 100%; width: 220px; padding: 12px; z-index: 10; }

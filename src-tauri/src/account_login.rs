@@ -2,14 +2,110 @@
 //! sign-in, and each step it reports on the chat-event subscription reaches
 //! the window here as a `local-mode-login` event. A finished sign-in brings
 //! the app to the front.
+//!
+//! A paired runtime runs a sign-in on its own computer, but the browser's
+//! `localhost` redirect lands on this one. While such a sign-in runs, this
+//! computer holds the callback port the runtime names and forwards each
+//! redirect to it.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use muniment_core::attach::ModelAction;
+use muniment_runtime::sign_in_callback::{self, CallbackServer};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::model_service::{self, data};
 
 pub(crate) const LOGIN_EVENT: &str = "local-mode-login";
+/// How long this computer holds the port when the sign-in never ends.
+const FORWARD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// The callback port held for a paired runtime's sign-in, by its generation.
+static FORWARD: Mutex<Option<(u64, CallbackServer)>> = Mutex::new(None);
+static FORWARD_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Releases the callback port, when this computer holds it for `generation`
+/// or, with none, for any sign-in. The threads stop off the caller's thread,
+/// because one may be waiting on the runtime's answer.
+fn release_callback(generation: Option<u64>) {
+    let held = {
+        let mut forward = FORWARD.lock().unwrap_or_else(|e| e.into_inner());
+        match (&*forward, generation) {
+            (Some((held, _)), Some(generation)) if *held != generation => None,
+            _ => forward.take(),
+        }
+    };
+    if let Some((_, server)) = held {
+        std::thread::spawn(move || drop(server));
+    }
+}
+
+/// The callback port a sign-in's start answer names, when it names one.
+fn callback_port(started: &Value) -> Option<u16> {
+    started
+        .pointer("/callback/port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+}
+
+/// Holds the callback port the paired runtime's sign-in names on this
+/// computer's loopback, and forwards each redirect to the runtime.
+fn hold_callback<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    started: &Value,
+    provider: &str,
+) -> Result<(), String> {
+    release_callback(None);
+    let Some(port) = callback_port(started) else {
+        return Ok(());
+    };
+    let listeners = sign_in_callback::bind(port)?;
+    let forward_app = app.clone();
+    let server = CallbackServer::start(
+        listeners,
+        Arc::new(muniment_runtime::sign_in_page),
+        sign_in_callback::provider_display_name(provider).to_owned(),
+        Arc::new(move |url| {
+            tauri::async_runtime::block_on(model_service::request(
+                &forward_app,
+                ModelAction::LoginCallback,
+                data([("url", json!(url))]),
+            ))
+            .is_ok()
+        }),
+    );
+    let generation = FORWARD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    *FORWARD.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, server));
+    std::thread::spawn(move || {
+        std::thread::sleep(FORWARD_TIMEOUT);
+        release_callback(Some(generation));
+    });
+    Ok(())
+}
+
+/// Starts a sign-in through `action` on the selected runtime. A paired
+/// runtime's sign-in gets its callback port held here, and a port this
+/// computer cannot hold cancels it with the reason.
+pub(crate) async fn start_sign_in<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    action: ModelAction,
+    provider: String,
+) -> Result<(), String> {
+    release_callback(None);
+    let remote = model_service::remote_selected(app);
+    let started = model_service::request(app, action, data([("provider", json!(provider))])).await?;
+    if !remote {
+        return Ok(());
+    }
+    if let Err(message) = hold_callback(app, &started, &provider) {
+        let _ = model_service::request(app, ModelAction::LoginCancel, json!({})).await;
+        return Err(message);
+    }
+    Ok(())
+}
 
 fn present_main_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(main) = app.get_webview_window("main") {
@@ -26,6 +122,9 @@ pub(crate) fn deliver_step<R: tauri::Runtime>(app: &AppHandle<R>, step: Value) {
     let stage = step.get("stage").and_then(Value::as_str);
     let pool = step.get("pool").and_then(Value::as_bool) == Some(true);
     let present = stage == Some("done") || (stage == Some("failed") && pool);
+    if matches!(stage, Some("done" | "failed" | "cancelled" | "exit")) {
+        release_callback(None);
+    }
     let _ = app.emit(LOGIN_EVENT, step);
     if present {
         present_main_window(app);
@@ -38,13 +137,7 @@ pub(crate) async fn local_mode_account_login_start(
     app: AppHandle,
     provider: String,
 ) -> Result<(), String> {
-    model_service::request(
-        &app,
-        ModelAction::LoginStart,
-        data([("provider", json!(provider))]),
-    )
-    .await
-    .map(drop)
+    start_sign_in(&app, ModelAction::LoginStart, provider).await
 }
 
 #[tauri::command]
@@ -71,6 +164,7 @@ pub(crate) async fn local_mode_account_login_answer(
 /// still hears the cancel, so it leaves the sign-in view.
 #[tauri::command]
 pub(crate) async fn local_mode_account_login_cancel(app: AppHandle) {
+    release_callback(None);
     if model_service::request(&app, ModelAction::LoginCancel, json!({}))
         .await
         .is_err()
@@ -115,6 +209,16 @@ mod tests {
         ] {
             assert!(sign_in_url(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_start_answer_names_the_callback_port_to_hold() {
+        assert_eq!(
+            callback_port(&json!({"callback": {"port": 1455, "path": "/auth/callback"}})),
+            Some(1455)
+        );
+        assert_eq!(callback_port(&Value::Null), None);
+        assert_eq!(callback_port(&json!({"callback": {"port": 70000}})), None);
     }
 
     #[test]

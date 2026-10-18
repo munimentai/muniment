@@ -56,6 +56,14 @@ export function receiptSummary(receipt = {}) {
   return { route, model, time }
 }
 
+// The provider whose mark leads the receipt's model: the part of the model id
+// before its first slash, or null for a bare model id.
+export function receiptProvider(receipt = {}) {
+  const model = recorded(receipt?.model) ? String(receipt.model) : ''
+  const slash = model.indexOf('/')
+  return slash > 0 ? model.slice(0, slash) : null
+}
+
 // What a screen reader hears instead of the line: engines pronounce →
 // inconsistently, so the accessible name states the relation in words.
 export function receiptLabel(receipt = {}) {

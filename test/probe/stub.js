@@ -42,7 +42,7 @@ export const historyFixtures = {
       text: 'The lease renews for one year unless either party gives 60 days notice.',
       receipt: {
         route: 'analysis/high',
-        model: 'pi-2',
+        model: 'openai/gpt-5.5',
         cost: '$0.014',
         time: '6.2s',
         capabilities: [{ name: 'files', version: '2' }],

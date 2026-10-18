@@ -6,7 +6,9 @@
   import Row from '../lib/ui/Row.svelte'
   import Button from '../lib/ui/Button.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import { canRequestUpdate, kindIcon, kindLabel, statusHint, statusLabel, statusTone, updateLabel, versionLabel } from './runtimes.js'
+  import StatusChip from '../lib/ui/StatusChip.svelte'
+  import { machineStatusTone, updateStatusTone } from '../lib/status-tone.js'
+  import { canRequestUpdate, kindIcon, kindLabel, statusHint, statusLabel, updateLabel, versionLabel } from './runtimes.js'
 
   let { runtime, busy = false, onrename, onremove, onupdate } = $props()
   let mode = $state('view')
@@ -14,6 +16,8 @@
   let menu = $state(false)
   let root = $state()
   const update = $derived(runtime.status === 'online' ? updateLabel(runtime) : null)
+  const UPDATE_STATES = ['queued', 'downloading', 'draining', 'installing', 'restarting', 'failed']
+  const updateTone = $derived(updateStatusTone(UPDATE_STATES.includes(runtime.updateStatus?.state) ? runtime.updateStatus.state : runtime.updateRequested ? 'requested' : 'available'))
 
   $effect(() => {
     if (!menu) return
@@ -51,9 +55,9 @@
         {#if !runtime.local}<span>{kindLabel(runtime)}</span>{/if}
         {#if runtime.sshHost}<span class="record">ssh {runtime.sshHost}</span>{/if}
         {#if update}
-          <span class="runtime-state" data-tone="signal" data-tooltip={update.tooltip || undefined} tabindex={update.tooltip ? 0 : undefined}>{update.text}</span>
+          <span class="runtime-state" data-tooltip={update.tooltip || undefined} tabindex={update.tooltip ? 0 : undefined}><StatusChip tone={updateTone}>{update.text}</StatusChip></span>
         {:else}
-          <span class="runtime-state" data-tone={statusTone(runtime)}>{statusLabel(runtime)}</span>
+          <span class="runtime-state"><StatusChip tone={machineStatusTone(runtime.status)}>{statusLabel(runtime)}</StatusChip></span>
         {/if}
       </p>
       {#if statusHint(runtime)}<p class="runtime-hint">{statusHint(runtime)}</p>{/if}
@@ -77,10 +81,7 @@
   .runtime-mark { display: grid; place-items: center; width: 32px; height: 32px; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); }
   .runtime-facts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; color: var(--muted); font-size: var(--text-13); }
   .record { font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
-  .runtime-state[data-tone="ink"] { color: var(--ink); }
-  .runtime-state[data-tone="signal"] { color: var(--ink); }
-  .runtime-state[data-tone="caution"] { color: var(--ochre); }
-  .runtime-state[data-tone="critical"] { color: var(--oxide); }
+  .runtime-state { display: inline-flex; }
   .runtime-hint { margin: 0; color: var(--muted); font-size: var(--text-12); }
   .runtime-state[data-tooltip] { position: relative; cursor: default; }
   .runtime-state[data-tooltip]::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; bottom: calc(100% + 6px); width: max-content; max-width: 280px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font-size: var(--text-12); pointer-events: none; opacity: 0; transition: opacity 80ms ease; }

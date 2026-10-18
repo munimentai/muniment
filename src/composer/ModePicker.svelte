@@ -53,7 +53,7 @@
 
 <style>
   .mode-picker { width: min(360px, 100%); display: flex; flex-direction: column; padding: 6px; overflow-y: auto; outline: 0; }
-  .heading { margin: 4px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); font-weight: 400; }
+  .heading { margin: 4px 8px 4px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .mode-row { display: flex; width: 100%; align-items: center; gap: 10px; min-height: 30px; padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .mode-row:hover:not(:disabled), .mode-row[aria-checked="true"] { background: var(--faint); }
   .mode-row:disabled { color: var(--muted); cursor: default; }

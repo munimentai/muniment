@@ -9,6 +9,7 @@
 //! `models.request` attach operation and hear sign-in steps as `models.login`
 //! events.
 
+pub mod callback;
 mod connections;
 mod memory;
 mod pool_sign_in;
@@ -357,6 +358,10 @@ impl ModelService {
                     data.confirmed,
                 ))
             }
+            ModelAction::LoginCallback => {
+                let data: LoginCallback = parse(data)?;
+                answer(sign_in::deliver_redirect(&self.sign_ins, &data.url))
+            }
             ModelAction::LoginCancel => {
                 parse::<Empty>(data)?;
                 sign_in::cancel(self);
@@ -662,6 +667,12 @@ struct Sample {
 struct Assist {
     enabled: bool,
     id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginCallback {
+    url: String,
 }
 
 #[derive(Deserialize)]

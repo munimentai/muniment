@@ -5,6 +5,7 @@
   // variant shows the one for the current theme; the rest are one file.
   const files = import.meta.glob('./logos/*.svg', { query: '?raw', import: 'default', eager: true })
   // Nimble uses Bespoke Labs’ favicon: https://framerusercontent.com/images/tBmIC2QpuzBT566Qth8NNaI5CJE.png
+  // oMLX uses its site icon, images/icon-rounded-dark.svg, without its drop shadow.
   const images = import.meta.glob('./logos/*.{webp,png}', { query: '?url', import: 'default', eager: true })
   const classifiers = new Set(CLASSIFIERS.map(entry => entry.id))
   const logos = {}
@@ -33,8 +34,13 @@
   // Simple Icons marks ship without a fill, so they take the text color.
   const UNFILLED = new Set(['search-wikipedia', 'search-startpage'])
 
+  // A custom endpoint takes the generic mark, except one a server kind names,
+  // such as the oMLX endpoint the local server scan connects as custom-omlx.
+  const CUSTOM_MARKS = { omlx: 'omlx' }
+  const customMark = (value) => CUSTOM_MARKS[value?.match(/^custom-(.+?)(?:-\d+)?$/)?.[1]] ?? 'custom'
+
   let { provider, size = 16, color = false } = $props()
-  const id = $derived(ALIASES[provider] ?? provider?.replace(/^custom-.*/, 'custom'))
+  const id = $derived(ALIASES[provider] ?? (provider?.startsWith('custom-') ? customMark(provider) : provider))
   const colorId = $derived(color ? `${COLOR_MARKS[id] ?? id}-color` : null)
   const logo = $derived(logos[colorId] ?? logos[id] ?? null)
   const image = $derived(images[`./logos/${id}.webp`] ?? images[`./logos/${id}.png`] ?? null)

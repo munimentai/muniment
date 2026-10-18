@@ -1,4 +1,6 @@
-//! Runtime diagnostics retain stderr output and reach a bounded file on macOS and Windows.
+//! Runtime diagnostics retain stderr output and reach a bounded file on macOS
+//! and Windows. A test run writes that file under a temporary directory, or
+//! the one `MUNIMENT_LOG_DIR` names, never the owner's.
 
 /// The runtime logs each hold at most 256 KiB.
 pub const RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
@@ -15,18 +17,25 @@ macro_rules! runtime_eprintln {
 pub fn emit(arguments: std::fmt::Arguments<'_>) {
     #[cfg(target_os = "macos")]
     {
-        let result = crate::user_diagnostics::effective_user_home().and_then(|home| {
-            write_runtime_service_record(&home.join("Library/Logs/Muniment"), arguments)
-        });
+        let directory = match crate::state_root::log_directory_override() {
+            Some(directory) => Ok(directory),
+            None => crate::user_diagnostics::effective_user_home()
+                .map(|home| home.join("Library/Logs/Muniment")),
+        };
+        let result =
+            directory.and_then(|directory| write_runtime_service_record(&directory, arguments));
         if let Err(error) = result {
             eprintln!("muniment-runtime: The runtime service log failed: {error}.");
         }
     }
     #[cfg(target_os = "windows")]
     {
-        let result = crate::windows_known_folders::windows_local_app_data()
-            .map_err(|error| std::io::Error::other(format!("{error:?}")))
-            .and_then(|root| write_windows_runtime_record(&root, arguments));
+        let root = match crate::state_root::log_directory_override() {
+            Some(directory) => Ok(directory),
+            None => crate::windows_known_folders::windows_local_app_data()
+                .map_err(|error| std::io::Error::other(format!("{error:?}"))),
+        };
+        let result = root.and_then(|root| write_windows_runtime_record(&root, arguments));
         if let Err(error) = result {
             eprintln!("muniment-runtime: The runtime log failed: {error}.");
         }

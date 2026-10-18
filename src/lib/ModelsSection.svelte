@@ -408,7 +408,7 @@
 </script>
 
 {#snippet tabAction()}
-  {#if tab === 'accounts'}<Button icon="plus" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
+  {#if tab === 'accounts'}<Button icon="plus" variant="primary" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
   <Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>{/if}
 {/snippet}
 
@@ -583,7 +583,7 @@
     {:else if method === 'account'}
       <p class="support">Sign in with your {methodLabel(provider, 'account')}. The browser opens, and the token stays on this device.</p>
       {#if !login}
-        <button type="button" disabled={pending} onclick={startLogin}>Sign in</button>
+        <button type="button" data-variant="primary" disabled={pending} onclick={startLogin}>Sign in</button>
       {:else}
         <div class="login" aria-live="polite">
           <p class="support">{login.message}</p>

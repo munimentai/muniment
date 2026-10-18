@@ -76,7 +76,7 @@
           {/if}
           <form onsubmit={(event) => { event.preventDefault(); if (key.trim()) onconnect?.(option, { key: key.trim() }) }}>
             <input type="password" bind:value={key} placeholder="API key" aria-label={`${server.name} API key`} autocomplete="off" />
-            <button type="submit" disabled={!key.trim()}>Connect</button>
+            <button type="submit" data-variant="primary" disabled={!key.trim()}>Connect</button>
           </form>
         </div>
       {:else if open === option.id && server?.state === 'not-running'}
@@ -132,7 +132,7 @@
   .step button, .more { min-height: 30px; padding: 5px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
   .step button:hover:not(:disabled), .more:hover { background: var(--faint); }
   .step button:disabled { color: var(--muted); cursor: default; }
-  .step .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .step .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .ends { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
   .more { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border-style: dashed; border-radius: var(--radius-panel); background: none; color: var(--muted); }
   .more:hover { color: var(--ink); }

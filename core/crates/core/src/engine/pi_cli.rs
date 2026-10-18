@@ -167,7 +167,7 @@ impl PiRpcEngine {
 
     /// Whether one short exchange with the model comes back as a reply. An
     /// account plan serves some of a provider's models and refuses the rest,
-    /// and only the provider says which.
+    /// and only the provider says which. The exchange keeps no session.
     pub fn model_answers(&self, provider: &str, model: &str) -> bool {
         let (Some(executable), Some(agent)) = (self.executable(), self.agent_directory.as_deref())
         else {
@@ -175,7 +175,15 @@ impl PiRpcEngine {
         };
         let mut command = self.cli(&executable, agent);
         command
-            .args(["-ne", "-p", "--provider", provider, "--model", model])
+            .args([
+                "-ne",
+                "--no-session",
+                "-p",
+                "--provider",
+                provider,
+                "--model",
+                model,
+            ])
             .arg("Reply with the single word ready.");
         run_with_timeout(command, PROBE_TIMEOUT).is_some_and(|output| {
             let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();

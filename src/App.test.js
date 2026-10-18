@@ -1548,7 +1548,7 @@ describe('workspace composer entry', () => {
 
     await fireEvent.click(appearance.getByRole('button', { name: label }))
     expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: label.toLowerCase(), palette: 'moss' })
-    expect(document.documentElement.dataset.theme).toBe({ System: undefined, Light: 'moss-light', Dark: 'moss-dark' }[label])
+    expect(document.documentElement.dataset.theme).toBe({ System: 'moss-light', Light: 'moss-light', Dark: 'moss-dark' }[label])
     expect(appearance.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
 
     cleanup()
@@ -3470,8 +3470,8 @@ describe('thread name', () => {
   it('draws a hovered row lighter than the open thread and a selection darker', () => {
     const hover = appRules.get('button.thread-row:hover:not([aria-disabled="true"])')
     expect(hover).toMatch(/background:\s*color-mix\(in srgb, var\(--faint\) 55%, transparent\)/)
-    expect(appRules.get('.active-thread')).toMatch(/background:\s*var\(--faint\)/)
-    expect(appRules.get('.thread-row.selected')).toMatch(/color-mix\(in srgb, var\(--ink\) 14%, var\(--surface\)\)/)
+    expect(appRules.get('.active-thread')).toMatch(/background:\s*var\(--selected\)/)
+    expect(appRules.get('.thread-row.selected')).toMatch(/color-mix\(in srgb, var\(--selected-edge\) 18%, var\(--surface\)\)/)
   })
 })
 
@@ -6857,14 +6857,14 @@ it('does not offer another-model retry in a completed reply', async () => {
     expect(screen.getByPlaceholderText('Ask anything')).toBeEnabled()
   })
 
-  it('notes a reply that resumed after an update in one mono line', async () => {
+  it('notes a reply that resumed after an update in one line', async () => {
     localModeStatus = true
     const resumeNotice = 'Muniment updated while this reply ran, so it resumed where it stopped.'
     signedIn([{ runId: 'resumed-run', phase: 'complete', text: 'Finished reply', prompt: null, resumeNotice }])
     const note = await screen.findByText('Resumed after update')
     expect(note.closest('p')).toHaveClass('resume-notice')
     expect(note).toHaveAttribute('data-tooltip', resumeNotice)
-    expect(appRules.get('.resume-notice')).toContain('var(--font-mono)')
+    expect(appRules.get('.resume-notice')).toContain('var(--font-human)')
     expect(await screen.findByText('Finished reply')).toBeInTheDocument()
   })
 
@@ -7916,15 +7916,15 @@ describe('signed-in access popover', () => {
     const system = appearance.getByRole('button', { name: 'System' })
     const dark = appearance.getByRole('button', { name: 'Dark' })
 
-    // Moss dark is the default appearance.
+    // Moss vibrant dark is the default appearance.
     expect(dark).toHaveAttribute('aria-pressed', 'true')
     expect(system).toHaveAttribute('aria-pressed', 'false')
 
     await fireEvent.click(system)
     await fireEvent.click(dark)
-    expect(document.documentElement.dataset.theme).toBe('moss-dark')
+    expect(document.documentElement.dataset.theme).toBe('moss-vibrant-dark')
     expect(document.documentElement.dataset.scheme).toBe('dark')
-    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', palette: 'moss' })
+    expect(JSON.parse(localStorage.getItem('muniment.theme'))).toEqual({ mode: 'dark', palette: 'moss-vibrant' })
     expect(dark).toHaveAttribute('aria-pressed', 'true')
 
     await fireEvent.click(system)

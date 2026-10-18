@@ -20,6 +20,13 @@
 //! level as the model's default and answers null. A missing level restores
 //! the engine's own default.
 //!
+//! `login_start` and `router_subscription_start` answer
+//! `{"callback": {"port", "path"}}` when the sign-in's browser redirect lands
+//! on a fixed loopback port of the runtime's computer, else null. A client on
+//! another computer holds that port on its own loopback while the sign-in
+//! runs and sends each redirect it receives as `login_callback`, which takes
+//! `{"url"}` and answers null.
+//!
 //! A `models.request` body is `{"action": <action>, "data": <object>}`. The
 //! runtime answers `{"result": <value>}`. An action that changes a setting, a
 //! credential or a sign-in carries an idempotency key, and a read carries none.
@@ -71,6 +78,7 @@ pub enum ModelAction {
     ConnectServer,
     LoginStart,
     LoginAnswer,
+    LoginCallback,
     LoginCancel,
     SearchSettings,
     SearchSaveOrder,
@@ -93,7 +101,7 @@ pub enum ModelAction {
 
 impl ModelAction {
     /// Every action, in wire order.
-    pub const ALL: [ModelAction; 50] = [
+    pub const ALL: [ModelAction; 51] = [
         Self::ProviderStatus,
         Self::StoreProviderKey,
         Self::StoreLocalProvider,
@@ -126,6 +134,7 @@ impl ModelAction {
         Self::ConnectServer,
         Self::LoginStart,
         Self::LoginAnswer,
+        Self::LoginCallback,
         Self::LoginCancel,
         Self::SearchSettings,
         Self::SearchSaveOrder,
@@ -234,6 +243,7 @@ impl ModelAction {
             Self::ConnectServer => "connect_server",
             Self::LoginStart => "login_start",
             Self::LoginAnswer => "login_answer",
+            Self::LoginCallback => "login_callback",
             Self::LoginCancel => "login_cancel",
             Self::SearchSettings => "search_settings",
             Self::SearchSaveOrder => "search_save_order",

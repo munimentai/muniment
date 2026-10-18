@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -491,4 +491,12 @@ describe('promptFolders', () => {
     expect(promptFolders('plain')).toEqual({ text: 'plain', folders: [] })
     expect(promptFolders('quoted\n\nAttached folders (local paths):\nnot json\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.').folders).toEqual([])
   })
+})
+
+it('names the receipt model\'s provider for its mark', () => {
+  expect(receiptProvider({ model: 'openai/gpt-6-astra' })).toBe('openai')
+  expect(receiptProvider({ model: 'custom-omlx/qwen3-8b' })).toBe('custom-omlx')
+  expect(receiptProvider({ model: 'pi-2' })).toBe(null)
+  expect(receiptProvider({})).toBe(null)
+  expect(receiptProvider(null)).toBe(null)
 })

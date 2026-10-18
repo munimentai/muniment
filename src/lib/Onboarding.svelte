@@ -218,11 +218,11 @@
   .actions .primary { margin-left: auto; }
   h1 { font-size: var(--text-22); }
   p { margin: 8px 0; font-size: var(--text-13); overflow-wrap: anywhere; }
-  .path, .error { font: var(--text-12) var(--font-mono); }
-  .error { color: var(--muted); }
+  .path { font: var(--text-12) var(--font-mono); }
+  .error { color: var(--muted); font: var(--text-12) var(--font-human); }
   button { min-height: 28px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
-  .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   @media (max-height: 600px) { section.onboarding { margin-top: 12px; max-height: calc(100% - 12px); } }
 </style>
