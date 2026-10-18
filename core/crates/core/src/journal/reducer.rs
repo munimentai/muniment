@@ -594,6 +594,9 @@ pub struct ChatProjection {
     /// The note a `run.resumed` event carried, such as why the runtime
     /// resumed the run on its own.
     pub resume_notice: Option<String>,
+    /// The cause a `run.failed` event names beside its reason, such as the
+    /// provider's own sentence or what reply setup waited on.
+    pub failure_detail: Option<String>,
     pub text: String,
     pub receipt: Option<Value>,
     pub status: Option<RunStatus>,
@@ -683,6 +686,7 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
                     chat.resume_notice = Some(notice);
                 }
             }
+            "run.failed" => chat.failure_detail = optional_field(event, "detail")?,
             "chat.attachment.ingested" => {
                 let EventPayload::Attachment { attachment } = &event.payload else {
                     return Err(ReduceError::MissingAttachmentPayload {
@@ -755,6 +759,7 @@ pub(crate) struct ChatCheckpoint {
     routing_stage: Option<String>,
     prompt_storage_notice: Option<String>,
     resume_notice: Option<String>,
+    failure_detail: Option<String>,
     receipt: Option<Option<Value>>,
     tool_activity_len: usize,
     finished_activity: Option<(usize, ToolActivity)>,
@@ -809,6 +814,7 @@ impl ChatProjector {
             routing_stage: self.chat.routing_stage.clone(),
             prompt_storage_notice: self.chat.prompt_storage_notice.clone(),
             resume_notice: self.chat.resume_notice.clone(),
+            failure_detail: self.chat.failure_detail.clone(),
             receipt: (event.event_type == "run.completed").then(|| self.chat.receipt.clone()),
             tool_activity_len: self.chat.tool_activity.len(),
             finished_activity,
@@ -827,6 +833,7 @@ impl ChatProjector {
         self.chat.routing_stage = checkpoint.routing_stage;
         self.chat.prompt_storage_notice = checkpoint.prompt_storage_notice;
         self.chat.resume_notice = checkpoint.resume_notice;
+        self.chat.failure_detail = checkpoint.failure_detail;
         if let Some(receipt) = checkpoint.receipt {
             self.chat.receipt = receipt;
         }
@@ -859,6 +866,7 @@ impl ChatProjector {
                     self.chat.resume_notice = Some(notice);
                 }
             }
+            "run.failed" => self.chat.failure_detail = optional_field(event, "detail")?,
             "chat.attachment.ingested" => {
                 let EventPayload::Attachment { attachment } = &event.payload else {
                     return Err(ReduceError::MissingAttachmentPayload {
@@ -876,11 +884,17 @@ impl ChatProjector {
             "model.turn.started" => self.chat.turn_started = true,
             "model.routing.stage" => {
                 let stage = field(event, "stage")?;
+                // `folder-access` names an operating system consent prompt
+                // the run waits on, and `routing` ends that wait.
                 if matches!(
                     stage.as_str(),
                     "choosing-model" | "waiting-for-account" | "fallback" | "thinking"
-                ) {
+                ) || stage == "folder-access"
+                    || stage.starts_with("folder-access:")
+                {
                     self.chat.routing_stage = Some(stage);
+                } else if stage == "routing" {
+                    self.chat.routing_stage = None;
                 }
             }
             "model.stream.delta" => {

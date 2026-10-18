@@ -36,6 +36,7 @@
     </ul>
   {/if}
   <p class="reset">{reset || 'Reset time unknown'}</p>
+  {#if limit.note}<p class="note">{limit.note}</p>{/if}
 </article>
 
 <style>
@@ -52,7 +53,7 @@
   .accounts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
   .accounts li { position: relative; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .chip { display: inline-grid; place-items: center; width: 22px; height: 20px; border-radius: var(--radius-control); background: color-mix(in srgb, var(--chip) 22%, var(--surface)); color: var(--ink); font: 600 var(--text-12) var(--font-human); }
-  .reset { margin: 0; color: var(--muted); font-size: var(--text-12); }
+  .reset, .note { margin: 0; color: var(--muted); font-size: var(--text-12); }
   [data-tooltip]:hover::after { content: attr(data-tooltip); position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 2; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .accounts [data-tooltip]:hover::after { left: 0; right: auto; }
 </style>

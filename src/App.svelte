@@ -58,6 +58,7 @@
   import ThreadPost from './agents/ThreadPost.svelte'
   import AgentMentions from './agents/AgentMentions.svelte'
   import GroupCreate from './agents/GroupCreate.svelte'
+  import AgentBuilder from './agents/AgentBuilder.svelte'
   import AbsencePrompt from './agents/AbsencePrompt.svelte'
   import { exportAgent } from './agents/import.js'
   import ApprovalList from './agents/ApprovalList.svelte'
@@ -318,20 +319,40 @@
     if (values[0].status === 'fulfilled' && Array.isArray(values[0].value)) creations = values[0].value
     if (values[1].status === 'fulfilled' && Array.isArray(values[1].value)) artifactItems = values[1].value
   }
-  async function startCreation(kind, chosen = creationDefaults(kind)) {
+  async function startCreation(kind, chosen = creationDefaults(kind), text = '') {
     if (remoteSelected(runtimeList)) await onThisComputer()
     if (switchLocked) return
     if (!await newSidebarThread(selectedProject) || !currentThreadId) return
     pendingCreation = { threadId: currentThreadId, kind, goal: chosen.goal, output: chosen.output, resultId: null }
-    draft = ''
+    draft = text
     await tick()
     composer?.focus()
+  }
+  // The agent builder takes the thread's place: one sentence, or a thread's
+  // text, fills the agent form through core's `agent.draft`. New agent, the
+  // Set up an agent starter, the templates and a thread's Make this an agent
+  // open it on this computer.
+  let agentBuilder = $state(null)
+  async function openAgentBuilder(request = {}) {
+    if (remoteSelected(runtimeList)) await onThisComputer()
+    if (switchLocked) return
+    if (settingsOpen) closeSettings()
+    projectsOpen = false; artifactsOpen = false; agentsOpen = false; agentProfileOpen = false; closeRail()
+    agentBuilder = { description: '', threadId: null, threadTitle: '', autostart: false, ...request, key: (agentBuilder?.key ?? 0) + 1 }
+    fullPage = 'agent-builder'
+  }
+  async function openBuiltAgent(agent) {
+    await refreshAgents()
+    const entry = roster.find((item) => item.id === agent.id && (item.runtimeId ?? 'local') === (agent.runtimeId ?? 'local')) ?? roster.find((item) => item.id === agent.id)
+    fullPage = null
+    agentBuilder = null
+    if (entry) await openAgent(entry).catch((error) => { submitError = String(error) })
   }
   // A new thread's starter card: a creation chat, or a prompt in the composer,
   // after the file picker for a starter about files.
   async function pickThreadStarter(starter) {
     if (starter.kind === 'artifact') return startCreation('artifact', { goal: starter.goal, output: starter.output })
-    if (starter.kind === 'agent') return startCreation('agent')
+    if (starter.kind === 'agent') return openAgentBuilder()
     if (starter.kind === 'files') {
       await chooseFiles()
       if (!selectedFiles.length) return
@@ -424,7 +445,7 @@
     // A new agent starts in a creation chat on this computer.
     if (create && remoteSelected(runtimeList)) await onThisComputer()
     await Promise.all([refreshAgents(),refreshCreations()])
-    if (create) return startCreation('agent')
+    if (create) return openAgentBuilder()
     projectsOpen=false; artifactsOpen=false; fullPage = null; agentsOpen=true; agentProfileOpen=false; agentsRequest+=1;closeRail()
   }
   let agentProfileOpen = $state(false)
@@ -979,7 +1000,7 @@
   // A group thread, or a replica of another machine's agent thread, takes a
   // message through `thread.post`. Core hands it to the group or to the
   // agent's primary machine.
-  const threadPostTarget = $derived(postTarget({ threadId: freshThread ? null : currentThreadId, threadRuntime: threadMachine, groups: swarm.groups, agent: threadAgent, swarm, owner: currentSummary?.owner_runtime }))
+  const threadPostTarget = $derived(postTarget({ threadId: freshThread ? null : currentThreadId, threadRuntime: threadMachine, groups: swarm.groups, agent: threadAgent, swarm, owner: currentSummary?.owner_runtime, replica: !!currentSummary?.replica }))
   // The open thread's summary, and the fleet member that owns it when that
   // is another machine.
   const currentSummary = $derived(freshThread || !currentThreadId ? null : threadSummaries.find((summary) => summary.threadId === currentThreadId) ?? null)
@@ -1062,9 +1083,8 @@
     }
   }
   let posting = $state(false)
-  async function postToThread(target) {
-    const text = draft.trim()
-    if (!text || posting) return
+  async function postToThread(target, text = draft.trim()) {
+    if (!text || posting) return false
     posting = true
     submitError = ''
     try {
@@ -1072,8 +1092,10 @@
       fleet.forwarded(answer)
       draft = ''
       await chatController.refreshOpenThread()
+      return true
     } catch (error) {
       submitError = String(error?.message ?? error)
+      return false
     } finally {
       posting = false
     }
@@ -1086,8 +1108,8 @@
   // Approvals waiting in the open thread. Each shows as an approval card at
   // the end of the transcript in place of the run's own gate.
   const openApprovals = $derived(threadApprovals(swarm.approvals, freshThread ? null : currentThreadId))
-  // A catalog covers the thread, so the title bar names the catalog.
-  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? (settingsProject ? sidebarProjectById[settingsProject]?.name ?? 'Projects' : 'Projects') : '')
+  // A catalog or a page covers the thread, so the title bar names it.
+  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? (settingsProject ? sidebarProjectById[settingsProject]?.name ?? 'Projects' : 'Projects') : fullPage === 'usage' ? 'Usage' : fullPage === 'notifications' ? 'Notifications' : '')
   let currentThreadTitle = $derived(threadAgent?.name || threadGroup?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   // The machine the open thread lives on. A new thread has none until its
@@ -1330,6 +1352,9 @@
   let composerExtensions = $state()
   let extensionCommandNames = $state([])
   const chatController = createChatController({
+    // A thread another machine runs that the list did not mark yet takes
+    // the message as a post, which core sends on to that machine.
+    postElsewhere: (text) => !freshThread && currentThreadId ? postToThread({ runtime: threadMachine || LOCAL_RUNTIME_ID, body: { thread_id: currentThreadId } }, text) : false,
     invoke: (command, args) => tauri.invoke(command, ...(args === undefined ? [] : [args])),
     onPosted: (threadId, posts) => { threadPosts = { threadId, posts } },
     prepareSubmit: async ({ prompt }) => {
@@ -1451,14 +1476,10 @@
     await refreshProjects()
   }
 
-  // A trigger makes the project an agent: core saves an agent that works in
-  // the project's folder, and its profile opens on its routines.
+  // A trigger makes the project an agent: the agent builder drafts one that
+  // works in the project's folder, and its home thread is where runs post.
   async function addProjectTrigger(project) {
-    const instructions = (await tauri.invoke('project_settings', { projectId: project.id }).catch(() => null))?.instructions?.trim()
-    const answer = await agentRequest(tauri, LOCAL_RUNTIME_ID, 'agent.save', { agent: { name: project.name, instructions: instructions || `Work on the ${project.name} project.`, projectId: project.id } })
-    await refreshAgents()
-    const agent = roster.find(entry => entry.id === answer?.agent?.id)
-    if (agent) openAgentProfile(agent)
+    await openAgentBuilder({ projectId: project.id })
   }
 
   async function saveProject() {
@@ -1678,6 +1699,7 @@
   const sidebarPages = $derived([
     { id: 'artifacts', label: 'Artifacts', icon: 'file-code', shortcut: artifactShortcut },
     { id: 'agents', label: 'Agents', icon: 'bot' },
+    { id: 'new-agent', label: 'New agent', icon: 'plus' },
     { id: 'projects', label: 'Projects', icon: 'layout-dashboard' },
     ...(roster.length > 1 ? [{ id: 'group', label: 'New group chat', icon: 'users' }] : []),
     { id: 'notifications', label: 'Notifications', icon: 'bell' },
@@ -1688,6 +1710,7 @@
     threadSearch = ''
     if (id === 'artifacts') void showArtifacts()
     else if (id === 'agents') void showAgents()
+    else if (id === 'new-agent') void openAgentBuilder()
     else if (id === 'projects') void showProjects()
     else if (id === 'group') groupCreateOpen = true
     else if (id === 'settings') toggleSettings()
@@ -3084,9 +3107,10 @@
 {/snippet}
 
 {#snippet sidebarThread(summary)}
-                {@const title = summary.title || summary.row?.title || 'New thread'}
+                {@const creation = creations.find((item) => item.threadId === summary.threadId)}
+                {@const title = creation ? creationTitle(creation, [summary]) : summary.title || summary.row?.title || 'New thread'}
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
-                {@const rowTitle = current ? summary.title || currentThreadTitle : title}
+                {@const rowTitle = current && !creation ? summary.title || currentThreadTitle : title}
                 {@const rowPosition = shortcutThreads.findIndex((item) => item.threadId === summary.threadId) + 1}
                 {@const selected = selectedThreadIds.has(summary.threadId)}
                 {@const rowId = nextRowId()}
@@ -3098,7 +3122,7 @@
                       <button type="submit" disabled={rowRenamePending || !rowRename.title.trim()}>Save</button>
                       <button type="button" disabled={rowRenamePending} onclick={() => { rowRename = null; focusThreadRow(summary.threadId) }}>Cancel</button>
                     </form>
-                  {:else if current && !(agentsOpen || artifactsOpen || projectsOpen)}
+                  {:else if current && !catalogTitle}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
                     <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
                   {:else}
@@ -3192,6 +3216,7 @@
                       {#if !threadMenu.fromTitle && !selectedThreadIds.has(summary.threadId)}<button type="button" role="menuitem" onclick={() => { const id = summary.threadId; closeThreadMenu(); selectThread(id, false); focusThreadRow(id) }}>Select</button>{/if}
                       <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'pinned')}>{threadOrganization[summary.threadId]?.pinned ? 'Unpin' : 'Pin'}</button>
                       <button type="button" role="menuitem" disabled={running} onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
+                      {#if !agentThreadMap[summary.threadId]}<button type="button" role="menuitem" disabled={switchLocked} onclick={() => { const { threadId, title } = summary; closeThreadMenu(); void openAgentBuilder({ threadId, threadTitle: title || rowTitle, autostart: true, projectId: projectCatalog.projects[projectCatalog.threads[threadId]] ? projectCatalog.threads[threadId] : null }) }}>Make this an agent</button>{/if}
                       <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={threadSwitching || runLocked || deletionHoldsRun(summary.threadId)} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
@@ -3374,7 +3399,7 @@
                   </div>
                 {/if}
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Details</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Show log</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && !openApprovals.some(approval => approval.run_id === message.run.id)}
@@ -3752,12 +3777,15 @@
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
+  {#if fullPage === 'agent-builder' && agentBuilder}{#key agentBuilder.key}<AgentBuilder {tauri} description={agentBuilder.description} threadId={agentBuilder.threadId} threadTitle={agentBuilder.threadTitle} autostart={agentBuilder.autostart} projectId={agentBuilder.projectId ?? null}
+    onsaved={openBuiltAgent} onopenchat={openBuiltAgent} onchange={() => { void refreshAgents() }}
+    onrefine={(text) => { fullPage = null; agentBuilder = null; void startCreation('agent', creationDefaults('agent'), text) }} />{/key}{/if}
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
-    <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>startCreation('agent', chosen)} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
+    <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentBuilder(chosen?.description ? { description: chosen.description, autostart: true } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
       {inventory} latestRuns={agentListing.latestRuns} onprofile={openAgentProfile} onmanagemodels={openModelSettings} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {/key}{/if}
   {#if projectsOpen && settingsProject && sidebarProjectById[settingsProject]}

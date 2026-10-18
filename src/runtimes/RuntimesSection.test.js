@@ -37,6 +37,43 @@ const listen = vi.fn(async () => () => {})
 const machineRows = () => within(screen.getByRole('region', { name: 'Machine list' })).getAllByRole('group')
 
 describe('Machines page', () => {
+  it('lists the account\'s devices and the paired phone in the one list, and pairs or removes a phone from it', async () => {
+    let pair = null
+    const handlers = {
+      auth_devices: () => [
+        { device_id: 'd0', platform: 'macos', current: true, revoked_at: null, last_active_at: '2026-10-17T10:00:00Z' },
+        { device_id: 'd1', platform: 'windows', current: false, revoked_at: null, last_active_at: '2026-10-17T09:00:00Z' },
+        { device_id: 'd2', platform: 'ios', current: false, revoked_at: null, last_active_at: '2026-10-17T08:00:00Z' },
+        { device_id: 'd3', platform: 'linux', current: false, revoked_at: '2026-10-01T00:00:00Z', last_active_at: '2026-09-01T00:00:00Z' },
+      ],
+      auth_pairing_status: () => ({ pair }),
+      auth_pairing_challenge: () => ({ qr_svg: '<svg></svg>', expires_at: new Date(Date.now() + 60_000).toISOString() }),
+      auth_pairing_revoke: () => { pair = null },
+      app_update_prepare: () => null,
+      agent_request: () => { throw new Error('no fleet') },
+    }
+    const { unmount } = render(RuntimesSection, { tauri: tauri(handlers), listen })
+    await waitFor(() => expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Windows', 'iOS']))
+    // Add machine offers a phone while none is paired.
+    await fireEvent.click(screen.getByRole('button', { name: 'Add machine' }))
+    expect(await screen.findByRole('button', { name: 'Pair a phone' })).toBeInTheDocument()
+    unmount()
+
+    pair = { pair_id: 'p1', mobile_device_id: 'm1', created_at: '2026-10-16T08:00:00Z', remote_control: 'ok' }
+    render(RuntimesSection, { tauri: tauri(handlers), listen })
+    // Status reads keep their two-second spacing across mounts.
+    await waitFor(() => expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Phone', 'Windows']), { timeout: 4000 })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add machine' }))
+    expect(screen.queryByRole('button', { name: 'Pair a phone' })).toBeNull()
+    // Remove on the phone's row revokes the pairing.
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Phone' })).getByRole('button', { name: 'More for Phone' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Windows', 'iOS']))
+    expect(await screen.findByText('Removed Phone.')).toBeInTheDocument()
+  })
+
+
   it('lists this computer first, then each paired machine with its kind, version and state', async () => {
     render(RuntimesSection, { tauri: tauri(), listen })
     const computer = await screen.findByRole('group', { name: 'This computer' })
@@ -83,6 +120,17 @@ describe('Machines page', () => {
     // A machine this device may not update offers no Update.
     await fireEvent.click(screen.getByRole('button', { name: 'More for Studio' }))
     expect(screen.queryByRole('menuitem', { name: 'Update' })).toBeNull()
+  })
+
+  it('shows a failed update\'s first line inline with its log behind Show log', async () => {
+    const bridge = tauri({ runtime_update: () => ({ id: buildBox.id, name: 'Build box', ok: false, message: 'The update did not install.\ninstaller exited with status 3' }) })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'More for Build box' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Update' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The update did not install.')
+    expect(within(alert).getByText('Show log')).toBeInTheDocument()
+    expect(within(alert).getByText('installer exited with status 3')).toBeInTheDocument()
   })
 
   it('updates every machine that is behind, names each skip and updates this computer last', async () => {

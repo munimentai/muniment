@@ -24,6 +24,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | crate | muniment-server | It runs the runtime headless, with no keychain and no OS service registration. |
 | crate | muniment-search | It searches the web without a key and answers the SearXNG JSON format on loopback. |
 | module | account | It defines the session, device, pairing, and entitlement values attach carries. |
+| module | agent_draft | It drafts an agent's settings from one description or a thread with one model call. |
 | module | agent_extract | It proposes agent routines from saved instructions. |
 | module | agent_hooks | It verifies webhook deliveries and queues their agent runs. |
 | module | agent_poll | It polls MCP routines and evaluates their conditions. |

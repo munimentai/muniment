@@ -4,6 +4,7 @@
 // This module merges their answers into one row per machine.
 import { directLinks, memberMachine } from '../agents/swarm.js'
 import { kindIcon, kindLabel, machineName, versionLabel } from './runtimes.js'
+import { platformDisplayName } from '../lib/auth-state.js'
 
 // The device kind core gives the link between two fleet members. A member
 // shows as its own row, so its link does not.
@@ -13,6 +14,9 @@ const ADMIN = 'runtime.admin'
 const DEVICE_KINDS = {
   'desktop-client': ['desktop', 'laptop'],
   desktop: ['desktop', 'laptop'],
+  macos: ['desktop', 'laptop'],
+  windows: ['desktop', 'laptop'],
+  linux: ['desktop', 'laptop'],
   mobile: ['phone', 'smartphone'],
   phone: ['phone', 'smartphone'],
   ios: ['phone', 'smartphone'],
@@ -32,12 +36,15 @@ function deviceKind(kind) {
 const sameName = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase()
 
 // One row per machine, each { key, name, kind, icon, version, local, runtime,
-// coreId, deviceId, online, limited, seenAt }. `runtime` is the `runtime_list`
+// coreId, deviceId, pairId, online, limited, seenAt }. `runtime` is the `runtime_list`
 // entry of a machine this app reaches, `coreId` its fleet member id, and
 // `deviceId` the access it holds on this computer. A device that uses this
 // computer and a fleet member or reached machine with the same name are one
 // machine, so they share a row.
-export function machineRows({ list, swarm = null, devices = [] }) {
+// With MuniCloud on, the devices on the account that are not this computer
+// and the phone paired through the relay are rows too, so every machine and
+// device is in this one list. `pairId` names the phone's pairing.
+export function machineRows({ list, swarm = null, devices = [], cloudDevices = [], phone = null }) {
   const rows = []
   const shown = new Set()
   for (const runtime of list?.runtimes ?? []) {
@@ -103,6 +110,19 @@ export function machineRows({ list, swarm = null, devices = [] }) {
       seenAt: device.last_seen_at ?? null,
     })
   }
+  if (phone?.pair_id) {
+    rows.push({ key: `phone:${phone.pair_id}`, name: 'Phone', kind: 'phone', icon: 'smartphone', version: '', local: false, runtime: null, coreId: null, deviceId: null, pairId: phone.pair_id, online: null, limited: true, seenAt: phone.created_at ?? null })
+  }
+  for (const device of cloudDevices ?? []) {
+    if (device.current || device.revoked_at) continue
+    const [kind, icon] = deviceKind(String(device.platform ?? '').toLowerCase())
+    const name = device.platform ? platformDisplayName(device.platform) : kindWord(kind)
+    // The phone paired through the relay is the account's phone.
+    const paired = kind === 'phone' ? rows.find((row) => row.pairId) : null
+    if (paired) { paired.seenAt = device.last_active_at ?? paired.seenAt; continue }
+    if (rows.some((row) => !row.local && sameName(row.name, name))) continue
+    rows.push({ key: `cloud:${device.device_id}`, name, kind, icon, version: '', local: false, runtime: null, coreId: null, deviceId: null, online: null, limited: true, seenAt: device.last_active_at ?? null })
+  }
   return rows
 }
 
@@ -124,5 +144,5 @@ export function linkHolders(swarm, coreId) {
 // Whether a row can be removed from here: this app reaches it, a machine it
 // reaches links to it, or it holds access to this computer.
 export function removable(row, swarm) {
-  return !row.local && (!!row.runtime || !!row.deviceId || (!!row.coreId && linkHolders(swarm, row.coreId).length > 0))
+  return !row.local && (!!row.runtime || !!row.deviceId || !!row.pairId || (!!row.coreId && linkHolders(swarm, row.coreId).length > 0))
 }

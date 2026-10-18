@@ -223,6 +223,37 @@ export function probeAgentStores(seed, state = null) {
   return stores
 }
 
+// Core's `agent.draft`: a start answers an id at once, and the next ask
+// answers the draft one model call made. A description with no job gets one
+// question beside its draft. `store.draftStarts` keeps each start, which is
+// one model round trip in core.
+function probeDraft(store, body) {
+  store.drafts ??= {}
+  store.draftStarts ??= []
+  if (!body.draft_id) {
+    const id = `probe-draft-${store.draftStarts.length + 1}`
+    store.draftStarts.push(clone(body))
+    store.drafts[id] = clone(body)
+    return { draft_id: id, status: 'drafting' }
+  }
+  const started = store.drafts[body.draft_id]
+  if (!started) throw 'The agent draft was not found. Draft it again.'
+  delete store.drafts[body.draft_id]
+  const words = started.description ?? ''
+  const vague = /^make me an agent\.?$/i.test(words.trim()) && !started.answers?.length
+  const draft = {
+    name: started.thread_id ? 'Release notes' : vague ? 'Helper' : 'Inbox brief',
+    label: started.thread_id ? 'Release writer' : vague ? '' : 'Morning briefer',
+    instructions: started.thread_id ? 'Write the release notes from the merged changes and list what still needs review.' : vague ? 'Help me with my work.' : 'Summarize the new email in my inbox and list what needs a reply. Group messages by sender and keep each summary to one line.',
+    skills: [],
+    tools_off: [],
+    permission_mode: vague || started.thread_id ? null : 'manual',
+    routines: vague || started.thread_id ? [] : [{ id: 'extract-5d41402abc4b2a76', name: 'Summarize the new email in my inbox', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' }, prompt: 'Summarize the new email in my inbox.', created_from: 'instructions', last_fired_at: null, last_result: null }],
+  }
+  const question = vague ? { text: 'What should the agent do?', options: ['Research topics', 'Edit my writing', 'Track a project'] } : null
+  return { draft_id: body.draft_id, status: 'done', draft, question, via: 'router' }
+}
+
 // The preview `agent.import` answers for the probe's share link.
 function importPreview(source) {
   return {
@@ -331,6 +362,7 @@ export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
     return threadMode(store, runtime, body.thread_id)
   }
   if (operation === 'thread.plan') return { plan: store.plans?.[body.thread_id] ? clone(store.plans[body.thread_id]) : null }
+  if (operation === 'agent.draft') return probeDraft(store, body)
   if (operation === 'agent.list') return { agents: clone(store.agents), primary_threads: { ...store.primaryThreads }, latest_runs: latest(), errors: [] }
   if (operation === 'agent.read') return { agent: clone(find(body.id)), primary_thread_id: store.primaryThreads[body.id] ?? null }
   if (operation === 'agent.save') {

@@ -108,4 +108,39 @@ describe('sidebar actions', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
     expect(onusage).toHaveBeenCalledOnce()
   })
+
+  it('shows one name at a time and hides it when the pointer or focus leaves', async () => {
+    vi.useFakeTimers()
+    try {
+      const view = render(SidebarActions, { usageShortcut: 'Meta+Shift+U', notificationsShortcut: 'Meta+Shift+A', settingsShortcut: 'Meta+,', onsettings: vi.fn(), onusage: vi.fn(), onnotifications: vi.fn() })
+      const settings = screen.getByRole('button', { name: 'Settings' })
+      const usage = screen.getByRole('button', { name: 'Usage' })
+      // Focus the app moves back after a dialog closes names nothing.
+      settings.focus()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await fireEvent.pointerEnter(settings)
+      await vi.advanceTimersByTimeAsync(400)
+      expect(screen.getByRole('tooltip')).toHaveTextContent(/^Settings/)
+      await fireEvent.pointerLeave(settings)
+      await fireEvent.pointerEnter(usage)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await vi.advanceTimersByTimeAsync(400)
+      expect(screen.getAllByRole('tooltip')).toHaveLength(1)
+      expect(screen.getByRole('tooltip')).toHaveTextContent(/^Usage/)
+      await fireEvent.pointerLeave(usage)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      // Keyboard focus names its button, and blur or a page change hides it.
+      await fireEvent.keyDown(window, { key: 'Tab' })
+      await fireEvent.focus(usage)
+      expect(screen.getByRole('tooltip')).toHaveTextContent(/^Usage/)
+      await view.rerender({ usageOpen: true })
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await fireEvent.focus(usage)
+      await fireEvent.blur(usage)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

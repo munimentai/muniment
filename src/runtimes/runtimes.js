@@ -171,7 +171,7 @@ export function skipLabel(skip) {
 
 // The parts of Settings pages that keep this computer's data while a paired
 // runtime is selected. Each says so in one line.
-export const LOCAL_PARTS = ['mcp', 'skill', 'plugin', 'storage', 'companies']
+export const LOCAL_PARTS = ['mcp', 'skill', 'plugin', 'retention', 'storage', 'companies']
 
 // Settings pages that read and change the selected machine, in whole or in
 // part. Once a machine is paired, each names that machine at its top and can
@@ -192,6 +192,13 @@ export function errorLine(failure, fallback = 'The runtime did not answer.') {
   const text = typeof failure === 'string' ? failure : failure?.message ?? String(failure ?? '')
   const line = text.trim().split('\n')[0]?.trim() || fallback
   return /[.!?]$/.test(line) ? line : `${line}.`
+}
+
+// A failure's whole text, which a failure note shows as its first line with
+// the rest behind Show log.
+export function errorText(failure, fallback = 'The runtime did not answer.') {
+  const text = typeof failure === 'string' ? failure : failure?.message ?? String(failure ?? '')
+  return text.trim() || fallback
 }
 
 // A pasted link that looks like a pairing link. The runtime checks the rest.

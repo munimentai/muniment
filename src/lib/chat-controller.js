@@ -11,6 +11,9 @@ const desktopBusy = 'Muniment is busy with another request. Try again.'
 const replyInProgress = 'A reply is already in progress.'
 const replyInProgressRetryMs = 2_000
 const runElsewhere = 'Another reply is still running. Send again when it ends.'
+// The runtime refuses a run in a thread another fleet member runs with this
+// reason before it records anything (attach_boundaries.rs).
+const threadElsewhere = 'Another machine runs this thread. Send the message to that machine.'
 const terminalTypes = { completed: 'complete', cancelled: 'cancelled', failed: 'failed' }
 const eventSettles = (event) => settledPhases.has(event.phase ?? terminalTypes[event.type])
 const submissionSources = ['local-mode', 'auth', 'thread', 'submit']
@@ -71,6 +74,9 @@ export function createChatController({
   onBackgroundRun = () => {},
   // The messages posted to a thread on swarm members, from its first page.
   onPosted = () => {},
+  // Sends a message the runtime refused because another machine runs the
+  // thread to that machine, and answers whether it went.
+  postElsewhere = null,
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -507,7 +513,7 @@ export function createChatController({
     holdBuffer()
     try {
       if (select) {
-        await invoke('chat_select_thread', { threadId })
+        await invoke('chat_select_thread', selection(threadId))
         selected = true
       }
       const history = []
@@ -526,7 +532,7 @@ export function createChatController({
       if (destroyed) return
       // Read first so a failed initial history read still permits a fresh thread.
       if (restoreSelection && !selected) {
-        await invoke('chat_select_thread', { threadId })
+        await invoke('chat_select_thread', selection(threadId))
         selected = true
         if (destroyed) return
       }
@@ -844,6 +850,13 @@ export function createChatController({
     }
   }
 
+  // A thread's selection names the machine its row lives on, so requests
+  // and the model list follow the machine the composer shows.
+  function selection(threadId) {
+    const runtimeId = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId
+    return runtimeId ? { threadId, runtimeId } : { threadId }
+  }
+
   async function sendNewThread(text) {
     const prompt = typeof text === 'string' ? text.trim() : ''
     if (!prompt) return false
@@ -932,6 +945,18 @@ export function createChatController({
         onAnnounce(null)
         onActive(null)
         onSubmitError(runElsewhere)
+        return false
+      }
+      if (reason === threadElsewhere && postElsewhere && submissionId === submissionSequence) {
+        // The runtime recorded nothing; the message goes to the machine that
+        // runs the thread instead.
+        publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
+        onAnnounce(null)
+        onActive(null)
+        if (await postElsewhere(prompt)) {
+          if (!preserveDraft) { onDraft(''); onFiles([]) }
+          return true
+        }
         return false
       }
       if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {

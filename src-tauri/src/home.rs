@@ -162,7 +162,9 @@ pub async fn home_folder_access(
     use muniment_core::folder_access::{check, failure_reason, protected_folder, FolderAccess};
     let home = PathBuf::from(home_path);
     let user_home = app.path().home_dir().ok();
+    let runtime_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        ask_runtime(&runtime_app);
         let access = check(
             &home,
             FOLDER_ACCESS_BOUND,
@@ -181,6 +183,23 @@ pub async fn home_folder_access(
     })
     .await
     .map_err(|_| "Muniment could not check folder access.".to_string())
+}
+
+/// Has the runtime read Home too. macOS asks each process that reads a
+/// protected folder, and Pi runs under the runtime, so the runtime's prompt
+/// shows during the first run instead of holding the first chat.
+fn ask_runtime(app: &AppHandle) {
+    use crate::attach_service::{AttachCompanionState, DesktopClientSession};
+    let attach = app.state::<AttachCompanionState>();
+    if let DesktopClientSession::Connected(client) =
+        attach.local_client_session_within(std::time::Duration::from_secs(3))
+    {
+        let _ = client.request_with_error(
+            muniment_core::attach::Operation::HomeEnsure,
+            None,
+            serde_json::json!({}),
+        );
+    }
 }
 
 #[tauri::command]

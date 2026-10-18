@@ -65,16 +65,20 @@ function calls(invoke, command) {
 describe('phone pairing', () => {
   it('traps Tab and Escape inside pairing and restores the Settings opener', async () => {
     const onclose = vi.fn()
+    const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, active: true }
     const invoke = vi.fn(async (command) => {
       if (command === 'auth_pairing_status') return { pair: null }
       if (command === 'auth_pairing_challenge') return challengeResponse()
-      if (command === 'auth_devices' || command === 'attach_companions') return []
-      if (command === 'attach_listener_status') return { started: true, failure: null }
-      if (command === 'thread_retention_choice') return 'keep_every_thread'
-      if (command === 'auth_entitlement_snapshot') return { grants: [], capabilities: [], snapshot_version: 1 }
+      if (command === 'auth_devices') return []
+      if (command === 'runtime_list' || command === 'runtime_refresh') return { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [local] }
+      if (command === 'local_devices') return { devices: [] }
+      if (command === 'local_access_settings') return { settings: { enabled: false, endpoints: [] }, endpoints: [], error: null }
+      if (command === 'app_update_prepare') return null
       throw new Error(`unexpected command: ${command}`)
     })
-    render(Settings, { tauri: { invoke }, section: 'account', onclose })
+    render(Settings, { tauri: { invoke }, section: 'machines', onclose })
+    // The phone pairs from Add machine on Machines.
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add machine' }))
     const opener = await openPairing()
     const close = await screen.findByRole('button', { name: 'Close pairing' })
     expect(close).toHaveFocus()

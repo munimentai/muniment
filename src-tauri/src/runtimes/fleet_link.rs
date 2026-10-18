@@ -11,6 +11,10 @@ use serde_json::{json, Value};
 
 use super::connection::client_options;
 
+/// Why a machine added with limited access does not sync: only a machine
+/// that holds admin access joins this computer's machines.
+const LIMITED_MACHINE: &str = "This machine was added with limited access, so it does not sync with this computer. Remove it in Settings, Machines, then add it again with a code from Add machine.";
+
 /// Links the paired runtime `record` names with this computer's runtime.
 /// The paired runtime accepts connections, since this app just reached it,
 /// so it invites and this computer dials it. When this computer cannot dial
@@ -18,10 +22,7 @@ use super::connection::client_options;
 /// the sentence that says why neither worked.
 pub(crate) fn link_into_fleet(record: &RemoteRuntimeRecord) -> Result<(), String> {
     if !record.scopes.contains(SCOPE_RUNTIME_ADMIN) {
-        return Err(
-            "Pair this machine again with Updates and pairing to sync it with this computer."
-                .into(),
-        );
+        return Err(LIMITED_MACHINE.into());
     }
     let mut remote = connect_remote_runtime(record, &client_options(None))
         .map_err(|_| "The machine stopped answering before it could be linked.".to_owned())?;

@@ -154,7 +154,8 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
           existing.choice = entry.id
         }
       } else {
-        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: entry.name || modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
+        // A model every plan behind it refused shows as unavailable, with the reason.
+        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: entry.name || modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off, ...(entry.unavailable ? { unavailable: entry.unavailable } : {}) })
       }
     }
     // Automatic routes each message through a decision model, so its row
@@ -239,7 +240,8 @@ export function currentModel(inventory) {
     : null
   const sourceGroup = pickerGroups(inventory).find((group) => group.id === inventory.default_provider)
   const equivalent = sourceGroup?.models.find((row) => row.id === inventory.default_model)
-  const row = saved ?? equivalent ?? rows[0]
+  // With no saved row, the first row some account serves leads.
+  const row = saved ?? equivalent ?? rows.find((entry) => !entry.unavailable) ?? rows[0]
   return row ? { provider: row.provider, model: row.choice, label: row.label } : null
 }
 

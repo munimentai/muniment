@@ -8,16 +8,20 @@
   // machine also joins this computer's machines in the same step: core links
   // a machine that holds admin access, and a device that takes less, such
   // as a phone, stays limited. Showing a code turns on connections the first
-  // time. Each link holds a secret, so it lives in this panel's state only.
+  // time. With MuniCloud on, a third way pairs a phone with the Muniment app.
+  // Each link holds a secret, so it lives in this panel's state only.
   import { onMount } from 'svelte'
   import Button from '../lib/ui/Button.svelte'
   import PopupClose from '../lib/PopupClose.svelte'
-  import { DEFAULT_SSH_COMMAND, DEFAULT_SSH_PORT, errorLine, listenPort, looksLikePairingLink } from './runtimes.js'
+  import { DEFAULT_SSH_COMMAND, DEFAULT_SSH_PORT, errorText, listenPort, looksLikePairingLink } from './runtimes.js'
+  import FailureNote from '../lib/FailureNote.svelte'
 
   // `onadded` hears that a machine joined, with the new machine list when
   // this computer added it. `onnetwork` opens this computer's network
   // settings when connections cannot start.
-  let { tauri, deviceName = '', onadded = () => {}, onnetwork = () => {}, onclose = () => {} } = $props()
+  // `onphone` opens the phone pairing code, while MuniCloud pairs phones and
+  // none is paired yet.
+  let { tauri, deviceName = '', onadded = () => {}, onnetwork = () => {}, onclose = () => {}, onphone = null } = $props()
   const id = $props.id()
   let code = $state(null)
   let known = $state(null)
@@ -55,7 +59,7 @@
       if (access?.error) {
         error = /address already in use/i.test(String(access.error))
           ? `Another program uses port ${listenPort(access) ?? DEFAULT_SSH_PORT}. Choose another port in this computer's network settings.`
-          : `Connections cannot start. ${errorLine(access.error)}`
+          : `Connections cannot start. ${errorText(access.error)}`
         onnetwork()
         return
       }
@@ -68,7 +72,7 @@
       code = await tauri.invoke('local_pairing_link', { admin: true })
       now = Date.now()
     } catch (failure) {
-      error = errorLine(failure, 'This computer\'s runtime did not answer.')
+      error = errorText(failure, 'This computer\'s runtime did not answer.')
     } finally {
       pending = ''
     }
@@ -122,7 +126,7 @@
       added = 'Machine added.'
       onadded(next)
     } catch (failure) {
-      error = errorLine(failure, 'The machine was not added. Try again.')
+      error = errorText(failure, 'The machine was not added. Try again.')
     } finally {
       pending = ''
     }
@@ -185,8 +189,14 @@
       </div>
     </form>
   </div>
+  {#if onphone}
+    <div class="way" role="group" aria-label="Phone pairing">
+      <p class="line">Or pair a phone with the Muniment app.</p>
+      <div><Button icon="smartphone" onclick={onphone}>Pair a phone</Button></div>
+    </div>
+  {/if}
   {#if added}<p class="line good" role="status">{added}</p>{/if}
-  {#if error}<p class="line error" role="alert">{error}</p>{/if}
+  {#if error}<FailureNote failure={error} />{/if}
 </section>
 
 <style>
@@ -208,7 +218,7 @@
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
   .line { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .line.good, .line.error { color: var(--ink); }
+  .line.good { color: var(--ink); }
   .quiet { background: transparent; color: var(--muted); }
   .quiet:hover:not(:disabled) { color: var(--ink); }
 </style>

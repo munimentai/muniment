@@ -242,6 +242,10 @@ pub struct Limit {
     /// spent.
     pub status: String,
     pub accounts: Vec<LimitAccount>,
+    /// What the card says beside the window, such as a weekly window whose
+    /// upstream reports no 5-hour window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// A provider no window meters, with the reason.
@@ -588,6 +592,26 @@ fn kind_order(kind: quota::WindowKind) -> u8 {
 /// One card per provider, window kind and scope, with its accounts pooled.
 /// A window whose reset has passed reads as full until the next probe.
 pub fn limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
+    let mut limits = pooled_limits(windows, now_ms);
+    // A weekly window with no 5-hour window beside it says so, so the card
+    // never reads as a 5-hour window that is missing from the screen.
+    let five_hour: BTreeSet<String> = limits
+        .iter()
+        .filter(|limit| limit.kind == quota::WindowKind::FiveHour && limit.scope.is_empty())
+        .map(|limit| limit.provider.clone())
+        .collect();
+    for limit in &mut limits {
+        if limit.kind == quota::WindowKind::Weekly
+            && limit.scope.is_empty()
+            && !five_hour.contains(&limit.provider)
+        {
+            limit.note = Some("The plan reports no 5-hour window.".into());
+        }
+    }
+    limits
+}
+
+fn pooled_limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
     let mut pools: BTreeMap<(String, u8, String), Vec<&AccountWindow>> = BTreeMap::new();
     for window in windows {
         pools
@@ -665,6 +689,7 @@ pub fn limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
                 }
                 .into(),
                 accounts,
+                note: None,
             }
         })
         .collect()
@@ -1122,6 +1147,24 @@ mod tests {
         let passed = limits(&[window("one", 0.0, -HOUR)], NOW);
         assert_eq!(passed[0].remaining_percent, 100.0);
         assert_eq!(passed[0].status, "ok");
+    }
+
+    #[test]
+    fn a_weekly_window_without_a_five_hour_window_says_so() {
+        let weekly = |account: &str| AccountWindow {
+            kind: quota::WindowKind::Weekly,
+            ..window(account, 80.0, 6 * 24 * HOUR)
+        };
+        let alone = limits(&[weekly("pro")], NOW);
+        assert_eq!(alone.len(), 1);
+        assert_eq!(
+            alone[0].note.as_deref(),
+            Some("The plan reports no 5-hour window.")
+        );
+        // Beside a 5-hour window, both cards show and neither carries the note.
+        let both = limits(&[weekly("plus"), window("plus", 50.0, HOUR)], NOW);
+        assert_eq!(both.len(), 2);
+        assert!(both.iter().all(|limit| limit.note.is_none()));
     }
 
     #[test]

@@ -869,7 +869,7 @@ impl RuntimeAttachBoundaries {
         if let (Some(thread), Some(swarm)) = (thread_id.as_deref(), &self.swarm) {
             if swarm.is_replica_thread(thread).is_some() {
                 return Err(RunStartError::InvalidRequest(
-                    "Another machine runs this thread. Post the message with thread.post.".into(),
+                    "Another machine runs this thread. Send the message to that machine.".into(),
                 ));
             }
         }
@@ -1710,6 +1710,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 prompt_storage_notice: None,
                 resume_notice: None,
                 failure_reason: Some(cause.to_owned()),
+                failure_detail: None,
                 receipt: None,
                 tool_activity: Vec::new(),
                 attachments: Vec::new(),
@@ -1822,6 +1823,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 body,
             )
             .map_err(ProtocolError::invalid_request_with_reason);
+        }
+        if operation == muniment_core::attach::Operation::AgentDraft {
+            return self.agent_draft(body);
         }
         self.require_home()?;
         if operation == muniment_core::attach::Operation::AgentThreads {
@@ -2022,6 +2026,32 @@ impl RuntimeAttachBoundaries {
         }
         Ok(())
     }
+
+    /// `agent.draft`: a named thread's text is read here, and the one model
+    /// call runs on the draft's own thread, so the request answers at once.
+    fn agent_draft(&self, body: serde_json::Value) -> Result<serde_json::Value, ProtocolError> {
+        let profile = self.profile_directory.clone();
+        let catalog_profile = profile.clone();
+        muniment_core::agent_draft::operation(
+            muniment_core::agent_draft::Drafts::shared(),
+            body,
+            |thread_id| {
+                let mut storage = self
+                    .storage
+                    .lock()
+                    .map_err(|_| "The thread could not be read.".to_string())?;
+                storage
+                    .journal
+                    .thread_texts(thread_id, muniment_core::agent_draft::THREAD_RUNS)
+                    .map(|runs| muniment_core::agent_draft::thread_text(&runs))
+                    .map_err(|_| "The thread could not be read.".to_string())
+            },
+            move || muniment_core::agent_draft::Catalog::local(&catalog_profile),
+            muniment_core::agent_routines::local_time_zone(),
+            Some(muniment_core::memory_extract::extraction_model(profile)),
+        )
+        .map_err(ProtocolError::invalid_request_with_reason)
+    }
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -2072,6 +2102,7 @@ fn sign_in_link_event(url: &str) -> muniment_core::run_events::ChatEvent {
         prompt_storage_notice: None,
         resume_notice: None,
         failure_reason: None,
+        failure_detail: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),

@@ -623,7 +623,7 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         if let Some(plan) = muniment_core::creations::read(profile, &self.thread_id)
             .map_err(|e| PiLaunchError::rejected("creation", e))?
         {
-            instructions.push_str(&format!("\nCreation thread: {}\nGoal: {}\nSpecified output: {}\nUse creation-plan to retain user-approved refinements. Continue in this dedicated thread.",plan.kind,plan.goal,plan.output));
+            instructions.push_str(&format!("\nCreation thread: {}\nGoal: {}\nSpecified output: {}\nBuild it from the user's message now. Use creation-plan to retain user-approved refinements. Continue in this dedicated thread.",plan.kind,plan.goal,plan.output));
         }
         Ok((!instructions.is_empty()).then_some(instructions))
     }
@@ -705,6 +705,7 @@ mod tests {
             prompt_storage_notice: None,
             resume_notice: None,
             failure_reason: None,
+            failure_detail: None,
             receipt: None,
             tool_activity: Vec::new(),
             attachments: Vec::new(),

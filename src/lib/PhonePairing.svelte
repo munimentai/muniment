@@ -15,7 +15,10 @@
     replacementReady,
   } from './pairing-state.js'
 
-  let { tauri } = $props()
+  // `compact` keeps only the pairing dialog, for Settings → Machines, which
+  // lists the paired phone as a row, opens the dialog from Add machine and
+  // revokes through `revokePair`. `onpair` hears the paired phone, or null.
+  let { tauri, compact = false, onpair = null } = $props()
   let pairing = $state(pairingLoadingState())
   let challenge = $state(null)
   let dialog = $state(null)
@@ -57,12 +60,12 @@
         try {
           const status = await pairingRequests.status(tauri.invoke, controller.signal)
           if (controller.signal.aborted || !watching) return
-          pairing = pairingReadyState(status)
+          setPairing(pairingReadyState(status))
           revoking = status.pair ? revoking : false
           if (status.pair && open) dismissChallenge()
         } catch (_) {
           if (controller.signal.aborted || !watching) return
-          if (!pairing.pair) pairing = pairingErrorState()
+          if (!pairing.pair) setPairing(pairingErrorState())
         }
       } while (pairing.pair || finalRead || (challenge && !challengeExpired(challenge.expiresAt)))
     } finally {
@@ -70,7 +73,13 @@
     }
   }
 
-  async function requestChallenge() {
+  // Every change of the pairing passes the paired phone out.
+  function setPairing(next) {
+    pairing = next
+    onpair?.(next.pair ?? null)
+  }
+
+  export async function requestChallenge() {
     if (requesting || !watching) return
     requesting = true
     const generation = ++challengeGeneration
@@ -139,8 +148,8 @@
     stopStatusPoll()
   }
 
-  async function revokePair(pairId) {
-    if (revokePending) return
+  export async function revokePair(pairId) {
+    if (revokePending) return false
     revokePending = true
     stopStatusPoll()
     error = ''
@@ -148,9 +157,12 @@
       await tauri.invoke('auth_pairing_revoke', { pairId })
       if (!watching) return
       revoking = false
-      pairing = pairingReadyState({ pair: null })
+      setPairing(pairingReadyState({ pair: null }))
+      return true
     } catch (_) {
       if (watching) error = 'The phone could not be revoked.'
+      if (compact) throw new Error('The phone could not be revoked.')
+      return false
     } finally {
       revokePending = false
       if (watching && pairing.pair) void loadStatus()
@@ -197,6 +209,7 @@
   })
 </script>
 
+{#if !compact}
 <section class="pairing-section" aria-labelledby="pairing-heading">
   <h3 id="pairing-heading" class="settings-heading">Phone pairing</h3>
   <div class="pairing-card">
@@ -229,6 +242,7 @@
   {/if}
   </div>
 </section>
+{/if}
 
 {#if open}
   <div class="dialog-backdrop" use:dialogDismiss={{onclose: closeChallenge}}>

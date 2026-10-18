@@ -1,12 +1,12 @@
 <script>
-  // The account sections of Settings: how long threads are kept, the access the
-  // server grants this person, their devices and the programs paired with this
-  // desktop.
+  // The account sections of Settings: the person, their plan, the access the
+  // server grants them and the programs paired with this desktop. Their
+  // devices and phone are on Settings → Machines, and thread retention is on
+  // Settings → Data.
   import { onDestroy, onMount, tick } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
 
-  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState, devicesErrorState, devicesIdleState, devicesLoadingState, devicesReadyState } from './auth-state.js'
-  import PhonePairing from './PhonePairing.svelte'
+  import { accessErrorState, accessIdleState, accessLoadingState, accessReadyState, companionsErrorState, companionsIdleState, companionsLoadingState, companionsReadyState } from './auth-state.js'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
@@ -14,7 +14,6 @@
   // `children` sits under the signed-in card, such as the MuniCloud vault switch.
   let { tauri, subject = '', onsignout = null, children } = $props()
   let access = $state(accessIdleState)
-  let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
   let attachListener = $state({ started: false, failure: null, pending: true, stopped: false })
   let sectionRoot = $state()
@@ -36,22 +35,8 @@
   let revokingIdentity = $state(null)
   let revokePending = $state(false)
   let revokeError = $state('')
-  let retentionChoice = $state('keep_every_thread')
-  let recordedRetentionChoice = $state('keep_every_thread')
-  let retentionSaving = $state(false)
-  let retentionError = $state('')
-  let retentionRetryChoice = $state(null)
-  let retentionLoadRequest = 0
-  let retentionSaveRequest = 0
   let attachListenerPoll = 0
   let watching = true
-
-  const retentionOptions = [
-    ['Keep every thread', 'keep_every_thread'],
-    ['Delete after 30 days', 'delete_after_30_days'],
-    ['Delete after 90 days', 'delete_after_90_days'],
-    ['Delete after 1 year', 'delete_after_1_year'],
-  ]
 
   onDestroy(() => {
     watching = false
@@ -70,55 +55,8 @@
 
   function reload() {
     loadAccess()
-    loadRetentionChoice()
-    loadDevices()
     loadCompanions()
   }
-  async function loadRetentionChoice() {
-    const request = ++retentionLoadRequest
-    const saveRequest = retentionSaveRequest
-    try {
-      const choice = await tauri.invoke('thread_retention_choice')
-      if (request === retentionLoadRequest && saveRequest === retentionSaveRequest && !retentionSaving) {
-        recordedRetentionChoice = choice ?? 'keep_every_thread'
-        retentionChoice = recordedRetentionChoice
-      }
-    } catch (_) {
-      if (request === retentionLoadRequest && saveRequest === retentionSaveRequest && !retentionSaving) {
-        recordedRetentionChoice = 'keep_every_thread'
-        retentionChoice = recordedRetentionChoice
-      }
-    }
-  }
-
-  async function chooseRetention(choice) {
-    retentionSaveRequest += 1
-    retentionChoice = choice
-    retentionSaving = true
-    retentionError = ''
-    retentionRetryChoice = null
-    try {
-      await tauri.invoke('record_thread_retention_choice', { choice })
-      recordedRetentionChoice = choice
-    } catch (_) {
-      retentionChoice = recordedRetentionChoice
-      retentionError = 'Thread retention could not be saved.'
-      retentionRetryChoice = choice
-    } finally {
-      retentionSaving = false
-      retentionSaveRequest += 1
-    }
-  }
-
-  async function loadDevices() {
-    devices = devicesLoadingState()
-    try {
-      devices = devicesReadyState(await tauri.invoke('auth_devices'))
-    } catch (_) {
-      devices = devicesErrorState()
-    }
-  }
-
   async function loadCompanions() {
     companions = companionsLoadingState()
     const poll = ++attachListenerPoll
@@ -252,26 +190,6 @@
       {/each}
     </ul>
   </section>
-  <section class="devices-section" aria-labelledby="devices-heading">
-    <h3 id="devices-heading" class="settings-heading">Devices</h3>
-    {#if devices.name === 'loading'}
-      <p class="access-status" aria-live="polite">Loading devices…</p>
-    {:else if devices.name === 'error'}
-      <div class="access-status" role="alert"><p>Devices could not be loaded.</p><button onclick={loadDevices}>Try again</button></div>
-    {:else if devices.name === 'ready'}
-      {#if devices.devices.length === 0}<p class="empty-grant">No devices found</p>{:else}
-      <ul class="device-list">
-        {#each devices.devices as device (device.device_id)}
-          <li class:revoked={device.revoked_at}>
-            <div class="device-heading"><strong>{device.platform}</strong>{#if device.current}<span class="current-device">This device</span>{/if}<span class="device-state">{device.revoked_at ? 'Revoked' : 'Active'}</span></div>
-            <time datetime={device.last_active_at}>Last active {lastActive(device.last_active_at)}</time>
-          </li>
-        {/each}
-      </ul>
-      {/if}
-    {/if}
-  </section>
-  <PhonePairing {tauri} />
   <section class="companions-section" aria-labelledby="companions-heading">
     <h3 id="companions-heading" class="settings-heading">Connected programs</h3>
     {#if companions.name === 'loading'}
@@ -344,16 +262,6 @@
     {/if}
     <p class="access-note">Your admins set access. The snapshot is a display hint. The server checks each request.</p>
   </section>
-  <section class="retention-section" aria-labelledby="retention-heading">
-    <h3 id="retention-heading" class="settings-heading">Thread retention</h3>
-    <p class="section-help">Choose how long Muniment keeps completed threads.</p>
-    <div class="retention-options">
-      {#each retentionOptions as option}
-        <label><input type="radio" name="thread-retention" value={option[1]} checked={retentionChoice === option[1]} disabled={retentionSaving} onchange={() => chooseRetention(option[1])} /> <span>{option[0]}</span></label>
-      {/each}
-    </div>
-    {#if retentionError}<div class="access-status" role="alert"><p>{retentionError}</p><button onclick={() => chooseRetention(retentionRetryChoice)}>Try again</button></div>{/if}
-  </section>
 </div>
 
 <style>
@@ -362,7 +270,7 @@
   .account-sections { display: grid; gap: var(--page-gap); }
   .account-sections section > .settings-heading, .access-heading { margin: 0 0 4px; }
   .section-help { margin: 0 0 10px; color: var(--muted); font-size: var(--text-13); }
-  .plan-section, .devices-section, .companions-section, .entitlements-section, .retention-section { min-width: 0; }
+  .plan-section, .companions-section, .entitlements-section { min-width: 0; }
   .account-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-control); background: var(--surface); border: 1px solid var(--border); font: var(--weight-semibold) var(--text-13) var(--font-human); }
   .plan-chip { flex: none; padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--surface); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .plan-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -372,9 +280,7 @@
   .plan-name strong { font-size: var(--text-15); font-weight: 600; }
   .plan-tiers p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .plan-tiers ul { display: grid; gap: 3px; margin: 4px 0 0; padding: 0; list-style: none; font: var(--text-12) var(--font-mono); color: var(--muted); }
-  .account-sections :is(.device-list, .companion-list, .retention-options) { padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .retention-options label { min-height: 36px; border-top: 1px solid var(--border); }
-  .retention-options label:first-child { border-top: 0; }
+  .account-sections .companion-list { padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   .access-heading { display: flex; align-items: baseline; justify-content: space-between; }
@@ -393,21 +299,7 @@
   .access-card { padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); }
   .access-card .empty-grant { padding: 12px 0; border: 0; border-top: 1px solid var(--border); }
   .access-status p { margin: 0 0 6px; }
-  .retention-options { display: grid; }
-  .retention-options label { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); cursor: pointer; }
-  .retention-options input { min-width: 24px; min-height: 24px; margin: 0; accent-color: var(--ink); cursor: pointer; transform: scale(.67); /* a 24px box drawn at 16px, and its whole row is the label */ }
   .access-note { margin: 10px 0 0; color: var(--muted); font-size: var(--text-12); }
-  .device-list { margin: 0; padding: 0; list-style: none; }
-  .device-list li { padding: 10px 0; border-top: 1px solid var(--border); }
-  .device-list li:first-child { border-top: 0; }
-  .device-heading { display: flex; align-items: center; gap: 7px; font-size: var(--text-13); }
-  .device-heading strong { font-weight: 600; }
-  .revoked .device-heading strong { color: var(--oxide); font-weight: 400; text-decoration: line-through; }
-  /* §1.2 forbids signal on badges at rest; §1.5 puts chips on radius 2. */
-  .current-device { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
-  /* §6: the word, not the color, carries Active vs Revoked. */
-  .device-state { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .device-list time { display: block; margin-top: 3px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .companion-list { margin: 0; padding: 0; list-style: none; }
   .companion-list li { min-width: 0; padding: 10px 0; border-top: 1px solid var(--border); }
   .companion-list li:first-child { border-top: 0; }

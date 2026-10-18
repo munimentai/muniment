@@ -82,6 +82,13 @@ describe('Usage page', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
   })
 
+  it('says when a weekly window has no 5-hour window beside it', async () => {
+    const weekly = limit({ provider: 'openai', kind: 'weekly', note: 'The plan reports no 5-hour window.' })
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => summary({ limits: [weekly] })) }, runtimeList })
+    const card = await screen.findByRole('article', { name: 'OpenAI · Weekly' })
+    expect(within(card).getByText('The plan reports no 5-hour window.')).toBeInTheDocument()
+  })
+
   it('shows tokens and cost with a breakdown, and asks again for a range or a machine', async () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })

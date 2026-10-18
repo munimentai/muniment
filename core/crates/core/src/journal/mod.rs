@@ -1587,6 +1587,25 @@ impl RunJournal {
         workspace: &str,
         limit: usize,
     ) -> Result<Vec<(String, String)>, JournalError> {
+        self.thread_run_texts(thread_id, Some(workspace), limit)
+    }
+
+    /// The projected user and assistant text of a thread's newest `limit`
+    /// runs, oldest first, whichever workspace owns them.
+    pub fn thread_texts(
+        &mut self,
+        thread_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, JournalError> {
+        self.thread_run_texts(thread_id, None, limit)
+    }
+
+    fn thread_run_texts(
+        &mut self,
+        thread_id: &str,
+        workspace: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, JournalError> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -1599,16 +1618,27 @@ impl RunJournal {
             .connection
             .as_ref()
             .expect("journal connection is always present outside compaction");
-        let mut runs = connection
-            .prepare_cached(
-                "SELECT rt.run_id FROM run_threads rt \
-                 JOIN run_workspaces rw ON rw.run_id=rt.run_id AND rw.workspace=?2 \
-                 WHERE rt.thread_id=?1 ORDER BY rt.thread_run_ordinal DESC LIMIT ?3",
-            )?
-            .query_map(params![thread_id, workspace, limit as u64], |row| {
-                row.get::<_, String>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut runs = match workspace {
+            Some(workspace) => connection
+                .prepare_cached(
+                    "SELECT rt.run_id FROM run_threads rt \
+                     JOIN run_workspaces rw ON rw.run_id=rt.run_id AND rw.workspace=?2 \
+                     WHERE rt.thread_id=?1 ORDER BY rt.thread_run_ordinal DESC LIMIT ?3",
+                )?
+                .query_map(params![thread_id, workspace, limit as u64], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?,
+            None => connection
+                .prepare_cached(
+                    "SELECT run_id FROM run_threads WHERE thread_id=?1 \
+                     ORDER BY thread_run_ordinal DESC LIMIT ?2",
+                )?
+                .query_map(params![thread_id, limit as u64], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
         runs.reverse();
         let mut entries = connection.prepare_cached(
             "SELECT kind, COALESCE(text,'') FROM thread_projection_entries \

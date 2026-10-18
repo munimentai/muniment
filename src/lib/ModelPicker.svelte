@@ -146,8 +146,8 @@
   {@const compacts = !used && compactsOnSwitch(contextUsage, model.contextWindow ?? windowTokens(model.context))}
   {@const auto = model.id === 'auto' && group.classifier}
   <li class="picker-item">
-    <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={used} onclick={() => onchoose(model.provider, model.choice)}>
-      <span class="model-label">{#if auto}<ProviderLogo provider={group.providerId} size={16} />{/if}<span class="model-id" class:classifier={auto}>{model.label ?? model.id}</span>{#if compacts}<span class="will-compact"><LucideIcon name="combine" variant="action" size={12} />will compact</span>{/if}</span>
+    <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={used} disabled={!!model.unavailable && !used} aria-describedby={model.unavailable ? `unavailable-${group.id}-${model.id}` : undefined} onclick={() => onchoose(model.provider, model.choice)}>
+      <span class="model-label">{#if auto}<ProviderLogo provider={group.providerId} size={16} />{/if}<span class="model-id" class:classifier={auto}>{model.label ?? model.id}</span>{#if compacts}<span class="will-compact"><LucideIcon name="combine" variant="action" size={12} />will compact</span>{/if}{#if model.unavailable}<span class="unavailable" id={`unavailable-${group.id}-${model.id}`}>Unavailable. {model.unavailable}</span>{/if}</span>
       {#if model.accounts > 1}<span class="balanced" aria-label={`Balanced across ${model.accounts} accounts`}><LucideIcon name="scale" variant="action" size={14} /><span class="tag">{model.accounts}</span></span>{/if}
       {#if used}<LucideIcon name="check" variant="action" size={14} />{/if}
     </button>
@@ -182,6 +182,7 @@
   .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .classifier { color: var(--ink); font-weight: 600; }
   .balanced { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); }
+  .unavailable { min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); white-space: normal; }
   .will-compact { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--ochre); font: var(--text-12) var(--font-human); }
   .picker-group ul { margin: 0; padding: 0; list-style: none; }
   .picker-item { position: relative; }

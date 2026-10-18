@@ -66,6 +66,9 @@ describe('owners', () => {
     const owned = { threadId: 't1', runtimeId: 'box', owner_runtime: BOX, title: 'Owner' }
     expect(dedupeThreads([replica, owned, { threadId: 't2', runtimeId: 'local' }], swarm).map((entry) => entry.title ?? entry.threadId)).toEqual(['Owner', 't2'])
     expect(dedupeThreads([owned, replica], swarm)).toEqual([owned])
+    // A runtime the app has no fleet id for still names its own thread.
+    const container = { threadId: 't3', runtimeId: 'pod', owner_runtime: POD, title: 'Container' }
+    expect(dedupeThreads([{ ...replica, threadId: 't3' }, container], { self: { local: LAPTOP } })).toEqual([container])
   })
 
   it('names the owner of another member\'s project', () => {

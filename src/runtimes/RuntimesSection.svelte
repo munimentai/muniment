@@ -10,7 +10,9 @@
   // answers, names the ones it skips, and updates this computer last. Under
   // the list, one switch has core share this computer's model connections
   // through `fleet.credentials`. This computer's row opens its network,
-  // offline and log settings.
+  // offline and log settings. With MuniCloud on, the account's devices and
+  // the phone paired through the relay are rows as well, and Add machine
+  // pairs a phone.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import PageHead from '../lib/ui/PageHead.svelte'
@@ -21,11 +23,14 @@
   import MachineRow from './MachineRow.svelte'
   import AddMachine from './AddMachine.svelte'
   import ThisComputer from './ThisComputer.svelte'
-  import { errorLine, skipLabel, updatableRuntimes } from './runtimes.js'
+  import { errorText, skipLabel, updatableRuntimes } from './runtimes.js'
+  import FailureNote from '../lib/FailureNote.svelte'
   import { linkHolders, machineRows, removable } from './machines.js'
   import { agentRequest } from '../agents/agent-runtime.js'
   import { listSwarm } from '../agents/swarm.js'
   import { interruptionCount, interruptionMessage } from '../lib/app-update.js'
+  import PhonePairing from '../lib/PhonePairing.svelte'
+  import { featureFlags } from '../feature-flags.js'
 
   // `focus` names the part a link or search result opens: `add` opens Add
   // machine and `this-computer` opens this computer's settings.
@@ -33,6 +38,9 @@
   let list = $state(null)
   let swarm = $state(null)
   let devices = $state([])
+  let cloudDevices = $state([])
+  let phone = $state(null)
+  let phonePairing = $state()
   let error = $state('')
   let notice = $state('')
   let busy = $state('')
@@ -46,7 +54,7 @@
   let adding = $state(focus === 'add')
   // svelte-ignore state_referenced_locally
   let computerOpen = $state(focus === 'this-computer')
-  const rows = $derived(list ? machineRows({ list, swarm, devices }) : [])
+  const rows = $derived(list ? machineRows({ list, swarm, devices, cloudDevices, phone }) : [])
   const updateWaits = $derived(!!localVersion || updatableRuntimes(list).length > 0)
 
   onMount(() => {
@@ -55,6 +63,7 @@
     void load().then(refresh)
     void readSharing()
     void readDevices()
+    void readCloudDevices()
     // Update all shows once this computer has a verified update waiting.
     Promise.resolve(tauri.invoke('app_update_prepare')).then((version) => { if (alive && version) localVersion = version }).catch(() => {})
     for (const [event, handle] of [
@@ -74,7 +83,7 @@
       list = await tauri.invoke('runtime_list')
       void readSwarm()
     } catch (failure) {
-      error = errorLine(failure, 'The machine list could not load.')
+      error = errorText(failure, 'The machine list could not load.')
     }
   }
 
@@ -102,6 +111,17 @@
     }
   }
 
+  // The devices on the MuniCloud account, while signed in.
+  async function readCloudDevices() {
+    if (!featureFlags.cloud) return
+    try {
+      const listed = await tauri.invoke('auth_devices')
+      cloudDevices = Array.isArray(listed) ? listed : Array.isArray(listed?.devices) ? listed.devices : []
+    } catch (_) {
+      cloudDevices = []
+    }
+  }
+
   // Core keeps the sharing switch: `fleet.credentials` answers it and sets it.
   async function readSharing() {
     try {
@@ -126,7 +146,7 @@
       shareModels = !!answer?.share_models
     } catch (failure) {
       shareModels = before
-      shareFailure = errorLine(failure)
+      shareFailure = errorText(failure)
       return
     } finally {
       busy = ''
@@ -146,9 +166,9 @@
     try {
       const result = await tauri.invoke('runtime_update', { id: runtime.id })
       if (result?.ok) notice = result.message
-      else error = errorLine(result?.message)
+      else error = errorText(result?.message)
     } catch (failure) {
-      error = errorLine(failure)
+      error = errorText(failure)
     } finally {
       busy = ''
     }
@@ -166,7 +186,7 @@
       const report = await tauri.invoke('runtime_update_all')
       const results = report?.results ?? []
       const asked = results.filter((result) => result.ok).map((result) => result.name)
-      failures = results.filter((result) => !result.ok).map((result) => `${result.name}: ${errorLine(result.message)}`)
+      failures = results.filter((result) => !result.ok).map((result) => `${result.name}: ${errorText(result.message)}`)
       const skips = [...(report?.skipped ?? [])]
       let version = null
       try { version = await tauri.invoke('app_update_prepare') } catch { /* This computer keeps its version. */ }
@@ -175,7 +195,7 @@
       notice = asked.length ? `Update requested on ${named(asked)}.` : ''
       if (version) await updateThisComputer(version)
     } catch (failure) {
-      error = errorLine(failure)
+      error = errorText(failure)
     } finally {
       busy = ''
     }
@@ -191,7 +211,7 @@
     try {
       await tauri.invoke('app_update_install')
     } catch (failure) {
-      error = errorLine(failure, 'The update could not be installed. Try again.')
+      error = errorText(failure, 'The update could not be installed. Try again.')
     }
   }
 
@@ -205,7 +225,7 @@
       if (next?.notice) notice = next.notice
       return true
     } catch (failure) {
-      error = errorLine(failure)
+      error = errorText(failure)
       return false
     } finally {
       busy = ''
@@ -226,6 +246,7 @@
         if (refused) throw refused.reason
       }
       if (row.deviceId) await tauri.invoke('local_device_revoke', { deviceId: row.deviceId })
+      if (row.pairId) await phonePairing.revokePair(row.pairId)
       if (row.runtime) {
         const next = await tauri.invoke('runtime_remove', { id: row.runtime.id })
         if (next?.runtimes) list = next
@@ -234,7 +255,7 @@
       if (!notice) notice = `Removed ${row.name}.`
       return true
     } catch (failure) {
-      error = errorLine(failure)
+      error = errorText(failure)
       return false
     } finally {
       busy = ''
@@ -259,14 +280,15 @@
     {/snippet}
   </PageHead>
 
-  {#if error}<p class="line" role="alert">{error}</p>{/if}
+  {#if error}<FailureNote failure={error} />{/if}
   {#if notice}<p class="line" role="status">{notice}</p>{/if}
-  {#each failures as failure (failure)}<p class="line" role="alert">{failure}</p>{/each}
+  {#each failures as failure (failure)}<FailureNote {failure} />{/each}
   {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
 
   {#if adding}
-    <AddMachine {tauri} deviceName={list?.deviceName ?? ''} {onadded} onnetwork={() => { computerOpen = true }} onclose={() => { adding = false }} />
+    <AddMachine {tauri} deviceName={list?.deviceName ?? ''} {onadded} onnetwork={() => { computerOpen = true }} onclose={() => { adding = false }} onphone={featureFlags.cloud && phonePairing && !phone ? () => phonePairing.requestChallenge() : null} />
   {/if}
+  {#if featureFlags.cloud}<PhonePairing {tauri} compact bind:this={phonePairing} onpair={(next) => { phone = next }} />{/if}
 
   <Group label="Machine list">
     {#if list}
@@ -298,8 +320,8 @@
       <Toggle checked={shareModels ?? false} label="Share model connections" disabled={shareModels === null || busy === 'share'} onchange={setSharing} />
     </Row>
   </Group>
-  {#if shareFailure}<p class="line" role="alert">{shareFailure}</p>{/if}
-  {#if list?.shareError}<p class="line" role="alert">{list.shareError}</p>{/if}
+  {#if shareFailure}<FailureNote failure={shareFailure} />{/if}
+  {#if list?.shareError}<FailureNote failure={list.shareError} />{/if}
 
   {#if localUpdate}
     <ConfirmDialog title="Install update {localUpdate.version}?" cancelLabel="Not now" confirmLabel="Install and restart" onDecision={async (approve) => { localUpdate = null; if (approve) await installThisComputer() }}>
@@ -311,5 +333,4 @@
 <style>
   .settings-runtimes { display: grid; gap: var(--page-gap); }
   .line { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .line[role="alert"] { color: var(--ink); }
 </style>

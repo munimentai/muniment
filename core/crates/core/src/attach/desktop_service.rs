@@ -853,7 +853,10 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
 
     fn ensure_home(&mut self) -> Result<(), ProtocolError> {
         let home = self.home.resolve()?;
-        crate::ensure_cross_project_home(&home).map_err(|_| ProtocolError::persistence_failed())
+        crate::ensure_cross_project_home(&home).map_err(|_| ProtocolError::persistence_failed())?;
+        // The runtime runs Pi, so the folder prompt for its reads shows now.
+        crate::folder_access::ask_ahead(&home);
+        Ok(())
     }
 
     #[cfg(any(unix, target_os = "windows"))]

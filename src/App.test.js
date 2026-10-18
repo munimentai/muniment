@@ -33,7 +33,6 @@ const appRules = new Map([...appStyles
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .map(([, selector, declarations]) => [selector.trim().replace(/\s+/g, ' '), declarations]))
-const accountSettingsSource = fs.readFileSync(path.join(process.cwd(), 'src/lib/AccountSettings.svelte'), 'utf8')
 const rowControlStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/RowControl.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
 const settingsStyles = fs.readFileSync(path.join(process.cwd(), 'src/lib/Settings.svelte'), 'utf8').match(/<style>([\s\S]*)<\/style>/)?.[1] ?? ''
 const emptyInventory = { providers: [], default_provider: null, default_model: null, hidden: [] }
@@ -3550,7 +3549,7 @@ describe('window chrome', () => {
     await waitFor(() => expect(actions).toBeEnabled())
     await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     await fireEvent.click(actions)
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Archive', 'Delete'])
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Archive', 'Make this an agent', 'Delete'])
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
     await fireEvent.click(actions)
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument()
@@ -7978,52 +7977,6 @@ describe('signed-in access popover', () => {
 
   })
 
-  it('renders mixed device states in deterministic order without disturbing grants', async () => {
-    invoke.mockImplementation(async (command) => {
-      if (command === 'project_list') return { projects: {}, threads: {} }
-    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
-      if (command === 'auth_pairing_status') return { pair: null }
-      if (command === 'auth_devices') return [
-        device('revoked-newest', { platform: 'ios', revoked_at: '2026-06-01T00:00:00Z', last_active_at: '2026-07-01T00:00:00Z' }),
-        device('active-old', { platform: 'android', last_active_at: '2026-05-01T00:00:00Z' }),
-        device('current-new', { current: true, last_active_at: '2026-06-01T00:00:00Z' }),
-      ]
-      if (command === 'chat_select_thread') return undefined
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const dialog = await openSettings('Account')
-    // The settings nav is a list too, so read the device list itself.
-    await within(dialog).findByText('Android')
-    const rows = [...dialog.querySelectorAll('.device-list li')]
-    expect(rows.map((row) => row.textContent)).toEqual(expect.arrayContaining([
-      expect.stringContaining('This device'), expect.stringContaining('Active'), expect.stringContaining('Revoked'),
-    ]))
-    expect(rows[0]).toHaveTextContent('DesktopThis deviceActive')
-    expect(rows[1]).toHaveTextContent('AndroidActive')
-    expect(rows[2]).toHaveTextContent('iOSRevoked')
-    expect(rows[2]).toHaveClass('revoked')
-    const activeIdentifier = within(rows[1]).getByText('Android')
-    const revokedIdentifier = within(rows[2]).getByText('iOS')
-    const revokedRule = accountSettingsSource.match(/\.revoked \.device-heading strong\s*\{([^}]*)\}/)?.[1]
-    expect(revokedIdentifier.tagName).toBe('STRONG')
-    expect(activeIdentifier.tagName).toBe('STRONG')
-    expect(revokedRule).toMatch(/color:\s*var\(--oxide\)/)
-    expect(revokedRule).toMatch(/text-decoration:\s*line-through/)
-    expect(revokedRule).toMatch(/font-weight:\s*400/)
-    expect(within(rows[2]).getByText('Revoked')).toBeVisible()
-    expect(within(dialog).getByRole('button', { name: 'allow use · gpt' })).toBeInTheDocument()
-    expect(dialog).not.toHaveTextContent('revoked-newest')
-  })
-
-  it('renders an empty device response', async () => {
-    render(App)
-    await openSettings('Account')
-    expect(await screen.findByText('No devices found')).toBeInTheDocument()
-  })
-
   it('applies and persists an accessible per-device appearance choice', async () => {
     render(App)
     await openSettings('General')
@@ -8062,12 +8015,11 @@ describe('signed-in access popover', () => {
       'Signed-in account',
       'Shared model connections',
       'plan-heading',
-      'devices-heading',
-      'pairing-heading',
       'companions-heading',
       'entitlements-heading',
-      'retention-heading',
     ])
+    // Devices and the phone list on Machines, and retention is on Data.
+    expect(content.querySelector('.devices-section, .pairing-section, .retention-section')).toBeNull()
     expect(content.querySelector('.entitlements-section')).toHaveTextContent('Your admins set access.')
   })
 
@@ -8084,35 +8036,6 @@ describe('signed-in access popover', () => {
     expect(within(dialog).getAllByRole('heading', { name: 'Your access' })).toHaveLength(1)
     await waitFor(() => expect(accessSection).toHaveTextContent('Snapshot v2'))
     expect(dialog).not.toHaveTextContent('Your groups')
-  })
-
-  it('retries only a failed device request and keeps entitlement grants rendered', async () => {
-    let deviceCalls = 0
-    invoke.mockImplementation(async (command) => {
-      if (command === 'project_list') return { projects: {}, threads: {} }
-    if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
-      if (command === 'chat_thread_open') return []
-      if (command === 'auth_entitlement_snapshot') return snapshot([grant()])
-      if (command === 'auth_pairing_status') return { pair: null }
-      if (command === 'auth_devices') {
-        deviceCalls += 1
-        if (deviceCalls === 1) throw new Error('raw backend secret')
-        return [device('recovered')]
-      }
-      if (command === 'attach_companions') return []
-      if (command === 'attach_listener_status') return { started: true, failure: null }
-      if (command === 'chat_select_thread') return undefined
-      throw new Error(`unexpected command: ${command}`)
-    })
-    render(App)
-    const dialog = await openSettings('Account')
-    expect(await within(dialog).findByText('Devices could not be loaded.')).toBeInTheDocument()
-    expect(dialog).not.toHaveTextContent('raw backend secret')
-    expect(within(dialog).getByRole('button', { name: 'allow use · gpt' })).toBeInTheDocument()
-    const entitlementCalls = invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot').length
-    await fireEvent.click(within(dialog.querySelector('.devices-section')).getByRole('button', { name: 'Try again' }))
-    expect(await within(dialog).findByText('Active')).toBeInTheDocument()
-    expect(invoke.mock.calls.filter(([command]) => command === 'auth_entitlement_snapshot')).toHaveLength(entitlementCalls)
   })
 
   it('shows connected programs while loading and renders claimed records with missing approval times', async () => {
@@ -8206,7 +8129,7 @@ describe('account display names', () => {
 
 
 describe('dedicated creation chats', () => {
-  it.each([['Artifacts','Tracker','Build a tracker for a list I keep'],['Agents','Weekly report','Compile a weekly recap of my work']])('starts %s from a starter tile with its goal filled in', async (section, tile, goal) => {
+  it.each([['Artifacts','Tracker','Build a tracker for a list I keep']])('starts %s from a starter tile with its goal filled in', async (section, tile, goal) => {
     const original=invoke.getMockImplementation()
     invoke.mockImplementation((command,payload)=>{
       if(command==='creation_list') return Promise.resolve([])
@@ -8252,10 +8175,13 @@ describe('dedicated creation chats', () => {
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     await fireEvent.input(composer, { target: { value: '' } })
     await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Set up an agent' }))
-    expect(await screen.findByRole('group', { name: 'Template' })).toHaveTextContent('Goal: Create a reusable agent for my work.')
+    // Set up an agent opens the agent builder, which waits for one sentence.
+    const builder = await screen.findByRole('region', { name: 'New agent' })
+    expect(within(builder).getByRole('textbox', { name: 'Describe your agent' })).toHaveValue('')
+    expect(invoke.mock.calls.some(([name, args]) => name === 'agent_request' && args?.operation === 'agent.draft')).toBe(false)
   })
 
-  it.each(['Artifacts','Agents'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
+  it.each(['Artifacts'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
     const original=invoke.getMockImplementation()
     const id='01900000-0000-7000-8000-000000000077'
     let plans=[]
@@ -8287,6 +8213,106 @@ describe('dedicated creation chats', () => {
   })
 })
 
+describe('agent builder', () => {
+  // A draft answer as core gives it: started, then done on the next ask.
+  const drafted = { name: 'Weekly recap', label: 'Recap writer', instructions: 'Write a recap of my week from my threads and projects.', skills: [], tools_off: [], permission_mode: null,
+    routines: [{ id: 'extract-1', name: 'Write a recap of my week', enabled: true, trigger: { kind: 'cron', expr: '0 16 * * 5', tz: 'America/New_York' }, prompt: 'Write a recap of my week.', created_from: 'instructions' }] }
+  function builderMock(saved) {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'creation_list') return Promise.resolve([])
+      if (command === 'artifact_list') return Promise.resolve([])
+      if (isAgentList(command, payload)) return Promise.resolve(agentListAnswer(saved))
+      if (command === 'agent_request' && payload?.operation === 'agent.draft') {
+        return Promise.resolve(payload.body.draft_id ? { draft_id: 'draft-1', status: 'done', draft: drafted, question: null, via: 'router' } : { draft_id: 'draft-1', status: 'drafting' })
+      }
+      if (command === 'agent_request' && payload?.operation === 'agent.save') {
+        const agent = { ...payload.body.agent, id: 'agent-1', avatar: { style: 'muniment', seed: 's' } }
+        saved.splice(0, saved.length, agent)
+        return Promise.resolve({ agent })
+      }
+      if (command === 'agent_request' && payload?.operation === 'agent.tool_catalog') return Promise.resolve({ builtin: [], mcp: [], skills: [] })
+      return original(command, payload)
+    })
+  }
+  const draftCalls = () => invoke.mock.calls.filter(([name, args]) => name === 'agent_request' && args?.operation === 'agent.draft').map(([, args]) => args.body)
+
+  it('makes a project an agent from its settings: the builder saves the agent in the project', async () => {
+    builderMock([])
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, args) => {
+      if (command === 'project_list') return Promise.resolve({ projects: { research: 'Research' }, threads: {} })
+      if (command === 'project_settings') return Promise.resolve({ instructions: '' })
+      return original(command, args)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Research actions' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }))
+    const page = await screen.findByRole('region', { name: 'Project settings' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Add a trigger' }))
+    expect(await screen.findByRole('textbox', { name: /Describe/ })).toBeInTheDocument()
+  })
+
+  it('drafts an agent from a template in one model call and saves it with its trigger on', async () => {
+    builderMock([])
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const form = await screen.findByRole('form', { name: 'Agent draft' })
+    // One draft starts, and only asks after it follow until the form shows.
+    expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ description: 'Every Friday at 4pm, write a recap of my week from my threads and projects.' }])
+    expect(within(form).getByRole('textbox', { name: 'Name' })).toHaveValue('Weekly recap')
+    expect(within(form).getByRole('switch', { name: 'Run Write a recap of my week' })).toHaveAttribute('aria-checked', 'true')
+    expect(invoke.mock.calls.some(([name]) => name === 'chat_submit' || name === 'creation_save')).toBe(false)
+    await fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.save' })))
+    const body = invoke.mock.calls.find(([name, args]) => name === 'agent_request' && args?.operation === 'agent.save')[1].body.agent
+    expect(body).toMatchObject({ name: 'Weekly recap', label: 'Recap writer', schedule: null })
+    expect(body.routines).toEqual([expect.objectContaining({ id: 'extract-1', enabled: true, proposed: false })])
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'New agent' })).toBeNull())
+  })
+
+  it('makes an agent from a thread through its menu', async () => {
+    builderMock([])
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }, { threadId: 'thread-2', title: 'Release notes', updatedAt: '' }]
+    render(App)
+    await screen.findByRole('button', { name: 'Release notes' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Release notes' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Make this an agent' }))
+    const builder = await screen.findByRole('region', { name: 'New agent' })
+    expect(builder).toHaveTextContent('From Release notes')
+    await screen.findByRole('form', { name: 'Agent draft' })
+    expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ thread_id: 'thread-2' }])
+  })
+})
+
+it('sends a page starter the user words, so the thread takes their title', async () => {
+  const original=invoke.getMockImplementation()
+  const id='01900000-0000-7000-8000-000000000066'
+  let plans=[]
+  invoke.mockImplementation((command,payload)=>{
+    if(command==='creation_list') return Promise.resolve(plans)
+    if(command==='artifact_list') return Promise.resolve([])
+    if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
+    if(command==='chat_new_thread') return Promise.resolve(id)
+    if(command==='creation_save') {plans=[payload.creation]; return Promise.resolve(payload.creation)}
+    if(command==='chat_submit') return Promise.resolve({runId:'run-page',attachments:[]})
+    return original(command,payload)
+  })
+  render(App)
+  const composer = await findReadyWorkspaceComposer()
+  await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Make a page' }))
+  await screen.findByRole('group',{name:'Template'})
+  await fireEvent.input(composer, { target: { value: 'A countdown to New Year with big colorful digits.' } })
+  await fireEvent.click(screen.getByRole('button',{name:'Send'}))
+  await waitFor(()=>expect(invoke.mock.calls.filter(([name])=>name==='chat_submit')).toHaveLength(1))
+  expect(invoke.mock.calls.find(([name])=>name==='chat_submit')[1].prompt).toBe('A countdown to New Year with big colorful digits.')
+  // The goal and output travel in the creation record, saved before the send.
+  expect(plans).toEqual([expect.objectContaining({ threadId: id, kind: 'artifact', goal: 'Make a web page' })])
+})
+
 it('opens the preview the first time a creation chat saves its artifact', async () => {
   const original=invoke.getMockImplementation()
   const id='01900000-0000-7000-8000-000000000099'
@@ -8311,7 +8337,8 @@ it('opens the preview the first time a creation chat saves its artifact', async 
   await screen.findByRole('group',{name:'Template'})
   await fireEvent.click(screen.getByRole('button',{name:'Send'}))
   await screen.findByRole('button',{name:'Stop'})
-  await waitFor(()=>expect(invoke.mock.calls.find(([name])=>name==='chat_submit')?.[1]?.prompt).toContain('Expected output:'))
+  // The message is the user's words, here the template's goal, never a scaffold.
+  await waitFor(()=>expect(invoke.mock.calls.find(([name])=>name==='chat_submit')?.[1]?.prompt).toBe('Create an interactive artifact'))
   expect(screen.queryByRole('region',{name:'Artifacts'})).toBeNull()
   plans=[{...plans[0],resultId:'loan-comparison'}]
   artifacts=[{id:'loan-comparison',name:'Loan Comparison',threadId:id}]
@@ -8980,6 +9007,28 @@ describe('a run on another thread', () => {
   })
 })
 
+it('names the Usage or Notifications page in the title bar and clears the thread highlight while it is open', async () => {
+  threadSummaryResult = [{ threadId: 'thread-1', title: 'Until Midnight', updatedAt: '' }]
+  const fallback = invoke.getMockImplementation()
+  const page = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+  invoke.mockImplementation((command, args) => command === 'chat_current_thread' ? Promise.resolve('thread-1')
+    : command === 'notifications_list' ? Promise.resolve(page)
+      : fallback(command, args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  await waitFor(() => expect(document.querySelector('.active-thread')).toHaveTextContent('Until Midnight'))
+  for (const name of ['Notifications', 'Usage']) {
+    await fireEvent.click(screen.getByRole('button', { name }))
+    await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent(name))
+    expect(document.querySelector('.titlebar-thread')).not.toHaveTextContent('Until Midnight')
+    // The open thread's row loses its fill while the page covers it.
+    expect(document.querySelector('.active-thread')).toBeNull()
+  }
+  // Leaving the page shows the thread again.
+  await fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
+  await waitFor(() => expect(document.querySelector('.active-thread')).toHaveTextContent('Until Midnight'))
+})
+
 describe('runtimes', () => {
   const thisComputer = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const buildBox = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
@@ -9041,6 +9090,22 @@ describe('runtimes', () => {
     await vi.dynamicImportSettled()
     expect(await within(dialog).findByRole('region', { name: 'Profile' })).toBeInTheDocument()
     expect(dialog.querySelector('[data-settings-part="cloud"]')).toBeNull()
+  })
+
+  it('opens a thread on the machine its row names, so the model list follows that machine', async () => {
+    const fallback = invoke.getMockImplementation()
+    threadSummaryResult = [
+      { threadId: 'local-1', title: 'Local work', updatedAt: '2026-01-02T00:00:00Z', runtimeId: 'local' },
+      { threadId: 'remote-1', title: 'Remote work', updatedAt: '2026-01-01T00:00:00Z', runtimeId: buildBox.id },
+    ]
+    invoke.mockImplementation(async (command, payload) => command === 'runtime_list' ? listFor('local') : fallback(command, payload))
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'local-1', runtimeId: 'local' }))
+    await waitFor(async () => {
+      await fireEvent.click(screen.getByText('Remote work'))
+      expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'remote-1', runtimeId: buildBox.id })
+    })
   })
 
   it('names the machine Model providers applies to and switches it from Settings', async () => {
@@ -9247,6 +9312,37 @@ describe('the swarm', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: 'always_allow_agent' } }))
     expect(await within(list).findByText('Another device answered this first. Its answer stands.')).toBeInTheDocument()
     expect(within(list).queryByRole('button', { name: 'Deny' })).toBeNull()
+  })
+
+  it('posts a follow-up in a thread another machine runs to that machine through core', async () => {
+    threadSummaryResult = [{ threadId: 'box-thread', title: 'Hostname', updatedAt: '', runtimeId: 'local', owner_runtime: 'core-box', replica: true }]
+    swarmMachine({ answers: { 'thread.post': () => ({ message_id: 'm9', forwarded: true, op_id: 'op1', state: 'sent' }) } })
+    const swarmed = invoke.getMockImplementation()
+    invoke.mockImplementation((command, args) => command === 'chat_current_thread' ? Promise.resolve('box-thread') : swarmed(command, args))
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'swarm.members' })))
+    await fireEvent.input(composer, { target: { value: 'Run hostname.' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.post', body: { thread_id: 'box-thread', text: 'Run hostname.' } }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+  })
+
+  it('sends a message the runtime refuses for a thread another machine runs to that machine, with no operation names', async () => {
+    threadSummaryResult = [{ threadId: 'box-thread', title: 'Hostname', updatedAt: '', runtimeId: 'local' }]
+    swarmMachine({ answers: { 'thread.post': () => ({ message_id: 'm9', forwarded: true, op_id: 'op1', state: 'sent' }) } })
+    const swarmed = invoke.getMockImplementation()
+    invoke.mockImplementation((command, args) => command === 'chat_current_thread' ? Promise.resolve('box-thread')
+      : command === 'chat_submit' ? Promise.reject({ source: 'submit', message: 'Another machine runs this thread. Send the message to that machine.' })
+        : swarmed(command, args))
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'Run hostname.' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.post', body: { thread_id: 'box-thread', text: 'Run hostname.' } }))
+    await waitFor(() => expect(composer).toHaveValue(''))
+    expect(screen.queryByText(/Another machine runs this thread/)).toBeNull()
+    expect(document.body.textContent).not.toContain('thread.post')
   })
 
   it('asks to resume routines after the absence pause', async () => {
