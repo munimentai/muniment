@@ -801,6 +801,25 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
         Ok(())
     });
 
+    // A follow-up from the host runs on c2. A run started here in place of
+    // a post is refused in words that name no operation.
+    let refused =
+        h.with(|client| client.run_submit("Again here.", &[], Some(&offloaded), None, None));
+    let refused = format!("{refused:?}");
+    assert!(!refused.contains("thread.post"), "{refused}");
+    let follow_up = "Follow up on c2.";
+    let posted = h
+        .call(
+            Operation::ThreadPost,
+            None,
+            json!({"thread_id": offloaded, "text": follow_up}),
+        )
+        .unwrap();
+    assert_eq!(posted["forwarded"], true, "{posted}");
+    until("the follow-up runs on c2", || {
+        thread_ran_on(c2, &offloaded, Some(follow_up))
+    });
+
     // 2. Settings, preferences and memory edits converge.
     c1.call(
         Operation::PermissionSettingsSave,
@@ -895,6 +914,23 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
                             }),
                     || format!("{} inventory: {inventory}", node.name),
                 )?;
+                // A default the router names is a model the catalog knows
+                // and some plan behind it offers.
+                if inventory["default_provider"] == "muniment-router" {
+                    let default = inventory["default_model"].as_str().unwrap_or_default();
+                    ensure(
+                        inventory["router_models"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|model| {
+                                model["id"] == default
+                                    && model["name"].is_string()
+                                    && model["unavailable"].is_null()
+                            }),
+                        || format!("{} default: {inventory}", node.name),
+                    )?;
+                }
                 let held = node.credentials()?;
                 ensure(
                     held["secrets"]
