@@ -164,7 +164,16 @@ const ACTIONS: [Action; 8] = [
 ];
 
 /// The app's own pages, beside the ones the host adds.
-const PAGES: [(&str, &str, &[&str], &str, Option<&str>); 6] = [
+/// An app page: its id, title, synonyms, icon and shortcut.
+type AppPage = (
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+    Option<&'static str>,
+);
+
+const PAGES: [AppPage; 6] = [
     (
         "artifacts",
         "Artifacts",
@@ -367,7 +376,7 @@ pub fn rank(input: &Input) -> Vec<Group> {
             score(&words, &item.title, keywords).map(|score| (score, item))
         })
         .collect();
-    scored_actions.sort_by(|a, b| b.0.cmp(&a.0));
+    scored_actions.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     let mut groups: Vec<(u32, Group)> = Vec::new();
     let best = |items: &[(u32, Item)]| items.first().map_or(0, |(score, _)| *score);
     if !actions_only {
@@ -384,7 +393,7 @@ pub fn rank(input: &Input) -> Vec<Group> {
             })
             .collect();
         // A stable sort keeps the newest first among equal matches.
-        scored_threads.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_threads.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         scored_threads.truncate(THREADS);
         let pages = PAGES
             .iter()
@@ -421,7 +430,7 @@ pub fn rank(input: &Input) -> Vec<Group> {
                 score(&words, &item.title, &others).map(|score| (score, item))
             })
             .collect();
-        scored_pages.sort_by(|a, b| b.0.cmp(&a.0));
+        scored_pages.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         for (title, items) in [("Threads", scored_threads), ("Pages", scored_pages)] {
             if !items.is_empty() {
                 let top = best(&items);
@@ -444,7 +453,7 @@ pub fn rank(input: &Input) -> Vec<Group> {
     }
     // The group with the best match leads. Equal groups keep threads, pages,
     // then actions.
-    groups.sort_by(|a, b| b.0.cmp(&a.0));
+    groups.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     groups.into_iter().map(|(_, group)| group).collect()
 }
 
