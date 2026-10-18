@@ -65,7 +65,7 @@
   import ModelPicker from './lib/ModelPicker.svelte'
   import ThinkingPicker from './lib/ThinkingPicker.svelte'
   import ModePicker from './composer/ModePicker.svelte'
-  import { findMode, loadModes, modeIcon, nextMode } from './agents/permission-modes.js'
+  import { findMode, modeIcon, nextMode, watchModes } from './agents/permission-modes.js'
   import { modelThinking, thinkingLabel, withThinkingLevel } from './lib/thinking-level.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
   import Usage from './lib/Usage.svelte'
@@ -806,12 +806,15 @@
   let modeRequest = 0
   const composerThreadId = $derived(freshThread ? null : currentThreadId)
   const composerRuntime = $derived(threadMachine ?? runtimeList?.selected ?? LOCAL_RUNTIME_ID)
+  // The modes load again once Home exists and the runtime answers, and a
+  // runtime that lists none yet is asked again.
   $effect(() => {
     const runtime = composerRuntime
     void modesRevision
-    let alive = true
-    void loadModes(tauri, runtime).then((listing) => { if (alive) modeListing = listing ? { runtime, listing } : null })
-    return () => { alive = false }
+    void onboarding.name
+    void desktopClientStatus?.connected
+    untrack(() => { if (modeListing?.runtime !== runtime) modeListing = null })
+    return watchModes(tauri, runtime, (listing) => { modeListing = { runtime, listing } })
   })
   async function refreshThreadMode() {
     const request = ++modeRequest
