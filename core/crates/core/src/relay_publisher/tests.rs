@@ -419,6 +419,9 @@ fn the_publisher_registers_seals_applies_and_receipts() {
             timeout: None,
         },
         diff: None,
+        presentation: None,
+        rule: None,
+        reason: None,
     });
     runtime.emit(asking);
     let (header, opened) = relay.next_event(&keys);
@@ -539,6 +542,9 @@ fn gate_event(phase: &str, text: &str, gate_id: &str) -> ChatEvent {
             timeout: None,
         },
         diff: None,
+        presentation: None,
+        rule: None,
+        reason: None,
     });
     event
 }
@@ -765,6 +771,9 @@ fn a_deny_cancels_and_an_allow_needs_a_yes_or_no_gate() {
                 gate_id: "gate with spaces".into(),
                 request,
                 diff: None,
+                presentation: None,
+                rule: None,
+                reason: None,
             },
             now,
         )

@@ -788,10 +788,10 @@ pub fn asks_first(
 /// The most characters of a call summary.
 const MAX_SUMMARY_CHARS: usize = 240;
 
-/// A short human summary of one call's operation and inputs: the command
-/// and its folder, the file operation and its path, or the tool and its
-/// exact input.
-pub fn summary(request: &PolicyRequest) -> String {
+/// The exact operation and inputs of one call on one line, for the auto
+/// reviewer: the command and its folder, the file operation and its path,
+/// or the tool and its exact input.
+pub fn exact_summary(request: &PolicyRequest) -> String {
     let text = match &request.resource {
         ThreadPermissionResource::Command {
             arguments,
@@ -818,6 +818,12 @@ pub fn summary(request: &PolicyRequest) -> String {
     let mut short: String = text.chars().take(MAX_SUMMARY_CHARS - 1).collect();
     short.push('…');
     short
+}
+
+/// What one call does, as a person reads it: the headline of its
+/// presentation, such as "Run `git push` in work".
+pub fn summary(request: &PolicyRequest) -> String {
+    crate::tool_presentation::describe_request(request).headline
 }
 
 /// What a `plan` run is told when it tries a change.
@@ -895,18 +901,22 @@ pub fn decide_tool_call(
         (_, ActionClass::Read) | (PermissionMode::Bypass, _) => GateDecision::Allow,
         (PermissionMode::EditAuto, ActionClass::Edit { inside: true }) => GateDecision::Allow,
         (PermissionMode::DontAsk, _) => deny("Don't ask mode denies actions that no rule allows."),
-        (PermissionMode::Auto, _) => match review.review(tool, &summary(request)) {
+        (PermissionMode::Auto, _) => match review.review(tool, &exact_summary(request)) {
             classifier::Review::Allow => GateDecision::Allow,
             classifier::Review::Pause(reason) => GateDecision::Ask { reason },
         },
         (PermissionMode::EditAuto, ActionClass::Edit { inside: false }) => {
             ask("This edit is outside the working folders, so it asks.")
         }
-        (PermissionMode::Plan, _) => ask("Plan mode asks before web and MCP reads."),
-        (_, ActionClass::Edit { .. }) => ask("This thread asks before edits."),
-        (_, ActionClass::Web) => ask("This thread asks before it uses the web."),
-        (_, ActionClass::Mcp { .. }) => ask("This thread asks before MCP calls."),
-        (_, ActionClass::Command) => ask("This thread asks before this command."),
+        // One reason for every call the mode itself stops, named as the
+        // mode menu names the mode.
+        (
+            _,
+            ActionClass::Edit { .. }
+            | ActionClass::Web
+            | ActionClass::Mcp { .. }
+            | ActionClass::Command,
+        ) => ask(&format!("{} mode asks first.", mode.title())),
     }
 }
 
@@ -1417,18 +1427,23 @@ mod tests {
     fn the_gate_names_each_call_and_offers_only_the_rules_that_can_apply() {
         let directory = std::path::Path::new("/work");
         let push = tool_request("bash", &json!({"command": "git push"}), directory);
-        assert_eq!(summary(&push), "bash `git push` in /work");
+        assert_eq!(summary(&push), "Run `git push` in work");
+        assert_eq!(exact_summary(&push), "bash `git push` in /work");
         let write = tool_request("write", &json!({"path": "a.md"}), directory);
-        assert_eq!(summary(&write), "write /work/a.md");
+        assert_eq!(summary(&write), "Write a.md");
+        assert_eq!(exact_summary(&write), "write /work/a.md");
         let mcp = tool_request("mcp__crm__delete", &json!({"id": 7}), directory);
-        assert_eq!(summary(&mcp), "mcp__crm__delete {\"id\":7}");
+        assert_eq!(summary(&mcp), "Ask CRM: delete 7");
+        assert_eq!(exact_summary(&mcp), "mcp__crm__delete {\"id\":7}");
         let long = tool_request(
             "mcp__crm__note",
             &json!({"text": "x".repeat(400)}),
             directory,
         );
-        assert_eq!(summary(&long).chars().count(), 240);
-        assert!(summary(&long).ends_with('…'));
+        assert!(summary(&long).chars().count() < 80);
+        assert!(!summary(&long).contains('{'));
+        assert_eq!(exact_summary(&long).chars().count(), 240);
+        assert!(exact_summary(&long).ends_with('…'));
         assert_eq!(
             gate_options(true, true, true),
             [

@@ -352,6 +352,9 @@ pub struct Approval {
     /// A short human summary of the operation and its inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The operation as a person reads it: its headline, details and icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::tool_presentation::ToolPresentation>,
     /// Why the gate asks, such as the auto reviewer's reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

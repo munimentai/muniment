@@ -1,0 +1,542 @@
+{
+  "calls": [
+    {
+      "id": "web",
+      "tool": "web_search",
+      "status": "completed",
+      "seconds": 3,
+      "input": {
+        "category": "",
+        "domainFilter": [
+          "news.ycombinator.com"
+        ],
+        "includeContent": true,
+        "numResults": 8,
+        "provider": "auto",
+        "proxy": "",
+        "queries": [
+          "site:news.ycombinator.com \"Local\" \"desktop\" \"October 2026\"",
+          "site:news.ycombinator.com \"Show HN\" desktop agent"
+        ]
+      },
+      "output": "1. Show HN: A local desktop agent\n   https://news.ycombinator.com/item?id=1\n\n2. Ask HN: Desktop agents\n   https://news.ycombinator.com/item?id=2\n\n3. Launch HN\n   https://news.ycombinator.com/item?id=3\n\n4. Desktop apps in 2026\n   https://news.ycombinator.com/item?id=4\n\n5. Tauri 3\n   https://news.ycombinator.com/item?id=5\n\n6. Local models\n   https://news.ycombinator.com/item?id=6\n\n7. Agents everywhere\n   https://news.ycombinator.com/item?id=7\n\n8. October roundup\n   https://news.ycombinator.com/item?id=8"
+    },
+    {
+      "id": "read",
+      "tool": "read",
+      "status": "completed",
+      "seconds": 0.1,
+      "input": {
+        "path": "/Users/sam/work/muniment/README.md"
+      },
+      "output": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25\nline 26\nline 27\nline 28\nline 29\nline 30\nline 31\nline 32\nline 33\nline 34\nline 35\nline 36\nline 37\nline 38\nline 39\nline 40\nline 41\nline 42\nline 43\nline 44\nline 45\nline 46\nline 47\nline 48\nline 49\nline 50\nline 51\nline 52\nline 53\nline 54\nline 55\nline 56\nline 57\nline 58\nline 59\nline 60\nline 61\nline 62\nline 63\nline 64\nline 65\nline 66\nline 67\nline 68\nline 69\nline 70\nline 71\nline 72\nline 73\nline 74\nline 75\nline 76\nline 77\nline 78\nline 79\nline 80\nline 81\nline 82\nline 83\nline 84\nline 85\nline 86\nline 87\nline 88\nline 89\nline 90\nline 91\nline 92\nline 93\nline 94\nline 95\nline 96\nline 97\nline 98\nline 99\nline 100\nline 101\nline 102\nline 103\nline 104\nline 105\nline 106\nline 107\nline 108\nline 109\nline 110\nline 111\nline 112\nline 113\nline 114\nline 115\nline 116\nline 117\nline 118\nline 119\nline 120"
+    },
+    {
+      "id": "grep",
+      "tool": "grep",
+      "status": "completed",
+      "seconds": 0.4,
+      "input": {
+        "pattern": "renewal",
+        "path": "/Users/sam/work/leases",
+        "glob": "*.md"
+      },
+      "output": "leases/a.md:3: renewal\nleases/b.md:9: renewal\nleases/c.md:1: renewal"
+    },
+    {
+      "id": "edit",
+      "tool": "edit",
+      "status": "completed",
+      "seconds": 0.2,
+      "input": {
+        "path": "/Users/sam/work/muniment/src/main.rs",
+        "edits": [
+          {
+            "oldText": "a",
+            "newText": "b"
+          },
+          {
+            "oldText": "c",
+            "newText": "d"
+          }
+        ]
+      },
+      "output": "Successfully replaced 2 blocks in src/main.rs"
+    },
+    {
+      "id": "test",
+      "tool": "bash",
+      "status": "completed",
+      "seconds": 4.2,
+      "input": {
+        "command": "npm test",
+        "timeout": 600
+      },
+      "output": "Test Files  212 passed\nTests  1912 passed"
+    },
+    {
+      "id": "push",
+      "tool": "bash",
+      "status": "failed",
+      "seconds": 1.4,
+      "input": {
+        "command": "git push origin main"
+      },
+      "output": "error: failed to push some refs\n\nCommand exited with code 1"
+    },
+    {
+      "id": "long",
+      "tool": "bash",
+      "status": "completed",
+      "seconds": 12.6,
+      "input": {
+        "command": "cargo test -p muniment-core --lib -- tool_presentation permission_gate swarm relay_publisher chat_view chat_coordinate --test-threads=1 --nocapture"
+      },
+      "output": "test result: ok. 219 passed"
+    },
+    {
+      "id": "script",
+      "tool": "codemode",
+      "status": "completed",
+      "seconds": 2.0,
+      "input": {
+        "code": "const issues = await tools.mcp__linear__list_issues({ team: 'ENG' })\nreturn issues.length"
+      },
+      "output": "14"
+    },
+    {
+      "id": "memory",
+      "tool": "memory-search",
+      "status": "completed",
+      "seconds": 0.3,
+      "input": {
+        "query": "lease renewal dates"
+      },
+      "output": "{\"items\":[{\"id\":\"m1\"},{\"id\":\"m2\"}],\"recall\":{}}"
+    },
+    {
+      "id": "child",
+      "tool": "subagent",
+      "status": "completed",
+      "seconds": 48,
+      "input": {
+        "agent": "researcher",
+        "task": "Find the renewal terms in every lease"
+      },
+      "output": "Three leases renew in March.\nDetails follow."
+    },
+    {
+      "id": "message",
+      "tool": "agent-message",
+      "status": "completed",
+      "seconds": 0.2,
+      "input": {
+        "to": "Scout",
+        "intent": "question",
+        "text": "Did the March renewals go out?"
+      },
+      "output": "{\"sent\":true}"
+    },
+    {
+      "id": "mcp",
+      "tool": "mcp__linear__create_issue",
+      "status": "completed",
+      "seconds": 1.1,
+      "input": {
+        "title": "Fix sync bug",
+        "teamId": "ENG",
+        "priority": 2,
+        "labels": [],
+        "draft": false
+      },
+      "output": "{\"id\":\"ENG-42\",\"title\":\"Fix sync bug\",\"url\":\"https://linear.app/x/issue/ENG-42\"}"
+    },
+    {
+      "id": "schema",
+      "tool": "mcp__crm__find_leads",
+      "status": "completed",
+      "seconds": 0.8,
+      "meta": {
+        "name": "mcp__crm__find_leads",
+        "title": "Find leads",
+        "inputSchema": {
+          "type": "object",
+          "required": [
+            "region"
+          ],
+          "properties": {
+            "region": {
+              "type": "string",
+              "title": "Sales region"
+            },
+            "limit": {
+              "type": "integer",
+              "default": 20
+            },
+            "stage": {
+              "type": "string",
+              "oneOf": [
+                {
+                  "const": "won",
+                  "title": "Closed won"
+                },
+                {
+                  "const": "open",
+                  "title": "Open"
+                }
+              ]
+            },
+            "apiToken": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "input": {
+        "region": "EMEA",
+        "limit": 20,
+        "stage": "won",
+        "apiToken": "hidden-in-details"
+      },
+      "output": "{\"leads\":[1,2,3],\"results\":[{\"id\":1},{\"id\":2},{\"id\":3},{\"id\":4},{\"id\":5}]}"
+    },
+    {
+      "id": "hinted",
+      "tool": "mcp__tracker__issue_create",
+      "status": "completed",
+      "seconds": 0.6,
+      "meta": {
+        "name": "mcp__tracker__issue_create",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "board": {
+              "type": "string"
+            }
+          },
+          "x-muniment-presentation": {
+            "headline": "File {summary} on {board}",
+            "progress": "Filing an issue",
+            "icon": "list-checks",
+            "result": "Filed {key}"
+          }
+        }
+      },
+      "input": {
+        "summary": "Crash on start",
+        "board": "APP"
+      },
+      "output": "{\"key\":\"APP-12\"}"
+    },
+    {
+      "id": "limit",
+      "tool": "mcp__github__search_repositories",
+      "status": "failed",
+      "seconds": 0.5,
+      "input": {
+        "q": "tauri plugin",
+        "perPage": 50
+      },
+      "output": "{\"error\":{\"message\":\"Rate limit exceeded. Try again in 60 seconds.\"}}"
+    },
+    {
+      "id": "plugin",
+      "tool": "translateDocument",
+      "status": "running",
+      "input": {
+        "file_path": "/Users/sam/docs/brief.pdf",
+        "targetLanguage": "de",
+        "options": {
+          "formal": true
+        }
+      }
+    },
+    {
+      "id": "bulk",
+      "tool": "mcp__notes__bulk_tag",
+      "status": "completed",
+      "seconds": 0.9,
+      "input": {
+        "ids": [
+          "n1",
+          "n2",
+          "n3",
+          "n4",
+          "n5",
+          "n6"
+        ],
+        "tag": "q4-planning-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "notify": true,
+        "settings": {
+          "a": 1,
+          "b": 2,
+          "c": 3,
+          "d": 4
+        }
+      },
+      "output": "[1,2,3,4,5,6]"
+    },
+    {
+      "id": "probe-read",
+      "tool": "read",
+      "status": "completed",
+      "seconds": 2,
+      "input": {
+        "path": "/leases/northwind.md"
+      },
+      "output": "Renewal notice: 60 days."
+    },
+    {
+      "id": "probe-compare",
+      "tool": "read",
+      "status": "running",
+      "input": {
+        "path": "/leases/ridgeway.md"
+      }
+    },
+    {
+      "id": "probe-search",
+      "tool": "grep",
+      "status": "completed",
+      "input": {
+        "pattern": "renewal",
+        "path": "/leases"
+      },
+      "output": "/leases/a.md:3: renewal\n/leases/b.md:9: renewal\n/leases/c.md:1: renewal"
+    },
+    {
+      "id": "probe-command",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "wc -l /leases/*.md"
+      },
+      "output": "147 total"
+    },
+    {
+      "id": "probe-log",
+      "tool": "bash",
+      "status": "completed",
+      "input": {
+        "command": "cat /leases/audit.log"
+      },
+      "output": "audit entry 1\naudit entry 2\n"
+    },
+    {
+      "id": "preview-read",
+      "tool": "read",
+      "status": "completed",
+      "input": {
+        "path": "src/welcome.js"
+      }
+    },
+    {
+      "id": "trust-read",
+      "tool": "read",
+      "status": "completed",
+      "seconds": 1,
+      "input": {
+        "path": "CHANGELOG.md"
+      },
+      "output": "# Changelog\n\n## 1.4\n- Faster sync"
+    },
+    {
+      "id": "trust-search",
+      "tool": "web_search",
+      "status": "completed",
+      "seconds": 5,
+      "input": {
+        "query": "semver release notes format"
+      },
+      "output": "1. Semantic Versioning\n   https://semver.org\n\n2. Keep a Changelog\n   https://keepachangelog.com"
+    },
+    {
+      "id": "trust-edit",
+      "tool": "edit",
+      "status": "completed",
+      "seconds": 1,
+      "input": {
+        "path": "notes.md",
+        "oldText": "Draft\n",
+        "newText": "Release 1.4\nFaster sync\n"
+      },
+      "output": "Successfully replaced text in notes.md"
+    },
+    {
+      "id": "trust-build",
+      "tool": "bash",
+      "status": "completed",
+      "seconds": 26,
+      "input": {
+        "command": "npm run docs"
+      },
+      "output": "Built 14 pages"
+    },
+    {
+      "id": "trust-push",
+      "tool": "bash",
+      "status": "completed",
+      "seconds": 4,
+      "input": {
+        "command": "git push origin main"
+      },
+      "output": "main -> main"
+    },
+    {
+      "id": "trust-tag",
+      "tool": "bash",
+      "status": "failed",
+      "seconds": 3,
+      "input": {
+        "command": "git tag v1.4.0 && git push --tags"
+      },
+      "output": "fatal: tag 'v1.4.0' already exists\n\nCommand exited with code 128"
+    },
+    {
+      "id": "trust-tell",
+      "tool": "agent-message",
+      "status": "completed",
+      "seconds": 1,
+      "input": {
+        "to": "Release bot"
+      },
+      "output": "{\"sent\":true}"
+    }
+  ],
+  "gates": [
+    {
+      "id": "gate-web",
+      "agent": "HN digest",
+      "reason": "Ask before changes mode asks first.",
+      "rule": {
+        "request_kind": "tool",
+        "resource": {
+          "type": "tool",
+          "name": "web_search",
+          "input": {
+            "category": "",
+            "domainFilter": [
+              "news.ycombinator.com"
+            ],
+            "includeContent": true,
+            "numResults": 8,
+            "provider": "auto",
+            "proxy": "",
+            "queries": [
+              "site:news.ycombinator.com \"Local\" \"desktop\" \"October 2026\"",
+              "site:news.ycombinator.com \"Show HN\" desktop agent"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "gate-mcp",
+      "agent": "Triage",
+      "reason": "Ask before changes mode asks first.",
+      "rule": {
+        "request_kind": "tool",
+        "resource": {
+          "type": "tool",
+          "name": "mcp__linear__create_issue",
+          "input": {
+            "title": "Fix sync bug",
+            "teamId": "ENG",
+            "description": "Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. Sync drops edits made offline. ",
+            "priority": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "gate-push",
+      "agent": "Releaser",
+      "reason": "Auto review paused this: The request does not ask to publish the branch.",
+      "rule": {
+        "request_kind": "command",
+        "resource": {
+          "type": "command",
+          "arguments": [
+            "bash",
+            "git push origin main"
+          ],
+          "working_directory": "/Users/sam/work/muniment-desktop"
+        }
+      }
+    },
+    {
+      "id": "gate-unknown",
+      "agent": "Translator",
+      "reason": "Ask before changes mode asks first.",
+      "rule": {
+        "request_kind": "tool",
+        "resource": {
+          "type": "tool",
+          "name": "translateDocument",
+          "input": {
+            "file_path": "/Users/sam/docs/brief.pdf",
+            "targetLanguage": "de"
+          }
+        }
+      }
+    },
+    {
+      "id": "run-30:gate-1",
+      "agent": "Nightly test triage",
+      "reason": "",
+      "rule": {
+        "request_kind": "tool",
+        "resource": {
+          "type": "tool",
+          "name": "mcp__tracker__create_issue",
+          "input": {
+            "title": "Nightly: proxy test times out on Windows",
+            "labels": [
+              "flaky",
+              "windows",
+              "ci"
+            ],
+            "body": "The proxy test timed out in 3 of the last 5 nightly runs on the Windows runner. Every failure waits on the same socket read.\n\nLast failure: run 4512, job windows-x64, step test:proxy.\n\nSuspect the loopback proxy starts after the test opens its socket.",
+            "assignee": null,
+            "milestone": "v0.4"
+          }
+        }
+      }
+    },
+    {
+      "id": "run-21:gate-2",
+      "agent": "Release editor",
+      "reason": "",
+      "rule": {
+        "request_kind": "command",
+        "resource": {
+          "type": "command",
+          "arguments": [
+            "bash",
+            "git tag v0.4.0"
+          ],
+          "working_directory": "/Users/sam/release"
+        }
+      }
+    },
+    {
+      "id": "h-4:gate-3",
+      "agent": "Inbox triage",
+      "reason": "",
+      "rule": {
+        "request_kind": "command",
+        "resource": {
+          "type": "command",
+          "arguments": [
+            "bash",
+            "git push origin main"
+          ],
+          "working_directory": "/Users/alice/Documents/muniment/agents/Inbox-triage"
+        }
+      }
+    }
+  ]
+}

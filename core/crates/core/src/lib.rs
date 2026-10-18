@@ -78,6 +78,7 @@ pub mod sidecar;
 pub mod state_root;
 pub mod thread_history;
 pub mod thread_ownership;
+pub mod tool_presentation;
 #[cfg(unix)]
 pub mod user_diagnostics;
 #[cfg(target_os = "windows")]

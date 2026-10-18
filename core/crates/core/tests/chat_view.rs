@@ -138,9 +138,12 @@ fn tool_activity_uses_the_webview_contract() {
     assert_eq!(
         serde_json::to_value(activity).unwrap(),
         json!([
-            {"textOffset":0,"effectId": "effect-1", "displayName": "Search", "status": "running"},
-            {"textOffset":0,"effectId": "effect-2", "displayName": null, "status": "completed"},
-            {"textOffset":0,"effectId": "effect-3", "displayName": null, "status": "failed"}
+            {"textOffset":0,"effectId": "effect-1", "displayName": "Search", "status": "running",
+             "presentation": {"category": "other", "kind": "other", "icon": "wrench", "headline": "Search", "progress": "Using search"}},
+            {"textOffset":0,"effectId": "effect-2", "displayName": null, "status": "completed",
+             "presentation": {"category": "other", "kind": "other", "icon": "wrench", "headline": "Use a tool", "progress": "Using a tool", "result": "Done"}},
+            {"textOffset":0,"effectId": "effect-3", "displayName": null, "status": "failed",
+             "presentation": {"category": "other", "kind": "other", "icon": "wrench", "headline": "Use a tool", "progress": "Using a tool", "result": "Failed"}}
         ])
     );
     assert!(chat_tool_activity(&[]).is_empty());

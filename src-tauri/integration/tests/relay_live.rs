@@ -718,6 +718,9 @@ fn a_paired_phone_follows_and_steers_a_desktop_run_through_the_relay() {
             timeout: None,
         },
         diff: None,
+        presentation: None,
+        rule: None,
+        reason: None,
     });
     runtime.emit(asking);
     let (header, content) = phone.event();
@@ -864,6 +867,9 @@ impl RelayRuntime for ReactiveRuntime {
                     timeout: None,
                 },
                 diff: None,
+                presentation: None,
+                rule: None,
+                reason: None,
             });
             self.react(asking);
         }

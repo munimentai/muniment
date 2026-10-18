@@ -3,6 +3,7 @@
 // device never paired, whose agent shows as a synced copy. `handleAgentRequest`
 // answers `agent_request` with the core attach operations' shapes, as the
 // protocol fixtures show.
+import { presentApproval } from './presentations.js'
 
 export const LAPTOP = '018f0000-0000-7000-8000-000000000041'
 export const STUDIO = '018f0000-0000-7000-8000-000000000042'
@@ -50,6 +51,10 @@ const SCOUT_PLAN = [
 // agent", a long tool input that folds, an auto review's reason, a plan
 // waiting for approval, and one from an older runtime.
 export function probeApprovals() {
+  return probeApprovalList().map(presentApproval)
+}
+
+function probeApprovalList() {
   const command = (args, folder) => ({ request_kind: 'command', resource: { type: 'command', arguments: args, working_directory: folder } })
   const pushRule = command(['bash', 'git push origin main'], INBOX_PATH)
   const issue = { title: 'Nightly: proxy test times out on Windows', labels: ['flaky', 'windows', 'ci'], body: 'The proxy test timed out in 3 of the last 5 nightly runs on the Windows runner. Every failure waits on the same socket read.\n\nLast failure: run 4512, job windows-x64, step test:proxy.\n\nSuspect the loopback proxy starts after the test opens its socket.', assignee: null, milestone: 'v0.4' }

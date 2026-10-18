@@ -157,7 +157,7 @@ describe('the avatar style and tone', () => {
       [undefined, null, null],
       [{ state: 'idle', action: null, since: null }, 'idle', 'Idle'],
       [{ state: 'running', action: 'Runs a scheduled routine' }, 'running', 'Running: Runs a scheduled routine'],
-      [{ state: 'waiting', action: 'bash `git push origin main`' }, 'waiting', 'Waiting for you: bash `git push origin main`'],
+      [{ state: 'waiting', action: 'Run `git push origin main` in work' }, 'waiting', 'Waiting for you: Run git push origin main in work'],
       [{ state: 'error', action: 'The model could not complete this reply.' }, 'error', 'Last run failed: The model could not complete this reply.'],
     ]
     for (const [activity, state, title] of states) {

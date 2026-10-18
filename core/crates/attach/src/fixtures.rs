@@ -2294,7 +2294,7 @@ fn fixture_directory_entry() -> serde_json::Value {
 fn fixture_activity() -> serde_json::Value {
     json!({
         "state": "waiting",
-        "action": "bash `git push origin main` in /work/agents/Lead-scout",
+        "action": "Run `git push origin main` in Lead-scout",
         "since": "2026-01-01T14:01:00Z"
     })
 }
@@ -2312,17 +2312,25 @@ fn fixture_approval(state: &str) -> serde_json::Value {
         "request": {
             "gate_id": "019965a0-0000-7000-8000-0000000000b4",
             "kind": "select",
-            "title": "Allow bash `git push origin main` in /work/agents/Lead-scout? Auto review paused this: The request does not ask to publish the branch.",
+            "title": "Run `git push origin main` in Lead-scout? Auto review paused this: The request does not ask to publish the branch.",
             "options": ["Allow once", "Allow for this thread", "Always allow for this agent", "Deny"],
             "policy": {
                 "request_kind": "command",
                 "resource": fixture_push_resource(),
-                "summary": "bash `git push origin main` in /work/agents/Lead-scout",
+                "summary": "Run `git push origin main` in Lead-scout",
                 "reason": "Auto review paused this: The request does not ask to publish the branch."
             }
         },
         "rule": {"request_kind": "command", "resource": fixture_push_resource()},
-        "summary": "bash `git push origin main` in /work/agents/Lead-scout",
+        "summary": "Run `git push origin main` in Lead-scout",
+        "presentation": {
+            "category": "shell",
+            "kind": "command",
+            "icon": "square-terminal",
+            "headline": "Run `git push origin main` in Lead-scout",
+            "progress": "Running git push origin main",
+            "details": [{"label": "Folder", "value": "/work/agents/Lead-scout", "mono": true}]
+        },
         "reason": "Auto review paused this: The request does not ask to publish the branch.",
         "answers": ["allow_once", "allow_thread", "always_allow_agent", "deny"],
         "state": state,

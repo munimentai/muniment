@@ -69,8 +69,12 @@ export function runLineLabel(parts) {
 export function runTimeline(toolActivity = [], live = false) {
   return actionGroups(toolActivity, live).flatMap((group) => group.actions.map((action) => ({
     id: action.effectId,
+    presentation: action.presentation,
     icon: action.icon,
     label: action.label,
+    result: action.result,
+    failed: action.failed,
+    running: action.running,
     state: action.state,
     duration: action.startedAt && action.finishedAt ? actionDuration(action.startedAt, action.finishedAt) : '',
   })))

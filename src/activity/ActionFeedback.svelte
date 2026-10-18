@@ -1,5 +1,6 @@
 <script>
   import LucideIcon from '../lib/LucideIcon.svelte'
+  import ToolCall from './ToolCall.svelte'
   import { actionGroups, actionDuration, outputLimitNote } from './action-feedback.js'
 
   let { activities = [], live = false, onopenfile, loadoutput } = $props()
@@ -20,44 +21,38 @@
   })
 </script>
 
+{#snippet line(action)}
+  <ToolCall presentation={action.presentation} label={action.label} running={action.running} result={action.result} failed={action.failed} state={action.state} />{#if action.counts}<span class="counts">{action.counts}</span>{/if}
+{/snippet}
+
 {#snippet renderActions(group)}
   <div class="action-list" class:grouped={group.actions.length > 1}>
     {#each group.actions as action (action.effectId)}
       {#if action.path && onopenfile}
-        <button type="button" class="file-action" onclick={() => onopenfile({ path: action.path })}>
-          <LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>
-          {#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}
-        </button>
+        <button type="button" class="file-action" aria-label={action.label.replaceAll('`', '')} onclick={() => onopenfile({ path: action.path })}>{@render line(action)}</button>
       {:else if !action.hasDetails}
-        <div class="plain-action"><LucideIcon name={action.icon} /><span class="action-label" class:active-sheen={action.running}>{action.label}</span>{#if action.counts}<span class="counts">{action.counts}</span>{/if}{#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}</div>
+        <div class="plain-action">{@render line(action)}</div>
       {:else}
       <details ontoggle={(event) => { if (event.currentTarget.open) readOutput(action) }}>
         <summary>
-          <LucideIcon name={action.icon} />
-          <span class="action-label" class:active-sheen={action.running}>{action.label}</span>
-          {#if action.counts}<span class="counts">{action.counts}</span>{/if}
-          {#if action.state === 'Failed' || action.state === 'Interrupted'}<span>{action.state}</span>{/if}
+          {@render line(action)}
           <span class="chevron"><LucideIcon name="chevron-right" /></span>
         </summary>
         <div class="action-detail">
-          {#if group.kind === 'web' && action.queries.length}
-            <strong>Queries:</strong>
-            <ul class="search-queries">{#each action.queries as query}<li>{query}</li>{/each}</ul>
-          {:else}
-          <p>{action.state}{#if action.startedAt && (action.finishedAt || action.running)}{` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}`}{/if}</p>
-          {#if action.input}<strong>{group.kind === 'command' ? 'Command' : 'Input'}</strong><pre>{action.detailInput}</pre>{/if}
-          {#if action.output}<strong>Output</strong>
-            {#if outputs[action.effectId]}
-              {#await outputs[action.effectId]}
-                <pre>{action.output}</pre><p>Loading the full output.</p>
-              {:then detail}
-                <pre>{detail.text}</pre>{#if detail.truncated}<p>{outputLimitNote(detail)}</p>{/if}
-              {:catch}
-                <pre>{action.output}</pre><p role="alert">The full output could not be loaded. <button type="button" onclick={() => readOutput(action, true)}>Load full output</button></p>
-              {/await}
-            {:else}<pre>{action.output}</pre>{/if}
-          {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
-          {/if}
+          {#snippet output()}
+            {#if action.output}<strong>Output</strong>
+              {#if outputs[action.effectId]}
+                {#await outputs[action.effectId]}
+                  <pre>{action.output}</pre><p>Loading the full output.</p>
+                {:then detail}
+                  <pre>{detail.text}</pre>{#if detail.truncated}<p>{outputLimitNote(detail)}</p>{/if}
+                {:catch}
+                  <pre>{action.output}</pre><p role="alert">The full output could not be loaded. <button type="button" onclick={() => readOutput(action, true)}>Load full output</button></p>
+                {/await}
+              {:else}<pre>{action.output}</pre>{/if}
+            {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
+          {/snippet}
+          <ToolCall variant="detail" presentation={action.presentation} state={`${action.state}${action.startedAt && (action.finishedAt || action.running) ? ` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}` : ''}`} input={action.detailInput} raw={output} />
         </div>
       </details>
       {/if}
@@ -98,9 +93,8 @@
   summary:hover, summary:focus-visible { color: var(--ink); }
   .file-action, .plain-action { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; max-width: 100%; }
   .file-action { border: 0; padding: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-  .file-action .action-label { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .file-action :global(.tool-label) { text-decoration: underline dotted; text-underline-offset: 3px; }
   .file-action:hover { color: var(--ink); }
-  .action-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .chevron { flex: none; display: inline-flex; }
   .counts { flex: none; font: var(--text-12) var(--font-mono); }
   .tools-used { width: max-content; max-width: 100%; }
@@ -108,8 +102,6 @@
   details[open] > summary > .chevron { transform: rotate(90deg); }
   .action-list.grouped { padding-left: 12px; }
   .action-detail { margin: 6px 0 12px 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
-  .search-queries { list-style: none; margin: 8px 0 0; padding: 0; }
-  .search-queries li { margin: 4px 0; overflow-wrap: anywhere; }
   .action-detail p { margin: 0 0 8px; }
   .action-detail strong { font-weight: 500; }
   .action-detail button { min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }

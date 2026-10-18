@@ -27,13 +27,15 @@ describe('the run line', () => {
   })
 
   it('lists every tool call in order with its state and duration', () => {
+    const test = { kind: 'command', icon: 'square-terminal', headline: 'Run `npm test`', progress: 'Running npm test', result: 'Exit 0 in 26 s' }
+    const edit = { kind: 'edit', icon: 'square-pen', headline: 'Edit a.js', progress: 'Editing a.js', result: 'Failed: no match', path: 'src/a.js' }
     const timeline = runTimeline([
-      { effectId: 'a', displayName: 'bash', status: 'completed', input: '{"command":"npm test"}', startedAt: '2026-10-18T12:00:00Z', finishedAt: '2026-10-18T12:00:26Z' },
-      { effectId: 'b', displayName: 'edit', status: 'failed', input: '{"path":"src/a.js"}' },
+      { effectId: 'a', displayName: 'bash', status: 'completed', input: '{"command":"npm test"}', startedAt: '2026-10-18T12:00:00Z', finishedAt: '2026-10-18T12:00:26Z', presentation: test },
+      { effectId: 'b', displayName: 'edit', status: 'failed', input: '{"path":"src/a.js"}', presentation: edit },
     ])
     expect(timeline).toEqual([
-      { id: 'a', icon: 'square-terminal', label: 'Ran npm test', state: 'Completed', duration: '26s' },
-      { id: 'b', icon: 'file-text', label: 'Changed a.js', state: 'Failed', duration: '' },
+      { id: 'a', presentation: test, icon: 'square-terminal', label: 'Run `npm test`', result: 'Exit 0 in 26 s', failed: false, running: false, state: 'Completed', duration: '26s' },
+      { id: 'b', presentation: edit, icon: 'square-pen', label: 'Edit a.js', result: 'Failed: no match', failed: true, running: false, state: 'Failed', duration: '' },
     ])
   })
 })

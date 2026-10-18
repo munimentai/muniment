@@ -84,6 +84,7 @@ fn current_gate(inner: &Inner, run_id: &str) -> Result<Option<Value>, String> {
 struct GateFacts {
     rule: Option<crate::permission_gate::PolicyRequest>,
     summary: Option<String>,
+    presentation: Option<crate::tool_presentation::ToolPresentation>,
     reason: Option<String>,
     plan: Option<String>,
     answers: Vec<String>,
@@ -104,6 +105,7 @@ fn gate_facts(gate: &Value) -> GateFacts {
         return GateFacts {
             rule: None,
             summary: None,
+            presentation: None,
             reason: None,
             plan: None,
             answers,
@@ -119,6 +121,9 @@ fn gate_facts(gate: &Value) -> GateFacts {
         None
     };
     GateFacts {
+        presentation: rule
+            .as_ref()
+            .map(crate::tool_presentation::describe_request),
         rule,
         summary: Some(policy.summary),
         reason: policy.reason,
@@ -184,6 +189,7 @@ pub(super) fn scan(inner: &Inner) -> Result<(), String> {
         let GateFacts {
             rule,
             summary,
+            presentation,
             reason,
             plan,
             answers,
@@ -199,6 +205,7 @@ pub(super) fn scan(inner: &Inner) -> Result<(), String> {
             request: gate,
             rule,
             summary,
+            presentation,
             reason,
             plan,
             answers,
@@ -523,6 +530,9 @@ pub(super) fn phone_event(approval: &Approval) -> Option<crate::run_events::Chat
             gate_id: gate.gate_id,
             request: gate.request,
             diff: None,
+            presentation: approval.presentation.clone(),
+            rule: approval.rule.clone(),
+            reason: approval.reason.clone(),
         }),
         (true, None) => return None,
         (false, _) => None,
@@ -575,6 +585,7 @@ mod tests {
             request: json!({"gate_id": "gate-1", "kind": "confirm", "title": "Allow bash?", "message": "git push"}),
             rule: None,
             summary: None,
+            presentation: None,
             reason: None,
             plan: None,
             answers: Vec::new(),

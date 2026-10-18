@@ -118,6 +118,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | swarm | It links one owner's runtimes, replicates agent and group threads on the journal, delivers agent messages, moves and approvals between them, and seals shared credentials to each member's fleet key. |
 | module | thread_history | It reads journal-backed thread history. |
 | module | thread_ownership | It checks journal subject ownership. |
+| module | tool_presentation | It describes each tool call for people: its headline, details and result. |
 | module | user_diagnostics | It diagnoses user-level runtime services. |
 | module | windows_known_folders | It resolves Windows runtime paths. |
 | module | windows_payload | It resolves installed runtime payloads. |

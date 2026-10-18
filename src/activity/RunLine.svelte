@@ -1,5 +1,5 @@
 <script>
-  import LucideIcon from '../lib/LucideIcon.svelte'
+  import ToolCall from './ToolCall.svelte'
   import { executionTime } from '../lib/execution-time.js'
   import { runLineLabel, runLineParts, runTimeline } from './run-trust.js'
 
@@ -31,7 +31,7 @@
       {#if open}
         <ol class="timeline" aria-label="Tool calls">
           {#each timeline as entry (entry.id)}
-            <li><LucideIcon name={entry.icon} size={14} /><span class="label">{entry.label}</span><span class="state" class:failed={entry.state === 'Failed'}>{entry.state}</span>{#if entry.duration}<span class="duration">{entry.duration}</span>{/if}</li>
+            <li><ToolCall presentation={entry.presentation} label={entry.label} running={entry.running} result={entry.result || (entry.state === 'Completed' ? '' : entry.state)} failed={entry.failed} iconSize={14} />{#if entry.duration}<span class="duration">{entry.duration}</span>{/if}</li>
           {/each}
         </ol>
         {#if onreview}<button type="button" class="review" onclick={onreview}>Review changes</button>{/if}
@@ -52,9 +52,8 @@
   details[open] > summary::before { transform: rotate(45deg); }
   summary:hover { background: var(--faint); color: var(--ink); }
   .timeline { display: grid; gap: 4px; margin: 6px 0 0; padding: 0 0 0 4px; list-style: none; }
-  .timeline li { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 24px; }
-  .label { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
-  .state.failed { color: var(--danger); }
+  .timeline li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 24px; }
+  .timeline li :global(.tool-label) { color: var(--ink); }
   .duration { min-width: 40px; text-align: right; }
   .review { min-height: 28px; margin-top: 8px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-human); cursor: pointer; }
   .review:hover { background: var(--faint); }

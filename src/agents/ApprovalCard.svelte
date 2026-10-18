@@ -1,8 +1,8 @@
 <script>
   // One agent approval: the agent with its activity, its machine and age,
-  // core's summary of the exact operation, that operation's inputs with long
-  // ones folded, why the gate asks, a plan waiting for approval, and only
-  // the answers core accepts. Core applies the first
+  // the tool call as core presents it (its headline, why the gate asks and
+  // its details, with the exact request behind Show details), a plan waiting
+  // for approval, and only the answers core accepts. Core applies the first
   // answer from any device. A later one comes back as already answered and
   // its line shows here.
   import Button from '../lib/ui/Button.svelte'
@@ -11,6 +11,8 @@
   import { agentRequest } from './agent-runtime.js'
   import { approvalChoices, approvalOutcome, approvalSummary, longInput } from './approvals.js'
   import { whenLabel } from '../lib/agent-labels.js'
+  import ToolCall from '../activity/ToolCall.svelte'
+  import { ruleInput } from '../activity/tool-call.js'
 
   let { tauri, approval, agent = null, activity = undefined, machine = null, inline = false, onanswered = () => {}, onopen = null } = $props()
   let busy = $state(false)
@@ -46,13 +48,17 @@
     {#if machine}<MachineMark {machine} />{/if}
     <time class="when" datetime={approval.created_at}>{whenLabel(approval.created_at)}</time>
   </header>
+  {#if approval.presentation && !plan}
+    <ToolCall variant="card" presentation={approval.presentation} reason={approval.reason ?? ''} input={ruleInput(approval.rule)} />
+  {:else}
   <p class="operation">{plan ? 'Approve this plan?' : summary.operation}</p>
   {#if approval.reason}<p class="reason">{approval.reason}</p>{/if}
+  {/if}
   {#if plan}
     <div class="plan" class:folded={longInput(plan, 14, 900) && !planOpen} aria-label="Plan" role="region">{plan}</div>
     {#if longInput(plan, 14, 900)}<button type="button" class="more" aria-expanded={planOpen} onclick={() => { planOpen = !planOpen }}>{planOpen ? 'Show less' : 'Show all'}</button>{/if}
   {/if}
-  {#if summary.rows.length && !plan}
+  {#if summary.rows.length && !plan && !approval.presentation}
     <dl class="inputs" class:folded={folds && !open}>
       {#each summary.rows as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}
     </dl>

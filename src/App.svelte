@@ -23,6 +23,8 @@
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
   import { actionGroups, responseParts } from './activity/action-feedback.js'
   import ActionFeedback from './activity/ActionFeedback.svelte'
+  import ToolCall from './activity/ToolCall.svelte'
+  import { ruleInput } from './activity/tool-call.js'
   import { onMount, tick, untrack } from 'svelte'
   import { workspaceOnNavigate } from './lib/workspace-panel-state.js'
   import { awaitingFrom, keptInventory, loadInventory } from './lib/inventory-loader.js'
@@ -3730,7 +3732,8 @@
                 {:else}
                 {@const choices = composerGateOptions(gate, !!threadAgent)}
                 <div class="permission-card tool-card">
-                  <strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>
+                  {#if gate.presentation && !isPlanGate(gate)}<ToolCall variant="card" presentation={gate.presentation} reason={gate.reason ?? ''} input={ruleInput(gate.rule)} />
+                  {:else}<strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>{/if}
                   {#if isPlanGate(gate) && composerPlan?.gateId === gate.gateId && composerPlan.text}<div class="permission-plan" role="region" aria-label="Plan">{composerPlan.text}</div>{/if}
                   {#if gate.kind === 'confirm' && gate.message}<p>{gate.message}</p>{/if}
                   {#if gate.kind === 'code_diff' && gate.diff}{#await loadCodeDiff() then module}{@const CodeDiff = module.default}<CodeDiff codeDiff={gate.diff} />{/await}

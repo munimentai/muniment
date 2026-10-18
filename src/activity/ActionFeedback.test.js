@@ -1,12 +1,18 @@
 import '@testing-library/jest-dom/vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { cleanup, render, fireEvent } from '@testing-library/svelte'
 import { afterEach, expect, it, vi } from 'vitest'
 import ActionFeedback from './ActionFeedback.svelte'
 
 afterEach(cleanup)
 
+const gallery = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/tool-presentation/presented.json'), 'utf8'))
+const call = (id) => gallery.calls.find((activity) => activity.effectId === id)
+const command = (effectId, command, extra = {}) => ({ effectId, displayName: 'bash', status: 'completed', input: JSON.stringify({ command }), presentation: { kind: 'command', icon: 'square-terminal', headline: `Run \`${command}\``, progress: `Running ${command}`, result: 'Exit 0 in 0.2 s' }, ...extra })
+
 it('opens the group and action details and stops the active sheen when the run ends', async () => {
-  const activities = [{ effectId: 'command-0', displayName: 'bash', status: 'completed', input: '{"command":"pwd"}' }, { effectId: 'command-1', displayName: 'bash', status: 'running', input: '{"command":"cargo test"}', output: '12 tests passed' }]
+  const activities = [command('command-0', 'pwd'), command('command-1', 'cargo test', { status: 'running', output: '12 tests passed' })]
   const view = render(ActionFeedback, { activities, live: true })
   const tools = view.getByText('2 tools used').closest('details')
   expect(tools).not.toHaveAttribute('open')
@@ -19,6 +25,7 @@ it('opens the group and action details and stops the active sheen when the run e
   const action = view.getByText('Running cargo test').closest('details')
   await fireEvent.click(action.querySelector('summary'))
   expect(action).toHaveAttribute('open')
+  await fireEvent.click(view.getAllByText('Show details').at(-1))
   expect(view.getByText('12 tests passed')).toBeVisible()
   expect(view.container.querySelectorAll('.active-sheen')).toHaveLength(3)
   await view.rerender({ activities, live: false })
@@ -26,27 +33,36 @@ it('opens the group and action details and stops the active sheen when the run e
   expect(view.getAllByText('Interrupted')).toHaveLength(2)
 })
 
-it('leaves rows without details static and opens read files in the panel', async () => {
+it('opens read files in the panel and names the result beside the headline', async () => {
   const opened = []
-  const view = render(ActionFeedback, { onopenfile: (file) => opened.push(file), activities: [
-    { effectId: 'a', displayName: 'search', status: 'completed', input: '{"query":"renewals"}' },
-    { effectId: 'b', displayName: 'read', status: 'completed', input: '{"path":"src/main.rs"}' },
-  ] })
-  expect(view.getByText('Searched renewals').closest('.plain-action')).not.toBeNull()
-  await fireEvent.click(view.getByRole('button', { name: 'Read main.rs', hidden: true }))
-  expect(opened).toEqual([{ path: 'src/main.rs' }])
+  const view = render(ActionFeedback, { onopenfile: (file) => opened.push(file), activities: [call('read')] })
+  const read = view.getByRole('button', { name: 'Read README.md', hidden: true })
+  await fireEvent.click(read)
+  expect(opened).toEqual([{ path: '/Users/sam/work/muniment/README.md' }])
 })
 
-it('shows only the queries for web search details', () => {
-  const view = render(ActionFeedback, { activities: [{ effectId: 'web', displayName: 'web_search', status: 'completed', input: JSON.stringify({ queries: ['First query', 'Second query'], numResults: 6 }), output: 'Long provider output' }] })
-  expect(view.getAllByText('Searched the web')).toHaveLength(1)
+it('shows a web search as its headline and details, with the raw input behind Show details', async () => {
+  const view = render(ActionFeedback, { activities: [call('web')] })
   expect(view.getByText('1 tool used')).toBeInTheDocument()
-  expect(view.container.querySelectorAll('details')).toHaveLength(2)
-  expect(view.getByText('Queries:')).toBeInTheDocument()
-  expect(view.getByText('First query')).toBeInTheDocument()
-  expect(view.queryByText('Long provider output')).not.toBeInTheDocument()
-  expect(view.container.textContent).not.toContain('Num Results')
-  expect(view.container.textContent).not.toContain('Completed')
+  const row = view.container.querySelector('.action-list details')
+  expect(row.querySelector('summary')).toHaveTextContent('Search the web for “Local desktop October 2026” and 1 more on news.ycombinator.com Found 8 results')
+  await fireEvent.click(row.querySelector('summary'))
+  const details = row.querySelector('.tool-details')
+  expect(details).toHaveTextContent('Results per query8')
+  expect(details).toHaveTextContent('Page contentIncluded')
+  expect(details).not.toHaveTextContent('Provider')
+  const raw = row.querySelector('.tool-raw')
+  expect(raw).not.toHaveAttribute('open')
+  expect(raw).toHaveTextContent('"numResults": 8')
+})
+
+it('never shows raw JSON outside Show details for any call in the gallery', async () => {
+  const view = render(ActionFeedback, { activities: gallery.calls, live: true })
+  for (const summary of view.container.querySelectorAll('summary')) await fireEvent.click(summary)
+  const shown = view.container.cloneNode(true)
+  for (const raw of shown.querySelectorAll('.tool-raw')) raw.remove()
+  expect(shown.textContent).not.toMatch(/[{[]"|":/)
+  expect(view.container.querySelectorAll('.tool-raw').length).toBeGreaterThan(10)
 })
 
 it('reads the whole output of a truncated action when its detail opens', async () => {
@@ -57,14 +73,14 @@ it('reads the whole output of a truncated action when its detail opens', async (
     return new Promise((resolve, reject) => { answer = { resolve, reject } })
   }
   const activities = [
-    { effectId: 'log', displayName: 'bash', status: 'completed', input: '{"command":"cat build.log"}', output: 'first lines', outputBytes: 400_000, outputTruncated: true },
-    { effectId: 'short', displayName: 'bash', status: 'completed', input: '{"command":"pwd"}', output: '/work', outputBytes: 5 },
+    command('log', 'cat build.log', { output: 'first lines', outputBytes: 400_000, outputTruncated: true }),
+    command('short', 'pwd', { output: '/work', outputBytes: 5 }),
   ]
   const view = render(ActionFeedback, { activities, loadoutput })
   await fireEvent.click(view.getByText('2 tools used').closest('summary'))
   await fireEvent.click(view.getByText('Ran commands').closest('summary'))
-  await fireEvent.click(view.getByText('Ran pwd').closest('summary'))
-  const action = view.getByText('Ran cat build.log').closest('details')
+  await fireEvent.click(view.getByText('pwd').closest('summary'))
+  const action = view.getByText('cat build.log').closest('details')
   await fireEvent.click(action.querySelector('summary'))
   await vi.waitFor(() => expect(reads).toEqual(['log']))
   expect(view.getByText('first lines')).toBeInTheDocument()

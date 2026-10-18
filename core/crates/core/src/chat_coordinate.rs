@@ -2115,6 +2115,9 @@ fn coordinate_agent_permission(
             .map(|set| set.mode);
         let mode = permissions.mode_for(thread_mode);
         if title == "muniment:permission-mode" {
+            if let Ok(report) = serde_json::from_str::<serde_json::Value>(prefill) {
+                crate::tool_presentation::remember_catalog(&report["tools"]);
+            }
             return Ok(json!({"mode": mode.id(), "title": mode.title()}));
         }
         if title == "muniment:plan-check" {
@@ -2257,7 +2260,7 @@ fn coordinate_agent_permission(
                     &policy_request,
                 );
             let summary = crate::permission_gate::summary(&policy_request);
-            let gate_title = unique_title(asked, format!("Allow {summary}? {reason}"));
+            let gate_title = unique_title(asked, format!("{summary}? {reason}"));
             asked.insert(
                 gate_title.clone(),
                 crate::journal::reducer::GatePolicy {

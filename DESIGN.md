@@ -106,7 +106,7 @@ its 760px column, and the transcript scrolls on under it and fades into the
 surface above it. Streaming is one signal underscore caret,
 never dots. Tool activity folds under one `N tools used` line with a chevron.
 It opens to groups of file reads, searches, commands and edits, indented. Each group opens its action list,
-and each action opens its input, output, state and duration. A neutral text
+and each action, named by core's headline and result, opens its details, state and duration, with the raw input and output behind Show details. A neutral text
 sheen marks active actions and stops with reduced motion. Lucide icons name
 the action type. The receipt's Tools row tallies the calls only when the transcript shows none, and the receipt never lists memory reads. Routing details appear only for a turn whose model the router chose, not for a model the user picked, and open in an overlay: the blurred scrim, a 1080 by 760 panel, and the turns scrolling inside. The provenance line sits under every response in mono at
 `--text-provenance`, with the route in signal. Composer focus shifts the

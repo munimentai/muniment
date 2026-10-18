@@ -377,8 +377,8 @@ it('lists failed runs, replays one against the agent as it is now and links the 
 
 it('says when a machine has no failed runs and shows the agent\'s activity', async () => {
   const { invoke } = machine()
-  render(AgentProfile, { agent, tauri: { invoke }, catalog, activity: { state: 'waiting', action: 'bash `git push`', since: null }, onchange: vi.fn(), onactivity: vi.fn() })
+  render(AgentProfile, { agent, tauri: { invoke }, catalog, activity: { state: 'waiting', action: 'Run `git push` in work', since: null }, onchange: vi.fn(), onactivity: vi.fn() })
   expect(await screen.findByText('No failed runs to replay.')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Open activity' })).toBeInTheDocument()
-  expect(screen.getByText('Waiting for you: bash `git push`')).toBeInTheDocument()
+  expect(screen.getByText('Waiting for you: Run git push in work')).toBeInTheDocument()
 })

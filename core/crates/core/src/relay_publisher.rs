@@ -1241,13 +1241,16 @@ fn local_answer(gate: &OpenGate, decision: AnswerDecision) -> Option<ChatPermiss
     }
 }
 
+/// A tool call as the phone reads it: its headline and, once it ends, its
+/// result.
 fn tool_summary(tool: &ChatToolActivity) -> String {
-    let name = tool
-        .display_name
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("Tool");
-    bounded(&redact(&format!("{name}: {}", tool.status)), 2048)
+    let presentation = &tool.presentation;
+    let line = match (&presentation.result, presentation.headline.trim()) {
+        (_, "") => format!("Tool: {}", tool.status),
+        (Some(result), headline) => format!("{headline}: {result}"),
+        (None, headline) => headline.to_owned(),
+    };
+    bounded(&redact(&line), 2048)
 }
 
 /// Splits appended assistant text into deltas of at most 16 KiB, in order.
