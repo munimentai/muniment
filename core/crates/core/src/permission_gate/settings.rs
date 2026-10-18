@@ -181,6 +181,29 @@ pub fn save(profile: &Path, settings: PermissionSettings) -> Result<PermissionSe
     Ok(settings)
 }
 
+/// Appends one exact request to the global `always_allow`, so every thread,
+/// agent and fleet member runs it without asking. A request the global
+/// `ask_first` names is refused, since ask-first outranks every allow; one
+/// already listed changes nothing.
+pub fn always_allow(profile: &Path, request: PolicyRequest) -> Result<PermissionSettings, String> {
+    let mut settings = load(profile);
+    if settings.ask_first.contains(&request) {
+        return Err("An ask-first rule covers this action, so it still asks.".into());
+    }
+    if settings.always_allow.contains(&request) {
+        return Ok(settings);
+    }
+    if settings.always_allow.len() >= MAX_GLOBAL_RULES {
+        return Err(format!(
+            "Always allow holds {MAX_GLOBAL_RULES} rules. Remove one in Permissions, then try again."
+        ));
+    }
+    settings.always_allow.push(request);
+    let saved = save(profile, settings)?;
+    crate::fleet_sync::changed(profile, crate::fleet_sync::PERMISSIONS_CLASS);
+    Ok(saved)
+}
+
 /// The modes for a picker, in menu order, with whether each can be chosen.
 pub fn modes(settings: &PermissionSettings) -> Value {
     let modes: Vec<Value> = PermissionMode::ALL
@@ -325,6 +348,34 @@ mod tests {
         let path = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn always_allow_adds_one_global_rule_that_new_threads_read_and_ask_first_refuses() {
+        let profile = profile();
+        let push = super::super::tool_request(
+            "bash",
+            &json!({"command": "git push origin main"}),
+            Path::new("/work"),
+        );
+        always_allow(&profile, push.clone()).unwrap();
+        always_allow(&profile, push.clone()).unwrap();
+        assert_eq!(load(&profile).always_allow, vec![push.clone()]);
+        // A thread that starts later, as after a restart, carries the rule.
+        let permissions = thread_permissions(&profile);
+        assert!(permissions.policies.iter().any(|policy| {
+            policy.decision == ThreadPermissionDecision::Allow && policy.resource == push.resource
+        }));
+
+        let delete =
+            super::super::tool_request("mcp__crm__delete", &json!({"id": 1}), Path::new("/work"));
+        let mut settings = load(&profile);
+        settings.ask_first.push(delete.clone());
+        save(&profile, settings).unwrap();
+        assert!(always_allow(&profile, delete)
+            .unwrap_err()
+            .contains("ask-first"));
+        std::fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]

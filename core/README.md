@@ -267,11 +267,16 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   policies beside the global rules and the thread's own journaled policies.
   The gate shows the call's exact request and a summary and offers "Allow
   once", "Allow for this thread", "Always allow for this agent" and "Deny".
+  A run of no agent offers "Always allow" in place of the agent answer.
   "Allow for this thread" journals an allow policy in the thread. "Always
   allow for this agent" also appends the request to `always_allow` through
-  the agent save path. A call an ask policy covers never offers it, a
-  protected path or critical command offers neither, and the save refuses a
-  request `ask_first` names.
+  the agent save path, and "Always allow" to the global `always_allow` in
+  `permission-settings.json`, which every later run reads at launch and fleet
+  sync carries to every member. The thread policy is journaled first, so a
+  refused save still covers the thread, and the answer then names the
+  reason. A call an ask policy covers never offers either, a protected path
+  or critical command offers neither, and the save refuses a request
+  `ask_first` names.
 - `primary_runtime`, the runtime id that runs the agent's routines;
   `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
   `paused_reason`, which stops the routines while set.
