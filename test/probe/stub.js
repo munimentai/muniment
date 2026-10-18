@@ -320,9 +320,9 @@ const providerScanFixtures = {
   mac: {
     servers: [omlx],
     hints: [
-      { provider: 'anthropic', evidence: 'Claude Code is signed in' },
-      { provider: 'openai', evidence: 'Codex CLI is signed in' },
-      { provider: 'github-copilot', evidence: 'Copilot CLI is installed' },
+      { provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true },
+      { provider: 'openai', evidence: 'Codex CLI is signed in', reuse: false },
+      { provider: 'github-copilot', evidence: 'Copilot CLI is installed', reuse: false },
     ],
   },
   many: {
@@ -331,7 +331,7 @@ const providerScanFixtures = {
       omlx,
       { id: 'lmstudio', name: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', state: 'not-running', modelCount: 0 },
     ],
-    hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in' }],
+    hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true }],
   },
   none: { servers: [], hints: [] },
 }
