@@ -416,6 +416,80 @@ async function checkComposerActions(browser, baseUrl) {
   }
 }
 
+// Creation keeps to one model round trip before the user sees its result.
+// The agent builder starts one core draft, which is one model call, before
+// the filled form shows, and asks at most one question. A page starter sends
+// one message, the user's own words, as a plain message does, so the thread
+// takes their title and no question loop runs first.
+async function checkCreationBudget(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
+  const commands = () => page.evaluate(() => window.__PROBE__.invokedCommands.map(({ command, payload }) => ({ command, operation: payload?.operation, body: payload?.body, prompt: payload?.prompt })))
+  const draftStarts = async () => (await commands()).filter(({ command, operation, body }) => command === 'agent_request' && operation === 'agent.draft' && !body?.draft_id)
+  const formShown = (name) => page.waitForFunction((name) => document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"] input')?.value === name && !document.querySelector('[data-panel="agent-builder"] [role="status"]'), name)
+  try {
+    await page.goto(`${baseUrl}/test/probe/agents.html?state=builder`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.deepEqual((await draftStarts()).map(({ body }) => body), [{ description: 'Every weekday at 9am, summarize my inbox and list what needs a reply.' }])
+    const form = page.getByRole('form', { name: 'Agent draft' })
+    assert.equal(await form.getByRole('switch', { name: 'Run Summarize the new email in my inbox' }).getAttribute('aria-checked'), 'true')
+    // A draft again is one more round trip, and the form returns within the budget.
+    const started = Date.now()
+    await page.getByRole('button', { name: 'Draft again', exact: true }).click()
+    await formShown('Inbox brief')
+    assert.ok(Date.now() - started < 3000, `the draft took ${Date.now() - started} ms`)
+    assert.equal((await draftStarts()).length, 2)
+    await form.getByRole('button', { name: 'Save', exact: true }).click()
+    await page.waitForFunction(() => !document.querySelector('[data-panel="agent-builder"]'))
+    const saves = (await commands()).filter(({ command, operation }) => command === 'agent_request' && operation === 'agent.save')
+    assert.equal(saves.length, 1)
+    assert.equal(saves[0].body.agent.routines[0].enabled, true)
+    assert.equal((await commands()).filter(({ command }) => command === 'chat_submit').length, 0)
+
+    await page.goto(`${baseUrl}/test/probe/agents.html?state=builder-question`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.equal((await draftStarts()).length, 1)
+    await page.getByRole('group', { name: 'Question' }).getByRole('button', { name: 'Research topics' }).click()
+    await formShown('Inbox brief')
+    assert.equal(await page.getByRole('group', { name: 'Question' }).count(), 0)
+    assert.deepEqual((await draftStarts()).map(({ body }) => body.answers ?? null), [null, [{ question: 'What should the agent do?', answer: 'Research topics' }]])
+
+    await page.goto(`${baseUrl}/test/probe/agents.html?state=builder-thread`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.equal((await draftStarts()).length, 1)
+    assert.ok((await draftStarts())[0].body.thread_id)
+
+    // A plain message and a page starter each send one message.
+    const words = 'A countdown to New Year with big colorful digits.'
+    const send = async (starter) => {
+      await page.goto(`${baseUrl}/test/probe/index.html`)
+      await page.waitForSelector('[data-probe-ready]')
+      if (starter) {
+        await page.getByRole('region', { name: 'Start with' }).getByRole('button', { name: 'Make a page' }).click()
+        await page.getByRole('group', { name: 'Template', exact: true }).waitFor()
+      }
+      await page.locator('#composer-message').fill(starter ? words : `Make a small HTML page: ${words}`)
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await page.waitForFunction(() => window.__PROBE__.invokedCommands.some(({ command }) => command === 'chat_submit'))
+      return commands()
+    }
+    const plain = await send(false)
+    const fromStarter = await send(true)
+    const submits = fromStarter.filter(({ command }) => command === 'chat_submit')
+    assert.equal(plain.filter(({ command }) => command === 'chat_submit').length, 1)
+    assert.equal(submits.length, 1)
+    assert.equal(submits[0].prompt, words)
+    assert.equal(fromStarter.filter(({ command }) => command === 'creation_save').length, 1)
+    assert.equal(fromStarter.filter(({ operation }) => operation === 'agent.draft').length, 0)
+    // The thread's title is the user's words, never a scaffold.
+    await page.waitForFunction((words) => [...document.querySelectorAll('#sidebar .thread-row-title')].some((row) => row.textContent.trim() === words), words)
+    assert.equal(await page.locator('#sidebar .thread-row-title', { hasText: 'I want to create' }).count(), 0)
+    assert.deepEqual(await page.evaluate(() => window.__PROBE__.unknownCommands), [])
+    console.log('Creation budget checks passed.')
+  } finally {
+    await page.close()
+  }
+}
+
 // Every agent avatar is a square box its drawing fills, centered in its slot: across a row's
 // text, under a card's or header's center, and on its tile. Each surface shows one.
 async function checkAgentAvatars(browser, baseUrl) {
@@ -523,6 +597,7 @@ async function main() {
     await checkPaperFrame(browser, baseUrl)
     await checkComposerActions(browser, baseUrl)
     await checkAgentAvatars(browser, baseUrl)
+    await checkCreationBudget(browser, baseUrl)
     for (const fixture of fixtures) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {

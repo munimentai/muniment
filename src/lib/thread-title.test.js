@@ -36,6 +36,10 @@ describe('creation titles', () => {
     const creation = {kind, threadId:'draft', goal:'Create a polished dashboard with charts and a checklist'}
     expect(creationTitle(creation, [{threadId:'draft', title:'Launch readiness'}])).toBe('Launch readiness')
     expect(creationTitle(creation, [{threadId:'draft', title:creation.goal}])).toBe(`New ${kind}`)
+    // The user's own first words name the chat until the namer answers.
+    expect(creationTitle(creation, [{threadId:'draft', title:'A countdown to New Year with big colorful digits.'}])).toBe('A countdown to New Year with big colorful digits.')
+    // An older chat's scaffold never shows.
+    expect(creationTitle(creation, [{threadId:'draft', title:`I want to create an ${kind} in this dedicated chat. Goal: Create a polished…`}])).toBe(`New ${kind}`)
   })
   it('keeps an explicit published name and a short renamed draft', () => {
     expect(creationTitle({kind:'artifact', goal:'Draft report'})).toBe('Draft report')

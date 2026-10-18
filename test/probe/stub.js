@@ -534,6 +534,8 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'launcher_register') return null
     if (command === 'artifact_list' || command === 'creation_list') return []
+    // The plan arrives as the app's live state, which only serializes as JSON.
+    if (command === 'creation_save') return JSON.parse(JSON.stringify(payload.creation))
     if (command === 'extend_command' && payload?.action === 'read') return agentsFixture ? structuredClone(probeExtensions) : { items: [] }
     if (command === 'browser_view') return null
     if (command === 'runtime_state') return runtimeState
@@ -1037,6 +1039,9 @@ const AGENT_STATES = {
   'cards-offline': { agent: null },
   empty: { agent: null },
   'notifications-empty': { agent: null },
+  builder: { agent: null },
+  'builder-question': { agent: null },
+  'builder-thread': { agent: null },
 }
 
 const AGENT_SCREENS = {
@@ -1062,7 +1067,15 @@ const AGENT_SCREENS = {
   absence: () => !!document.querySelector('#sidebar [aria-label="Routines paused"]'),
   transcript: () => !!document.querySelector('.thread [aria-label="Message from Lead scout"]') && !!document.querySelector('.thread .silent-note'),
   move: () => !!document.querySelector('[data-panel="move"] [role="note"]') && !!document.querySelector('[data-panel="move"] input:checked'),
+  builder: () => document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"] input')?.value === 'Inbox brief',
+  'builder-question': () => !!document.querySelector('[data-panel="agent-builder"] [aria-label="Question"]') && !!document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"]'),
+  'builder-thread': () => document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"] input')?.value === 'Release notes',
 }
+
+// The builder states describe an agent in one sentence, or vaguely, and draft it.
+const BUILDER_WORDS = { builder: 'Every weekday at 9am, summarize my inbox and list what needs a reply.', 'builder-question': 'Make me an agent' }
+const probeBuildersTyped = new WeakSet()
+let probeBuilderOpened = 0
 
 // `&panel=overview|model|permissions|routines|activity` opens that panel on
 // every card, and `&edit=name` opens the first card's name field.
@@ -1138,6 +1151,36 @@ function advanceAgentsFixture() {
     if (!groups) return
     if (agentsState === 'group-create') return buttonNamed(groups, 'New group')?.click()
     return Array.from(groups.querySelectorAll('.agent-roster button')).find((button) => button.textContent.trim().startsWith('Launch room'))?.click()
+  }
+  if (agentsState.startsWith('builder')) {
+    const builder = document.querySelector('[data-panel="agent-builder"]')
+    if (agentsState === 'builder-thread') {
+      if (builder) return
+      const menuItem = Array.from(document.querySelectorAll('.thread-menu [role="menuitem"]')).find((item) => item.textContent.trim() === 'Make this an agent')
+      if (Date.now() - probeBuilderOpened < 1500) return
+      probeBuilderOpened = Date.now()
+      setTimeout(advanceAgentsFixture, 1600)
+      if (menuItem) return menuItem.click()
+      return document.querySelector('#sidebar button[aria-label^="Actions for"]')?.click()
+    }
+    // A press while the builder opens would mount it again, so the driver
+    // presses again only after a pause, and types into each builder once.
+    if (!builder) {
+      if (Date.now() - probeBuilderOpened < 1500) return
+      const catalog = document.querySelector('[data-panel="agents"]')
+      if (!catalog) return sidebarButton('Agents')?.click()
+      const create = buttonNamed(catalog, 'New agent')
+      if (create && !create.disabled) { probeBuilderOpened = Date.now(); setTimeout(advanceAgentsFixture, 1600); create.click() }
+      return
+    }
+    if (probeBuildersTyped.has(builder)) return
+    probeBuildersTyped.add(builder)
+    setTimeout(() => {
+      if (document.querySelector('[data-panel="agent-builder"]') !== builder) return advanceAgentsFixture()
+      typeInto(builder.querySelector('textarea'), BUILDER_WORDS[agentsState])
+      setTimeout(() => buttonNamed(builder, 'Draft')?.click(), 50)
+    }, 300)
+    return
   }
   const expand = sidebarButton('Expand Agents')
   if (expand) return expand.click()

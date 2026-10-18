@@ -3544,7 +3544,7 @@ describe('window chrome', () => {
     await waitFor(() => expect(actions).toBeEnabled())
     await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     await fireEvent.click(actions)
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Archive', 'Delete'])
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Archive', 'Make this an agent', 'Delete'])
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
     await fireEvent.click(actions)
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument()
@@ -8193,7 +8193,7 @@ describe('account display names', () => {
 
 
 describe('dedicated creation chats', () => {
-  it.each([['Artifacts','Tracker','Build a tracker for a list I keep'],['Agents','Weekly report','Compile a weekly recap of my work']])('starts %s from a starter tile with its goal filled in', async (section, tile, goal) => {
+  it.each([['Artifacts','Tracker','Build a tracker for a list I keep']])('starts %s from a starter tile with its goal filled in', async (section, tile, goal) => {
     const original=invoke.getMockImplementation()
     invoke.mockImplementation((command,payload)=>{
       if(command==='creation_list') return Promise.resolve([])
@@ -8238,10 +8238,13 @@ describe('dedicated creation chats', () => {
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     await fireEvent.input(composer, { target: { value: '' } })
     await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Set up an agent' }))
-    expect(await screen.findByRole('group', { name: 'Template' })).toHaveTextContent('Goal: Create a reusable agent for my work.')
+    // Set up an agent opens the agent builder, which waits for one sentence.
+    const builder = await screen.findByRole('region', { name: 'New agent' })
+    expect(within(builder).getByRole('textbox', { name: 'Describe your agent' })).toHaveValue('')
+    expect(invoke.mock.calls.some(([name, args]) => name === 'agent_request' && args?.operation === 'agent.draft')).toBe(false)
   })
 
-  it.each(['Artifacts','Agents'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
+  it.each(['Artifacts'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {
     const original=invoke.getMockImplementation()
     const id='01900000-0000-7000-8000-000000000077'
     let plans=[]
@@ -8270,6 +8273,90 @@ describe('dedicated creation chats', () => {
   })
 })
 
+describe('agent builder', () => {
+  // A draft answer as core gives it: started, then done on the next ask.
+  const drafted = { name: 'Weekly recap', label: 'Recap writer', instructions: 'Write a recap of my week from my threads and projects.', skills: [], tools_off: [], permission_mode: null,
+    routines: [{ id: 'extract-1', name: 'Write a recap of my week', enabled: true, trigger: { kind: 'cron', expr: '0 16 * * 5', tz: 'America/New_York' }, prompt: 'Write a recap of my week.', created_from: 'instructions' }] }
+  function builderMock(saved) {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'creation_list') return Promise.resolve([])
+      if (command === 'artifact_list') return Promise.resolve([])
+      if (isAgentList(command, payload)) return Promise.resolve(agentListAnswer(saved))
+      if (command === 'agent_request' && payload?.operation === 'agent.draft') {
+        return Promise.resolve(payload.body.draft_id ? { draft_id: 'draft-1', status: 'done', draft: drafted, question: null, via: 'router' } : { draft_id: 'draft-1', status: 'drafting' })
+      }
+      if (command === 'agent_request' && payload?.operation === 'agent.save') {
+        const agent = { ...payload.body.agent, id: 'agent-1', avatar: { style: 'muniment', seed: 's' } }
+        saved.splice(0, saved.length, agent)
+        return Promise.resolve({ agent })
+      }
+      if (command === 'agent_request' && payload?.operation === 'agent.tool_catalog') return Promise.resolve({ builtin: [], mcp: [], skills: [] })
+      return original(command, payload)
+    })
+  }
+  const draftCalls = () => invoke.mock.calls.filter(([name, args]) => name === 'agent_request' && args?.operation === 'agent.draft').map(([, args]) => args.body)
+
+  it('drafts an agent from a template in one model call and saves it with its trigger on', async () => {
+    builderMock([])
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name: 'Agents', exact: true }))
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const form = await screen.findByRole('form', { name: 'Agent draft' })
+    // One draft starts, and only asks after it follow until the form shows.
+    expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ description: 'Every Friday at 4pm, write a recap of my week from my threads and projects.' }])
+    expect(within(form).getByRole('textbox', { name: 'Name' })).toHaveValue('Weekly recap')
+    expect(within(form).getByRole('switch', { name: 'Run Write a recap of my week' })).toHaveAttribute('aria-checked', 'true')
+    expect(invoke.mock.calls.some(([name]) => name === 'chat_submit' || name === 'creation_save')).toBe(false)
+    await fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.save' })))
+    const body = invoke.mock.calls.find(([name, args]) => name === 'agent_request' && args?.operation === 'agent.save')[1].body.agent
+    expect(body).toMatchObject({ name: 'Weekly recap', label: 'Recap writer', schedule: null })
+    expect(body.routines).toEqual([expect.objectContaining({ id: 'extract-1', enabled: true, proposed: false })])
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'New agent' })).toBeNull())
+  })
+
+  it('makes an agent from a thread through its menu', async () => {
+    builderMock([])
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }, { threadId: 'thread-2', title: 'Release notes', updatedAt: '' }]
+    render(App)
+    await screen.findByRole('button', { name: 'Release notes' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Release notes' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Make this an agent' }))
+    const builder = await screen.findByRole('region', { name: 'New agent' })
+    expect(builder).toHaveTextContent('From Release notes')
+    await screen.findByRole('form', { name: 'Agent draft' })
+    expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ thread_id: 'thread-2' }])
+  })
+})
+
+it('sends a page starter the user words, so the thread takes their title', async () => {
+  const original=invoke.getMockImplementation()
+  const id='01900000-0000-7000-8000-000000000066'
+  let plans=[]
+  invoke.mockImplementation((command,payload)=>{
+    if(command==='creation_list') return Promise.resolve(plans)
+    if(command==='artifact_list') return Promise.resolve([])
+    if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
+    if(command==='chat_new_thread') return Promise.resolve(id)
+    if(command==='creation_save') {plans=[payload.creation]; return Promise.resolve(payload.creation)}
+    if(command==='chat_submit') return Promise.resolve({runId:'run-page',attachments:[]})
+    return original(command,payload)
+  })
+  render(App)
+  const composer = await findReadyWorkspaceComposer()
+  await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Make a page' }))
+  await screen.findByRole('group',{name:'Template'})
+  await fireEvent.input(composer, { target: { value: 'A countdown to New Year with big colorful digits.' } })
+  await fireEvent.click(screen.getByRole('button',{name:'Send'}))
+  await waitFor(()=>expect(invoke.mock.calls.filter(([name])=>name==='chat_submit')).toHaveLength(1))
+  expect(invoke.mock.calls.find(([name])=>name==='chat_submit')[1].prompt).toBe('A countdown to New Year with big colorful digits.')
+  // The goal and output travel in the creation record, saved before the send.
+  expect(plans).toEqual([expect.objectContaining({ threadId: id, kind: 'artifact', goal: 'Make a web page' })])
+})
+
 it('opens the preview the first time a creation chat saves its artifact', async () => {
   const original=invoke.getMockImplementation()
   const id='01900000-0000-7000-8000-000000000099'
@@ -8293,7 +8380,8 @@ it('opens the preview the first time a creation chat saves its artifact', async 
   await screen.findByRole('group',{name:'Template'})
   await fireEvent.click(screen.getByRole('button',{name:'Send'}))
   await screen.findByRole('button',{name:'Stop'})
-  await waitFor(()=>expect(invoke.mock.calls.find(([name])=>name==='chat_submit')?.[1]?.prompt).toContain('Expected output:'))
+  // The message is the user's words, here the template's goal, never a scaffold.
+  await waitFor(()=>expect(invoke.mock.calls.find(([name])=>name==='chat_submit')?.[1]?.prompt).toBe('Create an interactive artifact'))
   expect(screen.queryByRole('region',{name:'Artifacts'})).toBeNull()
   plans=[{...plans[0],resultId:'loan-comparison'}]
   artifacts=[{id:'loan-comparison',name:'Loan Comparison',threadId:id}]

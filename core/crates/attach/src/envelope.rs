@@ -557,6 +557,10 @@ pub enum Operation {
     /// runtime can use.
     #[serde(rename = "agent.tool_catalog")]
     AgentToolCatalog,
+    /// Drafts an agent's settings from a description or a thread with one
+    /// model call. Nothing is saved.
+    #[serde(rename = "agent.draft")]
+    AgentDraft,
     /// Lists the saved inputs of an agent's failed runs.
     #[serde(rename = "agent.replays")]
     AgentReplays,
@@ -770,6 +774,7 @@ impl Operation {
             Self::RoutineWebhookInfo => "routine.webhook_info",
             Self::AgentThreads => "agent.threads",
             Self::AgentToolCatalog => "agent.tool_catalog",
+            Self::AgentDraft => "agent.draft",
             Self::AgentReplays => "agent.replays",
             Self::AgentReplay => "agent.replay",
             Self::PermissionModes => "permission.modes",
@@ -849,6 +854,7 @@ impl Operation {
                 | Self::RoutineWebhookInfo
                 | Self::AgentThreads
                 | Self::AgentToolCatalog
+                | Self::AgentDraft
                 | Self::AgentReplays
                 | Self::AgentReplay
                 | Self::PermissionModes

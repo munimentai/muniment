@@ -1228,6 +1228,7 @@ fn agent_operations_and_their_event_have_canonical_fixtures() {
         (Operation::RoutineWebhookInfo, "routine.webhook_info"),
         (Operation::AgentThreads, "agent.threads"),
         (Operation::AgentToolCatalog, "agent.tool_catalog"),
+        (Operation::AgentDraft, "agent.draft"),
         (Operation::AgentReplays, "agent.replays"),
         (Operation::AgentReplay, "agent.replay"),
     ] {

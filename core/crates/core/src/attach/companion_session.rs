@@ -462,6 +462,7 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::RoutineWebhookInfo
         | Operation::AgentThreads
         | Operation::AgentToolCatalog
+        | Operation::AgentDraft
         | Operation::AgentReplays
         | Operation::AgentReplay
         | Operation::PermissionModes

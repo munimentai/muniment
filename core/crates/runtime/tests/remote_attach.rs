@@ -291,6 +291,34 @@ fn a_paired_device_lists_an_agents_threads_and_reads_why_a_save_was_refused() {
         .iter()
         .all(|thread| thread["title"].is_string() && thread["updated_at"].is_string()));
 
+    // A draft answers at once and finishes on its own thread. Without a
+    // model account it drafts from the words and reads the schedule in them.
+    let started = client
+        .agent_draft(json!({"description": "Every weekday at 9am, summarize my inbox."}))
+        .unwrap();
+    assert_eq!(started["status"], "drafting");
+    let mut drafted = started.clone();
+    for _ in 0..200 {
+        drafted = client
+            .agent_draft(json!({"draft_id": started["draft_id"]}))
+            .unwrap();
+        if drafted["status"] == "done" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(drafted["status"], "done", "{drafted}");
+    assert_eq!(
+        drafted["draft"]["routines"][0]["trigger"]["expr"],
+        "0 9 * * 1-5"
+    );
+    assert_eq!(drafted["draft"]["routines"][0]["enabled"], true);
+    assert!(client.agent_draft(json!({"thread_id": unrelated})).is_err());
+    assert!(matches!(
+        client.last_request_error().unwrap().details(),
+        Some(ErrorDetails::RequestReason { reason }) if reason.contains("no messages")
+    ));
+
     // A read-only device lists threads and the catalog but cannot save.
     let link = access
         .create_pairing_link(PairingLinkRequest {
@@ -305,6 +333,9 @@ fn a_paired_device_lists_an_agents_threads_and_reads_why_a_save_was_refused() {
     assert!(reader.agent_tool_catalog().is_ok());
     assert!(reader
         .save_agent(json!({"name": "Other", "instructions": "Other."}))
+        .is_err());
+    assert!(reader
+        .agent_draft(json!({"description": "Other."}))
         .is_err());
     drop(stop);
     server.join().unwrap().unwrap();

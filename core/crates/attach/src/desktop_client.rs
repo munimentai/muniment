@@ -1342,6 +1342,7 @@ impl DesktopClient {
             Operation::RoutineWebhookInfo => &["hook"],
             Operation::AgentThreads => &["threads"],
             Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
+            Operation::AgentDraft => &["draft_id", "status"],
             Operation::AgentReplays => &["replays"],
             Operation::AgentReplay => &["run", "replay"],
             Operation::PermissionModes => &["modes", "default_thread_mode", "default_agent_mode"],
@@ -1380,6 +1381,13 @@ impl DesktopClient {
     /// Lists the built-in tools, MCP servers and skills of this runtime.
     pub fn agent_tool_catalog(&mut self) -> Result<Value, ClientError> {
         self.agent_request(Operation::AgentToolCatalog, serde_json::json!({}))
+    }
+
+    /// Starts an agent draft from a description, or from a thread with
+    /// `{"thread_id"}`, or asks after one with `{"draft_id"}`. Nothing is
+    /// saved.
+    pub fn agent_draft(&mut self, body: Value) -> Result<Value, ClientError> {
+        self.agent_request(Operation::AgentDraft, body)
     }
 
     /// Lists the saved inputs of an agent's failed runs, newest first.

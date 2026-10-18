@@ -199,7 +199,9 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::PreferencesGet
         | Operation::UsageSummary
         | Operation::NotificationsList => RemoteRule::Scope(SCOPE_THREAD_READ),
+        // A draft spends a model call and reads the thread it names.
         Operation::AgentRunNow
+        | Operation::AgentDraft
         | Operation::AgentReplay
         | Operation::ThreadPermissionModeSet
         | Operation::ThreadPlanAnswer => RemoteRule::Scope(SCOPE_RUN_WRITE),
