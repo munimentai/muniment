@@ -385,6 +385,87 @@ fn model_connections_apply_on_members_and_drop_when_a_member_leaves() {
         .contains(&json!("pi:openai")));
 }
 
+#[test]
+fn a_shared_subscription_serves_its_models_on_a_member() {
+    let _environment = environment();
+    let a = Member::new("subscription-a");
+    let b = Member::new("subscription-b");
+    b.join(&a);
+    assert!(wait(|| a.trusts(&b) && b.trusts(&a)));
+    // A runtime host starts the router a shared connection turns on.
+    let models = Arc::downgrade(b.state().models());
+    muniment_core::shared_models::set_on_change(move || {
+        if let Some(models) = models.upgrade() {
+            models.apply_router();
+        }
+    });
+    // A signed in to a ChatGPT subscription, which its router pool serves.
+    let expires = muniment_core::chrono::Utc::now().timestamp_millis() + 24 * 60 * 60_000;
+    let mut settings = config::load(&a.agent()).unwrap();
+    settings.enabled = true;
+    settings.accounts.push(subscription("a0", "r0", expires));
+    config::save(&a.agent(), &settings).unwrap();
+    a.share();
+    a.swarm().fleet_pass().unwrap();
+    assert!(
+        wait(|| b
+            .accounts()
+            .iter()
+            .any(|account| account.id.ends_with(":work"))),
+        "B never received the subscription"
+    );
+    let received = config::load(&b.agent()).unwrap();
+    assert!(received.enabled, "B's router stayed off");
+    // B's model picker lists the subscription's models, served by its account.
+    let read = || {
+        b.state()
+            .models()
+            .request(
+                muniment_core::attach::ModelRequest {
+                    action: muniment_core::attach::ModelAction::ProviderInventory,
+                    data: json!({}),
+                },
+                None,
+            )
+            .unwrap()
+    };
+    assert!(
+        wait(|| read()["providers"]
+            .as_array()
+            .is_some_and(|providers| providers
+                .iter()
+                .any(|provider| provider["source"] == "router"))),
+        "B never offered the router: {}",
+        read()
+    );
+    let inventory = b
+        .state()
+        .models()
+        .request(
+            muniment_core::attach::ModelRequest {
+                action: muniment_core::attach::ModelAction::ProviderInventory,
+                data: json!({}),
+            },
+            None,
+        )
+        .unwrap();
+    let served: Vec<&Value> = inventory["router_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|model| model["family"] == "openai" && model["accounts"].as_u64() >= Some(1))
+        .collect();
+    assert!(!served.is_empty(), "{inventory}");
+    assert!(
+        inventory["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["source"] == "router"),
+        "{inventory}"
+    );
+}
+
 /// A token endpoint that rotates refresh tokens and refuses a reused one,
 /// as the rotating providers do. It can hold requests to stand in for a
 /// refresh that never completes.
