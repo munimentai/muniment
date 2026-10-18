@@ -94,6 +94,8 @@
   let codeDiffModule
   const loadCodeDiff = () => codeDiffModule ??= import('./lib/CodeDiff.svelte')
   import FileChanges from './files/FileChanges.svelte'
+  import RunLine from './activity/RunLine.svelte'
+  import { rewindOutcome, rewindUnavailable } from './activity/run-trust.js'
   import RoutingDetails from './lib/RoutingDetails.svelte'
   import { appliedDiffLabel, createChangedFiles, fileName } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
@@ -1199,6 +1201,29 @@
   let filePanelOpen = $derived(railOccupant === 'files')
   const readChangedFiles = createChangedFiles()
   const changed = $derived(readChangedFiles(messages))
+  // Review changes and a rewind open over the thread. A rewind's report stays
+  // above the composer until it is dismissed or the thread changes.
+  let reviewing = $state(null)
+  let rewinding = $state(null)
+  let rewindNotice = $state(null)
+  const loadReviewChanges = () => import('./files/ReviewChanges.svelte')
+  const loadRewindDialog = () => import('./activity/RewindDialog.svelte')
+  // Each user message's turn: its run, or the run that answers it.
+  const userTurnRuns = $derived(new Map(messages.flatMap((message, index) => message.role === 'user' ? [[message, message.id ?? messages[index + 1]?.run?.id ?? null]] : [])))
+  const rewindBlocked = $derived(rewindUnavailable({ owner: currentOwner, replica: !!currentSummary?.replica, group: !!threadGroup, running: !!active }))
+  const runMachine = $derived(machineName(runtimeList?.runtimes?.find((runtime) => runtime.id === (threadMachine ?? LOCAL_RUNTIME_ID)) ?? { id: threadMachine ?? LOCAL_RUNTIME_ID }))
+  // The settled turns Review changes reads, newest first.
+  const reviewTurns = $derived(messages.flatMap((message, index) => message.role === 'assistant' && message.run?.id && settledPhases.has(message.run.phase)
+    ? [{ runId: message.run.id, prompt: promptFolders(message.run.prompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].text : '')).text }] : []).reverse().slice(0, 20))
+  $effect(() => { void currentThreadId; untrack(() => { rewindNotice = null; reviewing = null; rewinding = null }) })
+  async function finishRewind(result) {
+    const turn = rewinding
+    rewinding = null
+    rewindNotice = rewindOutcome(result)
+    if (turn?.prompt && !draft.trim()) draft = turn.prompt
+    await chatController.refreshOpenThread(true)
+    composer?.focus()
+  }
   $effect(() => {
     const files = changed.filter(file => !file.deleted && /\.html?$/i.test(file.path))
     const threadId = currentThreadId
@@ -3396,6 +3421,7 @@
                 </div>
                 <div class="user-message-meta message-actions">
                   {#if messageLocalTime(message.sentAt)}<time class="message-time" datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
+                  {#if userTurnRuns.get(message) && !threadGroup}{@const turnRun = userTurnRuns.get(message)}<button type="button" aria-label={rewindBlocked ? `Rewind to here. ${rewindBlocked}` : 'Rewind to here'} data-tooltip={rewindBlocked ?? 'Rewind to here'} aria-disabled={!!rewindBlocked} class="rewind-turn" onclick={() => { if (!rewindBlocked) rewinding = { runId: turnRun, prompt: sent.text } }}></button>{/if}
                   <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: sent.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
                 </div>
                 {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
@@ -3405,6 +3431,7 @@
             {:else}
             {@const parts = responseParts(message.run)}
             <div class="response">
+              {#if settledPhases.has(message.run.phase)}<RunLine run={message.run} machine={runMachine} modes={modeListing?.listing?.modes ?? []} onreview={message.run.phase === 'complete' && !threadGroup && !currentSummary?.replica ? () => { reviewing = { runId: message.run.id } } : null} />{/if}
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
                   <summary>Prompt text stays in runtime memory for this run.</summary>
@@ -3578,6 +3605,13 @@
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <ChatComposer bind:element={composerBox}>
+        {#if rewindNotice}
+          <section aria-label="Rewind result" class="rewind-notice" role={rewindNotice.done ? 'status' : 'alert'}>
+            <p>{#if !rewindNotice.done}<LucideIcon name="triangle-alert" size={14} />{/if}<strong>{rewindNotice.headline}</strong>{#if rewindNotice.notCovered.length}<span>Not covered: <span class="mono">{rewindNotice.notCovered.join(', ')}</span>.</span>{/if}</p>
+            {#if rewindNotice.details.length}<details open={!rewindNotice.done}><summary>{rewindNotice.done ? 'Details' : 'What was not restored'}</summary><ul>{#each rewindNotice.details as line}<li>{line}</li>{/each}</ul></details>{/if}
+            <PopupClose label="Dismiss rewind result" onclick={() => { rewindNotice = null }} />
+          </section>
+        {/if}
         {#if retryReview}
           <section aria-label="Review retry" class="retry-review">
             <p>Retry sends this message again in this conversation.</p>
@@ -3642,7 +3676,7 @@
           <!-- The changed-files chip and the jump to the latest message sit side by side, centered above the composer. -->
           {#if changed.length || (!pinned && hasContentBelow)}
             <div class="composer-chips">
-              <FileChanges files={changed} onopen={openFile} />
+              <FileChanges files={changed} onopen={openFile} onreview={!threadGroup && !currentSummary?.replica && reviewTurns.length ? () => { reviewing = { runId: null } } : null} />
               {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={jumpToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
             </div>
           {/if}
@@ -3864,6 +3898,8 @@
   {/if}
 </main>
 
+  {#if reviewing && currentThreadId}{#await loadReviewChanges() then module}{@const Review = module.default}<Review {tauri} runtime={composerRuntime} threadId={currentThreadId} turns={reviewTurns} initialRunId={reviewing.runId} onclose={() => { reviewing = null }} />{/await}{/if}
+  {#if rewinding && currentThreadId}{#await loadRewindDialog() then module}{@const Rewind = module.default}<Rewind {tauri} runtime={composerRuntime} threadId={currentThreadId} runId={rewinding.runId} prompt={rewinding.prompt} ondone={finishRewind} onclose={() => { rewinding = null }} />{/await}{/if}
   {#if deletingThreadId}
     <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
       {#if deletingThreadIds.length > 1}
@@ -4075,6 +4111,17 @@
   .thread-search-field :global(.lucide) { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
   .thread-search { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 6px 8px 6px 30px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); }
   .retry-review { font-size: var(--text-12); color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .rewind-notice { position: relative; padding: 0 36px 8px 0; border-bottom: 1px solid var(--border); color: var(--muted); font-size: var(--text-12); }
+  .rewind-notice p { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; margin: 0; }
+  .rewind-notice p > :global(.lucide) { color: var(--warning); }
+  .rewind-notice strong { color: var(--ink); font-weight: var(--weight-semibold); }
+  .rewind-notice .mono { font-family: var(--font-mono); }
+  .rewind-notice ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--font-mono); overflow-wrap: anywhere; }
+  .rewind-notice > :global(.popup-close) { position: absolute; top: -4px; right: 0; }
+  .message-actions button[aria-disabled="true"] { opacity: .45; cursor: default; }
+  /* Lucide's undo-2, drawn as a mask: a long transcript carries one per message. */
+  .message-actions .rewind-turn::before { content: ''; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--rewind-icon) center / 14px no-repeat; mask: var(--rewind-icon) center / 14px no-repeat; }
+  .message-actions .rewind-turn { --rewind-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14 4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11'/%3E%3C/svg%3E"); min-width: 24px; min-height: 24px; }
   .side-empty { padding: 4px 8px; color: var(--muted); font-size: var(--text-12); }
   .side-bottom { flex: none; padding: 0 6px; }
   .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }

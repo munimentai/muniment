@@ -19,6 +19,7 @@ Open `permission-modes.html` for a composer thread in Ask before changes, paused
 Open `code-diff.html` for a run paused on proposed file changes.
 Open `code-diff-unavailable.html` for a run whose proposed file changes cannot be shown.
 Open `applied-diff.html` for a settled run with applied file changes.
+Open `run-trust.html` for two turns that edited a folder through file tools and shell commands. `?state=line` opens the last turn's run line, `review` opens Review changes on the notes, `rewind` previews a rewind to before the second message, `blocked` previews one while another reply uses the folder, and `rewound` runs it with one file that fails.
 Open `select.html` for a run paused on a choice request.
 Open `input.html` for a run paused on a single-line text request.
 Open `editor.html` for a run paused on a multi-line text request.

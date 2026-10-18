@@ -41,14 +41,15 @@ use crate::run_events::SharedStorage;
 /// The thread event the primary appends once it consumed a posted message.
 pub const THREAD_MESSAGE_CONSUMED: &str = "thread.message.consumed";
 /// The thread events a member replicates. Creation and permission policies
-/// stay with the runtime that wrote them; the permission mode replicates
-/// from the thread's owner.
-const REPLICATED_THREAD_EVENTS: [&str; 5] = [
+/// stay with the runtime that wrote them; the permission mode and a rewind
+/// replicate from the thread's owner.
+const REPLICATED_THREAD_EVENTS: [&str; 6] = [
     THREAD_MESSAGE_POSTED,
     THREAD_MESSAGE_CONSUMED,
     "thread.title.renamed",
     "thread.deleted",
     crate::journal::THREAD_PERMISSION_MODE_SET,
+    crate::journal::THREAD_REWOUND,
 ];
 /// The registration kind of an ordinary thread.
 pub(super) const PLAIN: &str = "plain";

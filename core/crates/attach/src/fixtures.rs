@@ -724,6 +724,10 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("usage-summary", Operation::UsageSummary),
         ("notifications-list", Operation::NotificationsList),
         ("agent-draft", Operation::AgentDraft),
+        ("run-changes", Operation::RunChanges),
+        ("run-revert", Operation::RunRevert),
+        ("thread-rewind-preview", Operation::ThreadRewindPreview),
+        ("thread-rewind", Operation::ThreadRewind),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -1027,6 +1031,57 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         (
             "thread-plan-answer",
             json!({"status": "answered", "answer": "plan_edit_auto"}),
+        ),
+        ("run-changes", fixture_turn_changes("applied")),
+        (
+            "run-revert",
+            json!({
+                "outcome": {"path": "notes.md", "state": "reverted"},
+                "changes": fixture_turn_changes("reverted")
+            }),
+        ),
+        (
+            "thread-rewind-preview",
+            json!({
+                "thread_id": FIXTURE_THREAD_ID,
+                "run_id": FIXTURE_TURN_RUN_ID,
+                "available": true,
+                "turns": 2,
+                "conversation": "restore",
+                "files": {
+                    "checkpoint_id": "019965a0-0000-7000-8000-0000000000e1",
+                    "folder": "/Users/owner/Documents/muniment/projects/notes",
+                    "files_available": true,
+                    "restore": ["notes.md"],
+                    "remove": ["draft.md"],
+                    "cannot_restore": [{"path": "video.mov", "reason": "too_large"}],
+                    "not_covered": [".git"],
+                    "token": "5f2b9c0d7e1a4b6c8d0e2f4a6b8c0d1e3f5a7b9c1d3e5f7a9b1c3d5e7f9a1b3c"
+                },
+                "irreversible": [
+                    {"kind": "command", "count": 1, "labels": ["git push origin main"]},
+                    {"kind": "network", "count": 1, "labels": ["release notes"]}
+                ]
+            }),
+        ),
+        (
+            "thread-rewind",
+            json!({
+                "thread_id": FIXTURE_THREAD_ID,
+                "run_id": FIXTURE_TURN_RUN_ID,
+                "status": "partial",
+                "turns": 2,
+                "conversation": "restored",
+                "files": {
+                    "restored": ["notes.md"],
+                    "removed": ["draft.md"],
+                    "failed": [],
+                    "cannot_restore": [{"path": "video.mov", "reason": "too_large"}],
+                    "not_covered": [".git"],
+                    "safety_checkpoint": "019965a0-0000-7000-8000-0000000000e2",
+                    "complete": false
+                }
+            }),
         ),
         ("fleet-op-status", json!({"op": fixture_op("applied")})),
         ("preferences-get", fixture_preferences(false)),
@@ -1856,10 +1911,67 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::ThreadPlanAnswer => {
             json!({"thread_id": FIXTURE_THREAD_ID, "answer": "plan_edit_auto"})
         }
+        Operation::RunChanges | Operation::ThreadRewindPreview => {
+            json!({"thread_id": FIXTURE_THREAD_ID, "run_id": FIXTURE_TURN_RUN_ID})
+        }
+        Operation::RunRevert => json!({
+            "thread_id": FIXTURE_THREAD_ID,
+            "run_id": FIXTURE_TURN_RUN_ID,
+            "path": "notes.md",
+            "hunk": 0
+        }),
+        Operation::ThreadRewind => json!({
+            "thread_id": FIXTURE_THREAD_ID,
+            "run_id": FIXTURE_TURN_RUN_ID,
+            "token": "5f2b9c0d7e1a4b6c8d0e2f4a6b8c0d1e3f5a7b9c1d3e5f7a9b1c3d5e7f9a1b3c"
+        }),
     }
 }
 
 const PERMISSION_DEFAULT_TIMEOUT: u64 = 4 * 60 * 60;
+const FIXTURE_TURN_RUN_ID: &str = "019965a0-0000-7000-8000-0000000000e0";
+
+/// One turn's changes: a notes file the turn edited, as `run.changes`
+/// answers it.
+fn fixture_turn_changes(state: &str) -> serde_json::Value {
+    json!({
+        "run_id": FIXTURE_TURN_RUN_ID,
+        "folder": "/Users/owner/Documents/muniment/projects/notes",
+        "available": true,
+        "files": [{
+            "path": "notes.md",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "binary": false,
+            "state": state,
+            "hunks_applied": [state == "applied"]
+        }],
+        "more": 0,
+        "diff": {
+            "schemaVersion": 1,
+            "id": format!("turn-{FIXTURE_TURN_RUN_ID}"),
+            "files": [{
+                "oldPath": "notes.md",
+                "newPath": "notes.md",
+                "status": "modified",
+                "binary": false,
+                "hunks": [{
+                    "oldStart": 1,
+                    "oldCount": 1,
+                    "newStart": 1,
+                    "newCount": 1,
+                    "header": "@@ -1,1 +1,1 @@",
+                    "lines": [
+                        {"kind": "deletion", "oldLineNumber": 1, "text": "Draft", "segments": [{"kind": "deletion", "text": "Draft"}]},
+                        {"kind": "addition", "newLineNumber": 1, "text": "Final", "segments": [{"kind": "addition", "text": "Final"}]}
+                    ]
+                }]
+            }],
+            "truncated": false
+        }
+    })
+}
 const FIXTURE_DRAFT_ID: &str = "019965a0-0000-4000-8000-0000000000d7";
 
 /// A finished agent draft, as `agent.draft` answers a poll once: one enabled
@@ -2959,6 +3071,10 @@ mod tests {
             Operation::ThreadPermissionModeSet,
             Operation::ThreadPlan,
             Operation::ThreadPlanAnswer,
+            Operation::RunChanges,
+            Operation::RunRevert,
+            Operation::ThreadRewindPreview,
+            Operation::ThreadRewind,
             Operation::FleetOpStatus,
             Operation::PreferencesGet,
             Operation::PreferencesSet,
@@ -3062,6 +3178,10 @@ mod tests {
             "response-thread-permission-mode-set.json",
             "response-thread-plan.json",
             "response-thread-plan-answer.json",
+            "response-run-changes.json",
+            "response-run-revert.json",
+            "response-thread-rewind-preview.json",
+            "response-thread-rewind.json",
             "request-agent-approval-answer-plan.json",
             "event-agent-approval-pending-plan.json",
             "response-fleet-hold-sign-in.json",
@@ -3086,7 +3206,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4 + 2,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4 + 2 + 8,
             "every canonical fixture must be inventoried"
         );
     }

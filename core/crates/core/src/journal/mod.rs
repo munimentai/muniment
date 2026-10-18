@@ -507,6 +507,25 @@ fn publish_commit_hint(coordination: Option<&JournalCoordination>, run_id: &str,
         });
 }
 
+/// The thread event that takes runs out of their thread's conversation.
+pub const THREAD_REWOUND: &str = "thread.rewound";
+
+/// A condition that holds when the run `$alias.run_id` was rewound out of
+/// its thread `$alias.thread_id`.
+macro_rules! rewound {
+    ($alias:literal) => {
+        concat!(
+            "EXISTS(SELECT 1 FROM thread_events rw, \
+             json_each(rw.envelope_json,'$.payload_json.run_ids') ids \
+             WHERE rw.thread_id=",
+            $alias,
+            ".thread_id AND rw.event_type='thread.rewound' AND ids.value=",
+            $alias,
+            ".run_id)"
+        )
+    };
+}
+
 impl RunJournal {
     /// Registers a bounded commit-hint receiver and returns the run's committed
     /// high-water sequence at the same coordination boundary. Hints may be
@@ -1113,6 +1132,51 @@ impl RunJournal {
         )
     }
 
+    /// Takes runs out of their thread's conversation: history, the saved
+    /// conversation each next run reopens and the thread's recent text skip
+    /// them. Their events and receipts stay.
+    pub fn append_thread_rewound(
+        &mut self,
+        expected_last_thread_seq: u64,
+        thread_id: &str,
+        run_ids: &[String],
+        recorded_at: &str,
+        provenance: &Provenance,
+    ) -> Result<(), JournalError> {
+        self.append_thread_event(
+            expected_last_thread_seq,
+            thread_id,
+            THREAD_REWOUND,
+            recorded_at,
+            serde_json::json!({ "run_ids": run_ids }),
+            provenance,
+        )
+    }
+
+    /// The run and every later run of its thread still in the conversation,
+    /// in order.
+    pub fn thread_runs_from(&mut self, run_id: &str) -> Result<Vec<String>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let mut statement = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .prepare_cached(concat!(
+                "SELECT later.run_id FROM run_threads first \
+                 JOIN run_threads later ON later.thread_id=first.thread_id \
+                    AND later.thread_run_ordinal>=first.thread_run_ordinal \
+                 WHERE first.run_id=?1 AND NOT ",
+                rewound!("later"),
+                " ORDER BY later.thread_run_ordinal"
+            ))?;
+        let rows = statement.query_map([run_id], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     fn append_thread_event(
         &mut self,
         expected_last_thread_seq: u64,
@@ -1484,14 +1548,18 @@ impl RunJournal {
         let raw: Option<String> = self.connection.as_ref()
             .expect("journal connection is always present outside compaction")
             .query_row(
-                "SELECT e.envelope_json FROM run_threads current \
+                concat!(
+                    "SELECT e.envelope_json FROM run_threads current \
                  JOIN run_threads prior ON prior.thread_id=current.thread_id \
                     AND prior.thread_run_ordinal<current.thread_run_ordinal \
                  JOIN events e ON e.run_id=prior.run_id \
                  WHERE current.run_id=?1 AND e.event_type='runtime.pi_session.bound' \
                  AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
                     WHERE deleted.thread_id=current.thread_id AND deleted.event_type='thread.deleted') \
-                 ORDER BY prior.thread_run_ordinal DESC,e.run_seq DESC LIMIT 1",
+                 AND NOT ",
+                    rewound!("prior"),
+                    " ORDER BY prior.thread_run_ordinal DESC,e.run_seq DESC LIMIT 1"
+                ),
                 [run_id],
                 |row| row.get(0),
             ).optional()?;
@@ -1517,12 +1585,16 @@ impl RunJournal {
         let raw: Option<String> = self.connection.as_ref()
             .expect("journal connection is always present outside compaction")
             .query_row(
-                "SELECT e.envelope_json FROM run_threads runs \
+                concat!(
+                    "SELECT e.envelope_json FROM run_threads runs \
                  JOIN events e ON e.run_id=runs.run_id \
                  WHERE runs.thread_id=?1 AND e.event_type='runtime.pi_session.bound' \
                  AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
                     WHERE deleted.thread_id=runs.thread_id AND deleted.event_type='thread.deleted') \
-                 ORDER BY runs.thread_run_ordinal DESC,e.run_seq DESC LIMIT 1",
+                 AND NOT ",
+                    rewound!("runs"),
+                    " ORDER BY runs.thread_run_ordinal DESC,e.run_seq DESC LIMIT 1"
+                ),
                 [thread_id],
                 |row| row.get(0),
             ).optional()?;
@@ -1553,15 +1625,17 @@ impl RunJournal {
             .connection
             .as_ref()
             .expect("journal connection is always present outside compaction");
-        let mut statement = connection.prepare_cached(
-            "WITH runs AS (SELECT run_id,thread_run_ordinal FROM run_threads \
+        let mut statement = connection.prepare_cached(concat!(
+            "WITH runs AS (SELECT run_id,thread_run_ordinal FROM run_threads rt \
              WHERE thread_id=?1 AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
                 WHERE deleted.thread_id=?1 AND deleted.event_type='thread.deleted') \
-             ORDER BY thread_run_ordinal LIMIT ?3) \
+             AND NOT ",
+            rewound!("rt"),
+            " ORDER BY thread_run_ordinal LIMIT ?3) \
              SELECT r.receipt_json FROM runs JOIN receipt_projection r ON r.run_id=runs.run_id \
              WHERE runs.run_id<>?2 AND r.valid=1 AND r.receipt_json IS NOT NULL \
-             ORDER BY runs.thread_run_ordinal, r.run_seq",
-        )?;
+             ORDER BY runs.thread_run_ordinal, r.run_seq"
+        ))?;
         let rows = statement
             .query_map(params![thread_id, excluded_run_id, limit as u64], |row| {
                 row.get::<_, String>(0)
@@ -1620,20 +1694,23 @@ impl RunJournal {
             .expect("journal connection is always present outside compaction");
         let mut runs = match workspace {
             Some(workspace) => connection
-                .prepare_cached(
+                .prepare_cached(concat!(
                     "SELECT rt.run_id FROM run_threads rt \
                      JOIN run_workspaces rw ON rw.run_id=rt.run_id AND rw.workspace=?2 \
-                     WHERE rt.thread_id=?1 ORDER BY rt.thread_run_ordinal DESC LIMIT ?3",
-                )?
+                     WHERE rt.thread_id=?1 AND NOT ",
+                    rewound!("rt"),
+                    " ORDER BY rt.thread_run_ordinal DESC LIMIT ?3"
+                ))?
                 .query_map(params![thread_id, workspace, limit as u64], |row| {
                     row.get::<_, String>(0)
                 })?
                 .collect::<Result<Vec<_>, _>>()?,
             None => connection
-                .prepare_cached(
-                    "SELECT run_id FROM run_threads WHERE thread_id=?1 \
-                     ORDER BY thread_run_ordinal DESC LIMIT ?2",
-                )?
+                .prepare_cached(concat!(
+                    "SELECT run_id FROM run_threads rt WHERE thread_id=?1 AND NOT ",
+                    rewound!("rt"),
+                    " ORDER BY thread_run_ordinal DESC LIMIT ?2"
+                ))?
                 .query_map(params![thread_id, limit as u64], |row| {
                     row.get::<_, String>(0)
                 })?
@@ -2044,11 +2121,12 @@ impl RunJournal {
             }
         }
         let mut statement = connection
-            .prepare(
-                "SELECT run_id,thread_run_ordinal FROM run_threads \
-                 WHERE thread_id=?1 AND thread_run_ordinal>?2 \
-                 ORDER BY thread_run_ordinal LIMIT ?3",
-            )
+            .prepare(concat!(
+                "SELECT run_id,thread_run_ordinal FROM run_threads rt \
+                 WHERE thread_id=?1 AND thread_run_ordinal>?2 AND NOT ",
+                rewound!("rt"),
+                " ORDER BY thread_run_ordinal LIMIT ?3"
+            ))
             .map_err(JournalError::from)
             .map_err(ThreadRunPageError::Journal)?;
         let rows = statement
@@ -2786,6 +2864,26 @@ fn validate_thread_envelope(event: &ThreadEventEnvelope) -> Result<(), JournalEr
             {
                 return Err(JournalError::InvalidEnvelope(
                     "thread.permission.mode.set payload is invalid".into(),
+                ));
+            }
+        }
+        THREAD_REWOUND => {
+            let valid = event.payload_json.as_object().is_some_and(|payload| {
+                payload.len() == 1
+                    && payload
+                        .get("run_ids")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| {
+                            !ids.is_empty()
+                                && ids.len() <= 10_000
+                                && ids.iter().all(|id| {
+                                    id.as_str().is_some_and(|id| Uuid::parse_str(id).is_ok())
+                                })
+                        })
+            });
+            if !valid {
+                return Err(JournalError::InvalidEnvelope(
+                    "thread.rewound payload is invalid".into(),
                 ));
             }
         }
