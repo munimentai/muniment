@@ -4110,6 +4110,37 @@ describe('Home onboarding', () => {
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
   })
 
+  it('asks for Home folder access after it saves Home and before it leaves the first run', async () => {
+    firstRun()
+    providerScan = { servers: [ollama], hints: [] }
+    const answer = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'home_folder_access' ? answer.promise : original(command, payload))
+    render(App)
+    await fireEvent.click(await ready('Ollama'))
+    expect(await screen.findByText('If macOS asks about this folder, choose Allow.')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('home_folder_access', { homePath: '/Documents/Muniment' })
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
+    answer.resolve({ state: 'open', message: null })
+    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
+    const calls = invoke.mock.calls.map(([command]) => command)
+    expect(calls.indexOf('home_confirm')).toBeLessThan(calls.indexOf('home_folder_access'))
+    expect(calls.indexOf('home_folder_access')).toBeLessThan(calls.indexOf('onboarding_connect_server'))
+  })
+
+  it('keeps the first run and names the step when macOS refuses Home', async () => {
+    firstRun()
+    providerScan = { servers: [ollama], hints: [] }
+    const original = invoke.getMockImplementation()
+    const refusal = 'macOS does not let Muniment open your Documents folder. Turn on Muniment in System Settings > Privacy & Security > Files & Folders, then try again.'
+    invoke.mockImplementation((command, payload) => command === 'home_folder_access' ? Promise.resolve({ state: 'denied', message: refusal }) : original(command, payload))
+    render(App)
+    await fireEvent.click(await ready('Ollama'))
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+    expect(firstRunScreen()).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
+  })
+
   it.each([
     ['the key in its settings file', async () => fireEvent.click(screen.getByRole('button', { name: /Use the key in/ })), { key: null, keyFromFile: true }],
     ['a pasted key', async () => {

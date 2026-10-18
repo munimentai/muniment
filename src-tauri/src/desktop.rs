@@ -310,6 +310,7 @@ pub fn run() {
             projects::project_open,
             home::home_status,
             home::home_confirm,
+            home::home_folder_access,
             home::home_confirm_import,
             onboarding_import::onboarding_import_preview,
             onboarding_import::onboarding_import_extract,
