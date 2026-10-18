@@ -87,7 +87,20 @@ export async function listSwarm(tauri, runtimeList) {
     const [members, agents, groups, approvals] = await Promise.all(['swarm.members', 'swarm.agents', 'group.list', 'agent.approvals'].map((operation) => ask(runtime, operation)))
     return { runtimeId: runtime.local ? LOCAL_RUNTIME_ID : runtime.id, members, agents, groups, approvals }
   }))
-  return mergeSwarm(answers)
+  return withLocalSelf(mergeSwarm(answers), runtimeList)
+}
+
+// This computer's fleet id when its own `swarm.members` did not answer this
+// time, such as while it was busy: the one member that no reached machine
+// is and that carries this computer's name. So this computer never lists as
+// a second machine.
+export function withLocalSelf(swarm, runtimeList) {
+  const name = String(runtimeList?.deviceName ?? '').trim().toLowerCase()
+  if (swarm.self[LOCAL_RUNTIME_ID] || !name) return swarm
+  const reached = new Set(Object.values(swarm.self))
+  const named = swarm.members.filter((member) => !reached.has(member.runtime_id) && String(member.runtime_name ?? '').trim().toLowerCase() === name)
+  if (named.length === 1) swarm.self = { ...swarm.self, [LOCAL_RUNTIME_ID]: named[0].runtime_id }
+  return swarm
 }
 
 // The window id of the machine with core runtime id `coreId`, when the app

@@ -109,6 +109,31 @@ pub fn check_as(
     }
 }
 
+/// Home's folder of thread workspaces, which a thread's first run writes.
+const SESSIONS: &str = "sessions";
+
+/// Creates Home and its sessions folder and lists that folder from a thread
+/// of this process, and waits `bound` at most for the answer. macOS asks the
+/// process that writes into a protected folder, and a listing of a folder
+/// that does not exist yet asks nothing, so the process that later writes a
+/// thread's folder raises its prompt here, during the first run.
+pub fn open_home(home: &Path, bound: Duration) -> FolderAccess {
+    let sessions = home.join(SESSIONS);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let opened = std::fs::create_dir_all(&sessions)
+            .and_then(|()| std::fs::read_dir(&sessions).map(drop));
+        let _ = sender.send(opened);
+    });
+    match receiver.recv_timeout(bound) {
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            FolderAccess::Denied
+        }
+        Ok(_) => FolderAccess::Open,
+        Err(_) => FolderAccess::Waiting,
+    }
+}
+
 /// The Pi executable installed under the state directory, which a chat
 /// launch runs, if one is installed.
 pub fn installed_pi() -> Option<std::path::PathBuf> {
@@ -130,6 +155,7 @@ pub fn ask_ahead(directory: &Path, pi: Option<std::path::PathBuf>) {
         std::thread::spawn(move || {
             let bound = Duration::from_secs(600);
             let cancelled = AtomicBool::new(false);
+            let _ = open_home(&directory, bound);
             let _ = check(&directory, bound, &cancelled);
             if let Some(pi) = pi {
                 let _ = check_as(Some(&pi), &directory, bound, &cancelled);
@@ -176,6 +202,33 @@ mod tests {
             check(&directory, Duration::from_secs(10), &AtomicBool::new(false)),
             FolderAccess::Open
         );
+    }
+
+    #[test]
+    fn opening_a_missing_home_creates_it_and_its_sessions_folder() {
+        let home = std::env::temp_dir()
+            .join(format!("muniment-open-home-{}", uuid::Uuid::new_v4()))
+            .join("Muniment");
+        assert_eq!(
+            open_home(&home, Duration::from_secs(10)),
+            FolderAccess::Open
+        );
+        assert!(home.join("sessions").is_dir());
+        std::fs::remove_dir_all(home.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_the_process_may_not_write_is_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent =
+            std::env::temp_dir().join(format!("muniment-locked-home-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let access = open_home(&parent.join("Muniment"), Duration::from_secs(10));
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(&parent).unwrap();
+        assert_eq!(access, FolderAccess::Denied);
     }
 
     #[test]

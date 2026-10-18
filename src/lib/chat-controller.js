@@ -1,4 +1,5 @@
 import { applyChatEvent, historyMessages, settledPhases, unsettledRun, withFolders } from './chat-state.js'
+import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
 const historyPageCap = 100
 const historyPageLimit = 100
@@ -47,6 +48,9 @@ export function createChatController({
   readPendingModel = () => null,
   readThreadId = () => null,
   readThreadSummaries = () => [],
+  // The machine the composer sends to. A run left running on one machine
+  // does not hold a send to another.
+  readRuntime = () => null,
   blocked = () => false,
   onMessages,
   onActive,
@@ -261,8 +265,12 @@ export function createChatController({
       void refreshThreads()
       return
     }
-    publishBackground({ threadId: threadId ?? null, runId: run.id })
+    const runtime = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId ?? readRuntime() ?? LOCAL_RUNTIME_ID
+    publishBackground({ threadId: threadId ?? null, runId: run.id, runtime })
   }
+  // Whether the run left in the background runs on the machine the composer
+  // sends to, so a send there waits for it.
+  const backgroundHere = () => !!background && (background.runtime ?? LOCAL_RUNTIME_ID) === (readRuntime() ?? LOCAL_RUNTIME_ID)
   const publishMessages = (next) => {
     if (!destroyed) onMessages(next)
   }
@@ -868,7 +876,11 @@ export function createChatController({
 
   async function send() {
     const prompt = readDraft().trim()
-    if (!prompt || active() || background || switchingThread || switchBlocked || blocked()) return
+    if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
+    if (backgroundHere()) {
+      onSubmitError(runElsewhere)
+      return
+    }
     const selected = readFiles()
     const folders = selected.filter(file => file.isDirectory).map(file => file.path)
     return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))

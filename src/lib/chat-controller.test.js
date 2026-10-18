@@ -21,6 +21,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   let openThreadId = threadId
   let threadSummaries = summaries
   let background = null
+  let runtime = null
   let listener
   const errors = []
   const onHistoryError = vi.fn()
@@ -51,6 +52,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     readProject: () => projectId,
     readAgent: () => agentId,
     readThreadSummaries: () => threadSummaries,
+    readRuntime: () => runtime,
     onMessages,
     onActive,
     onAnnounce: (next) => { announced = next },
@@ -98,6 +100,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     setMessages: (next) => { messages = next },
     setThreadId: (next) => { openThreadId = next },
     background: () => background,
+    setRuntime: (next) => { runtime = next },
   }
 }
 
@@ -3089,7 +3092,7 @@ describe('background runs', () => {
     expect(context.invoke).not.toHaveBeenCalledWith('chat_cancel', expect.anything())
     expect(runIds(context.messages())).toEqual(['run-0'])
     expect(context.active()).toBeNull()
-    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1', runtime: 'local' })
   })
 
   it('opens a fresh thread while a run streams and keeps that run in the background', async () => {
@@ -3099,7 +3102,23 @@ describe('background runs', () => {
 
     expect(context.messages()).toEqual([])
     expect(context.active()).toBeNull()
-    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1', runtime: 'local' })
+  })
+
+  it('holds a send on the background run\'s machine and sends to another machine', async () => {
+    const context = await startRunning()
+    await context.controller.newThread()
+    context.invoke.mockClear()
+
+    await context.controller.send()
+    expect(context.invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    expect(context.errors).toEqual(['Another reply is still running. Send again when it ends.'])
+
+    context.invoke.mockImplementation((command) => Promise.resolve(command === 'chat_submit' ? { runId: 'run-box' } : undefined))
+    context.setRuntime('box')
+    await context.controller.send()
+    expect(context.invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Hello' }))
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1', runtime: 'local' })
   })
 
   it('drops background events from the open transcript and forgets the run when it settles', async () => {
@@ -3110,7 +3129,7 @@ describe('background runs', () => {
 
     context.event({ runId: 'run-1', threadId: 'thread-1', type: 'text-delta', text: ' everywhere' })
     expect(context.messages()).toBe(shown)
-    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1', runtime: 'local' })
     expect(context.invoke).not.toHaveBeenCalled()
 
     context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
@@ -3194,7 +3213,7 @@ describe('background runs', () => {
     for (let round = 0; round < 3; round += 1) {
       await context.controller.openThread('thread-2')
       expect(context.active()).toBeNull()
-      expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+      expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1', runtime: 'local' })
       expect(runIds(context.messages())).toEqual(['run-0'])
 
       await context.controller.openThread('thread-1')
@@ -3219,7 +3238,7 @@ describe('background runs', () => {
     expect(context.active()).toMatchObject({ id: 'run-1' })
 
     await context.controller.openThread('thread-4')
-    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1' })
+    expect(context.background()).toEqual({ threadId: 'thread-1', runId: 'run-1', runtime: 'local' })
     context.invoke.mockClear()
 
     await expect(context.controller.deleteThread('thread-1')).resolves.toBe(false)

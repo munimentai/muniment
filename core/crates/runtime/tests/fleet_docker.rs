@@ -788,6 +788,15 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
                 .filter_map(|member| member["runtime_id"].as_str().map(str::to_owned))
                 .collect();
             ensure(full == ids, || format!("{}: {members:?}", node.name))?;
+            // Each machine lists once, under its one id.
+            let listed: Vec<&str> = members
+                .iter()
+                .filter_map(|member| member["runtime_id"].as_str())
+                .collect();
+            ensure(
+                listed.len() == ids.len() && listed.iter().all(|id| ids.contains(*id)),
+                || format!("{} lists {listed:?}: {members:?}", node.name),
+            )?;
         }
         Ok(())
     });
@@ -875,6 +884,58 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
     assert_eq!(posted["forwarded"], true, "{posted}");
     until("the follow-up runs on c2", || {
         thread_ran_on(c2, &offloaded, Some(follow_up))
+    });
+
+    // The app's path to a machine it paired: while a run waits on the host,
+    // a new thread on c1 takes a first and a second message, and every
+    // member lists the thread as c1's.
+    let waiting = h
+        .with(|client| {
+            client.run_submit(
+                &format!("Wait on the host. {HOLD_MARKER}"),
+                &[],
+                None,
+                None,
+                Some("bypass"),
+            )
+        })
+        .unwrap();
+    let fresh = c1.with(|client| client.create_thread()).unwrap();
+    for text in ["First message on c1.", "Second message on c1."] {
+        // A refusal records nothing, so the send repeats while the last
+        // run's slot frees.
+        until(&format!("c1 takes {text:?}"), || {
+            c1.with(|client| client.run_submit(text, &[], Some(&fresh), None, Some("bypass")))
+                .map(drop)
+        });
+        until(&format!("{text:?} runs on c1"), || {
+            thread_ran_on(c1, &fresh, Some(text))
+        });
+    }
+    // The wait held on the host the whole time; a steer ends it.
+    until("the host's waiting run takes a steer", || {
+        h.with(|client| client.run_steer(&waiting.run_id, "Done waiting."))
+            .map(drop)
+    });
+    until("the host's waiting run finishes", || {
+        let entries = h.history(&waiting.thread_id)?;
+        ensure(
+            entries.iter().any(|entry| {
+                entry["runId"] == waiting.run_id.as_str() && entry["phase"] == "complete"
+            }),
+            || format!("host history: {entries:?}"),
+        )
+    });
+    until("every member lists c1's new thread as c1's", || {
+        every(&all, |node| {
+            let summary = node.summary(&fresh)?;
+            ensure(
+                summary
+                    .as_ref()
+                    .is_some_and(|summary| summary["owner_runtime"] == c1.runtime_id),
+                || format!("{}: {summary:?}", node.name),
+            )
+        })
     });
 
     // Stop and steer from the host reach a run on c2, which only the fleet
@@ -1066,6 +1127,21 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
             Ok(())
         },
     );
+
+    // Sharing adds no member: every machine still lists each one once.
+    for node in &all {
+        let listed: Vec<String> = node
+            .members()
+            .unwrap()
+            .iter()
+            .filter_map(|member| member["runtime_id"].as_str().map(str::to_owned))
+            .collect();
+        assert!(
+            listed.len() == ids.len() && listed.iter().all(|id| ids.contains(id)),
+            "{} lists {listed:?} after sharing",
+            node.name
+        );
+    }
 
     // A thread offloaded after the switch runs on the shared connections.
     let shared_text = "Answer with the shared connection on c1.";
