@@ -56,6 +56,10 @@ pub struct ToolPresentation {
     /// The file a host may open for the call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// How the call ran when another call made it, such as a tool call a
+    /// script makes: `via script`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 /// One labeled value of a call. `mono` marks a record, such as a path or a
@@ -185,6 +189,16 @@ pub fn describe_activity(activity: &ToolActivity) -> ToolPresentation {
             seconds,
         },
     )
+}
+
+/// The note a call another call made carries: `via script` under a
+/// codemode script, else the kind of call that made it.
+pub fn via(parent: &ToolPresentation) -> String {
+    match parent.category.as_str() {
+        "code" => "via script".into(),
+        "agent" => "via agent".into(),
+        _ => "via another tool".into(),
+    }
 }
 
 /// Describes the exact operation a permission gate asks about: a shell

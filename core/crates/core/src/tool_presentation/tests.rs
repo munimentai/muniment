@@ -634,6 +634,7 @@ fn registered_metadata_reaches_calls_and_activities() {
     let activity = ToolActivity {
         text_offset: 0,
         effect_id: "e1".into(),
+        parent_effect_id: None,
         display_name: Some("bash".into()),
         status: ToolActivityStatus::Completed,
         input: Some(r#"{"command":"ls"}"#.into()),

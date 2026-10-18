@@ -31,7 +31,7 @@
       {#if open}
         <ol class="timeline" aria-label="Tool calls">
           {#each timeline as entry (entry.id)}
-            <li><ToolCall presentation={entry.presentation} label={entry.label} running={entry.running} result={entry.result || (entry.state === 'Completed' ? '' : entry.state)} failed={entry.failed} iconSize={14} />{#if entry.duration}<span class="duration">{entry.duration}</span>{/if}</li>
+            <li><ToolCall presentation={entry.presentation} label={entry.label} running={entry.running} result={entry.result || (entry.state === 'Completed' ? '' : entry.state)} failed={entry.failed} via={entry.via ?? ''} iconSize={14} />{#if entry.duration}<span class="duration">{entry.duration}</span>{/if}</li>
           {/each}
         </ol>
         {#if onreview}<button type="button" class="review" onclick={onreview}>Review changes</button>{/if}
@@ -43,7 +43,7 @@
 {/if}
 
 <style>
-  .run-line { margin: 0 0 10px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .run-line { margin: 0 0 10px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   summary, .plain { min-height: 24px; padding: 2px 0; }
   summary { display: block; width: max-content; max-width: 100%; margin-left: -8px; padding: 2px 8px; border-radius: var(--radius-control); cursor: pointer; list-style: none; }
   summary::-webkit-details-marker { display: none; }

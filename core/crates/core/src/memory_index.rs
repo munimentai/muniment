@@ -1,7 +1,7 @@
 //! Rebuildable lexical search over the visible Muniment Home.
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
-use cap_std::{ambient_authority, fs::Dir};
+use cap_std::fs::Dir;
 use rusqlite::{params, Connection, ErrorCode, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -824,10 +824,8 @@ fn scan_home_with_hook(
 }
 
 fn open_home_directory(home: &Path) -> Result<Dir, MemoryIndexError> {
-    let parent = home.parent().ok_or(MemoryIndexError::InvalidPath)?;
-    let name = home.file_name().ok_or(MemoryIndexError::InvalidPath)?;
-    let parent = Dir::open_ambient_dir(parent, ambient_authority())?;
-    parent.open_dir_nofollow(name).map_err(MemoryIndexError::Io)
+    home.file_name().ok_or(MemoryIndexError::InvalidPath)?;
+    crate::home::open_home_directory(home).map_err(MemoryIndexError::Io)
 }
 
 fn open_relative_file(home: &Dir, relative: &Path) -> io::Result<fs::File> {
@@ -1762,6 +1760,43 @@ mod tests {
 
         let result = read_utf8_bytes(SlowReader, 1, Instant::now() + Duration::from_millis(1));
         assert!(matches!(result, Err(MemoryIndexError::TimedOut)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_scan_and_a_memory_write_open_home_without_reading_its_folder() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        // The folder that holds Home stands in for Documents: a process may
+        // pass through it but not list it, as macOS holds it until it asks.
+        let holder = std::env::temp_dir().join(format!("muniment-holder-{}", uuid::Uuid::new_v4()));
+        let home = holder.join("muniment");
+        fs::create_dir_all(home.join("memory")).unwrap();
+        fs::write(home.join("memory/lease.md"), "renewal in March").unwrap();
+        symlink(&home, holder.join("linked")).unwrap();
+        fs::set_permissions(&holder, fs::Permissions::from_mode(0o300)).unwrap();
+        let scanned = scan_home_with_hook(
+            &home,
+            Instant::now() + Duration::from_secs(5),
+            &BTreeMap::new(),
+            || {},
+        );
+        let written = write_memory_record(&home, Path::new("memory/new.md"), "safe text");
+        let linked = scan_home_with_hook(
+            &holder.join("linked"),
+            Instant::now() + Duration::from_secs(5),
+            &BTreeMap::new(),
+            || {},
+        );
+        fs::set_permissions(&holder, fs::Permissions::from_mode(0o700)).unwrap();
+        let new = fs::read_to_string(home.join("memory/new.md"));
+        fs::remove_dir_all(&holder).unwrap();
+
+        assert!(scanned.unwrap().contains_key("memory/lease.md"));
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(new.unwrap(), "safe text");
+        // A link in Home's place is refused.
+        assert!(linked.is_err());
     }
 
     #[cfg(unix)]

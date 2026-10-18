@@ -410,7 +410,7 @@
     {
       "id": "gate-web",
       "agent": "HN digest",
-      "reason": "Ask before changes mode asks first.",
+      "reason": "Needs your OK in Ask before changes mode.",
       "rule": {
         "request_kind": "tool",
         "resource": {
@@ -436,7 +436,7 @@
     {
       "id": "gate-mcp",
       "agent": "Triage",
-      "reason": "Ask before changes mode asks first.",
+      "reason": "Needs your OK in Ask before changes mode.",
       "rule": {
         "request_kind": "tool",
         "resource": {
@@ -470,7 +470,7 @@
     {
       "id": "gate-unknown",
       "agent": "Translator",
-      "reason": "Ask before changes mode asks first.",
+      "reason": "Needs your OK in Ask before changes mode.",
       "rule": {
         "request_kind": "tool",
         "resource": {

@@ -724,7 +724,7 @@
         "kind": "web",
         "progress": "Searching the web"
       },
-      "reason": "Ask before changes mode asks first.",
+      "reason": "Needs your OK in Ask before changes mode.",
       "rule": {
         "request_kind": "tool",
         "resource": {
@@ -773,7 +773,7 @@
         "kind": "mcp",
         "progress": "Asking Linear"
       },
-      "reason": "Ask before changes mode asks first.",
+      "reason": "Needs your OK in Ask before changes mode.",
       "rule": {
         "request_kind": "tool",
         "resource": {
@@ -836,7 +836,7 @@
         "kind": "other",
         "progress": "Using translate document"
       },
-      "reason": "Ask before changes mode asks first.",
+      "reason": "Needs your OK in Ask before changes mode.",
       "rule": {
         "request_kind": "tool",
         "resource": {

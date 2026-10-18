@@ -2730,6 +2730,7 @@ mod tests {
             tool_call_id: id.into(),
             tool_name: name.into(),
             input: None,
+            parent_tool_call_id: None,
         };
         let finished = |id: &str, failed: bool| PiChatEvent::ToolFinished {
             tool_call_id: id.into(),
@@ -3392,6 +3393,7 @@ mod tests {
             tool_call_id: effect_id.into(),
             tool_name: "Read file".into(),
             input: None,
+            parent_tool_call_id: None,
         };
         assert!(effects
             .with(|open_effects| tool_journal_entry(&started, open_effects))

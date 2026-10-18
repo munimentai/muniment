@@ -26,6 +26,12 @@ describe('the run line', () => {
     expect([estimateCost(0.0912), estimateCost(0.0042), estimateCost(0.00001), estimateCost(0), estimateCost(undefined)]).toEqual(['$0.09', '$0.004', '<$0.001', '$0.00', null])
   })
 
+  it('lists a script\'s calls in its place with their via note', () => {
+    const script = { effectId: 's1', displayName: 'codemode', status: 'completed', presentation: { category: 'code', kind: 'command', icon: 'file-code', headline: 'Run a script that uses 2 tools', result: 'Script completed' } }
+    const made = (effectId, headline) => ({ effectId, parentEffectId: 's1', status: 'completed', presentation: { kind: 'web', icon: 'globe', headline, result: 'Found 1 result', via: 'via script' } })
+    expect(runTimeline([script, made('s1/1', 'Search A'), made('s1/2', 'Search B')]).map((entry) => [entry.label, entry.via])).toEqual([['Search A', 'via script'], ['Search B', 'via script']])
+  })
+
   it('lists every tool call in order with its state and duration', () => {
     const test = { kind: 'command', icon: 'square-terminal', headline: 'Run `npm test`', progress: 'Running npm test', result: 'Exit 0 in 26 s' }
     const edit = { kind: 'edit', icon: 'square-pen', headline: 'Edit a.js', progress: 'Editing a.js', result: 'Failed: no match', path: 'src/a.js' }

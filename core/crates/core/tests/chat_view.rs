@@ -106,6 +106,7 @@ fn tool_activity_uses_the_webview_contract() {
         ToolActivity {
             text_offset: 0,
             effect_id: "effect-1".into(),
+            parent_effect_id: None,
             display_name: Some("Search".into()),
             status: ToolActivityStatus::Running,
             input: None,
@@ -116,6 +117,7 @@ fn tool_activity_uses_the_webview_contract() {
         ToolActivity {
             text_offset: 0,
             effect_id: "effect-2".into(),
+            parent_effect_id: None,
             display_name: None,
             status: ToolActivityStatus::Completed,
             input: None,
@@ -126,6 +128,7 @@ fn tool_activity_uses_the_webview_contract() {
         ToolActivity {
             text_offset: 0,
             effect_id: "effect-3".into(),
+            parent_effect_id: None,
             display_name: None,
             status: ToolActivityStatus::Failed,
             input: None,
@@ -182,4 +185,47 @@ fn projection_phase_maps_every_status() {
     for (status, expected) in cases {
         assert_eq!(projection_phase(&status), expected);
     }
+}
+
+#[test]
+fn a_script_tool_call_names_its_script_and_notes_how_it_ran() {
+    let call = |effect_id: &str, parent: Option<&str>, name: &str, input: &str| ToolActivity {
+        text_offset: 0,
+        effect_id: effect_id.into(),
+        parent_effect_id: parent.map(Into::into),
+        display_name: Some(name.into()),
+        status: ToolActivityStatus::Completed,
+        input: Some(input.into()),
+        output: None,
+        started_at: None,
+        finished_at: None,
+    };
+    let activity = chat_tool_activity(&[
+        call(
+            "call_1",
+            None,
+            "codemode",
+            r#"{"code":"await tools.web_search({})"}"#,
+        ),
+        call(
+            "call_1/1",
+            Some("call_1"),
+            "web_search",
+            r#"{"query":"desktop apps"}"#,
+        ),
+        call(
+            "orphan/1",
+            Some("orphan"),
+            "read",
+            r#"{"path":"/work/a.md"}"#,
+        ),
+    ]);
+    let value = serde_json::to_value(&activity).unwrap();
+    assert!(value[0].get("parentEffectId").is_none());
+    assert!(value[0]["presentation"].get("via").is_none());
+    assert_eq!(value[1]["parentEffectId"], "call_1");
+    assert_eq!(value[1]["presentation"]["via"], "via script");
+    // A parent the run does not hold names none.
+    assert!(value[2].get("parentEffectId").is_none());
+    assert!(value[2]["presentation"].get("via").is_none());
 }

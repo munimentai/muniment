@@ -916,7 +916,7 @@ pub fn decide_tool_call(
             | ActionClass::Web
             | ActionClass::Mcp { .. }
             | ActionClass::Command,
-        ) => ask(&format!("{} mode asks first.", mode.title())),
+        ) => ask(&format!("Needs your OK in {} mode.", mode.title())),
     }
 }
 

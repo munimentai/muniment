@@ -11,7 +11,8 @@
     outputs[action.effectId] = loadoutput(action.effectId)
   }
   const groups = $derived(actionGroups(activities, live))
-  const total = $derived(groups.reduce((sum, group) => sum + group.actions.length, 0))
+  // A script counts as the calls it made, so the count names the calls a person asked for.
+  const total = $derived(groups.reduce((sum, group) => sum + group.calls, 0))
   const running = $derived(groups.some((group) => group.running))
   let now = $state(Date.now())
   $effect(() => {
@@ -21,42 +22,61 @@
   })
 </script>
 
-{#snippet line(action)}
-  <ToolCall presentation={action.presentation} label={action.label} running={action.running} result={action.result} failed={action.failed} state={action.state} />{#if action.counts}<span class="counts">{action.counts}</span>{/if}
+{#snippet line(action, via = '')}
+  <ToolCall presentation={action.presentation} label={action.label} running={action.running} result={action.result} failed={action.failed} state={action.state} {via} />{#if action.counts}<span class="counts">{action.counts}</span>{/if}
+{/snippet}
+
+<!-- The state, details and output of one call, the raw record behind Show details. -->
+{#snippet detail(action)}
+  {#snippet output()}
+    {#if action.output}<strong>Output</strong>
+      {#if outputs[action.effectId]}
+        {#await outputs[action.effectId]}
+          <pre>{action.output}</pre><p>Loading the full output.</p>
+        {:then full}
+          <pre>{full.text}</pre>{#if full.truncated}<p>{outputLimitNote(full)}</p>{/if}
+        {:catch}
+          <pre>{action.output}</pre><p role="alert">The full output could not be loaded. <button type="button" onclick={() => readOutput(action, true)}>Load full output</button></p>
+        {/await}
+      {:else}<pre>{action.output}</pre>{/if}
+    {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
+  {/snippet}
+  <ToolCall variant="detail" presentation={action.presentation} state={`${action.state}${action.startedAt && (action.finishedAt || action.running) ? ` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}` : ''}`} input={action.detailInput} raw={output} />
+{/snippet}
+
+<!-- One row. A script's calls nest under its row, and a script that made one call shows as that call, with the script in its detail. -->
+{#snippet actionRow(action)}
+  {#if action.path && onopenfile && !action.script}
+    <button type="button" class="file-action" aria-label={action.label.replaceAll('`', '')} onclick={() => onopenfile({ path: action.path })}>{@render line(action)}</button>
+  {:else if !action.hasDetails && !action.script}
+    <div class="plain-action">{@render line(action)}</div>
+  {:else}
+    <details ontoggle={(event) => { if (event.currentTarget.open) { readOutput(action); if (action.script) readOutput(action.script) } }}>
+      <summary>
+        {@render line(action, action.via)}
+        <span class="chevron"><LucideIcon name="chevron-right" /></span>
+      </summary>
+      <div class="action-detail">
+        {@render detail(action)}
+        {#if action.script}
+          <div class="action-script">
+            <p class="script-line"><ToolCall presentation={action.script.presentation} label={action.script.label} result={action.script.result} failed={action.script.failed} state={action.script.state} iconSize={14} /></p>
+            {@render detail(action.script)}
+          </div>
+        {/if}
+      </div>
+    </details>
+  {/if}
+  {#if action.children}
+    <div class="action-list nested">
+      {#each action.children as child (child.effectId)}{@render actionRow(child)}{/each}
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet renderActions(group)}
   <div class="action-list" class:grouped={group.actions.length > 1}>
-    {#each group.actions as action (action.effectId)}
-      {#if action.path && onopenfile}
-        <button type="button" class="file-action" aria-label={action.label.replaceAll('`', '')} onclick={() => onopenfile({ path: action.path })}>{@render line(action)}</button>
-      {:else if !action.hasDetails}
-        <div class="plain-action">{@render line(action)}</div>
-      {:else}
-      <details ontoggle={(event) => { if (event.currentTarget.open) readOutput(action) }}>
-        <summary>
-          {@render line(action)}
-          <span class="chevron"><LucideIcon name="chevron-right" /></span>
-        </summary>
-        <div class="action-detail">
-          {#snippet output()}
-            {#if action.output}<strong>Output</strong>
-              {#if outputs[action.effectId]}
-                {#await outputs[action.effectId]}
-                  <pre>{action.output}</pre><p>Loading the full output.</p>
-                {:then detail}
-                  <pre>{detail.text}</pre>{#if detail.truncated}<p>{outputLimitNote(detail)}</p>{/if}
-                {:catch}
-                  <pre>{action.output}</pre><p role="alert">The full output could not be loaded. <button type="button" onclick={() => readOutput(action, true)}>Load full output</button></p>
-                {/await}
-              {:else}<pre>{action.output}</pre>{/if}
-            {:else}<p>{action.running ? 'Waiting for output.' : 'No output was saved.'}</p>{/if}
-          {/snippet}
-          <ToolCall variant="detail" presentation={action.presentation} state={`${action.state}${action.startedAt && (action.finishedAt || action.running) ? ` · ${actionDuration(action.startedAt, action.finishedAt || (action.running ? now : action.startedAt))}` : ''}`} input={action.detailInput} raw={output} />
-        </div>
-      </details>
-      {/if}
-    {/each}
+    {#each group.actions as action (action.effectId)}{@render actionRow(action)}{/each}
   </div>
 {/snippet}
 
@@ -100,7 +120,9 @@
   .tools-used { width: max-content; max-width: 100%; }
   .tool-groups { padding-left: 14px; }
   details[open] > summary > .chevron { transform: rotate(90deg); }
-  .action-list.grouped { padding-left: 12px; }
+  .action-list.grouped, .action-list.nested { padding-left: 12px; }
+  .action-script { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .script-line { display: flex; min-height: 24px; align-items: center; }
   .action-detail { margin: 6px 0 12px 24px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); }
   .action-detail p { margin: 0 0 8px; }
   .action-detail strong { font-weight: 500; }

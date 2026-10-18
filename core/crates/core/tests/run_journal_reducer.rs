@@ -929,6 +929,7 @@ fn chat_projection_tracks_tool_activity_in_start_order() {
             ToolActivity {
                 text_offset: 0,
                 effect_id: "first".into(),
+                parent_effect_id: None,
                 display_name: Some("Search".into()),
                 status: ToolActivityStatus::Completed,
                 input: None,
@@ -939,6 +940,7 @@ fn chat_projection_tracks_tool_activity_in_start_order() {
             ToolActivity {
                 text_offset: 7,
                 effect_id: "second".into(),
+                parent_effect_id: None,
                 display_name: None,
                 status: ToolActivityStatus::Failed,
                 input: None,
@@ -1107,4 +1109,39 @@ fn a_resume_notice_reaches_the_projection_and_the_chat_event() {
         .unwrap()
         .get("resumeNotice")
         .is_none());
+}
+
+#[test]
+fn a_script_tool_call_names_the_script_that_made_it() {
+    let events = stream(&[
+        ("run.started", json!({})),
+        (
+            "tool.effect.started",
+            json!({"effect_id":"call_1", "display_name":"codemode"}),
+        ),
+        (
+            "tool.effect.started",
+            json!({"effect_id":"call_1/1", "display_name":"web_search", "parent_effect_id":"call_1"}),
+        ),
+        // A run recorded before events named the parent keeps Pi's id scheme.
+        (
+            "tool.effect.started",
+            json!({"effect_id":"call_1/2", "display_name":"fetch_content"}),
+        ),
+        // An id with a slash names no parent unless that call ran first.
+        (
+            "tool.effect.started",
+            json!({"effect_id":"other/1", "display_name":"read"}),
+        ),
+    ]);
+    let parents: Vec<_> = project_chat(&events)
+        .unwrap()
+        .tool_activity
+        .into_iter()
+        .map(|activity| activity.parent_effect_id)
+        .collect();
+    assert_eq!(
+        parents,
+        vec![None, Some("call_1".into()), Some("call_1".into()), None]
+    );
 }
