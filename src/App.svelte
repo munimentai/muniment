@@ -24,6 +24,7 @@
   import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
   import { workspaceOnNavigate } from './lib/workspace-panel-state.js'
+  import { keptInventory, loadInventory } from './lib/inventory-loader.js'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
   import { open } from '@tauri-apps/plugin-dialog'
@@ -174,6 +175,9 @@
   })
   let inventoryError = $state('')
   let inventoryRequestVersion = 0
+  // Inventory reads stop when the window closes.
+  let inventoryClosed = false
+  onMount(() => () => { inventoryClosed = true })
   let pickerOpen = $state(false)
   let thinkingOpen = $state(false)
   let modeOpen = $state(false)
@@ -1471,6 +1475,8 @@
     if (chatEventsRecovered || (requestsRecovered && workspaceMode())) {
       void startupReady.then(() => chatController.recoverChatEvents())
     }
+    // A runtime that comes back may serve other models than the last read named.
+    if (requestsRecovered && workspaceMode() && auth.name === 'local') void refreshInventory()
   }
 
   function toggleSidebar() {
@@ -2238,15 +2244,16 @@
     }
   }
 
+  // A connected provider that lists no model yet is read again, and the chip
+  // keeps the model it named until the last read.
   async function refreshInventory() {
     const version = ++inventoryRequestVersion
     try {
-      const next = await tauri.invoke('local_mode_provider_inventory')
-      if (version === inventoryRequestVersion) {
-        inventory = next
+      await loadInventory((command) => tauri.invoke(command), (next, final) => {
+        inventory = keptInventory(inventory, next, final)
         if (accountStatus === inventoryError) accountStatus = ''
         inventoryError = ''
-      }
+      }, { alive: () => version === inventoryRequestVersion && !inventoryClosed })
       return true
     } catch (_) {
       if (version === inventoryRequestVersion) {

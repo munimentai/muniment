@@ -142,7 +142,7 @@ rows span the page, with allowances visible and usage in details.
 Decision models holds the routing statements. Connect
 account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
-opens a picker: a column of full-color provider marks, each named on hover, the picked provider's current generation, Legacy models folded under one row,
+opens a picker: a column of full-color provider marks, each named on hover, that scroll to their provider, every connected provider's current generation under its name, each provider's Legacy models folded under one row,
 a search over every model, and Model providers at its foot. The
 sidebar is resizable by its divider and collapses to nothing: no rail. Each divider
 shows Lucide's vertical ellipsis as its grip, and on hover, focus or drag its gap fills with `border` that fades out at both ends.
