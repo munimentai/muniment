@@ -43,3 +43,20 @@ export const SERVER_STATES = {
   'needs-key': { action: 'Add key', tone: 'ochre' },
   'not-running': { action: 'Start', tone: 'muted' },
 }
+
+// How long the first run waits before it scans again. At first launch the
+// runtime is still starting, so the first scans can fail before one answers.
+export const SCAN_RETRY_DELAYS = [1000, 2000, 3000, 5000, 8000]
+
+// Runs the provider scan, and runs it again after each delay while it fails.
+// The last failure throws. `wait` is the timer, replaceable in tests.
+export async function scanProviders(invoke, delays = SCAN_RETRY_DELAYS, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await invoke('onboarding_provider_scan')
+    } catch (error) {
+      if (attempt >= delays.length) throw error
+      await wait(delays[attempt])
+    }
+  }
+}

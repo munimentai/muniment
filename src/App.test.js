@@ -7,12 +7,13 @@ import vm from 'node:vm'
 import { tick } from 'svelte'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { featureFlags } from './feature-flags.js'
 vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord: true}}))
 
 import { historyMessages } from './lib/chat-state.js'
+import { SCAN_RETRY_DELAYS } from './lib/first-run-providers.js'
 
 const extensionInstances = vi.hoisted(() => [])
 vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
@@ -4193,11 +4194,28 @@ describe('Home onboarding', () => {
     expect(within(dialog).getByRole('searchbox', { name: 'Search providers' })).toBeInTheDocument()
   })
 
+  it('scans again while the runtime starts instead of saying the first scan failed', async () => {
+    firstRun()
+    const original = invoke.getMockImplementation()
+    let failures = 1
+    invoke.mockImplementation((command, payload) => command === 'onboarding_provider_scan' && failures-- > 0 ? Promise.reject('unavailable') : original(command, payload))
+    providerScan = { servers: [ollama], hints: [] }
+    const saved = SCAN_RETRY_DELAYS.splice(0, Infinity, 1)
+    try {
+      render(App)
+      await waitFor(() => expect(option('Ollama')).toBeDefined())
+      expect(screen.queryByText('Muniment could not look for local models.', { exact: false })).not.toBeInTheDocument()
+      expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_provider_scan')).toHaveLength(2)
+    } finally { SCAN_RETRY_DELAYS.splice(0, Infinity, ...saved) }
+  })
+
   it('says when the scan fails and looks again', async () => {
     firstRun()
     const original = invoke.getMockImplementation()
     let fail = true
     invoke.mockImplementation((command, payload) => command === 'onboarding_provider_scan' && fail ? Promise.reject('unavailable') : original(command, payload))
+    const saved = SCAN_RETRY_DELAYS.splice(0)
+    onTestFinished(() => { SCAN_RETRY_DELAYS.splice(0, Infinity, ...saved) })
     render(App)
     expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not look for local models.')
     expect(optionNames()).toEqual(SUBSCRIPTION_NAMES)

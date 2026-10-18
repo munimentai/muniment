@@ -4,6 +4,7 @@
   import { onboardingCancelSettingsState, onboardingStatusState } from './onboarding-state.js'
   import { firstRunError } from './onboarding-diagnostics.js'
   import FirstRunConnect from './FirstRunConnect.svelte'
+  import { scanProviders } from './first-run-providers.js'
 
   // The first run asks one question, which model to connect, and Home settings
   // reuse this screen to change the Home folder.
@@ -31,16 +32,21 @@
   }
 
   // The provider scan probes loopback model servers and looks for signed-in
-  // assistant CLIs. It reads no file body and no credential.
+  // assistant CLIs. It reads no file body and no credential. At first launch
+  // the runtime may still be starting, so a failed scan runs again before the
+  // error shows.
+  let scanRequest = 0
   async function loadProviderScan() {
+    const request = ++scanRequest
     providerScanning = true
     providerScanError = ''
     try {
-      providerScan = await tauri.invoke('onboarding_provider_scan')
+      const scan = await scanProviders((command) => tauri.invoke(command))
+      if (request === scanRequest) providerScan = scan
     } catch (_) {
-      providerScanError = 'Muniment could not look for local models.'
+      if (request === scanRequest) providerScanError = 'Muniment could not look for local models.'
     } finally {
-      providerScanning = false
+      if (request === scanRequest) providerScanning = false
     }
   }
 
