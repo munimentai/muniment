@@ -162,6 +162,15 @@ it('marks the default mode of an agent that chose none, and names a refused chan
   expect(await screen.findByRole('alert')).toHaveTextContent('The agent settings are invalid.')
 })
 
+it('fits every mode on one line each and shows the chosen mode\'s description', async () => {
+  show({ tauri: core().tauri, modes, agent: { ...agent, permissions: { ...agent.permissions, mode: 'dont_ask' } } })
+  await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
+  const group = screen.getByRole('radiogroup', { name: 'Permission mode' })
+  const lines = within(group).getAllByRole('radio').map((radio) => [radio.getAttribute('aria-label'), !radio.querySelector('.mode-line').classList.contains('visually-hidden')])
+  expect(lines.filter(([, visible]) => visible)).toEqual([["Don't ask", true]])
+  expect(within(group).getByRole('radio', { name: 'Plan first' })).toHaveAccessibleDescription(modes.modes.find((mode) => mode.id === 'plan').description)
+})
+
 it('says so when the machine lists no modes', async () => {
   show({ tauri: core().tauri, modes: null })
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
