@@ -131,7 +131,7 @@ impl InterruptibleConnectState for ChatEventStopState {
 
 #[cfg(unix)]
 impl ChatEventStopHandle {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn for_test() -> (Self, std::sync::mpsc::Receiver<()>) {
         let (connect_started, started) = std::sync::mpsc::channel();
         let stop = Self {

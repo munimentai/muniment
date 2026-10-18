@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 use std::time::Duration;
 
 use muniment_core::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};

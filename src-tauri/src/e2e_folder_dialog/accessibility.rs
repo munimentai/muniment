@@ -792,6 +792,7 @@ pub(super) fn go_to_folder_field<A: Accessibility>(
     Ok(Some(field))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn child_confirm_button<A: Accessibility>(
     ax: &A,
     panel: &A::Element,
