@@ -1,4 +1,4 @@
-use muniment_core::projects;
+use muniment_core::{projects, sidebar};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -17,6 +17,22 @@ pub fn project_create(name: String) -> Result<String, String> {
 #[tauri::command]
 pub fn project_rename(project_id: String, name: String) -> Result<(), String> {
     projects::rename(&profile()?, &project_id, &name)
+}
+#[tauri::command]
+pub fn project_settings(project_id: String) -> Result<projects::Settings, String> {
+    projects::settings(&profile()?, &project_id)
+}
+#[tauri::command]
+pub fn project_settings_save(
+    project_id: String,
+    settings: projects::Settings,
+) -> Result<(), String> {
+    projects::save_settings(&profile()?, &project_id, &settings)
+}
+/// The sidebar's sections, arranged by core from what the window knows.
+#[tauri::command]
+pub fn sidebar_arrange(input: sidebar::Input) -> sidebar::Sidebar {
+    sidebar::arrange(&input)
 }
 #[tauri::command]
 pub fn project_open(app: AppHandle, project_id: String) -> Result<(), String> {

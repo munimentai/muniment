@@ -129,7 +129,8 @@ async function checkWindowChrome(browser, baseUrl) {
       assert.equal(await page.locator('.new-thread').count(), 0)
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
       await checkRow()
-      assert.equal(await page.locator('.new-thread').innerText(), platform.startsWith('Mac') ? 'New thread\n⌘ N' : 'New thread\nCtrl N')
+      assert.equal(await page.locator('.new-thread').innerText(), 'New')
+      assert.equal(await page.locator('.new-thread').getAttribute('aria-keyshortcuts'), platform.startsWith('Mac') ? 'Meta+N' : 'Control+N')
       await page.getByRole('button', { name: 'Artifacts', exact: true }).click()
       await checkArtifactCreation(page)
       await checkRow()
@@ -420,14 +421,14 @@ async function checkComposerActions(browser, baseUrl) {
 // text, under a card's or header's center, and on its tile. Each surface shows one.
 async function checkAgentAvatars(browser, baseUrl) {
   const surfaces = {
-    '': ['.catalog-sidebar-row .side-action', '.agent-card .head-avatar', '.starter .thumb'],
+    '': ['.agent-card .head-avatar', '.starter .thumb'],
     profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .check'],
     transcript: ['.agent-message header'],
     meeting: ['.agent-post header', '#agent-mentions [role="option"]'],
     approvals: ['.approval .who', '.running button'],
     import: ['.body .profile'],
     'group-create': ['.members .check'],
-    move: ['.catalog-sidebar-row .side-action', '.profile .avatar'],
+    move: ['.profile .avatar'],
     'approval-inline': ['.approval .who'],
     preferences: ['.avatar-preview'],
   }
