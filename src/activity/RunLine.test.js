@@ -9,7 +9,7 @@ const run = {
   id: 'run-1',
   phase: 'complete',
   receipt: { model: 'openai/gpt-5.5', time: '6.2s', tokens: { input: 900, output: 100 }, cost_usd: 0.014, permission_mode: 'manual' },
-  toolActivity: [{ effectId: 'a', displayName: 'bash', status: 'failed', input: '{"command":"npm test"}', startedAt: '2026-10-18T12:00:00Z', finishedAt: '2026-10-18T12:00:04Z' }],
+  toolActivity: [{ effectId: 'a', displayName: 'bash', status: 'failed', input: '{"command":"npm test"}', startedAt: '2026-10-18T12:00:00Z', finishedAt: '2026-10-18T12:00:04Z', presentation: { kind: 'command', icon: 'square-terminal', headline: 'Run `npm test`', progress: 'Running npm test', result: 'Exit 1 in 4.0 s' } }],
 }
 
 it('opens a turn with one line and expands to its tool calls and Review changes', async () => {
@@ -19,7 +19,10 @@ it('opens a turn with one line and expands to its tool calls and Review changes'
   expect(line.querySelector('summary')).toHaveTextContent('Studio · OpenAI · GPT 5.5 · Ask before changes · 6s · 1k tokens · $0.01 API estimate')
   await fireEvent.click(line.querySelector('summary'))
   expect(line).toHaveAttribute('open')
-  expect(await view.findByRole('list', { name: 'Tool calls' })).toHaveTextContent('Ran npm testFailed4s')
+  const calls = await view.findByRole('list', { name: 'Tool calls' })
+  expect(calls).toHaveTextContent('Run npm test Exit 1 in 4.0 s4s')
+  expect(calls.querySelector('code')).toHaveTextContent('npm test')
+  expect(calls.querySelector('.tool-result')).toHaveClass('failed')
   await fireEvent.click(view.getByRole('button', { name: 'Review changes' }))
   expect(onreview).toHaveBeenCalledOnce()
 })

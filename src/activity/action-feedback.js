@@ -1,63 +1,54 @@
 import { compactionCounts } from '../lib/context-usage.js'
 import { formatByteSize } from '../lib/chat-state.js'
+import { callLine, rawInput } from './tool-call.js'
 
-const categories = {
-  compact: { icon: 'combine', done: 'Context automatically compacted', active: 'Compacting context', verb: 'Context compacted', present: 'Compacting context' },
-  read: { icon: 'book-open', done: 'Read files', active: 'Reading files', verb: 'Read', present: 'Reading' },
-  search: { icon: 'search', done: 'Searched files', active: 'Searching files', verb: 'Searched', present: 'Searching' },
-  list: { icon: 'folder', done: 'Listed files', active: 'Listing files', verb: 'Listed files in', present: 'Listing files in' },
-  web: { icon: 'globe', done: 'Searched the web', active: 'Searching the web', verb: 'Searched the web for', present: 'Searching the web for' },
-  command: { icon: 'square-terminal', done: 'Ran commands', active: 'Running commands', verb: 'Ran', present: 'Running' },
-  edit: { icon: 'file-text', done: 'Changed files', active: 'Changing files', verb: 'Changed', present: 'Changing' },
-  other: { icon: 'play', done: 'Actions', active: 'Working', verb: '', present: '' },
+// The headings of a run of calls of one kind. Core names each call's kind.
+const groupWords = {
+  compact: { icon: 'combine', done: 'Context compacted', active: 'Compacting context' },
+  read: { icon: 'book-open', done: 'Read files', active: 'Reading files' },
+  search: { icon: 'search', done: 'Searched files', active: 'Searching files' },
+  list: { icon: 'folder', done: 'Listed files', active: 'Listing files' },
+  web: { icon: 'globe', done: 'Used the web', active: 'Using the web' },
+  command: { icon: 'square-terminal', done: 'Ran commands', active: 'Running commands' },
+  edit: { icon: 'square-pen', done: 'Changed files', active: 'Changing files' },
+  agent: { icon: 'bot', done: 'Worked with agents', active: 'Working with agents' },
+  memory: { icon: 'brain', done: 'Used memory', active: 'Using memory' },
+  mcp: { icon: 'server', done: 'Called servers', active: 'Calling servers' },
+  other: { icon: 'wrench', done: 'Used tools', active: 'Using tools' },
 }
 
-// Pi names an MCP tool `mcp__<server>__<tool>`, and a server takes its
-// extension's name, so `mcp__Context7__resolve_library_id` reads
-// "MCP Context7 · resolve library id". Older runs named the server by its id.
-function mcpLabel(name) {
-  const match = /^mcp__(.+?)__(.+)$/.exec(name)
-  if (!match) return null
-  const words = value => value.replace(/[_-]+/g, ' ').trim()
-  const server = words(match[1].replace(/^extend-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}-?/, ''))
-  return `MCP${server ? ` ${server}` : ''} · ${words(match[2])}`
-}
-
+// Consecutive calls of one kind fold into a group, in order. Each call
+// carries its line, the file it may open, and whether it has details.
 export function actionGroups(activities = [], live = false) {
   const groups = []
   for (const activity of activities) {
-    const name = (activity.displayName || 'Action').replace(/[_-]+/g, ' ')
-    const kind = /^compact context$/i.test(name) ? 'compact'
-      : /^(read|read file|read files)$/i.test(name) ? 'read'
-      : /^(ls|list|list files)$/i.test(name) ? 'list'
-      : /^(web|web search|websearch|search web)$/i.test(name) ? 'web'
-      : /^(grep|find|search|search files)$/i.test(name) ? 'search'
-        : /^(bash|powershell|shell|exec|exec command|run command)$/i.test(name) ? 'command'
-          : /^(edit|write|apply patch)$/i.test(name) ? 'edit' : 'other'
-    const category = categories[kind]
-    let args = {}
-    try { args = JSON.parse(activity.input) || {} } catch { /* Older runs have no arguments. */ }
-    const running = live && activity.status === 'running'
-    const state = activity.status === 'running' ? (live ? 'In progress' : 'Interrupted')
-      : activity.status === 'failed' ? 'Failed' : 'Completed'
-    const path = args.path || args.file_path || args.filePath
-    const target = kind === 'command' ? args.description || args.command
-      : ['search', 'web', 'list'].includes(kind) ? args.pattern || args.query || path
-        : path && String(path).split(/[\\/]/).pop()
-    const queries = kind === 'web' ? (Array.isArray(args.queries) ? args.queries.filter((q) => typeof q === 'string') : typeof args.query === 'string' ? [args.query] : []) : []
-    const verb = running ? category.present : category.verb
-    const label = kind === 'web' ? (running ? 'Searching the web' : 'Searched the web') : kind === 'compact' ? (running ? 'Compacting context' : activity.status === 'failed' ? 'Context compaction did not finish' : args.reason === 'manual' ? 'Context compacted' : 'Context automatically compacted')
-      : kind === 'command' && args.description ? String(args.description) : target ? `${verb} ${target}`.trim()
-      : kind === 'other' ? mcpLabel(activity.displayName || '') ?? name.charAt(0).toUpperCase() + name.slice(1) : `${verb} ${kind === 'command' ? 'command' : 'files'}`
-    const action = { ...activity, counts: kind === 'compact' && activity.status !== 'failed' ? compactionCounts(activity.output) : '', queries, path: ['read', 'edit'].includes(kind) && typeof path === 'string' ? path : null, hasDetails: queries.length > 0 || !!activity.output || (kind === 'command' && !!activity.input) || (kind === 'other' && !!activity.input), detailInput: actionInput(activity.input), label, state, running, icon: category.icon }
+    const line = callLine(activity, live)
+    const { presentation } = line
+    const kind = groupWords[presentation.kind] ? presentation.kind : 'other'
+    const counts = kind === 'compact' && activity.status !== 'failed' ? compactionCounts(activity.output) : ''
+    const details = (presentation.details ?? []).length > 0
+    const action = {
+      ...activity,
+      presentation,
+      label: line.label,
+      result: line.result,
+      failed: line.failed,
+      state: line.state,
+      running: line.running,
+      icon: presentation.icon,
+      counts,
+      path: ['read', 'edit'].includes(kind) && typeof presentation.path === 'string' ? presentation.path : null,
+      hasDetails: details || !!activity.output || !!activity.input,
+      detailInput: rawInput(activity.input),
+    }
     let group = groups.at(-1)
     if (!group || group.kind !== kind) {
-      group = { kind, id: activity.effectId, ...category, actions: [] }
+      group = { kind, id: activity.effectId, ...groupWords[kind], actions: [] }
       groups.push(group)
     }
     group.actions.push(action)
-    group.running = group.running || running
-    group.label = kind === 'compact' ? label : group.running ? group.active : group.done
+    group.running = group.running || line.running
+    group.label = kind === 'compact' ? line.label : group.running ? group.active : group.done
   }
   return groups
 }
@@ -73,18 +64,6 @@ export function actionDuration(start, end) {
 export function outputLimitNote(detail) {
   const shown = new TextEncoder().encode(detail?.text ?? '').length
   return `Showing the first ${formatByteSize(shown)} of ${formatByteSize(detail?.bytes)}.`
-}
-
-export function actionInput(input) {
-  if (!input) return ''
-  try {
-    const value = JSON.parse(input)
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return input
-    return Object.entries(value).map(([key, item]) => {
-      const name = key.replace(/[_-]/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2')
-      return `${name.charAt(0).toUpperCase() + name.slice(1)}: ${typeof item === 'string' ? item : JSON.stringify(item, null, 2)}`
-    }).join('\n')
-  } catch { return input }
 }
 
 // Offsets count UTF-16 units, as JavaScript strings do. The journal derives them

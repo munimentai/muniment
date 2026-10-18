@@ -42,7 +42,7 @@ describe('approval answers', () => {
 describe('approval summary', () => {
   it('names the exact operation and its inputs from the rule', () => {
     expect(approvalSummary(pending)).toEqual({
-      operation: 'bash `git push origin main` in /work/agents/Lead-scout',
+      operation: 'Run `git push origin main` in Lead-scout',
       title: pending.request.title,
       rows: [['Command', 'git push origin main'], ['Shell', 'bash'], ['Folder', '/work/agents/Lead-scout']],
       exact: true,

@@ -161,8 +161,9 @@ export function toolStatus(activity = {}) {
   return ['running', 'completed', 'failed'].includes(activity.status) ? activity.status : 'status unknown'
 }
 
-// The in-flight word is the plain verb of the run's last event. It names no
-// vendor, no model and no harness, and it never rotates.
+// The in-flight word is the plain verb of the run's last event: the words
+// core gives a running tool call, or for a record without them, a verb for
+// the tool. It names no vendor, no model and no harness, and it never rotates.
 const toolVerbs = new Map([
   ['read', 'Reading'], ['grep', 'Reading'], ['find', 'Reading'], ['ls', 'Reading'],
   ['write', 'Editing'], ['edit', 'Editing'],
@@ -184,7 +185,10 @@ export function toolVerb(name = '') {
 const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
 
 export function stageWord(stage = 'routing') {
-  if (typeof stage === 'string' && stage.startsWith('tool:')) return toolVerb(stage.slice(5))
+  if (typeof stage === 'string' && stage.startsWith('tool:')) {
+    const [name, progress] = stage.slice(5).split('\n')
+    return progress?.trim() || toolVerb(name)
+  }
   if (stage === 'folder-access') return 'macOS is asking for access to this folder. Choose Allow.'
   if (typeof stage === 'string' && stage.startsWith('folder-access:')) return `macOS is asking for access to ${stage.slice('folder-access:'.length)}. Choose Allow.`
   return stageWords[stage] ?? stageWords.routing
@@ -195,7 +199,7 @@ export function stageWord(stage = 'routing') {
 // the runtime reports the started turn.
 export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
-  if (running) return `tool:${running.displayName ?? ''}`
+  if (running) return `tool:${running.displayName ?? ''}${running.presentation?.progress ? `\n${running.presentation.progress}` : ''}`
   if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
   // The run waits on a macOS consent prompt for its folder.
   if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:'))) return next.routingStage

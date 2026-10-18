@@ -6,7 +6,7 @@ import { activityLabel, activityState, agentActivity, applyActivity } from './ac
 const event = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/event-agent-activity.json'), 'utf8')).body
 
 it('names each state and its action', () => {
-  expect(activityLabel(event.activity)).toBe('Waiting for you: bash `git push origin main` in /work/agents/Lead-scout')
+  expect(activityLabel(event.activity)).toBe('Waiting for you: Run git push origin main in Lead-scout')
   expect(activityLabel({ state: 'running', action: 'Waits to start' })).toBe('Running: Waits to start')
   expect(activityLabel({ state: 'error' })).toBe('Last run failed')
   expect(activityLabel({ state: 'idle', since: null })).toBe('Idle')

@@ -4,10 +4,13 @@ import { arrangeStandIn, toolsStandIn } from '../sidebar-standin.js'
 import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsPalette, projectsRendered, projectsSettings, projectsSummaries, projectsThreadSettings } from './projects-fixture.js'
 import { advanceTrust, trustAnswer, trustHistory, trustRendered } from './trust-fixture.js'
 import { longThreadHistory } from './long-thread-fixture.js'
+import { presentActivities } from './presentations.js'
+import { advanceTools, toolApprovalItems, toolsHistory, toolsRendered } from './tools-fixture.js'
 import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
 export const historyFixtures = {
   'run-trust': trustHistory,
+  tools: toolsHistory(),
   agents: [],
   projects: [],
   'fleet-sync': [],
@@ -422,6 +425,8 @@ export function buildProbeCommandTable(fixtureName) {
   // The bodies the stub answers through chat_run_detail.
   const runDetails = { appliedDiff: null }
   if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
+  // Each call carries core's presentation, as the runtime sends it.
+  for (const entry of history) presentActivities(entry.toolActivity)
   const onboardingFixture = fixtureName === 'onboarding'
   const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
@@ -446,6 +451,7 @@ export function buildProbeCommandTable(fixtureName) {
   const agentsFixture = fixtureName === 'agents'
   const projectsFixture = fixtureName === 'projects'
   const trustFixture = fixtureName === 'run-trust'
+  const toolsFixture = fixtureName === 'tools'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
   let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' ? 'agents-offline' : 'agents') : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
@@ -697,6 +703,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'notifications_list') {
       const page = probeNotifications(payload, agentsState)
       if (agentsState === 'approvals') return { ...page, needs_you: [...probeApprovalItems(), ...page.needs_you.filter((item) => item.kind !== 'approval')] }
+      if (agentsState === 'tool-approvals') return { ...page, needs_you: toolApprovalItems(probeApprovalItems()[0].approval) }
       return agentsFixture ? page : { ...page, needs_you: [], running: [], days: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 } }
     }
     if (command === 'agent_open') return null
@@ -908,6 +915,7 @@ export function buildProbeCommandTable(fixtureName) {
     agentsState,
     projectsFixture,
     trustFixture,
+    toolsFixture,
     modesFixture,
     modesState,
     onboardingFixture,
@@ -1005,6 +1013,7 @@ const {
   agentsState,
   projectsFixture,
   trustFixture,
+  toolsFixture,
   modesFixture,
   modesState,
   onboardingFixture,
@@ -1069,6 +1078,7 @@ const AGENT_STATES = {
   transcript: { agent: 'Inbox triage' },
   notifications: { agent: null },
   approvals: { agent: null },
+  'tool-approvals': { agent: null },
   usage: { agent: null },
   'usage-tokens': { agent: null },
   'usage-cost': { agent: null },
@@ -1095,6 +1105,7 @@ const AGENT_SCREENS = {
   list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .project-title[aria-label^="Project "]').length >= 5 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
   notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
   approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
+  'tool-approvals': () => document.querySelectorAll('[data-panel="notifications"] .approval .tool-call-card').length === 4,
   'notifications-empty': () => document.querySelector('[data-panel="notifications"]')?.textContent.includes('Nothing needs you') && document.querySelectorAll('[data-panel="notifications"] .upcoming li').length === 3,
   usage: () => document.querySelectorAll('[data-panel="usage"] .limit-card').length === 5 && !!document.querySelector('[data-panel="usage"] .unmetered'),
   'usage-tokens': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7 && document.querySelectorAll('[data-panel="usage"] .breakdown li').length === 5,
@@ -1278,7 +1289,7 @@ function advanceAgentsFixture() {
     }, 100)
     return
   }
-  if (agentsState === 'notifications' || agentsState === 'approvals' || agentsState === 'notifications-empty') {
+  if (agentsState === 'notifications' || agentsState === 'approvals' || agentsState === 'tool-approvals' || agentsState === 'notifications-empty') {
     if (!document.querySelector('[data-panel="notifications"]')) document.querySelector('#sidebar .sidebar-actions button[aria-label^="Notifications"]')?.click()
     return
   }
@@ -1347,6 +1358,7 @@ function fixtureRendered() {
   if (agentsFixture) return agentsRendered()
   if (projectsFixture) return projectsRendered()
   if (trustFixture) return trustRendered()
+  if (toolsFixture) return toolsRendered()
   if (modesFixture) return modesRendered()
   if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
@@ -1498,6 +1510,7 @@ function markReadyAfterFixtureRender() {
   if (fleetSyncFixture) advanceFleetSync()
   if (projectsFixture) advanceProjects()
   if (trustFixture) advanceTrust()
+  if (toolsFixture) advanceTools()
   if (fixtureRendered()) {
     void markProbeReady()
     return
@@ -1512,6 +1525,7 @@ function markReadyAfterFixtureRender() {
     if (fleetSyncFixture) advanceFleetSync()
     if (projectsFixture) advanceProjects()
     if (trustFixture) advanceTrust()
+    if (toolsFixture) advanceTools()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
@@ -1519,7 +1533,7 @@ function markReadyAfterFixtureRender() {
   // A fixture can finish on a text change, such as a path or a scan count, or
   // on a control that turns on once its settings load. Agent dialogs mount
   // on the page body, so the agents fixture watches the whole body.
-  observer.observe(agentsFixture || fleetSyncFixture || projectsFixture || trustFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
+  observer.observe(agentsFixture || fleetSyncFixture || projectsFixture || trustFixture || toolsFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {

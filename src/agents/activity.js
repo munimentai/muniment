@@ -9,10 +9,11 @@ export function activityState(activity) {
   return STATES.has(activity?.state) ? activity.state : 'idle'
 }
 
-// The line the avatar shows on hover.
+// The line the avatar shows on hover. A tooltip shows plain text, so the
+// backticks core puts around code in a tool call's headline drop.
 export function activityLabel(activity) {
   const state = activityState(activity)
-  const action = String(activity?.action ?? '').trim()
+  const action = String(activity?.action ?? '').replaceAll('`', '').trim()
   if (state === 'running') return action ? `Running: ${action}` : 'Running'
   if (state === 'waiting') return action ? `Waiting for you: ${action}` : 'Waiting for you'
   if (state === 'error') return action ? `Last run failed: ${action}` : 'Last run failed'

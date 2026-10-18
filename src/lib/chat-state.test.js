@@ -94,6 +94,9 @@ describe('chat composer and projection', () => {
     expect(stageWord(run.stage)).toBe('Writing')
     run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'completed' }, { effectId: 'e2', displayName: 'mcp__linear__list_issues', status: 'running' }] })
     expect(stageWord(run.stage)).toBe('Calling linear')
+    // Core's words for the running call lead when the record carries them.
+    run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, toolActivity: [{ effectId: 'e3', displayName: 'mcp__linear__list_issues', status: 'running', presentation: { headline: 'Ask Linear: list issues', progress: 'Asking Linear' } }] })
+    expect(stageWord(run.stage)).toBe('Asking Linear')
     expect(runStage(null, { phase: 'streaming', text: 'Restored', toolActivity: [] })).toBe('writing')
     expect(historyMessages([{ runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] }])[0].run.stage).toBe('thinking')
   })

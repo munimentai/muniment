@@ -7229,9 +7229,9 @@ it('does not offer another-model retry in a completed reply', async () => {
 
     chatListener({ payload: { runId: 'run-old', phase: 'complete', text: 'Restored answer', receipt: {}, toolActivity: [{ effectId: 'tool-1', displayName: 'Read file', status: 'completed' }] } })
 
-    // The event applies without a card: the thread draws no tool activity.
+    // The event applies without a card: its call folds under the closed tools line.
     await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(screen.queryByText('Read file')).not.toBeInTheDocument()
+    expect(screen.queryByText('Read file')?.closest('details.action-feedback')).not.toHaveAttribute('open')
     expect(drain()).toEqual([])
     expect(region.textContent).toBe('')
   })
@@ -7310,7 +7310,7 @@ describe('tool activity', () => {
     })
     render(App)
     expect(await screen.findByText('I used tools.')).toBeInTheDocument()
-    expect(screen.queryByText('Search files')).not.toBeInTheDocument()
+    expect(screen.getByText('Search files').closest('details.action-feedback')).not.toHaveAttribute('open')
     expect(screen.queryByRole('group', { name: /tool activity/i })).not.toBeInTheDocument()
     expect(document.querySelector('.tool-row, .tool-dot')).toBeNull()
 
