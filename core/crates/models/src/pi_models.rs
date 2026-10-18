@@ -377,6 +377,35 @@ pub fn store_endpoint(
     Ok(provider)
 }
 
+/// Each server Pi reaches through `models.json`, a local server or a custom
+/// endpoint, as its provider id, the name the record gives it and its base URL.
+pub fn endpoints(agent: &Path) -> Result<Vec<(String, String, String)>, String> {
+    let root = match read_json(&models_file(agent)) {
+        Ok(root) => root,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err(READ_ERROR.into()),
+    };
+    let record = read_record(agent)?;
+    Ok(root
+        .get("providers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| {
+            id.as_str() != ROUTER_PROVIDER && !key_providers().any(|(known, _)| known == *id)
+        })
+        .filter_map(|(id, entry)| {
+            let base_url = entry.get("baseUrl").and_then(Value::as_str)?;
+            let name = record
+                .get("names")
+                .and_then(|names| names.get(id))
+                .and_then(Value::as_str)
+                .unwrap_or(id);
+            Some((id.clone(), name.to_owned(), base_url.to_owned()))
+        })
+        .collect())
+}
+
 /// Rewrites each endpoint's model list from what its server serves now, with
 /// each model's window, and answers whether any list changed. A model the
 /// server still serves keeps the settings the user gave it. A server that

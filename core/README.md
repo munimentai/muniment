@@ -730,9 +730,13 @@ steering, gate answers and run starts through `SwarmHost`.
   every account in the fleet, recent audit entries and each member's vault
   state (`token`, or `leases` with the refusal). An account is a record of
   class `account` keyed `<holder>/<name>` that only its holder writes:
-  `{"name", "provider", "kind", "label", "refresher", "holder",
-  "holder_name", "shared", "this_machine", "usable_here"}` without any
-  secret.
+  `{"name", "provider", "kind", "label", "refresher", "shareable",
+  "reason"?, "holder", "holder_name", "shared", "this_machine",
+  "usable_here"}` without any secret. `shareable` says whether sharing
+  carries the connection, and `reason` says why not: a server at a loopback
+  address runs only on its own computer, and a local server or custom
+  endpoint, listed as `endpoint:<provider>` of kind `endpoint`, stays on the
+  computer that connected it.
   The owner reseals about once a minute, so a rotating sign-in travels as a
   lease the owner refreshes before the lease margin. `fleet.hold_sign_in`
   (`{"account": "pi:<provider>"|"router:<id>"}` → `{"status": "requested"|"held",
