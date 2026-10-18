@@ -15,7 +15,7 @@ use muniment_core::model_router::config::Credential;
 use muniment_core::model_router::native_auth::{self, Poll};
 use muniment_core::serde_json::{self, json};
 
-use super::sign_in::write_response;
+use super::callback::write_response;
 use super::{router, ModelService};
 
 /// How long a sign-in may take before the router gives up on it.
