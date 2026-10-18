@@ -131,6 +131,18 @@ pub(crate) fn pair(
     Ok((id, observation))
 }
 
+/// Links the runtime just paired as `id` into this computer's fleet, and
+/// answers the line that says why it is not linked when that failed.
+fn link_paired(registry: &Registry, id: &str) -> Option<String> {
+    let record = registry.record(id).ok()?;
+    let linked = super::fleet_link::link_into_fleet(&record);
+    if let Err(reason) = &linked {
+        eprintln!("muniment-desktop: the paired runtime was not linked runtime_id={id}");
+        return Some(reason.clone());
+    }
+    None
+}
+
 /// Revokes the credential a new pairing replaced, so the runtime lists this
 /// device once.
 fn revoke_previous(previous: &RemoteRuntimeRecord) {
@@ -226,7 +238,11 @@ pub async fn runtime_pair_link(
             .map_err(|_| "Another pairing is in progress.".to_owned())?;
         let registry = runtimes.registry()?.clone();
         let (id, observation) = pair(&registry, link, device_name, None, None)?;
-        Ok(finish_pairing(&app, &id, observation))
+        let notice = link_paired(&registry, &id);
+        Ok(RuntimeList {
+            notice,
+            ..finish_pairing(&app, &id, observation)
+        })
     })
     .await
 }
@@ -270,9 +286,18 @@ pub async fn runtime_pair_ssh(
             Some(tunnel.endpoint()),
             Some(target),
         );
+        // The paired record dials through the tunnel, so linking runs before
+        // it closes.
+        let notice = paired
+            .as_ref()
+            .ok()
+            .and_then(|(id, _)| link_paired(&registry, id));
         drop(tunnel);
         let (id, observation) = paired?;
-        Ok(finish_pairing(&app, &id, observation))
+        Ok(RuntimeList {
+            notice,
+            ..finish_pairing(&app, &id, observation)
+        })
     })
     .await
 }

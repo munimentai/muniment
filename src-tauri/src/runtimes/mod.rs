@@ -5,6 +5,7 @@
 
 mod commands;
 mod connection;
+mod fleet_link;
 mod local_access;
 mod registry;
 mod requested_update;
