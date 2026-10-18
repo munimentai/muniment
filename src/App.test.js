@@ -8825,6 +8825,31 @@ describe('runtimes', () => {
     expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
   })
 
+  it('names the machine Model providers applies to and switches it from Settings', async () => {
+    const fallback = invoke.getMockImplementation()
+    let list = listFor(buildBox.id)
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return list
+      if (command === 'runtime_select') {
+        list = listFor(payload.id)
+        return list
+      }
+      return fallback(command, payload)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await openSettings('Model providers')
+    const machine = await screen.findByRole('combobox', { name: 'Settings for' })
+    expect(machine).toHaveValue(buildBox.id)
+    expect([...machine.options].map((option) => option.textContent)).toEqual(['This computer', 'Build box'])
+    await fireEvent.change(machine, { target: { value: 'local' } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('runtime_select', { id: 'local' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue('local'))
+    // Appearance belongs to this window, so it names no machine.
+    await fireEvent.click(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'Appearance' }))
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Settings for' })).not.toBeInTheDocument())
+  })
+
   it('shows the agents of every paired machine with its shape and keeps that machine selected', async () => {
     const fallback = invoke.getMockImplementation()
     const list = listFor(buildBox.id)
