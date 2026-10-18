@@ -177,8 +177,73 @@ fn model_entries(ids: &[String], windows: &BTreeMap<String, Limits>) -> Vec<Valu
         .collect()
 }
 
-/// The key an endpoint provider already holds, never a stand-in. Settings never
-/// reads a key back to show it, so an edit with a blank key keeps this one.
+/// How long a key command may run before the key counts as unresolved.
+const KEY_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The key a `models.json` `apiKey` value stands for. A value that starts with
+/// `!` is a command, as Pi reads it: the key is its trimmed standard output,
+/// and empty output, a failure or a timeout leaves it unresolved. Any other
+/// value is the key itself.
+pub fn resolve_key(value: &str) -> Option<String> {
+    let Some(command) = value.strip_prefix('!') else {
+        return (!value.is_empty()).then(|| value.to_owned());
+    };
+    let output = run_key_command(command)?;
+    let key = String::from_utf8(output).ok()?.trim().to_owned();
+    (!key.is_empty()).then_some(key)
+}
+
+/// Runs a key command through the platform shell and answers its standard
+/// output when it exits zero within [`KEY_COMMAND_TIMEOUT`].
+fn run_key_command(command: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    #[cfg(unix)]
+    let mut shell = {
+        let mut shell = Command::new("/bin/sh");
+        shell.arg("-c").arg(command);
+        shell
+    };
+    #[cfg(windows)]
+    let mut shell = {
+        use std::os::windows::process::CommandExt;
+        // /S strips the outer quotes, so cmd runs the command exactly as written.
+        let mut shell = Command::new("cmd");
+        shell
+            .args(["/D", "/S", "/C"])
+            .raw_arg(format!("\"{command}\""));
+        shell
+    };
+    let mut child = shell
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let deadline = Instant::now() + KEY_COMMAND_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(LOCK_RETRY),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let bytes = reader.join().ok()?.ok()?;
+    status.success().then_some(bytes)
+}
+
+/// The `apiKey` value an endpoint provider already holds, never a stand-in: the
+/// key or the command that answers it. Settings never reads a key back to show
+/// it, so an edit with a blank key keeps this one.
 pub fn saved_endpoint_key(models_file: &Path, provider: &str) -> Option<String> {
     let root: Value = serde_json::from_slice(&fs::read(models_file).ok()?).ok()?;
     root["providers"][provider]["apiKey"]
@@ -268,7 +333,11 @@ pub fn store_ollama(
         .as_object_mut()
         .ok_or_else(|| SAVE_ERROR.to_string())?;
     // The server names its own models; the pinned id stands in when it does not answer.
-    let discovered = discover_endpoint_models(base_url, Some(key), DISCOVERY_TIMEOUT);
+    let discovered = discover_endpoint_models(
+        base_url,
+        resolve_key(key).as_deref().or(Some(key)),
+        DISCOVERY_TIMEOUT,
+    );
     let (model_ids, decisions, windows) = match discovered {
         Some(found) => (found.chat, found.decisions, found.windows),
         None => (vec![OLLAMA_MODEL.to_owned()], Vec::new(), BTreeMap::new()),
@@ -334,8 +403,12 @@ pub fn store_endpoint(
     let mut decisions = None;
     let mut windows = BTreeMap::new();
     if models.is_empty() {
-        let found =
-            discover_endpoint_models(base_url, Some(key), DISCOVERY_TIMEOUT).unwrap_or_default();
+        let found = discover_endpoint_models(
+            base_url,
+            resolve_key(key).as_deref().or(Some(key)),
+            DISCOVERY_TIMEOUT,
+        )
+        .unwrap_or_default();
         models = found.chat;
         windows = found.windows;
         decisions = Some(found.decisions);
@@ -434,11 +507,12 @@ pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
             let key = entry
                 .get("apiKey")
                 .and_then(Value::as_str)
-                .filter(|key| !matches!(*key, "ollama" | "local"));
+                .filter(|key| !matches!(*key, "ollama" | "local"))
+                .and_then(resolve_key);
             // A server that answers with no chat model is still loading, as
             // a local server does for a while after it starts, so the saved
             // list stays until it serves one.
-            let Some(found) = discover_endpoint_models(base_url, key, DISCOVERY_TIMEOUT)
+            let Some(found) = discover_endpoint_models(base_url, key.as_deref(), DISCOVERY_TIMEOUT)
                 .filter(|found| !found.chat.is_empty())
             else {
                 continue;

@@ -41,6 +41,8 @@ commands:
   revoke DEVICE_ID      revoke a paired remote device
   info [--json]         print the runtime's id, certificate fingerprint and
                         remote access state
+  secret get PROVIDER   print an endpoint key from the credential files, as
+                        Pi reads it
 
 options:
   -h, --help  print this help
@@ -67,6 +69,15 @@ const FAILURE: u8 = 1;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Pi runs `secret get <provider>` for an endpoint key, which this binary
+    // reads from the state root's credential files.
+    if let Some(status) =
+        muniment_runtime_core::models::endpoint_secrets::run_command(&args, || {
+            std::sync::Arc::new(muniment_runtime_core::host::state_root_credentials())
+        })
+    {
+        return ExitCode::from(u8::try_from(status).unwrap_or(FAILURE));
+    }
     let command = args.first().map(String::as_str).unwrap_or("serve");
     let rest = args.get(1..).unwrap_or_default();
     let takes_arguments = matches!(command, "pair" | "devices" | "revoke" | "info");

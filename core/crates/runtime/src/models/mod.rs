@@ -11,6 +11,7 @@
 
 pub mod callback;
 mod connections;
+pub mod endpoint_secrets;
 mod memory;
 mod pool_sign_in;
 mod providers;
@@ -32,7 +33,7 @@ use muniment_core::engine::PiRpcEngine;
 use muniment_core::serde_json::{self, Value};
 use muniment_core::sha2::{Digest, Sha256};
 
-use crate::host::SignInPage;
+use crate::host::{CredentialStore, SignInPage};
 
 /// How many mutating answers the service keeps for a retried key.
 const REPLAYS: usize = 32;
@@ -49,6 +50,14 @@ pub struct ModelService {
     sign_in_page: Arc<SignInPage>,
     subscribers: Mutex<Vec<Sender<Value>>>,
     replays: Mutex<VecDeque<Replay>>,
+    endpoint_keys: Option<EndpointKeys>,
+}
+
+/// Where endpoint keys live instead of `models.json`, and the executable Pi
+/// runs to read one.
+struct EndpointKeys {
+    store: Arc<dyn CredentialStore>,
+    executable: PathBuf,
 }
 
 /// One mutating answer, by its idempotency key and its request's digest.
@@ -80,6 +89,33 @@ impl ModelService {
             sign_in_page,
             subscribers: Mutex::new(Vec::new()),
             replays: Mutex::new(VecDeque::new()),
+            endpoint_keys: None,
+        }
+    }
+
+    /// Keeps endpoint keys in `store`, which `executable` answers Pi from,
+    /// and moves the keys `models.json` holds there now.
+    pub fn with_endpoint_keys(
+        mut self,
+        store: Arc<dyn CredentialStore>,
+        executable: PathBuf,
+    ) -> Self {
+        self.endpoint_keys = Some(EndpointKeys { store, executable });
+        self.seal_endpoint_keys();
+        self
+    }
+
+    /// Moves each plain endpoint key in `models.json` to the credential store.
+    fn seal_endpoint_keys(&self) {
+        let Some(keys) = &self.endpoint_keys else {
+            return;
+        };
+        if let Err(error) =
+            endpoint_secrets::seal(&self.agent, keys.store.as_ref(), &keys.executable)
+        {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: endpoint_keys outcome=failed error={error}"
+            );
         }
     }
 
@@ -164,6 +200,8 @@ impl ModelService {
         let result = self
             .run(request.action, request.data)?
             .map_err(ProtocolError::invalid_request_with_reason)?;
+        // A saved endpoint, a scan or a shared connection may have written a key.
+        self.seal_endpoint_keys();
         if let (Some(key), Some(digest)) = (key, digest) {
             let mut replays = self
                 .replays
@@ -249,7 +287,18 @@ impl ModelService {
             }
             ModelAction::DisconnectProvider => {
                 let data: Provider = parse(data)?;
-                answer(providers::disconnect_provider(agent, &data.provider))
+                let result = providers::disconnect_provider(agent, &data.provider);
+                if let (Ok(()), Some(keys)) = (&result, &self.endpoint_keys) {
+                    if let Err(error) =
+                        endpoint_secrets::forget(keys.store.as_ref(), &data.provider)
+                    {
+                        muniment_core::runtime_eprintln!(
+                            "muniment-runtime: endpoint_key provider={} outcome=kept error={error}",
+                            data.provider
+                        );
+                    }
+                }
+                answer(result)
             }
             ModelAction::StoreEndpoint => {
                 let data: Endpoint = parse(data)?;
@@ -707,6 +756,67 @@ mod tests {
             Some(ErrorDetails::RequestReason { reason }) => Some(reason),
             _ => None,
         }
+    }
+
+    #[test]
+    fn a_saved_endpoint_key_lives_in_the_credential_store_and_leaves_with_the_endpoint() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-model-service-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_core::state_root::agent_directory(&profile);
+        std::fs::create_dir_all(&agent).unwrap();
+        // A key saved before the store held endpoint keys moves at startup.
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-old":{"baseUrl":"https://old.example/v1","apiKey":"sk-old","models":[{"id":"m"}]}}}"#,
+        )
+        .unwrap();
+        let store: Arc<dyn CredentialStore> = Arc::new(crate::host::FileCredentialStore::new(
+            profile.join("credentials"),
+        ));
+        let page: Arc<SignInPage> = Arc::new(crate::host::plain_sign_in_page);
+        let executable = PathBuf::from("/opt/muniment/muniment-runtime");
+        let service = Arc::new(
+            ModelService::new(&profile, page).with_endpoint_keys(Arc::clone(&store), executable),
+        );
+        let text = || std::fs::read_to_string(agent.join("models.json")).unwrap();
+        assert!(!text().contains("sk-old"));
+        assert_eq!(
+            store
+                .read(endpoint_secrets::SERVICE, "custom-old")
+                .as_deref(),
+            Some("sk-old")
+        );
+
+        let provider = service
+            .request(
+                request(
+                    ModelAction::StoreEndpoint,
+                    serde_json::json!({"kind": "custom", "name": "Proxy", "base_url": "https://proxy.example/v1", "key": "sk-new", "models": ["m"]}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert_eq!(provider, "custom-proxy");
+        assert!(!text().contains("sk-new"));
+        assert!(text().contains(r#"secret get custom-proxy"#));
+        assert_eq!(
+            store
+                .read(endpoint_secrets::SERVICE, "custom-proxy")
+                .as_deref(),
+            Some("sk-new")
+        );
+
+        service
+            .request(
+                request(
+                    ModelAction::DisconnectProvider,
+                    serde_json::json!({"provider": "custom-proxy"}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert_eq!(store.read(endpoint_secrets::SERVICE, "custom-proxy"), None);
+        std::fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]

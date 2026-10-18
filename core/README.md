@@ -1017,6 +1017,19 @@ The catalog (`crates/models/catalog.toml`) is a list of `[[model]]` tables with
 `strengths` and `limits`. A file that fails the check keeps the last good
 catalog in force.
 
+### Endpoint keys
+
+The runtime keeps the key of each Ollama, LM Studio or custom endpoint in its
+credential store, the keychain on the desktop and `FileCredentialStore` on a
+headless host, under the service `ai.muniment.endpoints` with the provider id
+as the name. Pi's `models.json` holds a command in its place,
+`!"<runtime executable>" secret get <provider>`, which Pi runs for the key and
+which `muniment-runtime` and `muniment-server` answer from the same store. At
+startup and after every model action the runtime moves any plain key it finds
+in `models.json` into the store and points each command at its current
+executable. A stand-in key, an environment reference and a command the user
+wrote stay as they are. A key the store refuses stays in the file.
+
 ### Account credentials
 
 A gateway on `state_dir` keeps each credential inside its account record, as

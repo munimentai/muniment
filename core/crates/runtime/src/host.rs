@@ -49,12 +49,16 @@ pub struct RuntimeHost {
     pub provider_clients: ProviderClients,
     /// The page a provider sign-in's browser lands on.
     pub sign_in_page: Arc<SignInPage>,
+    /// The executable that answers `secret get <provider>` from
+    /// `credentials`, which Pi runs for an endpoint key. `None` leaves
+    /// endpoint keys in Pi's `models.json`.
+    pub secret_executable: Option<PathBuf>,
 }
 
 impl Default for RuntimeHost {
     /// No cloud account, the platform keyring, no desktop peer, no reader
-    /// sidecar, this crate's version, no provider clients and a plain
-    /// sign-in page. Without the `keyring` feature the credential store is
+    /// sidecar, this crate's version, no provider clients, a plain sign-in
+    /// page and endpoint keys in `models.json`. Without the `keyring` feature the credential store is
     /// [`state_root_credentials`].
     fn default() -> Self {
         Self {
@@ -69,6 +73,7 @@ impl Default for RuntimeHost {
             runtime_version: env!("CARGO_PKG_VERSION"),
             provider_clients: ProviderClients::default(),
             sign_in_page: Arc::new(plain_sign_in_page),
+            secret_executable: None,
         }
     }
 }

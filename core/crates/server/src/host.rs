@@ -21,7 +21,8 @@ const RUNTIME_DIRECTORY_NAME: &str = "run";
 
 /// No cloud account or chat grants, secrets in files under the state root,
 /// no desktop peer, the reader sidecar beside this binary when one is there,
-/// this binary's version, no provider OAuth clients and a plain sign-in page.
+/// this binary's version, no provider OAuth clients, a plain sign-in page,
+/// and this binary as the one Pi runs to read an endpoint key.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn headless_host(state: &Path) -> RuntimeHost {
     RuntimeHost {
@@ -38,6 +39,7 @@ pub fn headless_host(state: &Path) -> RuntimeHost {
         runtime_version: RUNTIME_VERSION,
         provider_clients: Default::default(),
         sign_in_page: Arc::new(plain_sign_in_page),
+        secret_executable: std::env::current_exe().ok(),
     }
 }
 
