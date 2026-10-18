@@ -8,6 +8,7 @@ export const ANSWER_LABELS = {
   allow_once: 'Allow once',
   allow_thread: 'Allow for this thread',
   always_allow_agent: 'Always allow for this agent',
+  always_allow: 'Always allow',
   deny: 'Deny',
   // A plan approval's answers: approve it into a mode, or keep planning.
   plan_manual: 'Approve, then ask before changes',

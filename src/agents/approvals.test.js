@@ -79,6 +79,9 @@ it('shows a composer gate without the agent-only answer and answers Deny with it
   const gate = { kind: 'select', title: 'Allow bash `rm old.csv`?', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] }
   expect(composerGateOptions(gate)).toEqual({ options: ['Allow once', 'Allow for this thread'], deny: { type: 'select', value: 'Deny' } })
   expect(composerGateOptions(gate, true).options).toContain('Always allow for this agent')
+  // A thread without an agent offers the global answer core lists for it.
+  const plain = { ...gate, options: ['Allow once', 'Allow for this thread', 'Always allow', 'Deny'] }
+  expect(composerGateOptions(plain).options).toEqual(['Allow once', 'Allow for this thread', 'Always allow'])
   expect(composerGateOptions({ kind: 'select', title: 'Export target', options: ['PDF', 'Word'] })).toEqual({ options: ['PDF', 'Word'], deny: { type: 'cancelled' } })
   expect(isPlanGate({ kind: 'select', title: 'Approve this plan?', options: [] })).toBe(true)
   expect(isPlanGate(gate)).toBe(false)
