@@ -278,7 +278,13 @@ fn first_message_name_persists_and_never_overwrites_a_manual_name() {
         first_thread_needs_name(&mut journal, &run),
         Some(thread.clone())
     );
-    assert!(!save_first_thread_name(&mut journal, &run, "This title is too long", true).unwrap());
+    assert!(!save_first_thread_name(
+        &mut journal,
+        &run,
+        "This title is far too long to keep",
+        true
+    )
+    .unwrap());
     assert!(save_first_thread_name(&mut journal, &run, "Report repair", true).unwrap());
     assert!(first_thread_needs_name(&mut journal, &run).is_none());
     drop(journal);
@@ -318,4 +324,25 @@ fn a_manual_name_during_generation_and_later_messages_block_automatic_names() {
     )
     .unwrap();
     assert!(!save_first_thread_name(&mut journal, &first, "Late title", true).unwrap());
+}
+
+#[test]
+fn a_prompt_fallback_name_keeps_whole_words_and_marks_a_cut() {
+    use muniment_core::journal::thread_mutation::fallback_thread_name;
+    assert_eq!(fallback_thread_name("Say hi in French"), "Say hi in French");
+    assert_eq!(
+        fallback_thread_name("Make a small HTML page that shows a countdown to New Year"),
+        "Make a small HTML page that…"
+    );
+    assert_eq!(
+        fallback_thread_name("Summarize   the\nquarterly report, please"),
+        "Summarize the quarterly report, please"
+    );
+    assert_eq!(
+        fallback_thread_name("Compare these: alpha, beta, gamma, delta, epsilon"),
+        "Compare these: alpha, beta, gamma, delta…"
+    );
+    let long = "x".repeat(60);
+    assert_eq!(fallback_thread_name(&long), format!("{}…", "x".repeat(47)));
+    assert_eq!(fallback_thread_name("   "), "");
 }

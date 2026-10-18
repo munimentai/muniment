@@ -29,9 +29,10 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use muniment_core::attach::{
-    connect_remote_runtime, pair_with_link, ClientError, DesktopClient, Id, InstallKind, Operation,
-    PairingLink, PairingLinkRequest, RemoteAccess, RemoteAccessOptions, RemoteClientOptions,
-    RemoteListener, RemoteListenerConfig, RemoteListenerError, RemoteRuntimeRecord,
+    connect_remote_runtime, pair_with_link, ClientError, DesktopClient, Id, InstallKind,
+    ModelAction, Operation, PairingLink, PairingLinkRequest, RemoteAccess, RemoteAccessOptions,
+    RemoteClientOptions, RemoteListener, RemoteListenerConfig, RemoteListenerError,
+    RemoteRuntimeRecord,
 };
 use muniment_core::serde_json::{self, json, Value};
 use muniment_runtime_core::host::{AccountService, AccountSession, FileCredentialStore};
@@ -493,6 +494,37 @@ impl HostRuntime {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("auth.json"), auth.to_string()).unwrap();
     }
+
+    /// A ChatGPT subscription in the router pool, signed in for a day.
+    fn write_subscription(&self) {
+        use muniment_core::model_router::config::{self, Account, Credential};
+        let agent = muniment_core::state_root::agent_directory(&self.temporary.profile);
+        let mut settings = config::load(&agent).unwrap();
+        settings.enabled = true;
+        settings.accounts.push(Account {
+            id: "chatgpt".into(),
+            family: "openai".into(),
+            label: "ChatGPT".into(),
+            credential: Credential::Subscription {
+                provider: "openai-codex".into(),
+                access: "fleet-e2e-access".into(),
+                refresh: Some("fleet-e2e-refresh".into()),
+                expires_ms: Some(
+                    muniment_core::chrono::Utc::now().timestamp_millis() + 24 * 60 * 60_000,
+                ),
+                account_id: None,
+                email: None,
+                plan: None,
+                renews_at_ms: None,
+            },
+            base_url: None,
+            models: Vec::new(),
+            enabled: true,
+            weight: 1,
+            overflow: false,
+        });
+        config::save(&agent, &settings).unwrap();
+    }
 }
 
 impl Drop for HostRuntime {
@@ -823,8 +855,11 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
         Ok(())
     });
 
-    // 3. The host shares a model connection: every container holds it.
+    // 3. The host shares a model connection and a ChatGPT subscription its
+    // router pool serves: every container holds both and offers the
+    // subscription's models.
     host.write_auth(&json!({"openai": {"type": "api_key", "key": API_KEY}}));
+    host.write_subscription();
     let shared = h
         .call(
             Operation::FleetCredentials,
@@ -842,6 +877,24 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
                 ensure(auth["openai"]["key"] == API_KEY, || {
                     format!("{} auth: {auth}", node.name)
                 })?;
+                let inventory = node.with(|client| {
+                    client.models_request(ModelAction::ProviderInventory, json!({}))
+                })?;
+                ensure(
+                    inventory["providers"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|provider| provider["source"] == "router")
+                        && inventory["router_models"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|model| {
+                                model["family"] == "openai" && model["accounts"].as_u64() >= Some(1)
+                            }),
+                    || format!("{} inventory: {inventory}", node.name),
+                )?;
                 let held = node.credentials()?;
                 ensure(
                     held["secrets"]

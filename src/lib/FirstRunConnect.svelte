@@ -8,7 +8,7 @@
   // server that needs a step opens that step in place, and a subscription's
   // sign-in runs in place under its card. Connect means Muniment reuses a
   // sign-in this computer already holds, and Sign in means a new one.
-  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, signIn = null, onconnect, onmore, onexplore, onrescan, onsigninanswer, onsignincancel, onsigninopen } = $props()
+  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, folderAsking = false, busy = false, signIn = null, onconnect, onmore, onexplore, onrescan, onsigninanswer, onsignincancel, onsigninopen } = $props()
   let answer = $state('')
   let open = $state(null)
   let key = $state('')
@@ -102,6 +102,7 @@
 
   <p class="home">
     {#if home}{'Your files go to '}{/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Home is unavailable.')}</span>{#if home}.{/if}
+    {#if folderAsking}<span class="asking" role="status">If macOS asks about this folder, choose Allow.</span>{/if}
   </p>
 </section>
 
@@ -137,5 +138,6 @@
   .more { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border-style: dashed; border-radius: var(--radius-panel); background: none; color: var(--muted); }
   .more:hover { color: var(--ink); }
   .home { margin: 24px 0 0; color: var(--muted); font-size: var(--text-12); }
+  .asking { margin-left: 8px; color: var(--ink); }
   .link { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 </style>

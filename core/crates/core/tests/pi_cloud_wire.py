@@ -58,7 +58,7 @@ class CloudWire(unittest.TestCase):
                                  'arguments': json.dumps({'path': str(root / 'tool-result'), 'content': 'once'})}}]}
                         finish = 'tool_calls'
                     else:
-                        is_name = any('Name this thread in one to three words.' in str(message.get('content')) for message in body['messages'])
+                        is_name = any('Name this thread in two to five words' in str(message.get('content')) for message in body['messages'])
                         delta = {'role': 'assistant', 'content': 'Lease comparison' if is_name else 'The gateway replied.'}
                         finish = 'stop'
                     for part, reason in [(delta, None), ({}, finish)]:

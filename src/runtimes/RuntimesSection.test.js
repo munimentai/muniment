@@ -403,6 +403,8 @@ describe('Model sharing', () => {
     await waitFor(() => expect(toggle).toBeEnabled())
     await fireEvent.click(toggle)
     expect(await screen.findByText('This runtime is not in a fleet.')).toBeInTheDocument()
+    // The switch shows core's answer, not the click.
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
   })
 
   it('takes shared connections back from MuniCloud when sharing turns off, and leaves the MuniCloud switch to Account', async () => {

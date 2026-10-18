@@ -1721,6 +1721,31 @@ describe('workspace composer entry', () => {
     expect(await within(dialog).findByRole('region', { name: 'LM Studio' })).toBeInTheDocument()
   })
 
+  it('keeps the chip on its model when the runtime reconnects after a reply and lists no model for a while', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      localModeStatus = true
+      const router = { id: 'muniment-router', name: 'Muniment router', source: 'router', base_url: null, models: [] }
+      const served = { providers: [router], default_provider: 'muniment-router', default_model: 'openai/gpt-6-astra', hidden: [], shown: [], router_models: [{ id: 'openai/gpt-6-astra', name: 'GPT-6 Astra', family: 'openai', model: 'gpt-6-astra', accounts: 1 }] }
+      let answer = served
+      const defaultInvoke = invoke.getMockImplementation()
+      invoke.mockImplementation((command, ...args) => command === 'local_mode_provider_inventory' ? Promise.resolve(answer) : defaultInvoke(command, ...args))
+      render(App)
+      expect(await screen.findByRole('button', { name: 'Model: GPT-6 Astra' })).toBeInTheDocument()
+      // The reply ends, the desktop client reconnects, and the runtime answers
+      // with no provider, then with the router and no model, until it settles.
+      desktopClientListener({ payload: { connected: false, supervisor_running: true } })
+      answer = { providers: [], hidden: [], shown: [], router_models: [] }
+      desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+      await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_provider_inventory').length).toBeGreaterThan(1))
+      expect(screen.getByRole('button', { name: 'Model: GPT-6 Astra' })).toBeInTheDocument()
+      answer = { ...served, router_models: [] }
+      await vi.advanceTimersByTimeAsync(12_000)
+      expect(screen.getByRole('button', { name: 'Model: GPT-6 Astra' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Model: Connect a model' })).not.toBeInTheDocument()
+    } finally { vi.useRealTimers() }
+  })
+
   it.each([false, true])('disables the endpoint form until a save settles with failure %s', async (fails) => {
     localModeStatus = true
     const save = deferred()
@@ -4116,6 +4141,37 @@ describe('Home onboarding', () => {
     expect(calls.lastIndexOf('local_mode_provider_inventory')).toBeGreaterThan(calls.indexOf('onboarding_connect_server'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+  })
+
+  it('asks for Home folder access after it saves Home and before it leaves the first run', async () => {
+    firstRun()
+    providerScan = { servers: [ollama], hints: [] }
+    const answer = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'home_folder_access' ? answer.promise : original(command, payload))
+    render(App)
+    await fireEvent.click(await ready('Ollama'))
+    expect(await screen.findByText('If macOS asks about this folder, choose Allow.')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('home_folder_access', { homePath: '/Documents/Muniment' })
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
+    answer.resolve({ state: 'open', message: null })
+    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
+    const calls = invoke.mock.calls.map(([command]) => command)
+    expect(calls.indexOf('home_confirm')).toBeLessThan(calls.indexOf('home_folder_access'))
+    expect(calls.indexOf('home_folder_access')).toBeLessThan(calls.indexOf('onboarding_connect_server'))
+  })
+
+  it('keeps the first run and names the step when macOS refuses Home', async () => {
+    firstRun()
+    providerScan = { servers: [ollama], hints: [] }
+    const original = invoke.getMockImplementation()
+    const refusal = 'macOS does not let Muniment open your Documents folder. Turn on Muniment in System Settings > Privacy & Security > Files & Folders, then try again.'
+    invoke.mockImplementation((command, payload) => command === 'home_folder_access' ? Promise.resolve({ state: 'denied', message: refusal }) : original(command, payload))
+    render(App)
+    await fireEvent.click(await ready('Ollama'))
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+    expect(firstRunScreen()).toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
 
   it.each([

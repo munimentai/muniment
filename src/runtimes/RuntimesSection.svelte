@@ -41,6 +41,7 @@
   let localUpdate = $state(null)
   let localVersion = $state(null)
   let shareModels = $state(null)
+  let shareFailure = $state('')
   // svelte-ignore state_referenced_locally
   let adding = $state(focus === 'add')
   // svelte-ignore state_referenced_locally
@@ -110,16 +111,22 @@
     }
   }
 
-  // Turning sharing off takes the connections back from MuniCloud too.
+  // Turning sharing off takes the connections back from MuniCloud too. The
+  // switch shows what core answers: a refused change moves it back, and the
+  // reason shows under it.
   async function setSharing(next) {
+    const before = shareModels
+    shareModels = next
     busy = 'share'
     error = ''
     notice = ''
+    shareFailure = ''
     try {
       const answer = await agentRequest(tauri, 'local', 'fleet.credentials', { share_models: next })
       shareModels = !!answer?.share_models
     } catch (failure) {
-      error = errorLine(failure)
+      shareModels = before
+      shareFailure = errorLine(failure)
       return
     } finally {
       busy = ''
@@ -291,6 +298,7 @@
       <Toggle checked={shareModels ?? false} label="Share model connections" disabled={shareModels === null || busy === 'share'} onchange={setSharing} />
     </Row>
   </Group>
+  {#if shareFailure}<p class="line" role="alert">{shareFailure}</p>{/if}
   {#if list?.shareError}<p class="line" role="alert">{list.shareError}</p>{/if}
 
   {#if localUpdate}

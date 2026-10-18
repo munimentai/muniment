@@ -312,7 +312,9 @@ impl Ssh {
 
     fn command(&self, arguments: &[String]) -> Command {
         let mut command = Command::new(&self.program);
-        command.args(arguments).stdin(Stdio::null());
+        muniment_core::child_fds::stdio_only(&mut command)
+            .args(arguments)
+            .stdin(Stdio::null());
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
