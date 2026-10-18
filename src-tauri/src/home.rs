@@ -166,8 +166,9 @@ pub async fn home_folder_access(
     let user_home = app.path().home_dir().ok();
     let runtime_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // The app writes a thread's folder at its first run, so it writes
-        // into Home now and macOS asks while the first run shows its hint.
+        // macOS answers one prompt for the app and the processes it starts.
+        // Reading Home and the folder that holds it now shows that prompt
+        // while the first run shows its hint, not at the first chat.
         let mut access = open_home(&home, FOLDER_ACCESS_BOUND);
         if access == FolderAccess::Open {
             ask_runtime(&runtime_app);
