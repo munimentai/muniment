@@ -877,6 +877,45 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
         thread_ran_on(c2, &offloaded, Some(follow_up))
     });
 
+    // The app's path to a machine it paired: while a run waits on the host,
+    // a new thread on c1 takes a first and a second message, and every
+    // member lists the thread as c1's.
+    let waiting = h
+        .with(|client| {
+            client.run_submit(
+                &format!("Wait on the host. {HOLD_MARKER}"),
+                &[],
+                None,
+                None,
+                Some("bypass"),
+            )
+        })
+        .unwrap();
+    let fresh = c1.with(|client| client.create_thread()).unwrap();
+    for text in ["First message on c1.", "Second message on c1."] {
+        // A refusal records nothing, so the send repeats while the last
+        // run's slot frees.
+        until(&format!("c1 takes {text:?}"), || {
+            c1.with(|client| client.run_submit(text, &[], Some(&fresh), None, Some("bypass")))
+                .map(drop)
+        });
+        until(&format!("{text:?} runs on c1"), || {
+            thread_ran_on(c1, &fresh, Some(text))
+        });
+    }
+    h.with(|client| client.run_cancel(&waiting.run_id)).unwrap();
+    until("every member lists c1's new thread as c1's", || {
+        every(&all, |node| {
+            let summary = node.summary(&fresh)?;
+            ensure(
+                summary
+                    .as_ref()
+                    .is_some_and(|summary| summary["owner_runtime"] == c1.runtime_id),
+                || format!("{}: {summary:?}", node.name),
+            )
+        })
+    });
+
     // Stop and steer from the host reach a run on c2, which only the fleet
     // links the host to: the host's runtime forwards both to the owner.
     let held = |text: &str| -> (String, String) {
