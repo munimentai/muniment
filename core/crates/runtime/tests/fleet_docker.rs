@@ -788,6 +788,15 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
                 .filter_map(|member| member["runtime_id"].as_str().map(str::to_owned))
                 .collect();
             ensure(full == ids, || format!("{}: {members:?}", node.name))?;
+            // Each machine lists once, under its one id.
+            let listed: Vec<&str> = members
+                .iter()
+                .filter_map(|member| member["runtime_id"].as_str())
+                .collect();
+            ensure(
+                listed.len() == ids.len() && listed.iter().all(|id| ids.contains(*id)),
+                || format!("{} lists {listed:?}: {members:?}", node.name),
+            )?;
         }
         Ok(())
     });
@@ -903,7 +912,20 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
             thread_ran_on(c1, &fresh, Some(text))
         });
     }
-    h.with(|client| client.run_cancel(&waiting.run_id)).unwrap();
+    // The wait held on the host the whole time; a steer ends it.
+    until("the host's waiting run takes a steer", || {
+        h.with(|client| client.run_steer(&waiting.run_id, "Done waiting."))
+            .map(drop)
+    });
+    until("the host's waiting run finishes", || {
+        let entries = h.history(&waiting.thread_id)?;
+        ensure(
+            entries.iter().any(|entry| {
+                entry["runId"] == waiting.run_id.as_str() && entry["phase"] == "complete"
+            }),
+            || format!("host history: {entries:?}"),
+        )
+    });
     until("every member lists c1's new thread as c1's", || {
         every(&all, |node| {
             let summary = node.summary(&fresh)?;
@@ -1105,6 +1127,21 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
             Ok(())
         },
     );
+
+    // Sharing adds no member: every machine still lists each one once.
+    for node in &all {
+        let listed: Vec<String> = node
+            .members()
+            .unwrap()
+            .iter()
+            .filter_map(|member| member["runtime_id"].as_str().map(str::to_owned))
+            .collect();
+        assert!(
+            listed.len() == ids.len() && listed.iter().all(|id| ids.contains(id)),
+            "{} lists {listed:?} after sharing",
+            node.name
+        );
+    }
 
     // A thread offloaded after the switch runs on the shared connections.
     let shared_text = "Answer with the shared connection on c1.";
