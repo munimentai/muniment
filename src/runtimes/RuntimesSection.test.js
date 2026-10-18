@@ -350,6 +350,21 @@ describe('one list of machines', () => {
     })
   }
 
+  it('lists this computer once while its own fleet view does not answer', async () => {
+    const bridge = fleetBridge([])
+    const answer = bridge.invoke.getMockImplementation()
+    bridge.invoke.mockImplementation(async (command, payload) => {
+      if (command === 'agent_request' && payload.runtime === 'local' && payload.operation === 'swarm.members') throw new Error('Muniment is busy with another request. Try again.')
+      return answer(command, payload)
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await screen.findByRole('group', { name: 'Build box' })
+    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ runtime: box.id, operation: 'swarm.members' })))
+    // The merge lands once every machine answered.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Pocket'])
+  })
+
   it('lists every machine once: reached, linked through the fleet, and using this computer', async () => {
     render(RuntimesSection, { tauri: fleetBridge([]), listen })
     await screen.findByRole('group', { name: 'Pod' })
