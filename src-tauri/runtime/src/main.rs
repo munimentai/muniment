@@ -368,6 +368,15 @@ enum RuntimeDirectorySource {
 }
 
 fn handle_arguments() -> Result<bool, String> {
+    // Pi runs `secret get <provider>` for an endpoint key, which this binary
+    // reads from the keychain it stored the key in.
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(status) = muniment_runtime_core::models::endpoint_secrets::run_command(
+        &arguments,
+        muniment_runtime_core::host::platform_credentials,
+    ) {
+        std::process::exit(status);
+    }
     let mut args = std::env::args_os().skip(1);
     let Some(argument) = args.next() else {
         return Ok(false);

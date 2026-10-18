@@ -24,7 +24,8 @@ const READER_NAME: &str = if cfg!(windows) {
 /// store in a temporary directory in a test run), the
 /// installed desktop executable, the reader sidecar beside this binary, this
 /// binary's package version, which the runtime announces on attach, the
-/// desktop's provider OAuth clients and Muniment's sign-in page.
+/// desktop's provider OAuth clients, Muniment's sign-in page, and this binary
+/// as the one Pi runs to read an endpoint key from the keychain.
 pub fn desktop_host() -> RuntimeHost {
     let runtime_executable = std::env::current_exe().ok();
     RuntimeHost {
@@ -36,6 +37,7 @@ pub fn desktop_host() -> RuntimeHost {
         runtime_version: env!("CARGO_PKG_VERSION"),
         provider_clients: muniment_desktop_integration::provider_clients::provider_clients(),
         sign_in_page: Arc::new(sign_in_page),
+        secret_executable: runtime_executable,
     }
 }
 
