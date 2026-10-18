@@ -5,7 +5,9 @@
 </script>
 
 <svg class="lucide" class:side-icon={variant === 'side'} class:action-icon={variant === 'action'} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" data-icon={name}>
-  {#if name === 'activity'}
+  {#if name === 'undo-2'}
+    <path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+  {:else if name === 'activity'}
     <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
   {:else if name === 'bell'}
     <path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
