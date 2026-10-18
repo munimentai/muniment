@@ -1556,6 +1556,7 @@
     readPendingModel: () => currentThreadId ? null : pendingModel,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
+    readRuntime: () => composerRuntime,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,
     onMessages: (next) => { messages = next },
     onActive: (next) => { const finished = !!active && !next; active = next; if (finished) void revealSavedArtifact() },
@@ -3335,8 +3336,15 @@
     return desktopClientStatus?.runtime_upgrade_pending === true
   }
 
+  // A run left running on another thread holds a send only on its own
+  // machine. A post or a new thread on a fleet member starts no run here.
+  function backgroundHolds() {
+    if (!backgroundRun || threadPostTarget || (freshThread && offloadTarget)) return false
+    return (backgroundRun.runtime ?? LOCAL_RUNTIME_ID) === composerRuntime
+  }
+
   function sendDisabled() {
-    return runtimeUpgradePending() || !!unreachableMachine || !outgoingDraft().trim() || !!backgroundRun || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || !!unreachableMachine || !outgoingDraft().trim() || backgroundHolds() || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   // The band's one action control: an up arrow that sends while the draft has

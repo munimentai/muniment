@@ -9118,6 +9118,43 @@ describe('runtimes', () => {
     expect(dialog.querySelector('[data-settings-part="cloud"]')).toBeNull()
   })
 
+  it('sends two messages in a new thread on a paired machine while a run waits on this computer', async () => {
+    const fallback = invoke.getMockImplementation()
+    let list = listFor('local')
+    let current = 'local-1'
+    threadSummaryResult = [{ threadId: 'local-1', title: 'Local work', updatedAt: '', runtimeId: 'local' }]
+    const submits = []
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return list
+      if (command === 'runtime_select') { list = listFor(payload.id); return list }
+      if (command === 'chat_current_thread') return current
+      // This computer's run waits for an approval, so it stays in the background.
+      if (command === 'chat_thread_open' && payload.threadId === 'local-1') return [{ runId: 'run-gated', phase: 'pending-permission', text: '', prompt: 'Scan the news.', receipt: null, toolActivity: [], pendingPermission: { kind: 'select', title: 'Allow web_search?', options: ['Allow once', 'Deny'] } }]
+      if (command === 'chat_new_thread') { current = 'box-thread'; return current }
+      if (command === 'chat_submit') { submits.push(payload.prompt); return { runId: `box-run-${submits.length}` } }
+      return fallback(command, payload)
+    })
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    await screen.findByRole('button', { name: 'Stop' })
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: /Build box/ }))
+    expect(await screen.findByRole('button', { name: 'Machine: Build box. Choose a machine' })).toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'Run uname.' } })
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled')
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(submits).toEqual(['Run uname.']))
+    threadSummaryResult = [{ threadId: 'box-thread', title: 'Run uname', updatedAt: '', runtimeId: buildBox.id }, { threadId: 'local-1', title: 'Local work', updatedAt: '', runtimeId: 'local' }]
+    chatListener({ payload: { runId: 'box-run-1', threadId: 'box-thread', phase: 'complete', text: 'Linux', receipt: {} } })
+    await screen.findByText('Linux')
+    await fireEvent.input(composer, { target: { value: 'Now run hostname.' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAttribute('aria-disabled'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(submits).toEqual(['Run uname.', 'Now run hostname.']))
+  })
+
   it('opens a thread on the machine its row names, so the model list follows that machine', async () => {
     const fallback = invoke.getMockImplementation()
     threadSummaryResult = [
@@ -9369,6 +9406,44 @@ describe('the swarm', () => {
     await waitFor(() => expect(composer).toHaveValue(''))
     expect(screen.queryByText(/Another machine runs this thread/)).toBeNull()
     expect(document.body.textContent).not.toContain('thread.post')
+  })
+
+  it('starts a new thread on a fleet member while a run waits on this computer and posts the follow-up there', async () => {
+    const members = { self: 'core-laptop', absence: { paused: false, paused_at: null, last_client_at: null }, members: [{ runtime_id: 'core-laptop', runtime_name: 'Laptop', form_factor: 'laptop', online: true, self: true, links: ['core-pod'], link: null }, { runtime_id: 'core-pod', runtime_name: 'Container', form_factor: 'container', online: true, self: false, links: ['core-laptop'], link: { direction: 'inbound', state: 'connected' } }] }
+    swarmMachine({ answers: { 'swarm.members': () => members, 'thread.post': () => ({ message_id: 'm2', forwarded: true, op_id: 'op2', state: 'sent' }) } })
+    const swarmed = invoke.getMockImplementation()
+    const list = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [{ id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, active: true, scopes: [], admin: true, updateOffered: false, sshHost: null }] }
+    let current = 'thread-1'
+    invoke.mockImplementation((command, args) => command === 'runtime_list' ? Promise.resolve(list)
+      : command === 'chat_current_thread' ? Promise.resolve(current)
+        // The open thread's run waits for an approval, so it stays in the background.
+        : command === 'chat_thread_open' && args.threadId === 'thread-1' ? Promise.resolve([{ runId: 'run-gated', phase: 'pending-permission', text: '', prompt: 'Scan the news.', receipt: null, toolActivity: [], pendingPermission: { kind: 'select', title: 'Allow web_search?', options: ['Allow once', 'Deny'] } }])
+          : command === 'chat_new_thread' ? Promise.resolve(current = 'thread-new')
+            : command === 'fleet_thread_create' ? Promise.resolve({ thread_id: 'pod-thread', op_id: 'op1', forwarded: true, state: 'sent' })
+              : swarmed(command, args))
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    await screen.findByRole('button', { name: 'Stop' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'swarm.members' })))
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread'))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Container' }))
+    await fireEvent.input(composer, { target: { value: 'Run uname.' } })
+    const send = screen.getByRole('button', { name: 'Send' })
+    expect(send).not.toHaveAttribute('aria-disabled')
+    await fireEvent.click(send)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('fleet_thread_create', { runtimeId: 'core-pod', text: 'Run uname.', permissionMode: null }))
+    await waitFor(() => expect(composer).toHaveValue(''))
+    // The thread opens once the member's sync lists it, and the next message posts to its owner.
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'News', updatedAt: '' }, { threadId: 'pod-thread', title: 'Run uname', updatedAt: '', runtimeId: 'local', owner_runtime: 'core-pod', replica: true }]
+    current = 'pod-thread'
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'swarm-changed') handle({ payload: { runtimeId: 'local', change: { kind: 'threads' } } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'pod-thread' })))
+    await fireEvent.input(composer, { target: { value: 'Now run hostname.' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.post', body: { thread_id: 'pod-thread', text: 'Now run hostname.' } }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
   })
 
   it('asks to resume routines after the absence pause', async () => {
