@@ -335,9 +335,10 @@ until the key changes.
 
 ### Release signing key
 
-Each `core-v*` release attaches `SHA256SUMS` and a minisign signature over it.
-The `MUNIMENT_RELEASE_SIGNING_KEY` secret exists only in the release job, which
-fails before it tags when the key is missing or when `RELEASE_PUBLIC_KEY` in
+Each `vX.Y.Z` release attaches `SHA256SUMS`, which lists every file of the
+release, and a minisign signature over it. The `MUNIMENT_RELEASE_SIGNING_KEY`
+secret exists only in the release workflow's server job, which fails before it
+uploads when the key is missing or when `RELEASE_PUBLIC_KEY` in
 `core/crates/server/src/release.rs` does not verify the signature. The public key
 is in source control. The private key never is. A holder of the private key can
 publish an update that every launcher accepts. A key change needs a new launcher

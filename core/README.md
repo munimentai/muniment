@@ -4,9 +4,10 @@ The shared Rust core of Muniment. The Muniment desktop and headless router
 hosts build on the same crates, so local runtime behavior, model routing and
 runtime pins match in both.
 
-This directory is the core of the `munimentai/muniment` repository. Core
-releases are the `core-vX.Y.Z` tags and releases there. The desktop releases
-use the `vX.Y.Z` tags.
+This directory is the core of the `munimentai/muniment` repository. One
+`vX.Y.Z` tag there releases the core, the desktop app and the CLI together.
+`version` under `[workspace.package]` in `Cargo.toml` names the version, and
+every crate inherits it.
 
 ## Crates
 
@@ -71,9 +72,8 @@ compatibility suite on the host platform:
 The `core-pins-update` workflow runs daily. It bumps every pin that passes the
 suite on Linux, then runs the suite and the workspace tests on macOS and the CI
 checks on Linux against the bumped tree. When all of them pass, it rebases the
-bump onto `main` and pushes it with a `feat:` or `fix:` message. It then tags
-the next `core-v*` release with `pins.toml`, `packages.bun.lock` and the signed
-server archives attached, as the release job does. A pin that fails gets one
+bump onto `main` and pushes it with a `feat:` or `fix:` message. The next
+release carries the bump. A pin that fails gets one
 `Pin update blocked: <component> <version>` issue and stays at its version.
 
 ## Consumers
@@ -83,7 +83,7 @@ build always uses the core beside it. Another Rust host depends on a core
 release tag:
 
 ```toml
-muniment-core = { git = "https://github.com/munimentai/muniment", tag = "core-v1.15.0", features = ["tls"] }
+muniment-core = { git = "https://github.com/munimentai/muniment", tag = "v0.4.0", features = ["tls"] }
 ```
 
 The repository carries no third-party OAuth client secrets. A host that offers
@@ -97,13 +97,12 @@ A headless host builds the router binaries from a release tag and reads the
 pins from the release asset:
 
 ```sh
-cargo install --git https://github.com/munimentai/muniment --tag core-v1.15.0 --features server muniment-router
-gh release download core-v1.15.0 --repo munimentai/muniment --pattern pins.toml
+cargo install --git https://github.com/munimentai/muniment --tag v0.4.0 --features server muniment-router
+gh release download v0.4.0 --repo munimentai/muniment --pattern pins.toml
 ```
 
-Core releases are never marked latest, so `releases/latest` on the repository
-always names a desktop release. List the `core-v*` tags to find the newest core
-release.
+`releases/latest` on the repository names the newest release, which carries
+`pins.toml` once its server job has run.
 
 ## Remote attach
 
@@ -1094,9 +1093,8 @@ access settings without changing them: `MUNIMENT_REMOTE_ACCESS` (`on` or
 the links name) and `MUNIMENT_REMOTE_ALLOW_PUBLIC` (`on` or `off`). `install_kind` is `server`, or `container` when
 `MUNIMENT_INSTALL_KIND=container`. `MUNIMENT_REMOTE_NAME` sets the name links
 and paired devices show, which defaults to `Muniment runtime`. The runtime
-announces the release it was built from: a build sets
-`MUNIMENT_RUNTIME_VERSION`, and a build without it announces the crate
-version. At start `serve` logs the runtime id, the certificate fingerprint and
+announces the workspace version it was built from, which the release of the
+same tag shares. At start `serve` logs the runtime id, the certificate fingerprint and
 the listen address.
 
 These commands work on the state directory while `serve` runs in another
@@ -1122,8 +1120,7 @@ as a LAN or tailnet address rather than every host interface, and set
 `MUNIMENT_REMOTE_ENDPOINTS` to it:
 
 ```sh
-docker build -f deploy/runtime/Containerfile \
-  --build-arg MUNIMENT_RUNTIME_VERSION=1.13.1 -t muniment-runtime .
+docker build -f deploy/runtime/Containerfile -t muniment-runtime .
 docker run -d --name muniment -p 192.0.2.20:7443:7443 \
   -e MUNIMENT_REMOTE_ENDPOINTS=runtime.example.net:7443 \
   -e MUNIMENT_REMOTE_NAME="Build box" \
@@ -1131,7 +1128,7 @@ docker run -d --name muniment -p 192.0.2.20:7443:7443 \
 docker exec muniment muniment-server pair
 ```
 
-Each core release publishes the image for linux/amd64 and linux/arm64 as
+Each release publishes the image for linux/amd64 and linux/arm64 as
 `ghcr.io/munimentai/muniment-runtime:<version>` and `:latest`:
 
 ```sh
@@ -1140,8 +1137,8 @@ docker run -d --name muniment -p 192.0.2.20:7443:7443 \
   -v muniment-data:/data ghcr.io/munimentai/muniment-runtime:latest
 ```
 
-The CI `runtime-image-publish` job runs `deploy/runtime/publish.sh` after the
-release job tags a `core-v*` version. It pushes to each image repository in the
+The `runtime-image` job of the release workflow runs `deploy/runtime/publish.sh`
+after the release's server files are published. It pushes to each image repository in the
 `RUNTIME_IMAGE_REPOSITORIES` variable (a space list) and logs in with the
 `RUNTIME_IMAGE_LOGINS` secret, one `<registry> <user> <password>` line per
 registry. A repository whose registry has no login is skipped with a warning.
@@ -1176,22 +1173,24 @@ pointers, and runs the current version, or its own when that is newer or
 nothing is installed. It reports `update_capability: launcher` when it can
 verify releases and write its versions directory, and `manual` otherwise.
 
-Each core release publishes, beside `pins.toml`,
+Each release publishes, beside `pins.toml`,
 `muniment-server-<version>-linux-x86_64.tar.gz` and
 `muniment-server-<version>-linux-aarch64.tar.gz`, each the server and the
 speech runtime libraries it loads from its own directory. `SHA256SUMS` lists
-them, and `SHA256SUMS.minisig` is a minisign signature over it. The release
-job and the pins update both run `deploy/runtime/release-assets.sh`, which
-cross-compiles both with cargo-zigbuild against glibc 2.36 and signs with the
-`MUNIMENT_RELEASE_SIGNING_KEY` secret, and the optional
-`MUNIMENT_RELEASE_SIGNING_PASSWORD`. It fails before tagging when the key is
-missing or `RELEASE_PUBLIC_KEY` in `crates/server/src/release.rs` does not
-verify the signature, so no release goes out unsigned.
+them beside the release's desktop files, and `SHA256SUMS.minisig` is a
+minisign signature over it. The release workflow's server job runs
+`deploy/runtime/release-assets.sh` after the desktop files are published. It
+cross-compiles both archives with cargo-zigbuild against glibc 2.36, merges the
+release's `SHA256SUMS`, and signs with the `MUNIMENT_RELEASE_SIGNING_KEY`
+secret and the optional `MUNIMENT_RELEASE_SIGNING_PASSWORD`. It fails before
+the upload when the key is missing or `RELEASE_PUBLIC_KEY` in
+`crates/server/src/release.rs` does not verify the signature, so no release
+carries an unsigned server.
 
 While a request names a version newer than the running one, the launcher:
 
 1. Downloads the archive for its architecture, `SHA256SUMS` and the
-   signature from `<feed>/core-v<version>/`.
+   signature from `<feed>/v<version>/`.
 2. Checks the signature against the release public key, then the archive's
    SHA-256, and unpacks its regular files into a staging directory.
 3. Runs the new server's `--version`, which must name the version.
@@ -1296,10 +1295,11 @@ or later) then pairs with the test runtime's account, reads `fleet.snapshot`
 over the relay control session, and posts into a container's thread, which
 runs on that container.
 
-Pushes to `main` that touch `core/` cut a `core-v*` release. The conventional
-prefixes of those commits pick the version: `feat:` is minor, `fix:` and
-`perf:` are patch, `feat!:` or a `BREAKING CHANGE:` trailer is major, and other
-prefixes cut no release. Commits outside `core/` never move the core version.
+A maintainer releases the core with the desktop app under one `vX.Y.Z` tag, as
+the root `README.md` describes. `scripts/release.py` plans the version from the
+conventional prefixes of every commit since the last tag: `feat:` is minor,
+`fix:` and `perf:` are patch, `feat!:` or a `BREAKING CHANGE:` trailer is major
+(minor before 1.0), and other prefixes cut no release.
 
 ## License
 

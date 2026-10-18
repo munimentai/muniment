@@ -32,7 +32,7 @@ downgrade attacks.
 
 Release signing credentials stay outside source control and contributor builds.
 The updater verifies signed packages before offering installation.
-Core releases (`core-v*` tags) sign `SHA256SUMS` with a minisign key. The release
-job refuses to tag when the key does not match the public key in source.
+Each release signs `SHA256SUMS` with a minisign key. The release job refuses to
+sign when the key does not match the public key in source.
 Private build runners do not execute fork pull requests.
 A release requires dependency review, secret scanning and platform checks.

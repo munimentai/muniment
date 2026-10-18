@@ -102,16 +102,19 @@ Core holds the logic that every host shares. The desktop is the UI layer on top 
 
 ## Releases
 
-GitHub Releases on `munimentai/muniment` host every download. Desktop releases use
-`vX.Y.Z` tags. Core releases use `core-vX.Y.Z` tags, carry the pins and the signed
-server archives, and are never marked latest. The CI workflows in `.forgejo/workflows/` build and publish them.
+GitHub Releases on `munimentai/muniment` host every download. One `vX.Y.Z` tag
+releases the desktop app, the CLI, the server and the runtime image together.
+`core/Cargo.toml` names the version, and `scripts/version.py` keeps the desktop
+copies in step. The CI workflows in `.forgejo/workflows/` build and publish them.
 Only a maintainer dispatch of `main` runs a release job. Each job checks this in its first step and fails before any credential is read.
 
-1. Dispatch `nightly.yml` on `main`. It signs the three platform builds, uploads them to the `nightly` pre-release, and runs the installed checks.
-2. Dispatch `subscriptions.yml` on GitHub with the nightly source SHA. Its native runners are on GitHub.
-3. Dispatch `release.yml` on `main` with the source SHA, the version, and `dry_run` set. The dry run runs every check and creates nothing.
-4. Dispatch `release.yml` again without `dry_run`. It creates the version tag in the source repository, and the mirror carries it to GitHub.
+1. Set the version with `python3 scripts/version.py set X.Y.Z` and land it on `main`. `core/scripts/release.py` prints the next version.
+2. Dispatch `nightly.yml` on `main`. It signs the three platform builds, uploads them to the `nightly` pre-release, and runs the installed checks.
+3. Dispatch `subscriptions.yml` on GitHub with the nightly source SHA. Its native runners are on GitHub.
+4. Dispatch `release.yml` on `main` with the source SHA, the version, and `dry_run` set. The dry run runs every check and creates nothing.
+5. Dispatch `release.yml` again without `dry_run`. It creates the version tag in the source repository, and the mirror carries it to GitHub.
    The job then publishes the verified nightly bytes, `latest.json`, and `SHA256SUMS` as the stable release.
+   Later jobs add the pins and the signed server archives, sign `SHA256SUMS` over every file, and push the runtime image.
 
 The `GH_RELEASE_TOKEN` secret holds a fine-grained GitHub token with Contents write on `munimentai/muniment`.
 Every GitHub Releases call uses it. The CI job token reaches only the source repository.

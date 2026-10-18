@@ -5,7 +5,9 @@ steering files. This file adds the rules for `core/`, the shared Rust core.
 
 The desktop workspace builds the core crates by path. Headless hosts run
 the router gateway (`muniment-router serve`) or the runtime server
-(`muniment-server serve`) from a `core-v*` release and read its `pins.toml`.
+(`muniment-server serve`) from a `vX.Y.Z` release and read its `pins.toml`.
+`version` under `[workspace.package]` in `Cargo.toml` is the one release version
+of the repository. Every crate inherits it.
 `README.md` describes each crate. `docs/` holds technical documentation about
 the core, such as `docs/core-boundary.md`, which the boundary check reads.
 
@@ -32,8 +34,8 @@ size and SHA-256, the Pi extension packages, and the Claude Code version.
 compiles the file into constants, so a malformed file fails the build. Change
 pins with `muniment-pins bump`, which rewrites both files, and run
 `muniment-pins compat` before you commit. The daily pins update workflow does
-both, runs the CI checks on Linux and macOS, then commits to `main` and tags
-the next `core-v*` version with the same assets as the release job.
+both, runs the CI checks on Linux and macOS, then commits to `main`. The next
+release carries the bump.
 
 ## Verification loop
 
@@ -57,9 +59,9 @@ before you push. A green local build does not cover that code.
 
 ## Release key
 
-The release job and the pins update tag `core-v*` versions and attach
-`pins/pins.toml`, `pins/packages.bun.lock` and the signed `muniment-server`
-archives that `deploy/runtime/release-assets.sh` builds. It fails without the `MUNIMENT_RELEASE_SIGNING_KEY` secret or when
+The release workflow attaches `pins/pins.toml`, `pins/packages.bun.lock` and the
+signed `muniment-server` archives that `deploy/runtime/release-assets.sh` builds
+to each `vX.Y.Z` release. It fails without the `MUNIMENT_RELEASE_SIGNING_KEY` secret or when
 `RELEASE_PUBLIC_KEY` in `crates/server/src/release.rs` does not verify the
 signature. Installed launchers verify every update against that public key, so
 change it only together with the signing key, and never commit the private key.

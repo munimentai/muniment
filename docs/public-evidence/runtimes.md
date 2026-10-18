@@ -72,8 +72,8 @@ its scopes and when it was last seen, with Revoke.
 
 ## Updates
 
-A paired desktop updates to the app's version. A server or container updates to
-the core release the app bundles. The app asks a runtime that runs an older
+Every paired desktop, server and container updates to the app's version. They
+release together under one version. The app asks a runtime that runs an older
 version to update each time it connects, at most once every ten minutes, when
 this device holds the `runtime.update` or `runtime.admin` scope there. It does
 not ask a runtime that installs by hand, or ask again for a version the runtime
