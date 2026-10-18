@@ -18,6 +18,7 @@ import {
   canRequestUpdate,
   olderVersion,
   skipLabel,
+  settingsMachine,
 } from './runtimes.js'
 
 const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', active: true, local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
@@ -136,6 +137,21 @@ describe('update labels', () => {
     expect(canRequestUpdate(status('failed'))).toBe(true)
     expect(skipLabel({ name: 'Rack', reason: 'manual' })).toBe('Rack (manual install)')
     expect(skipLabel({ name: 'Lab', reason: 'no_permission' })).toBe('Lab (no permission)')
+  })
+})
+
+describe('the machine a Settings page applies to', () => {
+  it('names the selected machine on machine pages once a machine is paired, with the machines that answer', () => {
+    const list = runtimeList([{ ...local, active: false }, studio, { ...buildBox, active: true }], buildBox.id)
+    const scope = settingsMachine(list, 'providers')
+    expect(scope.selected.name).toBe('Build box')
+    expect(scope.choices.map((runtime) => runtime.name)).toEqual(['This computer', 'Build box'])
+    expect(settingsMachine(list, 'appearance')).toBeNull()
+    expect(settingsMachine(list, 'mcp')).toBeNull()
+  })
+
+  it('shows no machine while this computer is the only one', () => {
+    expect(settingsMachine(runtimeList([local]), 'providers')).toBeNull()
   })
 })
 

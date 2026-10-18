@@ -7,12 +7,13 @@ import vm from 'node:vm'
 import { tick } from 'svelte'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { featureFlags } from './feature-flags.js'
 vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord: true}}))
 
 import { historyMessages } from './lib/chat-state.js'
+import { SCAN_RETRY_DELAYS } from './lib/first-run-providers.js'
 
 const extensionInstances = vi.hoisted(() => [])
 vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
@@ -4089,6 +4090,7 @@ describe('Home onboarding', () => {
     // Each card is one line: the name and its action.
     expect(option('Ollama')).toHaveTextContent(/^Ollama\s*Connect$/)
     expect(option('oMLX')).toHaveTextContent(/^oMLX\s*Add key$/)
+    // A Codex sign-in is not one Muniment reuses, so ChatGPT signs in again.
     expect(option('ChatGPT')).toHaveTextContent(/^ChatGPT\s*Sign in$/)
     expect(option('Grok')).toHaveTextContent(/^Grok\s*Sign in$/)
   })
@@ -4156,11 +4158,25 @@ describe('Home onboarding', () => {
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
 
-  it('opens a subscription sign-in in Model providers', async () => {
+  it('connects a signed-in Claude Code in one step', async () => {
     firstRun()
-    providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in' }] }
+    providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true }] }
     const original = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => command === 'local_mode_claude_code_status' ? Promise.resolve({ installed: true, logged_in: true, path: '/usr/local/bin/claude' }) : original(command, payload))
+    render(App)
+    await more()
+    await waitFor(() => expect(option('Claude')).toHaveTextContent('Connect'))
+    await fireEvent.click(option('Claude'))
+    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
+    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
+    expect(invoke).toHaveBeenCalledWith('local_mode_connect_claude_code', { executable: '/usr/local/bin/claude' })
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
+  })
+
+  it('opens Model providers for a subscription with no sign-in to start here', async () => {
+    firstRun()
+    providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is installed', reuse: false }] }
     render(App)
     await more()
     await waitFor(() => expect(option('Claude')).toHaveTextContent('Sign in'))
@@ -4168,8 +4184,28 @@ describe('Home onboarding', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     expect(await within(dialog).findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
     expect(firstRunScreen()).not.toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_connect_claude_code', expect.anything())
+  })
+
+  it('signs in to a subscription from the first run and opens the browser at once', async () => {
+    firstRun()
+    providerScan = { servers: [], hints: [{ provider: 'openai', evidence: 'Codex CLI is signed in', reuse: false }] }
+    render(App)
+    await ready('ChatGPT')
+    // The hint moves ChatGPT under Found on this computer once the scan answers.
+    await waitFor(() => expect(optionNames()[0]).toBe('ChatGPT'))
+    await fireEvent.click(option('ChatGPT'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'openai-codex' }))
+    const login = window.__TAURI__.event.listen.mock.calls.findLast(([event]) => event === 'local-mode-login')[1]
+    await login({ payload: { provider: 'openai-codex', stage: 'event', event: { type: 'auth_url', url: 'https://auth.example/oauth' } } })
+    expect(invoke).toHaveBeenCalledWith('local_mode_open_url', { url: 'https://auth.example/oauth' })
+    expect(firstRunScreen()).toBeInTheDocument()
+    expect(await screen.findByText('Continue in your browser.')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    await login({ payload: { provider: 'openai-codex', stage: 'done', pool: true } })
+    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
   })
 
   it('opens the composer with no model from Explore without connecting', async () => {
@@ -4193,11 +4229,28 @@ describe('Home onboarding', () => {
     expect(within(dialog).getByRole('searchbox', { name: 'Search providers' })).toBeInTheDocument()
   })
 
+  it('scans again while the runtime starts instead of saying the first scan failed', async () => {
+    firstRun()
+    const original = invoke.getMockImplementation()
+    let failures = 1
+    invoke.mockImplementation((command, payload) => command === 'onboarding_provider_scan' && failures-- > 0 ? Promise.reject('unavailable') : original(command, payload))
+    providerScan = { servers: [ollama], hints: [] }
+    const saved = SCAN_RETRY_DELAYS.splice(0, Infinity, 1)
+    try {
+      render(App)
+      await waitFor(() => expect(option('Ollama')).toBeDefined())
+      expect(screen.queryByText('Muniment could not look for local models.', { exact: false })).not.toBeInTheDocument()
+      expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_provider_scan')).toHaveLength(2)
+    } finally { SCAN_RETRY_DELAYS.splice(0, Infinity, ...saved) }
+  })
+
   it('says when the scan fails and looks again', async () => {
     firstRun()
     const original = invoke.getMockImplementation()
     let fail = true
     invoke.mockImplementation((command, payload) => command === 'onboarding_provider_scan' && fail ? Promise.reject('unavailable') : original(command, payload))
+    const saved = SCAN_RETRY_DELAYS.splice(0)
+    onTestFinished(() => { SCAN_RETRY_DELAYS.splice(0, Infinity, ...saved) })
     render(App)
     expect(await screen.findByRole('alert')).toHaveTextContent('The scan for local models failed.')
     expect(optionNames()).toEqual(SUBSCRIPTION_NAMES)
@@ -8811,6 +8864,31 @@ describe('runtimes', () => {
     expect(pages).not.toContain('Account')
     expect(pages).toContain('Machines')
     expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
+  })
+
+  it('names the machine Model providers applies to and switches it from Settings', async () => {
+    const fallback = invoke.getMockImplementation()
+    let list = listFor(buildBox.id)
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'runtime_list') return list
+      if (command === 'runtime_select') {
+        list = listFor(payload.id)
+        return list
+      }
+      return fallback(command, payload)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    await openSettings('Model providers')
+    const machine = await screen.findByRole('combobox', { name: 'Settings for' })
+    expect(machine).toHaveValue(buildBox.id)
+    expect([...machine.options].map((option) => option.textContent)).toEqual(['This computer', 'Build box'])
+    await fireEvent.change(machine, { target: { value: 'local' } })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('runtime_select', { id: 'local' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue('local'))
+    // Appearance belongs to this window, so it names no machine.
+    await fireEvent.click(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'Appearance' }))
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Settings for' })).not.toBeInTheDocument())
   })
 
   it('shows the agents of every paired machine with its shape and keeps that machine selected', async () => {

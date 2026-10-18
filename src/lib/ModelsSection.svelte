@@ -21,7 +21,9 @@
   import ClassifierEdit from './ClassifierEdit.svelte'
   import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders } from './provider-catalog.js'
+  import { loginEvent, loginStart } from './account-login.js'
+  import { foundServers, foundServerAction } from './first-run-providers.js'
+  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, modelCountLabel, providerFamily, providerName, refreshResult, searchProviders } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
@@ -85,6 +87,7 @@
       .map((entry) => ({
         ...entry,
         family: providerFamily(entry.id),
+        count: entry.models.length,
         models: needle ? entry.models.filter((model) => model.id.toLowerCase().includes(needle)) : entry.models,
       })).filter((entry) => !needle || entry.models.length > 0 || entry.name.toLowerCase().includes(needle))
   })
@@ -143,6 +146,7 @@
       inventory = await tauri.invoke('local_mode_provider_inventory', { force })
       loadError = ''
       oninventory?.(inventory)
+      if (force) status = refreshResult(inventory)
 
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
@@ -172,6 +176,39 @@
   function openConnector() {
     providerQuery = ''
     view = 'connect'
+    void loadFound()
+  }
+
+  // The model servers the provider scan finds on this computer that no
+  // connection serves yet. Each connects in one step when it needs nothing,
+  // or with the key file it names; any other opens a filled endpoint form.
+  let found = $state([])
+  async function loadFound() {
+    try {
+      const scan = await tauri.invoke('onboarding_provider_scan')
+      found = foundServers(scan, inventory)
+    } catch (_) { found = [] }
+  }
+
+  async function connectFound(server) {
+    if (pending) return
+    const oneStep = server.state === 'ready' || (server.state === 'needs-key' && !!server.keyFile)
+    if (!oneStep) {
+      chooseProvider('custom')
+      endpointName = server.name
+      baseUrl = server.baseUrl
+      return
+    }
+    pending = true
+    formError = ''
+    try {
+      await tauri.invoke('onboarding_connect_server', { id: server.id, baseUrl: server.baseUrl, key: null, keyFromFile: server.state === 'needs-key' })
+      await finishConnect(`Muniment connected ${server.name}.`)
+    } catch (error) {
+      formError = String(error?.message ?? error) || `Muniment could not connect ${server.name}. Check the server and try again.`
+    } finally {
+      pending = false
+    }
   }
 
   // The connected endpoint whose form is open for an edit, empty for a new connection.
@@ -320,7 +357,7 @@
     pending = true
     formError = ''
     loginAnswer = ''
-    login = { provider: account.provider, stage: 'start', message: 'Starting the sign-in…', url: '', code: '', prompt: null }
+    login = loginStart(account.provider)
     stopListening()
     unlisten = listen('local-mode-login', ({ payload }) => onLoginEvent(payload))
     try {
@@ -334,50 +371,19 @@
   }
 
   function onLoginEvent(payload) {
-    if (!login || (payload.provider && payload.provider !== login.provider && payload.stage !== 'cancelled')) return
-    switch (payload.stage) {
-      case 'event': {
-        const event = payload.event ?? {}
-        if (event.type === 'auth_url') {
-          login = { ...login, stage: 'browser', url: event.url, message: event.instructions ?? 'Continue in your browser.' }
-          void tauri.invoke('local_mode_open_url', { url: event.url }).catch(() => {})
-        } else if (event.type === 'device_code') {
-          login = { ...login, stage: 'code', url: event.verificationUri ?? event.verificationUriComplete ?? '', code: event.userCode ?? '', message: 'Enter this code on the sign-in page.' }
-        } else if (event.message) {
-          login = { ...login, message: event.message }
-        }
-        break
-      }
-      case 'prompt':
-        login = { ...login, prompt: payload }
-        break
-      case 'done':
-        stopListening()
-        if (payload.pool) {
-          // The account joined the router's pool. The probe that names it runs
-          // after the sign-in, so the cards read now and once more after it.
-          void loadRouter()
-          setTimeout(() => { void loadRouter() }, 4000)
-        }
-        void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
-        break
-      case 'failed':
-        stopListening()
-        login = { ...login, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', prompt: null }
-        break
-      case 'cancelled':
-        stopListening()
-        login = { ...login, stage: 'cancelled', message: 'The sign-in was cancelled.', prompt: null }
-        break
-      case 'exit':
-        if (login.stage !== 'done' && login.stage !== 'failed' && login.stage !== 'cancelled') {
-          stopListening()
-          login = { ...login, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', prompt: null }
-        }
-        break
-      default:
-        if (payload.message) login = { ...login, message: payload.message }
+    const step = loginEvent(login, payload)
+    if (!step) return
+    login = step.login
+    if (step.open) void tauri.invoke('local_mode_open_url', { url: step.open }).catch(() => {})
+    if (step.stop) stopListening()
+    if (!step.done) return
+    if (step.pool) {
+      // The account joined the router's pool. The probe that names it runs
+      // after the sign-in, so the cards read now and once more after it.
+      void loadRouter()
+      setTimeout(() => { void loadRouter() }, 4000)
     }
+    void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
   }
 
   async function answerPrompt(value) {
@@ -459,6 +465,7 @@
               <div class="line-card" data-testid="provider-connection">
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
+                <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
                 {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
                 {#if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
@@ -517,6 +524,16 @@
     </header>
     {#if view === 'connect'}
       <SearchToolbar label="Search providers" placeholder="Search providers" bind:value={providerQuery} />
+      {#if found.length && !providerQuery.trim()}
+        <Group heading="Found on this computer" level={5}>
+        <ul class="provider-list">
+          {#each found as server (server.id)}
+            <li><button type="button" class="quiet provider-row" disabled={pending} onclick={() => connectFound(server)}><ProviderLogo color provider={server.id} size={18} /><span>{server.name}</span> <span class="tag">{foundServerAction(server)}</span></button></li>
+          {/each}
+        </ul>
+        </Group>
+        {#if formError}<p class="support" role="alert">{formError}</p>{/if}
+      {/if}
       {#each [['Popular & Subscriptions', catalog.popular], ['Decision models', searchClassifiers(providerQuery)], ['All providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <Group heading={group} level={5}>
@@ -656,6 +673,8 @@
   .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .model-count { flex: none; white-space: nowrap; }
+  .model-count[data-tone="caution"] { color: var(--ochre); }
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .provider-list li + li { border-top: 1px solid var(--border); }

@@ -22,7 +22,8 @@
   const SearchSection = () => import('./SearchSection.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
-  import { LOCAL_PAGES } from '../runtimes/runtimes.js'
+  import { LOCAL_PAGES, settingsMachine } from '../runtimes/runtimes.js'
+  import MachineScope from '../runtimes/MachineScope.svelte'
 
   let {
     tauri,
@@ -50,6 +51,9 @@
     // The selected paired runtime, or null while this computer's runtime is selected.
     remoteRuntime = null,
     runtimeSwitchDisabled = false,
+    // Every machine, from `runtime_list`, and the switch to another one.
+    runtimeList = null,
+    onselectruntime = () => {},
     // Called after a permission setting saves, so the composer reads the modes again.
     onpermissions = () => {},
   } = $props()
@@ -61,6 +65,7 @@
   })
   let storageError = $state('')
   let panel = $state()
+  const machine = $derived(settingsMachine(runtimeList, settingsPage(section)))
   const sectionLabel = $derived(sections.find(([id]) => id === settingsPage(section))?.[1] ?? 'Settings')
   // Each page's PageHead shows the sidebar label as its title.
   setContext('page-title', () => sectionLabel)
@@ -92,9 +97,12 @@
 
 <div data-panel="settings" class="settings-layout" role="dialog" aria-label="Settings" bind:this={panel}>
   <PanelPage>
+    {#if machine}<MachineScope scope={machine} disabled={runtimeSwitchDisabled} onselect={onselectruntime} />{/if}
     {#if remoteRuntime && LOCAL_PAGES.includes(section)}
       <p class="support" role="note">These settings belong to this computer. {remoteRuntime.name} keeps its own.</p>
     {/if}
+    <!-- A page reads its machine when it opens, so switching machines opens it again. -->
+    {#key remoteRuntime?.id ?? 'local'}
     {#if section in EXTEND_TABS}
       <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, sidebarTab: EXTEND_TABS[section]}} />
     {:else if section in MODEL_TABS}
@@ -104,7 +112,7 @@
     {:else if section === 'context'}
       <SettingsSection load={ContextSettings} properties={{tauri}} />
     {:else if section === 'permissions'}
-      {#key remoteRuntime?.id ?? 'local'}<SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: remoteRuntime?.name ?? 'this computer', onsaved: onpermissions}} />{/key}
+      <SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: remoteRuntime?.name ?? 'this computer', onsaved: onpermissions}} />
     {:else if section === 'voice'}
       <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
     {:else if section === 'search'}
@@ -145,6 +153,7 @@
         <SettingsSection load={AccountSettings} properties={{tauri, subject, onsignout}} />
       {/if}
     {/if}
+    {/key}
   </PanelPage>
 </div>
 

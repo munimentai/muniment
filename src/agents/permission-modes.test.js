@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { agentMode, loadModes, modeIcon, modePermissions, nextMode } from './permission-modes.js'
+import { agentMode, loadModes, modeIcon, modePermissions, nextMode, watchModes } from './permission-modes.js'
 
 // Core's `permission.modes` answer on a runtime with bypass off.
 const listing = {
@@ -45,4 +45,35 @@ it('cycles through the available modes and skips bypass while it is off', () => 
 it('names the icon the agent card uses for every mode', () => {
   expect(listing.modes.map(modeIcon)).toEqual(['hand', 'pencil', 'map', 'zap', 'shield-check', 'triangle-alert'])
   expect(modeIcon('plan')).toBe('map')
+})
+
+it('asks again for the modes until a fresh install\'s runtime lists them', async () => {
+  vi.useFakeTimers()
+  try {
+    const tauri = { invoke: vi.fn()
+      .mockRejectedValueOnce(new Error('Choose a Home folder first.'))
+      .mockResolvedValueOnce({ modes: [] })
+      .mockResolvedValueOnce(listing) }
+    const onlisting = vi.fn()
+    watchModes(tauri, 'local', onlisting, [10, 20, 30])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onlisting).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(onlisting).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(20)
+    expect(onlisting).toHaveBeenCalledWith(listing)
+    expect(tauri.invoke).toHaveBeenCalledTimes(3)
+  } finally { vi.useRealTimers() }
+})
+
+it('stops asking for the modes once the composer moves to another runtime', async () => {
+  vi.useFakeTimers()
+  try {
+    const tauri = { invoke: vi.fn().mockResolvedValue(null) }
+    const stop = watchModes(tauri, 'local', vi.fn(), [10, 10])
+    await vi.advanceTimersByTimeAsync(0)
+    stop()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(tauri.invoke).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
 })

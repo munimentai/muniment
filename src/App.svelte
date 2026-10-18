@@ -18,13 +18,15 @@
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
-  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, organizeThreads } from './lib/thread-organization.js'
+  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, organizeThreads, listedThreads } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
   import { actionGroups, responseParts } from './activity/action-feedback.js'
   import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
+  import { workspaceOnNavigate } from './lib/workspace-panel-state.js'
+  import { keptInventory, loadInventory } from './lib/inventory-loader.js'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
   import { open } from '@tauri-apps/plugin-dialog'
@@ -67,7 +69,7 @@
   import ModelPicker from './lib/ModelPicker.svelte'
   import ThinkingPicker from './lib/ThinkingPicker.svelte'
   import ModePicker from './composer/ModePicker.svelte'
-  import { findMode, loadModes, modeIcon, nextMode } from './agents/permission-modes.js'
+  import { findMode, modeIcon, nextMode, watchModes } from './agents/permission-modes.js'
   import { modelThinking, thinkingLabel, withThinkingLevel } from './lib/thinking-level.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
   import Usage from './lib/Usage.svelte'
@@ -75,7 +77,7 @@
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
-  import { currentModel, currentModelAvailable, modelChipLabel, modelKey, routerHidden } from './lib/provider-catalog.js'
+  import { catalogProvider, currentModel, currentModelAvailable, modelChipLabel, modelKey, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -176,6 +178,9 @@
   })
   let inventoryError = $state('')
   let inventoryRequestVersion = 0
+  // Inventory reads stop when the window closes.
+  let inventoryClosed = false
+  onMount(() => () => { inventoryClosed = true })
   let pickerOpen = $state(false)
   let thinkingOpen = $state(false)
   let modeOpen = $state(false)
@@ -374,6 +379,13 @@
     artifactsOpen=true;projectsOpen=false; agentsOpen=false; activityOpen = false;agentProfileOpen=false;closeRail()
   }
   let browserPanel = $state(null)
+  // The tool put aside while Settings or a catalog page shows.
+  let parkedPanel = null
+  const threadView = $derived(!settingsOpen && !agentsOpen && !artifactsOpen && !projectsOpen && !activityOpen)
+  $effect(() => {
+    const view = threadView
+    untrack(() => { ({ panel: browserPanel, parked: parkedPanel } = workspaceOnNavigate({ panel: browserPanel, parked: parkedPanel }, view)) })
+  })
   let workspacePanelWidth = $state(500)
   let workspacePanelMaximum = $state(1200)
   let workspacePanelPointer = $state()
@@ -750,7 +762,7 @@
   // Projects another fleet member owns, each with its owner. Their files
   // stay on that member.
   const remoteProjectRows = $derived(Object.entries(projectCatalog.remote ?? {}).map(([id, project]) => [id, project.name, projectOwner(project, swarm, runtimeList)]).sort((a, b) => a[1].localeCompare(b[1])))
-  const regularThreads = $derived(threadSummaries.filter(thread => !agentThreadMap[thread.threadId] && !swarm.groups.some(group => group.thread_id === thread.threadId) && !creations.some(item=>item.threadId===thread.threadId) && !artifactItems.some(item=>item.threadId===thread.threadId)))
+  const regularThreads = $derived(listedThreads(threadSummaries, { agentThreads: agentThreadMap, groupThreads: swarm.groups.map(group => group.thread_id), creations }))
   let threadOrganization = $state(readThreadOrganization())
   let threadSearch = $state('')
   let archivedThreads = $state(false)
@@ -804,12 +816,15 @@
   let modeRequest = 0
   const composerThreadId = $derived(freshThread ? null : currentThreadId)
   const composerRuntime = $derived(threadMachine ?? runtimeList?.selected ?? LOCAL_RUNTIME_ID)
+  // The modes load again once Home exists and the runtime answers, and a
+  // runtime that lists none yet is asked again.
   $effect(() => {
     const runtime = composerRuntime
     void modesRevision
-    let alive = true
-    void loadModes(tauri, runtime).then((listing) => { if (alive) modeListing = listing ? { runtime, listing } : null })
-    return () => { alive = false }
+    void onboarding.name
+    void desktopClientStatus?.connected
+    untrack(() => { if (modeListing?.runtime !== runtime) modeListing = null })
+    return watchModes(tauri, runtime, (listing) => { modeListing = { runtime, listing } })
   })
   async function refreshThreadMode() {
     const request = ++modeRequest
@@ -1472,6 +1487,8 @@
     if (chatEventsRecovered || (requestsRecovered && workspaceMode())) {
       void startupReady.then(() => chatController.recoverChatEvents())
     }
+    // A runtime that comes back may serve other models than the last read named.
+    if (requestsRecovered && workspaceMode() && auth.name === 'local') void refreshInventory()
   }
 
   function toggleSidebar() {
@@ -2239,15 +2256,16 @@
     }
   }
 
+  // A connected provider that lists no model yet is read again, and the chip
+  // keeps the model it named until the last read.
   async function refreshInventory() {
     const version = ++inventoryRequestVersion
     try {
-      const next = await tauri.invoke('local_mode_provider_inventory')
-      if (version === inventoryRequestVersion) {
-        inventory = next
+      await loadInventory((command) => tauri.invoke(command), (next, final) => {
+        inventory = keptInventory(inventory, next, final)
         if (accountStatus === inventoryError) accountStatus = ''
         inventoryError = ''
-      }
+      }, { alive: () => version === inventoryRequestVersion && !inventoryClosed })
       return true
     } catch (_) {
       if (version === inventoryRequestVersion) {
@@ -2720,9 +2738,10 @@
     if (!workspaceMode() || desktopClientStatus?.connected !== true) {
       throw firstRunError(tauri, 'runtime')
     }
-    // SPEC.md: a found server connects in place. A subscription opens its
-    // sign-in in Model providers, More providers opens the catalog, and
-    // explore opens the composer with no model.
+    // SPEC.md: a found server connects in place. A signed-in Claude Code
+    // connects in place, a subscription with an account signs in from the
+    // first run, any other opens its sign-in in Model providers, More
+    // providers opens the catalog, and explore opens the composer with no model.
     if (option?.kind === 'explore') {
       onboarding = { name: 'complete', homePath: onboarding.homePath }
       void refreshProjects()
@@ -2741,11 +2760,38 @@
       void tick().then(() => composer?.focus())
       return
     }
+    if (option?.kind === 'subscription' && option.hint?.reuse && await connectClaudeCodeInPlace()) {
+      await finishFirstRunConnect()
+      return
+    }
+    const account = option?.kind === 'subscription' ? catalogProvider(option.catalog)?.account : null
+    if (account) return { signIn: account }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
     // Projects first loaded before Home existed, so they load again under it.
     void refreshProjects()
     settingsConnectProvider = option?.catalog ?? ''
     openSettings('providers')
+  }
+
+  // Connects through the Claude Code sign-in the scan found. False sends the
+  // user to Model providers, which names the step Claude Code still needs.
+  async function connectClaudeCodeInPlace() {
+    try {
+      const claude = await tauri.invoke('local_mode_claude_code_status')
+      if (!claude?.logged_in || !claude.path) return false
+      await tauri.invoke('local_mode_connect_claude_code', { executable: claude.path })
+      return true
+    } catch (_) {
+      return false
+    }
+  }
+
+  // A first-run connection ends the first run on the composer with its models.
+  async function finishFirstRunConnect() {
+    await refreshInventory()
+    onboarding = { name: 'complete', homePath: onboarding.homePath }
+    void refreshProjects()
+    void tick().then(() => composer?.focus())
   }
 
   function keydown(event) {
@@ -2888,7 +2934,7 @@
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding onready={openFirstRunModelSettings} />
+    <Onboarding {tauri} bind:onboarding onready={openFirstRunModelSettings} onsignedin={finishFirstRunConnect} />
     {#if backgroundServiceNoticeVisible}
       <section class="auth-state" aria-live="polite" data-testid="runtime-notice">
         <p class="record error-record">{runtimeNotice.text}</p>
@@ -3576,7 +3622,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a

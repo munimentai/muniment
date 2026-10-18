@@ -177,6 +177,19 @@ export const REMOTE_HIDDEN_PAGES = ['account']
 // selected. Each says so in one line.
 export const LOCAL_PAGES = ['mcp', 'skills', 'plugins', 'home']
 
+// Settings pages that read and change the selected machine. Once a machine is
+// paired, each names that machine at its top and can switch it.
+export const MACHINE_PAGES = ['providers', 'decisions', 'context', 'permissions', 'search', 'profile', 'memory']
+
+// The machine scope a Settings page shows: the selected machine and the
+// machines it can switch to, or null for a page or a list without a choice.
+export function settingsMachine(list, page) {
+  if (!MACHINE_PAGES.includes(page) || !pairedRuntimes(list).length) return null
+  const selected = activeRuntime(list)
+  const choices = (list?.runtimes ?? []).filter((runtime) => runtime.local || runtime.status === 'online' || runtime.id === selected?.id)
+  return selected ? { selected, choices } : null
+}
+
 // One sentence from a command failure, ending in a period.
 export function errorLine(failure, fallback = 'The runtime did not answer.') {
   const text = typeof failure === 'string' ? failure : failure?.message ?? String(failure ?? '')

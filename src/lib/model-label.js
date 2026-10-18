@@ -21,6 +21,17 @@ export function modelLabel(value, names = null) {
   ).join(' · ')
 }
 
+// A picker row's name: the display name the registry or the server gives,
+// else the model id itself without its folder and Ollama's `:latest` tag.
+// An id keeps its own case, since title case mangles names such as
+// `gpt-oss-20b-MXFP4-Q8`.
+export function modelName(id, name = null) {
+  const given = typeof name === 'string' ? name.trim() : ''
+  if (given && given !== id) return given
+  if (id === undefined || id === null || id === '') return null
+  return String(id).replace(/:latest$/i, '').split('/').filter(Boolean).at(-1) ?? String(id)
+}
+
 // Exclusion messages carry a model ID before a colon and human-written reason.
 export function modelReason(value) {
   const text = String(value)

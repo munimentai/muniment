@@ -31,3 +31,19 @@ it('keeps each context shell alive and restores it without restarting', async ()
   expect(invoke.mock.calls.filter(([cmd]) => cmd === 'terminal_close')).toHaveLength(2)
   vi.unstubAllGlobals()
 })
+
+it('keeps the start of an artifact name and ends a long one in an ellipsis with the full name as its tooltip', async () => {
+  vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
+  const invoke = vi.fn(async (command) => {
+    if (command === 'artifact_list') return [{id: 'a1', name: 'New Year Countdown', threadId: 't1'}]
+    return null
+  })
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'artifacts', requestedArtifact: 'a1', context: {threadId: 't1'}, threadId: 't1', onselect: vi.fn()}})
+  const tab = await screen.findByRole('tab', {name: 'New Year Countdown'})
+  const label = tab.querySelector('.tab-label')
+  expect(label).toHaveTextContent('New Year Countdown')
+  expect(label.classList.contains('fade-viewport')).toBe(false)
+  expect(tab).toHaveAttribute('title', 'New Year Countdown')
+  view.unmount()
+  vi.unstubAllGlobals()
+})

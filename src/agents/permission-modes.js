@@ -22,6 +22,25 @@ export async function loadModes(tauri, runtime) {
   }
 }
 
+// How long the composer waits before it asks again for a runtime's modes.
+// A fresh install lists none until Home exists and the runtime answers.
+export const MODE_RETRY_DELAYS = [500, 1000, 2000, 4000, 8000, 15000, 30000]
+
+// Reads the runtime's modes and asks again after each delay while it lists
+// none. `onlisting` gets the first listing. The answer stops the retries.
+export function watchModes(tauri, runtime, onlisting, delays = MODE_RETRY_DELAYS) {
+  let alive = true
+  let timer = null
+  const attempt = async (index) => {
+    const listing = await loadModes(tauri, runtime)
+    if (!alive) return
+    if (listing) { onlisting(listing); return }
+    if (index < delays.length) timer = setTimeout(() => { void attempt(index + 1) }, delays[index])
+  }
+  void attempt(0)
+  return () => { alive = false; clearTimeout(timer) }
+}
+
 export function findMode(listing, id) {
   return listing?.modes?.find((mode) => mode.id === id) ?? null
 }
