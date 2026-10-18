@@ -58,7 +58,8 @@ pub(crate) async fn seed_thread(app: &AppHandle, thread: &str, project_id: Optio
         return;
     };
     let defaults = settings.defaults;
-    if defaults.model.is_none() && defaults.permission_mode.is_none() && defaults.machine.is_none() {
+    if defaults.model.is_none() && defaults.permission_mode.is_none() && defaults.machine.is_none()
+    {
         return;
     }
     let seed = muniment_core::thread_settings::Seed {

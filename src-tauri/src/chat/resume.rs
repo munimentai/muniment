@@ -45,6 +45,7 @@ impl SubmissionError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn chat_submit(
     app: tauri::AppHandle,
@@ -82,9 +83,8 @@ pub async fn chat_submit(
             )
             .map_err(SubmissionError::at("thread"))?;
         }
-        let thread =
-            crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)
-                .map_err(SubmissionError::at("thread"))?;
+        let thread = crate::projects::prepare_thread(&app, &state, subject.as_deref(), None, false)
+            .map_err(SubmissionError::at("thread"))?;
         // A first message with no thread yet starts one in Chats, with the
         // Chats defaults and the model the composer picked for it.
         if existing.is_none() {

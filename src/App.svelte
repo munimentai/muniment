@@ -765,6 +765,9 @@
     const actions = []
     if (threadModel.layer === 'thread') actions.push({ id: 'reset', label: threadModel.seed?.model ? 'Use the project model' : 'Use the default model' })
     if (modelProject && threadModel.layer !== 'project' && threadModel.model) actions.push({ id: 'project-default', label: modelProject === CHATS_PROJECT ? 'Make Chats default' : 'Make project default' })
+    // The machine's default changes only on this explicit choice.
+    const model = threadModel.model
+    if (model && inventory && (inventory.default_provider !== model.provider || inventory.default_model !== model.model)) actions.push({ id: 'default', label: 'Make default' })
     return actions
   })
 
@@ -801,6 +804,12 @@
       if (id === 'reset') {
         const answer = await tauri.invoke('thread_settings_set', { threadId, reset: true })
         if (currentThreadId === threadId) threadModel = answer
+        return
+      }
+      if (id === 'default') {
+        if (!model) return
+        await tauri.invoke('local_mode_set_default_model', { provider: model.provider, model: model.model })
+        if (inventory) inventory = { ...inventory, default_provider: model.provider, default_model: model.model }
         return
       }
       const projectId = modelProject
@@ -1918,7 +1927,7 @@
       await refreshProjects(threadId)
       moveTarget = null
       const name = projectId === CHATS_PROJECT ? 'Chats' : projectCatalog.projects[projectId] ?? 'the project'
-      moveNote = { threadId, text: projectId === CHATS_PROJECT ? 'Moved to Chats.' : `Now uses ${name} instructions and tools.` }
+      moveNote = { threadId, seen: threadId === currentThreadId, text: projectId === CHATS_PROJECT ? 'Moved to Chats.' : `Now uses ${name} instructions and tools.` }
       return true
     } catch (error) {
       moveError = String(error?.message ?? error)
@@ -1933,7 +1942,15 @@
     event.dataTransfer.setData(THREAD_DRAG, threadId)
     event.dataTransfer.effectAllowed = 'move'
   }
-  $effect(() => { if (moveNote && moveNote.threadId !== currentThreadId) untrack(() => { moveNote = null }) })
+  // The note shows on the moved thread until the user leaves it.
+  $effect(() => {
+    const threadId = currentThreadId
+    untrack(() => {
+      if (!moveNote) return
+      if (moveNote.threadId === threadId) moveNote.seen = true
+      else if (moveNote.seen) moveNote = null
+    })
+  })
 
   // The sidebar keeps its scroll position while Settings takes its rows.
   let sidebarScrollTop = 0

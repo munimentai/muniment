@@ -169,22 +169,35 @@ pub(crate) async fn local_mode_set_default_model(
 /// A thread's model and where it comes from: the thread, its agent, its
 /// project or the default.
 #[tauri::command]
-pub(crate) async fn thread_settings(app: tauri::AppHandle, thread_id: String) -> Result<Value, String> {
-    model_service::request(&app, ModelAction::ThreadSettings, json!({ "thread_id": thread_id })).await
+pub(crate) async fn thread_settings(
+    app: tauri::AppHandle,
+    thread_id: String,
+) -> Result<Value, String> {
+    model_service::request(
+        &app,
+        ModelAction::ThreadSettings,
+        json!({ "thread_id": thread_id }),
+    )
+    .await
 }
 
-/// Changes one thread's model, or returns it to the one it started with. The
-/// default model stays as it is.
+/// Changes one thread's model, returns it to the one it started with, or
+/// starts it again from a project's defaults. The default model stays as it
+/// is.
 #[tauri::command]
 pub(crate) async fn thread_settings_set(
     app: tauri::AppHandle,
     thread_id: String,
     model: Option<Value>,
     reset: Option<bool>,
+    seed: Option<Value>,
 ) -> Result<Value, String> {
     let mut body = json!({ "thread_id": thread_id });
     if let Some(model) = model {
         body["model"] = model;
+    }
+    if let Some(seed) = seed {
+        body["seed"] = seed;
     }
     if reset == Some(true) {
         body["reset"] = json!(true);
