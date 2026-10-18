@@ -1,6 +1,8 @@
 #![cfg(unix)]
 //! A fleet of three runtime containers and this process's runtime, linked
-//! as full members over a Docker network: offloaded threads, settings,
+//! as full members over a Docker network: a host with a long history that
+//! joins a container as the app does, offloaded threads with stop and steer
+//! from the host, settings,
 //! preferences and memory with a conflict copy, sealed model connections
 //! and a revocation, a partition, delay and loss, a queued action for an
 //! owner that stopped, and the phone's control session.
@@ -46,6 +48,14 @@ const HOST_NAME: &str = "fleet-host";
 const CONTAINER_MEMORY: &str = "/data/home/memory";
 const CONTAINER_AUTH: &str = "/data/agent/auth.json";
 const API_KEY: &str = "sk-fleet-e2e-0000";
+/// The files a member writes when it applies shared model connections.
+const SHARED_FILES: [&str; 3] = [
+    "/data/agent/muniment-shared.json",
+    "/data/agent/muniment-router.json",
+    "/data/agent/muniment-router-endpoint.json",
+];
+/// A prompt the stub holds open until a steer or a stop.
+const HOLD_MARKER: &str = "[hold the run]";
 
 fn started() -> Instant {
     static START: OnceLock<Instant> = OnceLock::new();
@@ -489,6 +499,49 @@ impl HostRuntime {
         self.temporary.root.join("home").join("memory")
     }
 
+    /// Gives this runtime `threads` threads of `posts` messages each: more
+    /// items than one exchange frame holds, as a desktop holds after some
+    /// days of chats.
+    fn seed_history(&self, threads: usize, posts: usize) {
+        use muniment_core::journal::{
+            replica::THREAD_MESSAGE_POSTED, Provenance, ThreadEventEnvelope,
+        };
+        let storage = muniment_runtime_core::open_profile_storage(&self.temporary.profile).unwrap();
+        let mut storage = storage.lock().unwrap();
+        let now = muniment_core::chrono::Utc::now().to_rfc3339();
+        let provenance = Provenance {
+            source: "fleet-e2e".into(),
+            source_version: "1".into(),
+            actor_id: None,
+            device_id: None,
+            rpc_request_id: None,
+            capability_versions: None,
+            extra: [("attach_profile".to_owned(), json!("desktop-owner"))]
+                .into_iter()
+                .collect(),
+        };
+        for thread in 0..threads {
+            let id = storage
+                .journal
+                .create_thread("local", &now, provenance.clone())
+                .unwrap();
+            for post in 0..posts {
+                let message = uuid::Uuid::now_v7().to_string();
+                storage
+                    .journal
+                    .append_thread_event_with_id(ThreadEventEnvelope::new(
+                        &message,
+                        &id,
+                        THREAD_MESSAGE_POSTED,
+                        &now,
+                        json!({"message_id": message, "author": {"kind": "agent"}, "text": format!("Note {post} of thread {thread}."), "deps": {}}),
+                        provenance.clone(),
+                    ))
+                    .unwrap();
+            }
+        }
+    }
+
     fn write_auth(&self, auth: &Value) {
         let directory = muniment_core::state_root::agent_directory(&self.temporary.profile);
         std::fs::create_dir_all(&directory).unwrap();
@@ -688,6 +741,7 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
         }) as Arc<dyn AccountService>
     });
     let host = HostRuntime::open(temporary, account);
+    host.seed_history(40, 12);
     let h = host.device();
     let nodes: Vec<Node> = containers
         .iter()
@@ -706,9 +760,11 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
             .join(" ")
     ));
 
-    // Links: every container dials the host through the host gateway, c2
-    // dials c1 and c3 dials c2 by their Docker names.
-    for (joiner, inviter) in [(c1, &h), (c2, &h), (c3, &h), (c2, c1), (c3, c2)] {
+    // Links: the host joins c1 as the app links a machine it paired, with
+    // its whole history in the first exchanges; c2 and c3 dial the host
+    // through the host gateway, c2 dials c1 and c3 dials c2 by their Docker
+    // names.
+    for (joiner, inviter) in [(&h, c1), (c2, &h), (c3, &h), (c2, c1), (c3, c2)] {
         let invite = inviter
             .call(Operation::SwarmInvite, None, json!({}))
             .unwrap();
@@ -818,6 +874,63 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
     assert_eq!(posted["forwarded"], true, "{posted}");
     until("the follow-up runs on c2", || {
         thread_ran_on(c2, &offloaded, Some(follow_up))
+    });
+
+    // Stop and steer from the host reach a run on c2, which only the fleet
+    // links the host to: the host's runtime forwards both to the owner.
+    let held = |text: &str| -> (String, String) {
+        let created = h
+            .call(
+                Operation::ThreadCreate,
+                Some(key()),
+                json!({"runtime_id": c2.runtime_id, "text": format!("{text} {HOLD_MARKER}"), "permission_mode": "bypass"}),
+            )
+            .unwrap();
+        let thread = created["thread_id"].as_str().unwrap().to_owned();
+        let op_id = created["op_id"].as_str().unwrap().to_owned();
+        let mut run = String::new();
+        until("the held run starts on c2", || {
+            let op = h.op_status(&op_id)?;
+            run = op["result"]["run_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            ensure(op["state"] == "applied" && !run.is_empty(), || {
+                op.to_string()
+            })
+        });
+        (thread, run)
+    };
+    let (steered, run) = held("Wait for a steer.");
+    until("the host's steer reaches the run on c2", || {
+        h.with(|client| client.run_steer(&run, "Steered from the host."))
+            .map(drop)
+    });
+    until("the steered run finishes on c2", || {
+        let entries = c2.history(&steered)?;
+        ensure(
+            entries.iter().any(|entry| {
+                entry["run_id"] == run.as_str()
+                    && entry["text"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("steer resumed")
+            }),
+            || format!("c2 history: {entries:?}"),
+        )
+    });
+    let (stopped, run) = held("Wait for a stop.");
+    until("the host's stop reaches the run on c2", || {
+        h.with(|client| client.run_cancel(&run)).map(drop)
+    });
+    until("the stopped run ends cancelled on c2", || {
+        let entries = c2.history(&stopped)?;
+        ensure(
+            entries
+                .iter()
+                .any(|entry| entry["run_id"] == run.as_str() && entry["phase"] == "cancelled"),
+            || format!("c2 history: {entries:?}"),
+        )
     });
 
     // 2. Settings, preferences and memory edits converge.
@@ -931,6 +1044,12 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
                         || format!("{} default: {inventory}", node.name),
                     )?;
                 }
+                // The member writes the files its runs read the shared
+                // connections from.
+                for file in SHARED_FILES {
+                    docker(&["exec", node.container_name(), "test", "-s", file])
+                        .map_err(|error| format!("{} lacks {file}: {error}", node.name))?;
+                }
                 let held = node.credentials()?;
                 ensure(
                     held["secrets"]
@@ -946,6 +1065,21 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
             }
             Ok(())
         },
+    );
+
+    // A thread offloaded after the switch runs on the shared connections.
+    let shared_text = "Answer with the shared connection on c1.";
+    let created = h
+        .call(
+            Operation::ThreadCreate,
+            Some(key()),
+            json!({"runtime_id": c1.runtime_id, "text": shared_text, "permission_mode": "bypass"}),
+        )
+        .unwrap();
+    let on_shared = created["thread_id"].as_str().unwrap().to_owned();
+    until(
+        "the offloaded run on the shared connections completes on c1",
+        || thread_ran_on(c1, &on_shared, Some(shared_text)),
     );
 
     // 4. c3 leaves the network while the others keep editing, and edits
