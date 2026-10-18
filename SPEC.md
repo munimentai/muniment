@@ -170,7 +170,7 @@ shows the model source, Home, the context meter and the running cost. A global s
 
 **The model chip.** The chip shows the provider's mark and the model id in use,
 the saved default when it is shown, else the first shown model. When no
-provider answers it reads `Connect a model`, and the chip and Send open the provider catalog.
+provider answers it reads `Connect a model`, and the chip and Send open the provider catalog. A re-read of the same machine after a reply or a reconnect keeps the model the chip names.
 Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 

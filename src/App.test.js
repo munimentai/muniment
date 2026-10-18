@@ -1721,6 +1721,31 @@ describe('workspace composer entry', () => {
     expect(await within(dialog).findByRole('region', { name: 'LM Studio' })).toBeInTheDocument()
   })
 
+  it('keeps the chip on its model when the runtime reconnects after a reply and lists no model for a while', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      localModeStatus = true
+      const router = { id: 'muniment-router', name: 'Muniment router', source: 'router', base_url: null, models: [] }
+      const served = { providers: [router], default_provider: 'muniment-router', default_model: 'openai/gpt-6-astra', hidden: [], shown: [], router_models: [{ id: 'openai/gpt-6-astra', name: 'GPT-6 Astra', family: 'openai', model: 'gpt-6-astra', accounts: 1 }] }
+      let answer = served
+      const defaultInvoke = invoke.getMockImplementation()
+      invoke.mockImplementation((command, ...args) => command === 'local_mode_provider_inventory' ? Promise.resolve(answer) : defaultInvoke(command, ...args))
+      render(App)
+      expect(await screen.findByRole('button', { name: 'Model: GPT-6 Astra' })).toBeInTheDocument()
+      // The reply ends, the desktop client reconnects, and the runtime answers
+      // with no provider, then with the router and no model, until it settles.
+      desktopClientListener({ payload: { connected: false, supervisor_running: true } })
+      answer = { providers: [], hidden: [], shown: [], router_models: [] }
+      desktopClientListener({ payload: { connected: true, supervisor_running: true } })
+      await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'local_mode_provider_inventory').length).toBeGreaterThan(1))
+      expect(screen.getByRole('button', { name: 'Model: GPT-6 Astra' })).toBeInTheDocument()
+      answer = { ...served, router_models: [] }
+      await vi.advanceTimersByTimeAsync(12_000)
+      expect(screen.getByRole('button', { name: 'Model: GPT-6 Astra' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Model: Connect a model' })).not.toBeInTheDocument()
+    } finally { vi.useRealTimers() }
+  })
+
   it.each([false, true])('disables the endpoint form until a save settles with failure %s', async (fails) => {
     localModeStatus = true
     const save = deferred()
