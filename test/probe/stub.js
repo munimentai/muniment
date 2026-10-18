@@ -287,7 +287,7 @@ function probeAccounts() {
   }
 }
 
-// ?accounts&fleet opens Settings → Model providers on a fleet: this machine
+// ?accounts&fleet opens Settings → Models on a fleet: this machine
 // holds the team sign-in and Studio holds the personal one, which offers Hold
 // sign-in here. Studio also holds a Codex sign-in it shares, still on its
 // way, and Pod a Claude sign-in it keeps to itself. Core answers
@@ -313,7 +313,7 @@ const fleetRendered = () => document.querySelectorAll('[data-hold]').length === 
 function advanceFleetFixture() {
   if (!FLEET_PROBE || fleetRendered()) return
   if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
-  const providers = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Model providers')
+  const providers = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Models')
   if (providers && providers.getAttribute('aria-current') !== 'true') providers.click()
 }
 
@@ -992,12 +992,12 @@ function runtimesRendered() {
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
   const accept = page.querySelector('[role="switch"][aria-label="Accept connections"]')
-  const show = Array.from(page.querySelectorAll('button')).some((button) => button.textContent.trim() === 'Show pairing code')
-  if (runtimesState === 'pairing-off') return accept?.getAttribute('aria-checked') === 'false' && !accept.disabled && show && !page.textContent.includes('Devices using this computer')
+  const show = Array.from(page.querySelectorAll('.add-machine button')).some((button) => button.textContent.trim() === 'Show code')
+  if (runtimesState === 'pairing-off') return accept?.getAttribute('aria-checked') === 'false' && !accept.disabled && show
   if (runtimesState === 'pairing-on') return page.textContent.includes('Private overlay network')
-  if (runtimesState === 'link') return !!page.querySelector('.pairing-qr svg') && page.textContent.includes('expires in')
-  if (runtimesState === 'devices') return !!page.querySelector('[aria-label="Revoke Build box"]')
-  const rows = page.querySelectorAll('.group-card [role="group"]').length
+  if (runtimesState === 'link') return !!page.querySelector('.add-machine .qr svg') && page.textContent.includes('expires in')
+  const rows = page.querySelectorAll('.group-card > [role="group"]').length
+  if (runtimesState === 'devices') return rows === 3 && !!page.querySelector('[aria-label="More for Build box"]') && page.textContent.includes('Limited')
   if (runtimesState === 'local') return rows === 1
   if (runtimesState === 'paired') return rows === 3 && page.textContent.includes('Offline') && page.textContent.includes('Updating to v0.2.0')
   if (runtimesState === 'pairing') return page.textContent.includes('Connecting…')
@@ -1055,7 +1055,7 @@ const AGENT_SCREENS = {
   empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .agent-card'),
   cards: () => cardsRendered(5),
   'cards-offline': () => cardsRendered(5) && !!document.querySelector('[data-agent-card="018f0000-0000-4000-8000-0000000000a3"].read-only [role="note"]'),
-  machines: () => !!document.querySelector('.settings-runtimes [aria-label="Fleet member Office mini"]') && document.querySelector('.settings-runtimes')?.textContent.includes('Retrying'),
+  machines: () => !!document.querySelector('.settings-runtimes [aria-label="Office mini"]') && document.querySelector('.settings-runtimes [aria-label="Office mini"]')?.textContent.includes('Offline'),
   'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
   meeting: () => document.querySelector('.thread')?.textContent.includes('Debate round 1') && document.querySelectorAll('.thread .round').length === 3,
   import: () => !!document.querySelector('[data-panel="import"] [aria-label="Skills"]'),
@@ -1109,7 +1109,7 @@ function advanceAgentsFixture() {
   if (agentsState === 'absence') return
   if (agentsState === 'preferences') {
     if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
-    const appearance = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Appearance')
+    const appearance = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'General')
     if (appearance && appearance.getAttribute('aria-current') !== 'true') return appearance.click()
     document.querySelector('[aria-label="Agent avatars"]')?.scrollIntoView({ block: 'center' })
     return
@@ -1257,8 +1257,8 @@ function fixtureRendered() {
       && document.querySelector('.connect .action[data-tone="ochre"]')?.textContent.trim() === 'Add key'
   }
   if (scanFixture) {
-    // Settings → Memory lists the assistant memory found on this computer.
-    const imports = [...document.querySelectorAll('.memory .group')].find((group) => group.querySelector('h4')?.textContent === 'Imports')
+    // Settings → Data → Memory lists the assistant memory found on this computer.
+    const imports = [...document.querySelectorAll('.memory .group')].find((group) => group.querySelector('.settings-heading')?.textContent === 'Imports')
     return imports?.querySelectorAll('.row').length === 2
   }
   if (accessFixture) {
@@ -1290,7 +1290,7 @@ function advanceScanFixture() {
     return
   }
   const memory = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
-    .find((button) => button.textContent.trim() === 'Memory')
+    .find((button) => button.textContent.trim() === 'Data')
   if (memory && memory.getAttribute('aria-current') !== 'true') return memory.click()
   Array.from(document.querySelectorAll('.memory button')).find((button) => button.textContent.trim() === 'Look for memory')?.click()
 }
@@ -1334,8 +1334,16 @@ function advanceRuntimesFixture() {
   if (runtimes && runtimes.getAttribute('aria-current') !== 'true') return runtimes.click()
   const page = document.querySelector('.settings-runtimes')
   if (!page) return
+  // This computer's row opens its network settings, and Add machine its panel.
+  if (['pairing-off', 'pairing-on'].includes(runtimesState)) {
+    const details = page.querySelector('[aria-label="Settings for This computer"][aria-expanded="false"]')
+    if (details) return details.click()
+  }
+  if (['pairing-off', 'link', 'pairing', 'failed', 'ssh'].includes(runtimesState) && !page.querySelector('.add-machine')) {
+    return Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Add machine')?.click()
+  }
   if (runtimesState === 'pairing' || runtimesState === 'failed') {
-    const link = page.querySelector('input[placeholder="Paste a pairing link"]')
+    const link = page.querySelector('input[placeholder="Paste its link"]')
     if (link && !link.value) return typeInto(link, PROBE_PAIRING_LINK)
     const pair = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Add')
     if (pair && !pair.disabled && !probePairClicked) {
@@ -1345,7 +1353,7 @@ function advanceRuntimesFixture() {
     return
   }
   if (runtimesState === 'link') {
-    const create = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Show pairing code')
+    const create = Array.from(page.querySelectorAll('.add-machine button')).find((button) => button.textContent.trim() === 'Show code')
     if (create && !create.disabled && !probePairClicked) {
       probePairClicked = true
       create.click()

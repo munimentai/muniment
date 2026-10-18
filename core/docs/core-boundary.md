@@ -42,6 +42,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | fleet_sync | It maps the settings, project and memory classes onto swarm records, both ways. |
 | module | extend | It manages local extensions and per-chat capability snapshots. |
 | module | form_factor | It reads the shape of the computer a runtime runs on. |
+| module | folder_access | It checks that the operating system lets Pi read its working folder. |
 | module | creations | It stores local agent and artifact creation contracts. |
 | module | project_context | It provides project context to the local harness. |
 | module | workspace_names | It resolves stable names for local workspace folders. |

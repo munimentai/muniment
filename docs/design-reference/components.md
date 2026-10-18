@@ -11,7 +11,7 @@ listed as written.
 
 ## Shared component library
 
-`src/lib/ui/` owns reusable settings controls. Models and Extend share
+`src/lib/ui/` owns reusable settings controls. Models and Tools share
 `SearchToolbar`: the filter icon comes first, search fills the row, and actions
 sit at the right. Filters expand below the toolbar. `Button` supplies compact
 32px controls, icon-only accessible names, disabled states and focus backgrounds.
@@ -406,6 +406,7 @@ label tracking, the 1.45 provenance line height, and every opacity.
 | Approval | `.approval` in `ApprovalCard.svelte` | A gate waiting on any member, in Notifications and inline in the agent's thread (`.inline`, a hairline `--surface` card) | Agent with its activity, machine mark and age, core's summary in mono, the rule's inputs as mono rows in a `--faint` block, core's reason in `--text-12` `--muted`, a plan in a 1px `--border` block in the human face, then unified `Button`s for each answer core lists | Long inputs fold behind Show all. Deny uses the outline variant. An already-answered or refused answer shows its line in the card |
 | Failed runs | `.replay` in `ReplayList.svelte` | Agent profile | Trigger and routine, age in mono, the error in `--oxide`, notes in `--muted`, the input folded in a `--faint` mono block, Replay as a unified `Button` | A queued replay links Open run once it starts |
 | Group members | `.group-members` in `GroupMembers.svelte` | A group's composer band, in place of the model chip | Up to four 16px avatars and the count in mono `--muted` | Hover names every member |
-| Fleet member | `Row` in `SwarmSection.svelte` | One member on Settings → Machines | Shape icon, name, Online or Offline in mono meta, link line in `--muted` mono | Leave fleet on a machine this device administers, Remove from fleet on one it does not reach |
+| Machine row | `MachineRow.svelte` | One machine or device on Settings → Machines | 32px shape mark, name, mono version, hairline `--radius-chip` kind chip, one `StatusChip`, neutral Limited chip, last-seen line in `--muted` `--text-12` | Menu with Update, Rename and Remove in `--danger`. This computer's chevron opens its settings under the row |
+| Add machine | `.add-machine` in `AddMachine.svelte` | Settings → Machines, under the head | 1px `--border` panel at `--radius-panel`, 132px QR, mono link field with Copy, timer in `--muted` | Show code while connections are off, Use SSH instead, Close |
 | Move warning | `.warning` in `MoveDialog.svelte` | A forced move off a primary that does not answer | 1px `--ochre`, `--radius-control`, `--text-13` | The move stays off until the confirm box is checked |
 | Webhook address | `WebhookPanel.svelte` | A webhook routine's URLs, certificate fingerprint and secret | Mono values on `--faint`, Copy buttons, the secret in a 1px `--ochre` box | A `.warning` names a machine that does not accept connections |

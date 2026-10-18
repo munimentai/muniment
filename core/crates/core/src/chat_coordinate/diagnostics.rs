@@ -59,10 +59,11 @@ impl RunDiagnostics {
         &mut self,
         status: crate::sidecar::SidecarStatus,
         timeout: std::time::Duration,
+        waiting_on: &super::StartupWait,
     ) {
         self.outcome = "not_started_pi_not_ready";
         eprintln!(
-            "muniment-runtime: run_id={} pi_spawn rejected cause=pi_not_ready status={status:?} readiness_bound_ms={}",
+            "muniment-runtime: run_id={} pi_spawn rejected cause=pi_not_ready status={status:?} readiness_bound_ms={} pi_waiting_on={waiting_on}",
             self.run_id,
             timeout.as_millis()
         );

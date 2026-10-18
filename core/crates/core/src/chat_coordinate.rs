@@ -702,6 +702,10 @@ fn coordinate_work(
                     .map(|resume| &resume.locator)
                     .or(previous_session.as_ref()),
             )?;
+            if let Some(directory) = config.working_directory.as_deref() {
+                diagnostics.startup_stage("folder_access");
+                await_folder_access(&app, &run_id, directory, config.startup_timeout, &cancelled)?;
+            }
             diagnostics.startup_stage("acquire_completed");
             if matches!(
                 projector
@@ -767,11 +771,16 @@ fn coordinate_work(
             }
             Err(error) => {
                 eprintln!("{}", diagnostics::config_error_line(&run_id, &error));
-                let message = if matches!(error, PiLaunchError::Acquisition(_)) {
-                    "Reply setup failed. Check your connection and storage, then retry."
-                } else {
-                    "The agent runtime is unavailable."
+                let message = match error {
+                    PiLaunchError::Acquisition(_) => {
+                        "Reply setup failed. Check your connection and storage, then retry.".into()
+                    }
+                    PiLaunchError::FolderAccess { access, folder } => {
+                        crate::folder_access::failure_reason(access, folder)
+                    }
+                    _ => "The agent runtime is unavailable.".to_owned(),
                 };
+                let message = message.as_str();
                 fail_start(
                     &app,
                     &journal,
@@ -786,6 +795,7 @@ fn coordinate_work(
             }
         };
         let startup_timeout = config.startup_timeout;
+        let working_directory = config.working_directory.clone();
         diagnostics.startup_stage("pi_spawn");
         let opened = engine.open(PiOpen {
             config,
@@ -818,9 +828,9 @@ fn coordinate_work(
             Err(OpenError::Unavailable(process)) => (process, Err(OpenError::Unavailable(()))),
         };
         *runtime = Some(process);
-        (startup_timeout, opened)
+        (startup_timeout, working_directory, opened)
     };
-    let (startup_timeout, opened) = opening;
+    let (startup_timeout, working_directory, opened) = opening;
     let runtime = runtime.as_mut().expect("runtime was initialized");
     let transport = match opened {
         Ok(transport) => {
@@ -843,8 +853,16 @@ fn coordinate_work(
             return;
         }
         Err(OpenError::NotReady((), readiness_status)) => {
-            diagnostics.readiness_failed(readiness_status, startup_timeout);
-            let reason = if grant.is_local() {
+            let waiting_on = startup_waiting_on(
+                &app,
+                &runtime.wiring,
+                working_directory.as_deref(),
+                &cancelled,
+            );
+            diagnostics.readiness_failed(readiness_status, startup_timeout, &waiting_on);
+            let reason = if let StartupWait::Folder { access, folder } = waiting_on {
+                crate::folder_access::failure_reason(access, folder)
+            } else if grant.is_local() {
                 match diagnostics.stderr_error() {
                     Some(error) => format!("Reply setup failed. {error}"),
                     None => "Reply setup timed out. Try again.".to_owned(),
@@ -2397,6 +2415,94 @@ fn append_terminal(
             subject,
         )
     })
+}
+
+/// How long a folder read may take before the run logs that it waits on the
+/// operating system's consent prompt.
+const FOLDER_ACCESS_GRACE: Duration = Duration::from_secs(2);
+
+/// Waits, `bound` at most, until the operating system lets Pi read
+/// `directory`. Pi reads its working folder before it answers its first
+/// command, so a consent prompt nobody answers would otherwise hold Pi silent
+/// until its readiness bound.
+fn await_folder_access(
+    app: &impl PiLaunchBoundaries,
+    run_id: &str,
+    directory: &std::path::Path,
+    bound: Duration,
+    cancelled: &AtomicBool,
+) -> Result<(), PiLaunchError> {
+    use crate::folder_access::FolderAccess;
+    let folder = crate::state_root::home_directory_value().and_then(|home| {
+        crate::folder_access::protected_folder(directory, std::path::Path::new(&home))
+    });
+    let mut access = app.folder_access(directory, FOLDER_ACCESS_GRACE.min(bound), cancelled);
+    if access == FolderAccess::Waiting && !cancelled.load(Ordering::SeqCst) {
+        eprintln!(
+            "muniment-runtime: run_id={run_id} pi_spawn waiting_on=folder_access folder={} bound_ms={}",
+            folder.unwrap_or("other"),
+            bound.as_millis()
+        );
+        access = app.folder_access(directory, bound, cancelled);
+    }
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(PiLaunchError::Acquisition(
+            crate::model_install::ModelInstallError::Cancelled,
+        ));
+    }
+    match access {
+        FolderAccess::Open => Ok(()),
+        access => Err(PiLaunchError::FolderAccess { access, folder }),
+    }
+}
+
+/// What Pi waited on when it missed its readiness bound, as far as the
+/// runtime can tell.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StartupWait {
+    /// The operating system still holds or refuses Pi's working folder.
+    Folder {
+        access: crate::folder_access::FolderAccess,
+        folder: Option<&'static str>,
+    },
+    /// Pi asked a question through an extension and has no answer yet.
+    Dialog(String),
+    Unknown,
+}
+
+impl std::fmt::Display for StartupWait {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Folder { access, folder } => write!(
+                formatter,
+                "folder_access access={access:?} folder={}",
+                folder.unwrap_or("other")
+            ),
+            Self::Dialog(request) => write!(formatter, "extension_request {request}"),
+            Self::Unknown => formatter.write_str("unknown"),
+        }
+    }
+}
+
+fn startup_waiting_on(
+    app: &impl PiLaunchBoundaries,
+    wiring: &crate::sidecar::PiRpcWiring,
+    directory: Option<&std::path::Path>,
+    cancelled: &AtomicBool,
+) -> StartupWait {
+    use crate::folder_access::FolderAccess;
+    if let Some(directory) = directory {
+        let access = app.folder_access(directory, Duration::from_millis(500), cancelled);
+        if access != FolderAccess::Open {
+            let folder = crate::state_root::home_directory_value().and_then(|home| {
+                crate::folder_access::protected_folder(directory, std::path::Path::new(&home))
+            });
+            return StartupWait::Folder { access, folder };
+        }
+    }
+    wiring
+        .pending_request()
+        .map_or(StartupWait::Unknown, StartupWait::Dialog)
 }
 
 /// The line a failed reply shows: the provider's own sentence after ours,

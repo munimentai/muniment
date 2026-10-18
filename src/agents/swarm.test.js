@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { applyApproval, directLinks, emptySwarm, linkMachines, listSwarm, memberMachine, mergeSwarm, moveOutcome, moveRequest, postTarget, swarmRoster, swarmThreads, windowRuntime } from './swarm.js'
+import { applyApproval, directLinks, emptySwarm, listSwarm, memberMachine, mergeSwarm, moveOutcome, moveRequest, postTarget, swarmRoster, swarmThreads, windowRuntime } from './swarm.js'
 
 const LAPTOP = 'core-laptop'
 const BOX = 'core-box'
@@ -104,15 +104,6 @@ describe('posting', () => {
 })
 
 describe('linking', () => {
-  it('runs the invitation on one machine and redeems it on the other', async () => {
-    const invoke = vi.fn(async (_command, { operation }) => operation === 'swarm.invite' ? { link: 'muniment://pair?v=1&id=x' } : { member: { runtime_id: BOX } })
-    expect(await linkMachines({ invoke }, 'local', 'box')).toEqual({ runtime_id: BOX })
-    expect(invoke.mock.calls.map(([, payload]) => [payload.runtime, payload.operation, payload.body])).toEqual([
-      ['local', 'swarm.invite', {}],
-      ['box', 'swarm.join', { link: 'muniment://pair?v=1&id=x' }],
-    ])
-    await expect(linkMachines({ invoke }, 'box', 'box')).rejects.toThrow('Choose two different machines.')
-  })
   it('lists a machine\'s direct links from its own view', () => {
     expect(directLinks(answers()[0].members).map((entry) => entry.runtime_id)).toEqual([BOX])
   })

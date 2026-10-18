@@ -14,7 +14,7 @@
         {
           "id": "account",
           "title": "Connect your first account",
-          "body": "Open Settings → Models & decisions → Accounts. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device unless you share them with your own machines. Your provider sets access and usage limits."
+          "body": "Open Settings → Models. Choose Connect account and a provider. Use a supported subscription sign-in, an API key, or a local model endpoint. Credentials stay on your device unless you share them with your own machines. Your provider sets access and usage limits."
         },
         {
           "id": "first-message",
@@ -24,7 +24,7 @@
         {
           "id": "next",
           "title": "Make it your workspace",
-          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings → Extend. Use Preferences to choose a theme, text size, and separate fonts for headers, prose, and records."
+          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings → Tools. Use Preferences to choose a theme, text size, and separate fonts for headers, prose, and records."
         }
       ]
     },
@@ -100,7 +100,7 @@
         {
           "id": "mcp",
           "title": "Connect an MCP server",
-          "body": "Open Settings → Extend → MCP servers. Search names, descriptions, publishers, or categories. Use the sliders button for category, installed, and sort filters. Details opens an in-app description. Connect starts provider authentication for supported servers. Complete consent in your browser."
+          "body": "Open Settings → Tools → MCP servers. Search names, descriptions, publishers, or categories. Use the sliders button for category, installed, and sort filters. Details opens an in-app description. Connect starts provider authentication for supported servers. Complete consent in your browser."
         },
         {
           "id": "custom",

@@ -205,7 +205,9 @@ export function advanceFleetSync() {
     if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     const machines = [...document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')].find((button) => button.textContent.trim() === 'Machines')
     if (machines && machines.getAttribute('aria-current') !== 'true') return machines.click()
-    const target = state === 'log' ? document.querySelector('[aria-label="Fleet log"]') : [...document.querySelectorAll('.settings-heading')].find((heading) => heading.textContent.startsWith('Available offline'))
+    const details = document.querySelector('.settings-runtimes [aria-label="Settings for This computer"][aria-expanded="false"]')
+    if (details) return details.click()
+    const target = state === 'log' ? document.querySelector('[aria-label="Machine log"]') : [...document.querySelectorAll('.settings-heading')].find((heading) => heading.textContent.startsWith('Available offline'))
     target?.closest('section')?.scrollIntoView({ block: 'start' })
   }
 }
@@ -223,7 +225,7 @@ export function fleetSyncRendered() {
   if (state === 'replica') return document.body.textContent.includes('History arriving from Pod: 12 of 48 events.')
   if (state === 'offload') return offloadStep === 3 && !!document.querySelector('.machine-menu [role="menuitemradio"][aria-checked="true"]')?.textContent.includes('Pod')
   if (state === 'offline-settings') return document.body.textContent.includes('Details only. Files stay on the machine that owns the project.') && !document.querySelector('[role="radiogroup"][aria-label="Projects"]')
-  if (state === 'log') return (document.querySelector('[aria-label="Fleet log"]')?.children.length ?? 0) === audit.length && document.body.textContent.includes('Pod → Laptop')
+  if (state === 'log') return (document.querySelector('[aria-label="Machine log"]')?.children.length ?? 0) === audit.length && document.body.textContent.includes('Pod → Laptop')
   if (state === 'projects') {
     const catalog = document.querySelector('[aria-label="Projects catalog"]')?.textContent ?? ''
     return catalog.includes('Lease renewal') && catalog.includes('files on Studio') && catalog.includes('files on Pod')

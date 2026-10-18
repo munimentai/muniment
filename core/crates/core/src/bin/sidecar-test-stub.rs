@@ -48,6 +48,7 @@ fn main() {
         Some("echo") => echo(),
         Some("json-rpc") => json_rpc(args.next()),
         Some("pi-rpc-interleaved") => pi_rpc_interleaved(),
+        Some("pi-rpc-startup-question") => pi_rpc_startup_question(),
         Some("pi-rpc-blocked-stdin") => pi_rpc_blocked_stdin(),
         Some("pi-rpc-slow-probes") => {
             for line in io::stdin().lock().lines() {
@@ -215,6 +216,13 @@ fn pi_rpc_blocked_stdin() {
 }
 
 fn pi_resume(args: Vec<String>) {
+    // Pi reads its working folder before it answers its first command. A
+    // `PI_RESUME_STUB_FOLDER_GATE` FIFO there holds that read, as macOS holds
+    // a protected folder until the user answers its consent prompt.
+    let _ = fs::read_dir(".").map(Iterator::count);
+    if let Ok(gate) = std::env::var("PI_RESUME_STUB_FOLDER_GATE") {
+        let _ = fs::read(gate);
+    }
     if let Ok(path) = std::env::var("PI_RESUME_STUB_ARGS") {
         fs::write(path, args.join("\n")).unwrap();
     }
@@ -980,6 +988,40 @@ fn json_rpc(ping_marker: Option<String>) {
             ),
         }
         io::stdout().flush().unwrap();
+    }
+}
+
+/// Asks an extension question while it starts and answers no command until
+/// the question has its answer, as an extension that asks during load does.
+fn pi_rpc_startup_question() {
+    println!(
+        "{}",
+        serde_json::json!({
+            "type": "extension_ui_request", "id": "startup-question-1", "method": "editor",
+            "title": "muniment:startup-check", "prefill": "{}"
+        })
+    );
+    io::stdout().flush().unwrap();
+    let mut answered = false;
+    let mut waiting = Vec::new();
+    for line in io::stdin().lock().lines() {
+        let request: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if request["type"] == "extension_ui_response" && request["id"] == "startup-question-1" {
+            answered = true;
+        } else if request["type"] == "get_state" {
+            waiting.push(request["id"].clone());
+        }
+        if answered {
+            for id in waiting.drain(..) {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "response", "command": "get_state", "success": true, "id": id
+                    })
+                );
+            }
+            io::stdout().flush().unwrap();
+        }
     }
 }
 

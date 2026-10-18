@@ -1,5 +1,5 @@
 <script>
-  // Settings → Language: the language the app and its Browser tab use.
+  // Settings → General → Language: the language the app and its Browser tab use.
   import BrowserLanguage from './BrowserLanguage.svelte'
   import PageHead from './ui/PageHead.svelte'
   let { tauri } = $props()

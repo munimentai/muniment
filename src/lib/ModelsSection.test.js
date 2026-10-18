@@ -23,7 +23,7 @@ function bridge() {
 
 it('names how many models each endpoint serves and what Refresh models found', async () => {
   const tauri = bridge()
-  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory, sidebarTab: 'accounts' } })
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
   const omlx = screen.getByRole('region', { name: 'oMLX' })
   expect(within(omlx).getByText('2 models')).toBeInTheDocument()
   expect(within(screen.getByRole('region', { name: 'Spare box' })).getByText('No models')).toBeInTheDocument()
@@ -42,7 +42,7 @@ it('offers the servers found on this computer under Connect account and connects
   const tauri = bridge()
   const base = tauri.invoke.getMockImplementation()
   tauri.invoke.mockImplementation(async (command, payload) => command === 'onboarding_provider_scan' ? scan : base(command, payload))
-  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory, sidebarTab: 'accounts' } })
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
   await fireEvent.click(screen.getByRole('button', { name: 'Connect account' }))
   const found = await screen.findByRole('region', { name: 'Found on this computer' })
   expect(found).toHaveTextContent('oMLX')

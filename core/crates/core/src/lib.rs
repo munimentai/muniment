@@ -29,6 +29,7 @@ pub mod creations;
 pub mod engine;
 pub use muniment_router::endpoint_models;
 pub mod extend;
+pub mod folder_access;
 pub mod form_factor;
 pub mod harness_scan;
 pub mod home;
