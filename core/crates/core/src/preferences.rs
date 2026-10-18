@@ -28,14 +28,18 @@ pub const FLEET_KEYS: [&str; 7] = [
     MEMORY_RECALL,
 ];
 /// The keys that stay on this machine.
-pub const LOCAL_KEYS: [&str; 6] = [
+pub const LOCAL_KEYS: [&str; 7] = [
     "sidebar-collapsed",
     "sidebar-width",
     "window",
     "frame",
     "local-mode",
     "voice-shortcut",
+    LARGE_DOWNLOADS,
 ];
+/// The key that records the user's consent to large model downloads on this
+/// machine: `true` once they allowed one, so the next one starts unasked.
+pub const LARGE_DOWNLOADS: &str = "large-downloads";
 /// The key backed by the memory recall settings.
 pub const MEMORY_RECALL: &str = "memory-recall";
 /// The prefix a client's own storage puts before each key.
@@ -100,6 +104,14 @@ pub fn values(profile: &Path) -> Result<BTreeMap<String, Value>, String> {
         values.insert(MEMORY_RECALL.into(), json!(recall));
     }
     Ok(values)
+}
+
+/// Whether the user allowed large model downloads on this machine.
+pub fn large_downloads_allowed(profile: &Path) -> bool {
+    values(profile)
+        .ok()
+        .and_then(|values| values.get(LARGE_DOWNLOADS).cloned())
+        == Some(Value::Bool(true))
 }
 
 pub(crate) fn check(key: &str, value: &Value) -> Result<(), String> {
@@ -264,6 +276,26 @@ mod tests {
         let path = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn large_downloads_wait_for_the_users_consent_and_stay_on_this_machine() {
+        let profile = profile();
+        assert!(!large_downloads_allowed(&profile));
+        assert!(!is_fleet_key(LARGE_DOWNLOADS));
+        set(
+            &profile,
+            BTreeMap::from([(LARGE_DOWNLOADS.to_owned(), Some(json!(true)))]),
+        )
+        .unwrap();
+        assert!(large_downloads_allowed(&profile));
+        set(
+            &profile,
+            BTreeMap::from([(LARGE_DOWNLOADS.to_owned(), None)]),
+        )
+        .unwrap();
+        assert!(!large_downloads_allowed(&profile));
+        std::fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]
