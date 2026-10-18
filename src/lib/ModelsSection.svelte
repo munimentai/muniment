@@ -1,4 +1,5 @@
 <script>
+  import FailureNote from './FailureNote.svelte'
   import './ui/settings-controls.css'
   import { accountCache } from './account-cache.js'
   import SearchToolbar from './ui/SearchToolbar.svelte'
@@ -576,7 +577,7 @@
         <button type="button" data-variant="primary" disabled={pending} onclick={startLogin}>Sign in</button>
       {:else}
         <div class="login" aria-live="polite">
-          <p class="support">{login.message}</p>
+          {#if login.stage === 'failed'}<FailureNote failure={login.message} detail={login.detail} />{:else}<p class="support">{login.message}</p>{/if}
           {#if login.code}<p class="login-code">{login.code}</p>{/if}
           {#if login.url}
             <div class="login-links">

@@ -33,7 +33,8 @@ export function loginEvent(login, payload) {
     case 'done':
       return { login: { ...login, stage: 'done', prompt: null }, stop: true, done: true, pool: !!payload.pool }
     case 'failed':
-      return { login: { ...login, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', prompt: null }, stop: true }
+      // The cause a provider or the runtime named stays for Show log.
+      return { login: { ...login, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', detail: payload.detail ?? payload.error ?? '', prompt: null }, stop: true }
     case 'cancelled':
       return { login: { ...login, stage: 'cancelled', message: 'The sign-in was cancelled.', prompt: null }, stop: true }
     case 'exit':

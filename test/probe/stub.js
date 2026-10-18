@@ -1264,10 +1264,9 @@ function fixtureRendered() {
   if (accessFixture) {
     const sections = document.querySelector('.account-sections')
     const headings = Array.from(sections?.querySelectorAll('.settings-heading') ?? [], (heading) => heading.textContent)
-    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention']
-      .every((heading) => headings.includes(heading))
-      && sections.querySelector('.current-device')?.textContent === 'This device'
-      && sections.querySelector('.revoked .device-state')?.textContent === 'Revoked'
+    // The account's devices and phone list on Machines, and retention is on Data.
+    return ['Plan', 'Connected programs', 'Your access'].every((heading) => headings.includes(heading))
+      && !['Devices', 'Phone pairing', 'Thread retention'].some((heading) => headings.includes(heading))
   }
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false

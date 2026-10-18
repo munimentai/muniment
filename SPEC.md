@@ -163,13 +163,13 @@ The first run asks one question: which model to connect. The provider scan runs
 at launch, and its finds lead the list: ready local servers, then subscriptions
 with a sign-in hint, then servers that need a key or a start. Every subscription
 Muniment signs in to follows in full color. Each card is one line: logo, name and action. The action reads Connect only where one click connects, and Sign in where a sign-in follows. More providers opens the provider
-catalog, and Explore without connecting opens the composer with no model. A pick saves Home and asks macOS for access to it then, with a hint beside Home, so no prompt holds the first chat. A refusal keeps the first run and names the setting. A found server connects in place. A signed-in Claude Code connects in place. Any other subscription's sign-in starts at once, opens the browser, and shows its progress under its card until the account connects. A scan that fails while the runtime starts runs again before it names the failure. Settings → Connect account lists the servers the scan finds that no connection serves: one connects in one step, and one that needs more opens a custom endpoint form with its name and address. The composer band
+catalog, and Explore without connecting opens the composer with no model. A pick saves Home, and the app and the runtime that runs Pi each read it then, so macOS asks while a hint beside Home shows and no prompt holds the first chat. A run that still waits on a folder prompt names it in place of its stage word and waits up to ten minutes for the answer. A refusal keeps the first run and names the setting. A found server connects in place. A signed-in Claude Code connects in place. Any other subscription's sign-in starts at once, opens the browser, and shows its progress under its card until the account connects. A scan that fails while the runtime starts runs again before it names the failure. Settings → Connect account lists the servers the scan finds that no connection serves: one connects in one step, and one that needs more opens a custom endpoint form with its name and address. The composer band
 shows the model source, Home, the context meter and the running cost. A global shortcut opens a one-line launcher that starts a new thread with the line typed into it.
 
 **The provider scan.** It probes known model servers on `127.0.0.1` only, never the network, in about two seconds, and names each by its answer, not its port: Ollama, LM Studio, llama.cpp, MLX LM, oMLX, vLLM, Jan, Osaurus, LocalAI, Lemonade, KoboldCpp, Docker Model Runner, Text Generation WebUI and exo. It sends no key. A `401` asks *Add key*, and an installed server that does not answer reads *Not running* and opens how to start it. A key comes from the user, or for oMLX from its own settings file on request. A sign-in hint only tests that a CLI's executable, folder or credential file exists and never reads it: Claude Code, Codex, Grok Build, Gemini, Copilot, Kimi, Devin, Muse Code and Ori.
 
 **The model chip.** The chip shows the provider's mark and the model id in use,
-the saved default when it is shown, else the first shown model. When no
+the saved default when it is shown, else the router's pick among the models the catalog knows, else the first shown model that some plan offers; a model every plan refused shows unavailable with the reason. When no
 provider answers it reads `Connect a model`, and the chip and Send open the provider catalog. A re-read of the same machine after a reply or a reconnect keeps the model the chip names.
 Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
@@ -224,7 +224,7 @@ Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
 at its seat service's `GetUserStatus`. xAI has no such route, and its card
 says what the router cannot read. A window is known by its length in
 seconds, never by its slot, because a Pro plan's primary window is the weekly
-one. The card shows what is left, not what is used, with the reset, the plan,
+one. A weekly window with no 5-hour window says the plan reports none. The card shows what is left, not what is used, with the reset, the plan,
 and Codex's banked resets. The store in `muniment-router-quota.json` carries
 no token and no prompt. Allowances refresh when the settings page opens and
 every two minutes while it is visible, without overlapping probes. The card's

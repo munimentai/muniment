@@ -690,10 +690,10 @@ pub(crate) fn name_unreachable<R: tauri::Runtime>(
 pub(crate) fn unreachable_message(name: &str, status: RuntimeStatus) -> String {
     match status {
         RuntimeStatus::CertificateChanged => {
-            format!("{name} answered with a new certificate. Pair it again in Settings, Runtimes.")
+            format!("{name} answered with a new certificate. Add it again in Settings, Machines.")
         }
         RuntimeStatus::Revoked => {
-            format!("{name} revoked this computer. Pair it again in Settings, Runtimes.")
+            format!("{name} revoked this computer. Add it again in Settings, Machines.")
         }
         RuntimeStatus::VersionMismatch => {
             format!("{name} runs an incompatible version. Update the app or the runtime.")

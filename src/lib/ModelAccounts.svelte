@@ -1,4 +1,5 @@
 <script>
+  import FailureNote from './FailureNote.svelte'
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
   import AllowanceMeter from './AllowanceMeter.svelte'
   import { allowanceLabel } from './allowance-label.js'
@@ -311,7 +312,7 @@
 
   {#if signIn}
     <div class="login" aria-live="polite">
-      <p class="support">{signIn.message}</p>
+      {#if signIn.stage === 'failed'}<FailureNote failure={signIn.message} detail={signIn.detail} />{:else}<p class="support">{signIn.message}</p>{/if}
       {#if signIn.code}<p class="login-code">{signIn.code}</p>{/if}
       {#if signIn.url}
         <div class="login-links">

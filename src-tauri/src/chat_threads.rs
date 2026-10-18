@@ -267,6 +267,29 @@ fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
     serde_json::json!({ "summaries": summaries, "nextCursor": next_cursor, "runtimeIds": answered })
 }
 
+/// The runtime each listed thread lives on. A thread listed both by its owner
+/// and as another runtime's replica lives on its owner, so requests for it,
+/// such as a follow-up message or a stop, reach the runtime that runs it.
+#[cfg(any(unix, target_os = "windows"))]
+fn thread_runtimes(listed: &[serde_json::Value]) -> Vec<(String, String)> {
+    let mut threads: Vec<(bool, String, String)> = listed
+        .iter()
+        .filter_map(|summary| {
+            Some((
+                summary.get("replica").and_then(serde_json::Value::as_bool) != Some(true),
+                summary.get("threadId")?.as_str()?.to_owned(),
+                summary.get("runtimeId")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    // Replicas first, so the owner's entry for the same thread replaces them.
+    threads.sort_by_key(|(owner, _, _)| *owner);
+    threads
+        .into_iter()
+        .map(|(_, thread, runtime)| (thread, runtime))
+        .collect()
+}
+
 /// The runtimes a page request reads, with each one's cursor: every runtime
 /// for the first page, then those the merged cursor names.
 #[cfg(any(unix, target_os = "windows"))]
@@ -323,12 +346,7 @@ pub async fn chat_thread_summaries(
         }
         let merged = merge_thread_pages(pages);
         if let Some(listed) = merged["summaries"].as_array() {
-            attach.remember_thread_runtimes(listed.iter().filter_map(|summary| {
-                Some((
-                    summary.get("threadId")?.as_str()?.to_owned(),
-                    summary.get("runtimeId")?.as_str()?.to_owned(),
-                ))
-            }));
+            attach.remember_thread_runtimes(thread_runtimes(listed));
         }
         Ok(merged)
     })
@@ -345,7 +363,15 @@ pub async fn chat_select_thread(
     state: tauri::State<'_, ChatState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
+    runtime_id: Option<String>,
 ) -> Result<(), String> {
+    // The window names the machine its thread row shows, so requests and the
+    // model list follow that machine even before a thread list names it.
+    if let Some(runtime) = runtime_id.filter(|runtime| {
+        runtime == LOCAL_RUNTIME || attach_state.remote_ids().iter().any(|id| id == runtime)
+    }) {
+        attach_state.remember_thread_runtimes([(thread_id.clone(), runtime)]);
+    }
     crate::runtimes::follow_thread(&app_handle, &thread_id);
     let session: ThreadSelectSession<_> = attach_state.desktop_client_session().into();
     if matches!(&session, ThreadSelectSession::Disconnected) {
@@ -1346,5 +1372,19 @@ mod tests {
             page: serde_json::json!({"summaries": [], "nextCursor": null}),
         }]);
         assert!(last["nextCursor"].is_null());
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_thread_listed_by_its_owner_and_as_a_replica_lives_on_its_owner() {
+        let listed = vec![
+            serde_json::json!({"threadId": "t", "runtimeId": "box", "owner_runtime": "core-box", "replica": false}),
+            serde_json::json!({"threadId": "t", "runtimeId": "local", "owner_runtime": "core-box", "replica": true}),
+            serde_json::json!({"threadId": "only-here", "runtimeId": "local", "owner_runtime": "core-box", "replica": true}),
+        ];
+        let mut map = std::collections::HashMap::new();
+        map.extend(thread_runtimes(&listed));
+        assert_eq!(map["t"], "box");
+        assert_eq!(map["only-here"], "local");
     }
 }

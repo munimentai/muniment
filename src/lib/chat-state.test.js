@@ -98,6 +98,16 @@ describe('chat composer and projection', () => {
     expect(historyMessages([{ runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] }])[0].run.stage).toBe('thinking')
   })
 
+  it('names the macOS folder prompt a run waits on until the answer clears it', () => {
+    let run = { id: 'r', phase: 'acquiring-pi', text: '' }
+    run = applyChatEvent(run, { runId: 'r', phase: 'acquiring-pi', text: '', routingStage: 'folder-access:Documents', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('macOS is asking for access to Documents. Choose Allow.')
+    run = applyChatEvent(run, { runId: 'r', phase: 'acquiring-pi', text: '', routingStage: 'folder-access', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('macOS is asking for access to this folder. Choose Allow.')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', routingStage: null, toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Routing')
+  })
+
   it('names every tool by a plain verb and never by a vendor, a model or a harness', () => {
     for (const tool of ['read', 'grep', 'find', 'ls']) expect(toolVerb(tool)).toBe('Reading')
     for (const tool of ['write', 'edit']) expect(toolVerb(tool)).toBe('Editing')

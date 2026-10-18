@@ -945,7 +945,7 @@
   // A group thread, or a replica of another machine's agent thread, takes a
   // message through `thread.post`. Core hands it to the group or to the
   // agent's primary machine.
-  const threadPostTarget = $derived(postTarget({ threadId: freshThread ? null : currentThreadId, threadRuntime: threadMachine, groups: swarm.groups, agent: threadAgent, swarm, owner: currentSummary?.owner_runtime }))
+  const threadPostTarget = $derived(postTarget({ threadId: freshThread ? null : currentThreadId, threadRuntime: threadMachine, groups: swarm.groups, agent: threadAgent, swarm, owner: currentSummary?.owner_runtime, replica: !!currentSummary?.replica }))
   // The open thread's summary, and the fleet member that owns it when that
   // is another machine.
   const currentSummary = $derived(freshThread || !currentThreadId ? null : threadSummaries.find((summary) => summary.threadId === currentThreadId) ?? null)
@@ -1028,9 +1028,8 @@
     }
   }
   let posting = $state(false)
-  async function postToThread(target) {
-    const text = draft.trim()
-    if (!text || posting) return
+  async function postToThread(target, text = draft.trim()) {
+    if (!text || posting) return false
     posting = true
     submitError = ''
     try {
@@ -1038,8 +1037,10 @@
       fleet.forwarded(answer)
       draft = ''
       await chatController.refreshOpenThread()
+      return true
     } catch (error) {
       submitError = String(error?.message ?? error)
+      return false
     } finally {
       posting = false
     }
@@ -1052,8 +1053,8 @@
   // Approvals waiting in the open thread. Each shows as an approval card at
   // the end of the transcript in place of the run's own gate.
   const openApprovals = $derived(threadApprovals(swarm.approvals, freshThread ? null : currentThreadId))
-  // A catalog covers the thread, so the title bar names the catalog.
-  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? 'Projects' : '')
+  // A catalog or a page covers the thread, so the title bar names it.
+  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? 'Projects' : fullPage === 'usage' ? 'Usage' : fullPage === 'notifications' ? 'Notifications' : '')
   let currentThreadTitle = $derived(threadAgent?.name || threadGroup?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   // The machine the open thread lives on. A new thread has none until its
@@ -1294,6 +1295,9 @@
   let composerExtensions = $state()
   let extensionCommandNames = $state([])
   const chatController = createChatController({
+    // A thread another machine runs that the list did not mark yet takes
+    // the message as a post, which core sends on to that machine.
+    postElsewhere: (text) => !freshThread && currentThreadId ? postToThread({ runtime: threadMachine || LOCAL_RUNTIME_ID, body: { thread_id: currentThreadId } }, text) : false,
     invoke: (command, args) => tauri.invoke(command, ...(args === undefined ? [] : [args])),
     onPosted: (threadId, posts) => { threadPosts = { threadId, posts } },
     prepareSubmit: async ({ prompt }) => {
@@ -2970,7 +2974,7 @@
                       <button type="submit" disabled={rowRenamePending || !rowRename.title.trim()}>Save</button>
                       <button type="button" disabled={rowRenamePending} onclick={() => { rowRename = null; focusThreadRow(summary.threadId) }}>Cancel</button>
                     </form>
-                  {:else if current && !(agentsOpen || artifactsOpen || projectsOpen)}
+                  {:else if current && !catalogTitle}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
                     <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
                   {:else}
@@ -3295,7 +3299,7 @@
                   </div>
                 {/if}
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Details</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Show log</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && !openApprovals.some(approval => approval.run_id === message.run.id)}
