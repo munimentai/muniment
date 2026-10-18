@@ -182,6 +182,9 @@ pub enum PiChatEvent {
         tool_call_id: String,
         tool_name: String,
         input: Option<String>,
+        /// The call that made this one, such as the script a codemode call
+        /// runs.
+        parent_tool_call_id: Option<String>,
     },
     ToolFinished {
         tool_call_id: String,
@@ -310,6 +313,7 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
             tool_call_id: "muniment:context-compaction".into(),
             tool_name: "compact_context".into(),
             input: Some(serde_json::json!({"reason": frame.get("reason").and_then(Value::as_str).unwrap_or("threshold")}).to_string()),
+            parent_tool_call_id: None,
         }),
         Some("compaction_end" | "auto_compaction_end") => {
             let failed = frame.get("aborted").and_then(Value::as_bool) == Some(true)
@@ -408,6 +412,8 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
             struct ToolStart {
                 tool_call_id: String,
                 tool_name: String,
+                #[serde(default)]
+                parent_tool_call_id: Option<String>,
             }
 
             let Ok(event) = serde_json::from_value::<ToolStart>(frame.clone()) else {
@@ -420,6 +426,7 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
                 tool_call_id: event.tool_call_id,
                 tool_name: event.tool_name,
                 input: activity_detail(frame.get("args")),
+                parent_tool_call_id: event.parent_tool_call_id.filter(|id| !id.is_empty()),
             })
         }
         Some("tool_execution_end") => {
@@ -1344,8 +1351,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(started, PiChatEvent::ToolStarted { ref tool_call_id, ref tool_name, .. }
-            if tool_call_id == "call_1/1" && tool_name == "mcp__record__sql")
+            matches!(started, PiChatEvent::ToolStarted { ref tool_call_id, ref tool_name, ref parent_tool_call_id, .. }
+            if tool_call_id == "call_1/1" && tool_name == "mcp__record__sql"
+                && parent_tool_call_id.as_deref() == Some("call_1"))
         );
         let finished = parse_frame(&json!({"type":"tool_execution_end","toolCallId":"call_1/1",
             "parentToolCallId":"call_1","toolName":"mcp__record__sql","isError":false}))

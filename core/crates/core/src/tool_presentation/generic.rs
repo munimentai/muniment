@@ -431,5 +431,6 @@ pub(super) fn describe(tool: &str, input: &Value, meta: Option<&ToolMeta>) -> To
         details: details(args, meta, &skip),
         result: None,
         path: None,
+        via: None,
     }
 }

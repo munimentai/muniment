@@ -15,6 +15,7 @@ reads. Hosts render the result and compute none of it.
 | `details` | At most six `{label, value, mono}` rows, without empty, false or default values |
 | `result` | How it ended: `Exit 0 in 4.2 s`, `Found 8 results`, `Failed: permission denied` |
 | `path` | The file a host may open |
+| `via` | How a call another call made ran: `via script` |
 
 A headline marks code in backticks and never holds raw JSON. The raw input and
 output stay with the call for its details.
@@ -22,6 +23,12 @@ output stay with the call for its details.
 `chat_view` adds a presentation to each `ChatToolActivity` and to a pending
 permission gate, and the swarm adds one to each agent approval. A gate's
 summary is its headline.
+
+Pi runs a codemode script's tool calls as calls of their own, each naming
+the script's call. A `ChatToolActivity` names that call in
+`parent_effect_id` and its presentation carries `via`. A host nests the
+calls under their script, shows a script with one call as that call with
+its `via` note, and counts the calls a script makes in place of the script.
 
 ## Describers
 

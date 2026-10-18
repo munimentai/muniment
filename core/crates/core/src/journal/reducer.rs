@@ -640,6 +640,9 @@ pub struct ProjectedAttachment {
 pub struct ToolActivity {
     pub text_offset: usize,
     pub effect_id: String,
+    /// The call that made this one, such as the codemode script whose tool
+    /// call it is.
+    pub parent_effect_id: Option<String>,
     pub display_name: Option<String>,
     pub status: ToolActivityStatus,
     pub input: Option<String>,
@@ -705,6 +708,7 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
             "code.diff.applied" => chat.applied_diffs.push(projected_applied_diff(event)?),
             "tool.effect.started" => chat.tool_activity.push(ToolActivity {
                 text_offset: chat.text.encode_utf16().count(),
+                parent_effect_id: parent_effect(event, &chat.tool_activity)?,
                 effect_id: field(event, "effect_id")?,
                 display_name: optional_field(event, "display_name")?,
                 status: ToolActivityStatus::Running,
@@ -913,6 +917,7 @@ impl ChatProjector {
             }
             "tool.effect.started" => self.chat.tool_activity.push(ToolActivity {
                 text_offset: self.text_utf16_len,
+                parent_effect_id: parent_effect(event, &self.chat.tool_activity)?,
                 effect_id: field(event, "effect_id")?,
                 display_name: optional_field(event, "display_name")?,
                 status: ToolActivityStatus::Running,
@@ -1325,6 +1330,24 @@ fn field(event: &EventEnvelope, name: &'static str) -> Result<String, ReduceErro
         field: name,
     })
 }
+/// The call that made a started call: the one its event names, else, for a
+/// run recorded before events named it, the earlier call whose id leads its
+/// own, as Pi names a script's tool call `<script call>/<n>`.
+fn parent_effect(
+    event: &EventEnvelope,
+    earlier: &[ToolActivity],
+) -> Result<Option<String>, ReduceError> {
+    if let Some(parent) = optional_field(event, "parent_effect_id")? {
+        return Ok(Some(parent));
+    }
+    let effect_id = field(event, "effect_id")?;
+    Ok(effect_id
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .filter(|parent| earlier.iter().any(|activity| activity.effect_id == *parent))
+        .map(str::to_owned))
+}
+
 fn optional_field(
     event: &EventEnvelope,
     name: &'static str,

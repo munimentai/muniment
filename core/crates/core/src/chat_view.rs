@@ -28,6 +28,10 @@ pub const TOOL_OUTPUT_PREVIEW_BYTES: usize = 1024;
 pub struct ChatToolActivity {
     pub text_offset: usize,
     pub effect_id: String,
+    /// The call of the same run that made this one, such as the codemode
+    /// script whose tool call it is. A host nests the call under it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_effect_id: Option<String>,
     pub display_name: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,32 +200,51 @@ pub fn chat_pending_permission(
     })
 }
 
-pub fn chat_tool_activity(activity: &[ToolActivity]) -> Vec<ChatToolActivity> {
-    activity
+/// Each call of a run as the webview shows it. A call another call of the
+/// run made names that call and notes how it ran, so a host nests a script's
+/// tool calls under the script.
+pub fn chat_tool_activity(activities: &[ToolActivity]) -> Vec<ChatToolActivity> {
+    let presentations: Vec<_> = activities
         .iter()
-        .map(|activity| ChatToolActivity {
-            text_offset: activity.text_offset,
-            effect_id: activity.effect_id.clone(),
-            input: activity.input.clone(),
-            output: activity
-                .output
-                .as_deref()
-                .map(|output| utf8_prefix(output, TOOL_OUTPUT_PREVIEW_BYTES).to_owned()),
-            output_bytes: activity.output.as_ref().map(String::len),
-            output_truncated: activity
-                .output
-                .as_ref()
-                .is_some_and(|output| output.len() > TOOL_OUTPUT_PREVIEW_BYTES),
-            started_at: activity.started_at.clone(),
-            finished_at: activity.finished_at.clone(),
-            presentation: crate::tool_presentation::describe_activity(activity),
-            display_name: activity.display_name.clone(),
-            status: match activity.status {
-                ToolActivityStatus::Running => "running",
-                ToolActivityStatus::Completed => "completed",
-                ToolActivityStatus::Failed => "failed",
+        .map(crate::tool_presentation::describe_activity)
+        .collect();
+    activities
+        .iter()
+        .zip(&presentations)
+        .map(|(activity, presentation)| {
+            let parent = activity.parent_effect_id.as_deref().and_then(|id| {
+                activities
+                    .iter()
+                    .position(|candidate| candidate.effect_id == id)
+            });
+            let mut presentation = presentation.clone();
+            presentation.via =
+                parent.map(|index| crate::tool_presentation::via(&presentations[index]));
+            ChatToolActivity {
+                text_offset: activity.text_offset,
+                effect_id: activity.effect_id.clone(),
+                parent_effect_id: parent.map(|index| activities[index].effect_id.clone()),
+                input: activity.input.clone(),
+                output: activity
+                    .output
+                    .as_deref()
+                    .map(|output| utf8_prefix(output, TOOL_OUTPUT_PREVIEW_BYTES).to_owned()),
+                output_bytes: activity.output.as_ref().map(String::len),
+                output_truncated: activity
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| output.len() > TOOL_OUTPUT_PREVIEW_BYTES),
+                started_at: activity.started_at.clone(),
+                finished_at: activity.finished_at.clone(),
+                presentation,
+                display_name: activity.display_name.clone(),
+                status: match activity.status {
+                    ToolActivityStatus::Running => "running",
+                    ToolActivityStatus::Completed => "completed",
+                    ToolActivityStatus::Failed => "failed",
+                }
+                .into(),
             }
-            .into(),
         })
         .collect()
 }

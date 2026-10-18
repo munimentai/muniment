@@ -310,6 +310,7 @@ fn tool_execution_frames_include_bounded_details_and_filter_credentials() {
             tool_call_id: "call-1".into(),
             tool_name: "bash".into(),
             input: Some("Details withheld because they may contain a secret.".into()),
+            parent_tool_call_id: None,
         }
     );
 

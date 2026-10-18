@@ -16,12 +16,17 @@ pub fn tool_journal_entry(
             tool_call_id,
             tool_name,
             input,
+            parent_tool_call_id,
         } if open_effects.insert(tool_call_id.clone()) => Some((
             "tool.effect.started",
             with_detail(
-                json!({"effect_id": tool_call_id, "display_name": tool_name}),
-                "input",
-                input,
+                with_detail(
+                    json!({"effect_id": tool_call_id, "display_name": tool_name}),
+                    "input",
+                    input,
+                ),
+                "parent_effect_id",
+                parent_tool_call_id,
             ),
         )),
         PiChatEvent::ToolFinished {
@@ -110,6 +115,7 @@ mod tests {
             tool_call_id: "tool-1".into(),
             tool_name: "Read file".into(),
             input: None,
+            parent_tool_call_id: None,
         };
         let unmatched = PiChatEvent::ToolFinished {
             tool_call_id: "missing".into(),
@@ -147,6 +153,23 @@ mod tests {
         assert_eq!(
             tool_journal_entry(&failed, &mut open_effects),
             Some(("tool.effect.failed", json!({"effect_id": "tool-2"})))
+        );
+    }
+
+    #[test]
+    fn a_script_tool_call_records_the_script_that_made_it() {
+        let started = PiChatEvent::ToolStarted {
+            tool_call_id: "call_1/1".into(),
+            tool_name: "web_search".into(),
+            input: None,
+            parent_tool_call_id: Some("call_1".into()),
+        };
+        assert_eq!(
+            tool_journal_entry(&started, &mut BTreeSet::new()),
+            Some((
+                "tool.effect.started",
+                json!({"effect_id": "call_1/1", "display_name": "web_search", "parent_effect_id": "call_1"})
+            ))
         );
     }
 

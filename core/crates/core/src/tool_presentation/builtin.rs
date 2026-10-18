@@ -812,6 +812,7 @@ pub(super) fn describe(tool: &str, input: &Value) -> Option<ToolPresentation> {
         details: call.details,
         result: None,
         path: call.path,
+        via: None,
     })
 }
 
