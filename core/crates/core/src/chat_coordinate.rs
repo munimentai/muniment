@@ -299,6 +299,7 @@ fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::
             .cost
             .filter(|_| !ledger.cost_incomplete)
             .map(|cost| format!("${cost:.3} est.")),
+        cost_usd: ledger.cost.filter(|_| !ledger.cost_incomplete),
         time: Some(format!("{:.1}s", elapsed.as_secs_f64())),
         tokens: ledger.tokens,
         turns: (ledger.turns > 0).then_some(ledger.turns),

@@ -264,6 +264,15 @@ pub struct ReceiptProjection {
     pub capabilities: Vec<ReceiptCapabilityProjection>,
 }
 
+/// One finished run's receipt as its `run.completed` event carries it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompletedReceipt {
+    pub run_id: String,
+    pub thread_id: Option<String>,
+    pub recorded_at: String,
+    pub receipt: Value,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReceiptCapabilityProjection {
@@ -2225,6 +2234,53 @@ impl RunJournal {
             )?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Every `run.completed` event recorded at or after `since`, an RFC 3339
+    /// time, with its thread and the receipt it carries, oldest first.
+    pub fn completed_receipts(
+        &mut self,
+        since: &str,
+    ) -> Result<Vec<CompletedReceipt>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let mut statement = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .prepare(
+                "SELECT e.run_id, e.recorded_at, e.envelope_json, t.thread_id FROM events e \
+                 LEFT JOIN run_threads t ON t.run_id=e.run_id \
+                 WHERE e.event_type='run.completed' AND e.recorded_at>=?1 ORDER BY e.rowid",
+            )?;
+        let rows = statement.query_map([since], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut receipts = Vec::new();
+        for row in rows {
+            let (run_id, recorded_at, envelope, thread_id) = row?;
+            let receipt = serde_json::from_str::<Value>(&envelope)
+                .ok()
+                .and_then(|envelope| envelope.pointer("/payload_json/receipt").cloned())
+                .filter(Value::is_object);
+            if let Some(receipt) = receipt {
+                receipts.push(CompletedReceipt {
+                    run_id,
+                    thread_id,
+                    recorded_at,
+                    receipt,
+                });
+            }
+        }
+        Ok(receipts)
     }
 
     pub(crate) fn refresh_after_compaction(&mut self) -> Result<(), JournalError> {

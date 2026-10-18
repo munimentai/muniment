@@ -196,7 +196,9 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::PermissionSettings
         | Operation::ThreadPermissionMode
         | Operation::ThreadPlan
-        | Operation::PreferencesGet => RemoteRule::Scope(SCOPE_THREAD_READ),
+        | Operation::PreferencesGet
+        | Operation::UsageSummary
+        | Operation::NotificationsList => RemoteRule::Scope(SCOPE_THREAD_READ),
         Operation::AgentRunNow
         | Operation::AgentReplay
         | Operation::ThreadPermissionModeSet

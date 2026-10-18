@@ -18,7 +18,7 @@ use crate::memory_files::RecallSettings;
 
 pub const PREFERENCES_FILE: &str = "preferences.json";
 /// The keys every swarm member shares.
-pub const FLEET_KEYS: [&str; 7] = [
+pub const FLEET_KEYS: [&str; 9] = [
     "theme",
     "agent-avatars",
     "type",
@@ -26,6 +26,8 @@ pub const FLEET_KEYS: [&str; 7] = [
     "browser.search",
     "browser.homepage",
     MEMORY_RECALL,
+    "notify",
+    crate::notifications::READ_AT_KEY,
 ];
 /// The keys that stay on this machine.
 pub const LOCAL_KEYS: [&str; 6] = [

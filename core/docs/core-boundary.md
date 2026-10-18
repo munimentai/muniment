@@ -37,6 +37,8 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | model_router | It selects local provider accounts and routes model requests. |
 | module | projects | It scopes threads and generated files to project folders. |
 | module | preferences | It stores the user's preferences and marks which keys every swarm member shares. |
+| module | usage_report | It sums run receipts and subscription windows into usage by provider, model, agent, project and machine. |
+| module | notifications | It lists agent runs, waiting approvals and scheduled runs, and joins machines into the notifications page. |
 | module | fleet_sync | It maps the settings, project and memory classes onto swarm records, both ways. |
 | module | extend | It manages local extensions and per-chat capability snapshots. |
 | module | form_factor | It reads the shape of the computer a runtime runs on. |
