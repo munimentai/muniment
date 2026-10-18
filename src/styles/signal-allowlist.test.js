@@ -67,8 +67,8 @@ const signalSelectors = (source) => [
 
 const unpermitted = (source, allowed) => signalSelectors(source).filter((selector) => !(selector in allowed))
 
-// Every :focus-visible rule that sets an outline, so a component cannot bring a
-// focus ring back through its own style block.
+// Every :focus-visible rule that sets an outline, so a component cannot drop
+// or redraw the one focus ring through its own style block.
 const focusOutlineRules = (source) => [
   ...(source.match(styleBlock)?.[1] ?? source)
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -80,9 +80,7 @@ const focusOutlineRules = (source) => [
 })))
   .filter(({ selector, declarations }) => selector.toLowerCase().includes(':focus-visible') && declarations.length)
 
-const focusRingRules = (source) => focusOutlineRules(source)
-  .filter(({ declarations }) => declarations.some(([property, value]) => !(property === 'outline' && /^(0|none)$/.test(value))))
-  .map(({ selector }) => selector)
+const focusRingRules = (source) => focusOutlineRules(source).map(({ selector }) => selector)
 
 // Everything outside the style block, where an inline style: or style="" would
 // route around the allowlist. Comments come out here too, for the same reason.
@@ -137,40 +135,44 @@ describe('§1.2 signal allowlist', () => {
   })
 })
 
-describe('no focus ring', () => {
-  it('is one global :focus-visible rule that draws nothing', () => {
+describe('one focus ring', () => {
+  it('is one global :focus-visible rule that draws a 2px ring in --focus-ring', () => {
     // The leading anchor keeps this to the bare `:focus-visible` selector, not
     // a component-qualified one.
-    const rules = [...read('src/styles/base.css')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .matchAll(/(?:^|[};])\s*:focus-visible\s*\{([^}]*)\}/g)]
+    const source = read('src/styles/base.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rules = [...source.matchAll(/(?:^|[};])\s*:focus-visible\s*\{([^}]*)\}/g)]
     expect(rules).toHaveLength(1)
-    expect(rules[0][1].trim()).toMatch(/^outline:\s*0\s*;$/)
+    expect(rules[0][1]).toMatch(/outline:\s*2px solid var\(--focus-ring\) !important\s*;/)
+    // The one exception is a text field whose frame draws the ring, which the composer alone uses.
+    expect(source).toMatch(/\[data-focus-frame\]:focus-visible\s*\{\s*outline:\s*0 !important;\s*\}/)
+    const framed = COMPONENTS.filter((file) => /data-focus-frame/.test(markup(read(file))))
+    expect(framed).toEqual(['src/App.svelte'])
+    expect(read('src/composer/ChatComposer.svelte')).toMatch(/\.composer:focus-within\s*\{[^}]*outline:\s*1px solid var\(--focus-edge\)/)
   })
 
-  it.each(COMPONENTS)('%s draws no focus ring of its own', (file) => {
+  it.each(COMPONENTS)('%s leaves the focus ring to the global rule', (file) => {
     expect(focusRingRules(read(file))).toEqual([])
   })
 
-  it('rejects a component focus ring', () => {
+  it('rejects a component rule that redraws or clears the ring', () => {
     const drift = '<style>.theme-options button:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }</style>'
     expect(focusRingRules(drift)).toEqual(['.theme-options button:focus-visible'])
-
     const mixedCaseDrift = '<style>.theme-options button:FOCUS-VISIBLE { Outline: 2px solid var(--muted); }</style>'
     expect(focusRingRules(mixedCaseDrift)).toEqual(['.theme-options button:FOCUS-VISIBLE'])
-  })
-
-  it('accepts a component rule that only clears the outline', () => {
     const cleared = '<style>.field:focus-visible { outline: 0; border-color: var(--muted); }</style>'
-    expect(focusRingRules(cleared)).toEqual([])
+    expect(focusRingRules(cleared)).toEqual(['.field:focus-visible'])
   })
 })
 
 describe('§1.7 reduced motion', () => {
-  it('blanket-collapses every animation and transition', () => {
+  it('blanket-collapses every animation and transition under data-motion', () => {
     const source = read('src/styles/base.css').replace(/\/\*[\s\S]*?\*\//g, '')
-    const media = [...source.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/g)]
-    expect(media).toHaveLength(1)
-    expect(media[0][1]).toMatch(/\*,\s*\*::before,\s*\*::after\s*\{[^}]*animation-duration:\s*0\.001ms !important\s*;[^}]*animation-iteration-count:\s*1 !important\s*;[^}]*transition-duration:\s*0\.001ms !important\s*;/)
+    expect(source).toMatch(/:root\[data-motion="reduce"\] \*,\s*:root\[data-motion="reduce"\] \*::before,\s*:root\[data-motion="reduce"\] \*::after\s*\{[^}]*animation-duration:\s*0\.001ms !important\s*;[^}]*animation-iteration-count:\s*1 !important\s*;[^}]*transition-duration:\s*0\.001ms !important\s*;/)
+  })
+
+  // The root's data-motion is the one switch: the OS setting under System, or
+  // the Appearance pick. A component media query would ignore the pick.
+  it.each(COMPONENTS)('%s reads reduced motion from data-motion', (file) => {
+    expect(read(file)).not.toMatch(/prefers-reduced-motion/)
   })
 })

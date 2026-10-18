@@ -42,7 +42,7 @@
   .compact ul { grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); gap: 8px; }
   .starter { display: grid; gap: 8px; align-content: start; width: 100%; height: 100%; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: none; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .starter:hover { background: var(--faint); }
-  .starter:focus-visible { border-color: var(--ink); outline: 0; }
+  .starter:focus-visible { border-color: var(--ink); }
   .compact .starter { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 8px 10px; }
   .thumb { display: flex; align-items: center; justify-content: center; height: 64px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); }
   .compact .thumb { width: 36px; height: 36px; border: 0; }

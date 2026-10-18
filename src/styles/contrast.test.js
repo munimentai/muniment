@@ -67,11 +67,10 @@ describe('§1.3 text token contrast', () => {
     expect(themes).toHaveLength(24)
     expect(palettes['moss-vibrant-light']).toEqual(palettes['default light'])
     expect(palettes['moss-vibrant-dark']).toEqual(palettes['default dark'])
-    expect(palettes['moss-dark'].paper).toBe('#000000')
-    // Every high contrast set holds pure ink on pure paper.
+    // Every high contrast set holds pure ink on pure white paper in light and near-black paper in dark.
     for (const color of colors) {
       expect([palettes[`${color}-contrast-light`].ink, palettes[`${color}-contrast-light`].paper]).toEqual(['#000000', '#FFFFFF'])
-      expect([palettes[`${color}-contrast-dark`].ink, palettes[`${color}-contrast-dark`].paper]).toEqual(['#FFFFFF', '#000000'])
+      expect([palettes[`${color}-contrast-dark`].ink, palettes[`${color}-contrast-dark`].paper]).toEqual(['#FFFFFF', '#0A0A0A'])
     }
     // Every set carries an accent for its primary actions.
     for (const name of themes) for (const token of ['accent', 'accent-soft', 'on-accent']) expect(source.match(themeBlock(name))[1], `${name} --${token}`).toMatch(new RegExp(`--${token}:`))
@@ -147,5 +146,63 @@ it('keeps every starter tint visible in every theme', () => {
         expect(contrastRatio(color, background), `${name} --tint-${token} on ${background}`).toBeGreaterThanOrEqual(3)
       }
     }
+  }
+})
+
+// Secondary text keeps 4.5:1 wherever it lands, not only on the three base
+// surfaces: on the selection fill, and on the sidebar the frames derive from
+// the theme in src/styles/panels.css. Framed quiets the sidebar's ink toward
+// paper over a paper-based faint and keeps the theme's muted. Frameless sets the sidebar on a panel
+// a step from surface toward ink.
+const frames = (palette) => ({
+  framed: {
+    ink: mixed(palette.ink, palette.paper, .78),
+    muted: palette.muted,
+    backgrounds: [palette.paper, mixed(palette.ink, palette.paper, .07)],
+  },
+  frameless: {
+    ink: palette.ink,
+    muted: palette.muted,
+    backgrounds: [mixed(palette.ink, palette.surface, .05), mixed(palette.ink, palette.surface, .10)],
+  },
+})
+
+it('keeps secondary text at 4.5:1 on the selection fill and on both sidebar frames', () => {
+  for (const name of themes) {
+    const palette = palettes[name]
+    const selected = name.includes('-vibrant-') ? palette['accent-soft'] : palette.faint
+    expect(contrastRatio(palette.muted, selected), `${name} muted on the selection fill`).toBeGreaterThanOrEqual(4.5)
+    for (const [frame, { ink, muted, backgrounds }] of Object.entries(frames(palette))) {
+      for (const background of backgrounds) {
+        expect(contrastRatio(muted, background), `${name} ${frame} sidebar muted on ${background}`).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(ink, background), `${name} ${frame} sidebar ink on ${background}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  }
+})
+
+// The focus ring is the accent in a vibrant set and ink in the others. As a
+// part of a control it clears 3:1 on every surface it can sit on.
+it('keeps the focus ring at 3:1 on every surface', () => {
+  for (const name of themes) {
+    const palette = palettes[name]
+    const ring = name.includes('-vibrant-') ? palette.accent : palette.ink
+    for (const background of [palette.paper, palette.surface, palette.faint]) {
+      expect(contrastRatio(ring, background), `${name} focus ring on ${background}`).toBeGreaterThanOrEqual(3)
+    }
+  }
+})
+
+// No dark theme paints a surface pure black. High contrast keeps a near-black
+// paper, #0A0A0A, because its job is the widest step from white ink: white on
+// it stays above 19:1 where pure black gives 21:1. Every other dark set lifts
+// its paper to a dark gray.
+it('paints no dark surface pure black', () => {
+  for (const name of [...themes.filter((theme) => theme.endsWith('-dark')), 'default dark']) {
+    const palette = palettes[name]
+    for (const token of ['paper', 'surface', 'faint']) expect(palette[token].toUpperCase(), `${name} --${token}`).not.toBe('#000000')
+    const floor = name.includes('-contrast-') ? relativeLuminance('#0A0A0A') : relativeLuminance('#0E1010')
+    expect(relativeLuminance(palette.paper), `${name} --paper`).toBeGreaterThanOrEqual(floor)
+    if (name.includes('-contrast-')) expect(contrastRatio(palette.ink, palette.paper)).toBeGreaterThan(19)
   }
 })

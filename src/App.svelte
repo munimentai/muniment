@@ -114,6 +114,7 @@
   import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createEntitlementToast } from './lib/entitlement-toast.js'
   import { createChatTranscriptController, transcriptKeys } from './lib/chat-transcript-controller.js'
+  import { createTranscriptWindow, tailWindow, windowItems } from './lib/transcript-window.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { firstRunError } from './lib/onboarding-diagnostics.js'
@@ -916,22 +917,28 @@
     filter: projectFilter, query: threadSearch,
     machineOf: (runtimeId) => pairedRuntimes(runtimeList).length ? machineName(runtimeList.runtimes.find(runtime => runtime.id === (runtimeId ?? LOCAL_RUNTIME_ID)) ?? { id: runtimeId }) : null,
   }))
+  // Core answers identical input with the same sections, so the same input is not asked twice in a row.
+  let sidebarAsked = ''
   $effect(() => {
     const input = sidebarFeed
-    const request = ++sidebarRequest
     if (!tauri) return
+    const asked = JSON.stringify(input)
+    if (asked === sidebarAsked) return
+    sidebarAsked = asked
+    const request = ++sidebarRequest
     Promise.resolve(arrangeSidebar(tauri, input)).then((next) => {
       if (request !== sidebarRequest || !next) return
       holdRows(heldRows, next)
       sidebarArrangement = next
-    }).catch(() => {})
+    }).catch(() => { if (request === sidebarRequest) sidebarAsked = '' })
   })
   // The open thread is read while it shows, and again as its replies land.
   $effect(() => {
     const threadId = freshThread ? null : currentThreadId
-    void threadSummaries.find(summary => summary.threadId === threadId)?.updatedAt
+    const updatedAt = Date.parse(threadSummaries.find(summary => summary.threadId === threadId)?.updatedAt ?? '')
     void agentListing
-    if (threadId) untrack(() => { readState = markRead(readState, threadId) })
+    // A mark already newer than the thread's last change stays, so the sidebar input stays the same.
+    if (threadId) untrack(() => { if (!(Date.parse(readState.read[threadId] ?? '') >= updatedAt)) readState = markRead(readState, threadId) })
   })
   const sidebarProjectById = $derived(Object.fromEntries(sidebarArrangement.projects.map(project => [project.id, project])))
   // The machine that holds each project: another member's project names its
@@ -1201,6 +1208,9 @@
   const currentPosts = $derived(threadPosts.threadId === currentThreadId ? visiblePosts(threadPosts.posts) : [])
   const postSections = $derived(new Map(meetingSections(currentPosts).map(({ post, section }) => [post.message_id, section])))
   const transcriptItems = $derived(timeline(messages, currentPosts))
+  // The rendered part of the transcript. src/lib/transcript-window.js bounds it.
+  let transcriptWindow = $state.raw(tailWindow())
+  const shownItems = $derived(windowItems(transcriptItems, transcriptWindow))
   // Approvals waiting in the open thread. Each shows as an approval card at
   // the end of the transcript in place of the run's own gate.
   const openApprovals = $derived(threadApprovals(swarm.approvals, freshThread ? null : currentThreadId))
@@ -1253,6 +1263,9 @@
   let dictationDraftSnapshot = $state('')
   let dictationTranscript = $state('')
   let dictationFinishing = $state(false)
+  // Derived flags, so a streamed chunk that changes the run leaves the composer's controls untouched.
+  const voiceDisabled = $derived(!!active || dictationFinishing)
+  const resumingReply = $derived(active?.phase === 'resuming')
   let speechInstallFacts = $state(null)
   let speechInstallStatus = $state(null)
   let speechInstallError = $state('')
@@ -1379,6 +1392,26 @@
     onParallelTools: (next) => { parallelTools = next },
   })
   const { scrollToLatest, followNewContent, handleScroll: handleThreadScroll, copyResponse, toggleReceipt } = transcriptController
+  const transcriptView = createTranscriptWindow({
+    tick,
+    readThread: () => thread,
+    readLength: () => transcriptItems.length,
+    readPinned: () => pinned,
+    readWindow: () => transcriptWindow,
+    onWindow: (next) => { transcriptWindow = next },
+    onScrollTop: (top) => transcriptController.syncScrollTop(top),
+  })
+  function transcriptScrolled() {
+    handleThreadScroll()
+    void transcriptView.scrolled()
+  }
+  async function jumpToLatest() {
+    transcriptWindow = tailWindow()
+    await tick()
+    scrollToLatest()
+  }
+  $effect(() => { void currentThreadId; untrack(() => { transcriptWindow = tailWindow() }) })
+  $effect(() => { void transcriptItems.length; untrack(() => { void transcriptView.grew() }) })
 
   const railController = createRailController({
     readOccupant: () => railOccupant,
@@ -1493,7 +1526,7 @@
     onThreadSwitch: (next) => { threadSwitching = next },
     onFreshThread: (next) => { freshThread = next },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
-    onHistoryLoaded: () => { pinned = true },
+    onHistoryLoaded: () => { pinned = true; transcriptWindow = tailWindow() },
     onFollow: followNewContent,
     onFocus: () => tick().then(() => composer?.focus()),
     onSend: () => { retryReview = null },
@@ -2445,6 +2478,8 @@
   }
 
   function focusComposerOnMount(node) {
+    // The first composer that takes typing marks the page timeline. scripts/speed-timing.mjs reads the mark.
+    try { if (!performance.getEntriesByName('muniment:composer-ready').length) performance.mark('muniment:composer-ready') } catch (_) {}
     if (!wasInWorkspace && active?.phase !== 'resuming') {
       wasInWorkspace = true
       node.focus()
@@ -2947,12 +2982,6 @@
       }
       if (auth.name === 'signing-in' && event.key === 'Escape') { event.preventDefault(); void cancelSignIn(); return }
       if (auth.name === 'signing-in') return
-      const sizeStep = typeSizeShortcutStep(event)
-      if (sizeStep !== null) {
-        event.preventDefault()
-        typeSizeShortcutPressed(sizeStep)
-        return
-      }
       const rowPosition = threadRowShortcutPosition(event)
       if (workspaceMode() && onboarding.name === 'complete' && rowPosition !== null) {
         event.preventDefault()
@@ -3018,6 +3047,17 @@
         return
       }
     }
+    // The text size shortcut listens in the capture phase, so a pane that keeps its own keys,
+    // such as the terminal or the file editor, still passes the super key with =, - and 0 to it.
+    const textSize = (event) => {
+      if (deletingThreadId || auth.name === 'signing-in') return
+      const sizeStep = typeSizeShortcutStep(event)
+      if (sizeStep === null) return
+      event.preventDefault()
+      event.stopPropagation()
+      typeSizeShortcutPressed(sizeStep)
+    }
+    document.addEventListener('keydown', textSize, true)
     document.addEventListener('keydown', shortcuts)
     window.addEventListener('resize', fitPanels)
     window.addEventListener('resize', agentResize.fit)
@@ -3064,6 +3104,7 @@
       stopDragDrop?.()
       voiceShortcutManager.cleanup()
       document.removeEventListener('keydown', shortcuts)
+      document.removeEventListener('keydown', textSize, true)
       window.removeEventListener('resize', fitPanels)
       window.removeEventListener('resize', agentResize.fit)
       window.removeEventListener('resize', workspaceResize.fit)
@@ -3496,14 +3537,15 @@
           {#if profileAgent && !agentProfileOpen && !agentsOpen}<button type="button" data-panel-control="corner" class="quiet" aria-label="Reveal agent profile" onclick={revealAgentProfile}><LucideIcon name="panel-right-open" /></button>{/if}
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell" data-panel-fade="chat">
-        <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
+        <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={transcriptScrolled}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation}{#if !threadGroup && !threadAgent && !(auth.name === 'local' && (inventoryError || !inventory || !chipModel || !currentModelAvailable(inventory)))}<ThreadStarters disabled={switchLocked || !!active} onpick={pickThreadStarter} />{:else}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : `Chat with ${threadAgent?.name} using ${modelSourceLabel}.`}{/if}</p>{/if}{/if}
           {#if currentCreation}
             {#if !pendingCreation}<details class="creation-goal" aria-label="Creation goal"><summary><strong>{creationName(currentCreation.kind, currentCreation)}</strong> <span>{currentCreation.goal}</span></summary><p>Output: {currentCreation.output}</p></details>{/if}
             {#if !messages.length && pendingCreation && creationStarters[currentCreation.kind].concat(creationDefaults(currentCreation.kind)).some(option=>option.goal===currentCreation.goal)}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationStarters[currentCreation.kind] as option (option.id)}<button aria-pressed={option.goal===currentCreation.goal} onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
           {/if}
-          {#each transcriptItems as item (item.post ? `post:${item.post.message_id}` : messageKeys.get(item.message))}
+          <i class="transcript-edge" hidden></i>
+          {#each shownItems as item (item.post ? `post:${item.post.message_id}` : messageKeys.get(item.message))}
             {#if item.post}
               <ThreadPost post={item.post} agents={roster} section={postSections.get(item.post.message_id)} waiting={!threadGroup} />
             {:else}
@@ -3710,6 +3752,7 @@
 
             </div>{/if}{/if}
           {/each}
+          <i class="transcript-edge" hidden></i>
           {#if openApprovals.length}<div class="thread-approvals"><ApprovalList {tauri} inline approvals={openApprovals} agents={roster} {swarm} {runtimeList} live={liveActivity}
             onanswered={(approval, result) => { if (result?.status === 'answered') swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) } }} /></div>{/if}
         </div>
@@ -3783,7 +3826,7 @@
           {#if changed.length || (!pinned && hasContentBelow)}
             <div class="composer-chips">
               <FileChanges files={changed} onopen={openFile} />
-              {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={scrollToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
+              {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={jumpToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
             </div>
           {/if}
           {#if pendingCreation}
@@ -3810,7 +3853,7 @@
             {#if mention && threadGroup}<AgentMentions agents={mentionAgents} selected={mentionSelected} onchoose={chooseAgentMention} />{:else if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
             <ComposerReferences commands={extensionCommandNames} text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" class="reference-input" aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={active?.phase === 'resuming' ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (active?.phase === 'resuming' || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
           </div>
           {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
           {#if moveNote && moveNote.threadId === currentThreadId}<p class="move-note" role="status">{moveNote.text}</p>{/if}
@@ -3865,12 +3908,12 @@
             {/if}
             </div>
             <div class="composer-actions">
-              <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
+              <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={voiceDisabled} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
               {#if active || outgoingDraft().trim()}
                 <button type="button" class="composer-action primary" class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
                   <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" size={active ? 12 : 16} />
                 </button>
-              {/if}
+              {:else}<span class="composer-action-slot" aria-hidden="true"></span>{/if}
             </div>
           </div>
           {#if speechInstallNotice}<p class="speech-install-notice" role="status">{speechInstallNotice}</p>
@@ -4234,7 +4277,7 @@
   .side-toggle { line-height: 0; }
   .side-toggle:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .side-toggle:hover:not(:disabled) :global(.side-icon) { color: var(--ink); }
-  .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-color: transparent; background: transparent; text-align: left; }
+  .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 8px; min-height: var(--row-height); padding: var(--row-pad) 8px; border-color: transparent; background: transparent; text-align: left; }
   /* The bar holds the Threads heading's margins and 24px height. */
   .selection-bar { display:flex; flex:1; min-width:0; align-items:center; gap:5px; height:28px; margin:0; font-size:var(--text-12); }
   .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-human); }
@@ -4310,7 +4353,7 @@
   .artifact-divider, .sidebar-divider { --divider-grab: 3px; --divider-glow: 100%; position: relative; z-index: 2; align-self: stretch; justify-self: start; width: calc(var(--frame-width) + 2 * var(--divider-grab)); margin-left: calc(-1 * var(--frame-width) - var(--divider-grab)); padding: 0; border: 0; border-radius: 0; background: linear-gradient(transparent, var(--border) 20%, var(--border) 80%, transparent) center / var(--frame-width) var(--divider-glow) no-repeat; background-color: transparent; background-size: 0 var(--divider-glow); cursor: col-resize; touch-action: none; }
   /* The grip is Lucide's vertical ellipsis, centered on the gap. */
   .divider-grip { position: absolute; top: 50%; left: 50%; display: grid; color: var(--muted); transform: translate(-50%, -50%); pointer-events: none; }
-  .artifact-divider:hover, .sidebar-divider:hover, .artifact-divider:focus-visible, .sidebar-divider:focus-visible, .artifact-divider:active, .sidebar-divider:active { background-size: var(--frame-width) var(--divider-glow); outline: none; }
+  .artifact-divider:hover, .sidebar-divider:hover, .artifact-divider:focus-visible, .sidebar-divider:focus-visible, .artifact-divider:active, .sidebar-divider:active { background-size: var(--frame-width) var(--divider-glow); }
   .artifact-divider:hover .divider-grip, .sidebar-divider:hover .divider-grip, .artifact-divider:focus-visible .divider-grip, .sidebar-divider:focus-visible .divider-grip, .artifact-divider:active .divider-grip, .sidebar-divider:active .divider-grip { opacity: 0; }
   .artifact-divider { grid-area: rail; }
   .sidebar-divider { grid-area: thread; }
@@ -4337,7 +4380,9 @@
   .composer-chips { position: absolute; z-index: 5; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: 100%; }
   .latest { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--ink); cursor: pointer; }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
-  .user-turn { margin: 0 0 28px auto; }
+  /* The two edges bracket the rendered window of the transcript. src/lib/transcript-window.js anchors on them. */
+  .transcript-edge { display: none; }
+  .user-turn { margin: 0 0 var(--turn-gap) auto; }
   .agent-turn { margin: 0 0 16px; }
   .thread-approvals { max-width: 760px; margin: 16px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
@@ -4362,7 +4407,7 @@
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
   .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-human); }
-  .response { margin: 0 0 20px; }
+  .response { margin: 0 0 var(--reply-gap); }
   .response, .user-turn { content-visibility: auto; contain-intrinsic-size: auto 120px; }
   .streaming { position: relative; }
   .thinking { display: flex; align-items: center; gap: 9px; color: var(--muted); font: var(--text-12) var(--font-mono); }
@@ -4466,6 +4511,8 @@
   .composer-icon:hover:not(:disabled), .composer-icon[aria-pressed="true"] { color: var(--ink); background: var(--faint); }
   /* The band's one action control: an ink up arrow while the draft has text, a muted stop square in flight. */
   .composer-action { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; }
+  /* Send and Stop share one 26px box, and an empty draft keeps the box free, so Voice never moves. */
+  .composer-action, .composer-action-slot { flex: none; width: 26px; height: 26px; }
   /* During a run the send button becomes Stop in the same place and color, with a filled square. */
   .composer-action.stop :global(svg) { fill: currentColor; }
   .composer-action.stop[aria-disabled="true"] { border-color: transparent; }
@@ -4494,10 +4541,8 @@
   .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-human); }
   @keyframes capture { to { transform: scaleY(.55); } }
   @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
-  @media (prefers-reduced-motion: reduce) {
-    /* Unlike the blanket duration rule, removing this animation keeps the meter
-       at its full-height resting state instead of the keyframe's 55% endpoint. */
-    .capture-meter i { animation: none; }
-    .receipt-marker { transition: none; }
-  }
+  /* Unlike the blanket duration rule, removing this animation keeps the meter
+     at its full-height resting state instead of the keyframe's 55% endpoint. */
+  :global(:root[data-motion="reduce"]) .capture-meter i { animation: none; }
+  :global(:root[data-motion="reduce"]) .receipt-marker { transition: none; }
 </style>

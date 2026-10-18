@@ -4,6 +4,7 @@
   import { listen } from '@tauri-apps/api/event'
   import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
   import LucideIcon from './LucideIcon.svelte'
+  import { currentZoom } from './display-state.js'
   let { selected = null, onselect, onopenchange, label = 'Workspace tools', icon = 'ellipsis-vertical' } = $props()
   let expanded = $state(false)
   let element
@@ -22,7 +23,9 @@
         const [origin, scale] = await Promise.all([main.innerPosition(), main.scaleFactor()])
         const rect = trigger.getBoundingClientRect()
         await popupWindow.setSize(new LogicalSize(240, 140))
-        await popupWindow.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, rect.right - 232) * scale), Math.round(origin.y + (rect.bottom - 2) * scale)))
+        // The page measures CSS pixels, and the interface zoom scales them to window pixels.
+        const zoom = currentZoom()
+        await popupWindow.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, rect.right * zoom - 232) * scale), Math.round(origin.y + (rect.bottom * zoom - 2) * scale)))
         await popupWindow.emit('workspace-menu-open', {selected})
         return
       } catch { /* Browser previews use the HTML menu. */ }

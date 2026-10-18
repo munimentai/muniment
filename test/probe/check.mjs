@@ -4,6 +4,9 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { checkSpeedBudgets } from './speed.mjs'
+import { checkLayoutStability } from './stability.mjs'
+import { checkFocusRings } from './focus.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const probeDirectory = path.join(repositoryRoot, 'test/probe')
@@ -599,6 +602,9 @@ async function main() {
     await checkComposerActions(browser, baseUrl)
     await checkAgentAvatars(browser, baseUrl)
     await checkCreationBudget(browser, baseUrl)
+    await checkSpeedBudgets(browser, baseUrl)
+    await checkLayoutStability(browser, baseUrl)
+    await checkFocusRings(browser, baseUrl)
     // The projects fixture's states: the palette, Move to project, the
     // thread's model with its source, and the project's and an agent's tools.
     const states = ['palette', 'palette-search', 'move', 'model', 'settings', 'agent-tools'].map((state) => `projects.html?state=${state}`)
