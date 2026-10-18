@@ -100,6 +100,8 @@ describe('offline and bootstrap', () => {
     ] }
     expect(credentialRows(credentials, swarm).map((row) => `${row.name}: ${row.line}`)).toEqual(['Work: arriving from Build box', 'pi:anthropic: waiting for a holder'])
     expect(credentialRows({}, swarm)).toEqual([])
+    const local = { accounts: [{ name: 'endpoint:custom-omlx', label: 'oMLX', holder: BOX, holder_name: 'Build box', this_machine: false, usable_here: false, shareable: false, reason: 'It runs only on its own computer.' }] }
+    expect(credentialRows(local, swarm)).toEqual([{ id: 'endpoint:custom-omlx', name: 'oMLX', line: 'It runs only on its own computer.', online: false }])
   })
 
   it('describes a replica thread while its history travels', () => {
