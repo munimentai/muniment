@@ -42,43 +42,22 @@ class Level(unittest.TestCase):
         self.assertEqual(release.bump((1, 2, 3), 2), (1, 3, 0))
         self.assertEqual(release.bump((1, 2, 3), 1), (1, 2, 4))
 
-
-class Mirror(unittest.TestCase):
-    SHA = "a" * 40
-
-    def test_a_tag_on_the_revision_is_mirrored(self):
-        listing = lambda url, ref: f"{self.SHA}\t{ref}\n"
-        self.assertTrue(release.mirrored("https://example", "v1.2.3", self.SHA, listing))
-
-    def test_a_missing_or_moved_tag_is_not_mirrored(self):
-        self.assertFalse(release.mirrored("https://example", "v1.2.3", self.SHA, lambda url, ref: ""))
-        moved = lambda url, ref: f"{'b' * 40}\t{ref}\n"
-        self.assertFalse(release.mirrored("https://example", "v1.2.3", self.SHA, moved))
-
-    def test_the_wait_polls_until_the_tag_arrives(self):
-        answers = iter(["", "", f"{self.SHA}\trefs/tags/v1.2.3\n"])
-        sleeps = []
-        release.wait_for_mirror("https://example", "v1.2.3", self.SHA,
-                                lambda url, ref: next(answers), sleeps.append)
-        self.assertEqual(len(sleeps), 2)
-
-    def test_the_wait_gives_up(self):
-        with self.assertRaises(SystemExit):
-            release.wait_for_mirror("https://example", "v1.2.3", self.SHA,
-                                    lambda url, ref: "", lambda seconds: None, polls=3)
+    def test_a_breaking_change_before_1_0_is_minor(self):
+        self.assertEqual(release.bump((0, 3, 0), 3), (0, 4, 0))
+        self.assertEqual(release.bump((0, 3, 2), 2), (0, 4, 0))
+        self.assertEqual(release.bump((0, 3, 2), 1), (0, 3, 3))
 
 
-class Publish(unittest.TestCase):
-    def test_no_core_release_is_marked_latest(self):
-        command = release.release_command("core-v1.15.0", "munimentai/muniment", "notes.md",
-                                          ["pins/pins.toml", "dist/SHA256SUMS"])
-        self.assertEqual(command[:4], ["gh", "release", "create", "core-v1.15.0"])
-        self.assertIn("--latest=false", command)
-        self.assertNotIn("--latest", command)
-        self.assertEqual(command[-2:], ["pins/pins.toml", "dist/SHA256SUMS"])
+class Source(unittest.TestCase):
+    def test_the_source_version_is_the_workspace_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "Cargo.toml"
+            manifest.write_text('[workspace]\nmembers = []\n\n# One version.\n'
+                                '[workspace.package]\nversion = "0.4.0"\n')
+            self.assertEqual(release.source_version(manifest), "0.4.0")
 
-    def test_the_release_lives_in_the_monorepo(self):
-        self.assertEqual(release.GITHUB_REPOSITORY, "munimentai/muniment")
+    def test_this_workspace_names_a_version(self):
+        self.assertRegex(release.source_version(), r"^\d+\.\d+\.\d+$")
 
 
 class History(unittest.TestCase):
@@ -92,8 +71,9 @@ class History(unittest.TestCase):
         self.run_git("init", "-q", "-b", "main")
         self.commit("core/lib.rs", "chore: start")
         self.run_git("tag", "core-v1.14.0")
-        self.commit("src/app.js", "feat: a desktop feature")
-        self.run_git("tag", "v0.9.0")
+        self.commit("src/app.js", "fix: a desktop fix")
+        self.run_git("tag", "v0.3.0")
+        self.commit("src/app.js", "feat!: a desktop change")
         self.commit("core/docs/a.md", "fix: a core fix")
         (self.root / "core").mkdir(exist_ok=True)
         self.cwd = os.getcwd()
@@ -113,12 +93,14 @@ class History(unittest.TestCase):
         self.run_git("add", path)
         self.run_git("commit", "-q", "-m", subject)
 
-    def test_only_core_tags_set_the_base(self):
-        self.assertEqual(release.last_tag("HEAD"), (1, 14, 0))
+    def test_only_release_tags_set_the_base(self):
+        self.assertEqual(release.last_tag("HEAD"), (0, 3, 0))
 
-    def test_only_commits_under_core_count(self):
-        subjects = [s for _, s, _ in release.commits("core-v1.14.0", "HEAD")]
-        self.assertEqual(subjects, ["fix: a core fix"])
+    def test_commits_anywhere_count(self):
+        entries = list(release.commits("v0.3.0", "HEAD"))
+        self.assertEqual([s for _, s, _ in entries], ["fix: a core fix", "feat!: a desktop change"])
+        change = max(release.level(s, b) for _, s, b in entries)
+        self.assertEqual(release.bump(release.last_tag("HEAD"), change), (0, 4, 0))
 
 
 if __name__ == "__main__":

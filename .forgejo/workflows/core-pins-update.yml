@@ -1,18 +1,18 @@
 name: Core pins update
 
 # Bumps the core pins that pass the compatibility suite, checks the bumped tree
-# on Linux and on a desktop-ci macOS VM, then pushes the bump to main and tags
-# the core-vX.Y.Z release itself. Pushes made with the job token start no
-# other workflow, so this workflow runs every check that CI and the release
-# would run. Blocked pins get Forgejo issues. A dry run runs every check and stops before the
-# push, the release and the issues.
+# on Linux and on a desktop-ci macOS VM, then pushes the bump to main. The next
+# vX.Y.Z release carries it. Pushes made with the job token start no other
+# workflow, so this workflow runs every check that CI would run. Blocked pins
+# get Forgejo issues. A dry run runs every check and stops before the push and
+# the issues.
 on:
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Run every check and stop before the push, the release and the issues"
+        description: "Run every check and stop before the push and the issues"
         type: boolean
         default: true
 
@@ -37,10 +37,6 @@ jobs:
     # CI_LINUX_RUNNER keeps the job off the image-smoke runner.
     runs-on: ${{ vars.CI_LINUX_RUNNER }}
     timeout-minutes: 360
-    # It shares the release job's group, so tags stay in order.
-    concurrency:
-      group: core-release
-      cancel-in-progress: false
     steps:
       # A branch workflow can ask for any secret, so the first step admits
       # only main of this repository before a later step reads one. It runs
@@ -151,15 +147,10 @@ jobs:
         if: always() && steps.darwin.outcome != 'skipped'
         run: git push origin --delete "$CHECK_BRANCH" || true
 
-      # Lands the bump and tags the release when every check passed, and files
-      # the blocked-pin issues. The release carries the signed server archives
-      # that deploy/runtime/release-assets.sh builds, as in core.yml.
-      - name: Land the bump, tag the release, and file issues
+      # Lands the bump when every check passed, and files the blocked-pin issues.
+      - name: Land the bump and file issues
         if: (steps.select.outputs.changed == 'true' || steps.select.outputs.blocked == 'true') && !inputs.dry_run
         env:
-          GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
-          MUNIMENT_RELEASE_SIGNING_KEY: ${{ secrets.MUNIMENT_RELEASE_SIGNING_KEY }}
-          MUNIMENT_RELEASE_SIGNING_PASSWORD: ${{ secrets.MUNIMENT_RELEASE_SIGNING_PASSWORD }}
           FORGEJO_TOKEN: ${{ github.token }}
           FORGEJO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           CHECKS: ${{ steps.checks.outcome == 'success' && steps.darwin.outcome == 'success' && 'success' || 'failure' }}
@@ -178,5 +169,5 @@ jobs:
           CHECKS: ${{ steps.checks.outcome }}
           DARWIN: ${{ steps.darwin.outcome }}
         run: |
-          echo "Dry run: changed=$CHANGED blocked=$BLOCKED Linux checks=$CHECKS macOS=$DARWIN. Nothing was pushed, tagged or filed."
+          echo "Dry run: changed=$CHANGED blocked=$BLOCKED Linux checks=$CHECKS macOS=$DARWIN. Nothing was pushed or filed."
           cat update.json

@@ -17,13 +17,13 @@
 # warning, so a registry can be added before its credential exists. The logins
 # live in a throwaway Docker config, so none stays on the runner.
 #
-# Usage: deploy/runtime/publish.sh <core-vX.Y.Z> [revision]
+# Usage: deploy/runtime/publish.sh <vX.Y.Z> [revision]
 set -euo pipefail
 
 tag=$1
 revision=${2:-$(git rev-parse HEAD)}
-if [[ ! $tag =~ ^core-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-  echo "publish.sh: $tag is not a core-vX.Y.Z tag" >&2
+if [[ ! $tag =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  echo "publish.sh: $tag is not a vX.Y.Z tag" >&2
   exit 2
 fi
 version=${BASH_REMATCH[1]}
@@ -85,7 +85,8 @@ fetch_release() {
   for name in "${names[@]}"; do
     curl --proto '=https,file' -sSfL -o "$release/$name" "$feed/$tag/$name" || return 1
   done
-  (cd "$release" && sha256sum --check --strict --quiet SHA256SUMS) || return 1
+  # SHA256SUMS also lists the desktop files of the release, which stay behind.
+  (cd "$release" && sha256sum --check --strict --quiet --ignore-missing SHA256SUMS) || return 1
   local key
   key=$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";$/\1/p' \
     "$context/crates/server/src/release.rs")
@@ -133,7 +134,6 @@ if [[ $platforms == *,* ]]; then
 fi
 
 docker build -f "$context/deploy/runtime/Containerfile" \
-  --build-arg "MUNIMENT_RUNTIME_VERSION=$version" \
   --label "org.opencontainers.image.version=$version" \
   --label "org.opencontainers.image.revision=$revision" \
   -t "$local_image" "$context"

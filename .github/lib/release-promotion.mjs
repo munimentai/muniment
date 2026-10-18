@@ -80,6 +80,9 @@ export const verifiedStableCopies = ({ version, sources, sums }) => {
   });
 };
 
+// The `version` under `[workspace.package]` of a Cargo manifest, or null.
+export const sourceVersion = (manifest) => manifest.match(/^\[workspace\.package\]\n(?:[^[\n].*\n|\n)*?version = "([^"]*)"/m)?.[1] ?? null;
+
 export const releaseBody = (sha, version) => `A free desktop app for your models, tools, and files. No Muniment account required.
 
 ## Features
@@ -393,6 +396,10 @@ export async function promoteRelease({ token, repository, sha, version, repoHost
   const packageFile = await (await request(fetchImpl, repoHost.token, `${repoApi}/contents/package.json?ref=${sha}`)).json();
   const packageJson = JSON.parse(Buffer.from(packageFile.content, "base64").toString("utf8"));
   if (packageJson.version !== version.slice(1)) throw new Error(`package.json version ${packageJson.version ?? "missing"} does not match ${version}`);
+  // core/Cargo.toml holds the one version that the desktop, the CLI and the server release under.
+  const coreFile = await (await request(fetchImpl, repoHost.token, `${repoApi}/contents/core/Cargo.toml?ref=${sha}`)).json();
+  const coreVersion = sourceVersion(Buffer.from(coreFile.content, "base64").toString("utf8"));
+  if (coreVersion !== version.slice(1)) throw new Error(`core/Cargo.toml version ${coreVersion ?? "missing"} does not match ${version}`);
   assertGreenCi(forgejoCheckRuns(withoutWaivedNightlyStatus(await getAllStatuses(fetchImpl, repoHost.token, repoApi, sha), waiver)), sha);
   await assertInstalledNightly(fetchImpl, repoHost.token, repoApi, sha, waiver);
   auditE2eWaiver(waiver, { log, summaryFile, sha, version });

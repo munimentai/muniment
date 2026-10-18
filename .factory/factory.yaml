@@ -7,7 +7,7 @@ default_branch: main
 language: rust
 
 # The agent rules are the owner's, and the secret-scan config judges every change.
-# Core's CI, release and pins update live in .forgejo/workflows/core*.yml.
+# Core's CI and pins update live in .forgejo/workflows/core*.yml.
 protected:
   - "AGENTS.md"
   - "CLAUDE.md"
@@ -29,7 +29,7 @@ risk_paths:
   - ".github/desktop-ci-command.py"
   - "SPEC.md"
   - "DESIGN.md"
-  # A releasing core merge ships to the desktop, the router and the sandbox
+  # A release ships the core to the desktop, the router and the sandbox
   # image. The pins, the release tooling, the router image and the public
   # boundary decide what they get.
   - "core/pins/**"
@@ -164,8 +164,8 @@ sandbox:
       printf '[build]\nincremental = false\n[profile.dev]\ndebug = 0\n[env]\nSHERPA_ONNX_ARCHIVE_DIR = "%s/sherpa-onnx"\n' "$HOME"
       >> $HOME/.cargo/config.toml; }
 
-# Desktop releases are owner-gated workflow_dispatch runs. A releasing core
-# merge publishes through core CI on main, so verify builds the core workspace.
+# Releases are owner-gated workflow_dispatch runs that ship the desktop and the
+# core under one tag, so verify builds the core workspace.
 verify:
   commands:
     - "npm run build"

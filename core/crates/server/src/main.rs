@@ -58,7 +58,7 @@ The launcher keeps versions in <state>/runtime. MUNIMENT_UPDATE_GRACE_SECS
 MUNIMENT_UPDATE_SHUTDOWN_SECS (60) the stop itself, MUNIMENT_UPDATE_TRIAL_SECS
 (120) the new version's health check and MUNIMENT_UPDATE_RETRY_SECS (60) the
 first retry of a failed download. MUNIMENT_UPDATE_FEED overrides the release
-feed base URL, under which <feed>/core-v<version>/<file> names each file, and
+feed base URL, under which <feed>/v<version>/<file> names each file, and
 MUNIMENT_UPDATE_PUBLIC_KEY the release signing key.";
 
 /// Docker reads 1 as unhealthy and reserves 2, so every failure exits 1.
