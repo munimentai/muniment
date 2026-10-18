@@ -508,7 +508,8 @@ impl HostRuntime {
         };
         let storage = muniment_runtime_core::open_profile_storage(&self.temporary.profile).unwrap();
         let mut storage = storage.lock().unwrap();
-        let now = muniment_core::chrono::Utc::now().to_rfc3339();
+        let now = muniment_core::chrono::Utc::now()
+            .to_rfc3339_opts(muniment_core::chrono::SecondsFormat::AutoSi, true);
         let provenance = Provenance {
             source: "fleet-e2e".into(),
             source_version: "1".into(),
@@ -910,11 +911,10 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
         let entries = c2.history(&steered)?;
         ensure(
             entries.iter().any(|entry| {
-                entry["run_id"] == run.as_str()
-                    && entry["text"]
-                        .as_str()
-                        .unwrap_or("")
-                        .contains("steer resumed")
+                // The stub answers a steer with its name and ends the turn.
+                entry["runId"] == run.as_str()
+                    && entry["phase"] == "complete"
+                    && entry["text"].as_str().unwrap_or("").contains("steer")
             }),
             || format!("c2 history: {entries:?}"),
         )
@@ -928,7 +928,7 @@ fn a_docker_fleet_converges_through_partitions_loss_and_a_stopped_owner() {
         ensure(
             entries
                 .iter()
-                .any(|entry| entry["run_id"] == run.as_str() && entry["phase"] == "cancelled"),
+                .any(|entry| entry["runId"] == run.as_str() && entry["phase"] == "cancelled"),
             || format!("c2 history: {entries:?}"),
         )
     });
