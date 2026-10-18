@@ -13,6 +13,8 @@ pub const PI_VERSION: &str = super::pi_install::PI_ARTIFACT.version;
 
 type PendingCalls = Arc<Mutex<HashMap<String, Option<mpsc::Sender<Result<Value, String>>>>>>;
 type CurrentTransport = Arc<Mutex<Option<(u64, Arc<PiRpcTransport>)>>>;
+/// The ID and description of the extension question Pi waits on.
+type PendingRequest = Arc<Mutex<Option<(String, String)>>>;
 /// Builds the production Pi RPC launch contract for a verified, platform-native
 /// Pi executable. The executable contains its Node-compatible runtime; a system
 /// `node` installation is deliberately not part of this contract.
@@ -147,6 +149,7 @@ pub struct PiRpcTransport {
     call_lock: Mutex<()>,
     pending: PendingCalls,
     subscribers: Arc<Mutex<Vec<mpsc::Sender<Value>>>>,
+    request: PendingRequest,
 }
 
 /// Shared wiring for the supervisor health probe and all application RPC.
@@ -168,6 +171,12 @@ impl PiRpcWiring {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .map(|(_, transport)| Arc::clone(transport))
+    }
+
+    /// The extension question the current child asked and has no answer
+    /// for, such as `method=editor title=muniment:permission-mode`.
+    pub fn pending_request(&self) -> Option<String> {
+        self.transport()?.pending_request()
     }
 
     pub fn readiness_probe(
@@ -232,6 +241,8 @@ impl PiRpcTransport {
         let reader = io.stdout.clone();
         let reader_pending = Arc::clone(&pending);
         let reader_subscribers = Arc::clone(&subscribers);
+        let request: PendingRequest = Arc::default();
+        let reader_request = Arc::clone(&request);
         std::thread::Builder::new()
             .name("pi-rpc-dispatcher".into())
             .spawn(move || loop {
@@ -264,6 +275,11 @@ impl PiRpcTransport {
                         break;
                     }
                 };
+                if let Some(asked) = question(&frame) {
+                    *reader_request
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(asked);
+                }
                 let waiter = frame.get("id").and_then(Value::as_str).and_then(|id| {
                     reader_pending
                         .lock()
@@ -287,7 +303,17 @@ impl PiRpcTransport {
             call_lock: Mutex::new(()),
             pending,
             subscribers,
+            request,
         }
+    }
+
+    /// The extension question Pi asked and has no answer for.
+    pub fn pending_request(&self) -> Option<String> {
+        self.request
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|(_, description)| description.clone())
     }
 
     /// Receives interleaved events and responses not correlated to this
@@ -337,6 +363,18 @@ impl PiRpcTransport {
     pub fn send(&self, frame: Value) -> Result<(), String> {
         if self.io.stdin.generation() != self.generation {
             return Err("Pi RPC transport belongs to a replaced child generation".into());
+        }
+        if frame.get("type").and_then(Value::as_str) == Some("extension_ui_response") {
+            let mut request = self
+                .request
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if request
+                .as_ref()
+                .is_some_and(|(id, _)| frame.get("id").and_then(Value::as_str) == Some(id))
+            {
+                *request = None;
+            }
         }
         self.io
             .stdin
@@ -433,6 +471,28 @@ impl PiRpcTransport {
             )),
         }
     }
+}
+
+/// The ID and description of an extension request that waits for an answer.
+/// Only Muniment's own titles are named; another title may carry user text.
+fn question(frame: &Value) -> Option<(String, String)> {
+    if frame.get("type").and_then(Value::as_str) != Some("extension_ui_request") {
+        return None;
+    }
+    let method = frame.get("method").and_then(Value::as_str)?;
+    if !matches!(method, "select" | "confirm" | "input" | "editor") {
+        return None;
+    }
+    let id = frame.get("id").and_then(Value::as_str)?;
+    let mut description = format!("method={method}");
+    if let Some(title) = frame
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| title.starts_with("muniment:"))
+    {
+        description.push_str(&format!(" title={title}"));
+    }
+    Some((id.to_owned(), description))
 }
 
 /// Pi RPC is JSONL, not JSON-RPC 2.0. `get_state` is local, side-effect free,

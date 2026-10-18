@@ -1355,3 +1355,37 @@ fn sidecar_never_inherits_secret_overrides() {
         .lines()
         .any(|name| name.starts_with(muniment_core::sidecar::SECRET_VARIABLE_PREFIX)));
 }
+
+#[test]
+fn pi_names_the_extension_question_it_waits_on_before_readiness() {
+    let mut cfg = config(&["pi-rpc-startup-question"]);
+    cfg.startup_timeout = STUB_RESPONSE_DEADLINE;
+    let wiring = PiRpcWiring::new();
+    let mut supervisor = SidecarSupervisor::spawn(
+        cfg,
+        wiring.readiness_probe_with_startup_timeout(
+            STUB_RESPONSE_DEADLINE,
+            Duration::from_millis(100),
+        ),
+    )
+    .unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    while wiring.pending_request().is_none() && Instant::now() < until {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        wiring.pending_request().as_deref(),
+        Some("method=editor title=muniment:startup-check")
+    );
+    assert_eq!(supervisor.status(), SidecarStatus::Starting);
+    wiring
+        .transport()
+        .unwrap()
+        .send(serde_json::json!({
+            "type": "extension_ui_response", "id": "startup-question-1", "value": "{}"
+        }))
+        .unwrap();
+    wait_for(&supervisor, SidecarStatus::Healthy);
+    assert_eq!(wiring.pending_request(), None);
+    supervisor.shutdown().unwrap();
+}
