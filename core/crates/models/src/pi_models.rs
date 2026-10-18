@@ -379,7 +379,8 @@ pub fn store_endpoint(
 
 /// Rewrites each endpoint's model list from what its server serves now, with
 /// each model's window, and answers whether any list changed. A model the
-/// server still serves keeps the settings the user gave it.
+/// server still serves keeps the settings the user gave it. A server that
+/// lists no chat model keeps its saved list.
 pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
     let models_file = models_file(agent);
     if !models_file.is_file() {
@@ -405,7 +406,12 @@ pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
                 .get("apiKey")
                 .and_then(Value::as_str)
                 .filter(|key| !matches!(*key, "ollama" | "local"));
-            let Some(found) = discover_endpoint_models(base_url, key, DISCOVERY_TIMEOUT) else {
+            // A server that answers with no chat model is still loading, as
+            // a local server does for a while after it starts, so the saved
+            // list stays until it serves one.
+            let Some(found) = discover_endpoint_models(base_url, key, DISCOVERY_TIMEOUT)
+                .filter(|found| !found.chat.is_empty())
+            else {
                 continue;
             };
             decisions.push((id.clone(), found.decisions));
@@ -582,6 +588,22 @@ mod tests {
         );
         assert_eq!(root["providers"]["openai"]["models"][0]["id"], "kept");
         assert!(!refresh_endpoints(&agent).unwrap());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_server_that_lists_no_model_yet_keeps_the_saved_list() {
+        let agent = temporary_directory();
+        let url = serve_routes(vec![(
+            "GET /v1/models",
+            json!({"object": "list", "data": []}),
+        )]);
+        let saved = json!({"providers": {
+            "custom-omlx": {"baseUrl": url, "apiKey": "k", "models": [{"id": "qwen3"}]}
+        }});
+        fs::write(models_file(&agent), saved.to_string()).unwrap();
+        assert!(!refresh_endpoints(&agent).unwrap());
+        assert_eq!(models(&agent), saved);
         fs::remove_dir_all(agent).unwrap();
     }
 
