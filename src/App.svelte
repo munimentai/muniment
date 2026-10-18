@@ -4018,7 +4018,9 @@
   .project-heading button { padding: 2px; }
   .side-top { padding: 8px 6px 0; }
   .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .sidebar-head { display: flex; align-items: center; gap: 4px; }
+  .sidebar-head { display: flex; align-items: center; gap: 4px; container-type: inline-size; }
+  /* A narrow sidebar keeps the search words and drops the shortcut chip, which aria-keyshortcuts still names. */
+  @container (max-width: 250px) { .sidebar-head .thread-search-field kbd { display: none; } .sidebar-head .thread-search-field:has(kbd) .thread-search { padding-right: 8px; } }
   .sidebar-head .new-thread { flex: none; width: auto; padding-right: 10px; }
   .library-entry kbd { flex: none; margin-left: auto; }
   .thread-search-field { position: relative; flex: 1; min-width: 0; }

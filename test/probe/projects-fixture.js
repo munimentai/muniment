@@ -66,7 +66,11 @@ const button = (root, name) => [...(root?.querySelectorAll('button') ?? [])].fin
 export function advanceProjects() {
   const sidebar = document.querySelector('#sidebar')
   if (!sidebar?.querySelector('[aria-label="Needs you"]')) return
-  if (projectsState === 'settled') return button(sidebar, 'Show settled (5)')?.click()
+  if (projectsState === 'settled') {
+    const settled = sidebar.querySelector('[aria-label="Settled threads"]')
+    if (settled) return settled.scrollIntoView({ block: 'end' })
+    return button(sidebar, 'Show settled (5)')?.click()
+  }
   if (projectsState === 'triggers') {
     const filter = button(sidebar, 'Projects with triggers')
     if (filter?.getAttribute('aria-pressed') === 'false') filter.click()
