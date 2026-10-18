@@ -141,12 +141,12 @@
   color-scheme: light;
 }
 :root[data-theme="moss-dark"], [data-swatch][data-theme="moss-dark"] {
-  --paper: #000000;
-  --surface: #0E1110;
-  --faint: #161A18;
+  --paper: #0E1110;
+  --surface: #151917;
+  --faint: #1C211F;
   --ink: #ECEFED;
   --muted: #9AA29E;
-  --border: #262B28;
+  --border: #2B312E;
   --signal: #58B39F;
   --signal-opacity: .12;
   --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
@@ -209,8 +209,8 @@
   color-scheme: light;
 }
 :root[data-theme="moss-contrast-dark"], [data-swatch][data-theme="moss-contrast-dark"] {
-  --paper: #000000;
-  --surface: #000000;
+  --paper: #0A0A0A;
+  --surface: #0A0A0A;
   --faint: #0F2A22;
   --ink: #FFFFFF;
   --muted: #CDEBE0;
@@ -311,8 +311,8 @@
   color-scheme: light;
 }
 :root[data-theme="harbor-contrast-dark"], [data-swatch][data-theme="harbor-contrast-dark"] {
-  --paper: #000000;
-  --surface: #000000;
+  --paper: #0A0A0A;
+  --surface: #0A0A0A;
   --faint: #0E2038;
   --ink: #FFFFFF;
   --muted: #CFE0F5;
@@ -413,8 +413,8 @@
   color-scheme: light;
 }
 :root[data-theme="clay-contrast-dark"], [data-swatch][data-theme="clay-contrast-dark"] {
-  --paper: #000000;
-  --surface: #000000;
+  --paper: #0A0A0A;
+  --surface: #0A0A0A;
   --faint: #2E1A0E;
   --ink: #FFFFFF;
   --muted: #F2D9C6;
@@ -515,8 +515,8 @@
   color-scheme: light;
 }
 :root[data-theme="iris-contrast-dark"], [data-swatch][data-theme="iris-contrast-dark"] {
-  --paper: #000000;
-  --surface: #000000;
+  --paper: #0A0A0A;
+  --surface: #0A0A0A;
   --faint: #1F1638;
   --ink: #FFFFFF;
   --muted: #DDD3FA;
@@ -547,6 +547,7 @@
   --on-selected: var(--accent);
   --selected-edge: var(--accent);
   --focus-edge: var(--accent);
+  --focus-ring: var(--accent);
 }
 :root[data-theme]:not([data-theme*="-vibrant-"]),
 [data-swatch][data-theme]:not([data-theme*="-vibrant-"]) {
@@ -554,6 +555,7 @@
   --on-selected: var(--ink);
   --selected-edge: var(--ink);
   --focus-edge: var(--muted);
+  --focus-ring: var(--ink);
 }
 
 /* Starter tints: each starter card on an empty screen draws its icon in one
@@ -566,6 +568,25 @@
   --tint-rose: light-dark(#B83A62, #FF8FB0);
   --tint-teal: light-dark(#0F7680, #5ED6E3);
   --tint-orange: light-dark(#A84B14, #FF9E5E);
+}
+
+/* Density: Comfortable by default, and Compact tightens rows, turns and
+   panel pages. Text keeps its size and every target stays 24px or larger. */
+:root {
+  --row-height: 28px;
+  --row-pad: 4px;
+  --turn-gap: 28px;
+  --reply-gap: 20px;
+  --settings-row-height: 44px;
+  --settings-row-pad: 10px;
+}
+:root[data-density="compact"] {
+  --row-height: 24px;
+  --row-pad: 2px;
+  --turn-gap: 16px;
+  --reply-gap: 12px;
+  --settings-row-height: 32px;
+  --settings-row-pad: 4px;
 }
 
 /* State colors for the states core reports: online and done in success,

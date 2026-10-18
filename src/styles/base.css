@@ -52,11 +52,17 @@ a:hover {
   border-color: var(--muted);
 }
 
-/* State is background, never a border: no control shows a focus ring. The
-   composer and the rename control alone show focus as their muted hairline.
+/* Every control shows a 2px ring on keyboard focus, in --focus-ring, inside
+   its own box so a scroller never clips it. It outranks a component's own
+   outline, so no component can drop it. A text field marked data-focus-frame
+   leaves the ring to its frame, which draws the same 2px edge: the composer.
    Declared once here because Svelte <style> blocks are component-scoped. */
 :focus-visible {
-  outline: 0;
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: -2px !important;
+}
+[data-focus-frame]:focus-visible {
+  outline: 0 !important;
 }
 
 
@@ -81,14 +87,14 @@ pre {
   white-space: nowrap;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
+/* Reduced motion: the root carries data-motion="reduce" while the OS asks for
+   it under Appearance's System pick, or while the pick is Reduce. */
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
 }
 
 /* A raw button marked primary outside Settings matches ui/Button's primary:

@@ -60,7 +60,7 @@
 
 <style>
   .project-row { display: flex; align-items: center; position: relative; border-radius: var(--radius-control); }
-  .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: 28px; padding: 4px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
+  .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: var(--row-height); padding: var(--row-pad) 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
   .project-title span { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
   .project-title :global(span[data-overflow="true"]) { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .project-title :global(.lucide) { flex: none; width: 16px; height: 16px; color: var(--muted); }
@@ -68,7 +68,7 @@
   .project-title:hover { background: var(--faint); }
   .project-controls { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; border-radius: var(--radius-control); background: var(--faint); opacity: 0; pointer-events: none; }
   .project-row:hover .project-controls, .project-row:focus-within .project-controls, .project-controls.visible { opacity: 1; pointer-events: auto; }
-  .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 28px; padding: 4px; border-radius: var(--radius-control); border: 0; background: transparent; color: var(--muted); }
+  .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: var(--row-height); padding: 4px; border-radius: var(--radius-control); border: 0; background: transparent; color: var(--muted); }
   .project-control:hover:not(:disabled), .project-control:focus-visible { background: color-mix(in srgb, var(--ink) 8%, var(--faint)); color: var(--ink); }
   @media (hover: none) { .project-controls { position: static; opacity: 1; pointer-events: auto; background: transparent; } }
   .project-menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 160px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }

@@ -7,6 +7,7 @@
   import { renderAssistantMarkdownBlocks } from './assistant-markdown.js'
   import { createExternalLinkHandler } from './external-link.js'
   import { scrollRegionOverflows } from './scroll-region.js'
+  import { toWindowPixels } from './display-state.js'
 
   // `caret` draws the active-line caret at the end of the last text block, so a
   // reply renders as Markdown from its first token with the caret inside it.
@@ -43,7 +44,7 @@
     if (!['http:','https:','mailto:'].includes(url.protocol)) return
     event.preventDefault()
     const rect = link.getBoundingClientRect()
-    const position = new LogicalPosition(event.clientX || rect.left, event.clientY || rect.bottom)
+    const position = new LogicalPosition(toWindowPixels(event.clientX || rect.left), toWindowPixels(event.clientY || rect.bottom))
     await linkAction(async () => {
       await linkMenu?.close()
       linkMenu = await Menu.new({items:[

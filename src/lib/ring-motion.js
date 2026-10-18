@@ -1,3 +1,4 @@
+import { motionReduced } from './display-state.js'
 // The mark's thinking motion, one organism shared by every mark on screen so
 // all of them breathe and turn together. Breath is an irregular heartbeat with
 // a signed depth: a swell sharpens the teeth, a slim smooths them, and scale,
@@ -30,7 +31,7 @@ let retargetAt = 0
 export const REST_POSE = Object.freeze({ scale: 1, ampMul: 1, widthMul: 1, angle: 0, trace: null })
 
 export function reducedMotion() {
-  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+  return motionReduced()
 }
 
 // One frame of the organism. Exported so a test can drive it without a clock.
