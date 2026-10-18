@@ -1,5 +1,5 @@
 <script>
-  // Settings → Language: one language for the app and its Browser tab.
+  // Settings → General → Language: one language for the app and its Browser tab.
   import ChoiceField from './ui/ChoiceField.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'

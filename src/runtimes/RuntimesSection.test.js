@@ -110,9 +110,10 @@ describe('Machines page', () => {
     expect(dialog).toHaveTextContent('Installing now stops 1 running reply. It resumes after the update.')
     expect(screen.getByText('Update requested on Build box.')).toBeInTheDocument()
     expect(screen.getByText('Skipped: Studio (offline), Reader (no permission), Rack (manual install), Lab (already current).')).toBeInTheDocument()
-    expect(order).toEqual(['machines', 'prepare', 'count'])
+    // The page asks once on open whether an update waits, then again for Update all.
+    expect(order).toEqual(['prepare', 'machines', 'prepare', 'count'])
     await fireEvent.click(screen.getByRole('button', { name: 'Install and restart' }))
-    await waitFor(() => expect(order).toEqual(['machines', 'prepare', 'count', 'install']))
+    await waitFor(() => expect(order).toEqual(['prepare', 'machines', 'prepare', 'count', 'install']))
   })
 
   it('names this computer as current when no app update waits', async () => {
@@ -144,6 +145,7 @@ describe('Machines page', () => {
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
     expect(bridge.invoke).not.toHaveBeenCalledWith('runtime_remove', expect.anything())
     expect(screen.getByText('Remove Studio?')).toBeInTheDocument()
+    expect(screen.getByText('It leaves your machines and loses access to this computer. Its threads stay on it.')).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     expect(bridge.invoke).toHaveBeenCalledWith('runtime_remove', { id: studio.id })
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Studio' })).toBeNull())
@@ -156,9 +158,10 @@ describe('Machines page', () => {
       runtime_pair_link: () => new Promise((resolve) => { finish = resolve }),
     })
     render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add machine' }))
     const add = await screen.findByRole('button', { name: 'Add' })
     expect(add).toBeDisabled()
-    const field = screen.getByRole('textbox', { name: 'Pairing link' })
+    const field = screen.getByRole('textbox', { name: 'Link from the other machine' })
     await fireEvent.input(field, { target: { value: `  ${LINK}  ` } })
     await waitFor(() => expect(add).not.toBeDisabled())
     await fireEvent.click(add)
@@ -171,12 +174,13 @@ describe('Machines page', () => {
     expect(screen.getByText('Machine added.')).toBeInTheDocument()
   })
 
-  it('shows why pairing failed and keeps the link for another try', async () => {
+  it('shows why adding failed and keeps the link for another try', async () => {
     const bridge = tauri({
       runtime_pair_link: () => { throw 'The runtime refused the link. It may be used or expired. Create a new link.' },
     })
     render(RuntimesSection, { tauri: bridge, listen })
-    const field = await screen.findByRole('textbox', { name: 'Pairing link' })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add machine' }))
+    const field = await screen.findByRole('textbox', { name: 'Link from the other machine' })
     await fireEvent.input(field, { target: { value: LINK } })
     await fireEvent.click(screen.getByRole('button', { name: 'Add' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('The runtime refused the link. It may be used or expired. Create a new link.')
@@ -186,6 +190,7 @@ describe('Machines page', () => {
   it('adds a machine over SSH with the host, the remote command and the runtime port', async () => {
     const bridge = tauri({ runtime_pair_ssh: () => runtimeList() })
     render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add machine' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Use SSH instead' }))
     const add = screen.getByRole('button', { name: 'Add' })
     expect(add).toBeDisabled()
@@ -198,8 +203,8 @@ describe('Machines page', () => {
     await fireEvent.input(screen.getByRole('textbox', { name: 'Runtime port' }), { target: { value: '7444' } })
     await fireEvent.click(add)
     expect(bridge.invoke).toHaveBeenCalledWith('runtime_pair_ssh', { host: 'me@build-box', command: 'docker exec muniment-runtime muniment-server', port: 7444, deviceName: 'Laptop' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Use a pairing link instead' }))
-    expect(screen.getByRole('textbox', { name: 'Pairing link' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Paste a link instead' }))
+    expect(screen.getByRole('textbox', { name: 'Link from the other machine' })).toBeInTheDocument()
   })
 
   it('follows the machine list the app announces', async () => {
@@ -210,7 +215,95 @@ describe('Machines page', () => {
     await waitFor(() => expect(announce).toBeTypeOf('function'))
     announce({ payload: runtimeList([local, { ...studio, status: 'revoked' }]) })
     expect(await within(screen.getByRole('group', { name: 'Studio' })).findByText('Access revoked')).toBeInTheDocument()
-    expect(screen.getByText('Pair it again with a new link.')).toBeInTheDocument()
+    expect(screen.getByText('Add it again with a new code.')).toBeInTheDocument()
+  })
+})
+
+describe('one list of machines', () => {
+  const CORE_LOCAL = '018f0000-0000-7000-8000-0000000000c1'
+  const CORE_BOX = '018f0000-0000-7000-8000-0000000000c3'
+  const CORE_POD = '018f0000-0000-7000-8000-0000000000c6'
+  const box = { ...buildBox, status: 'online', admin: true, updateOffered: false }
+  const heartbeat = new Date(Date.now() - 3 * 3600_000).toISOString()
+  const views = {
+    local: { self: CORE_LOCAL, members: [
+      { runtime_id: CORE_LOCAL, self: true, online: true },
+      { runtime_id: CORE_BOX, runtime_name: 'Build box', form_factor: 'container', online: true, link: { state: 'connected' } },
+      { runtime_id: CORE_POD, runtime_name: 'Pod', form_factor: 'container', online: false, heartbeat_at: heartbeat, link: { state: 'retrying' } },
+    ] },
+    [box.id]: { self: CORE_BOX, members: [
+      { runtime_id: CORE_BOX, self: true, online: true },
+      { runtime_id: CORE_LOCAL, runtime_name: 'Laptop', online: true, link: { state: 'connected' } },
+    ] },
+  }
+  const devices = [
+    { device_id: 'd-phone', name: 'Pocket', kind: 'mobile', scopes: ['run.write', 'thread.read'], created_at: '2030-01-01T00:00:00Z', last_seen_at: null },
+    { device_id: 'd-box', name: 'Build box', kind: 'desktop-client', scopes: ['run.write', 'runtime.admin', 'thread.read'], created_at: '2030-01-01T00:00:00Z', last_seen_at: null },
+    { device_id: 'd-peer', name: 'Pod', kind: 'swarm-peer', scopes: ['swarm.peer'], created_at: '2030-01-01T00:00:00Z', last_seen_at: null },
+  ]
+  function fleetBridge(calls) {
+    let listed = devices
+    return tauri({
+      runtime_list: () => runtimeList([local, studio, box]),
+      runtime_refresh: () => runtimeList([local, studio, box]),
+      local_devices: () => ({ devices: listed }),
+      local_device_revoke: ({ deviceId }) => { calls.push(['revoke', deviceId]); listed = listed.filter((device) => device.device_id !== deviceId); return true },
+      runtime_remove: ({ id }) => { calls.push(['remove', id]); return runtimeList([local, studio]) },
+      agent_request: ({ runtime, operation, body }) => {
+        if (operation === 'swarm.members') return views[runtime]
+        if (operation === 'swarm.leave') { calls.push(['leave', runtime, body.runtime_id]); return { removed: true } }
+        if (operation === 'fleet.credentials') return { share_models: false }
+        return {}
+      },
+    })
+  }
+
+  it('lists every machine once: reached, linked through the fleet, and using this computer', async () => {
+    render(RuntimesSection, { tauri: fleetBridge([]), listen })
+    await screen.findByRole('group', { name: 'Pod' })
+    await waitFor(() => expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Pod', 'Pocket']))
+    const pod = screen.getByRole('group', { name: 'Pod' })
+    expect(within(pod).getByText('Container')).toBeInTheDocument()
+    expect(within(pod).getByText('Offline')).toBeInTheDocument()
+    expect(within(pod).getByText('Seen 3h ago')).toBeInTheDocument()
+    const phone = screen.getByRole('group', { name: 'Pocket' })
+    expect(within(phone).getByText('Phone')).toBeInTheDocument()
+    expect(within(phone).getByText('Limited')).toBeInTheDocument()
+    expect(within(phone).getByText('Never seen')).toBeInTheDocument()
+    // A machine with admin access has no Limited chip, and no word names a fleet.
+    expect(within(screen.getByRole('group', { name: 'Build box' })).queryByText('Limited')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/fleet|Fleet|Pair\b|Join/)
+    // No update waits, so Update all stays off the page.
+    expect(screen.queryByRole('button', { name: 'Update all' })).toBeNull()
+  })
+
+  it('removes a machine from every link and its access in one step', async () => {
+    const calls = []
+    render(RuntimesSection, { tauri: fleetBridge(calls), listen })
+    await screen.findByRole('group', { name: 'Pod' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'More for Build box' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'More for Build box' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(calls).toEqual([['leave', 'local', CORE_BOX], ['revoke', 'd-box'], ['remove', box.id]]))
+    expect(await screen.findByText('Removed Build box.')).toBeInTheDocument()
+
+    calls.length = 0
+    await fireEvent.click(screen.getByRole('button', { name: 'More for Pocket' }))
+    expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(calls).toEqual([['revoke', 'd-phone']]))
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Pocket' })).toBeNull())
+  })
+
+  it('opens this computer\'s network, offline and log settings from its row', async () => {
+    render(RuntimesSection, { tauri: fleetBridge([]), listen })
+    const open = await screen.findByRole('button', { name: 'Settings for This computer' })
+    expect(screen.queryByRole('switch', { name: 'Accept connections' })).toBeNull()
+    await fireEvent.click(open)
+    expect(await screen.findByRole('switch', { name: 'Accept connections' })).toBeInTheDocument()
+    expect(open).toHaveAttribute('aria-expanded', 'true')
   })
 })
 
@@ -290,7 +383,9 @@ describe('Model sharing', () => {
     await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.credentials', body: {} }))
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByRole('note')).toHaveTextContent('Shared subscriptions depend on this computer.')
+    // The page holds no banner: the explanation sits behind the row's info control.
+    expect(screen.queryByRole('note')).toBeNull()
+    expect(screen.getByRole('tooltip', { hidden: true })).toHaveTextContent('Shared subscriptions depend on this computer')
 
     await fireEvent.click(toggle)
     await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.credentials', body: { share_models: true } }))
@@ -310,34 +405,21 @@ describe('Model sharing', () => {
     expect(await screen.findByText('This runtime is not in a fleet.')).toBeInTheDocument()
   })
 
-  it('keeps shared connections in MuniCloud for a signed-in account, and takes them back when sharing turns off', async () => {
+  it('takes shared connections back from MuniCloud when sharing turns off, and leaves the MuniCloud switch to Account', async () => {
     const state = { shareModels: true }
-    let viaCloud = false
-    const current = () => ({ ...runtimeList([local, studio]), shareViaCloud: viaCloud })
+    const current = () => ({ ...runtimeList([local, studio]), shareViaCloud: true })
     const bridge = tauri({
-      auth_status: () => ({ signed_in: true, subject: 'owner' }),
       agent_request: fleet(state),
       runtime_list: current,
       runtime_refresh: current,
-      runtime_share_models: ({ cloud }) => { viaCloud = cloud; return current() },
+      runtime_share_models: () => ({ ...current(), shareViaCloud: false }),
     })
     render(RuntimesSection, { tauri: bridge, listen })
-    const cloud = await screen.findByRole('switch', { name: 'Keep them in MuniCloud' })
-    await waitFor(() => expect(cloud).toBeEnabled())
-    expect(screen.getByRole('note')).toHaveTextContent('Shared subscriptions depend on this computer.')
-    await fireEvent.click(cloud)
-    await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { cloud: true }))
-    await waitFor(() => expect(screen.getByRole('note')).toHaveTextContent('MuniCloud renews shared sign-ins'))
-
-    await fireEvent.click(screen.getByRole('switch', { name: 'Share model connections' }))
+    const toggle = await screen.findByRole('switch', { name: 'Share model connections' })
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
+    expect(screen.queryByRole('switch', { name: /MuniCloud/ })).toBeNull()
+    await fireEvent.click(toggle)
     await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { cloud: false }))
     expect(state.shareModels).toBe(false)
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Keep them in MuniCloud' })).toBeDisabled())
-  })
-
-  it('hides MuniCloud from a computer that is not signed in', async () => {
-    render(RuntimesSection, { tauri: tauri({ auth_status: () => ({ signed_in: false }) }), listen })
-    await screen.findByRole('switch', { name: 'Share model connections' })
-    expect(screen.queryByRole('switch', { name: 'Keep them in MuniCloud' })).toBeNull()
   })
 })

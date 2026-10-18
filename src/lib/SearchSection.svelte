@@ -1,5 +1,5 @@
 <script>
-  // Settings → Search: the searches agents try in the user's order, the
+  // Settings → Tools → Search: the searches agents try in the user's order, the
   // engines built-in search asks, the providers the user adds keys for, then
   // the Browser tab's engine. The runtime keeps the record, and every change
   // answers the settings it left, which replace the page's copy. A key goes
@@ -17,7 +17,8 @@
   import PocketFold from './PocketFold.svelte'
   import LucideIcon from './LucideIcon.svelte'
 
-  let { tauri } = $props()
+  // `embedded` drops the page head where Tools shows search under its own.
+  let { tauri, embedded = false } = $props()
 
   // Providers whose mark the model settings already ship keep that file.
   const SHARED_LOGOS = { mistral: 'mistral', ollama: 'ollama', openai: 'openai', xai: 'xai', kimi: 'kimi-coding', zai: 'zai', gemini: 'google' }
@@ -49,7 +50,7 @@
     ['gemini', 'Gemini'], ['keenable', 'Keenable'], ['mistral', 'Mistral'], ['ollama', 'Ollama'], ['querit', 'Querit'], ['search1api', 'Search1API'], ['searchinfinity', 'SearchInfinity'],
     ['serpbase', 'SerpBase'], ['serpdive', 'SerpDive'], ['serply', 'Serply'], ['tinyfish', 'TinyFish'], ['valyu', 'Valyu'], ['xcrawl', 'xCrawl'], ['zai', 'Zhipu'],
   ].map(([id, name, url = false]) => ({ id, name, url }))
-  // OpenAI and xAI search with the account connected in Model providers.
+  // OpenAI and xAI search with the account connected in Models.
   const ACCOUNT_SEARCH = { openai: 'OpenAI', xai: 'xAI' }
   const FIELDS = { brightdataSerpZone: 'SERP zone', brightdataUnlockerZone: 'Unlocker zone' }
   const NAMES = Object.fromEntries([...COMMON, ...MORE].map(provider => [provider.id, provider.name]).concat(Object.entries(ACCOUNT_SEARCH)))
@@ -241,7 +242,7 @@
 {/snippet}
 
 <div class="search-preferences">
-  <PageHead intro="How agents search the web, and the engine the Browser tab address bar uses." />
+  {#if !embedded}<PageHead intro="How agents search the web, and the engine the Browser tab address bar uses." />{/if}
 
   <Group heading="Search order" info="Agents try each search that is on, top to bottom. A search that fails or runs out of quota passes to the next.">
     {#each order as item, index (item.id + (item.has_key ? '-key' : ''))}
@@ -276,7 +277,7 @@
     {/each}
   </Group>
 
-  <Group heading="Add a search provider" info="Use a provider you already pay for. The key stays on this device.">
+  <div class="add-provider" data-search-add><Group heading="Add a search provider" info="Use a provider you already pay for. The key stays on this device.">
     {#each available as provider (provider.id)}
       <Row title={provider.name} description={provider.note} stacked={adding === provider.id}>
         {#snippet lead()}{@render mark(provider.id)}{/snippet}
@@ -293,13 +294,14 @@
         <ul>{#each more as provider (provider.id)}<li class:adding={adding === provider.id}><span class="more-name">{@render mark(provider.id, 16)}{provider.name}</span>{#if adding === provider.id}{@render keyForm(provider)}{:else}<Button icon="key-round" onclick={() => startKey(provider.id)}>Add key</Button>{/if}</li>{/each}</ul>
       </details>
     {/if}
-    <p>OpenAI and xAI use your Model providers account.</p>
-  </Group>
+    <p>OpenAI and xAI use the account connected in Models.</p>
+  </Group></div>
 
   <BrowserSearch />
 </div>
 
 <style>
+  .add-provider { display: grid; scroll-margin-top: var(--page-pad); }
   .search-preferences { display: grid; gap: var(--page-gap); }
   .grip { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: grab; touch-action: none; }
   .grip:hover, .grip:focus-visible { background: var(--faint); color: var(--ink); }

@@ -15,21 +15,26 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
-  // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row.
-  let { tauri, oncreate, sidebarTab = null } = $props()
+  import SearchSection from '../lib/SearchSection.svelte'
+  // Settings → Tools: MCP servers, skills, plugins and web search in one page,
+  // with a type filter and one Add. `focus` picks the type a link or a
+  // search result names. `localNote` says that the extensions belong to this
+  // computer while another machine is selected.
+  let { tauri, oncreate, focus = null, localNote = '' } = $props()
+  const TYPES = ['mcp', 'skill', 'plugin', 'search']
   // A card names its publisher only when the server's name does not already.
   const distinctPublisher = entry => {
     const publisher = entry.publisher?.toLowerCase().trim()
     const name = entry.name.toLowerCase()
     return !!publisher && !name.includes(publisher.split(/[\s(,]/)[0]) && !publisher.includes(name.split(/[\s.-]/)[0])
   }
-  const intros = { mcp: 'MCP servers connect your models to apps and services.', skill: 'Skills give your models instructions and scripts for one kind of task.', plugin: 'Plugins package skills, MCP servers and code into one install.' }
+  const intros = { mcp: 'MCP servers connect your models to apps and services.', skill: 'Skills give your models instructions and scripts for one kind of task.', plugin: 'Plugins package skills, MCP servers and code into one install.', search: 'How agents search the web, and the engine the Browser tab address bar uses.' }
   // svelte-ignore state_referenced_locally
-  let state = $state({ items: [], threads: {} }), tab = $state(sidebarTab ?? 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
+  let state = $state({ items: [], threads: {} }), tab = $state(TYPES.includes(focus) ? focus : 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let filtersOpen = $state(false), formDialog = $state()
   function showTab(id) { tab = id; resetSearch(); form = null; preview = null }
   $effect(() => {
-    if (sidebarTab && sidebarTab !== untrack(() => tab)) showTab(sidebarTab)
+    if (TYPES.includes(focus) && focus !== untrack(() => tab)) showTab(focus)
   })
   $effect(() => { if (form && formDialog && !formDialog.open) formDialog.showModal() })
   let details = $state(null), detailsDialog
@@ -90,14 +95,24 @@
   async function install() { await work(async () => { state = await call('install', { previewId: preview.id, skills: selected, replaceId }); preview = null; form = null; status = 'Installed. Use the composer to select it.' }) }
   async function mutate(action, data) { await work(async () => { state = await call(action, data) }) }
   async function connection(item, action) { await work(async () => { const result = await call(action, { id: item.id }); status = `${item.name}: ${result.status}. ${result.tools.length} tools available.`; await refresh() }) }
+  // The one Add opens the form for the picked type. Search adds a provider
+  // in its own list, so Add moves to that list.
+  function addForType() {
+    if (tab === 'search') document.querySelector('[data-search-add]')?.scrollIntoView?.({ block: 'start' })
+    else add()
+  }
   function closeForm() { if (!busy) { form = null; preview = null; token = '' } }
   function update(item) { form = {}; source = item.source; replaceId = item.id; preview = null; error = '' }
 </script>
-<section class="extend" aria-label="Extend">
+<section class="extend" aria-label="Tools">
   <PageHead intro={intros[tab] ?? intros.mcp}>
-    {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
+    {#snippet actions()}{#if tab === 'skill' || tab === 'plugin'}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}<Button icon="plus" variant="primary" disabled={busy} onclick={addForType}>Add</Button>{/snippet}
   </PageHead>
-  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin}]} onchange={showTab} />{/if}
+  <SettingsTabs label="Tool types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin},{id:'search',label:'Search',icon:'search'}]} onchange={showTab} />
+  {#if localNote && tab !== 'search'}<p class="note" role="note">{localNote}</p>{/if}
+  {#if tab === 'search'}
+    <SearchSection {tauri} embedded />
+  {:else}
   <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0} />
   {#if tab === 'mcp' && filtersOpen}
     <div class="filters" id="mcp-filters">
@@ -123,7 +138,7 @@
       {:else}
         <label>GitHub repository, local folder, or archive<input bind:value={source} placeholder="https://github.com/owner/repository" /></label>
         <p>Use a GitHub URL, a local folder, or a ZIP or TAR archive. GitHub URLs can include a branch and subfolder. Files stay pinned until you install an update.</p>
-        {#if !preview}<button type="button" disabled={busy || !source.trim()} onclick={inspect}>Review package</button>{/if}
+        {#if !preview}<button type="button" disabled={busy || !source.trim()} onclick={inspect}>Review package</button>{#if oncreate && !replaceId}<button type="button" disabled={busy} onclick={() => { const kind = tab; closeForm(); oncreate(kind) }}>Create one in a chat</button>{/if}{/if}
         {#if preview}
           <h4>{preview.name}</h4><p>{preview.description}</p><p>Version {preview.version.slice(0, 12)}</p>
           {#each preview.skills as skill}<label class="check"><input type="checkbox" value={skill.path} bind:group={selected} />{skill.name}<span>{skill.description}</span></label>{/each}
@@ -172,6 +187,7 @@
       {#if !filtered.length}<p>No servers match these filters.</p>{/if}
     </Group>
     {#if remaining.length > 30}<nav class="pages" aria-label="Catalog pages"><button type="button" disabled={page === 0} onclick={() => page--}>Previous</button><span>Page {page + 1} of {Math.ceil(remaining.length / 30)}</span><button type="button" disabled={(page + 1) * 30 >= remaining.length} onclick={() => page++}>Next</button></nav>{/if}
+  {/if}
   {/if}
 </section>
 <dialog data-panel="mcp-details" data-panel-variant="overlay" class="server-details" bind:this={detailsDialog} use:dialogDismiss={{onclose: () => detailsDialog.close()}} aria-labelledby="server-details-title" onclose={() => details = null}>

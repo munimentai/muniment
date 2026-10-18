@@ -190,7 +190,7 @@
             <p class="empty">{inventory?.providers?.length ? 'No model is shown.' : 'No provider is connected.'}</p>
           {/each}
         </div>
-        <button type="button" class="foot" onclick={onmanagemodels}><LucideIcon name="settings" variant="action" size={14} />Model providers</button>
+        <button type="button" class="foot" onclick={onmanagemodels}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
       {:else if panel === 'permissions'}
         <div class="choices" role="radiogroup" aria-label="Permission mode">
           <h4>Permissions</h4>

@@ -4,7 +4,7 @@ The desktop app always has its own runtime. It can also attach to Muniment on
 another desktop, or to a `muniment-server` runtime on a server or in a
 container. The app attaches to one runtime at a time. No account is needed.
 
-Settings → Runtimes lists this computer first, then each paired runtime with
+Settings → Machines lists this computer first, then each paired runtime with
 its kind, version and state. A runtime's provider keys and files stay on that
 runtime. Threads stay on the runtime that holds them, and the thread list,
 models, memory, search and context settings show the selected runtime.
@@ -18,13 +18,13 @@ The runtime creates a one-time pairing link:
 muniment://pair?v=1&id=<runtime id>&name=<name>&fp=<certificate sha256>&host=<host:port>#<secret>
 ```
 
-Paste the whole link under Add a runtime and select Pair. The secret after `#`
+Select Add machine, paste the whole link and select Add. The secret after `#`
 works once. The app trusts only the certificate the link names, and keeps a
 device credential in an owner-only file under `~/.muniment/runtimes/`.
 
 ## Pair over SSH
 
-Select Over SSH and enter:
+Select Add machine, then Use SSH instead, and enter:
 
 - **SSH host**: any host `ssh` accepts, including an `ssh_config` alias or `user@host`.
 - **Remote command**: `muniment-server` by default. For a container, run it through `docker exec`.
@@ -50,15 +50,17 @@ fingerprint, runtime id, runtime name, endpoints, scopes and expiry. A user who
 runs the pairing command over SSH controls that host, so the device asks for the
 `runtime.admin` scope there.
 
-## Pair with this computer
+## Add from this computer
 
-Under This computer, turn on Allow pairing. Pairing is off until you turn it on.
-The listen port defaults to `7443`. The page lists the addresses a link names
-and where each comes from: local network, private overlay network, public
-address, this computer only, or set in these settings. Create pairing link
-shows the link, a QR code and the time it stops working. Allow updates adds the
-`runtime.admin` scope to the next link. Paired devices lists each device with
-its scopes and when it was last seen, with Revoke.
+Add machine shows this computer's one-time link, its QR code and the time it
+stops working. The link carries the `runtime.admin` scope, so a machine that
+uses it joins this computer's machines in the same step. Showing a code turns
+on connections the first time. This computer's row holds Accept connections,
+the listen port, which defaults to `7443`, and the addresses a link names with
+where each comes from: local network, private overlay network, public address,
+this computer only, or set in these settings. Every device that uses this
+computer shows in the one list, a device without `runtime.admin` as Limited,
+and Remove ends its access.
 
 ## States
 
@@ -66,8 +68,8 @@ its scopes and when it was last seen, with Revoke.
 | --- | --- |
 | Online | None. |
 | Offline | Check that the runtime is running and reachable. |
-| Certificate changed | Pair it again to trust its new certificate. |
-| Access revoked | Pair it again with a new link. |
+| Certificate changed | Add it again to trust its new certificate. |
+| Access revoked | Add it again with a new code. |
 | Version mismatch | Update the app or the runtime. |
 
 ## Updates

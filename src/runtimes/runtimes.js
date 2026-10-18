@@ -48,10 +48,10 @@ const STATES = {
   connecting: ['Connecting', '', 'quiet'],
   online: ['Online', '', 'ink'],
   offline: ['Offline', 'Check that it is running and reachable.', 'caution'],
-  certificate_changed: ['Certificate changed', 'Pair it again to trust its new certificate.', 'critical'],
-  revoked: ['Access revoked', 'Pair it again with a new link.', 'critical'],
+  certificate_changed: ['Certificate changed', 'Add it again to trust its new certificate.', 'critical'],
+  revoked: ['Access revoked', 'Add it again with a new code.', 'critical'],
   version_mismatch: ['Version mismatch', 'Update the app or the runtime.', 'caution'],
-  runtime_mismatch: ['Different runtime', 'Another runtime answers at its address. Pair it again.', 'critical'],
+  runtime_mismatch: ['Different runtime', 'Another runtime answers at its address. Add it again.', 'critical'],
 }
 
 export function statusLabel(runtime) {
@@ -169,17 +169,14 @@ export function skipLabel(skip) {
   return `${skip.name} (${SKIPS[skip.reason] ?? skip.reason})`
 }
 
-// Settings pages a paired runtime refuses: the cloud account and phone pairing
-// belong to this computer. They hide while a paired runtime is selected.
-export const REMOTE_HIDDEN_PAGES = ['account']
+// The parts of Settings pages that keep this computer's data while a paired
+// runtime is selected. Each says so in one line.
+export const LOCAL_PARTS = ['mcp', 'skill', 'plugin', 'storage', 'companies']
 
-// Settings pages that keep this computer's data while a paired runtime is
-// selected. Each says so in one line.
-export const LOCAL_PAGES = ['mcp', 'skills', 'plugins', 'home']
-
-// Settings pages that read and change the selected machine. Once a machine is
-// paired, each names that machine at its top and can switch it.
-export const MACHINE_PAGES = ['providers', 'decisions', 'context', 'permissions', 'search', 'profile', 'memory']
+// Settings pages that read and change the selected machine, in whole or in
+// part. Once a machine is paired, each names that machine at its top and can
+// switch it.
+export const MACHINE_PAGES = ['account', 'models', 'tools', 'permissions', 'data']
 
 // The machine scope a Settings page shows: the selected machine and the
 // machines it can switch to, or null for a page or a list without a choice.
@@ -213,14 +210,6 @@ const ENDPOINT_KINDS = {
 
 export function endpointKindLabel(kind) {
   return ENDPOINT_KINDS[kind] ?? 'Address'
-}
-
-const SCOPES = [['thread.read', 'Read'], ['run.write', 'Run'], ['runtime.admin', 'Updates and pairing']]
-
-// The scopes a paired device holds, in plain words.
-export function scopeLabels(scopes = []) {
-  const labels = SCOPES.filter(([scope]) => scopes.includes(scope)).map(([, label]) => label)
-  return labels.length ? labels.join(', ') : 'No access'
 }
 
 // The port the settings name, else the port the listener bound.

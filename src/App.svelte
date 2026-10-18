@@ -4,7 +4,7 @@
   import { startFleetPreferences } from './lib/fleet-preferences.js'
   import PopupClose from './lib/PopupClose.svelte'
   import { featureFlags } from './feature-flags.js'
-  import { settingsGroups, settingsPage } from './lib/settings-sections.js'
+  import { settingsNav, settingsPage } from './lib/settings-sections.js'
   import MachinePicker from './runtimes/MachinePicker.svelte'
   import SyncStatus from './runtimes/SyncStatus.svelte'
   import OwnerChip from './runtimes/OwnerChip.svelte'
@@ -14,7 +14,6 @@
   import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
   import { machineStatusTone } from './lib/status-tone.js'
   import StatusChip from './lib/ui/StatusChip.svelte'
-  import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
@@ -520,7 +519,10 @@
       await refreshAgents()
     } finally { startingAgent = null }
   }
-  let settingsSection = $state('providers')
+  let settingsSection = $state('models')
+  // The words in the Settings search, which narrow its sidebar.
+  let settingsQuery = $state('')
+  const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '')
   // The runtimes the app can attach to. While a paired runtime is selected,
   // threads, models and settings come from it, and this computer's agents,
   // artifacts and projects step aside.
@@ -533,8 +535,8 @@
   // The control that opened Settings takes focus back when it closes.
   let settingsOpener = null
 
-  function openSettings(section = 'providers', opener = settingsButton) {
-    settingsSection = settingsPage(section)
+  function openSettings(section = 'models', opener = settingsButton) {
+    settingsSection = section
     settingsOpener = opener ?? null
     pickerOpen = false
     settingsOpen = true
@@ -2740,7 +2742,7 @@
     }
     // SPEC.md: a found server connects in place. A signed-in Claude Code
     // connects in place, a subscription with an account signs in from the
-    // first run, any other opens its sign-in in Model providers, More
+    // first run, any other opens its sign-in in Models, More
     // providers opens the catalog, and explore opens the composer with no model.
     if (option?.kind === 'explore') {
       onboarding = { name: 'complete', homePath: onboarding.homePath }
@@ -2774,7 +2776,7 @@
   }
 
   // Connects through the Claude Code sign-in the scan found. False sends the
-  // user to Model providers, which names the step Claude Code still needs.
+  // user to Models, which names the step Claude Code still needs.
   async function connectClaudeCodeInPlace() {
     try {
       const claude = await tauri.invoke('local_mode_claude_code_status')
@@ -3009,12 +3011,19 @@
             <div class="side-top">
               <button class="side-action settings-back" aria-keyshortcuts="Escape" onclick={closeSettings}><LucideIcon name="arrow-left" /><span>Back to threads</span></button>
             </div>
+            <!-- One search over every page and part. The platform's find shortcut focuses it. -->
+            <div class="settings-search">
+              <LucideIcon name="search" size={14} />
+              <input id="settings-search" type="search" placeholder="Search settings" aria-label="Search settings" aria-keyshortcuts={isMacPlatform ? 'Meta+F' : 'Control+F'} autocomplete="off" spellcheck="false" bind:value={settingsQuery}>
+            </div>
             <nav class="side-scroll" aria-label="Settings sections" use:panelScroll>
-              {#each settingsGroups({ remote: !!remoteRuntime }) as [group, pages] (group)}
-                <h2 class="side-heading">{group}</h2>
-                {#each pages as [id, label, icon] (id)}
-                  <button class="side-action" aria-current={settingsSection === id ? 'true' : undefined} onclick={() => { settingsSection = id }}>{#if icon === 'mcp'}<span class="side-mark"><McpIcon /></span>{:else}<LucideIcon name={icon} />{/if}<span>{label}</span></button>
+              {#each settingsNav(settingsQuery, { remote: !!remoteRuntime }) as [id, label, icon, parts] (id)}
+                <button class="side-action" aria-current={settingsPage(settingsSection) === id ? 'true' : undefined} onclick={() => { settingsSection = id }}><LucideIcon name={icon} /><span>{label}</span></button>
+                {#each parts as [part, name] (part)}
+                  <button class="side-action settings-result" onclick={() => { settingsSection = part }}><span>{name}</span></button>
                 {/each}
+              {:else}
+                <p class="settings-empty" role="status">No setting matches.</p>
               {/each}
             </nav>
           {:else if !sidebarCollapsed}
@@ -3919,11 +3928,13 @@
   .side-action kbd { flex: none; }
   .activity-row { margin: 2px 0; }
   .side-action .side-count { flex: none; min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); line-height: 16px; text-align: center; }
-  .side-heading:first-child { margin-top: 6px; }
-  .side-heading { margin: 14px 8px 4px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
+  .settings-search { display: flex; align-items: center; gap: 6px; margin: 2px 6px 4px; padding: 0 8px; min-height: 28px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); }
+  .settings-search:focus-within { border-color: var(--muted); }
+  .settings-search input { flex: 1; min-width: 0; padding: 4px 0; border: 0; outline: none; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); }
+  .side-action.settings-result { padding-left: 34px; color: var(--muted); }
+  .settings-empty { margin: 0; padding: 6px 8px; color: var(--muted); font-size: var(--text-13); }
   .settings-back { color: var(--muted); }
   /* The MCP mark takes a Lucide icon's 18px slot and its muted color. */
-  .side-action .side-mark { flex: 0 0 18px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); mask-image: none; }
   /* The foot of the sidebar: Settings above the account row, under one edge-to-edge hairline. */
   .side-foot { position: relative; margin-top: auto; padding: 4px 6px 6px; }
   /* The menu separator: a straight line inset to the foot's 6px padding at three-quarter strength. */
