@@ -11,6 +11,7 @@ import { registry } from './model-registry.js'
 export const SUBSCRIPTIONS = registry.subscriptions
 
 // A local server is ready, needs a key, or is installed and not serving.
+// Connect names the one state where a click connects.
 const SERVER_RANK = { ready: 0, 'needs-key': 2, 'not-running': 3 }
 
 // Builds the ordered connect list: ready servers, hinted subscriptions,
@@ -41,5 +42,5 @@ export function connectOptions(scan) {
 export const SERVER_STATES = {
   ready: { action: 'Connect', tone: 'signal' },
   'needs-key': { action: 'Add key', tone: 'ochre' },
-  'not-running': { action: 'Start', tone: 'muted' },
+  'not-running': { action: 'Not running', tone: 'muted' },
 }

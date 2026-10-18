@@ -91,16 +91,16 @@
 </script>
 
 <section class="appearance" aria-label="Appearance">
-  <PageHead intro="Choose how Muniment looks. Theme and type follow you to every machine." />
+  <PageHead intro="Theme and type follow you to every machine." />
   <Group heading="Theme">
-  <Row title="Mode" description="Follow the system, or keep one.">
+  <Row title="Mode">
   <div class="theme-options" role="group" aria-label="Mode">
     {#each modeOptions as option}
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
   </Row>
-  <Row title="Frame" description="Framed sets each panel as a card. Frameless joins the panels with hairlines.">
+  <Row title="Frame" info="Framed sets each panel as a card. Frameless joins the panels with hairlines.">
   <div class="frame-options" role="group" aria-label="Frame">
     {#each FRAME_OPTIONS as [id, label] (id)}
       <button type="button" class="frame-pick" aria-pressed={frame === id} onclick={() => { frame = commitFrame(id) }}>
@@ -113,7 +113,7 @@
   </Group>
 
   <Group heading="Agent avatars">
-  <Row title="Style" description="How every agent's avatar draws, in light and dark.">
+  <Row title="Style">
   <div class="theme-options" role="group" aria-label="Agent avatars">
     {#each AVATAR_STYLE_OPTIONS as [id, label] (id)}
       <button type="button" aria-pressed={avatarStyle === id} onclick={() => { avatarStyle = commitAvatarStyle(id) }}>{label}</button>
@@ -125,9 +125,9 @@
   </div>
   </Group>
 
-  <Group heading="Color scheme" description="Four colors, each in three styles. Mode picks the light or dark version.">
+  <Group heading="Color scheme" info="Four colors, each in three styles. Mode picks the light or dark version.">
   {#each STYLES as [style, styleName] (style)}
-    <Row title={styleName} description={STYLE_NOTES[style]}>
+    <Row title={styleName} info={STYLE_NOTES[style]}>
       <div class="palettes" role="group" aria-label={`${styleName} color schemes`}>
         {#each COLORS as [color, colorName] (color)}
           {@const palette = paletteId(color, style)}
@@ -146,7 +146,7 @@
   </Group>
 
   <Group heading="Type">
-  <Row title="Size" description="The body size every register scales from.">
+  <Row title="Size" info="Every text size scales from the body size.">
   <div class="type-size" role="group" aria-label="Size">
     <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
     <span class="type-readout" role="status">{bodySize(type.step)} px body</span>
@@ -172,7 +172,7 @@
   </Group>
 
   <Group heading="Thinking indicator">
-  <Row title="Style" description="The mark a reply shows while it works.">
+  <Row title="Style" info="The mark a reply shows while it works.">
   <div class="theme-options" role="group" aria-label="Thinking indicator">
     {#each MARK_OPTIONS as [id, label] (id)}
       <button type="button" aria-pressed={mark === id} onclick={() => { mark = commitMark(id) }}>{label}</button>

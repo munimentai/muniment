@@ -13,8 +13,8 @@
     catch (failure) { error = String(failure?.message ?? failure) }
   }
 </script>
-<Group heading="Browser search" description="Words in the Browser tab address bar search with this engine.">
-  <Row title="Search engine" description="Add a bang before or after the words to search one site, such as !w for Wikipedia, !yt for YouTube or !gh for GitHub. DuckDuckGo answers other bangs.">
+<Group heading="Browser search">
+  <Row title="Address bar engine" info="Add a bang before or after the words to search one site, such as !w for Wikipedia, !yt for YouTube or !gh for GitHub. DuckDuckGo answers other bangs.">
     <div class="choice"><ChoiceField label="Search engine" hideLabel value={engine} {options} onchange={choose} /></div>
   </Row>
   {#if error}<p role="alert">{error}</p>{/if}

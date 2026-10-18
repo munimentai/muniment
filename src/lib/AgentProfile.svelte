@@ -216,7 +216,7 @@
 
     <section class="field" aria-label="Activity">
       <div class="field-heading"><h3>Activity</h3>{#if run?.status}<span class="record muted">{runStatusLabel(run.status)}</span>{/if}</div>
-      <RunList runs={runs.slice(0, 20)} empty="No runs yet. Run now starts one." onopen={onopen ? (entry) => action(() => onopen(entry.thread_id)) : null} />
+      <RunList runs={runs.slice(0, 20)} empty="No runs yet." onopen={onopen ? (entry) => action(() => onopen(entry.thread_id)) : null} />
     </section>
 
     <ReplayList {tauri} {agent} {runs} disabled={busy} {onrun} onopen={onopenrun} {onactivity} />

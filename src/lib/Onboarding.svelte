@@ -38,7 +38,7 @@
     try {
       providerScan = await tauri.invoke('onboarding_provider_scan')
     } catch (_) {
-      providerScanError = 'Muniment could not look for local models.'
+      providerScanError = 'The scan for local models failed.'
     } finally {
       providerScanning = false
     }

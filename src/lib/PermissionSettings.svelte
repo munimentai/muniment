@@ -54,24 +54,23 @@
   <PageHead intro={`How agents and threads on ${machineName} ask before they act.`} />
   {#if settings}
     <Group heading="Default modes">
-      <Row title="New threads" description="The mode a new thread starts in.">
+      <Row title="New threads">
         <ChoiceField label="Default thread mode" hideLabel value={settings.default_thread_mode} options={choices} disabled={busy} onchange={(value) => save({ default_thread_mode: value })} />
       </Row>
-      <Row title="Agents" description="The mode of an agent that has not chosen one.">
+      <Row title="Agents" description="Unless the agent picks its own">
         <ChoiceField label="Default agent mode" hideLabel value={settings.default_agent_mode} options={choices} disabled={busy} onchange={(value) => save({ default_agent_mode: value })} />
       </Row>
     </Group>
     <Group heading="Bypass permissions">
-      <Row title="Allow bypass" description="New threads and agents start in Bypass permissions while this is on.">
+      <Row title="Allow bypass" info="Off, new threads and agents start in Ask before changes, and a default set to Bypass permissions moves to Ask before changes.">
         {#snippet detail()}
-          <p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.</p>
-          <p class="fallback">Turn it off and new threads and agents start in Ask before changes. A default set to Bypass permissions moves to Ask before changes.</p>
+          <p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Everything runs except deny and ask-first rules, protected paths and critical commands.</p>
         {/snippet}
         <Toggle checked={settings.bypass_enabled} label="Allow bypass permissions" disabled={busy} onchange={(enabled) => save({ bypass_enabled: enabled })} />
       </Row>
     </Group>
     <Group heading="Unattended runs">
-      <Row title="Wait for an answer" description="An agent run nobody watches waits this long, then the action is denied and the run stops.">
+      <Row title="Wait for an answer" description="Then the action is denied and the run stops" info="An agent run nobody watches waits this long for an answer.">
         <form class="wait" onsubmit={(event) => { event.preventDefault(); void save({ unattended_timeout_seconds: Math.round(minutes * 60) }) }}>
           <input type="number" aria-label="Unattended wait (minutes)" min="1" max="10080" step="1" bind:value={minutes} required disabled={busy} />
           <span class="unit">min</span>
@@ -79,9 +78,8 @@
         </form>
       </Row>
     </Group>
-    <Group heading="Rules for every thread">
+    <Group heading="Rules for every thread" info={`Exact requests every thread and agent on ${machineName} denies, asks first or runs.`}>
       <div class="rules">
-        <p class="note">Exact requests every thread and agent on {machineName} denies, asks first or runs.</p>
         <PermissionRules rules={settings} {busy} onsave={(list, requests) => save({ [list]: requests })} />
       </div>
     </Group>
@@ -97,12 +95,10 @@
   p { margin: 0; font-size: var(--text-13); color: var(--muted); }
   .warning { display: flex; align-items: flex-start; gap: 6px; margin-top: 4px; color: var(--ink); font-size: var(--text-12); line-height: 1.45; }
   .warning > :global(svg) { flex: none; margin-top: 1px; color: var(--ochre); }
-  .fallback { margin-top: 4px; font-size: var(--text-12); line-height: 1.45; }
   .wait { display: flex; align-items: center; gap: 6px; }
   .unit { color: var(--muted); font: var(--text-12) var(--font-mono); }
   input[type="number"] { width: 96px; height: 32px; box-sizing: border-box; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-13) var(--font-mono); }
   input:focus { outline: none; border-color: var(--muted); }
   .rules { display: grid; gap: 6px; padding: 12px 0; }
-  .note { font-size: var(--text-12); }
   .error { color: var(--oxide); }
 </style>

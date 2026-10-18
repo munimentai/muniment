@@ -14,11 +14,11 @@ export function triggerSummary(trigger) {
 // When the agent starts itself next: the soonest time core reports for an
 // enabled routine, else the first enabled routine's trigger.
 export function nextRunLabel(agent) {
-  if (agent?.paused_reason) return 'Routines paused'
+  if (agent?.paused_reason) return 'Paused'
   const routines = (agent?.routines ?? []).filter((routine) => routine.enabled && !isProposal(routine))
   const times = routines.map((routine) => routine.next_fire_at).filter(Number.isFinite)
   if (times.length) return new Date(Math.min(...times) * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })
-  return routines.length ? triggerSummary(routines[0].trigger) : 'Runs when you ask'
+  return routines.length ? triggerSummary(routines[0].trigger) : 'Manual'
 }
 
 export function lastFiredLabel(routine, now = Date.now()) {

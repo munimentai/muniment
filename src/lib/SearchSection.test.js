@@ -37,7 +37,7 @@ it('renders the search order and the key meta from the runtime settings', async 
   await waitFor(() => expect(orderNames()).toEqual(['Muniment search', 'Tavily', 'Exa free']))
   expect(invoke).toHaveBeenCalledWith('web_search_settings')
   expect(screen.getByText('••••3f2a')).toBeInTheDocument()
-  expect(screen.getByText('Changes apply to the next agent session.')).toBeInTheDocument()
+  expect(screen.getByText('Applies from the next agent session.')).toBeInTheDocument()
   // Tavily holds a key, so only the providers without one offer Add key.
   const add = screen.getByRole('heading', { name: 'Add a search provider' }).closest('section')
   expect(within(add).queryByText('Tavily')).not.toBeInTheDocument()
@@ -123,5 +123,5 @@ it('removes a provider key', async () => {
 it('warns when every search is off', async () => {
   const invoke = vi.fn(async () => settings({ order: [['muniment', false], ['exa', false]], keys: [] }))
   render(SearchSection, { tauri: { invoke } })
-  expect(await screen.findByText('Every search is off, so agents cannot search the web.')).toBeInTheDocument()
+  expect(await screen.findByText('Every search is off. Agents cannot search the web.')).toBeInTheDocument()
 })

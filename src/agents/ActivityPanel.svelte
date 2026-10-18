@@ -17,13 +17,12 @@
 </script>
 
 <section data-panel="activity" class="panel" aria-label="Activity">
-  <h2 class="visually-hidden">Activity</h2>
   <PanelPage>
-    <PageHead intro="Runs from every agent on every machine, newest first.">
+    <PageHead title="Activity" level={2} intro="Runs from every agent on every machine, newest first.">
       {#snippet actions()}<Button icon="refresh-cw" disabled={loading} onclick={onrefresh}>Refresh</Button>{/snippet}
     </PageHead>
     {#if error}<p role="alert">{error}</p>{/if}
-    {#if offline.length}<p class="note">{offline.join(', ')} did not answer. Its runs show when it is back.</p>{/if}
+    {#if offline.length}<p class="note">{offline.join(', ')} offline. Its runs show when it is back.</p>{/if}
     {#if quiet}
       <div class="empty-state">
         <p>No agent runs yet.</p>

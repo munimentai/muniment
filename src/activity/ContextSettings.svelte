@@ -36,13 +36,13 @@
   {#if ready}
     <form id="context-settings" onsubmit={(event) => { event.preventDefault(); void save() }}>
       <Group heading="Compaction">
-        <Row title="Compact automatically" description="When off, a full conversation can stop replies.">
+        <Row title="Compact automatically" info="When off, a full conversation can stop replies.">
           <Toggle bind:checked={enabled} label="Compact automatically" disabled={saving} />
         </Row>
-        <Row title="Room for the next reply" description="Tokens kept free for the model's answer.">
+        <Row title="Room for the next reply" info="Tokens kept free for the model's answer.">
           <input type="number" aria-label="Room for the next reply (tokens)" min="4096" max="131072" step="1" bind:value={reserveTokens} required disabled={saving} />
         </Row>
-        <Row title="Recent messages to keep" description="Tokens of the latest messages kept word for word.">
+        <Row title="Recent messages to keep" info="Tokens of the latest messages kept word for word.">
           <input type="number" aria-label="Recent messages to keep (tokens)" min="4096" max="131072" step="1" bind:value={keepRecentTokens} required disabled={saving} />
         </Row>
       </Group>

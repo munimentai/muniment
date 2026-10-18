@@ -100,7 +100,7 @@ it('switches panels from the rail by click and by arrow keys', async () => {
   await fireEvent.keyDown(tab('Overview'), { key: 'End' })
   expect(tab('Activity')).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab('Activity').id)
-  expect(await screen.findByText('No runs yet. Run now starts one.')).toBeInTheDocument()
+  expect(await screen.findByText('No runs yet.')).toBeInTheDocument()
 })
 
 it('sets the model reference through agent.save, or clears it for the default', async () => {
@@ -183,7 +183,7 @@ it('turns a routine on and off through routine.save and opens the profile to edi
 
 it('shows an agent whose machine is offline read only, with a note', async () => {
   show({ tauri: core().tauri, modes, agent: { ...agent, online: false, replica: true } })
-  expect(screen.getByRole('note')).toHaveTextContent('Build box is offline. This card is read only until it answers.')
+  expect(screen.getByRole('note')).toHaveTextContent('Read only while Build box is offline.')
   expect(screen.getByRole('button', { name: 'Edit agent name: Scout' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Open chat' })).not.toBeDisabled()

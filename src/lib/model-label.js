@@ -5,10 +5,13 @@ const words = {
   lmstudio: 'LM Studio', huggingface: 'Hugging Face', latest: 'Latest',
 }
 
-export function modelLabel(value) {
+// `names` maps a provider id to the name the user gave it, so a custom
+// endpoint reads as its own name, not its generated id.
+export function modelLabel(value, names = null) {
   if (value === undefined || value === null || value === '') return null
   // Ollama's default tag, `:latest`, names no version, so the label leaves it off.
-  return String(value).replace(/:latest$/i, '').split('/').map(part => part
+  const parts = String(value).replace(/:latest$/i, '').split('/')
+  return parts.map((part, index) => index === 0 && parts.length > 1 && names?.[part] ? names[part] : part
     .replace(/(claude-[a-z]+-)(\d+)-(\d+)(?=$|-)/gi, '$1$2.$3')
     .replace(/[-_]+/g, ' ')
     .replace(/\b(llama|qwen|granite|gemma|deepseek)(?=\d)/gi, '$1 ')

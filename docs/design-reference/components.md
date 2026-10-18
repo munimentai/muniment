@@ -37,15 +37,21 @@ connection sections use 16px gaps. `SettingsTabs`, `Toggle` and `ProviderLogo` r
 Every full panel builds from five layout components. `PanelPage` is the
 scrolling body of Settings and the Agents, Artifacts and Projects catalogs, with
 `--page-pad` 24px and `--page-gap` 28px from `panels.css`. Settings pages set
-`measure` for a 760px width. `PageHead` is the first row: the muted 15px intro
-at the left and the page actions at the right, icon-only below 560px. `Group`
-is one section: a semibold heading, an optional support line and actions, and
-its rows in one bordered card with hairlines between them. `plain` keeps the
-heading and drops the card for a grid of cards. `Row` is one card row: the
-title, a mono meta note, a muted support line, and the control at the right.
-`CardGrid` and `CatalogCard` lay out catalog cards with the item menu in the
-corner. A panel names no section after its sidebar row. Its title stays as a
-visually hidden heading.
+`measure` for a 760px width. `PageHead` is the first row: the page title in
+semibold `--text-22` with its explanation behind an `InfoTip` at the left, and
+the page actions at the right, icon-only below 560px. Settings passes the
+sidebar label as the title through the `page-title` context. `InfoTip` is a
+24px `info` icon button in `--muted`, `--ink` on the `--faint` hover fill, whose
+tooltip is a `--surface` card with a `--border` hairline and
+`--shadow-overlay`. Hover and keyboard focus show it, a click pins it until
+Escape or blur, and the owner names it with `aria-describedby`. `Group`
+is one section: a semibold heading with an optional `info` tip, an optional
+support line and actions, and its rows in one bordered card with hairlines
+between them. `plain` keeps the heading and drops the card for a grid of cards.
+`Row` is one card row: the title with an optional `info` tip, a mono meta note,
+a muted support line, and the control at the right. `CardGrid` and
+`CatalogCard` lay out catalog cards with the item menu in the corner. A panel
+names no section after its title.
 
 Screens own layout and data. They import these controls instead of copying their
 CSS. Colors, fonts, radii and shadows come from `src/styles/tokens.css`.
@@ -126,7 +132,7 @@ them.
 | Activity row | `.activity-row` | Opens Activity | Side action with the `activity` icon | `.side-count`: mono `--text-12` chip, 1px `--border`, `--radius-chip`, counts runs that raised a notification since Activity last opened and approvals waiting |
 | Machine mark | `.machine-mark` in `MachineMark.svelte` | The machine an agent or run lives on | Shape icon at 12px and the name in `--muted`, `--text-12 --font-mono`. Icon only in a sidebar agent row | None |
 | Agent row marks | `.agent-offline`, `.agent-synced` | An agent whose primary machine does not answer, and a synced copy | `globe-off` at 12px in `--ochre`, `refresh-cw` at 12px in `--muted`, each with a visually hidden word | None |
-| Groups row | `aria-label="Groups group"` | Group chats, shown once a machine is in a swarm | Collection row with the `users` icon and a plus that opens New group | Each group row opens its thread |
+| Groups row | `aria-label="Groups group"` | Group chats, shown once a machine is in a fleet | Collection row with the `users` icon and a plus that opens New group | Each group row opens its thread |
 | Absence prompt | `.absence` in `AbsencePrompt.svelte` | Routines paused after 14 days without a client | `--surface`, 1px `--ochre`, `--radius-control`, `--text-12`, Resume routines and Not now | Busy while the resume runs. Not now hides it for the session |
 | Settings block | `.settings-block` | Foot of the sidebar | 1px `--border` top, padding-top 8px, `margin-top: auto` | None |
 
@@ -163,7 +169,7 @@ them.
 | Receipt record | `.receipt-record` | Expanded receipt list, plain under the provenance line | 329px, no border, no padding, `--muted`, `--text-12 --font-mono`, 88px label column | `.route-value`: `--signal` (allowed). `dd` wraps anywhere |
 | Message actions | `.message-actions` | Copy row under a complete reply | opacity 0, transition `opacity 120ms ease` (raw, `--motion-popover` exists), gap 2px | Response hover or focus-within: opacity 1 |
 | Copy | `.message-actions button` | Copies the reply | Quiet, `--muted`, `--text-12`, gap 5px, 14px `action` icon | Hover: `--faint`, `--ink`. Focus-visible: `outline-color: var(--ink)`. Disabled: opacity .45 |
-| Run error | `.run-error` | Failure, stop, or interruption line | `--muted`, `--text-12 --font-mono`, wraps anywhere | `.copy-failure` adds margin-top 4px |
+| Run error | `.run-error` | Failure, stop, or interruption line | `--muted`, `--text-12 --font-mono`, wraps anywhere | `.copy-failure` adds margin-top 4px. A failure's `.run-error-details` disclosure holds the provider's reason and any raw runtime record |
 | Run error retry | `.run-error button` | Try again or Resume beside the line | Transparent background, 24px floor, padding 2px 6px, `font: inherit` | Disabled while a run is active, dictation is busy, or an upgrade is pending |
 | History error | `.history-error` | Failed history load | `--muted`, `--text-12 --font-mono`, wraps anywhere | Retry uses the shell button |
 
@@ -380,7 +386,7 @@ label tracking, the 1.45 provenance line height, and every opacity.
 | `text-wrap.test.js` | `.provenance`, `.user-message`, `.response-prose`, `.tool-name`, `.permission-card p`, `.receipt-record dd`, and `.assistant-markdown` set `overflow-wrap: anywhere` |
 | `class-usage.test.js` | Every class in markup has a rule in its component or in base.css, and class expressions stay literal |
 
-## Agent swarm
+## Agent fleet
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
@@ -398,6 +404,6 @@ label tracking, the 1.45 provenance line height, and every opacity.
 | Approval | `.approval` in `ApprovalCard.svelte` | A gate waiting on any member, in Activity and inline in the agent's thread (`.inline`, a hairline `--surface` card) | Agent with its activity, machine mark and age, core's summary in mono, the rule's inputs as mono rows in a `--faint` block, core's reason in `--text-12` `--muted`, a plan in a 1px `--border` block in the human face, then unified `Button`s for each answer core lists | Long inputs fold behind Show all. Deny uses the outline variant. An already-answered or refused answer shows its line in the card |
 | Failed runs | `.replay` in `ReplayList.svelte` | Agent profile | Trigger and routine, age in mono, the error in `--oxide`, notes in `--muted`, the input folded in a `--faint` mono block, Replay as a unified `Button` | A queued replay links Open run once it starts |
 | Group members | `.group-members` in `GroupMembers.svelte` | A group's composer band, in place of the model chip | Up to four 16px avatars and the count in mono `--muted` | Hover names every member |
-| Swarm member | `Row` in `SwarmSection.svelte` | One member on Settings → Machines | Shape icon, name, Online or Offline in mono meta, link line in `--muted` mono | Leave swarm on a machine this device administers, Unlink on one it does not reach |
+| Fleet member | `Row` in `SwarmSection.svelte` | One member on Settings → Machines | Shape icon, name, Online or Offline in mono meta, link line in `--muted` mono | Leave fleet on a machine this device administers, Remove from fleet on one it does not reach |
 | Move warning | `.warning` in `MoveDialog.svelte` | A forced move off a primary that does not answer | 1px `--ochre`, `--radius-control`, `--text-13` | The move stays off until the confirm box is checked |
 | Webhook address | `WebhookPanel.svelte` | A webhook routine's URLs, certificate fingerprint and secret | Mono values on `--faint`, Copy buttons, the secret in a 1px `--ochre` box | A `.warning` names a machine that does not accept connections |

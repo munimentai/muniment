@@ -49,9 +49,10 @@ export { modelLabel } from './model-label.js'
 // rather than the head of a flat array: §1.2 permits --signal on the route
 // segment only, so a receipt without a route must never paint whatever
 // follows green.
-export function receiptSummary(receipt = {}) {
+// `names` maps provider ids to the names the user gave them.
+export function receiptSummary(receipt = {}, names = null) {
   const route = recorded(receipt?.route) ? receipt.route : null
-  const model = modelLabel(receipt?.model)
+  const model = modelLabel(receipt?.model, names)
   const time = recorded(receipt?.time) ? receiptTime(receipt.time) : null
   return { route, model, time }
 }
@@ -66,8 +67,8 @@ export function receiptProvider(receipt = {}) {
 
 // What a screen reader hears instead of the line: engines pronounce →
 // inconsistently, so the accessible name states the relation in words.
-export function receiptLabel(receipt = {}) {
-  const { route, model, time } = receiptSummary(receipt)
+export function receiptLabel(receipt = {}, names = null) {
+  const { route, model, time } = receiptSummary(receipt, names)
   const relation = route !== null && model !== null ? `Routed via ${route} to model ${model}`
     : route !== null ? `Routed via ${route}`
     : model !== null ? `Model ${model}`
@@ -75,9 +76,9 @@ export function receiptLabel(receipt = {}) {
   return [relation, time].filter(recorded).join(', ')
 }
 
-export function receiptUsageColumns(receipt = {}) {
+export function receiptUsageColumns(receipt = {}, names = null) {
   if (!receipt?.classifiers?.length) return []
-  const columns = [{ model: modelLabel(receipt.model) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
+  const columns = [{ model: modelLabel(receipt.model, names) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
   for (const classifier of receipt.classifiers) {
     columns.push({ model: modelLabel(classifier.model) ?? 'Classifier', cost: Number.isFinite(classifier.cost) ? `$${classifier.cost.toFixed(6)} est.` : 'Unavailable', tokens: classifier.tokens })
   }
@@ -226,14 +227,47 @@ const retryGuidance = new RegExp(`(?:^|(?<=[.!?])\\s)(?:${[
   'Choose a PNG, JPEG, GIF, or WebP image before sending again',
 ].join('|')})\\.?$`, 'i')
 
+// A runtime rejection the transport passes through as a log record, such as
+// `code="invalid_request" reason="…"`. The UI shows a sentence for its code
+// and keeps the record under Details.
+const RAW_REJECTION = /\bcode="([a-z_]+)"/
+const REJECTIONS = {
+  invalid_request: 'The runtime rejected the request.',
+  unauthorized: 'The runtime refused the request. Sign in again.',
+  persistence_failed: 'The runtime could not save the request.',
+  runtime_draining: 'The runtime is restarting. Try again shortly.',
+}
+
+function failureText(run) {
+  return typeof run?.failureReason === 'string' ? run.failureReason.trim().replace(/\s+/g, ' ') : ''
+}
+
 // The retry button carries the next step, not the recorded cause.
 export function runFailureMessage(run) {
-  const reason = typeof run?.failureReason === 'string'
-    ? run.failureReason.trim().replace(/\s+/g, ' ').replace(retryGuidance, '').trim()
-    : ''
+  const recorded = failureText(run)
+  const raw = RAW_REJECTION.exec(recorded)
+  if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
+  const reason = recorded.replace(retryGuidance, '').trim()
   if (run?.text?.trim() && (!reason || /reply (could not be started|did not start)/i.test(reason))) return 'The reply stopped before it finished.'
   if (!reason) return 'Reply failed.'
   return /[.!?]$/.test(reason) ? reason : `${reason}.`
+}
+
+// What a failed reply's Details disclosure holds: the provider's own reason
+// when core reports one, and a raw runtime record the message replaced.
+export function runFailureDetails(run) {
+  const details = []
+  const detail = [run?.failureDetail, run?.failure_detail, run?.detail].find((value) => typeof value === 'string' && value.trim())
+  if (detail) details.push(detail.trim())
+  const recorded = failureText(run)
+  if (RAW_REJECTION.test(recorded)) details.push(recorded)
+  return details
+}
+
+// The provider's reason for a failure, from the field core fills when it knows one.
+function failureDetail(source) {
+  const value = source?.failureDetail ?? source?.failure_detail ?? source?.detail ?? null
+  return typeof value === 'string' && value.trim() ? value : null
 }
 
 // Streamed text never reaches the live region until the run settles.
@@ -261,12 +295,12 @@ export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   if (event.sentAt) run = { ...run, startedAt: event.sentAt }
   const pendingPermission = event.pendingPermission ?? null
-  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, resumeNotice: event.resumeNotice ?? run.resumeNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
+  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, resumeNotice: event.resumeNotice ?? run.resumeNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, failureDetail: failureDetail(event), text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, recalls: event.recalls ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'cancelled') return { ...run, phase: 'cancelled', pendingPermission }
-  if (event.type === 'failed') return { ...run, phase: 'failed', failureReason: event.failureReason ?? null, pendingPermission }
+  if (event.type === 'failed') return { ...run, phase: 'failed', failureReason: event.failureReason ?? null, failureDetail: failureDetail(event), pendingPermission }
   return run
 }
 
@@ -277,7 +311,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, failureDetail: failureDetail(entry), text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

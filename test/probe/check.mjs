@@ -152,12 +152,14 @@ async function checkWindowChrome(browser, baseUrl) {
 async function checkArtifactCreation(page) {
   const panel = page.getByRole('region', { name: 'Artifacts', exact: true })
   await panel.getByRole('button', { name: 'New artifact', exact: true }).click()
-  const goal = page.getByRole('region', { name: 'Creation goal', exact: true })
-  await goal.waitFor()
-  assert.match(await page.locator('#composer-message').inputValue(), /artifact/i)
+  // The composer shows the template as a chip and keeps its own text empty.
+  const template = page.getByRole('group', { name: 'Template', exact: true })
+  await template.waitFor()
+  assert.match(await template.innerText(), /artifact/i)
+  assert.equal(await page.locator('#composer-message').inputValue(), '')
   assert.equal(await page.evaluate(() => window.__PROBE__.invokedCommands.filter(item => item.command === 'creation_save').length), 0)
-  await goal.getByRole('button', { name: 'Cancel creation', exact: true }).click()
-  assert.equal(await goal.count(), 0)
+  await template.getByRole('button', { name: 'Cancel creation', exact: true }).click()
+  assert.equal(await template.count(), 0)
   assert.equal(await page.locator('#composer-message').inputValue(), '')
 }
 

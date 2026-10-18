@@ -17,6 +17,12 @@
   import ProviderIcon from './ProviderIcon.svelte'
   // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row.
   let { tauri, oncreate, sidebarTab = null } = $props()
+  // A card names its publisher only when the server's name does not already.
+  const distinctPublisher = entry => {
+    const publisher = entry.publisher?.toLowerCase().trim()
+    const name = entry.name.toLowerCase()
+    return !!publisher && !name.includes(publisher.split(/[\s(,]/)[0]) && !publisher.includes(name.split(/[\s.-]/)[0])
+  }
   const intros = { mcp: 'MCP servers connect your models to apps and services.', skill: 'Skills give your models instructions and scripts for one kind of task.', plugin: 'Plugins package skills, MCP servers and code into one install.' }
   // svelte-ignore state_referenced_locally
   let state = $state({ items: [], threads: {} }), tab = $state(sidebarTab ?? 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
@@ -145,7 +151,7 @@
           <Toggle checked={item.enabled !== false} label={`Use ${item.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: item.id, enabled })} />
         </Row>
       {:else}
-        <p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>
+        <p>No {tab === 'skill' ? 'skills' : 'plugins'} installed.</p>
       {/each}
     </Group>
   {/if}
@@ -153,9 +159,9 @@
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
-        {#if entry.publisher && entry.publisher.toLowerCase() !== entry.name.toLowerCase()}<p class="publisher">{entry.publisher}</p>{/if}
-        <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
-        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
+        {#if distinctPublisher(entry)}<p class="publisher">{entry.publisher}</p>{/if}
+        {#if entry.categories.length}<p class="category">{categoryLabel(entry.categories[0])}{#if entry.categories.length > 1}<span class="more-categories"> +{entry.categories.length - 1}<span class="visually-hidden">: {entry.categories.slice(1).map(categoryLabel).join(', ')}</span></span>{/if}</p>{/if}
+        <div class="actions"><button type="button" class="details-link" aria-label="Details" onclick={() => showDetails(entry)}><LucideIcon name="info" size={16} variant="action" /></button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
@@ -219,7 +225,8 @@
   .server-details a { color: var(--ink); text-decoration: underline; }
   .requirements { margin-top: 20px; font-size: var(--text-13); line-height: var(--leading-body); }
   .detail-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
-  button.details-link { padding: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+  button.details-link { display: inline-grid; place-items: center; min-width: 28px; min-height: 28px; padding: 0; background: transparent; color: var(--muted); }
+  button.details-link:hover { color: var(--ink); }
 
   .extend { display: grid; gap: var(--page-gap); min-width: 0; } .note { margin: 4px 0 0; color: var(--muted); font-size: var(--text-12); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }  .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
   .extend { container-type: inline-size; }
@@ -234,5 +241,6 @@
   .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }
   .publisher { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-12); }
   .category { font-size: var(--text-provenance); min-height: 2.8em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .more-categories { color: var(--muted); }
   .catalog-card .actions { justify-content: space-between; gap: 8px; margin-top: 5px; }
 </style>
