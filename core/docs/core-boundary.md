@@ -58,6 +58,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | chat_prompt | It protects prompts through the system keyring, or in owner-only files without it. |
 | module | chat_resume | It resumes journaled runs. |
 | module | chat_view | It defines serializable run projections, not entitlement UI. |
+| module | child_fds | It starts programs with only the descriptors they are handed. |
 | module | code_diff | It exposes the portable code-diff contract. |
 | module | code_diff_apply | It applies verified write plans. |
 | module | code_diff_effect | It journals approved file writes. |

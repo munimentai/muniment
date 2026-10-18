@@ -570,6 +570,7 @@ fn spawn_child(
             command.env_remove(&name);
         }
     }
+    crate::child_fds::stdio_only(&mut command);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
