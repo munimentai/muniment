@@ -1,0 +1,371 @@
+{
+  "needs_you": [
+    {
+      "thread_id": "t-clean",
+      "title": "Clean the build folder",
+      "project_id": "p-muniment",
+      "project_name": "Muniment",
+      "machine": "mac2",
+      "updated_at": "2026-10-18T12:58:00Z",
+      "status": "needs_you",
+      "status_label": "Approve",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-branch",
+      "title": "Release notes",
+      "project_id": "p-homelab",
+      "project_name": "Homelab",
+      "updated_at": "2026-10-18T12:40:00Z",
+      "status": "needs_you",
+      "status_label": "Answer",
+      "home": false,
+      "pinned": false
+    }
+  ],
+  "working": [
+    {
+      "thread_id": "t-sync",
+      "title": "Fix sync bug",
+      "project_id": "p-muniment",
+      "project_name": "Muniment",
+      "updated_at": "2026-10-18T12:57:00Z",
+      "status": "working",
+      "status_label": "Working",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-index",
+      "title": "Reindex search",
+      "project_id": "p-muniment",
+      "project_name": "Muniment",
+      "machine": "Studio",
+      "updated_at": "2026-10-18T12:55:00Z",
+      "status": "working",
+      "status_label": "Working",
+      "home": false,
+      "pinned": false
+    }
+  ],
+  "pinned": [
+    {
+      "thread_id": "t-roadmap",
+      "title": "Roadmap",
+      "project_id": "p-muniment",
+      "project_name": "Muniment",
+      "updated_at": "2026-10-18T09:10:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "home": false,
+      "pinned": true
+    }
+  ],
+  "projects": [
+    {
+      "id": "chats",
+      "name": "Chats",
+      "kind": "chats",
+      "triggers": "",
+      "agent_ids": [],
+      "threads": [
+        {
+          "thread_id": "t-trip",
+          "title": "Trip ideas",
+          "project_id": "chats",
+          "project_name": "Chats",
+          "updated_at": "2026-10-18T12:01:00Z",
+          "status": "done",
+          "status_label": "Done",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-dinner",
+          "title": "Dinner recipes",
+          "project_id": "chats",
+          "project_name": "Chats",
+          "updated_at": "2026-10-18T11:30:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-lease",
+          "title": "Lease renewal",
+          "project_id": "chats",
+          "project_name": "Chats",
+          "updated_at": "2026-10-17T16:00:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-budget",
+          "title": "Budget notes",
+          "project_id": "chats",
+          "project_name": "Chats",
+          "updated_at": "2026-10-15T10:00:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "home": false,
+          "pinned": false
+        }
+      ]
+    },
+    {
+      "id": "p-garden",
+      "name": "Garden",
+      "kind": "project",
+      "triggers": "",
+      "agent_ids": [],
+      "threads": [
+        {
+          "thread_id": "t-kitchen",
+          "title": "Kitchen quotes",
+          "project_id": "p-garden",
+          "project_name": "Garden",
+          "updated_at": "2026-10-12T10:00:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "home": false,
+          "pinned": false
+        }
+      ]
+    },
+    {
+      "id": "p-homelab",
+      "name": "Homelab",
+      "kind": "project",
+      "triggers": "webhook",
+      "agent_ids": [
+        "deploy-bot"
+      ],
+      "threads": [
+        {
+          "thread_id": "t-deploy",
+          "title": "Deploy runs",
+          "project_id": "p-homelab",
+          "project_name": "Homelab",
+          "updated_at": "2026-10-18T08:15:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "agent_id": "deploy-bot",
+          "home": true,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-branch",
+          "title": "Release notes",
+          "project_id": "p-homelab",
+          "project_name": "Homelab",
+          "updated_at": "2026-10-18T12:40:00Z",
+          "status": "needs_you",
+          "status_label": "Answer",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-vendor",
+          "title": "Vendor audit",
+          "project_id": "p-homelab",
+          "project_name": "Homelab",
+          "updated_at": "2026-10-16T10:00:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "home": false,
+          "pinned": false
+        }
+      ]
+    },
+    {
+      "id": "p-muniment",
+      "name": "Muniment",
+      "kind": "project",
+      "triggers": "",
+      "agent_ids": [],
+      "threads": [
+        {
+          "thread_id": "t-clean",
+          "title": "Clean the build folder",
+          "project_id": "p-muniment",
+          "project_name": "Muniment",
+          "machine": "mac2",
+          "updated_at": "2026-10-18T12:58:00Z",
+          "status": "needs_you",
+          "status_label": "Approve",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-sync",
+          "title": "Fix sync bug",
+          "project_id": "p-muniment",
+          "project_name": "Muniment",
+          "updated_at": "2026-10-18T12:57:00Z",
+          "status": "working",
+          "status_label": "Working",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-index",
+          "title": "Reindex search",
+          "project_id": "p-muniment",
+          "project_name": "Muniment",
+          "machine": "Studio",
+          "updated_at": "2026-10-18T12:55:00Z",
+          "status": "working",
+          "status_label": "Working",
+          "home": false,
+          "pinned": false
+        },
+        {
+          "thread_id": "t-roadmap",
+          "title": "Roadmap",
+          "project_id": "p-muniment",
+          "project_name": "Muniment",
+          "updated_at": "2026-10-18T09:10:00Z",
+          "status": "read",
+          "status_label": "Read",
+          "home": false,
+          "pinned": true
+        }
+      ]
+    },
+    {
+      "id": "agent:pricing-watch",
+      "name": "Pricing watch",
+      "kind": "agent",
+      "triggers": "every day 9:00",
+      "agent_ids": [
+        "pricing-watch"
+      ],
+      "threads": [
+        {
+          "thread_id": "t-price",
+          "title": "Pricing watch",
+          "project_id": "agent:pricing-watch",
+          "project_name": "Pricing watch",
+          "updated_at": "2026-10-18T09:02:00Z",
+          "status": "failed",
+          "status_label": "Failed",
+          "agent_id": "pricing-watch",
+          "home": true,
+          "pinned": false
+        }
+      ]
+    }
+  ],
+  "recent": [
+    {
+      "thread_id": "t-trip",
+      "title": "Trip ideas",
+      "project_id": "chats",
+      "project_name": "Chats",
+      "updated_at": "2026-10-18T12:01:00Z",
+      "status": "done",
+      "status_label": "Done",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-dinner",
+      "title": "Dinner recipes",
+      "project_id": "chats",
+      "project_name": "Chats",
+      "updated_at": "2026-10-18T11:30:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-price",
+      "title": "Pricing watch",
+      "project_id": "agent:pricing-watch",
+      "project_name": "Pricing watch",
+      "updated_at": "2026-10-18T09:02:00Z",
+      "status": "failed",
+      "status_label": "Failed",
+      "agent_id": "pricing-watch",
+      "home": true,
+      "pinned": false
+    }
+  ],
+  "settled": [
+    {
+      "thread_id": "t-deploy",
+      "title": "Deploy runs",
+      "project_id": "p-homelab",
+      "project_name": "Homelab",
+      "updated_at": "2026-10-18T08:15:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "agent_id": "deploy-bot",
+      "home": true,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-lease",
+      "title": "Lease renewal",
+      "project_id": "chats",
+      "project_name": "Chats",
+      "updated_at": "2026-10-17T16:00:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-vendor",
+      "title": "Vendor audit",
+      "project_id": "p-homelab",
+      "project_name": "Homelab",
+      "updated_at": "2026-10-16T10:00:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-budget",
+      "title": "Budget notes",
+      "project_id": "chats",
+      "project_name": "Chats",
+      "updated_at": "2026-10-15T10:00:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "home": false,
+      "pinned": false
+    },
+    {
+      "thread_id": "t-kitchen",
+      "title": "Kitchen quotes",
+      "project_id": "p-garden",
+      "project_name": "Garden",
+      "updated_at": "2026-10-12T10:00:00Z",
+      "status": "read",
+      "status_label": "Read",
+      "home": false,
+      "pinned": false
+    }
+  ],
+  "archived": [
+    {
+      "thread_id": "t-draft",
+      "title": "Old draft",
+      "project_id": "chats",
+      "project_name": "Chats",
+      "updated_at": "2026-10-01T10:00:00Z",
+      "status": "done",
+      "status_label": "Done",
+      "home": false,
+      "pinned": false
+    }
+  ],
+  "results": []
+}

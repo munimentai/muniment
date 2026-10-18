@@ -1,0 +1,61 @@
+{
+  "threads": [
+    { "id": "t-clean", "title": "Clean the build folder", "updated_at": "2026-10-18T12:58:00Z", "machine": "mac2" },
+    { "id": "t-branch", "title": "Release notes", "updated_at": "2026-10-18T12:40:00Z", "machine": null },
+    { "id": "t-sync", "title": "Fix sync bug", "updated_at": "2026-10-18T12:57:00Z", "machine": null },
+    { "id": "t-index", "title": "Reindex search", "updated_at": "2026-10-18T12:55:00Z", "machine": "Studio" },
+    { "id": "t-roadmap", "title": "Roadmap", "updated_at": "2026-10-18T09:10:00Z", "machine": null },
+    { "id": "t-trip", "title": "Trip ideas", "updated_at": "2026-10-18T12:01:00Z", "machine": null },
+    { "id": "t-price", "title": "Pricing watch", "updated_at": "2026-10-18T09:02:00Z", "machine": null },
+    { "id": "t-dinner", "title": "Dinner recipes", "updated_at": "2026-10-18T11:30:00Z", "machine": null },
+    { "id": "t-deploy", "title": "Deploy runs", "updated_at": "2026-10-18T08:15:00Z", "machine": null },
+    { "id": "t-lease", "title": "Lease renewal", "updated_at": "2026-10-17T16:00:00Z", "machine": null },
+    { "id": "t-vendor", "title": "Vendor audit", "updated_at": "2026-10-16T10:00:00Z", "machine": null },
+    { "id": "t-budget", "title": "Budget notes", "updated_at": "2026-10-15T10:00:00Z", "machine": null },
+    { "id": "t-kitchen", "title": "Kitchen quotes", "updated_at": "2026-10-12T10:00:00Z", "machine": null },
+    { "id": "t-draft", "title": "Old draft", "updated_at": "2026-10-01T10:00:00Z", "machine": null }
+  ],
+  "projects": [
+    { "id": "p-muniment", "name": "Muniment", "owner": null },
+    { "id": "p-homelab", "name": "Homelab", "owner": null },
+    { "id": "p-garden", "name": "Garden", "owner": null }
+  ],
+  "assignments": {
+    "t-clean": "p-muniment",
+    "t-sync": "p-muniment",
+    "t-index": "p-muniment",
+    "t-roadmap": "p-muniment",
+    "t-branch": "p-homelab",
+    "t-vendor": "p-homelab",
+    "t-kitchen": "p-garden"
+  },
+  "agents": [
+    { "id": "pricing-watch", "name": "Pricing watch", "project_id": null, "home_thread_id": "t-price", "paused_reason": null,
+      "routines": [{ "enabled": true, "proposed": false, "trigger": { "kind": "cron", "expr": "0 9 * * *", "tz": "America/New_York" } }] },
+    { "id": "deploy-bot", "name": "Deploy bot", "project_id": "p-homelab", "home_thread_id": "t-deploy", "paused_reason": null,
+      "routines": [{ "enabled": true, "proposed": false, "trigger": { "kind": "webhook", "hook_id": "4f1c2b7a9d0e4c55", "preset": "forgejo" } }] }
+  ],
+  "agent_threads": {},
+  "pinned": ["t-roadmap"],
+  "archived": ["t-draft"],
+  "read": {
+    "t-roadmap": "2026-10-18T09:30:00Z",
+    "t-dinner": "2026-10-18T11:45:00Z",
+    "t-deploy": "2026-10-18T08:20:00Z",
+    "t-lease": "2026-10-17T16:10:00Z",
+    "t-vendor": "2026-10-16T10:05:00Z",
+    "t-budget": "2026-10-15T10:05:00Z",
+    "t-kitchen": "2026-10-12T10:05:00Z"
+  },
+  "read_baseline": "2026-10-01T00:00:00Z",
+  "working": ["t-sync", "t-index"],
+  "failed": ["t-price"],
+  "needs_you": [
+    { "kind": "approval", "thread_id": "t-clean", "agent_id": null },
+    { "kind": "input", "thread_id": "t-branch", "agent_id": null }
+  ],
+  "held": { "t-dinner": "recent" },
+  "current": null,
+  "filter": "all",
+  "query": ""
+}

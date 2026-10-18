@@ -122,6 +122,7 @@ pub mod notifications;
 pub mod preferences;
 pub mod project_context;
 pub mod projects;
+pub mod sidebar;
 pub mod swarm;
 pub mod usage_report;
 pub mod workspace_names;

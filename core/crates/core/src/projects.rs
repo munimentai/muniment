@@ -18,6 +18,43 @@ pub struct Catalog {
     /// owner.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub remote: BTreeMap<String, RemoteProject>,
+    /// Each project's defaults for its new threads, by id. The built-in
+    /// Chats project keeps its own under `chats`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, Defaults>,
+}
+
+/// What a new thread in a project starts with.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Defaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<DefaultModel>,
+    /// A permission mode id from `permission.modes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// The runtime id of the machine a new thread runs on. None is this computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+}
+
+/// A provider and model id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultModel {
+    pub provider: String,
+    pub model: String,
+}
+
+/// A project's settings: its defaults and the instructions every run in its
+/// folder reads from the folder's `AGENTS.md`. Chats has no folder, so it
+/// has no instructions.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    #[serde(flatten)]
+    pub defaults: Defaults,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// A project whose folder is on another swarm member.
@@ -234,6 +271,70 @@ pub fn thread_folder(profile: &Path, thread: &str) -> Result<Option<PathBuf>, St
         .filter(|id| !catalog.remote.contains_key(*id))
         .map(|id| folder(profile, id))
         .transpose()
+}
+
+const INSTRUCTIONS: &str = "AGENTS.md";
+const MAX_INSTRUCTIONS: usize = 64 * 1024;
+
+/// A project's settings. `id` is a catalog project or `chats`.
+pub fn settings(profile: &Path, id: &str) -> Result<Settings, String> {
+    let defaults = read(profile)?.settings.get(id).cloned().unwrap_or_default();
+    if id == crate::sidebar::CHATS {
+        return Ok(Settings {
+            defaults,
+            instructions: None,
+        });
+    }
+    let file = folder(profile, id)?.join(INSTRUCTIONS);
+    let instructions = match fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return Err("The project instructions cannot be read.".into()),
+    };
+    Ok(Settings {
+        defaults,
+        instructions: Some(instructions),
+    })
+}
+
+/// Saves a project's settings. Empty instructions remove the folder's
+/// `AGENTS.md`, and None leaves the file as it is.
+pub fn save_settings(profile: &Path, id: &str, settings: &Settings) -> Result<(), String> {
+    let folder = if id == crate::sidebar::CHATS {
+        None
+    } else {
+        Some(folder(profile, id)?)
+    };
+    if let (Some(folder), Some(text)) = (&folder, &settings.instructions) {
+        if text.len() > MAX_INSTRUCTIONS {
+            return Err("Project instructions must be under 64 KB.".into());
+        }
+        let file = folder.join(INSTRUCTIONS);
+        if file.is_symlink() {
+            return Err("The project instructions file must not be a symbolic link.".into());
+        }
+        let result = if text.trim().is_empty() {
+            match fs::remove_file(&file) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                other => other,
+            }
+        } else {
+            fs::write(&file, text)
+        };
+        result.map_err(|_| "The project instructions could not be saved.")?;
+    }
+    let defaults = settings.defaults.clone();
+    update(profile, |catalog| {
+        if defaults == Defaults::default() {
+            catalog.settings.remove(id).is_some()
+        } else {
+            catalog
+                .settings
+                .insert(id.into(), defaults.clone())
+                .as_ref()
+                != Some(&defaults)
+        }
+    })
 }
 
 /// The catalog as saved, with projects whose folder is missing.
@@ -494,6 +595,62 @@ mod tests {
         assert!(read(&profile).unwrap().projects.contains_key(&gone));
         fs::rename(fixture.0.join("away"), &folder_of_gone).unwrap();
         assert!(list(&profile).unwrap().projects.contains_key(&gone));
+    }
+    #[test]
+    fn settings_keep_defaults_in_the_catalog_and_instructions_in_the_folder() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let id = create(&profile, "Homelab").unwrap();
+        assert_eq!(
+            settings(&profile, &id).unwrap().instructions.as_deref(),
+            Some("")
+        );
+        let saved = Settings {
+            defaults: Defaults {
+                model: Some(DefaultModel {
+                    provider: "openai".into(),
+                    model: "gpt-6".into(),
+                }),
+                permission_mode: Some("plan".into()),
+                machine: Some("studio".into()),
+            },
+            instructions: Some("Answer in short lines.".into()),
+        };
+        save_settings(&profile, &id, &saved).unwrap();
+        assert_eq!(settings(&profile, &id).unwrap(), saved);
+        assert_eq!(
+            fs::read_to_string(folder(&profile, &id).unwrap().join("AGENTS.md")).unwrap(),
+            "Answer in short lines."
+        );
+        save_settings(
+            &profile,
+            &id,
+            &Settings {
+                instructions: Some(" ".into()),
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        assert!(!folder(&profile, &id).unwrap().join("AGENTS.md").exists());
+        assert!(read(&profile).unwrap().settings.is_empty());
+
+        let chats = crate::sidebar::CHATS;
+        save_settings(
+            &profile,
+            chats,
+            &Settings {
+                defaults: Defaults {
+                    permission_mode: Some("ask".into()),
+                    ..Defaults::default()
+                },
+                instructions: Some("ignored".into()),
+            },
+        )
+        .unwrap();
+        let read_back = settings(&profile, chats).unwrap();
+        assert_eq!(read_back.instructions, None);
+        assert_eq!(read_back.defaults.permission_mode.as_deref(), Some("ask"));
+        assert!(settings(&profile, "missing").is_err());
     }
     #[test]
     fn discovers_existing_folders_and_rejects_collisions_and_escapes() {
