@@ -67,5 +67,5 @@ fn captured_pi_frames_parse_into_a_completed_tool_turn() {
     }
     assert!(!events
         .iter()
-        .any(|event| matches!(event, PiChatEvent::Failed | PiChatEvent::Cancelled)));
+        .any(|event| matches!(event, PiChatEvent::Failed(_) | PiChatEvent::Cancelled)));
 }

@@ -409,6 +409,37 @@ pub fn fail_with_open_effects(
     reason: &str,
     subject: Option<&str>,
 ) {
+    fail_with_detail(
+        sink,
+        storage,
+        projector,
+        run_id,
+        seq,
+        open_effects,
+        reason,
+        None,
+        subject,
+    );
+}
+
+/// Fails the run like [`fail_with_open_effects`], and keeps the provider's
+/// own sentence as the event's `detail` when it gave one.
+#[allow(clippy::too_many_arguments)]
+pub fn fail_with_detail(
+    sink: &impl ChatEventSink,
+    storage: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut BTreeSet<String>,
+    reason: &str,
+    detail: Option<&str>,
+    subject: Option<&str>,
+) {
+    let mut payload = json!({"reason": reason});
+    if let Some(detail) = detail {
+        payload["detail"] = detail.into();
+    }
     let _ = append_terminal(
         sink,
         storage,
@@ -417,7 +448,7 @@ pub fn fail_with_open_effects(
         seq,
         open_effects,
         "run.failed",
-        json!({"reason": reason}),
+        payload,
         subject,
     );
 }

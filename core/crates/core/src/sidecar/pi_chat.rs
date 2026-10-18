@@ -187,7 +187,8 @@ pub enum PiChatEvent {
     Compacted(Result<crate::engine::CompactionOutcome, String>),
     Completed,
     Cancelled,
-    Failed,
+    /// The turn failed, with the provider's own sentence when it gave one.
+    Failed(Option<String>),
     UsageLimit,
     /// A valid Pi event for another part of the agent lifecycle.
     Interleaved,
@@ -276,15 +277,16 @@ impl ExtensionUiResponse {
     }
 }
 
-/// Parse only the documented fields needed by the UI. Error details and raw
-/// assistant messages deliberately do not cross this boundary.
+/// Parse only the documented fields needed by the UI. Raw assistant messages
+/// do not cross this boundary, and a provider's error crosses only as the
+/// cleaned sentence [`provider_error_detail`] keeps.
 pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
     match frame.get("type").and_then(Value::as_str) {
         Some("response") if frame.get("command").and_then(Value::as_str) == Some("prompt") => {
             if frame.get("success").and_then(Value::as_bool) == Some(true) {
                 Ok(PiChatEvent::PromptAccepted)
             } else {
-                Ok(PiChatEvent::Failed)
+                Ok(PiChatEvent::Failed(None))
             }
         }
         Some("message_update") => {
@@ -448,19 +450,59 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
                 });
             let stop_reason = last_message.and_then(|message| message.get("stopReason"))
                 .and_then(Value::as_str);
+            let error_message = last_message
+                .and_then(|message| message.get("errorMessage"))
+                .and_then(Value::as_str);
             match stop_reason {
-                Some("error") if last_message.and_then(|message| message.get("errorMessage")).and_then(Value::as_str)
+                Some("error") if error_message
                     .is_some_and(|message| message.contains("This provider has no remaining allowance.")) => Ok(PiChatEvent::UsageLimit),
-                Some("error" | "length") => Ok(PiChatEvent::Failed),
+                Some("error") => Ok(PiChatEvent::Failed(error_message.and_then(provider_error_detail))),
+                Some("length") => Ok(PiChatEvent::Failed(None)),
                 Some("aborted") => Ok(PiChatEvent::Cancelled),
                 _ => Ok(PiChatEvent::Completed),
             }
         }
         Some("cancelled") => Ok(PiChatEvent::Cancelled),
-        Some("error") => Ok(PiChatEvent::Failed),
+        Some("error") => Ok(PiChatEvent::Failed(None)),
         Some(_) => Ok(PiChatEvent::Interleaved),
         None => Err("Pi frame is missing type"),
     }
+}
+
+/// The longest provider sentence a failed run carries.
+const PROVIDER_DETAIL_CHARS: usize = 300;
+
+/// The sentence a provider's refusal carries, from Pi's `errorMessage`: the
+/// message of a JSON error body after an HTTP status, such as
+/// `400: {"message": ...}`, or the text itself. It comes back on one line,
+/// with credentials removed, and at most 300 characters long.
+pub fn provider_error_detail(text: &str) -> Option<String> {
+    let body = text
+        .split_once(':')
+        .filter(|(status, _)| !status.is_empty() && status.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(text, |(_, body)| body.trim());
+    let message = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            ["/message", "/error/message", "/detail", "/error"]
+                .iter()
+                .find_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| text.to_owned());
+    let line = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (clean, _) =
+        crate::agent_replays::without_secrets(&crate::pi_launch::diagnostic_text(&line));
+    let clean = clean.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    Some(if clean.chars().count() > PROVIDER_DETAIL_CHARS {
+        let cut: String = clean.chars().take(PROVIDER_DETAIL_CHARS - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        clean.to_owned()
+    })
 }
 
 /// Reads the token counts of a compaction result: `tokensBefore` and, when Pi
@@ -946,7 +988,7 @@ impl PiRunAdapter {
                 Ok(
                     PiChatEvent::Completed
                     | PiChatEvent::Cancelled
-                    | PiChatEvent::Failed
+                    | PiChatEvent::Failed(_)
                     | PiChatEvent::UsageLimit
                     | PiChatEvent::Compacted(_),
                 ) => return Ok(()),
@@ -1011,7 +1053,7 @@ impl PiRunAdapter {
         match result {
             Ok(
                 event @ (PiChatEvent::Completed
-                | PiChatEvent::Failed
+                | PiChatEvent::Failed(_)
                 | PiChatEvent::UsageLimit
                 | PiChatEvent::Cancelled
                 | PiChatEvent::Compacted(_)),
@@ -1151,7 +1193,17 @@ impl PiRunAdapter {
                 Some("aborted") => "cancelled",
                 _ => "unknown",
             };
-            eprintln!("muniment-runtime: run_id={} provider_request outcome={outcome} source=pi_message_end", self.run_id);
+            let detail = (outcome == "failed")
+                .then(|| {
+                    frame
+                        .pointer("/message/errorMessage")
+                        .and_then(Value::as_str)
+                })
+                .flatten()
+                .and_then(provider_error_detail)
+                .map(|detail| format!(" reason={detail:?}"))
+                .unwrap_or_default();
+            eprintln!("muniment-runtime: run_id={} provider_request outcome={outcome} source=pi_message_end{detail}", self.run_id);
         }
         let kind = match &event {
             PiChatEvent::TextDelta(_) => Some("text_delta"),
@@ -1160,7 +1212,7 @@ impl PiRunAdapter {
             PiChatEvent::ExtensionUiRequest(_) => Some("extension_ui_request"),
             PiChatEvent::Completed => Some("completed"),
             PiChatEvent::Cancelled => Some("cancelled"),
-            PiChatEvent::Failed | PiChatEvent::UsageLimit => Some("failed"),
+            PiChatEvent::Failed(_) | PiChatEvent::UsageLimit => Some("failed"),
             _ => match frame.get("type").and_then(Value::as_str) {
                 Some(
                     kind @ ("agent_start" | "turn_start" | "turn_end" | "message_start"
@@ -1730,10 +1782,41 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_error_crosses_as_its_cleaned_sentence() {
+        assert_eq!(
+            parse_frame(&json!({"type":"agent_end", "messages":[{
+                "role":"assistant", "stopReason":"error",
+                "errorMessage":"400: {\"message\":\"The plan of Work does not offer gpt-5.5. Choose another model.\",\"type\":\"router_error\"}"
+            }]}))
+            .unwrap(),
+            PiChatEvent::Failed(Some(
+                "The plan of Work does not offer gpt-5.5. Choose another model.".into()
+            ))
+        );
+        assert_eq!(
+            provider_error_detail(r#"404: {"error":{"message":"model gone","type":"x"}}"#),
+            Some("model gone".into())
+        );
+        assert_eq!(
+            provider_error_detail("connection\nreset   by peer"),
+            Some("connection reset by peer".into())
+        );
+        let leaked = provider_error_detail(
+            "401: invalid key sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH",
+        )
+        .unwrap();
+        assert!(!leaked.contains("abcdefghijklmnopqrstuvwxyz"), "{leaked}");
+        let long = provider_error_detail(&"word ".repeat(200)).unwrap();
+        assert_eq!(long.chars().count(), PROVIDER_DETAIL_CHARS);
+        assert!(long.ends_with('…'));
+        assert_eq!(provider_error_detail("   "), None);
+    }
+
+    #[test]
     fn provider_error_token_limit_and_abort_do_not_become_success_at_agent_end() {
         for (reason, expected) in [
-            ("error", PiChatEvent::Failed),
-            ("length", PiChatEvent::Failed),
+            ("error", PiChatEvent::Failed(Some("private detail".into()))),
+            ("length", PiChatEvent::Failed(None)),
             ("aborted", PiChatEvent::Cancelled),
         ] {
             assert_eq!(

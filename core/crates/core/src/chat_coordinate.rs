@@ -1445,7 +1445,7 @@ fn coordinate_work(
                     break 'coordinate;
                 }
             }
-            Ok(PiChatEvent::Completed | PiChatEvent::Failed | PiChatEvent::UsageLimit)
+            Ok(PiChatEvent::Completed | PiChatEvent::Failed(_) | PiChatEvent::UsageLimit)
                 if gateway_failure.is_some() => {}
             Ok(PiChatEvent::Compacted(result)) => {
                 let Some(attempt) = compaction.as_mut() else {
@@ -1542,20 +1542,29 @@ fn coordinate_work(
                 );
                 break;
             }
-            Ok(event @ (PiChatEvent::Failed | PiChatEvent::UsageLimit)) => {
+            Ok(event @ (PiChatEvent::Failed(_) | PiChatEvent::UsageLimit)) => {
                 diagnostics.outcome = "failed";
-                fail_with_open_effects(
+                let detail = match &event {
+                    PiChatEvent::Failed(detail) => detail.clone(),
+                    _ => None,
+                };
+                if let Some(detail) = &detail {
+                    diagnostics.provider_error = Some(detail.clone());
+                }
+                let reason = if event == PiChatEvent::UsageLimit {
+                    crate::model_router::balance::PickError::UsageLimit.message()
+                } else {
+                    failure_reason(detail.as_deref())
+                };
+                fail_with_detail(
                     &app,
                     &journal,
                     &mut projector,
                     &run_id,
                     &mut seq,
                     &mut open_effects,
-                    &if event == PiChatEvent::UsageLimit {
-                        crate::model_router::balance::PickError::UsageLimit.message()
-                    } else {
-                        "The model could not complete this reply.".into()
-                    },
+                    &reason,
+                    detail.as_deref(),
                     subject.as_deref(),
                 );
                 break;
@@ -2387,6 +2396,42 @@ fn append_terminal(
             subject,
         )
     })
+}
+
+/// The line a failed reply shows: the provider's own sentence after ours,
+/// when it gave one.
+fn failure_reason(detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => format!("The model could not complete this reply. {detail}"),
+        None => "The model could not complete this reply.".into(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fail_with_detail(
+    sink: &impl ChatEventSink,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut MarkedEffects,
+    reason: &str,
+    detail: Option<&str>,
+    subject: Option<&str>,
+) {
+    open_effects.with(|open_effects| {
+        crate::run_events::fail_with_detail(
+            sink,
+            journal,
+            projector,
+            run_id,
+            seq,
+            open_effects,
+            reason,
+            detail,
+            subject,
+        )
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
