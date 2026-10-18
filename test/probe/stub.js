@@ -2,10 +2,12 @@ import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixt
 import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
 import { arrangeStandIn } from '../sidebar-standin.js'
 import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsRendered, projectsSettings, projectsSummaries } from './projects-fixture.js'
+import { advanceTrust, trustAnswer, trustHistory, trustRendered } from './trust-fixture.js'
 import { longThreadHistory } from './long-thread-fixture.js'
 import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
 export const historyFixtures = {
+  'run-trust': trustHistory,
   agents: [],
   projects: [],
   'fleet-sync': [],
@@ -442,6 +444,7 @@ export function buildProbeCommandTable(fixtureName) {
   if (fleetSyncFixture && fleetSyncThread()) history.push(...fleetSyncHistory())
   const agentsFixture = fixtureName === 'agents'
   const projectsFixture = fixtureName === 'projects'
+  const trustFixture = fixtureName === 'run-trust'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
   let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' ? 'agents-offline' : 'agents') : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
@@ -679,6 +682,10 @@ export function buildProbeCommandTable(fixtureName) {
       const answer = fleetSyncAnswer(payload)
       if (answer !== undefined) return answer
     }
+    if (trustFixture && command === 'agent_request') {
+      const answer = trustAnswer(payload, history)
+      if (answer !== undefined) return answer
+    }
     if (command === 'agent_request') return handleAgentRequest(agentStores, payload)
     // Usage and Notifications answer from the agents fixture's states; every
     // other page reads a quiet fleet, so the composer shows no limit.
@@ -887,6 +894,7 @@ export function buildProbeCommandTable(fixtureName) {
     agentsFixture,
     agentsState,
     projectsFixture,
+    trustFixture,
     modesFixture,
     modesState,
     onboardingFixture,
@@ -983,6 +991,7 @@ const {
   agentsFixture,
   agentsState,
   projectsFixture,
+  trustFixture,
   modesFixture,
   modesState,
   onboardingFixture,
@@ -1320,6 +1329,7 @@ function fixtureRendered() {
   if (fleetSyncFixture) return fleetSyncRendered()
   if (agentsFixture) return agentsRendered()
   if (projectsFixture) return projectsRendered()
+  if (trustFixture) return trustRendered()
   if (modesFixture) return modesRendered()
   if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
@@ -1468,6 +1478,7 @@ function markReadyAfterFixtureRender() {
   advanceFleetFixture()
   if (fleetSyncFixture) advanceFleetSync()
   if (projectsFixture) advanceProjects()
+  if (trustFixture) advanceTrust()
   if (fixtureRendered()) {
     void markProbeReady()
     return
@@ -1481,6 +1492,7 @@ function markReadyAfterFixtureRender() {
     advanceFleetFixture()
     if (fleetSyncFixture) advanceFleetSync()
     if (projectsFixture) advanceProjects()
+    if (trustFixture) advanceTrust()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
@@ -1488,7 +1500,7 @@ function markReadyAfterFixtureRender() {
   // A fixture can finish on a text change, such as a path or a scan count, or
   // on a control that turns on once its settings load. Agent dialogs mount
   // on the page body, so the agents fixture watches the whole body.
-  observer.observe(agentsFixture || fleetSyncFixture || projectsFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
+  observer.observe(agentsFixture || fleetSyncFixture || projectsFixture || trustFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {

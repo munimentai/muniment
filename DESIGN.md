@@ -191,7 +191,7 @@ Components: [docs/design-reference/components.md](docs/design-reference/componen
 lists every control and surface, its states, and the token each state reads.
 
 The file panel shares the record panel rail, resize and maximize behavior.
-The changed-files chip sits above the composer and opens its list on hover or click.
+The changed-files chip sits above the composer, opens its list on hover and opens Review changes on click: turns and their files at the left, the diff with Revert file and per-hunk Revert change at the right. A settled turn opens with a mono run line, machine, model, mode, time, tokens and the estimate labeled API estimate, that opens to its tool calls. A user message shows Rewind to here beside Copy; its dialog names what returns, what goes and what cannot be undone, focuses Cancel, and a partial rewind reports itself with triangle-alert in `--warning`, never as done.
 File links open an editable Monaco tab with syntax highlighting. Only actions with more details use disclosure arrows.
 The account name shows a pencil on hover or focus and edits inline.
 

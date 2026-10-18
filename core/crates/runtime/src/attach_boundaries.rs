@@ -234,6 +234,60 @@ impl RuntimeAttachBoundaries {
             .map_err(ProtocolError::invalid_request_with_reason)
     }
 
+    /// Answers the checkpoint operations: a turn's changes and their revert,
+    /// and a rewind's preview and run.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn checkpoint_operation(
+        &self,
+        operation: muniment_core::attach::Operation,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ProtocolError> {
+        let store =
+            muniment_core::checkpoint::shared(&self.profile_directory).ok_or_else(|| {
+                ProtocolError::invalid_request_with_reason(
+                    "Checkpoints are unavailable on this machine.".to_string(),
+                )
+            })?;
+        let subject = self
+            .fresh_tokens()
+            .map_err(|error| error.protocol_error())?
+            .subject;
+        let session_root = muniment_core::chat_profile::ChatProfile::new(&self.profile_directory)
+            .pi_session_root();
+        let replica_of = |thread: &str| {
+            self.swarm
+                .as_ref()
+                .and_then(|swarm| swarm.is_replica_thread(thread))
+        };
+        let folder_of = |thread: &str| {
+            muniment_core::projects::workspace_with_config(
+                &self.profile_directory,
+                &self.config_directory,
+                thread,
+            )
+            .ok()
+        };
+        let release_thread = |thread: &str| {
+            if let Ok(mut process) = self.runtime.slot(thread).try_lock() {
+                *process = None;
+            }
+        };
+        let scope = muniment_core::checkpoint::ops::CheckpointScope {
+            store: &store,
+            storage: &self.storage,
+            active: &self.active,
+            subject: subject.as_deref(),
+            provenance: service::runtime_provenance(self.host.runtime_version),
+            session_root: &session_root,
+            protected: muniment_core::checkpoint::protected_folders(Some(&self.profile_directory)),
+            replica_of: &replica_of,
+            folder_of: &folder_of,
+            release_thread: &release_thread,
+        };
+        muniment_core::checkpoint::ops::operation(&scope, operation.as_str(), body)
+            .map_err(ProtocolError::invalid_request_with_reason)
+    }
+
     /// Answers swarm operations through `swarm`.
     pub fn with_swarm(mut self, swarm: muniment_core::swarm::Swarm) -> Self {
         self.swarm = Some(swarm);
@@ -1784,6 +1838,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
     ) -> Result<serde_json::Value, ProtocolError> {
         if operation.is_permission_operation() {
             return self.permission_operation(operation, body);
+        }
+        if operation.is_checkpoint_operation() {
+            return self.checkpoint_operation(operation, body);
         }
         if operation.is_preferences_operation() {
             return muniment_core::preferences::operation(

@@ -318,6 +318,31 @@ fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::
     }
 }
 
+/// The permission mode a run ended in: the thread's journaled mode under
+/// the run's gate.
+fn run_mode(
+    journal: &SharedStorage,
+    run_id: &str,
+    permissions: Option<&crate::permission_gate::RunPermissions>,
+) -> Option<String> {
+    let permissions = permissions?;
+    let mut storage = journal.lock().ok()?;
+    let thread_mode = storage
+        .journal
+        .run_thread_id(run_id)
+        .ok()
+        .flatten()
+        .and_then(|thread| {
+            storage
+                .journal
+                .thread_permission_mode(&thread)
+                .ok()
+                .flatten()
+        })
+        .map(|set| set.mode);
+    Some(permissions.mode_for(thread_mode).id().to_owned())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn coordinate(
     app: impl ChatEventSink + PiLaunchBoundaries,
@@ -848,6 +873,21 @@ fn coordinate_work(
         (startup_timeout, working_directory, opened)
     };
     let (startup_timeout, working_directory, opened) = opening;
+    // A reply records its folder and conversation before its prompt goes,
+    // and its folder again when it ends, so a rewind can return to them.
+    let _checkpoints = if compaction.is_some() {
+        None
+    } else if resume.is_some() {
+        crate::checkpoint::RunCheckpoints::resume(&app, &run_id, working_directory.as_deref())
+    } else {
+        crate::checkpoint::RunCheckpoints::begin(
+            &app,
+            &journal,
+            &run_id,
+            subject.as_deref(),
+            working_directory.as_deref(),
+        )
+    };
     let runtime = runtime.as_mut().expect("runtime was initialized");
     let transport = match opened {
         Ok(transport) => {
@@ -1538,7 +1578,13 @@ fn coordinate_work(
                     Ok(local_receipt(run_started.elapsed(), &ledger))
                 } else {
                     app.fetch_receipt(&grant, &access_token, &run_id)
-                };
+                }
+                .map(|mut receipt| {
+                    receipt.permission_mode = receipt
+                        .permission_mode
+                        .or_else(|| run_mode(&journal, &run_id, agent_permissions.as_ref()));
+                    receipt
+                });
                 match receipt {
                     Ok(receipt) => {
                         diagnostics.failed = append_terminal(

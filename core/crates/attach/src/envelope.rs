@@ -590,6 +590,19 @@ pub enum Operation {
     /// Approves a thread's waiting plan in a mode, or keeps planning.
     #[serde(rename = "thread.plan_answer")]
     ThreadPlanAnswer,
+    /// Reads the files one turn changed, by any tool, with their diff.
+    #[serde(rename = "run.changes")]
+    RunChanges,
+    /// Puts one file, or one hunk of it, back as it was before a turn.
+    #[serde(rename = "run.revert")]
+    RunRevert,
+    /// Reads what a rewind to before a turn restores and what it cannot.
+    #[serde(rename = "thread.rewind_preview")]
+    ThreadRewindPreview,
+    /// Rewinds a thread's conversation, and its files when asked, to before
+    /// a turn.
+    #[serde(rename = "thread.rewind")]
+    ThreadRewind,
     /// Reads where an action forwarded to the swarm member that owns its
     /// item stands.
     #[serde(rename = "fleet.op_status")]
@@ -784,6 +797,10 @@ impl Operation {
             Self::ThreadPermissionModeSet => "thread.permission_mode_set",
             Self::ThreadPlan => "thread.plan",
             Self::ThreadPlanAnswer => "thread.plan_answer",
+            Self::RunChanges => "run.changes",
+            Self::RunRevert => "run.revert",
+            Self::ThreadRewindPreview => "thread.rewind_preview",
+            Self::ThreadRewind => "thread.rewind",
             Self::FleetOpStatus => "fleet.op_status",
             Self::PreferencesGet => "preferences.get",
             Self::PreferencesSet => "preferences.set",
@@ -869,6 +886,19 @@ impl Operation {
                 | Self::PreferencesImport
                 | Self::UsageSummary
                 | Self::NotificationsList
+                | Self::RunChanges
+                | Self::RunRevert
+                | Self::ThreadRewindPreview
+                | Self::ThreadRewind
+        )
+    }
+
+    /// Whether the operation reads a turn's checkpoints or writes one back.
+    /// Each is also an agent operation.
+    pub fn is_checkpoint_operation(self) -> bool {
+        matches!(
+            self,
+            Self::RunChanges | Self::RunRevert | Self::ThreadRewindPreview | Self::ThreadRewind
         )
     }
 

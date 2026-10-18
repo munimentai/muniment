@@ -19,6 +19,7 @@ pub mod chat_profile;
 pub mod chat_prompt;
 pub mod chat_resume;
 pub mod chat_view;
+pub mod checkpoint;
 pub mod child_fds;
 pub mod code_diff;
 pub mod code_diff_apply;
