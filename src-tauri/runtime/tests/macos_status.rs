@@ -33,6 +33,10 @@ fn runtime(directory: &PathBuf, exit: &str) -> Output {
         .env("MUNIMENT_STATE_DIR", directory.join(".muniment"))
         .env_remove("XDG_RUNTIME_DIR")
         .env(MACOS_TEST_EXIT_ENV, exit)
+        .env(
+            muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+            muniment_core::state_root::test_log_directory(),
+        )
         .output()
         .unwrap()
 }

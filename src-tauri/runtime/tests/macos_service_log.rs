@@ -56,6 +56,11 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
         // Model launchd with the login home and no variable from the runner.
         .env_clear()
         .env("HOME", &login_home)
+        // The child is no test run, so it logs where this test reads.
+        .env(
+            muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+            log.parent().unwrap(),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
