@@ -2,14 +2,31 @@
   // One row of the sidebar's Projects list: the project's name with its
   // triggers in words, such as `every day 9:00` or `webhook`, the pencil that
   // starts a thread in it, and its chevron. The menu holds Settings, Rename,
-  // Open folder and New group chat where the project has each.
+  // Open folder and New group chat where the project has each. A thread row
+  // dropped on it moves the thread into the project.
   import { floatingMenu } from '../lib/floating-menu.js'
   import { tick } from 'svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import OwnerChip from '../runtimes/OwnerChip.svelte'
   // `owner` names the fleet member that holds a shared project's files.
-  let { owner = null, name, triggers = '', kind = 'project', expanded, disabled = false, ontoggle, onnew, onsettings, onrename, onopen, ongroup } = $props()
+  // `ondropthread` makes the row a drop target for a thread row dragged as `dragType`.
+  let { owner = null, name, triggers = '', kind = 'project', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondropthread } = $props()
   let open = $state(false)
+  let dropping = $state(false)
+  const carries = (event) => !!ondropthread && !!dragType && [...(event.dataTransfer?.types ?? [])].includes(dragType)
+  function dragOver(event) {
+    if (!carries(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    dropping = true
+  }
+  function drop(event) {
+    dropping = false
+    if (!carries(event)) return
+    event.preventDefault()
+    const threadId = event.dataTransfer.getData(dragType)
+    if (threadId) ondropthread(threadId)
+  }
   let row = $state()
   let trigger = $state()
   let menu = $state()
@@ -43,7 +60,8 @@
   }
 </script>
 
-<div class="project-row" bind:this={row}>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="project-row" class:dropping bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
   <button class="project-title" aria-label={triggers ? `Project ${name}, ${triggers}` : `Project ${name}`} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if triggers}<em class="triggers">{triggers}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix={kind === 'agent' ? 'on' : 'files on'} compact />{/if}</button>
   <!-- The controls sit over the row's right end and show on hover or focus, so the triggers keep the row's width at rest. -->
   <span class="project-controls" class:visible={open}>
@@ -66,6 +84,7 @@
   .project-title :global(.lucide) { flex: none; width: 16px; height: 16px; color: var(--muted); }
   .triggers { flex: 0 3 auto; min-width: 24px; margin-left: auto; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
   .project-title:hover { background: var(--faint); }
+  .dropping .project-title { background: var(--selected); color: var(--on-selected); }
   .project-controls { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; border-radius: var(--radius-control); background: var(--faint); opacity: 0; pointer-events: none; }
   .project-row:hover .project-controls, .project-row:focus-within .project-controls, .project-controls.visible { opacity: 1; pointer-events: auto; }
   .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: var(--row-height); padding: 4px; border-radius: var(--radius-control); border: 0; background: transparent; color: var(--muted); }

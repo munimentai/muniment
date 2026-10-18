@@ -128,6 +128,10 @@
   import ExecutionTime from './lib/ExecutionTime.svelte'
   import SidebarSections from './sidebar/SidebarSections.svelte'
   import ProjectSettings from './sidebar/ProjectSettings.svelte'
+  import CommandPalette from './sidebar/CommandPalette.svelte'
+  import ProjectPicker from './sidebar/ProjectPicker.svelte'
+  import { SETTINGS_PAGE, isPaletteShortcut, paletteInput, paletteShortcut, settingsPages } from './sidebar/palette.js'
+  import { layerLabel, sourceLine } from './sidebar/sources.js'
   import { CHATS_PROJECT, arrangeSidebar, emptySidebar, holdRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar/sidebar-model.js'
   import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
@@ -213,8 +217,18 @@
         : auth.name === 'local' ? ''
           : 'Routing is automatic. Every reply carries its receipt.')
 
-  const modelSourceLabel = $derived(modelChipLabel(inventory))
-  const chipModel = $derived(currentModel(inventory))
+  // The open thread's own model and where it comes from, from core's
+  // `thread_settings` on the thread's machine. The chip shows it, and a pick
+  // changes this thread alone, never the default model.
+  let threadModel = $state(null)
+  // The pick made before any thread exists. The first message carries it.
+  let pendingModel = $state(null)
+  const threadInventory = $derived.by(() => {
+    const model = currentThreadId ? (threadModel?.thread_id === currentThreadId ? threadModel.model : null) : pendingModel
+    return model && inventory ? { ...inventory, default_provider: model.provider, default_model: model.model } : inventory
+  })
+  const modelSourceLabel = $derived(modelChipLabel(threadInventory))
+  const chipModel = $derived(currentModel(threadInventory))
   // The composer warns only at or near a subscription limit of the machine
   // the thread runs on, for the chip's provider when one is known, from core's
   // usage summary. It reads again every two minutes and after each reply.
@@ -724,17 +738,104 @@
     }
   }
 
+  let threadModelRequest = 0
+  async function refreshThreadModel() {
+    const request = ++threadModelRequest
+    const threadId = currentThreadId
+    if (!tauri || !threadId || auth.name !== 'local') { threadModel = null; return }
+    try {
+      const answer = await tauri.invoke('thread_settings', { threadId })
+      if (request === threadModelRequest) threadModel = answer?.thread_id === threadId ? answer : null
+    } catch (_) { if (request === threadModelRequest) threadModel = null }
+  }
+  // The thread's model reads again when the thread or the default changes,
+  // and once its first message gives a new thread an id.
+  $effect(() => {
+    void currentThreadId; void inventory?.default_provider; void inventory?.default_model; void remoteRuntime?.id; void auth.name
+    untrack(() => {
+      if (currentThreadId) pendingModel = null
+      void refreshThreadModel()
+    })
+  })
+  // The thread's project, for the model picker's project actions. An
+  // agent's thread and a group's take none.
+  const modelProject = $derived(!currentThreadId || agentThreadMap[currentThreadId] || threadGroup ? null : (projectCatalog.threads[currentThreadId] ?? CHATS_PROJECT))
+  const modelLayerNames = $derived({ projectName: projectCatalog.projects[threadModel?.project_id] ?? '', agentName: threadAgent?.name ?? '', chats: threadModel?.project_id === CHATS_PROJECT })
+  const modelSource = $derived(!currentThreadId ? (pendingModel ? 'this thread' : 'default') : layerLabel(threadModel?.layer ?? 'default', modelLayerNames))
+  const modelActions = $derived.by(() => {
+    if (!currentThreadId || !threadModel) return []
+    const actions = []
+    if (threadModel.layer === 'thread') actions.push({ id: 'reset', label: threadModel.seed?.model ? 'Use the project model' : 'Use the default model' })
+    if (modelProject && threadModel.layer !== 'project' && threadModel.model) actions.push({ id: 'project-default', label: modelProject === CHATS_PROJECT ? 'Make Chats default' : 'Make project default' })
+    // The machine's default changes only on this explicit choice.
+    const model = threadModel.model
+    if (model && inventory && (inventory.default_provider !== model.provider || inventory.default_model !== model.model)) actions.push({ id: 'default', label: 'Make default' })
+    return actions
+  })
+
+  // The newest turn's run line names where its model and mode come from
+  // while the thread still runs on them.
+  const newestRunId = $derived(messages.findLast((message) => message.run && settledPhases.has(message.run.phase))?.run.id ?? null)
+  function runSources(run) {
+    const receipt = run?.receipt ?? {}
+    const model = typeof receipt.model === 'string' ? receipt.model : ''
+    const sameModel = !!chipModel && (model === chipModel.model || model.endsWith(`/${chipModel.model}`))
+    return {
+      model: sameModel && threadModel?.thread_id === currentThreadId ? modelSource : null,
+      mode: receipt.permission_mode && receipt.permission_mode === composerMode?.id && composerThreadId ? modeSource : null,
+    }
+  }
+
+  // A pick changes the open thread's model. With no thread yet it waits for
+  // the first message, which starts the thread with it.
   async function chooseModel(provider, model) {
     if (modelChoicePending) return
-    modelChoicePending = true
-    const before = inventory
-    if (inventory) inventory = { ...inventory, default_provider: provider, default_model: model }
     closePicker()
+    const threadId = currentThreadId
+    const reviewed = () => { if (retryReview) retryReview = { ...retryReview, chooseModel: retryReview.chooseModel && retryReview.previousProvider === provider && retryReview.previousModel === model } }
+    if (!threadId) { pendingModel = { provider, model }; reviewed(); return }
+    modelChoicePending = true
+    const before = threadModel
+    threadModel = { ...(before ?? {}), thread_id: threadId, model: { provider, model }, layer: 'thread' }
     try {
-      await tauri.invoke('local_mode_set_default_model', { provider, model })
-      if (retryReview) retryReview = { ...retryReview, chooseModel: retryReview.chooseModel && retryReview.previousProvider === provider && retryReview.previousModel === model }
+      const answer = await tauri.invoke('thread_settings_set', { threadId, model: { provider, model } })
+      if (currentThreadId === threadId) threadModel = answer
+      reviewed()
     } catch (_) {
-      if (inventory && before) inventory = { ...inventory, default_provider: before.default_provider, default_model: before.default_model }
+      if (currentThreadId === threadId) threadModel = before
+      accountStatus = 'Muniment could not save the model choice. Try again.'
+    } finally { modelChoicePending = false }
+  }
+
+  // The picker's foot: the open thread back on the model it started with,
+  // or its model as its project's default for new threads.
+  async function runModelAction(id) {
+    const threadId = currentThreadId
+    const model = threadModel?.model
+    if (!threadId || modelChoicePending) return
+    closePicker()
+    modelChoicePending = true
+    try {
+      if (id === 'reset') {
+        const answer = await tauri.invoke('thread_settings_set', { threadId, reset: true })
+        if (currentThreadId === threadId) threadModel = answer
+        return
+      }
+      if (id === 'default') {
+        if (!model) return
+        await tauri.invoke('local_mode_set_default_model', { provider: model.provider, model: model.model })
+        if (inventory) inventory = { ...inventory, default_provider: model.provider, default_model: model.model }
+        return
+      }
+      const projectId = modelProject
+      if (!projectId || !model) return
+      const settings = await tauri.invoke('project_settings', { projectId })
+      await tauri.invoke('project_settings_save', { projectId, settings: { ...settings, model } })
+      // The thread now runs its project's model, so it reads as the project's.
+      const answer = await tauri.invoke('thread_settings_set', { threadId, seed: { project_id: projectId, model, permission_mode: settings?.permissionMode ?? null, machine: settings?.machine ?? null } })
+      if (currentThreadId === threadId) threadModel = answer
+      await refreshProjects()
+    } catch (_) {
       accountStatus = 'Muniment could not save the model choice. Try again.'
     } finally { modelChoicePending = false }
   }
@@ -905,6 +1006,9 @@
   let modesRevision = $state(0)
   let threadMode = $state(null)
   let pendingMode = $state(null)
+  // Where the new thread's mode comes from: 'project' for its project's
+  // default, 'thread' for a pick on it.
+  let pendingModeLayer = $state(null)
   let modeRequest = 0
   const composerThreadId = $derived(freshThread ? null : currentThreadId)
   const composerRuntime = $derived(threadMachine ?? runtimeList?.selected ?? LOCAL_RUNTIME_ID)
@@ -930,12 +1034,26 @@
   }
   // A plan approval switches the thread's mode during a reply, so the mode is read again when a reply starts or ends.
   $effect(() => { void composerThreadId; void modeListing; void replyRunning; void refreshThreadMode() })
-  $effect(() => { if (composerThreadId) untrack(() => { pendingMode = null }) })
+  $effect(() => { if (composerThreadId) untrack(() => { pendingMode = null; pendingModeLayer = null }) })
   const composerMode = $derived(!modeListing ? null
     : composerThreadId ? (threadMode?.thread_id === composerThreadId ? findMode(modeListing.listing, threadMode.mode) : null)
       : findMode(modeListing.listing, pendingMode ?? modeListing.listing.default_thread_mode))
   // Group threads and threads another machine runs take no mode from here.
   const composerModeShown = $derived(!!composerMode && !threadGroup && !threadPostTarget)
+  // Where a new thread's machine comes from: its project's default, a pick
+  // in the machine menu, or the default.
+  let machineLayer = $state(null)
+  const machineSource = $derived(layerLabel(machineLayer ?? 'default', { projectName: projectCatalog.projects[selectedProject] ?? '', chats: !selectedProject }))
+  // The mode's layer, as core names it, beside the mode in its menu.
+  const modeSource = $derived.by(() => {
+    if (composerThreadId) {
+      const projectId = threadMode?.project_id
+      return layerLabel(threadMode?.layer ?? (threadMode?.source === 'agent' ? 'agent' : threadMode?.source === 'thread' ? 'thread' : 'default'), { projectName: projectCatalog.projects[projectId] ?? '', chats: projectId === CHATS_PROJECT, agentName: threadAgent?.name ?? '' })
+    }
+    if (!pendingMode) return 'default'
+    const projectId = selectedProject ?? CHATS_PROJECT
+    return layerLabel(pendingModeLayer === 'project' ? 'project' : 'thread', { projectName: projectCatalog.projects[projectId] ?? '', chats: projectId === CHATS_PROJECT })
+  })
   async function setThreadMode(threadId, mode) {
     ++modeRequest
     try {
@@ -953,7 +1071,7 @@
     closeModes(focus)
     const mode = findMode(modeListing?.listing, id)
     if (!mode || mode.available === false || id === composerMode?.id) return
-    if (!composerThreadId) { pendingMode = id === modeListing.listing.default_thread_mode ? null : id; return }
+    if (!composerThreadId) { pendingMode = id === modeListing.listing.default_thread_mode ? null : id; pendingModeLayer = 'thread'; return }
     void setThreadMode(composerThreadId, id)
   }
   // The plan a composer thread's plan gate waits on, from core's `thread.plan`.
@@ -1300,8 +1418,8 @@
   let threadMenu = $state(null)
   const sidebarKeyShortcut = sidebarShortcut()
   const newThreadKeyShortcut = newThreadShortcut()
-  // ⌘K focuses Search. The company record, when it is on, keeps ⌘K for its panel.
-  const searchKeyShortcut = recordPanelShortcut()
+  // ⌘K opens the command palette everywhere but a focused terminal.
+  const searchKeyShortcut = paletteShortcut()
   const settingsKeyShortcut = settingsShortcut()
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
   // The newest copy attempt in the thread, or null once its confirmation lapses.
@@ -1435,6 +1553,7 @@
     readFiles: () => selectedFiles,
     readThinkingLevel: () => chipThinking?.level ?? null,
     readPermissionMode: () => composerThreadId ? null : pendingMode,
+    readPendingModel: () => currentThreadId ? null : pendingModel,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,
@@ -1578,9 +1697,12 @@
     const machine = defaults.machine ? runtimeList?.runtimes?.find((runtime) => runtime.id === defaults.machine && !runtime.local && runtime.status === 'online') : null
     if (machine) { if (runtimeList?.selected !== machine.id) await selectRuntime(machine) }
     else if (remoteSelected(runtimeList)) await selectRuntime(runtimeList.runtimes.find((runtime) => runtime.local))
+    machineLayer = machine ? 'project' : null
     if (!await chatController.newThread()) return
-    if (defaults.permissionMode) pendingMode = defaults.permissionMode
-    if (defaults.model && inventory && (inventory.default_provider !== defaults.model.provider || inventory.default_model !== defaults.model.model)) void chooseModel(defaults.model.provider, defaults.model.model)
+    // Core started the thread with its project's model; the mode waits for
+    // the first message.
+    if (defaults.permissionMode) { pendingMode = defaults.permissionMode; pendingModeLayer = 'project' }
+    void refreshThreadModel()
     threadSearch = ''
     filterThreads()
     return true
@@ -1776,6 +1898,99 @@
     else if (id === 'settings') toggleSettings()
     else toggleFullPage(id)
   }
+
+  // The command palette, ⌘K. Core ranks what it finds from the sidebar's
+  // arrangement, the app's pages, the Settings pages and the actions that
+  // apply to the open thread.
+  let paletteOpen = $state(false)
+  const threadMovable = (threadId) => !!threadId && !agentThreadMap[threadId] && !swarm.groups.some((group) => group.thread_id === threadId) && threadId !== runningThreadId
+  function paletteFor(query) {
+    const positions = new Map(shortcutThreads.slice(0, 9).map((row, index) => [row.threadId, index + 1]))
+    const open = !freshThread && currentThreadId ? { thread_id: currentThreadId, pinned: !!threadOrganization[currentThreadId]?.pinned, movable: threadMovable(currentThreadId) } : null
+    const machines = (runtimeList?.runtimes ?? []).filter((runtime) => runtime.local || runtime.status === 'online').length || 1
+    return paletteInput({ query, sidebar: sidebarArrangement, positions, pages: settingsPages({ remote: !!remoteRuntime }), thread: open, machines, modes: composerModeShown })
+  }
+  function runPaletteItem(item) {
+    if (item.kind === 'thread') {
+      if (switchLocked) return
+      projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
+      if (settingsOpen) closeSettings()
+      if (item.id !== currentThreadId || freshThread) void chatController.openThread(item.id)
+      return
+    }
+    if (item.kind === 'page') {
+      if (item.id.startsWith(SETTINGS_PAGE)) return openSettings(item.id.slice(SETTINGS_PAGE.length))
+      if (item.id === 'settings') { if (!settingsOpen) toggleSettings(); return }
+      return openSidebarPage(item.id)
+    }
+    if (item.id === 'new_thread') void newSidebarThread()
+    else if (item.id === 'new_project') { if (sidebarCollapsed) toggleSidebar(); if (settingsOpen) closeSettings(); projectForm = 'new'; projectName = ''; projectsOpen = false }
+    else if (item.id === 'new_agent') void openAgentBuilder()
+    else if (item.id === 'move_to_project') openMoveDialog(currentThreadId)
+    else if (item.id === 'pin' && currentThreadId) setThreadOrganization(currentThreadId, 'pinned')
+    else if (item.id === 'switch_model') { if (settingsOpen) closeSettings(); void tick().then(() => togglePicker()) }
+    else if (item.id === 'switch_machine') { if (settingsOpen) closeSettings(); void tick().then(() => openComposerPanel('machine')) }
+    else if (item.id === 'toggle_permission_mode') cycleMode()
+  }
+
+  // Move to project: the thread menu, the palette and a row dropped on a
+  // project move a thread between Chats and the projects on this computer.
+  // The thread keeps its conversation and runs next in the new project's
+  // folder with its instructions and tools.
+  let moveTarget = $state(null)
+  let moveBusy = $state(false)
+  let moveError = $state('')
+  let moveNote = $state(null)
+  const moveProjects = $derived([
+    { id: CHATS_PROJECT, name: 'Chats', kind: 'chats' },
+    ...projectRows.map(([id, name]) => ({ id, name, kind: 'project' })),
+  ])
+  function openMoveDialog(threadId) {
+    closeThreadMenu()
+    if (!threadMovable(threadId)) return
+    const summary = threadSummaries.find((item) => item.threadId === threadId)
+    moveError = ''
+    moveTarget = { threadId, title: summary?.title || (threadId === currentThreadId ? currentThreadTitle : 'New thread') }
+  }
+  async function moveThread(threadId, projectId) {
+    if (!threadMovable(threadId) || moveBusy) return false
+    const from = projectCatalog.threads[threadId] ?? CHATS_PROJECT
+    if (from === projectId) return false
+    moveBusy = true; moveError = ''
+    try {
+      await tauri.invoke('project_move_thread', { threadId, projectId })
+      // A model the thread took from its old project follows the new one.
+      if (threadId === currentThreadId && threadModel?.layer === 'project') {
+        const defaults = projectCatalog.settings?.[projectId] ?? {}
+        threadModel = await tauri.invoke('thread_settings_set', { threadId, seed: { project_id: projectId, model: defaults.model ?? null, permission_mode: defaults.permissionMode ?? null, machine: defaults.machine ?? null } })
+      }
+      await refreshProjects(threadId)
+      moveTarget = null
+      const name = projectId === CHATS_PROJECT ? 'Chats' : projectCatalog.projects[projectId] ?? 'the project'
+      moveNote = { threadId, seen: threadId === currentThreadId, text: projectId === CHATS_PROJECT ? 'Moved to Chats.' : `Now uses ${name} instructions and tools.` }
+      return true
+    } catch (error) {
+      moveError = String(error?.message ?? error)
+      if (!moveTarget) submitError = moveError
+      return false
+    } finally { moveBusy = false }
+  }
+  // A thread row dragged onto a project row moves it there.
+  const THREAD_DRAG = 'application/x-muniment-thread'
+  function threadDragStart(event, threadId) {
+    if (!threadMovable(threadId) || !event.dataTransfer) { event.preventDefault(); return }
+    event.dataTransfer.setData(THREAD_DRAG, threadId)
+    event.dataTransfer.effectAllowed = 'move'
+  }
+  // The note shows on the moved thread until the user leaves it.
+  $effect(() => {
+    const threadId = currentThreadId
+    untrack(() => {
+      if (!moveNote) return
+      if (moveNote.threadId === threadId) moveNote.seen = true
+      else if (moveNote.seen) moveNote = null
+    })
+  })
 
   // The sidebar keeps its scroll position while Settings takes its rows.
   let sidebarScrollTop = 0
@@ -2845,16 +3060,15 @@
         toggleArtifactRail()
         return
       }
-      if (!featureFlags.companyRecord && workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
+      // A focused terminal keeps ⌘K, which clears it.
+      if (workspaceMode() && onboarding.name === 'complete' && isPaletteShortcut(event) && !event.target?.closest?.('.terminal-workspace')) {
         event.preventDefault()
-        if (settingsOpen) closeSettings()
-        if (sidebarCollapsed) toggleSidebar()
-        void tick().then(() => { threadSearchInput?.focus(); threadSearchInput?.select() })
+        paletteOpen = !paletteOpen
         return
       }
       if (featureFlags.companyRecord && workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
         event.preventDefault()
-        // ⌘K on a maximized record panel returns the sidebar and the thread first.
+        // ⌘⇧K on a maximized record panel returns the sidebar and the thread first.
         if ((recordPanelOpen || filePanelOpen) && recordMaximized) toggleRecordMaximized()
         else toggleRecordPanel()
         return
@@ -3161,12 +3375,13 @@
   {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machineName(machine)}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
-<!-- A row's meta line: once a machine is paired, the machine the thread lives
-     on, by its shape and name, then how long ago the thread last changed. -->
+<!-- A row's meta line: its status in words and its project, once a machine
+     is paired the machine the thread lives on, by its shape and name, then how
+     long ago the thread last changed. A settled thread shows only its time. -->
 {#snippet rowMeta(summary, id = undefined)}
   {@const owner = threadOwner(summary, swarm, runtimeList)}
   {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta" {id}>{#if summary.row}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip><span class="row-project">{summary.row.project_name}</span><span aria-hidden="true">·</span>{/if}{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip><span class="row-project">{summary.row.project_name}</span><span aria-hidden="true">·</span>{/if}{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -3184,7 +3399,7 @@
                 {@const selected = selectedThreadIds.has(summary.threadId)}
                 {@const rowId = nextRowId()}
                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                <li class="thread-record" class:selected oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
+                <li class="thread-record" class:selected draggable={threadMovable(summary.threadId) && rowRename?.threadId !== summary.threadId ? 'true' : undefined} ondragstart={(event) => threadDragStart(event, summary.threadId)} oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
                   {#if rowRename?.threadId === summary.threadId}
                     <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveSidebarName() }}>
                       <input aria-label="Thread name" maxlength="80" bind:this={rowRenameInput} bind:value={rowRename.title} onkeydown={sidebarNameKeydown} disabled={rowRenamePending} />
@@ -3284,6 +3499,7 @@
                       <button type="button" role="menuitem" disabled={running} onclick={() => { if (threadMenu.fromTitle) { closeThreadMenu(); editThreadTitle(currentThreadTitle) } else renameSidebarThread(summary) }}>Rename</button>
                       {#if !threadMenu.fromTitle && !selectedThreadIds.has(summary.threadId)}<button type="button" role="menuitem" onclick={() => { const id = summary.threadId; closeThreadMenu(); selectThread(id, false); focusThreadRow(id) }}>Select</button>{/if}
                       <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'pinned')}>{threadOrganization[summary.threadId]?.pinned ? 'Unpin' : 'Pin'}</button>
+                      {#if !agentThreadMap[summary.threadId] && !swarm.groups.some((group) => group.thread_id === summary.threadId)}<button type="button" role="menuitem" disabled={running} onclick={() => openMoveDialog(summary.threadId)}>Move to project</button>{/if}
                       <button type="button" role="menuitem" disabled={running} onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
                       {#if !agentThreadMap[summary.threadId]}<button type="button" role="menuitem" disabled={switchLocked} onclick={() => { const { threadId, title } = summary; closeThreadMenu(); void openAgentBuilder({ threadId, threadTitle: title || rowTitle, autostart: true, projectId: projectCatalog.projects[projectCatalog.threads[threadId]] ? projectCatalog.threads[threadId] : null }) }}>Make this an agent</button>{/if}
                       <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={threadSwitching || runLocked || deletionHoldsRun(summary.threadId)} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
@@ -3317,14 +3533,14 @@
                 <LucideIcon name="square-pen" /><span>New</span>
               </button>
               {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
-              {:else}<div class="thread-search-field"><LucideIcon name="search" size={14} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" aria-keyshortcuts={featureFlags.companyRecord ? undefined : searchKeyShortcut} placeholder="Search" bind:this={threadSearchInput} bind:value={threadSearch} oninput={filterThreads} />{#if !featureFlags.companyRecord && !threadSearch}<kbd>{shortcutDisplayLabel(searchKeyShortcut)}</kbd>{/if}</div>{/if}
+              {:else}<div class="thread-search-field"><LucideIcon name="search" size={14} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search" bind:this={threadSearchInput} bind:value={threadSearch} oninput={filterThreads} />{#if !threadSearch}<button type="button" class="palette-open" aria-label="Open the command palette" aria-keyshortcuts={searchKeyShortcut} onclick={() => { paletteOpen = true }}><kbd>{shortcutDisplayLabel(searchKeyShortcut)}</kbd></button>{/if}</div>{/if}
             </div>
             <div class="side-scroll" use:panelScroll use:keepSidebarScroll>
             {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
             <SidebarSections sidebar={sidebarArrangement} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
               disabled={switchLocked} expanded={expandedProjects} filter={projectFilter} bind:workingOpen bind:settledOpen bind:archivedOpen
               {projectForm} bind:projectName {projectBusy} {projectError}
-              onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings}
+              onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings} dragType={THREAD_DRAG} onmovethread={(threadId, projectId) => { void moveThread(threadId, projectId) }}
               onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
               ongroup={roster.length > 1 ? () => { groupCreateOpen = true } : undefined}
               onnewproject={() => { projectForm = 'new'; projectName = ''; projectsOpen = false }} onsaveproject={saveProject} oncancelproject={() => { projectForm = null }}
@@ -3431,7 +3647,7 @@
             {:else}
             {@const parts = responseParts(message.run)}
             <div class="response">
-              {#if settledPhases.has(message.run.phase)}<RunLine run={message.run} machine={runMachine} modes={modeListing?.listing?.modes ?? []} onreview={message.run.phase === 'complete' && !threadGroup && !currentSummary?.replica ? () => { reviewing = { runId: message.run.id } } : null} />{/if}
+              {#if settledPhases.has(message.run.phase)}<RunLine run={message.run} machine={runMachine} modes={modeListing?.listing?.modes ?? []} sources={message.run.id === newestRunId ? runSources(message.run) : {}} onreview={message.run.phase === 'complete' && !threadGroup && !currentSummary?.replica ? () => { reviewing = { runId: message.run.id } } : null} />{/if}
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
                   <summary>Prompt text stays in runtime memory for this run.</summary>
@@ -3622,13 +3838,13 @@
         {/if}
         {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
-          <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onvisibility={setModelShown} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
+          <ModelPicker {inventory} {contextUsage} current={chipModel} source={modelSource} actions={modelActions} onaction={runModelAction} onchoose={chooseModel} onvisibility={setModelShown} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
         {/if}
         {#if thinkingOpen && chipThinking}
           <ThinkingPicker levels={chipThinking.levels} current={chipThinking.level} onchoose={chooseThinkingLevel} onclose={closeThinking} />
         {/if}
         {#if modeOpen && composerModeShown}
-          <ModePicker modes={modeListing.listing.modes} current={composerMode.id} onchoose={chooseMode} onclose={closeModes} />
+          <ModePicker modes={modeListing.listing.modes} current={composerMode.id} source={modeSource} onchoose={chooseMode} onclose={closeModes} />
         {/if}
         {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -3707,6 +3923,7 @@
             <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
           </div>
           {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
+          {#if moveNote && moveNote.threadId === currentThreadId}<p class="move-note" role="status">{moveNote.text}</p>{/if}
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
@@ -3727,7 +3944,7 @@
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
-            <MachinePicker list={runtimeList} locked={threadMachine} owner={currentOwner} fleet={fleetTargets} offload={offloadTarget} disabled={switchLocked || !!active || !!pendingOffload} onselect={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} onoffload={(target) => { offloadTarget = target }} onmanage={() => openSettings('runtimes')} />
+            <MachinePicker list={runtimeList} locked={threadMachine} source={machineSource} owner={currentOwner} fleet={fleetTargets} offload={offloadTarget} disabled={switchLocked || !!active || !!pendingOffload} onselect={(runtime) => { offloadTarget = null; machineLayer = 'thread'; void selectRuntime(runtime) }} onoffload={(target) => { offloadTarget = target }} onmanage={() => openSettings('runtimes')} />
             {#if threadGroup}
               <GroupMembers members={threadGroupMembers} live={(agent) => roster.find(entry => entry.id === agent.id)?.activity} />
             {:else if auth.name === 'local'}
@@ -3863,6 +4080,8 @@
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
+  {#if paletteOpen && tauri}<CommandPalette {tauri} input={paletteFor} onrun={runPaletteItem} onclose={() => { paletteOpen = false }} />{/if}
+  {#if moveTarget}<ProjectPicker title={moveTarget.title} projects={moveProjects} current={projectCatalog.threads[moveTarget.threadId] ?? CHATS_PROJECT} busy={moveBusy} error={moveError} onmove={(projectId) => moveThread(moveTarget.threadId, projectId)} onclose={() => { moveTarget = null }} />{/if}
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentBuilder(chosen?.description ? { description: chosen.description, autostart: true } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
@@ -4102,12 +4321,14 @@
   .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .sidebar-head { display: flex; align-items: center; gap: 4px; container-type: inline-size; }
   /* A narrow sidebar keeps the search words and drops the shortcut chip, which aria-keyshortcuts still names. */
-  @container (max-width: 250px) { .sidebar-head .thread-search-field kbd { display: none; } .sidebar-head .thread-search-field:has(kbd) .thread-search { padding-right: 8px; } }
+  @container (max-width: 250px) { .sidebar-head .thread-search-field .palette-open { display: none; } .sidebar-head .thread-search-field:has(kbd) .thread-search { padding-right: 8px; } }
   .sidebar-head .new-thread { flex: none; width: auto; padding-right: 10px; }
   .library-entry kbd { flex: none; margin-left: auto; }
   .thread-search-field { position: relative; flex: 1; min-width: 0; }
   .thread-search-field:has(kbd) .thread-search { padding-right: 40px; }
-  .thread-search-field kbd { position: absolute; right: 8px; top: 50%; margin: 0; transform: translateY(-50%); pointer-events: none; }
+  .thread-search-field .palette-open { position: absolute; right: 4px; top: 50%; display: inline-flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0 4px; transform: translateY(-50%); border: 0; border-radius: var(--radius-control); background: transparent; cursor: pointer; }
+  .thread-search-field .palette-open:hover { background: var(--faint); }
+  .thread-search-field kbd { margin: 0; pointer-events: none; }
   .thread-search-field :global(.lucide) { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
   .thread-search { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 6px 8px 6px 30px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); }
   .retry-review { font-size: var(--text-12); color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
@@ -4337,7 +4558,7 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
   .run-status { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
-  .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .cancel-error, .history-error, .move-note { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-human); }
   .history-error { overflow-wrap: anywhere; }
   /* The notice keeps the background service register at the composer 12px scale.
      A 15px support line would compete with the draft text. */

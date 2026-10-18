@@ -2,6 +2,7 @@
   // The sidebar's threads as core arranges them, under the window's New and
   // Search: Needs you, Working, Pinned, Projects and Recent, with settled and
   // archived threads folded at the foot, or the search's pages and threads.
+  // A thread row dragged onto Chats or a project moves the thread there.
   // Every thread sits in one project, and each row states its status in
   // words. The window renders each row with its `row` snippet, so a row's menu, rename and selection stay one
   // control everywhere. The sections hold their order: a row moves only when
@@ -14,6 +15,8 @@
     disabled = false, expanded = new Set(), filter = 'all', workingOpen = $bindable(true), settledOpen = $bindable(false), archivedOpen = $bindable(false),
     projectForm = null, projectName = $bindable(''), projectBusy = false, projectError = '',
     onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, onfilter, library, footer,
+    // A thread row dropped on Chats or a project of this computer moves there.
+    dragType = '', onmovethread,
   } = $props()
   const searching = $derived(!!query.trim())
   const matchedPages = $derived(searching ? pages.filter((page) => page.label.toLowerCase().includes(query.trim().toLowerCase())) : [])
@@ -67,7 +70,8 @@
           ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
           onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
           onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
-          ongroup={ongroup ? () => ongroup(project.id) : undefined} />
+          ongroup={ongroup ? () => ongroup(project.id) : undefined}
+          {dragType} ondropthread={onmovethread && (project.kind === 'chats' || (project.kind === 'project' && !project.owner)) ? (threadId) => onmovethread(threadId, project.id) : undefined} />
         {#if expanded.has(project.id) && project.threads.length}<ul class="thread-list project-threads" aria-label={`${project.name} threads`}>{#each project.threads as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
       {/each}
       {#if filter === 'triggers' && !sidebar.projects.length}<p class="side-empty">No project has a trigger yet.</p>{/if}

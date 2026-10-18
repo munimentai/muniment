@@ -1,0 +1,418 @@
+{
+  "": [
+    {
+      "items": [
+        {
+          "detail": "Approve · Muniment",
+          "icon": "message-square",
+          "id": "t-clean",
+          "kind": "thread",
+          "shortcut": "mod+1",
+          "title": "Clean the build folder"
+        },
+        {
+          "detail": "Answer · Homelab",
+          "icon": "message-square",
+          "id": "t-branch",
+          "kind": "thread",
+          "shortcut": "mod+2",
+          "title": "Release notes"
+        }
+      ],
+      "title": "Needs you"
+    },
+    {
+      "items": [
+        {
+          "detail": "Working · Muniment",
+          "icon": "message-square",
+          "id": "t-sync",
+          "kind": "thread",
+          "shortcut": "mod+3",
+          "title": "Fix sync bug"
+        },
+        {
+          "detail": "Working · Muniment",
+          "icon": "message-square",
+          "id": "t-index",
+          "kind": "thread",
+          "shortcut": "mod+4",
+          "title": "Reindex search"
+        },
+        {
+          "detail": "Done · Chats",
+          "icon": "message-square",
+          "id": "t-trip",
+          "kind": "thread",
+          "shortcut": "mod+6",
+          "title": "Trip ideas"
+        },
+        {
+          "detail": "Chats",
+          "icon": "message-square",
+          "id": "t-dinner",
+          "kind": "thread",
+          "shortcut": "mod+7",
+          "title": "Dinner recipes"
+        },
+        {
+          "detail": "Muniment",
+          "icon": "message-square",
+          "id": "t-roadmap",
+          "kind": "thread",
+          "shortcut": "mod+5",
+          "title": "Roadmap"
+        },
+        {
+          "detail": "Failed · Pricing watch",
+          "icon": "message-square",
+          "id": "t-price",
+          "kind": "thread",
+          "shortcut": "mod+8",
+          "title": "Pricing watch"
+        },
+        {
+          "detail": "Homelab",
+          "icon": "message-square",
+          "id": "t-deploy",
+          "kind": "thread",
+          "title": "Deploy runs"
+        },
+        {
+          "detail": "Chats",
+          "icon": "message-square",
+          "id": "t-lease",
+          "kind": "thread",
+          "title": "Lease renewal"
+        }
+      ],
+      "title": "Recent threads"
+    },
+    {
+      "items": [
+        {
+          "detail": "",
+          "icon": "square-pen",
+          "id": "new_thread",
+          "kind": "action",
+          "shortcut": "mod+n",
+          "title": "New thread"
+        },
+        {
+          "detail": "",
+          "icon": "folder-plus",
+          "id": "new_project",
+          "kind": "action",
+          "title": "New project"
+        },
+        {
+          "detail": "",
+          "icon": "bot",
+          "id": "new_agent",
+          "kind": "action",
+          "title": "New agent"
+        },
+        {
+          "detail": "",
+          "icon": "folder-input",
+          "id": "move_to_project",
+          "kind": "action",
+          "title": "Move to project"
+        },
+        {
+          "detail": "",
+          "icon": "pin",
+          "id": "pin",
+          "kind": "action",
+          "title": "Pin thread"
+        },
+        {
+          "detail": "",
+          "icon": "cpu",
+          "id": "switch_model",
+          "kind": "action",
+          "title": "Switch model"
+        },
+        {
+          "detail": "",
+          "icon": "monitor",
+          "id": "switch_machine",
+          "kind": "action",
+          "title": "Switch machine"
+        },
+        {
+          "detail": "",
+          "icon": "shield-check",
+          "id": "toggle_permission_mode",
+          "kind": "action",
+          "shortcut": "shift+tab",
+          "title": "Toggle permission mode"
+        }
+      ],
+      "title": "Actions"
+    }
+  ],
+  ">": [
+    {
+      "items": [
+        {
+          "detail": "",
+          "icon": "square-pen",
+          "id": "new_thread",
+          "kind": "action",
+          "shortcut": "mod+n",
+          "title": "New thread"
+        },
+        {
+          "detail": "",
+          "icon": "folder-plus",
+          "id": "new_project",
+          "kind": "action",
+          "title": "New project"
+        },
+        {
+          "detail": "",
+          "icon": "bot",
+          "id": "new_agent",
+          "kind": "action",
+          "title": "New agent"
+        },
+        {
+          "detail": "",
+          "icon": "folder-input",
+          "id": "move_to_project",
+          "kind": "action",
+          "title": "Move to project"
+        },
+        {
+          "detail": "",
+          "icon": "pin",
+          "id": "pin",
+          "kind": "action",
+          "title": "Pin thread"
+        },
+        {
+          "detail": "",
+          "icon": "cpu",
+          "id": "switch_model",
+          "kind": "action",
+          "title": "Switch model"
+        },
+        {
+          "detail": "",
+          "icon": "monitor",
+          "id": "switch_machine",
+          "kind": "action",
+          "title": "Switch machine"
+        },
+        {
+          "detail": "",
+          "icon": "shield-check",
+          "id": "toggle_permission_mode",
+          "kind": "action",
+          "shortcut": "shift+tab",
+          "title": "Toggle permission mode"
+        }
+      ],
+      "title": "Actions"
+    }
+  ],
+  "> mo": [
+    {
+      "items": [
+        {
+          "detail": "",
+          "icon": "folder-input",
+          "id": "move_to_project",
+          "kind": "action",
+          "title": "Move to project"
+        },
+        {
+          "detail": "",
+          "icon": "cpu",
+          "id": "switch_model",
+          "kind": "action",
+          "title": "Switch model"
+        },
+        {
+          "detail": "",
+          "icon": "shield-check",
+          "id": "toggle_permission_mode",
+          "kind": "action",
+          "shortcut": "shift+tab",
+          "title": "Toggle permission mode"
+        },
+        {
+          "detail": "",
+          "icon": "monitor",
+          "id": "switch_machine",
+          "kind": "action",
+          "title": "Switch machine"
+        }
+      ],
+      "title": "Actions"
+    }
+  ],
+  "re": [
+    {
+      "items": [
+        {
+          "detail": "Working · Muniment",
+          "icon": "message-square",
+          "id": "t-index",
+          "kind": "thread",
+          "shortcut": "mod+4",
+          "title": "Reindex search"
+        },
+        {
+          "detail": "Answer · Homelab",
+          "icon": "message-square",
+          "id": "t-branch",
+          "kind": "thread",
+          "shortcut": "mod+2",
+          "title": "Release notes"
+        },
+        {
+          "detail": "Chats",
+          "icon": "message-square",
+          "id": "t-dinner",
+          "kind": "thread",
+          "shortcut": "mod+7",
+          "title": "Dinner recipes"
+        },
+        {
+          "detail": "Chats",
+          "icon": "message-square",
+          "id": "t-lease",
+          "kind": "thread",
+          "title": "Lease renewal"
+        }
+      ],
+      "title": "Threads"
+    },
+    {
+      "items": [
+        {
+          "detail": "",
+          "icon": "square-pen",
+          "id": "new_thread",
+          "kind": "action",
+          "shortcut": "mod+n",
+          "title": "New thread"
+        },
+        {
+          "detail": "",
+          "icon": "pin",
+          "id": "pin",
+          "kind": "action",
+          "title": "Pin thread"
+        },
+        {
+          "detail": "",
+          "icon": "monitor",
+          "id": "switch_machine",
+          "kind": "action",
+          "title": "Switch machine"
+        },
+        {
+          "detail": "",
+          "icon": "folder-plus",
+          "id": "new_project",
+          "kind": "action",
+          "title": "New project"
+        }
+      ],
+      "title": "Actions"
+    },
+    {
+      "items": [
+        {
+          "detail": "Settings",
+          "icon": "database",
+          "id": "data",
+          "kind": "page",
+          "title": "Data"
+        },
+        {
+          "detail": "",
+          "icon": "settings",
+          "id": "settings",
+          "kind": "page",
+          "shortcut": "mod+,",
+          "title": "Settings"
+        }
+      ],
+      "title": "Pages"
+    }
+  ],
+  "set": [
+    {
+      "items": [
+        {
+          "detail": "",
+          "icon": "settings",
+          "id": "settings",
+          "kind": "page",
+          "shortcut": "mod+,",
+          "title": "Settings"
+        },
+        {
+          "detail": "Settings",
+          "icon": "cpu",
+          "id": "models",
+          "kind": "page",
+          "title": "Models"
+        },
+        {
+          "detail": "Settings",
+          "icon": "wrench",
+          "id": "tools",
+          "kind": "page",
+          "title": "Tools"
+        },
+        {
+          "detail": "Settings",
+          "icon": "monitor",
+          "id": "machines",
+          "kind": "page",
+          "title": "Machines"
+        },
+        {
+          "detail": "Settings",
+          "icon": "shield-check",
+          "id": "permissions",
+          "kind": "page",
+          "title": "Permissions"
+        },
+        {
+          "detail": "Settings",
+          "icon": "database",
+          "id": "data",
+          "kind": "page",
+          "title": "Data"
+        },
+        {
+          "detail": "Settings",
+          "icon": "sliders-horizontal",
+          "id": "general",
+          "kind": "page",
+          "title": "General"
+        }
+      ],
+      "title": "Pages"
+    },
+    {
+      "items": [
+        {
+          "detail": "Answer · Homelab",
+          "icon": "message-square",
+          "id": "t-branch",
+          "kind": "thread",
+          "shortcut": "mod+2",
+          "title": "Release notes"
+        }
+      ],
+      "title": "Threads"
+    }
+  ]
+}

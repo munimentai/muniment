@@ -13,7 +13,9 @@
   import { pickerGroups, providerName } from './provider-catalog.js'
   import { compactsOnSwitch, windowTokens } from './context-usage.js'
 
-  let { inventory, current, contextUsage = null, onchoose, onvisibility = () => {}, onmanage, onrouting, onclose } = $props()
+  // `source` names where the model in use comes from, such as `from project
+  // Homelab`, and `actions` are the foot's choices for it, each run by `onaction`.
+  let { inventory, current, contextUsage = null, source = '', actions = [], onaction = () => {}, onchoose, onvisibility = () => {}, onmanage, onrouting, onclose } = $props()
   let query = $state('')
   let search = $state()
   const searching = $derived(!!query.trim())
@@ -136,6 +138,13 @@
       {/if}
     </div>
   </div>
+  {#if source && current}
+    {@const label = groups.flatMap((group) => group.models).find(inUse)?.label ?? current.model}
+    <div class="picker-source">
+      <span class="source-line">{label} · {source}</span>
+      {#each actions as action (action.id)}<button type="button" class="quiet source-action" onclick={() => onaction(action.id)}>{action.label}</button>{/each}
+    </div>
+  {/if}
   <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
 </div>
 
@@ -198,6 +207,10 @@
   .legacy-text { display: grid; gap: 2px; }
   .legacy-count { color: var(--muted); font-size: var(--text-12); }
   .support { margin: 8px; color: var(--muted); font-size: var(--text-13); }
+  .picker-source { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 12px; color: var(--muted); font-size: var(--text-12); }
+  .picker-source::before { content: ''; position: absolute; top: 0; left: 6px; right: 6px; height: 1px; background: var(--border); opacity: .75; }
+  .source-line { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .source-action { flex: none; padding: 2px 6px; border: 0; color: var(--ink); font-size: var(--text-12); text-decoration: underline; text-underline-offset: 2px; }
   .picker-manage { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; text-align: left; font-size: var(--text-13); }
   /* The menu separator: a straight line inset to the list's 6px padding at three-quarter strength. */
   .picker-manage::before { content: ''; position: absolute; top: 0; left: 6px; right: 6px; height: 1px; background: var(--border); opacity: .75; }

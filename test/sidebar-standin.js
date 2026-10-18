@@ -30,7 +30,7 @@ export function arrangeStandIn(input = {}) {
     const status = working.has(thread.id) ? 'working' : 'read'
     const row = {
       thread_id: thread.id, title: thread.title || agent?.name || 'New thread', project_id: projectId, project_name: projects.get(projectId).name,
-      machine: thread.machine ?? undefined, updated_at: thread.updated_at, status, status_label: status === 'working' ? 'Working' : 'Read',
+      machine: thread.machine ?? undefined, updated_at: thread.updated_at, status, status_label: status === 'working' ? 'Working' : '',
       agent_id: agent?.id, home: agent?.home_thread_id === thread.id, pinned: pinned.has(thread.id),
     }
     if (query && (row.title.toLowerCase().includes(query) || row.project_name.toLowerCase().includes(query))) sidebar.results.push(row)
@@ -43,4 +43,18 @@ export function arrangeStandIn(input = {}) {
   const list = [...projects.values()].filter((project) => input.filter !== 'triggers' || (project.kind !== 'chats' && project.agent_ids.length))
   sidebar.projects = [list[0]?.kind === 'chats' ? list.shift() : null, ...list.sort((a, b) => a.name.localeCompare(b.name))].filter(Boolean)
   return sidebar
+}
+
+// A stand-in for core's `project_tools` in window tests and probe pages:
+// each catalog tool with whether the project, and an agent's choices over
+// it, allow it, and the layer that decides. Core's tests cover the real one.
+export function toolsStandIn({ catalog = {}, policy = {}, agent = null } = {}) {
+  const groups = [['builtin', catalog.builtin], ['mcp', catalog.mcp], ['plugin', catalog.plugins], ['skill', catalog.skills]]
+  return groups.flatMap(([kind, entries]) => (entries ?? []).filter((entry) => entry.id).map((entry) => {
+    const off = (kind === 'builtin' ? policy?.disabledTools : policy?.disabledExtensions)?.includes(entry.id)
+    const agentOff = (kind === 'builtin' ? agent?.disabled : agent?.disabled_extensions)?.includes(entry.id)
+    const agentOn = agent?.allowed?.includes(entry.id)
+    const [allowed, layer] = agentOn ? [true, 'agent'] : agentOff ? [false, 'agent'] : off ? [false, 'project'] : [true, 'default']
+    return { id: entry.id, kind, label: entry.label || entry.name || entry.server || entry.id, allowed, layer }
+  }))
 }

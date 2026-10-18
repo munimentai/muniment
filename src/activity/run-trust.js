@@ -34,16 +34,19 @@ export function estimateCost(usd) {
 }
 
 // One turn's run line: machine, model, permission mode, elapsed time, tokens
-// and the estimated cost, each only when the run recorded it.
-export function runLineParts(run, { machine = null, modes = [], elapsed = null, liveMode = null } = {}) {
+// and the estimated cost, each only when the run recorded it. `sources`
+// names where the model and the mode come from, for the newest turn while
+// the thread still runs on them, such as `from project Homelab`.
+export function runLineParts(run, { machine = null, modes = [], elapsed = null, liveMode = null, sources = {} } = {}) {
   const receipt = run?.receipt ?? null
   const mode = modes.find((candidate) => candidate.id === receipt?.permission_mode) ?? null
   const tokens = turnTokens(receipt?.tokens)
   const time = recorded(receipt?.time) ? receiptTime(receipt.time) : elapsed
+  const sourced = (value, source) => value && source ? `${value} (${source})` : value
   return {
     machine,
-    model: recorded(receipt?.model) ? modelLabel(receipt.model) : null,
-    mode: mode?.title ?? liveMode,
+    model: sourced(recorded(receipt?.model) ? modelLabel(receipt.model) : null, sources.model),
+    mode: sourced(mode?.title ?? liveMode, sources.mode),
     time,
     tokens: tokens === null ? null : `${compactTokens(tokens)} tokens`,
     cost: estimateCost(receipt?.cost_usd),

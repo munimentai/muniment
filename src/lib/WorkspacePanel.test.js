@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import WorkspacePanel from './WorkspacePanel.svelte'
 vi.mock('@xterm/xterm', () => ({Terminal: class {
   options = {}; cols = 80; rows = 24
-  loadAddon() {} open() {} reset() {} focus() {} write() {} dispose() {}
+  loadAddon() {} open() {} reset() {} focus() {} write() {} dispose() {} clear() {} attachCustomKeyEventHandler() {}
   onData() { return {dispose() {}} }
 }}))
 vi.mock('@xterm/addon-fit', () => ({FitAddon: class {fit() {}}}))

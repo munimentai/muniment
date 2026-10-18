@@ -90,12 +90,15 @@ describe('the rail column with two occupants', () => {
   })
 
   it('names the record shortcut per platform and recognizes it', () => {
-    expect(recordPanelShortcut('MacIntel')).toBe('Meta+K')
-    expect(recordPanelShortcut('Win32')).toBe('Control+K')
-    expect(isRecordPanelShortcut({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, 'MacIntel')).toBe(true)
-    expect(isRecordPanelShortcut({ key: 'K', metaKey: false, ctrlKey: true, altKey: false, shiftKey: false }, 'Linux')).toBe(true)
-    expect(isRecordPanelShortcut({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: true }, 'MacIntel')).toBe(false)
-    expect(isRecordPanelShortcut({ key: 'j', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, 'MacIntel')).toBe(false)
+    expect(recordPanelShortcut('MacIntel')).toBe('Meta+Shift+K')
+    expect(recordPanelShortcut('Win32')).toBe('Control+Shift+K')
+    expect(shortcutDisplayLabel('Meta+Shift+K')).toBe('⌘ ⇧ K')
+    expect(shortcutDisplayLabel('Control+Shift+K')).toBe('Ctrl Shift K')
+    expect(isRecordPanelShortcut({ key: 'K', metaKey: true, ctrlKey: false, altKey: false, shiftKey: true }, 'MacIntel')).toBe(true)
+    expect(isRecordPanelShortcut({ key: 'K', metaKey: false, ctrlKey: true, altKey: false, shiftKey: true }, 'Linux')).toBe(true)
+    // The plain key opens the command palette.
+    expect(isRecordPanelShortcut({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, 'MacIntel')).toBe(false)
+    expect(isRecordPanelShortcut({ key: 'j', metaKey: true, ctrlKey: false, altKey: false, shiftKey: true }, 'MacIntel')).toBe(false)
   })
 
   it('opens one occupant at a time, resets the width per occupant, and maximizes the record alone', () => {

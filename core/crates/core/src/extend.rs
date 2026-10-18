@@ -460,17 +460,25 @@ fn take_turn(root: &Path, thread: &str) -> Result<Value, String> {
 /// Loads one turn's capability snapshot into the launch. `agent_skills`
 /// are the skill and plugin ids the thread's agent selected; each turn picks
 /// them as an automatic pick does, so a plugin adds its skills and never its
-/// code.
+/// code. `left_out` are the extension ids the thread's project and agent
+/// leave out, which no pick brings back.
 pub fn prepare(
     root: &Path,
     thread: &str,
     agent_skills: &[String],
+    left_out: &[String],
     config: &mut crate::sidecar::SidecarConfig,
     prompt: &mut String,
 ) -> Result<(), String> {
     let mut state = take_turn(root, thread)?;
     if state["items"].as_array().is_none_or(Vec::is_empty) {
         return Ok(());
+    }
+    if !left_out.is_empty() {
+        let turn = &mut state["turns"][thread];
+        let mut disabled = turn["disabled"].as_array().cloned().unwrap_or_default();
+        disabled.extend(left_out.iter().map(|id| json!(id)));
+        turn["disabled"] = Value::Array(disabled);
     }
     if !agent_skills.is_empty() {
         let turn = &mut state["turns"][thread];
@@ -595,9 +603,10 @@ pub fn mcp_tools(root: &Path) -> Vec<crate::agent_extract::McpTool> {
 }
 
 /// What an agent on this runtime can use, as `agent.tool_catalog` answers
-/// it: the built-in tools a launch offers, each enabled MCP server with the
-/// tools its last connection test listed, and each enabled skill by the id
-/// an agent's `skills` names.
+/// it: the built-in tools a launch offers, each enabled MCP server with its
+/// item id and the tools its last connection test listed, each enabled
+/// plugin by its item id, and each enabled skill by the id an agent's
+/// `skills` names.
 pub fn tool_catalog(root: &Path) -> Value {
     let builtin: Vec<Value> = crate::pi_launch::builtin_tools()
         .map(|(id, label)| {
@@ -607,11 +616,15 @@ pub fn tool_catalog(root: &Path) -> Value {
         .collect();
     let state = inventory(root).unwrap_or_else(|_| json!({"items": []}));
     let mut mcp = Vec::new();
+    let mut plugins = Vec::new();
     let mut skills = Vec::new();
     for item in state["items"].as_array().into_iter().flatten() {
         let id = item["id"].as_str().unwrap_or("");
         if id.is_empty() || item["enabled"] == false {
             continue;
+        }
+        if item["kind"] == "plugin" {
+            plugins.push(json!({"id": id, "name": item["name"].as_str().unwrap_or(id).trim()}));
         }
         let name = item["name"].as_str().unwrap_or("").trim();
         if item["kind"] == "mcp" {
@@ -625,7 +638,7 @@ pub fn tool_catalog(root: &Path) -> Value {
                 .filter_map(Value::as_str)
                 .map(|tool| json!({"name": tool}))
                 .collect();
-            let mut server = json!({"server": name, "tools": tools});
+            let mut server = json!({"id": id, "server": name, "tools": tools});
             if let Some(checked) = item["lastCheck"]["checkedAt"].as_str() {
                 server["checked_at"] = json!(checked);
             }
@@ -638,7 +651,7 @@ pub fn tool_catalog(root: &Path) -> Value {
             .flatten()
             .map(|(member, _)| member)
         {
-            mcp.push(json!({"server": member, "tools": []}));
+            mcp.push(json!({"id": format!("{id}:{member}"), "server": member, "tools": []}));
         }
         for skill in item["skills"].as_array().into_iter().flatten() {
             let (Some(path), Some(skill_name)) = (skill["path"].as_str(), skill["name"].as_str())
@@ -652,7 +665,7 @@ pub fn tool_catalog(root: &Path) -> Value {
             }));
         }
     }
-    json!({"builtin": builtin, "mcp": mcp, "skills": skills})
+    json!({"builtin": builtin, "mcp": mcp, "plugins": plugins, "skills": skills})
 }
 
 /// The saved MCP servers `servers` names, by id or name, with their saved
@@ -1261,7 +1274,7 @@ mod tests {
         )
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &mut config, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], &[], &mut config, &mut String::new()).unwrap();
         let generated: Value =
             serde_json::from_slice(&fs::read(&config.env["MUNIMENT_EXTEND_MCP"]).unwrap()).unwrap();
         // Pi reads `record` from the agent directory, so the turn adds only `m`.
@@ -1278,7 +1291,7 @@ mod tests {
 
         // The selection is spent, so the next turn adds nothing.
         let mut next = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &mut next, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], &[], &mut next, &mut String::new()).unwrap();
         assert!(next.args.is_empty() && !next.env.contains_key("MUNIMENT_EXTEND_MCP"));
     }
 
@@ -1318,6 +1331,7 @@ mod tests {
                     "off".into(),
                     "missing".into(),
                 ],
+                &[],
                 &mut config,
                 &mut prompt,
             )
@@ -1358,7 +1372,7 @@ mod tests {
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
         let mut prompt = String::new();
-        prepare(&root.0, "chat", &[], &mut config, &mut prompt).unwrap();
+        prepare(&root.0, "chat", &[], &[], &mut config, &mut prompt).unwrap();
         let loaded: Vec<_> = config
             .args
             .chunks(2)
@@ -1375,6 +1389,53 @@ mod tests {
         assert!(prompt.contains("picked the skill \"ship\""));
         assert!(prompt.contains(&base.join("commands/ship.md").to_string_lossy().into_owned()));
         assert!(!prompt.contains("Ship it") && !prompt.contains("Long instructions"));
+    }
+
+    #[test]
+    fn a_project_leaves_tools_out_that_a_turn_picks() {
+        let root = Extracted(
+            std::env::temp_dir().join(format!("extend-left-out-{}", uuid::Uuid::new_v4())),
+        );
+        let base = root.0.join("extensions/packages/kit");
+        fs::create_dir_all(base.join("review")).unwrap();
+        fs::create_dir_all(base.join("commands")).unwrap();
+        fs::write(base.join("review/SKILL.md"), "Review").unwrap();
+        fs::write(base.join("commands/ship.md"), "Ship it").unwrap();
+        let inventory = json!({"items": [
+            {"id": "m", "kind": "mcp", "name": "Leads", "definition": {"url": "https://leads.example/mcp"}},
+            {"id": "k", "kind": "skill", "base": base, "skills": [
+                {"name": "review", "path": "review/SKILL.md"},
+                {"name": "ship", "path": "commands/ship.md"}
+            ]}
+        ], "turns": {"chat": {"selected": ["m", "k:review/SKILL.md"]}}});
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        let mut config = crate::sidecar::SidecarConfig::new("unused");
+        let mut prompt = String::new();
+        prepare(
+            &root.0,
+            "chat",
+            &[],
+            &["m".into(), "k:review/SKILL.md".into()],
+            &mut config,
+            &mut prompt,
+        )
+        .unwrap();
+        assert!(!config.env.contains_key("MUNIMENT_EXTEND_MCP"));
+        let loaded: Vec<_> = config
+            .args
+            .chunks(2)
+            .filter(|pair| pair[0] == "--skill")
+            .map(|pair| pair[1].clone())
+            .collect();
+        assert_eq!(
+            loaded,
+            [base.join("commands/ship.md").to_string_lossy().into_owned()]
+        );
+        assert!(!prompt.contains("review"));
     }
 
     #[test]
@@ -1509,6 +1570,7 @@ mod tests {
         let empty = tool_catalog(&root.0);
         assert_eq!(empty["mcp"], json!([]));
         assert_eq!(empty["skills"], json!([]));
+        assert_eq!(empty["plugins"], json!([]));
         let builtin = empty["builtin"].as_array().unwrap();
         let ids: Vec<&str> = builtin
             .iter()
@@ -1550,12 +1612,13 @@ mod tests {
         assert_eq!(
             catalog["mcp"],
             json!([
-                {"server":"Leads","tools":[{"name":"search"},{"name":"get_lead"}],
+                {"id":"m1","server":"Leads","tools":[{"name":"search"},{"name":"get_lead"}],
                  "checked_at":"2026-01-01T09:00:00Z"},
-                {"server":"Untested","tools":[]},
-                {"server":"docs","tools":[]}
+                {"id":"m2","server":"Untested","tools":[]},
+                {"id":"p1:docs","server":"docs","tools":[]}
             ])
         );
+        assert_eq!(catalog["plugins"], json!([{"id":"p1","name":"Docs"}]));
         assert_eq!(
             catalog["skills"],
             json!([{"id":"p1:skills/review/SKILL.md","name":"review","description":"Review a draft."}])

@@ -2168,8 +2168,8 @@ describe('record panel', () => {
     const artifacts = screen.getByRole('button', { name: 'Artifacts' })
     const mac = navigator.platform.startsWith('Mac')
     expect(record).toHaveAttribute('aria-controls', 'record-panel')
-    expect(record).toHaveAttribute('aria-keyshortcuts', mac ? 'Meta+K' : 'Control+K')
-    expect(within(record).getByText(mac ? '⌘ K' : 'Ctrl K').tagName).toBe('KBD')
+    expect(record).toHaveAttribute('aria-keyshortcuts', mac ? 'Meta+Shift+K' : 'Control+Shift+K')
+    expect(within(record).getByText(mac ? '⌘ ⇧ K' : 'Ctrl Shift K').tagName).toBe('KBD')
     const row = record.closest('.titlebar-thread') ?? record.parentElement
     const controls = [...row.querySelectorAll('.row-control')]
     expect(row).not.toContainElement(artifacts)
@@ -2586,7 +2586,7 @@ describe('record panel', () => {
     render(App)
     const record = await screen.findByRole('button', { name: 'Open record panel' })
     const mac = navigator.platform.startsWith('Mac')
-    await fireEvent.keyDown(document, { key: 'k', metaKey: mac, ctrlKey: !mac })
+    await fireEvent.keyDown(document, { key: 'K', metaKey: mac, ctrlKey: !mac, shiftKey: true })
     expect(record).toHaveAttribute('aria-expanded', 'true')
     const workspace = document.querySelector('.workspace')
     expect(workspace).toHaveClass('rail-open')
@@ -2598,7 +2598,7 @@ describe('record panel', () => {
     expect(screen.queryByRole('separator', { name: 'Record' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Restore the thread beside the record' })).toHaveAttribute('aria-pressed', 'true')
 
-    await fireEvent.keyDown(document, { key: 'k', metaKey: mac, ctrlKey: !mac })
+    await fireEvent.keyDown(document, { key: 'K', metaKey: mac, ctrlKey: !mac, shiftKey: true })
     expect(workspace).not.toHaveClass('record-maximized')
     expect(record).toHaveAttribute('aria-expanded', 'true')
 
@@ -2943,7 +2943,7 @@ describe('thread name', () => {
     expect(screen.queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
   })
 
-  it('lists project threads in Recent with their project and under the expanded project without creating a chat', async () => {
+  it('lists settled project threads in Recent by their time alone and under the expanded project without creating a chat', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Project notes', updatedAt: '' },
       { threadId: 'thread-2', title: 'Unassigned notes', updatedAt: '' },
@@ -2955,12 +2955,15 @@ describe('thread name', () => {
     render(App)
     const project = await screen.findByRole('button', { name: 'Project Research' })
     const recent = screen.getByRole('list', { name: 'Recent threads' })
-    await waitFor(() => expect(within(recent).getByText('Project notes').closest('.thread-record')).toHaveTextContent('Research'))
-    expect(within(recent).getByRole('button', { name: 'Unassigned notes' })).toHaveAccessibleDescription(/Chats/)
     expect(screen.getAllByRole('button', { name: /^Project / }).map((button) => button.getAttribute('aria-label'))).toEqual(['Project Chats', 'Project Research'])
     await fireEvent.click(project)
     expect(project).toHaveAttribute('aria-expanded', 'true')
-    expect(within(screen.getByRole('list', { name: 'Research threads' })).getByText('Project notes')).toBeInTheDocument()
+    expect(await within(await screen.findByRole('list', { name: 'Research threads' })).findByText('Project notes')).toBeInTheDocument()
+    // A settled row names neither a status nor its project.
+    const settled = within(recent).getByText('Project notes').closest('.thread-record')
+    expect(settled).not.toHaveTextContent('Research')
+    expect(settled).not.toHaveTextContent('Read')
+    expect(within(recent).getByRole('button', { name: 'Unassigned notes' })).not.toHaveAccessibleDescription(/Chats/)
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(0)
     await fireEvent.click(project)
     expect(screen.queryByRole('list', { name: 'Research threads' })).not.toBeInTheDocument()
@@ -3551,7 +3554,7 @@ describe('window chrome', () => {
       expect(row.querySelector('.title-spacer')).toHaveAttribute('data-tauri-drag-region')
       expect(row.querySelector('.update-slot')).not.toHaveTextContent(/Update|Installing/)
       expect(row.querySelector('.update-slot button')).toBeNull()
-      expect(row.querySelector('.record-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ K' : 'Ctrl K')
+      expect(row.querySelector('.record-toggle kbd')).toHaveTextContent(platform.startsWith('Mac') ? '⌘ ⇧ K' : 'Ctrl Shift K')
       for (const control of row.querySelectorAll('button, input, button *')) {
         expect(control).not.toHaveAttribute('data-tauri-drag-region')
       }
@@ -3572,7 +3575,7 @@ describe('window chrome', () => {
     await waitFor(() => expect(actions).toBeEnabled())
     await fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
     await fireEvent.click(actions)
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Archive', 'Make this an agent', 'Delete'])
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Rename', 'Pin', 'Move to project', 'Archive', 'Make this an agent', 'Delete'])
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
     await fireEvent.click(actions)
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument()
@@ -3840,7 +3843,8 @@ describe('sidebar collapse', () => {
     expect([...document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')].map((button) => button.getAttribute('aria-label'))).toEqual(['New thread', 'Artifacts'])
     expect([...document.querySelectorAll('#sidebar .sidebar-actions button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Settings', 'Usage', 'Notifications'])
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
-    expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
+    // Artifacts names ⌘J, and Search names ⌘K, which opens the command palette.
+    expect([...document.querySelectorAll('#sidebar kbd')].map((kbd) => kbd.textContent)).toEqual(navigator.platform.startsWith('Mac') ? ['⌘ K', '⌘ J'] : ['Ctrl K', 'Ctrl J'])
 
     collapse.focus()
     await fireEvent.click(collapse)
@@ -9268,7 +9272,7 @@ describe('the swarm', () => {
     await screen.findByText('Notes', { selector: '.thread-row-title' })
     const recent = screen.getByRole('list', { name: 'Recent threads' })
     // The row takes the group's name once the swarm lists the group.
-    await waitFor(() => expect(within(recent).getByRole('button', { name: 'Launch room' })).toHaveAccessibleDescription(/Chats/))
+    await waitFor(() => expect(within(recent).getByRole('button', { name: 'Launch room' })).toBeInTheDocument())
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'group.list' })))
     await tick()
     await fireEvent.click(within(recent).getByRole('button', { name: 'Launch room' }))
@@ -9472,5 +9476,176 @@ describe('permission modes', () => {
     const card = plan.closest('.permission-card')
     await fireEvent.click(within(card).getByRole('button', { name: 'Approve and edit automatically' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_answer_permission', { runId: 'run-gated', gateId: '019965a0-0000-7000-8000-0000000000b7', answer: { type: 'select', value: 'Approve and edit automatically' } }))
+  })
+  it('names where the thread mode comes from in the Modes menu', async () => {
+    let answer = { thread_id: 'thread-1', mode: 'manual', title: '', source: 'thread', set_by: 'user', layer: 'project', project_id: 'p-homelab' }
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'project_list') return { projects: { 'p-homelab': 'Homelab' }, threads: { 'thread-1': 'p-homelab' } }
+      if (command === 'agent_request' && payload.operation === 'permission.modes') return fixture('response-permission-modes.json')
+      if (command === 'agent_request' && payload.operation === 'thread.permission_mode') return answer
+      if (command === 'agent_request' && payload.operation === 'thread.permission_mode_set') { answer = { ...answer, mode: payload.body.mode, layer: 'thread', project_id: undefined }; return answer }
+      return original(command, payload)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Permission mode: Ask before changes' }))
+    let menu = await screen.findByRole('menu', { name: 'Modes' })
+    expect(menu).toHaveTextContent('Ask before changes · from project Homelab')
+    await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Plan first' }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'Permission mode: Plan first' }))
+    menu = await screen.findByRole('menu', { name: 'Modes' })
+    expect(menu).toHaveTextContent('Plan first · this thread')
+  })
+})
+
+describe('command palette', () => {
+  const ranked = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/palette/ranked.json'), 'utf8'))
+  const mac = () => navigator.platform.startsWith('Mac')
+  const paletteKey = (target = document) => fireEvent.keyDown(target, { key: 'k', metaKey: mac(), ctrlKey: !mac() })
+  function paletteRuntime(extra = () => undefined) {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => {
+      const answer = await extra(command, args)
+      if (answer !== undefined) return answer
+      if (command === 'palette_rank') return structuredClone(ranked[args.input.query] ?? ranked[''])
+      return original(command, args)
+    })
+  }
+
+  it('opens with the palette key, hands core the threads, pages and open thread, and closes with the key', async () => {
+    paletteRuntime()
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }, { threadId: 'thread-2', title: 'Release notes', updatedAt: '' }]
+    render(App)
+    await findReadyWorkspaceComposer()
+    await paletteKey()
+    const palette = await screen.findByRole('dialog', { name: 'Search' })
+    const field = within(palette).getByRole('combobox', { name: 'Search threads, pages and actions' })
+    await waitFor(() => expect(field).toHaveFocus())
+    await waitFor(() => expect(within(palette).getByText('Needs you')).toBeInTheDocument())
+    const input = invoke.mock.calls.findLast(([name]) => name === 'palette_rank')[1].input
+    expect(input.query).toBe('')
+    expect(input.threads.map((thread) => thread.thread_id)).toEqual(expect.arrayContaining(['thread-1', 'thread-2']))
+    expect(input.pages.map((page) => page.id)).toEqual(expect.arrayContaining(['settings:models', 'settings:permissions', 'settings:mcp']))
+    expect(input.thread).toEqual({ thread_id: 'thread-1', pinned: false, movable: true })
+    const newThread = within(palette).getByRole('option', { name: /^New thread/ })
+    expect(newThread).toHaveAttribute('aria-keyshortcuts', mac() ? 'Meta+N' : 'Control+N')
+    expect(newThread).toHaveTextContent(mac() ? '⌘N' : 'Ctrl+N')
+    // A leading angle bracket keeps the actions alone.
+    await fireEvent.input(field, { target: { value: '>' } })
+    await waitFor(() => expect(within(palette).queryByText('Needs you')).toBeNull())
+    expect(within(palette).getByText('Actions')).toBeInTheDocument()
+    await paletteKey()
+    expect(screen.queryByRole('dialog', { name: 'Search' })).toBeNull()
+  })
+
+  it('leaves the palette key to a focused terminal', async () => {
+    paletteRuntime()
+    render(App)
+    await findReadyWorkspaceComposer()
+    const terminal = document.createElement('section')
+    terminal.className = 'terminal-workspace'
+    const input = document.createElement('textarea')
+    terminal.append(input)
+    document.body.append(terminal)
+    input.focus()
+    await paletteKey(input)
+    expect(screen.queryByRole('dialog', { name: 'Search' })).toBeNull()
+    terminal.remove()
+  })
+
+  it('moves the open thread to a project from the palette and names what it now uses', async () => {
+    const catalog = { projects: { 'p-homelab': 'Homelab' }, threads: {} }
+    paletteRuntime((command, args) => {
+      if (command === 'project_list') return structuredClone(catalog)
+      if (command === 'project_move_thread') { catalog.threads[args.threadId] = args.projectId; return null }
+    })
+    render(App)
+    await findReadyWorkspaceComposer()
+    await paletteKey()
+    const palette = await screen.findByRole('dialog', { name: 'Search' })
+    await fireEvent.input(within(palette).getByRole('combobox'), { target: { value: '> mo' } })
+    await waitFor(() => expect(within(palette).getAllByRole('option')[0]).toHaveTextContent('Move to project'))
+    await fireEvent.keyDown(within(palette).getByRole('combobox'), { key: 'Enter' })
+    const picker = await screen.findByRole('dialog', { name: 'Move to project' })
+    expect(within(picker).getByRole('button', { name: 'Chats' })).toHaveAttribute('aria-current', 'true')
+    await fireEvent.click(within(picker).getByRole('button', { name: 'Homelab' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('project_move_thread', { threadId: 'thread-1', projectId: 'p-homelab' }))
+    expect(await screen.findByText('Now uses Homelab instructions and tools.')).toHaveAttribute('role', 'status')
+    expect(screen.queryByRole('dialog', { name: 'Move to project' })).toBeNull()
+  })
+
+  it('moves a thread dropped on a project row', async () => {
+    const catalog = { projects: { 'p-homelab': 'Homelab' }, threads: {} }
+    paletteRuntime((command, args) => {
+      if (command === 'project_list') return structuredClone(catalog)
+      if (command === 'project_move_thread') { catalog.threads[args.threadId] = args.projectId; return null }
+    })
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }, { threadId: 'thread-2', title: 'Release notes', updatedAt: '' }]
+    render(App)
+    const row = (await screen.findByRole('button', { name: 'Release notes' })).closest('.thread-record')
+    expect(row).toHaveAttribute('draggable', 'true')
+    const project = (await screen.findByRole('button', { name: 'Project Homelab' })).closest('.project-row')
+    const data = { 'application/x-muniment-thread': 'thread-2' }
+    const dataTransfer = { types: Object.keys(data), getData: (type) => data[type] ?? '', setData: (type, value) => { data[type] = value }, dropEffect: 'none', effectAllowed: 'all' }
+    await fireEvent.dragStart(row, { dataTransfer })
+    await fireEvent.dragOver(project, { dataTransfer })
+    await fireEvent.drop(project, { dataTransfer })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('project_move_thread', { threadId: 'thread-2', projectId: 'p-homelab' }))
+  })
+})
+
+describe('per-thread model', () => {
+  const twoModels = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', thinking: false }, { id: 'qwen3:8b', context: '40K', thinking: false }] }], default_provider: 'ollama', default_model: 'llama3.2:3b', hidden: [] }
+  function modelRuntime(settings) {
+    localModeStatus = true
+    let current = settings
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_provider_inventory') return twoModels
+      if (command === 'project_list') return { projects: { 'p-homelab': 'Homelab' }, threads: { 'thread-1': 'p-homelab' }, settings: { 'p-homelab': { model: { provider: 'ollama', model: 'llama3.2:3b' } } } }
+      if (command === 'thread_settings') return current
+      if (command === 'thread_settings_set') {
+        current = args.reset
+          ? { ...current, model: current.seed?.model ?? twoModels.providers[0].models[0], layer: current.seed ? 'project' : 'default', project_id: current.seed?.project_id }
+          : { ...current, model: args.model, layer: 'thread', project_id: undefined }
+        return current
+      }
+      if (command === 'chat_submit') return { runId: 'run-1' }
+      return original(command, args)
+    })
+  }
+
+  it('changes the open thread alone, names where its model comes from and returns it to the project model', async () => {
+    modelRuntime({ thread_id: 'thread-1', model: { provider: 'ollama', model: 'llama3.2:3b' }, layer: 'project', project_id: 'p-homelab', seed: { project_id: 'p-homelab', model: { provider: 'ollama', model: 'llama3.2:3b' } } })
+    render(App)
+    await findReadyWorkspaceComposer()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings', { threadId: 'thread-1' }))
+    await fireEvent.click(await screen.findByRole('button', { name: /^Model: / }))
+    const picker = await screen.findByRole('dialog', { name: 'Model' })
+    await waitFor(() => expect(picker.querySelector('.picker-source')).toHaveTextContent('· from project Homelab'))
+    await fireEvent.click(picker.querySelector('[data-model="qwen3:8b"]'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings_set', { threadId: 'thread-1', model: { provider: 'ollama', model: 'qwen3:8b' } }))
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
+    await fireEvent.click(await screen.findByRole('button', { name: /^Model: / }))
+    const again = await screen.findByRole('dialog', { name: 'Model' })
+    expect(again.querySelector('.picker-source')).toHaveTextContent('· this thread')
+    await fireEvent.click(within(again).getByRole('button', { name: 'Use the project model' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings_set', { threadId: 'thread-1', reset: true }))
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
+  })
+
+  it('carries a model picked before any thread exists on the first message', async () => {
+    modelRuntime(null)
+    threadSummaryResult = []
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    await fireEvent.click(await screen.findByRole('button', { name: /^Model: / }))
+    await fireEvent.click((await screen.findByRole('dialog', { name: 'Model' })).querySelector('[data-model="qwen3:8b"]'))
+    expect(invoke).not.toHaveBeenCalledWith('thread_settings_set', expect.anything())
+    await fireEvent.input(composer, { target: { value: 'Hello' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Hello', model: { provider: 'ollama', model: 'qwen3:8b' } })))
+    expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
   })
 })

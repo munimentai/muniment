@@ -461,6 +461,15 @@ impl ModelService {
                     &data.provider,
                 ))
             }
+            ModelAction::ThreadSettings | ModelAction::ThreadSettingsSet => {
+                let default = muniment_core::launch_facts::read_local_default_model(agent);
+                muniment_core::thread_settings::operation(
+                    &self.state_directory,
+                    action == ModelAction::ThreadSettingsSet,
+                    data,
+                    default.as_deref(),
+                )
+            }
             ModelAction::MemoryProfileRead => {
                 parse::<Empty>(data)?;
                 answer(muniment_core::memory_files::profile_read(
