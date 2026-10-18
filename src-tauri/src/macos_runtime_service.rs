@@ -477,7 +477,9 @@ pub(crate) fn start_child(
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
         .map(|home| home.join("Library/Logs/Muniment"));
-    let spawned = Command::new(&executable)
+    // The browser engine in this process holds descriptors the runtime and Pi
+    // must not keep open.
+    let spawned = muniment_core::child_fds::stdio_only(&mut Command::new(&executable))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .spawn();

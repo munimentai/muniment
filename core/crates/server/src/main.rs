@@ -68,6 +68,8 @@ MUNIMENT_UPDATE_PUBLIC_KEY the release signing key.";
 const FAILURE: u8 = 1;
 
 fn main() -> ExitCode {
+    // Programs this server starts keep only the descriptors they are handed.
+    muniment_core::child_fds::seal_inherited();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Pi runs `secret get <provider>` for an endpoint key, which this binary
     // reads from the state root's credential files.

@@ -17,6 +17,7 @@
   let modelError = $state('')
   let modelOpening = $state(false)
   let busy = $state(false)
+  let folderAsking = $state(false)
   let picking = $state(false)
   let pickerOutcome = $state({ status: 'not-started' })
   let homeRequest = 0
@@ -71,7 +72,11 @@
       onboarding = { ...onboarding, configured: true, error: undefined }
     } catch (_) {
       onboarding = { ...onboarding, error: firstRunError(tauri, 'homeConfirm').message }
+      busy = false
       return
+    }
+    try {
+      if (!await folderAccess()) return
     } finally {
       busy = false
     }
@@ -83,6 +88,23 @@
       modelError = error instanceof Error ? error.message : String(error)
     } finally {
       modelOpening = false
+    }
+  }
+
+  // macOS asks before Muniment reads a folder in Documents, Desktop or
+  // Downloads. Asking while the user looks at the first run keeps the prompt
+  // from holding the first chat. A refusal stays on screen with its next step.
+  async function folderAccess() {
+    folderAsking = true
+    try {
+      const access = await tauri.invoke('home_folder_access', { homePath: onboarding.homePath })
+      if (access?.state !== 'denied') return true
+      onboarding = { ...onboarding, error: access.message }
+      return false
+    } catch (_) {
+      return true
+    } finally {
+      folderAsking = false
     }
   }
 
@@ -168,6 +190,7 @@
     onboarding = { ...onboarding, error: undefined }
     try {
       await tauri.invoke('home_confirm', { homePath: onboarding.homePath })
+      if (!await folderAccess()) return
       onboarding = { name: 'complete', homePath: onboarding.homePath }
     } catch (_) {
       onboarding = { ...onboarding, error: 'Muniment could not save Home. Check folder access and try Save Home again.' }
@@ -205,7 +228,7 @@
         <button class="primary" onclick={saveHome} disabled={busy || picking}>Save Home</button>
       </div>
     {:else}
-      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} busy={busy || modelOpening || onboarding.name === 'loading' || (!!signIn && signIn.stage !== 'failed' && signIn.stage !== 'cancelled')} {signIn} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} onsigninanswer={answerSignIn} onsignincancel={cancelSignIn} onsigninopen={(url) => tauri.invoke('local_mode_open_url', { url }).catch(() => {})} />
+      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} {folderAsking} busy={busy || modelOpening || onboarding.name === 'loading' || (!!signIn && signIn.stage !== 'failed' && signIn.stage !== 'cancelled')} {signIn} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} onsigninanswer={answerSignIn} onsignincancel={cancelSignIn} onsigninopen={(url) => tauri.invoke('local_mode_open_url', { url }).catch(() => {})} />
       {#if modelError}<p class="error" role="alert">{modelError}</p>{/if}
     {/if}
     {#if onboarding.error}<p class="error" role="alert">{onboarding.error}</p>{/if}

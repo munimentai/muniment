@@ -163,14 +163,14 @@ The first run asks one question: which model to connect. The provider scan runs
 at launch, and its finds lead the list: ready local servers, then subscriptions
 with a sign-in hint, then servers that need a key or a start. Every subscription
 Muniment signs in to follows in full color. Each card is one line: logo, name and action. The action reads Connect only where one click connects, and Sign in where a sign-in follows. More providers opens the provider
-catalog, and Explore without connecting opens the composer with no model. A pick saves Home, and a found server connects in place. A signed-in Claude Code connects in place. Any other subscription's sign-in starts at once, opens the browser, and shows its progress under its card until the account connects. A scan that fails while the runtime starts runs again before it names the failure. Settings → Connect account lists the servers the scan finds that no connection serves: one connects in one step, and one that needs more opens a custom endpoint form with its name and address. The composer band
+catalog, and Explore without connecting opens the composer with no model. A pick saves Home and asks macOS for access to it then, with a hint beside Home, so no prompt holds the first chat. A refusal keeps the first run and names the setting. A found server connects in place. A signed-in Claude Code connects in place. Any other subscription's sign-in starts at once, opens the browser, and shows its progress under its card until the account connects. A scan that fails while the runtime starts runs again before it names the failure. Settings → Connect account lists the servers the scan finds that no connection serves: one connects in one step, and one that needs more opens a custom endpoint form with its name and address. The composer band
 shows the model source, Home, the context meter and the running cost. A global shortcut opens a one-line launcher that starts a new thread with the line typed into it.
 
 **The provider scan.** It probes known model servers on `127.0.0.1` only, never the network, in about two seconds, and names each by its answer, not its port: Ollama, LM Studio, llama.cpp, MLX LM, oMLX, vLLM, Jan, Osaurus, LocalAI, Lemonade, KoboldCpp, Docker Model Runner, Text Generation WebUI and exo. It sends no key. A `401` asks *Add key*, and an installed server that does not answer reads *Not running* and opens how to start it. A key comes from the user, or for oMLX from its own settings file on request. A sign-in hint only tests that a CLI's executable, folder or credential file exists and never reads it: Claude Code, Codex, Grok Build, Gemini, Copilot, Kimi, Devin, Muse Code and Ori.
 
 **The model chip.** The chip shows the provider's mark and the model id in use,
 the saved default when it is shown, else the first shown model. When no
-provider answers it reads `Connect a model`, and the chip and Send open the provider catalog.
+provider answers it reads `Connect a model`, and the chip and Send open the provider catalog. A re-read of the same machine after a reply or a reconnect keeps the model the chip names.
 Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
@@ -570,8 +570,8 @@ Every file the app, the runtime and the agent harness keep sits under
 `~/.muniment` or the directory `MUNIMENT_STATE_DIR` names. Home is the document
 folder, a different thing, and logs keep their platform paths.
 
-Thread names use a separate model request on the first message, limited to one
-to three words. A failed request keeps a short prompt fallback. Manual names
+Thread names use a separate model request on the first message, limited to six
+words. A failed request keeps the prompt's first words, cut at a word with an ellipsis. Manual names
 win over generated names. Action feedback groups reads, searches, commands
 and edits with expandable, bounded, credential-filtered details. Saved runs
 retain those details. Cancel sign-in returns to local mode and rejects a late

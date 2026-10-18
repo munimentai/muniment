@@ -148,6 +148,41 @@ pub fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, Str
     })
 }
 
+/// How long the first run waits for the answer to macOS's folder prompt.
+const FOLDER_ACCESS_BOUND: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether macOS lets Muniment's processes read Home: `open`, `denied` with
+/// the step to take, or `waiting` when no answer came within the bound. The
+/// first run asks here, while the user looks, so the prompt never stops a chat.
+#[tauri::command]
+pub async fn home_folder_access(
+    app: AppHandle,
+    home_path: String,
+) -> Result<serde_json::Value, String> {
+    use muniment_core::folder_access::{check, failure_reason, protected_folder, FolderAccess};
+    let home = PathBuf::from(home_path);
+    let user_home = app.path().home_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        let access = check(
+            &home,
+            FOLDER_ACCESS_BOUND,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        let folder = user_home
+            .as_deref()
+            .and_then(|user_home| protected_folder(&home, user_home));
+        let state = match access {
+            FolderAccess::Open => "open",
+            FolderAccess::Denied => "denied",
+            FolderAccess::Waiting => "waiting",
+        };
+        let message = (access != FolderAccess::Open).then(|| failure_reason(access, folder));
+        serde_json::json!({ "state": state, "message": message })
+    })
+    .await
+    .map_err(|_| "Muniment could not check folder access.".to_string())
+}
+
 #[tauri::command]
 pub async fn home_confirm_import(
     app: AppHandle,

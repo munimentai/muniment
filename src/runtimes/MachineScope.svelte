@@ -7,8 +7,12 @@
 
   let { scope, disabled = false, onselect = () => {} } = $props()
 
+  // The switch keeps naming the machine the page belongs to until the
+  // selection moves, so a refused or pending switch never shows another one.
   function change(event) {
-    const runtime = scope.choices.find((choice) => choice.id === event.currentTarget.value)
+    const select = event.currentTarget
+    const runtime = scope.choices.find((choice) => choice.id === select.value)
+    select.value = scope.selected.id
     if (runtime && runtime.id !== scope.selected.id) onselect(runtime)
   }
 </script>
@@ -18,7 +22,9 @@
   <label for="settings-machine">Settings for</label>
   <select id="settings-machine" value={scope.selected.id} {disabled} onchange={change}>
     {#each scope.choices as runtime (runtime.id)}
-      <option value={runtime.id}>{machineName(runtime)}</option>
+      <!-- Each option carries its selection, so a list that arrives before or
+           after the selected machine changes still shows that machine. -->
+      <option value={runtime.id} selected={runtime.id === scope.selected.id}>{machineName(runtime)}</option>
     {/each}
   </select>
 </div>
@@ -26,6 +32,6 @@
 <style>
   .machine-scope { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 0 12px; color: var(--muted); font-size: var(--text-13); }
   label { flex: none; }
-  select { min-width: 0; max-width: 260px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; }
+  select { min-width: 96px; max-width: 260px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; }
   select:disabled { color: var(--muted); }
 </style>

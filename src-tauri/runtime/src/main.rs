@@ -39,6 +39,9 @@ Options:
   --version   Print version";
 
 fn main() {
+    // A desktop that started this runtime may have leaked descriptors from its
+    // browser engine, and Pi and every other program started here must not keep them.
+    muniment_core::child_fds::seal_inherited();
     match handle_arguments() {
         Ok(true) => return,
         Ok(false) => {}

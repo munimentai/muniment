@@ -96,6 +96,7 @@ impl PiRpcEngine {
             .env("PI_OFFLINE", "1")
             .env_remove("BUN_BE_BUN")
             .stdin(Stdio::null());
+        crate::child_fds::stdio_only(&mut command);
         command
     }
 
@@ -205,7 +206,7 @@ impl PiRpcEngine {
             .acquire_executable()
             .ok_or_else(|| SIGN_IN_START_ERROR.to_string())?;
         let extension = write_extension(agent)?;
-        let mut child = Command::new(executable)
+        let mut child = crate::child_fds::stdio_only(&mut Command::new(executable))
             .args(["--mode", "rpc", "--no-extensions", "--extension"])
             .arg(&extension)
             .env("PI_CODING_AGENT_DIR", agent)

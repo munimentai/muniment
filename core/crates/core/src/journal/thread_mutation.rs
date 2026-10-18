@@ -100,6 +100,40 @@ pub fn append_thread_delete_now(
     )
 }
 
+/// The most words a first-turn name holds, generated or taken from the prompt.
+pub const FIRST_NAME_WORDS: usize = 6;
+/// The most characters a prompt fallback keeps before its ellipsis.
+const FALLBACK_NAME_CHARS: usize = 48;
+
+/// The name a thread carries until the model names it: the first message
+/// whole when it is short, else its leading words cut at a word boundary
+/// with an ellipsis.
+pub fn fallback_thread_name(prompt: &str) -> String {
+    let words: Vec<&str> = prompt.split_whitespace().collect();
+    let mut name = String::new();
+    let mut kept = 0;
+    for word in &words {
+        let length = name.chars().count() + usize::from(!name.is_empty()) + word.chars().count();
+        if kept == FIRST_NAME_WORDS || length > FALLBACK_NAME_CHARS {
+            break;
+        }
+        if !name.is_empty() {
+            name.push(' ');
+        }
+        name.push_str(word);
+        kept += 1;
+    }
+    if kept == words.len() {
+        return name;
+    }
+    if name.is_empty() {
+        // A first word longer than the bound keeps its leading characters.
+        name = words[0].chars().take(FALLBACK_NAME_CHARS - 1).collect();
+    }
+    let name = name.trim_end_matches(|c: char| c.is_ascii_punctuation());
+    format!("{name}…")
+}
+
 /// A first-turn name may replace only its own temporary fallback, never a user's name.
 pub fn first_thread_needs_name(journal: &mut RunJournal, run_id: &str) -> Option<String> {
     let thread_id = journal.run_thread_id(run_id).ok()??;
@@ -138,7 +172,7 @@ pub fn save_first_thread_name(
     };
     if title.is_empty()
         || title.chars().count() > 80
-        || title.split_whitespace().count() > 3
+        || title.split_whitespace().count() > FIRST_NAME_WORDS
         || title.chars().any(char::is_control)
     {
         return Ok(false);
