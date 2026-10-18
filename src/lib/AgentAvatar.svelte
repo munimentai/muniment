@@ -34,5 +34,5 @@
   .agent-avatar.agent-avatar[data-tooltip]:hover::after { opacity: 1; transition-delay: 350ms; }
   @property --activity { syntax: '<color>'; inherits: true; initial-value: transparent; }
   @keyframes avatar-running { 50% { --activity: transparent; } }
-  @media (prefers-reduced-motion: reduce) { .agent-avatar.agent-avatar[data-activity="running"] { animation: none; } }
+  :global(:root[data-motion="reduce"]) .agent-avatar.agent-avatar[data-activity="running"] { animation: none; }
 </style>

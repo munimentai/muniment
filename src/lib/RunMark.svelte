@@ -3,6 +3,7 @@
   import { stageWord } from './chat-state.js'
   import { thinkingSettle } from './thinking-transition.js'
   import { MARK_EVENT, MARK_STORAGE_KEY, parseMark, readStoredMark } from './thinking-mark-state.js'
+  import { motionReduced, watchMotion } from './display-state.js'
   import { DEGREE, trunkPath } from './elephant-trunk.js'
   import { EAR, HIND, HIP, TILT_DEG, TORSO, foreLeg, foreRise } from './pocket-fold.js'
 
@@ -74,18 +75,22 @@
   // The trunk and the head are drawn each frame. The trunk sways with the hind
   // leg's stride. While the model thinks or a tool runs, the front rises and the
   // trunk curls into the J, and both settle when the run stands.
+  // A still mark draws once and sleeps. A change of style, stage or gait wakes it.
+  let wake = () => {}
   onMount(() => {
     if (typeof requestAnimationFrame !== 'function') return
-    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')
-    let frame
+    let still = motionReduced()
+    let frame = 0
     let raised = 0
     let last = performance.now()
     // A change of indicator draws new elements, so the frame remembers which
     // elements it last drew on.
     let drawn = [null, '']
+    let tilted = [null, null]
     let rose = [null, 0]
     const draw = (now) => {
-      const moving = style === 'motion' && !reduced?.matches
+      frame = 0
+      const moving = style === 'motion' && !still
       const step = (now - last) / CURL_MS
       last = now
       const thinking = moving && stage === 'thinking'
@@ -95,17 +100,29 @@
       const sway = typeof stride === 'number' ? Math.sin(360 * DEGREE * stride / STRIDE_MS) * (1 - curl) : 0
       const d = trunkPath(curl, sway)
       if (trunk !== drawn[0] || d !== drawn[1]) { trunk?.setAttribute('d', d); drawn = [trunk, d] }
-      rearing?.setAttribute('transform', curl ? `rotate(${-TILT_DEG * curl} ${HIP[0]} ${HIP[1]})` : '')
+      const tilt = curl ? `rotate(${-TILT_DEG * curl} ${HIP[0]} ${HIP[1]})` : ''
+      if (rearing !== tilted[0] || tilt !== tilted[1]) { rearing?.setAttribute('transform', tilt); tilted = [rearing, tilt] }
       const rise = foreRise(curl)
       if (fore !== rose[0] || rise !== rose[1]) {
         fore?.setAttribute('d', foreLeg(rise))
         fore?.style.setProperty('transform-origin', `50% ${40 / (161 + rise) * 100}%`)
         rose = [fore, rise]
       }
+      if (moving || raised > 0) frame = requestAnimationFrame(draw)
+    }
+    wake = () => {
+      if (frame) return
+      last = performance.now()
       frame = requestAnimationFrame(draw)
     }
-    frame = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(frame)
+    const motion = () => { still = motionReduced(); wake() }
+    wake()
+    const stop = watchMotion(motion)
+    return () => { cancelAnimationFrame(frame); stop() }
+  })
+  $effect(() => {
+    void [style, stage, gait, walker, rearing, hind, fore, trunk]
+    untrack(() => wake())
   })
 
   $effect(() => {
@@ -165,9 +182,7 @@
   /* The text choice shows only the stage word, with the sheen the tool rows use. */
   .stage-sheen { background: linear-gradient(100deg, var(--muted) 35%, var(--ink) 50%, var(--muted) 65%); background-size: 250% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: stage-sheen 2.4s linear infinite; }
   @keyframes stage-sheen { from { background-position: 140% 0; } to { background-position: -40% 0; } }
-  @media (prefers-reduced-motion: reduce) {
-    .walker, .accent, .leg { animation: none !important; }
-    .stage-sheen { animation: none; background: none; color: var(--muted); }
-  }
+  :global(:root[data-motion="reduce"]) :is(.walker, .accent, .leg) { animation: none !important; }
+  :global(:root[data-motion="reduce"]) .stage-sheen { animation: none; background: none; color: var(--muted); }
   @media (forced-colors: active) { .stage-sheen { background: none; color: CanvasText; } }
 </style>

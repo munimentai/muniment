@@ -29,5 +29,5 @@
   .info-text { position: absolute; z-index: 8; left: 0; top: calc(100% + 6px); width: max-content; max-width: min(340px, 70vw); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--weight-regular) var(--text-13) / var(--leading-body) var(--font-human); white-space: normal; overflow-wrap: anywhere; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 80ms ease; }
   .info-tip:hover .info-text, .info-button:focus-visible + .info-text, .info-tip[data-open] .info-text { opacity: 1; visibility: visible; }
   .info-tip:hover .info-text { transition-delay: 200ms; }
-  @media (prefers-reduced-motion: reduce) { .info-text { transition: none; } }
+  :global(:root[data-motion="reduce"]) .info-text { transition: none; }
 </style>

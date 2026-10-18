@@ -97,12 +97,12 @@
   .row-rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
   .row-rename input { width: 100%; min-width: 0; font: inherit; }
   .row-rename button { padding: 2px 6px; font-size: var(--text-12); }
-  .page-result { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
+  .page-result { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--row-height); padding: var(--row-pad) 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .page-result:hover { background: var(--faint); }
   .page-result span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
   .section-control::after { content: attr(data-tooltip); position: absolute; right: 0; top: calc(100% + 4px); z-index: 4; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; }
   .section-control:hover::after, .section-control:focus-visible::after { opacity: 1; visibility: visible; transition: opacity 80ms ease 350ms; }
-  @media (prefers-reduced-motion: reduce) { .section-control:hover::after { transition: none; } }
+  :global(:root[data-motion="reduce"]) .section-control:hover::after { transition: none; }
   .side-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin-top: 10px; }
   .side-section h3, .section-head h3 { margin: 0; padding: 2px 8px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .section-head { display: flex; align-items: center; gap: 2px; padding-right: 2px; }

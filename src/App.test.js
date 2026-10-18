@@ -1578,7 +1578,7 @@ describe('workspace composer entry', () => {
     localStorage.removeItem('muniment.type')
     render(App)
     await openSettings('General')
-    const size = within(await screen.findByRole('group', { name: 'Size' }))
+    const size = within(await screen.findByRole('group', { name: 'Text size' }))
     expect(size.getByRole('status')).toHaveTextContent('15 px body')
     expect(size.getByRole('button', { name: 'Default type size' })).toBeDisabled()
     const mac = navigator.platform.startsWith('Mac')

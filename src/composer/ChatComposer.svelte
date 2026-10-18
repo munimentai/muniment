@@ -7,5 +7,6 @@
 <div class="composer" bind:this={element}>{@render children()}</div>
 <style>
   .composer { container: composer / inline-size; grid-area: 1 / 1; align-self: end; z-index: 1; position: relative; width: min(760px, calc(100% - 48px)); margin: 0 auto 24px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); }
-  .composer:focus-within { border-color: var(--focus-edge); }
+  /* The text field leaves its ring to this frame: the border and a 1px outline make the 2px edge without moving the content. */
+  .composer:focus-within { border-color: var(--focus-edge); outline: 1px solid var(--focus-edge); }
 </style>

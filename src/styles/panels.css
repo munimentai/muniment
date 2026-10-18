@@ -12,6 +12,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
 }
+:root[data-density="compact"] [data-panel] { --page-pad: 16px; --page-gap: 18px; }
 [data-panel][data-panel-variant="overlay"] { box-shadow: var(--shadow-overlay); }
 [data-panel][data-panel-variant="embedded"] { border: 0; border-radius: 0; }
 /* Icon-only close controls share one borderless treatment across the app. */
@@ -57,7 +58,7 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
  * content. Frameless fills the frame with border seams, gives the sidebar a
  * panel a step from surface toward ink, and leaves content panels flat.
  * Framed fills the frame with paper, sets the sidebar on it with no panel and
- * text a step quieter, and draws each content panel as a card inset by
+ * its ink a step quieter, and draws each content panel as a card inset by
  * --card-ring inside its box, clipped to the card and edged with a hairline.
  * A card's box reaches up through the ring and the band's gap behind a
  * transparent top border, so the card's top hairline lies on the seam a
@@ -66,7 +67,8 @@ button:has(> svg[data-icon="x"]) > svg { width: 16px; height: 16px; }
 :root {
   --card-ring: 3px;
   --frame-sidebar-ink: color-mix(in srgb, var(--ink) 78%, var(--paper));
-  --frame-sidebar-muted: color-mix(in srgb, var(--muted) 85%, var(--paper));
+  /* Muted text keeps the theme's own muted, which clears 4.5:1 on the sidebar's paper and faint. */
+  --frame-sidebar-muted: var(--muted);
   --frame-sidebar-faint: color-mix(in srgb, var(--ink) 7%, var(--paper));
   --frame-sidebar-panel: color-mix(in srgb, var(--ink) 5%, var(--surface));
   --frame-sidebar-panel-faint: color-mix(in srgb, var(--ink) 10%, var(--surface));
