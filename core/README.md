@@ -443,6 +443,8 @@ answers the same until the draft is done and then, once, `{"draft_id",
 "status": "done", "draft", "question", "via"}`. A draft is `{"name", "label",
 "instructions", "skills", "tools_off", "permission_mode", "routines"}` from one
 cheap model call over the words and this runtime's tools, skills and modes;
+`tools_off` leaves on only the tools the model and the words name, and the
+reading tools when they name none;
 its routines come from the trigger reader and start enabled. `question` is
 null or one `{"text", "options"}` when the job is unknown, and `via` is
 `router`, `pi` or `rules` when no model answered. Nothing is saved.
