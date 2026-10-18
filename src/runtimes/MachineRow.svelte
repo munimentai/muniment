@@ -4,7 +4,8 @@
   // A row this app can change has a menu with Update, Rename and Remove.
   // Remove asks once and names the machine. `details` holds this computer's
   // own settings behind a disclosure. The update chip shows the state the
-  // machine reports, never an update the machine has not confirmed.
+  // machine reports, never an update the machine has not confirmed. A phone
+  // that must pair again says so, and its menu offers Pair again.
   import Row from '../lib/ui/Row.svelte'
   import Button from '../lib/ui/Button.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
@@ -14,7 +15,7 @@
   import { rowKind } from './machines.js'
 
   // `hostname` names this computer to the OS, under its one name in the app.
-  let { row, hostname = '', busy = false, removable = false, open = $bindable(false), onrename, onremove, onupdate, details } = $props()
+  let { row, hostname = '', busy = false, removable = false, open = $bindable(false), onrename, onremove, onupdate, onpairagain = null, details } = $props()
   const id = $props.id()
   let mode = $state('view')
   let draft = $state('')
@@ -27,7 +28,8 @@
   const updateTone = $derived(updateStatusTone(UPDATE_STATES.includes(runtime?.updateStatus?.state) ? runtime.updateStatus.state : runtime?.updateRequested ? 'requested' : 'available'))
   const canUpdate = $derived(!!runtime && canRequestUpdate(runtime) && !!onupdate)
   const canRename = $derived(!!runtime && !runtime.local)
-  const hasMenu = $derived(canUpdate || canRename || removable)
+  const canPairAgain = $derived(!!row.pairAgain && !!onpairagain)
+  const hasMenu = $derived(canUpdate || canRename || canPairAgain || removable)
   // A machine that answers shows Online. One that does not, and a device
   // that reports no state, shows when it was last seen.
   const seen = $derived.by(() => {
@@ -79,10 +81,12 @@
         {:else if row.online !== null}
           <span class="runtime-state"><StatusChip tone={onlineTone(row.online)}>{row.online ? 'Online' : 'Offline'}</StatusChip></span>
         {/if}
+        {#if row.pairAgain}<span class="runtime-state"><StatusChip tone="warning">Pair again</StatusChip></span>{/if}
         {#if row.limited}<span class="runtime-state" data-tooltip="Reads and runs threads. It cannot update or add machines." tabindex="0"><StatusChip>Limited</StatusChip></span>{/if}
         {#if seen}<span class="seen">{seen}</span>{/if}
       </p>
       {#if runtime && statusHint(runtime)}<p class="runtime-hint">{statusHint(runtime)}</p>{/if}
+      {#if row.pairAgain}<p class="runtime-hint">This phone cannot open sessions from this computer until it pairs again.</p>{/if}
     {/snippet}
     {#if details}
       <button type="button" class="quiet more" aria-expanded={open} aria-controls="{id}-details" aria-label="Settings for {row.name}" onclick={() => { open = !open }}><LucideIcon name={open ? 'chevron-up' : 'chevron-down'} size={16} variant="action" /></button>
@@ -94,6 +98,7 @@
           <div class="row-menu" role="menu" aria-label="{row.name} actions">
             {#if canUpdate}<button type="button" role="menuitem" onclick={() => { menu = false; onupdate() }}>Update</button>{/if}
             {#if canRename}<button type="button" role="menuitem" onclick={() => { menu = false; draft = runtime.name; mode = 'rename' }}>Rename</button>{/if}
+            {#if canPairAgain}<button type="button" role="menuitem" onclick={() => { menu = false; onpairagain() }}>Pair again</button>{/if}
             {#if removable}<button type="button" role="menuitem" class="critical" onclick={() => { menu = false; mode = 'remove' }}>Remove</button>{/if}
           </div>
         {/if}
