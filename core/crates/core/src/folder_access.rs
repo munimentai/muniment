@@ -116,8 +116,9 @@ const SESSIONS: &str = "sessions";
 /// folder that holds Home from a thread of this process, and waits `bound` at
 /// most for the answer. macOS lets the app that created Home use Home without
 /// asking, so only a read of the protected folder around it, such as
-/// Documents, raises the prompt. The memory scan opens that folder at the
-/// first chat, so the prompt shows here, during the first run, instead.
+/// Documents, raises the prompt. Pi looks for context files in the folders
+/// above its own at the first chat, so the prompt shows here, during the
+/// first run, instead.
 pub fn open_home(home: &Path, bound: Duration) -> FolderAccess {
     let sessions = home.join(SESSIONS);
     let holder = home.parent().map(Path::to_path_buf);

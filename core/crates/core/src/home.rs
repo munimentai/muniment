@@ -1,5 +1,5 @@
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
-use cap_std::{ambient_authority, fs::Dir};
+use cap_std::fs::Dir;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -420,17 +420,53 @@ fn validate_persistence_home(home: &Path) -> Result<PathBuf, OnboardingHomePersi
 }
 
 fn open_validated_home(home: &Path) -> Result<Dir, OnboardingHomePersistenceError> {
-    let parent = home
-        .parent()
-        .ok_or(OnboardingHomePersistenceError::InvalidHome)?;
-    let name = home
-        .file_name()
-        .ok_or(OnboardingHomePersistenceError::InvalidHome)?;
-    let parent = Dir::open_ambient_dir(parent, ambient_authority())
-        .map_err(|_| OnboardingHomePersistenceError::InvalidHome)?;
-    parent
-        .open_dir_nofollow(name)
-        .map_err(|_| OnboardingHomePersistenceError::InvalidHome)
+    open_home_directory(home).map_err(|_| OnboardingHomePersistenceError::InvalidHome)
+}
+
+/// Opens Home itself and refuses a symbolic link in its place. It never
+/// opens the folder that holds Home: macOS asks before a process reads a
+/// protected folder such as Documents, and Home inside it needs no prompt.
+pub fn open_home_directory(home: &Path) -> io::Result<Dir> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(home)?;
+        Ok(Dir::from_std_file(file))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        // A directory opens only with backup semantics, and a reparse point
+        // opens as itself, so a link in Home's place is refused below.
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(home)?;
+        let metadata = file.metadata()?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Home is not a directory",
+            ));
+        }
+        Ok(Dir::from_std_file(file))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let parent = home
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Home has no parent"))?;
+        let name = home
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Home has no name"))?;
+        Dir::open_ambient_dir(parent, cap_std::ambient_authority())?.open_dir_nofollow(name)
+    }
 }
 
 fn create_import_parent_directories(
