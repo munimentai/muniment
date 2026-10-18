@@ -227,7 +227,9 @@ pub fn propose_with_model(
 
 /// Replaces an agent's pending extraction proposals with `proposals`. A
 /// proposal the user dismissed, or one that repeats an existing routine, is
-/// left out. Answers the saved agent, or `None` when nothing changed.
+/// left out: one with the trigger of a routine the agent keeps already, such
+/// as the trigger the builder saved, repeats it whatever its words.
+/// Answers the saved agent, or `None` when nothing changed.
 pub fn apply(
     profile: &Path,
     agent_id: &str,
@@ -246,7 +248,8 @@ pub fn apply(
     for proposal in proposals {
         let repeated = agent.routines.iter().any(|routine| {
             routine.id == proposal.id
-                || (routine.trigger == proposal.trigger && routine.prompt == proposal.prompt)
+                || (routine.trigger == proposal.trigger
+                    && (!routine.proposed || routine.prompt == proposal.prompt))
         });
         if repeated || dismissed.contains(&proposal.id) {
             continue;
@@ -1062,6 +1065,53 @@ mod tests {
         let edited = crate::agents::save(&profile, edited).unwrap();
         assert_eq!(edited.routines.len(), 1);
         assert_eq!(cron_of(&edited.routines[0]), "0 18 * * *");
+        fs_cleanup(&root);
+    }
+
+    #[test]
+    fn a_proposal_on_the_trigger_of_a_kept_routine_is_left_out() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        let instructions = "Every weekday at 9am, check Hacker News for AI desktop apps.";
+        let tz = agent_routines::local_time_zone();
+        let proposed = propose(instructions, &tz, &[]);
+        assert_eq!(proposed.len(), 1);
+        // The builder saved the same trigger with its own words and id.
+        let kept = Routine {
+            id: "builder-1".into(),
+            name: "Scan Hacker News".into(),
+            enabled: true,
+            proposed: false,
+            created_from: CreatedFrom::User,
+            prompt: "Report the top five posts.".into(),
+            ..proposed[0].clone()
+        };
+        let agent = crate::agents::save_definition(
+            &profile,
+            crate::agents::Agent {
+                name: "Scout".into(),
+                instructions: instructions.into(),
+                routines: vec![kept],
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let renamed = Routine {
+            id: "extract-model".into(),
+            prompt: "Weekday AI desktop apps Hacker News scan.".into(),
+            ..proposed[0].clone()
+        };
+        assert!(
+            apply(&profile, &agent.id, vec![proposed[0].clone(), renamed])
+                .unwrap()
+                .is_none()
+        );
+        let saved = crate::agents::get(&profile, &agent.id).unwrap();
+        assert_eq!(saved.routines.len(), 1);
+        assert!(!saved.routines[0].proposed);
         fs_cleanup(&root);
     }
 
