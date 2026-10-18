@@ -92,7 +92,7 @@ it('turns skills on and off, sets the mode from core, edits permission rules and
   await waitFor(() => expect(saved().skills).toEqual(['review']))
 
   const mode = await screen.findByRole('combobox', { name: 'Permission mode' })
-  expect([...mode.options].map((option) => option.textContent)).toEqual(['Default: Plan first', 'Ask before changes', 'Plan first', "Don't ask", 'Bypass permissions'])
+  expect([...mode.options].map((option) => option.textContent)).toEqual(['Default (Plan first)', 'Ask before changes', 'Plan first', "Don't ask", 'Bypass permissions'])
   expect(mode.options[4]).toBeDisabled()
   await fireEvent.change(mode, { target: { value: 'dont_ask' } })
   await waitFor(() => expect(saved().permissions.mode).toBe('dont_ask'))
@@ -204,7 +204,7 @@ it('adds a tool check with its condition', async () => {
   await fireEvent.input(within(editor).getByRole('textbox', { name: 'Name' }), { target: { value: 'New leads' } })
   await fireEvent.change(within(editor).getByRole('combobox', { name: 'Starts on' }), { target: { value: 'mcp' } })
   await fireEvent.input(within(editor).getByRole('combobox', { name: 'Server' }), { target: { value: 'calendar' } })
-  expect(within(editor).getByText('Test this server in Extend to list its tools.')).toBeInTheDocument()
+  expect(within(editor).getByText('Test this server in Tools to list its tools.')).toBeInTheDocument()
   await fireEvent.input(within(editor).getByRole('combobox', { name: 'Server' }), { target: { value: 'crm' } })
   expect([...editor.querySelectorAll('datalist[id$="-servers"] option, datalist[id$="-tools"] option')].map((option) => option.value)).toEqual(['crm', 'calendar', 'search_leads', 'get_lead'])
   await fireEvent.input(within(editor).getByRole('combobox', { name: 'Tool' }), { target: { value: 'search_leads' } })

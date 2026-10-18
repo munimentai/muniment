@@ -1,5 +1,5 @@
 <script>
-  // Machines → Log: the fleet's audit log from core's `fleet.audit`, newest
+  // Machines → This computer → Log: the fleet audit log from core's `fleet.audit`, newest
   // first. Each entry is a record row in mono: when, what happened, the
   // machines it moved between and its detail, with names from
   // `swarm.members`. The log shows in a fleet, or while this computer holds
@@ -56,10 +56,10 @@
 </script>
 
 {#if shown}
-  <Group heading="Log" count={rows.length} info="Seals, forwarded actions, role changes and removals across the fleet.">
+  <Group heading="Log" count={rows.length} info="Seals, forwarded actions, role changes and removals across your machines.">
     {#snippet actions()}<Button icon="refresh-cw" disabled={busy} onclick={load}>Refresh</Button>{/snippet}
     {#if rows.length}
-      <ol class="audit" aria-label="Fleet log">
+      <ol class="audit" aria-label="Machine log">
         {#each rows as row (row.id)}
           <li>
             <time datetime={row.at}>{row.time}</time>

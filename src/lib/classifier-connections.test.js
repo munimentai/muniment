@@ -77,7 +77,7 @@ it('lists each connected classifier with its logo and edits it in place, keeping
   const connected = { ...settings, classifier_connections: [connection] }
   const renamed = { ...connected, classifier_connections: [{ ...connection, name: 'Kev 4B', connection: { ...connection.connection, model: 'kev-4b' } }] }
   const tauri = { invoke: vi.fn(async command => command === 'model_router_update_classifier' ? renamed : command === 'model_router_settings' ? connected : inventory) }
-  render(ModelsSection, { tauri, inventory, initialTab: 'accounts' })
+  render(ModelsSection, { tauri, inventory })
   const row = (await screen.findByText('Kev local')).closest('.row')
   expect(row.querySelector('.provider-logo, svg, img')).not.toBeNull()
   // The row's actions are icons with names, and no words.
@@ -97,7 +97,7 @@ it('lists each connected classifier with its logo and edits it in place, keeping
 it('edits a connected Ollama server through its own form, keeping the saved key when the field stays blank', async () => {
   const ollama = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'https://ollama.example/v1', models: [{ id: 'nimble:latest' }] }], hidden: [] }
   const tauri = { invoke: vi.fn(async command => command === 'model_router_settings' ? settings : ollama) }
-  render(ModelsSection, { tauri, inventory: ollama, initialTab: 'accounts' })
+  render(ModelsSection, { tauri, inventory: ollama })
   await fireEvent.click(await screen.findByRole('button', { name: 'Edit Ollama' }))
   expect(screen.getByRole('heading', { name: 'Edit Ollama' })).toBeVisible()
   expect(screen.getByLabelText('Ollama server URL')).toHaveValue('https://ollama.example/v1')

@@ -17,7 +17,7 @@ const routing = () => ({
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('Routing settings', () => {
-  it('separates accounts, models and routing on one settings screen', async () => {
+  it('shows the roles over the connections on one Models page', async () => {
     const tauri = { invoke: vi.fn(async (command) => command === 'model_router_settings' ? routing() : inventory) }
     // The Settings sidebar picks each page; the section carries no tab row of its own.
     const { rerender } = render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
@@ -28,9 +28,12 @@ describe('Routing settings', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh models' })).toBeEnabled())
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }))
     await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { force: true }))
-    await rerender({ section: 'decisions' })
-    expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull()
+    // Roles sits on the same page, over the connections, so the older Decision models link lands here too.
     expect(await screen.findByRole('switch', { name: 'Use routing' })).toBeDisabled()
+    expect(screen.getByRole('heading', { name: 'Roles' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Connections' })).toBeInTheDocument()
+    await rerender({ section: 'decisions' })
+    expect(screen.getByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     expect(screen.queryByText('Classifier and fallback')).toBeNull()
     expect(screen.queryByText('Test routing', { selector: 'summary' })).toBeNull()
 
