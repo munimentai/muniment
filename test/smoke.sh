@@ -119,6 +119,8 @@ grep -Fq '| crate | muniment-desktop-integration |' "$boundary_doc"
 test -x scripts/check-core-boundary.sh
 grep -Fq 'run: scripts/check-core-boundary.sh' "$ci"
 python3 -B test/core-boundary.py
+# core/Cargo.toml names the one release version, and every copy matches it.
+python3 -B scripts/version.py check >/dev/null
 # companion workspace and its path-scoped CI lane
 grep -Fq 'members = [".", "integration", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml

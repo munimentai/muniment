@@ -2,7 +2,8 @@
 //! verifies and unpacks one.
 //!
 //! Each release carries `muniment-server-<version>-linux-<arch>.tar.gz` for
-//! each architecture, a `SHA256SUMS` file that lists them, and
+//! each architecture, a `SHA256SUMS` file that lists them beside the
+//! release's other files, and
 //! `SHA256SUMS.minisig`, a minisign signature over `SHA256SUMS`. The launcher
 //! checks the signature against the release public key first, then the
 //! archive's SHA-256 against its line in `SHA256SUMS`, and unpacks only
@@ -25,18 +26,18 @@ pub const RELEASE_PUBLIC_KEY: &str = "RWRhWqZZgdTwfIOji0I2jBTPsMHRQI8EGTROXXo9Zu
 /// its own releases.
 pub const PUBLIC_KEY_VARIABLE: &str = "MUNIMENT_UPDATE_PUBLIC_KEY";
 /// Overrides the base URL of the release feed.
-/// `<feed>/core-v<version>/<file>` names each file. A `file://` feed reads a
+/// `<feed>/v<version>/<file>` names each file. A `file://` feed reads a
 /// local directory.
 pub const FEED_VARIABLE: &str = "MUNIMENT_UPDATE_FEED";
 /// The public releases of this repository.
 pub const DEFAULT_FEED: &str = "https://github.com/munimentai/muniment/releases/download";
-/// Core release tags are `core-v<version>`. The desktop's releases in the same
-/// repository use bare `v<version>` tags.
-pub const TAG_PREFIX: &str = "core-v";
+/// Release tags are `v<version>`. One tag releases the desktop app and the
+/// server together.
+pub const TAG_PREFIX: &str = "v";
 pub const SUMS_NAME: &str = "SHA256SUMS";
 pub const SIGNATURE_NAME: &str = "SHA256SUMS.minisig";
-/// A file every core release carries, so its presence shows that a release
-/// exists even when its server files are missing.
+/// A file every release carries, uploaded after its server files, so its
+/// presence shows that a release with a missing server file has none.
 pub const MARKER_NAME: &str = "pins.toml";
 /// The server binary inside an archive.
 pub const SERVER_NAME: &str = "muniment-server";
@@ -484,8 +485,8 @@ pub(crate) mod tests {
     #[test]
     fn a_file_feed_reads_a_local_directory() {
         let directory = temporary_directory("feed");
-        std::fs::create_dir_all(directory.join("core-v2.0.0")).unwrap();
-        std::fs::write(directory.join("core-v2.0.0").join(SUMS_NAME), b"sums").unwrap();
+        std::fs::create_dir_all(directory.join("v2.0.0")).unwrap();
+        std::fs::write(directory.join("v2.0.0").join(SUMS_NAME), b"sums").unwrap();
         let feed = Feed::new(&format!("file://{}/", directory.display()));
         assert_eq!(feed.fetch("2.0.0", SUMS_NAME).unwrap(), b"sums");
         let missing = feed.fetch("2.0.1", SUMS_NAME).unwrap_err();
@@ -501,8 +502,8 @@ pub(crate) mod tests {
             "muniment-server-1.15.0-linux-aarch64.tar.gz"
         );
         assert_eq!(
-            Feed::new(DEFAULT_FEED).url("1.15.0", SUMS_NAME),
-            "https://github.com/munimentai/muniment/releases/download/core-v1.15.0/SHA256SUMS"
+            Feed::new(DEFAULT_FEED).url("0.4.0", SUMS_NAME),
+            "https://github.com/munimentai/muniment/releases/download/v0.4.0/SHA256SUMS"
         );
     }
 }

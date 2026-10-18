@@ -39,7 +39,7 @@ Run `scripts/check-core-boundary.sh` after you add an import between modules or 
 From `core/`, run `cargo fmt --all --check` and `cargo test -p <crate> -- --test-threads=1`.
 Change pins only with `muniment-pins bump`, then run `muniment-pins compat`.
 Scope core commits with `(core)`, such as `fix(core):`, and keep them apart from desktop commits.
-A commit under `core/` can cut a `core-v*` release, so pick its prefix with care.
+A commit's prefix sets the next release version of the whole repository, so pick it with care.
 
 ## Contributions and license
 

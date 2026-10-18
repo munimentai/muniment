@@ -66,19 +66,23 @@ Windows-specific code CANNOT be compiled or tested in the agent's Linux checkout
 
 ## Releases
 
-Two tag namespaces share this repository. `core-vX.Y.Z` tags are core releases:
-the release job reads the commits that touch `core/` and tags the next version
-from their prefixes. Core releases carry the pins, the signed server archives and
-the update feed of headless runtimes, and are never marked latest. `vX.Y.Z` tags
-are desktop releases, which a maintainer dispatches as described in `README.md`.
+One version covers the desktop app, the CLI, the server and the runtime image.
+`version` under `[workspace.package]` in `core/Cargo.toml` is its source.
+`src-tauri/Cargo.toml`, `package.json` and `package-lock.json` keep copies, and
+`python3 scripts/version.py check` fails CI when one differs. Run
+`python3 scripts/version.py set X.Y.Z` to change all of them. Each release is one
+`vX.Y.Z` tag, which a maintainer dispatches as described in `README.md`. It
+carries the desktop files, the pins, the signed server archives and the update
+feed of headless runtimes.
 
 ## Commits
 
 Use conventional prefixes, scoped by path: `feat(core):` or `fix(core):` for a
 change under `core/`, and an unscoped or `(desktop)` prefix for the rest. `feat:`
 is minor, `fix:` and `perf:` are patch, and `!` or a `BREAKING CHANGE:` trailer is
-major. Keep core and desktop changes in separate commits, so a desktop change
-never bumps the core version.
+major. Before 1.0 a breaking change is minor. `core/scripts/release.py` plans the
+next version from these prefixes. Keep core and desktop changes in separate
+commits.
 
 ## CI logs
 

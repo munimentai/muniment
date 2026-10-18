@@ -135,8 +135,7 @@ pub(crate) fn should_request(
 }
 
 /// The version this app updates itself to because a paired desktop runs a
-/// newer app. A server or container announces core's version, which never
-/// moves this app.
+/// newer app. A newer server or container never moves this app.
 pub(crate) fn self_follow_version(
     kind: Option<&str>,
     version: Option<&str>,
@@ -360,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_desktop_peer_moves_this_app_and_a_newer_core_does_not() {
+    fn a_newer_desktop_peer_moves_this_app_and_a_newer_server_does_not() {
         assert_eq!(
             self_follow_version(Some("desktop"), Some("0.4.0"), "0.3.0"),
             Some("0.4.0".into())
@@ -378,17 +377,15 @@ mod tests {
             None
         );
         assert_eq!(self_follow_version(Some("desktop"), None, "0.3.0"), None);
-        // A server or container announces core's version, which runs ahead
-        // of the app's.
         assert_eq!(
-            self_follow_version(Some("container"), Some("1.15.0"), "0.3.0"),
+            self_follow_version(Some("container"), Some("0.4.0"), "0.3.0"),
             None
         );
         assert_eq!(
-            self_follow_version(Some("server"), Some("1.15.0"), "0.3.0"),
+            self_follow_version(Some("server"), Some("0.4.0"), "0.3.0"),
             None
         );
-        assert_eq!(self_follow_version(None, Some("1.15.0"), "0.3.0"), None);
+        assert_eq!(self_follow_version(None, Some("0.4.0"), "0.3.0"), None);
     }
 
     #[test]

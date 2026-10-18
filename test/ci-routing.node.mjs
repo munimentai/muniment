@@ -27,7 +27,10 @@ const assignments = {
     'validate-platform': 'muniment-checks', linux: 'muniment-release', windows: 'muniment-release',
     'macos-arm64': 'macos-15', 'macos-x64': 'muniment-release', collect: 'muniment-checks',
   },
-  'release.yml': { promote: 'self-hosted', 'draft-winget-pr': 'self-hosted' },
+  'release.yml': {
+    promote: 'self-hosted', 'draft-winget-pr': 'self-hosted',
+    'server-release': '${{ vars.CI_LINUX_RUNNER }}', 'runtime-image': 'image-smoke',
+  },
 }
 
 test('Every workflow keeps bounded checks separate from native and resource-heavy work.', () => {
@@ -91,6 +94,7 @@ test('The bounded CI job keeps the steering and copy checks with their reuse gat
   assert.match(ci.checks, /name: Steering check\n        if: needs.changes.outputs.reuse != 'true'\n        run: scripts\/check-steering.sh ./)
   assert.match(ci.checks, /name: Private address check\n        run: \|\n          scripts\/check-private-addresses.sh\n          python3 -B scripts\/test_private_addresses.py\n/)
   assert.match(ci.checks, /name: UI copy law\n        if: needs.changes.outputs.reuse != 'true' && \(needs.changes.outputs.desktop == 'true'\)\n        run: node test\/ui-copy-lint.mjs src src-tauri browser-control/)
+  assert.match(ci.checks, /name: Version check\n        run: \|\n          python3 -B scripts\/version.py check\n          python3 -B scripts\/test_version.py\n/)
   assert.doesNotMatch(ci.checks, /\bnpm\b/)
   const copyCommand = ci.checks.match(/run: (node test\/ui-copy-lint.mjs [^\n]+)/)[1]
   const copyRun = spawnSync(process.execPath, copyCommand.split(' ').slice(1), {
@@ -119,7 +123,7 @@ test('PR proof writers and main readers bind the same off-tree configuration.', 
   }
 })
 
-test('Core runs on Forgejo only, in core/, off the desktop runners, with one release group.', () => {
+test('Core runs on Forgejo only, in core/, off the desktop runners, and tags no release.', () => {
   const core = readFileSync('.forgejo/workflows/core.yml', 'utf8')
   const pins = readFileSync('.forgejo/workflows/core-pins-update.yml', 'utf8')
   assert.equal(workflows['core.yml'], undefined)
@@ -137,14 +141,30 @@ test('Core runs on Forgejo only, in core/, off the desktop runners, with one rel
   assert.deepEqual(runners, {
     checks: '${{ vars.CI_LINUX_RUNNER }}', 'router-server': '${{ vars.CI_LINUX_RUNNER }}',
     'router-image': 'image-smoke', 'runtime-image': 'image-smoke', macos: '${{ vars.CI_LINUX_RUNNER }}',
-    windows: '${{ vars.CI_LINUX_RUNNER }}', release: '${{ vars.CI_LINUX_RUNNER }}', 'runtime-image-publish': 'image-smoke',
+    windows: '${{ vars.CI_LINUX_RUNNER }}',
   })
-  assert.match(jobs(core).release, /group: core-release\n/)
-  assert.match(jobs(pins).update, /group: core-release\n/)
+  // Core releases with the desktop under one vX.Y.Z tag, which only release.yml creates.
+  assert.doesNotMatch(core, /core-v|release\.py --publish|gh release/)
+  assert.doesNotMatch(pins, /core-v|GH_RELEASE_TOKEN|MUNIMENT_RELEASE_SIGNING_KEY/)
+  assert.match(core, /python3 -B \.\.\/scripts\/version\.py check/)
   assert.match(core, /cargo metadata --locked --format-version 1 --manifest-path \.\.\/src-tauri\/Cargo.toml/)
-  assert.match(core, /--list 'core-v\*'/)
   assert.match(pins, /cargo check --manifest-path \.\.\/src-tauri\/Cargo.toml --locked -p muniment-runtime/)
   for (const vm of [jobs(core).macos, jobs(core).windows, jobs(pins).update]) {
     assert.match(vm, /desktop-ci.sh (?:macos|windows)[\s\\]*\n?\s*"cd core &&/)
   }
+})
+
+test('One vX.Y.Z release carries the desktop, the server files and the runtime image.', () => {
+  const release = jobs(workflows['release.yml'])
+  assert.match(release['server-release'], /needs: promote\n/)
+  assert.match(release['server-release'], /"v\$source" != "\$VERSION"/)
+  assert.match(release['server-release'], /gh release download "\$VERSION" --repo munimentai\/muniment --pattern SHA256SUMS/)
+  assert.match(release['server-release'], /deploy\/runtime\/release-assets.sh "\$\{VERSION#v\}" dist "\$\{sums\[@\]\}"/)
+  const uploads = [...release['server-release'].matchAll(/gh release upload "\$VERSION" .*/g)].map(([line]) => line)
+  assert.equal(uploads.length, 2)
+  assert.match(uploads[0], / dist\/SHA256SUMS dist\/SHA256SUMS.minisig$/)
+  assert.match(uploads[1], / pins\/pins.toml pins\/packages.bun.lock$/)
+  assert.match(release['runtime-image'], /needs: server-release\n/)
+  assert.match(release['runtime-image'], /deploy\/runtime\/publish.sh "\$VERSION" "\$SOURCE_SHA"/)
+  assert.doesNotMatch(workflows['release.yml'], /core-v|--latest=false/)
 })

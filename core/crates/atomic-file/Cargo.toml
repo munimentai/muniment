@@ -1,6 +1,6 @@
 [package]
 name = "muniment-atomic-file"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 
 [target.'cfg(target_os = "windows")'.dependencies]

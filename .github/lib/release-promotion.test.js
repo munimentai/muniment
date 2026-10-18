@@ -7,7 +7,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   APPLE_TEAM_ID, assertGreenCi, assertInstalledNightly, normalizeE2eWaiver, expectedNightlyAssets, forgejoCheckRuns, macosSigningProvenance, microsoftRootPem, promoteRelease, releaseBody,
-  sha256Sums, stableAssetName, verifiedStableCopies, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
+  sha256Sums, sourceVersion, stableAssetName, verifiedStableCopies, validatePromotionInputs, verifyAuthenticode, verifyMacosApp, verifyMacosPackage, verifyMacosDmg,
   verifyNightlyArtifacts, WINDOWS_PUBLISHER, windowsSigningProvenance,
 } from "./release-promotion.mjs";
 import { signUpdaterBytes } from "./updater-signature.mjs";
@@ -68,6 +68,7 @@ const promotionFetch = (overrides = {}) => {
     if (url.includes(`/git/ref/tags/${version}`) && tagged) return response({ object: { type: "commit", sha } });
     if (url.includes(`/git/ref/tags/${version}`) || url.includes(`/releases/tags/${version}`) || url === `${forgejo}/tags/${version}`) return response("missing", 404);
     if (url.startsWith(`${forgejo}/contents/package.json`)) return response({ content: Buffer.from(JSON.stringify({ version: version.slice(1) })).toString("base64") });
+    if (url.startsWith(`${forgejo}/contents/core/Cargo.toml`)) return response({ content: Buffer.from(`[workspace]\nmembers = []\n\n[workspace.package]\nversion = "${version.slice(1)}"\n`).toString("base64") });
     if (url.startsWith(`${forgejo}/actions/runs?`)) return response({ workflow_runs: [{ workflow_id: "nightly.yml", commit_sha: sha, status: "success", index_in_repo: 99 }] });
     if (url.startsWith(`${forgejo}/actions/tasks?`)) return response({ workflow_runs: installedJobs.map((name) => task(name)) });
     if (url.startsWith(`${forgejo}/commits/${sha}/status?`)) return response({ statuses: [{ context: "CI / smoke (push)", status: "success" }] });
@@ -167,6 +168,17 @@ describe("stable release promotion", () => {
     const { calls, fetchImpl } = promotionFetch({ route: (url) => url.includes("/contents/package.json") ? response({ content: Buffer.from('{"version":"9.9.9"}').toString("base64") }) : null });
     await expect(promote(fetchImpl)).rejects.toThrow("does not match");
     expect(calls.some(({ url }) => url.endsWith("/releases/tags/nightly"))).toBe(false);
+  });
+
+  it("rejects a core version that differs from the release", async () => {
+    const { calls, fetchImpl } = promotionFetch({ route: (url) => url.includes("/contents/core/Cargo.toml") ? response({ content: Buffer.from('[workspace.package]\nversion = "9.9.9"\n').toString("base64") }) : null });
+    await expect(promote(fetchImpl)).rejects.toThrow(`core/Cargo.toml version 9.9.9 does not match ${version}`);
+    expect(calls.some(({ url }) => url.endsWith("/releases/tags/nightly"))).toBe(false);
+  });
+
+  it("reads the workspace version of a manifest", () => {
+    expect(sourceVersion('[workspace]\nmembers = []\n\n# One version.\n[workspace.package]\nversion = "0.4.0"\n')).toBe("0.4.0");
+    expect(sourceVersion('[package]\nversion = "0.4.0"\n')).toBe(null);
   });
 
   it("rejects a later-page CI failure", async () => {

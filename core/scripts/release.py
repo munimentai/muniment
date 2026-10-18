@@ -1,39 +1,33 @@
 #!/usr/bin/env python3
-"""Tag the next core release from conventional commit prefixes since the last tag.
+"""Plan the next release from conventional commit prefixes since the last tag.
 
-Core releases are `core-vX.Y.Z` tags, and only commits that touch `core/`
-count. `feat:` is minor, `fix:` and `perf:` are patch, a `!` before the colon
-or a `BREAKING CHANGE:` trailer is major, and every other commit cuts no
-release. Without `--publish` the script prints the plan and changes nothing.
+Releases are `vX.Y.Z` tags. One tag releases the desktop app, the CLI, the
+server and the runtime image together, so every commit counts. `feat:` is
+minor, `fix:` and `perf:` are patch, and a `!` before the colon or a
+`BREAKING CHANGE:` trailer is major. Before 1.0 a breaking change is minor.
+Every other commit cuts no release.
 
-`--publish` pushes the tag to `origin`, the Forgejo record, waits until the
-push mirror carries it to the GitHub repository, and creates the GitHub release
-there with `gh`, which reads its token from `GH_TOKEN`. The desktop's `vX.Y.Z`
-releases share the repository and own its latest release, so no core release
-is marked latest.
+The script prints the plan and the version that `[workspace.package]` in
+Cargo.toml names, and changes nothing. The release workflow creates the tag
+from a nightly build whose source names the planned version.
 
-`--print-tag` prints only the next tag, or nothing when no release is due, so
-a job can build the release assets for that version before it publishes.
+`--print-tag` prints only the next tag, or nothing when no release is due.
 """
 
 import argparse
+from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
-import time
 
-PREFIX = "core-v"
+PREFIX = "v"
 TAG = re.compile(re.escape(PREFIX) + r"(\d+)\.(\d+)\.(\d+)")
 SUBJECT = re.compile(r"(?P<type>[a-z]+)(?:\([^)]*\))?(?P<bang>!)?: \S")
 BREAKING = re.compile(r"^BREAKING[ -]CHANGE: ", re.M)
 LEVELS = {"feat": 2, "fix": 1, "perf": 1}
 RECORD, FIELD = "\x1e", "\x1f"
-GITHUB_REPOSITORY = "munimentai/muniment"
-# A top-level pathspec, so the scope holds from any working directory.
-SCOPE = ":(top)core/"
-MIRROR_POLLS = 60
-MIRROR_WAIT_S = 10
+MANIFEST = Path(__file__).resolve().parents[1] / "Cargo.toml"
+WORKSPACE_VERSION = re.compile(r'\[workspace\.package\]\n(?:[^\[\n].*\n|\n)*?version = "([^"]*)"')
 
 
 def git(*args):
@@ -56,53 +50,29 @@ def level(subject, body):
 
 def bump(version, change):
     major, minor, patch = version
-    if change == 3:
+    if change == 3 and major > 0:
         return (major + 1, 0, 0)
-    if change == 2:
+    if change >= 2:
         return (major, minor + 1, 0)
     return (major, minor, patch + 1)
 
 
 def commits(base, revision):
-    log = git("log", "--no-merges", f"--format=%h{FIELD}%s{FIELD}%b{RECORD}",
-              f"{base}..{revision}", "--", SCOPE)
+    log = git("log", "--no-merges", f"--format=%h{FIELD}%s{FIELD}%b{RECORD}", f"{base}..{revision}")
     for record in log.split(RECORD):
         if record.strip():
             short, subject, body = record.strip("\n").split(FIELD, 2)
             yield short, subject, body
 
 
-def mirrored(url, tag, revision, ls_remote=None):
-    """True when the repository at `url` has `tag` on `revision`."""
-    ls_remote = ls_remote or (lambda u, ref: git("ls-remote", u, ref))
-    lines = ls_remote(url, f"refs/tags/{tag}").splitlines()
-    return any(line.split()[:1] == [revision] for line in lines)
-
-
-def wait_for_mirror(url, tag, revision, ls_remote=None, sleep=time.sleep, polls=MIRROR_POLLS):
-    for attempt in range(polls):
-        if mirrored(url, tag, revision, ls_remote):
-            return
-        if attempt + 1 < polls:
-            sleep(MIRROR_WAIT_S)
-    raise SystemExit(f"The push mirror did not carry {tag} to {url}.")
-
-
-def release_command(tag, repo, notes_file, assets):
-    """The `gh` call that creates the GitHub release for an existing tag."""
-    return ["gh", "release", "create", tag, "--repo", repo, "--title", tag,
-            "--notes-file", notes_file, "--verify-tag", "--latest=false", *assets]
+def source_version(manifest=MANIFEST):
+    match = WORKSPACE_VERSION.search(manifest.read_text(encoding="utf-8"))
+    return match[1] if match else None
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", default="HEAD")
-    parser.add_argument("--publish", action="store_true",
-                        help="push the tag and create the GitHub release")
-    parser.add_argument("--github-repo", default=GITHUB_REPOSITORY,
-                        help="the GitHub push mirror that hosts the release")
-    parser.add_argument("--asset", action="append", default=[],
-                        help="a file to attach to the release")
     parser.add_argument("--print-tag", action="store_true",
                         help="print only the next tag, or nothing when none is due")
     args = parser.parse_args()
@@ -124,21 +94,14 @@ def main():
         return
     notes = "".join(f"- {subject} ({short})\n" for short, subject, _ in entries)
     print(f"{base} -> {tag}\n{notes}", end="")
-    if not args.publish:
-        return
-    revision = git("rev-parse", args.revision).strip()
-    subprocess.run(["git", "tag", tag, revision], check=True)
-    subprocess.run(["git", "push", "origin", f"refs/tags/{tag}"], check=True)
-    wait_for_mirror(f"https://github.com/{args.github_repo}", tag, revision)
-    with tempfile.NamedTemporaryFile("w", suffix=".md") as file:
-        file.write(f"Changes since {base}:\n\n{notes}")
-        file.flush()
-        subprocess.run(release_command(tag, args.github_repo, file.name, args.asset), check=True)
+    source = source_version()
+    if source != tag.removeprefix(PREFIX):
+        print(f"Cargo.toml names {source}. Set {tag.removeprefix(PREFIX)} before the nightly build.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as error:
-        print(f"Release failed: {error}", file=sys.stderr)
+        print(f"Release planning failed: {error}", file=sys.stderr)
         sys.exit(1)

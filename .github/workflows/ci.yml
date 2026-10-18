@@ -50,6 +50,11 @@ jobs:
         run: |
           scripts/check-private-addresses.sh
           python3 -B scripts/test_private_addresses.py
+      # core/Cargo.toml names the one release version. The desktop copies must match it.
+      - name: Version check
+        run: |
+          python3 -B scripts/version.py check
+          python3 -B scripts/test_version.py
       - name: Forgejo workflow copy
         run: |
           for workflow in ci.yml secret-scan.yml nightly.yml release.yml; do
@@ -71,7 +76,6 @@ jobs:
       code_diff_fixtures: ${{ steps.changes.outputs.code_diff_fixtures }}
       desktop: ${{ steps.changes.outputs.desktop }}
       core_shared: ${{ steps.changes.outputs.core_shared }}
-      core_version: ${{ steps.core.outputs.version }}
       installer: ${{ steps.changes.outputs.installer }}
       release_tooling: ${{ steps.changes.outputs.release_tooling }}
       release_only: ${{ steps.changes.outputs.release_only }}
@@ -97,12 +101,6 @@ jobs:
           script: |
             const { reusePullRequest } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
             core.setOutput('reuse', await reusePullRequest({ github, context, core, workflow: 'ci.yml' }));
-
-      # The desktop-ci guests clone shallow and see no core-v tag, so the core
-      # release the app pairs with is read from this full clone.
-      - name: Core release version
-        id: core
-        run: echo "version=$(git describe --tags --match 'core-v[0-9]*' --abbrev=0 HEAD 2>/dev/null | sed 's/^core-v//')" >> "$GITHUB_OUTPUT"
 
       - name: Classify changes
         if: steps.proof.outputs.reuse != 'true'
@@ -478,7 +476,6 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           INSTALLER: ${{ needs.changes.outputs.installer }}
-          CORE_VERSION: ${{ needs.changes.outputs.core_version }}
           REPO_TOKEN: ${{ github.token }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
@@ -546,10 +543,6 @@ jobs:
           guest_env="GH_TOKEN=$REPO_TOKEN"
           if [ "$SERVER_URL" != https://github.com ]; then
             guest_env+=$'\nGITHUB_API_TOKEN='
-          fi
-          # A release build of the app needs the core release it pairs with.
-          if [ -n "${CORE_VERSION:-}" ]; then
-            guest_env+=$'\nMUNIMENT_CORE_VERSION='"$CORE_VERSION"
           fi
           remote=$(python3 .github/desktop-ci-command.py "$DESKTOP_CI_SLOT_SECONDS" "$remote")
           attempt=1

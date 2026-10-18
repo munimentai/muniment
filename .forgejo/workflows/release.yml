@@ -187,3 +187,118 @@ jobs:
           commit-message: "New version: Muniment.Muniment ${{ inputs.version }}"
           title: "New version: Muniment.Muniment ${{ inputs.version }}"
           body: "Automated draft for the signed, per-machine MSI from the Muniment stable release."
+
+  # The server files of the same release: the signed muniment-server archives
+  # the launcher installs, built from the promoted source, and the pins.
+  # SHA256SUMS on the release then lists the desktop files and the archives,
+  # and SHA256SUMS.minisig signs it with MUNIMENT_RELEASE_SIGNING_KEY. A dry run
+  # builds and signs against an empty list and uploads nothing.
+  server-release:
+    name: Publish the server release files
+    needs: promote
+    runs-on: ${{ vars.CI_LINUX_RUNNER }}
+    timeout-minutes: 150
+    env:
+      CARGO_TARGET_DIR: /root/.cache/muniment/core-release
+    steps:
+      # Forgejo runners have no job-started hook, so the first step admits only
+      # an owner dispatch of main before any later step reads a credential.
+      - name: Admit only an owner dispatch of main
+        env:
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
+          RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
+        run: |
+          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
+            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Check that the source names the version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 -B scripts/version.py check
+          source=$(python3 -B scripts/version.py print)
+          if [ "v$source" != "$VERSION" ]; then
+            echo "::error::core/Cargo.toml names $source, not $VERSION." >&2
+            exit 1
+          fi
+      - name: Read the release checksums
+        if: format('{0}', inputs.dry_run) != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          GH_HOST: github.com
+          VERSION: ${{ inputs.version }}
+        run: gh release download "$VERSION" --repo munimentai/muniment --pattern SHA256SUMS --dir "$RUNNER_TEMP/release"
+      - name: Build and sign the server archives
+        working-directory: core
+        env:
+          VERSION: ${{ inputs.version }}
+          MUNIMENT_RELEASE_SIGNING_KEY: ${{ secrets.MUNIMENT_RELEASE_SIGNING_KEY }}
+          MUNIMENT_RELEASE_SIGNING_PASSWORD: ${{ secrets.MUNIMENT_RELEASE_SIGNING_PASSWORD }}
+        run: |
+          sums=()
+          if [ -f "$RUNNER_TEMP/release/SHA256SUMS" ]; then sums=("$RUNNER_TEMP/release/SHA256SUMS"); fi
+          deploy/runtime/release-assets.sh "${VERSION#v}" dist "${sums[@]}"
+      # A launcher reads pins.toml as the sign that the server files are
+      # complete, so the pins go up after them.
+      - name: Upload the server files
+        if: format('{0}', inputs.dry_run) != 'true'
+        working-directory: core
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          GH_HOST: github.com
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release upload "$VERSION" --repo munimentai/muniment --clobber dist/*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.minisig
+          gh release upload "$VERSION" --repo munimentai/muniment --clobber pins/pins.toml pins/packages.bun.lock
+
+  # The runtime image of the release, pushed as the version and as latest to
+  # each repository in RUNTIME_IMAGE_REPOSITORIES. publish.sh builds each
+  # platform from the signed server archives the previous job uploaded.
+  runtime-image:
+    name: Publish the runtime image
+    needs: server-release
+    if: format('{0}', inputs.dry_run) != 'true'
+    runs-on: image-smoke
+    timeout-minutes: 90
+    steps:
+      # Forgejo runners have no job-started hook, so the first step admits only
+      # an owner dispatch of main before any later step reads a credential.
+      - name: Admit only an owner dispatch of main
+        env:
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
+          RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
+        run: |
+          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
+            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Publish the runtime image
+        working-directory: core
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RUNTIME_IMAGE_REPOSITORIES: ${{ vars.RUNTIME_IMAGE_REPOSITORIES }}
+          RUNTIME_IMAGE_LOGINS: ${{ secrets.RUNTIME_IMAGE_LOGINS }}
+        run: |
+          if [ -z "$RUNTIME_IMAGE_REPOSITORIES" ]; then
+            echo "RUNTIME_IMAGE_REPOSITORIES is unset, so no image is published."
+            exit 0
+          fi
+          deploy/runtime/publish.sh "$VERSION" "$SOURCE_SHA"

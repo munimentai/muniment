@@ -1314,7 +1314,7 @@ esac
         let fixture = Fixture::new("skipped");
         fixture.publish("1.1.0", "1.1.0", true);
         let name = release::archive_name("1.1.0", release::host_arch().unwrap());
-        let directory = fixture.feed.join("core-v1.1.0");
+        let directory = fixture.feed.join(format!("{}1.1.0", release::TAG_PREFIX));
         std::fs::write(directory.join(release::MARKER_NAME), b"[pins]\n").unwrap();
         let mut launcher = started(&fixture);
         let pid = launcher.child().unwrap().id();
@@ -1355,7 +1355,10 @@ esac
         let fixture = Fixture::new("tampered");
         fixture.publish("1.1.0", "1.1.0", true);
         let name = release::archive_name("1.1.0", release::host_arch().unwrap());
-        let path = fixture.feed.join("core-v1.1.0").join(&name);
+        let path = fixture
+            .feed
+            .join(format!("{}1.1.0", release::TAG_PREFIX))
+            .join(&name);
         let mut bytes = std::fs::read(&path).unwrap();
         bytes.push(0);
         std::fs::write(&path, bytes).unwrap();

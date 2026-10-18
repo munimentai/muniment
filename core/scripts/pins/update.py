@@ -9,14 +9,10 @@ in the working tree.
 
 `publish` reads `update.json`, the macOS compat report, and the outcome of the
 workspace checks. When everything passed it commits the bump on the newest
-main, pushes it, builds and signs the server archives with
-`deploy/runtime/release-assets.sh`, and tags the release with
-`scripts/release.py`, so the release carries what the launcher installs. It opens or
-comments on one `Pin update blocked: <component> <version>` Forgejo issue per
-blocked pin, and closes blocked issues for pins that now pass. It calls the
-issue API at `FORGEJO_API` with `FORGEJO_TOKEN`. Only the release command gets
-`GH_RELEASE_TOKEN`, as `GH_TOKEN`, and only the archive build gets the signing
-key.
+main and pushes it. The next release carries the bump. It opens or comments on
+one `Pin update blocked: <component> <version>` Forgejo issue per blocked pin,
+and closes blocked issues for pins that now pass. It calls the issue API at
+`FORGEJO_API` with `FORGEJO_TOKEN`.
 """
 
 import argparse
@@ -36,8 +32,6 @@ FAST_CHECKS = [
     ["cargo", "check", "--workspace", "--all-targets", "--locked", "--features", "muniment-pins/cli"],
 ]
 PIN_FILES = ["pins/pins.toml", "pins/packages.bun.lock"]
-SIGNING_VARIABLES = ["MUNIMENT_RELEASE_SIGNING_KEY", "MUNIMENT_RELEASE_SIGNING_PASSWORD"]
-DIST = "dist"
 BLOCKED = "Pin update blocked: "
 OUTPUT_TAIL = 20000
 ISSUE_PAGE = 50
@@ -173,23 +167,6 @@ def select(pins, workspace_tests=True, tests=None):
     return result
 
 
-def release_assets(directory):
-    """The `--asset` arguments of a core release: the pins, the server archives
-    in `directory`, SHA256SUMS and its signature. It fails when a server file
-    is missing, so no release goes out without them."""
-    directory = Path(directory)
-    archives = sorted(directory.glob("muniment-server-*-linux-*.tar.gz"))
-    signed = [directory / "SHA256SUMS", directory / "SHA256SUMS.minisig"]
-    missing = [str(path) for path in signed if not path.is_file()]
-    if not archives or missing:
-        raise SystemExit(f"{directory} lacks the server archives or their signature "
-                         f"({', '.join(missing) or 'no archive'}), so no release is published.")
-    argv = []
-    for path in [*PIN_FILES, *map(str, archives), *map(str, signed)]:
-        argv += ["--asset", path]
-    return argv
-
-
 def message(result):
     """The commit message: the conventional title, then the pins it moves."""
     lines = [result["title"], ""]
@@ -201,11 +178,9 @@ def message(result):
 class Forgejo:
     """The git calls and Forgejo issue calls `publish` makes. Tests replace it with a recorder."""
 
-    def __init__(self, api, token, release_token, signing=None):
+    def __init__(self, api, token):
         self.api = api.rstrip("/")
         self.token = token
-        self.release_token = release_token
-        self.signing = signing or {}
 
     def call(self, method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
@@ -236,7 +211,7 @@ class Forgejo:
         self.call("PATCH", f"/issues/{number}", {"state": "closed"})
 
     def land(self, text):
-        """Commits the bump on the newest main, pushes it, and tags the release."""
+        """Commits the bump on the newest main and pushes it."""
         run(["git", "add", *PIN_FILES])
         run(["git", "commit", "-m", text])
         base = run(["git", "rev-parse", "HEAD~1"]).stdout.strip()
@@ -251,16 +226,6 @@ class Forgejo:
                 break
         else:
             raise SystemExit(f"main moved {PUSH_ATTEMPTS} times during the push")
-        # A push with the job token starts no workflow, so the release runs here,
-        # with the same server archives as a release from core.yml.
-        tag = run(["python3", "-B", "scripts/release.py", "--revision", "HEAD", "--print-tag"]).stdout.strip()
-        if not tag:
-            return
-        run(["deploy/runtime/release-assets.sh", tag.removeprefix("core-v"), DIST], capture=False,
-            env={**os.environ, **self.signing})
-        env = {**os.environ, "GH_TOKEN": self.release_token, "GH_HOST": "github.com"}
-        run(["python3", "-B", "scripts/release.py", "--revision", "HEAD", "--publish",
-             *release_assets(ROOT / DIST)], capture=False, env=env)
 
 
 def publish(result, verification, forge):
@@ -344,11 +309,7 @@ def main():
                 out.write(f"changed={'true' if result['changes'] else 'false'}\n")
                 out.write(f"blocked={'true' if result['blocked'] else 'false'}\n")
     else:
-        # Removed from the environment first, so no command but the release
-        # sees the token and no command but the archive build sees the key.
-        release_token = os.environ.pop("GH_RELEASE_TOKEN", "")
-        signing = {name: os.environ.pop(name) for name in SIGNING_VARIABLES if name in os.environ}
-        forgejo = Forgejo(os.environ["FORGEJO_API"], os.environ["FORGEJO_TOKEN"], release_token, signing)
+        forgejo = Forgejo(os.environ["FORGEJO_API"], os.environ["FORGEJO_TOKEN"])
         result = json.loads(Path(args.result).read_text())
         checked = verification(args.darwin, args.checks == "success", args.run_url)
         for action in publish(result, checked, forgejo):

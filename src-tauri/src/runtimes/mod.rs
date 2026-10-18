@@ -768,8 +768,8 @@ mod tests {
         let view = paired_view(older, Observed::default(), false);
         assert!(view.admin);
         assert!(view.update_offered);
-        // A server updates to the core release the app bundles.
-        assert_eq!(view.update_target.as_deref(), Some(version::CORE_VERSION));
+        // A server updates to the app's version.
+        assert_eq!(view.update_target.as_deref(), Some(version::APP_VERSION));
         assert_eq!(view.kind.as_deref(), Some("server"));
         assert_eq!(view.status, RuntimeStatus::Unknown);
 
@@ -796,7 +796,7 @@ mod tests {
         let current = paired(&["runtime.admin"], Some("0.0.1"));
         let observed = Observed {
             status: RuntimeStatus::Online,
-            version: Some(version::CORE_VERSION.into()),
+            version: Some(version::APP_VERSION.into()),
             install_kind: Some("container".into()),
             form_factor: None,
             ..Observed::default()
