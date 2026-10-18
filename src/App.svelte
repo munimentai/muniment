@@ -3418,7 +3418,7 @@
                 </div>
                 <div class="user-message-meta message-actions">
                   {#if messageLocalTime(message.sentAt)}<time class="message-time" datetime={message.sentAt}>{messageLocalTime(message.sentAt)}</time>{/if}
-                  {#if userTurnRuns.get(message) && !threadGroup}{@const turnRun = userTurnRuns.get(message)}<button type="button" aria-label={rewindBlocked ? `Rewind to here. ${rewindBlocked}` : 'Rewind to here'} data-tooltip={rewindBlocked ?? 'Rewind to here'} aria-disabled={!!rewindBlocked} onclick={() => { if (!rewindBlocked) rewinding = { runId: turnRun, prompt: sent.text } }}><LucideIcon name="undo-2" variant="action" size={14} /></button>{/if}
+                  {#if userTurnRuns.get(message) && !threadGroup}{@const turnRun = userTurnRuns.get(message)}<button type="button" aria-label={rewindBlocked ? `Rewind to here. ${rewindBlocked}` : 'Rewind to here'} data-tooltip={rewindBlocked ?? 'Rewind to here'} aria-disabled={!!rewindBlocked} class="rewind-turn" onclick={() => { if (!rewindBlocked) rewinding = { runId: turnRun, prompt: sent.text } }}></button>{/if}
                   <button type="button" aria-label={copyConfirmed(copy, userCopyId) ? 'Copied message' : 'Copy message'} data-tooltip={copyConfirmed(copy, userCopyId) ? 'Copied' : 'Copy message'} onclick={() => copyResponse({ id: userCopyId, text: sent.text })}><LucideIcon name={copyConfirmed(copy, userCopyId) ? 'check' : 'copy'} variant="action" size={14} /></button>
                 </div>
                 {#if copyFailure(copy, userCopyId, modifierLabel)}<p class="copy-failure">{copyFailure(copy, userCopyId, modifierLabel)}</p>{/if}
@@ -4116,6 +4116,9 @@
   .rewind-notice ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--font-mono); overflow-wrap: anywhere; }
   .rewind-notice > :global(.popup-close) { position: absolute; top: -4px; right: 0; }
   .message-actions button[aria-disabled="true"] { opacity: .45; cursor: default; }
+  /* Lucide's undo-2, drawn as a mask: a long transcript carries one per message. */
+  .message-actions .rewind-turn::before { content: ''; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--rewind-icon) center / 14px no-repeat; mask: var(--rewind-icon) center / 14px no-repeat; }
+  .message-actions .rewind-turn { --rewind-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14 4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11'/%3E%3C/svg%3E"); min-width: 24px; min-height: 24px; }
   .side-empty { padding: 4px 8px; color: var(--muted); font-size: var(--text-12); }
   .side-bottom { flex: none; padding: 0 6px; }
   .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }
