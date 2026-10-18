@@ -11,7 +11,7 @@ it.each([[false, false], [false, true], [true, false], [true, true]])('closes Ex
   expect(pages()).toEqual([
     ['Models', ['providers', 'decisions']],
     ['Extend', ['mcp', 'skills', 'plugins', 'runtimes']],
-    ['Preferences', ['appearance', 'context', 'permissions', 'voice', 'search', 'language']],
+    ['Preferences', ['appearance', 'context', 'permissions', 'voice', 'search', 'language', 'notifications']],
     ['Personal', ['profile', 'memory', ...(cloud ? ['account'] : []), 'home']],
     // Workspace holds only Companies, so it shows only with the company record.
     ...(companyRecord ? [['Workspace', ['companies']]] : []),

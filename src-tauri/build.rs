@@ -150,6 +150,8 @@ const APP_COMMANDS: &[&str] = &[
     "agent_memory",
     "agent_export_template",
     "agent_open",
+    "usage_summary",
+    "notifications_list",
     "memory_profile_read",
     "memory_profile_save",
     "memory_facts",

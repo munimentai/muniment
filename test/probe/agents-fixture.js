@@ -49,7 +49,7 @@ const SCOUT_PLAN = [
 // every answer, an ask-first rule that leaves out "Always allow for this
 // agent", a long tool input that folds, an auto review's reason, a plan
 // waiting for approval, and one from an older runtime.
-function approvals() {
+export function probeApprovals() {
   const command = (args, folder) => ({ request_kind: 'command', resource: { type: 'command', arguments: args, working_directory: folder } })
   const pushRule = command(['bash', 'git push origin main'], INBOX_PATH)
   const issue = { title: 'Nightly: proxy test times out on Windows', labels: ['flaky', 'windows', 'ci'], body: 'The proxy test timed out in 3 of the last 5 nightly runs on the Windows runner. Every failure waits on the same socket read.\n\nLast failure: run 4512, job windows-x64, step test:proxy.\n\nSuspect the loopback proxy starts after the test opens its socket.', assignee: null, milestone: 'v0.4' }
@@ -177,7 +177,7 @@ function seededSwarm() {
       entry(RECEPTION, 'Front desk', 'Receptionist', 'reception', OFFICE, 'thread-a5', 2),
     ],
     groups: [{ group_id: '019965a0-0000-7000-8000-0000000000f1', name: 'Launch room', members: [SCOUT, EDITOR, TRIAGE], lead: SCOUT, meeting_mode: true, debate_rounds: 1, owner_runtime: LAPTOP, thread_id: GROUP_THREAD, created_at: at(120), updated_at: at(120), deleted: false }],
-    approvals: approvals(),
+    approvals: probeApprovals(),
     absence: { paused: false, paused_at: null, last_client_at: at(3) },
     posts: {
       [GROUP_THREAD]: [
@@ -212,7 +212,7 @@ export function probeAgentHistory(threadId) {
 
 export function probeAgentStores(seed, state = null) {
   if (!seed) return { local: { agents: [], primaryThreads: {}, runs: [] } }
-  if (state === 'empty' || state === 'empty-activity') return Object.fromEntries(['local', STUDIO, BOX].map((runtime) => [runtime, { agents: [], primaryThreads: {}, runs: [] }]))
+  if (state === 'empty') return Object.fromEntries(['local', STUDIO, BOX].map((runtime) => [runtime, { agents: [], primaryThreads: {}, runs: [] }]))
   const stores = seeded()
   // The Studio machine stops answering, so its agent shows as a read-only synced copy.
   if (state === 'cards-offline') stores.swarm.members.find((member) => member.runtime_id === STUDIO).online = false

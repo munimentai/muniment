@@ -7,6 +7,30 @@
 <svg class="lucide" class:side-icon={variant === 'side'} class:action-icon={variant === 'action'} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" data-icon={name}>
   {#if name === 'activity'}
     <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+  {:else if name === 'bell'}
+    <path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+  {:else if name === 'chart-column'}
+    <path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M18 17V9" /><path d="M13 17V5" /><path d="M8 17v-3" />
+  {:else if name === 'circle-check'}
+    <circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" />
+  {:else if name === 'circle-x'}
+    <circle cx="12" cy="12" r="10" /><path d="m15 9-6 6" /><path d="m9 9 6 6" />
+  {:else if name === 'circle-alert'}
+    <circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" />
+  {:else if name === 'circle-slash'}
+    <circle cx="12" cy="12" r="10" /><path d="m9 15 6-6" />
+  {:else if name === 'loader-circle'}
+    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  {:else if name === 'trending-up'}
+    <path d="M16 7h6v6" /><path d="m22 7-8.5 8.5-5-5L2 17" />
+  {:else if name === 'trending-down'}
+    <path d="M16 17h6v-6" /><path d="m22 17-8.5-8.5-5 5L2 7" />
+  {:else if name === 'message-square'}
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  {:else if name === 'shield-alert'}
+    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="M12 8v4" /><path d="M12 16h.01" />
+  {:else if name === 'check-check'}
+    <path d="M18 6 7 17l-5-5" /><path d="m22 10-7.5 7.5L13 16" />
   {:else if name === 'combine'}
     <path d="M10 18H5a3 3 0 0 1-3-3v-1" /><path d="M14 2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2" /><path d="M20 2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2" /><path d="m7 21 3-3-3-3" /><rect x="14" y="14" width="8" height="8" rx="2" /><rect x="2" y="2" width="8" height="8" rx="2" />
   {:else if name === 'house'}

@@ -19,6 +19,7 @@
   const ContextSettings = () => import('../activity/ContextSettings.svelte')
   const PermissionSettings = () => import('./PermissionSettings.svelte')
   const LanguageSection = () => import('./LanguageSection.svelte')
+  const NotificationSettings = () => import('../notifications/NotificationSettings.svelte')
   const SearchSection = () => import('./SearchSection.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
@@ -119,6 +120,8 @@
       <SettingsSection load={SearchSection} properties={{tauri}} />
     {:else if section === 'language'}
       <SettingsSection load={LanguageSection} properties={{tauri}} />
+    {:else if section === 'notifications'}
+      <SettingsSection load={NotificationSettings} properties={{tauri}} />
     {:else if section === 'profile' || section === 'memory'}
       <SettingsSection load={MemorySection} properties={{tauri, part: section}} />
     {:else if section === 'home'}

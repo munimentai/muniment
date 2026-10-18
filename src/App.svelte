@@ -47,7 +47,8 @@
   import AgentAvatar from './lib/AgentAvatar.svelte'
   import { agentColor } from './lib/agent-avatar.js'
   import AgentProfile from './lib/AgentProfile.svelte'
-  import ActivityPanel from './agents/ActivityPanel.svelte'
+  import NotificationsPage from './notifications/NotificationsPage.svelte'
+  import { isNotificationsShortcut, notificationsShortcut, notifyAllowed, readNotifications, readNotifyPreferences } from './notifications/notifications.js'
   import { agentMachine, agentRequest, agentThreads, applyRunUpdate, emptyListing, listAgents, listRuns } from './agents/agent-runtime.js'
   import { notificationKey, notificationText, shouldNotify, showNotification } from './agents/notify.js'
   import { applyApproval, emptySwarm, listSwarm, moveRequest, postTarget, swarmRoster, swarmThreads } from './agents/swarm.js'
@@ -72,12 +73,15 @@
   import { findMode, modeIcon, nextMode, watchModes } from './agents/permission-modes.js'
   import { modelThinking, thinkingLabel, withThinkingLevel } from './lib/thinking-level.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './lib/composer-panels.js'
-  import Usage from './lib/Usage.svelte'
+  import UsagePage from './usage/UsagePage.svelte'
+  import LimitBanner from './usage/LimitBanner.svelte'
+  import SidebarActions from './lib/SidebarActions.svelte'
+  import { composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
   import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
-  import { catalogProvider, currentModel, currentModelAvailable, modelChipLabel, modelKey, routerHidden } from './lib/provider-catalog.js'
+  import { catalogProvider, currentModel, currentModelAvailable, modelChipLabel, modelKey, providerFamily, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -153,18 +157,6 @@
   let accountStatus = $state('')
   // The connected providers and their models, as Settings → Models and the picker read them.
   let inventory = $state(null)
-  let hasSubscriptions = $state(false)
-  $effect(() => {
-    if (!inventory) { hasSubscriptions = false; return }
-    let disposed = false
-    void accountCache(tauri).read().then(settings => {
-      if (!disposed) {
-        hasSubscriptions = (settings?.accounts ?? []).some(account => account.source === 'account')
-        if (!hasSubscriptions) usageOpen = false
-      }
-    }).catch(() => { if (!disposed) { hasSubscriptions = false; usageOpen = false } })
-    return () => { disposed = true }
-  })
   // The router leaves the models the picker hides out of the running, so a
   // routed turn answers only from a model the picker offers.
   $effect(() => {
@@ -184,7 +176,6 @@
   let pickerOpen = $state(false)
   let thinkingOpen = $state(false)
   let modeOpen = $state(false)
-  let usageOpen = $state(false)
   let machineOpen = $state(false)
   let contextOpen = $state(false)
   $effect(() => {
@@ -192,7 +183,6 @@
       pickerOpen = event.detail === 'model'
       thinkingOpen = event.detail === 'thinking'
       modeOpen = event.detail === 'mode'
-      usageOpen = event.detail === 'usage'
       machineOpen = event.detail === 'machine'
       contextOpen = event.detail === 'context'
       if (event.detail !== 'speech') speechInstallDismissed = true
@@ -218,6 +208,22 @@
 
   const modelSourceLabel = $derived(modelChipLabel(inventory))
   const chipModel = $derived(currentModel(inventory))
+  // The composer warns only at or near a subscription limit of the machine
+  // the thread runs on, for the chip's provider when one is known, from core's
+  // usage summary. It reads again every two minutes and after each reply.
+  let composerLimits = $state([])
+  const chipFamily = $derived(chipModel ? inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? null : providerFamily(chipModel.provider)) : null)
+  const composerWarning = $derived(composerLimit(composerLimits, chipFamily))
+  async function refreshComposerLimits() {
+    if (!tauri || !(auth.name === 'local' || auth.name === 'signed-in')) { composerLimits = []; return }
+    const machine = remoteRuntime ? { id: remoteRuntime.id, name: remoteRuntime.name } : { id: LOCAL_RUNTIME_ID, name: 'This computer' }
+    try { composerLimits = (await readUsage(tauri, [machine], { range: '24h' }))?.limits ?? [] } catch (_) { composerLimits = [] }
+  }
+  onMount(() => {
+    const poll = () => { if (!document.hidden) void refreshComposerLimits() }
+    const timer = setInterval(poll, 120_000)
+    return () => clearInterval(timer)
+  })
   // The levels the chip's model thinks at and the one a send carries. A model
   // without reasoning shows no thinking control and sends no level.
   const chipThinking = $derived(auth.name === 'local' ? modelThinking(inventory, chipModel) : null)
@@ -229,7 +235,8 @@
   let groupCreateOpen = $state(false)
   let artifactsExpanded = $state(false)
   let agentsOpen = $state(false)
-  let activityOpen = $state(false)
+  // The page that takes the thread's place from the sidebar's foot: 'usage', 'notifications' or none.
+  let fullPage = $state(null)
   let artifactsOpen = $state(false)
   let projectsOpen = $state(false)
   let projectsExpanded = $state(true)
@@ -358,7 +365,7 @@
         creations=[...creations,plan]
       } catch(e) {submitError=String(e);return}
     } else if (!await chatController.openThread(item.threadId)) return
-    projectsOpen=false; agentsOpen=false; activityOpen = false; artifactsOpen=false; agentProfileOpen=false
+    projectsOpen=false; agentsOpen=false; fullPage = null; artifactsOpen=false; agentProfileOpen=false
     const artifactId=item.resultId || item.id
     if (artifactId && item.kind !== 'agent') {requestedArtifact=artifactId;showBrowser('artifacts')}
   }
@@ -376,12 +383,12 @@
   async function showArtifacts() {
     if (remoteSelected(runtimeList)) await onThisComputer()
     await refreshCreations()
-    artifactsOpen=true;projectsOpen=false; agentsOpen=false; activityOpen = false;agentProfileOpen=false;closeRail()
+    artifactsOpen=true;projectsOpen=false; agentsOpen=false; fullPage = null;agentProfileOpen=false;closeRail()
   }
   let browserPanel = $state(null)
   // The tool put aside while Settings or a catalog page shows.
   let parkedPanel = null
-  const threadView = $derived(!settingsOpen && !agentsOpen && !artifactsOpen && !projectsOpen && !activityOpen)
+  const threadView = $derived(!settingsOpen && !agentsOpen && !artifactsOpen && !projectsOpen && !fullPage)
   $effect(() => {
     const view = threadView
     untrack(() => { ({ panel: browserPanel, parked: parkedPanel } = workspaceOnNavigate({ panel: browserPanel, parked: parkedPanel }, view)) })
@@ -394,7 +401,7 @@
   let requestedNavigation = $state(null)
   function openChatLink(url) { requestedNavigation = {url}; showBrowser('browser') }
   let requestedWorkspaceFile = $state(null)
-  function showBrowser(mode) { if (mode === 'artifacts') { artifactsOpen = false; projectsOpen = false; agentsOpen = false; activityOpen = false }; browserPanel = mode; agentProfileOpen = false; closeRail(); workspaceResize.fit() }
+  function showBrowser(mode) { if (mode === 'artifacts') { artifactsOpen = false; projectsOpen = false; agentsOpen = false; fullPage = null }; browserPanel = mode; agentProfileOpen = false; closeRail(); workspaceResize.fit() }
   let agentsRequest = $state(0)
   let agentPanelId = $state(null)
   let agentCreateNew = $state(false)
@@ -403,14 +410,14 @@
     if (create && remoteSelected(runtimeList)) await onThisComputer()
     await Promise.all([refreshAgents(),refreshCreations()])
     if (create) return startCreation('agent')
-    projectsOpen=false; artifactsOpen=false; activityOpen=false; agentsOpen=true; agentProfileOpen=false; agentsRequest+=1;closeRail()
+    projectsOpen=false; artifactsOpen=false; fullPage = null; agentsOpen=true; agentProfileOpen=false; agentsRequest+=1;closeRail()
   }
   let agentProfileOpen = $state(false)
   let agentPanelWidth = $state(320)
   let agentPanelMaximum = $state(560)
   let agentPanelPointer = $state()
   let lastProfileAgent = null
-  function revealAgentProfile() { browserPanel = null; projectsOpen = false; agentsOpen = false; activityOpen = false; closeRail(); agentProfileOpen = true; agentResize.fit() }
+  function revealAgentProfile() { browserPanel = null; projectsOpen = false; agentsOpen = false; fullPage = null; closeRail(); agentProfileOpen = true; agentResize.fit() }
   $effect(() => {
     const id = profileAgent?.id
     if (id && id !== lastProfileAgent && !browserPanel) untrack(() => revealAgentProfile())
@@ -472,7 +479,7 @@
     if (!threadSummaries.some(thread => thread.threadId === group.thread_id)) await chatController.refreshThreads()
     if (group.thread_id !== currentThreadId && !await chatController.openThread(group.thread_id)) return
     selectedAgent = null; profileOnlyAgent = null; agentProfileOpen = false
-    projectsOpen = false; agentsOpen = false; activityOpen = false; artifactsOpen = false
+    projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
   }
   async function openAgent(agent) {
     if (switchLocked || agentOpening) return
@@ -489,20 +496,20 @@
       } else if (!machine.local || agent.replica) {
         // Its first run starts the conversation on its machine.
         profileOnlyAgent = agent.id
-        projectsOpen = false; agentsOpen = false; activityOpen = false; artifactsOpen = false
+        projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
         if (!browserPanel) revealAgentProfile()
         return
       } else await startAgentThread(agent)
       selectedAgent = agent.id
       selectedProject = agent.projectId || null
-      projectsOpen = false; agentsOpen = false; activityOpen = false; artifactsOpen = false
+      projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
       if (!browserPanel) revealAgentProfile()
     } finally { agentOpening = false }
   }
   // An agent's profile alone, beside whatever thread is open.
   function openAgentProfile(agent) {
     profileOnlyAgent = agent.id
-    projectsOpen = false; agentsOpen = false; activityOpen = false; artifactsOpen = false
+    projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
     if (!browserPanel) revealAgentProfile()
   }
   // The agent whose thread is starting keeps its profile open until the
@@ -793,6 +800,7 @@
   let compactError = $state('')
   let contextRequest = 0
   const replyRunning = $derived(!!active)
+  $effect(() => { void remoteRuntime?.id; void auth.name; if (!replyRunning) untrack(() => { void refreshComposerLimits() }) })
   async function refreshContextUsage() {
     const request = ++contextRequest
     const threadId = currentThreadId
@@ -1235,7 +1243,7 @@
   })
   const { fit: fitArtifactRail, pointerDown: artifactRailPointerDown, pointerMove: artifactRailPointerMove, pointerEnd: artifactRailPointerEnd, keydown: artifactRailKeydown } = railController
   const toggleArtifactRail = () => { if (artifactsOpen) artifactsOpen = false; else void showArtifacts() }
-  const toggleRecordPanel = () => { if (!featureFlags.companyRecord) return; artifactsOpen = false; browserPanel = null; projectsOpen = false; agentsOpen = false; activityOpen = false; agentProfileOpen = false; railController.toggle('record') }
+  const toggleRecordPanel = () => { if (!featureFlags.companyRecord) return; artifactsOpen = false; browserPanel = null; projectsOpen = false; agentsOpen = false; fullPage = null; agentProfileOpen = false; railController.toggle('record') }
   const closeRail = () => railController.close()
   // Ask puts the open view's SQL into the composer as a fenced block, so the reply starts from what the person sees.
   function askAboutView(sql) {
@@ -1353,7 +1361,7 @@
   }
 
   async function showProjects() {
-    projectsOpen = true; agentsOpen = false; activityOpen = false; artifactsOpen = false; agentProfileOpen = false; closeRail()
+    projectsOpen = true; agentsOpen = false; fullPage = null; artifactsOpen = false; agentProfileOpen = false; closeRail()
     await refreshProjects()
   }
   async function createCatalogProject(name) {
@@ -1401,7 +1409,7 @@
     if (switchLocked || projectBusy) return
     selectedProject = projectId
     projectsOpen = false
-    agentsOpen = false; activityOpen = false
+    agentsOpen = false; fullPage = null
     agentProfileOpen = false
     selectedAgent = null
     // A new thread starts on this computer. The composer's picker moves it.
@@ -1546,7 +1554,7 @@
       return
     }
     projectsOpen = false
-    agentsOpen = false; activityOpen = false
+    agentsOpen = false; fullPage = null
     artifactsOpen = false
     clearThreadSelection()
     // The open thread's row is a button only while a catalog covers it, and
@@ -2247,7 +2255,7 @@
       const status = await tauri.invoke(command)
       if (version !== authRequestVersion) return
       auth = statusState(status)
-      if (action === 'sign-out') { artifactsOpen = false; projectsOpen = false; agentsOpen = false; activityOpen = false; agentsExpanded = false; artifactsExpanded = false }
+      if (action === 'sign-out') { artifactsOpen = false; projectsOpen = false; agentsOpen = false; fullPage = null; agentsExpanded = false; artifactsExpanded = false }
       if (auth.name === 'signed-in') await chatController.loadHistory()
       return true
     } catch (err) {
@@ -2343,31 +2351,51 @@
     })
   }
 
-  // Activity: every agent's runs on every machine, kept current from each
-  // machine's `agent-run-updated` events. Runs this window started and runs
-  // already announced raise no notification.
+  // Every agent's runs on every machine, kept current from each machine's
+  // `agent-run-updated` events, for agent profiles. Runs this window started
+  // and runs already announced raise no system notification.
   let activityRuns = $state([])
-  let activityLoading = $state(false)
-  let activityError = $state('')
-  let activityUnseen = $state(0)
   const startedRuns = new Set()
   const announcedRuns = new Set()
   async function refreshRuns() {
-    activityLoading = true
-    try { activityRuns = await listRuns(tauri, runtimeList, { limit: 100 }); activityError = '' }
-    catch (error) { activityError = String(error?.message ?? error) }
-    finally { activityLoading = false }
+    try { activityRuns = await listRuns(tauri, runtimeList, { limit: 100 }) } catch (_) {}
   }
   async function refreshAgentsAndRuns() { await Promise.all([refreshAgents(), refreshRuns()]) }
-  async function showActivity() {
+  // Usage and Notifications take the thread's place. A second press closes them.
+  function toggleFullPage(page) {
+    if (settingsOpen) closeSettings()
+    if (fullPage === page) { fullPage = null; return }
     projectsOpen = false; artifactsOpen = false; agentsOpen = false; agentProfileOpen = false; closeRail()
-    activityOpen = true
-    activityUnseen = 0
-    await refreshRuns()
+    fullPage = page
   }
+  function showNotifications() { if (fullPage !== 'notifications') toggleFullPage('notifications') }
+  // The Notifications badge counts what needs the user on every machine, from
+  // core's page, and reads again shortly after each run or approval event.
+  let needsYou = $state(0)
+  let notificationsKey = $state(0)
+  let notifyChoice = { needs_you: true, finished: false }
+  let needsYouTimer = null
+  async function refreshNeedsYou() {
+    if (!tauri || !(auth.name === 'local' || auth.name === 'signed-in')) return
+    try { needsYou = (await readNotifications(tauri, machineRefs(runtimeList), { view: 'needs_you' }))?.counts?.needs_you ?? 0 } catch (_) {}
+  }
+  function noteNotifications() {
+    notificationsKey += 1
+    clearTimeout(needsYouTimer)
+    needsYouTimer = setTimeout(() => { void refreshNeedsYou() }, 800)
+  }
+  $effect(() => { void runtimeList; void auth.name; untrack(() => { void refreshNeedsYou() }) })
+  onMount(() => {
+    void readNotifyPreferences(tauri).then((value) => { notifyChoice = value })
+    const chosen = (event) => { notifyChoice = event.detail }
+    window.addEventListener('muniment:notify-preferences', chosen)
+    const poll = () => { if (!document.hidden) void refreshNeedsYou() }
+    const timer = setInterval(poll, 60_000)
+    return () => { clearInterval(timer); clearTimeout(needsYouTimer); window.removeEventListener('muniment:notify-preferences', chosen) }
+  })
   async function openRunThread(run) {
     if (!await chatController.openThread(run.thread_id, true)) return
-    activityOpen = false
+    fullPage = null
   }
   function agentRunUpdated(update) {
     const run = update?.run
@@ -2378,10 +2406,11 @@
     if (!latest || latest.id === run.id || String(latest.updated_at) <= String(run.updated_at)) {
       agentListing = { ...agentListing, latestRuns: { ...agentListing.latestRuns, [run.agent_id]: { ...run, runtimeId } } }
     }
+    noteNotifications()
     const placed = { ...run, runtimeId }
     if (!shouldNotify(placed, startedRuns) || announcedRuns.has(notificationKey(placed))) return
     announcedRuns.add(notificationKey(placed))
-    if (!activityOpen) activityUnseen += 1
+    if (!notifyAllowed(placed, notifyChoice)) return
     const agent = roster.find(entry => entry.id === run.agent_id)
     showNotification(notificationText(placed, agent?.name))
   }
@@ -2395,7 +2424,11 @@
     if (kind === 'threads' && pendingOffload) void chatController.refreshThreads()
   }
   function approvalChanged(update) {
+    const known = swarm.approvals.some((entry) => entry.approval_id === update?.approval?.approval_id)
     swarm = { ...swarm, approvals: applyApproval(swarm.approvals, update) }
+    noteNotifications()
+    const approval = update?.approval
+    if (approval?.state === 'pending' && !known && notifyChoice.needs_you) showNotification({ title: `${approval.agent_name || 'An agent'} needs approval`, body: approval.summary || 'Open Notifications to answer.' })
   }
   onMount(() => {
     const stops = []
@@ -2575,7 +2608,7 @@
         if (sidebarCollapsed || switchLocked) return
         const threadId = shortcutThreads[rowPosition - 1]?.threadId
         if (!threadId || threadId === currentThreadId) return
-        projectsOpen = false; agentsOpen = false; activityOpen = false; artifactsOpen = false
+        projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
         void chatController.openThread(threadId)
         return
       }
@@ -2606,11 +2639,16 @@
         settingsShortcutPressed()
         return
       }
-      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || modeOpen || usageOpen || machineOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
+      if (workspaceMode() && onboarding.name === 'complete' && !switchLocked && (isUsageShortcut(event) || isNotificationsShortcut(event))) {
+        event.preventDefault()
+        toggleFullPage(isUsageShortcut(event) ? 'usage' : 'notifications')
+        return
+      }
+      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || modeOpen || machineOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
       if (event.key === 'Escape' && projectsOpen) { projectsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && artifactsOpen) { artifactsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && agentsOpen) { agentsOpen = false; event.preventDefault() }
-      if (event.key === 'Escape' && activityOpen) { activityOpen = false; event.preventDefault() }
+      if (event.key === 'Escape' && fullPage) { fullPage = null; event.preventDefault() }
       if (event.key === 'Escape' && browserPanel) { browserPanel = null; event.preventDefault() }
       if (event.key === 'Escape' && railOccupant !== null) {
         event.preventDefault()
@@ -2962,7 +3000,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || activityOpen} class:tools-open={!!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || !!fullPage} class:tools-open={!!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region use:overflowLabels={'.agent-chat-title span'}>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -3053,7 +3091,6 @@
             {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span>{#if item.threadId && item.threadId === backgroundRunArtifact}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
               </div>{/if}
             </section>
-            <button class="side-action activity-row" aria-current={activityOpen ? 'true' : undefined} disabled={switchLocked} onclick={() => showActivity()}><LucideIcon name="activity" /><span>Activity</span>{#if activityUnseen + swarm.approvals.length}<span class="side-count" aria-label={`${activityUnseen + swarm.approvals.length} new`}>{activityUnseen + swarm.approvals.length}</span>{/if}</button>
             <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
             <section class="project-section" aria-label="Projects">
               <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length + remoteProjectRows.length > 0} collapsible={projectRows.length + remoteProjectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
@@ -3101,7 +3138,7 @@
           <div class="side-foot">
             <SyncStatus status={fleet.state.status} ops={fleet.state.ops} credentials={fleet.state.credentials} {swarm} />
             <div class="settings-block">
-              <button class="side-action" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-keyshortcuts={settingsKeyShortcut} bind:this={settingsButton} onclick={toggleSettings}><LucideIcon name="settings" size={18} /><span>Settings</span></button>
+              <SidebarActions bind:settingsButton {settingsOpen} usageOpen={fullPage === 'usage'} notificationsOpen={fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={switchLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
             </div>
             {#if featureFlags.cloud}
             {#if auth.name === 'signed-in'}
@@ -3366,7 +3403,6 @@
             <button type="button" onclick={() => { retryReview = null; draft = ''; pickerOpen = false }}>Cancel retry</button>
           </section>
         {/if}
-        {#if hasSubscriptions && usageOpen}<Usage {tauri} onmanage={openModelSettings} onclose={() => usageOpen = false} />{/if}
         {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
           <ModelPicker {inventory} {contextUsage} current={currentModel(inventory)} onchoose={chooseModel} onvisibility={setModelShown} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
@@ -3470,6 +3506,7 @@
               <p class="support">Muniment resumes on its own.</p>
             </section>
           {/if}
+          {#if composerWarning}<LimitBanner limit={composerWarning} onview={() => toggleFullPage('usage')} />{/if}
           <div class="composer-row" bind:this={composerRow}>
             <div class="composer-meta">
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
@@ -3483,11 +3520,6 @@
               {#if chipThinking}
                 <ComposerMenuButton menu="thinking" open={thinkingOpen} label={`Thinking level: ${thinkingLabel(chipThinking.level)}`} text={thinkingLabel(chipThinking.level)} bind:element={thinkingChip} onclick={() => openComposerPanel(thinkingOpen ? null : 'thinking')}>
                   {#snippet icon()}<LucideIcon name="brain" size={14} />{/snippet}
-                </ComposerMenuButton>
-              {/if}
-              {#if hasSubscriptions}
-                <ComposerMenuButton menu="usage" open={usageOpen} haspopup="dialog" label="Usage" text="Usage" onclick={() => openComposerPanel(usageOpen ? null : 'usage')}>
-                  {#snippet icon()}<LucideIcon name="gauge" size={14} />{/snippet}
                 </ComposerMenuButton>
               {/if}
             {/if}
@@ -3604,13 +3636,13 @@
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings}
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; profileOnlyAgent = null; void refreshAgents() }}
-        onopen={(id) => chatController.openThread(id, true)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onactivity={() => showActivity()} />{/key}
+        onopen={(id) => chatController.openThread(id, true)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onactivity={() => showNotifications()} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
-  {#if activityOpen}<ActivityPanel {tauri} runs={activityRuns} agents={roster} approvals={swarm.approvals} {swarm} {runtimeList} live={liveActivity} onagents={() => showAgents()} loading={activityLoading} error={activityError} unreachable={agentListing.unreachable} onrefresh={() => refreshAgentsAndRuns()} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
-    onanswered={(approval, result) => { if (result?.status === 'answered') swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) } }}
-    onopenapproval={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
+  {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
+  {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
+    onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); groupsExpanded = true; await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>startCreation('agent', chosen)} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
@@ -3917,7 +3949,6 @@
   .side-action span { flex: 1; min-width: 0; white-space: nowrap; }
   .side-action span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .side-action kbd { flex: none; }
-  .activity-row { margin: 2px 0; }
   .side-action .side-count { flex: none; min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); line-height: 16px; text-align: center; }
   .side-heading:first-child { margin-top: 6px; }
   .side-heading { margin: 14px 8px 4px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
