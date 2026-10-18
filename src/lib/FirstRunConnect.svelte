@@ -5,8 +5,11 @@
 
   // The first run's one question. Every option is a one-line button, found
   // ones first. More providers and Explore without connecting end the list. A
-  // server that needs a step opens that step in place.
-  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, onconnect, onmore, onexplore, onrescan } = $props()
+  // server that needs a step opens that step in place, and a subscription's
+  // sign-in runs in place under its card. Connect means Muniment reuses a
+  // sign-in this computer already holds, and Sign in means a new one.
+  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, signIn = null, onconnect, onmore, onexplore, onrescan, onsigninanswer, onsignincancel, onsigninopen } = $props()
+  let answer = $state('')
   let open = $state(null)
   let key = $state('')
   const options = $derived(connectOptions(scan))
@@ -37,12 +40,33 @@
   {#snippet card(option)}
     {@const server = option.kind === 'server' ? option.server : null}
     {@const state = server ? SERVER_STATES[server.state] : null}
-    <li class:expanded={open === option.id}>
+    <li class:expanded={open === option.id || signIn?.option === option.id}>
       <button type="button" class="option" disabled={busy} aria-expanded={server && server.state !== 'ready' ? open === option.id : undefined} onclick={() => choose(option)}>
         <ProviderLogo color provider={option.logo} size={20} />
         <strong>{option.name}</strong>
-        <span class="action" data-tone={state?.tone}>{state ? state.action : option.hint ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
+        <span class="action" data-tone={state?.tone}>{state ? state.action : option.hint?.reuse ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
       </button>
+      {#if signIn?.option === option.id}
+        <div class="step" aria-live="polite">
+          <p>{signIn.message}</p>
+          {#if signIn.code}<p class="code">{signIn.code}</p>{/if}
+          {#if signIn.url}<button type="button" onclick={() => onsigninopen?.(signIn.url)}>Open the sign-in page</button>{/if}
+          {#if signIn.prompt?.kind === 'select'}
+            <p>{signIn.prompt.title}</p>
+            <div class="choices">{#each signIn.prompt.options as choice}<button type="button" onclick={() => onsigninanswer?.(choice)}>{choice}</button>{/each}</div>
+          {:else if signIn.prompt?.kind === 'input'}
+            <form onsubmit={(event) => { event.preventDefault(); if (answer.trim()) { onsigninanswer?.(answer.trim()); answer = '' } }}>
+              <input type="text" bind:value={answer} placeholder={signIn.prompt.placeholder ?? ''} aria-label={signIn.prompt.title} autocomplete="off" />
+              <button type="submit" disabled={!answer.trim()}>Continue</button>
+            </form>
+          {/if}
+          {#if signIn.stage === 'failed' || signIn.stage === 'cancelled'}
+            <button type="button" onclick={() => onconnect?.(option)}>Try again</button>
+          {:else}
+            <button type="button" onclick={() => onsignincancel?.()}>Cancel</button>
+          {/if}
+        </div>
+      {/if}
       {#if open === option.id && server?.state === 'needs-key'}
         <div class="step">
           <p>{server.name} asks for an API key.</p>
@@ -101,6 +125,8 @@
   .step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 12px 12px 42px; }
   .step p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .step .or { margin-top: 4px; }
+  .step .code { color: var(--ink); font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
+  .choices { display: flex; flex-wrap: wrap; gap: 6px; }
   form { display: flex; gap: 8px; width: 100%; }
   input { flex: 1; min-width: 0; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: var(--text-13) var(--font-mono); }
   .step button, .more { min-height: 30px; padding: 5px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }

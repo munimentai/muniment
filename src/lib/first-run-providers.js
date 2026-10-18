@@ -60,3 +60,18 @@ export async function scanProviders(invoke, delays = SCAN_RETRY_DELAYS, wait = (
     }
   }
 }
+
+// The servers a scan found that no connected provider serves yet, matched by
+// address, for Settings → Connect account.
+export function foundServers(scan, inventory) {
+  const address = (url) => String(url ?? '').replace(/\/+$/, '').toLowerCase()
+  const connected = new Set((inventory?.providers ?? []).map((provider) => address(provider.base_url)).filter(Boolean))
+  return (scan?.servers ?? []).filter((server) => !connected.has(address(server.baseUrl)))
+}
+
+// What one click on a found server does, as its row names it.
+export function foundServerAction(server) {
+  if (server.state === 'ready') return 'Connect'
+  if (server.state === 'needs-key') return server.keyFile ? `Connect with the key in ${server.keyFile}` : 'Add key'
+  return 'Not running'
+}

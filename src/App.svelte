@@ -74,7 +74,7 @@
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
-  import { currentModel, currentModelAvailable, modelChipLabel, modelKey, routerHidden } from './lib/provider-catalog.js'
+  import { catalogProvider, currentModel, currentModelAvailable, modelChipLabel, modelKey, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -2726,9 +2726,10 @@
     if (!workspaceMode() || desktopClientStatus?.connected !== true) {
       throw firstRunError(tauri, 'runtime')
     }
-    // SPEC.md: a found server connects in place. A subscription opens its
-    // sign-in in Model providers, More providers opens the catalog, and
-    // explore opens the composer with no model.
+    // SPEC.md: a found server connects in place. A signed-in Claude Code
+    // connects in place, a subscription with an account signs in from the
+    // first run, any other opens its sign-in in Model providers, More
+    // providers opens the catalog, and explore opens the composer with no model.
     if (option?.kind === 'explore') {
       onboarding = { name: 'complete', homePath: onboarding.homePath }
       void refreshProjects()
@@ -2747,11 +2748,38 @@
       void tick().then(() => composer?.focus())
       return
     }
+    if (option?.kind === 'subscription' && option.hint?.reuse && await connectClaudeCodeInPlace()) {
+      await finishFirstRunConnect()
+      return
+    }
+    const account = option?.kind === 'subscription' ? catalogProvider(option.catalog)?.account : null
+    if (account) return { signIn: account }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
     // Projects first loaded before Home existed, so they load again under it.
     void refreshProjects()
     settingsConnectProvider = option?.catalog ?? ''
     openSettings('providers')
+  }
+
+  // Connects through the Claude Code sign-in the scan found. False sends the
+  // user to Model providers, which names the step Claude Code still needs.
+  async function connectClaudeCodeInPlace() {
+    try {
+      const claude = await tauri.invoke('local_mode_claude_code_status')
+      if (!claude?.logged_in || !claude.path) return false
+      await tauri.invoke('local_mode_connect_claude_code', { executable: claude.path })
+      return true
+    } catch (_) {
+      return false
+    }
+  }
+
+  // A first-run connection ends the first run on the composer with its models.
+  async function finishFirstRunConnect() {
+    await refreshInventory()
+    onboarding = { name: 'complete', homePath: onboarding.homePath }
+    void refreshProjects()
+    void tick().then(() => composer?.focus())
   }
 
   function keydown(event) {
@@ -2894,7 +2922,7 @@
   {/if}
 
   {#if tauri}
-    <Onboarding {tauri} bind:onboarding onready={openFirstRunModelSettings} />
+    <Onboarding {tauri} bind:onboarding onready={openFirstRunModelSettings} onsignedin={finishFirstRunConnect} />
     {#if backgroundServiceNoticeVisible}
       <section class="auth-state" aria-live="polite" data-testid="runtime-notice">
         <p class="record error-record">{runtimeNotice.text}</p>
