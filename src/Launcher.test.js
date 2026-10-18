@@ -114,7 +114,7 @@ describe('launcher', () => {
 
   it('syncs Light, Dark, and System from another window while hidden and on reopen', async () => {
     const input = await open()
-    const applied = { light: 'moss-light', dark: 'moss-dark', system: undefined, moss: 'moss-dark' }
+    const applied = { light: 'moss-light', dark: 'moss-dark', system: 'moss-light', moss: 'moss-dark' }
     for (const theme of ['light', 'dark', 'system', 'dark', 'light', 'moss']) {
       await fireEvent.keyDown(input, { key: 'Escape' })
       localStorage.setItem('muniment.theme', theme)
@@ -129,10 +129,10 @@ describe('launcher', () => {
     }
     localStorage.clear()
     await fireEvent(window, new StorageEvent('storage', { key: null, storageArea: localStorage }))
-    expect(document.documentElement.dataset.theme).toBe('moss-dark')
+    expect(document.documentElement.dataset.theme).toBe('moss-vibrant-dark')
   })
 
-  it('uses Moss dark for malformed or unavailable storage and ignores unrelated changes', async () => {
+  it('uses Moss vibrant dark for malformed or unavailable storage and ignores unrelated changes', async () => {
     localStorage.setItem('muniment.theme', 'light')
     await open()
     expect(document.documentElement.dataset.theme).toBe('moss-light')
@@ -140,11 +140,11 @@ describe('launcher', () => {
     await fireEvent(window, new StorageEvent('storage', { key: 'other', storageArea: localStorage }))
     expect(document.documentElement.dataset.theme).toBe('moss-light')
     handlers['launcher-opened']()
-    expect(document.documentElement.dataset.theme).toBe('moss-dark')
+    expect(document.documentElement.dataset.theme).toBe('moss-vibrant-dark')
     const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
     document.documentElement.dataset.theme = 'stale'
     handlers['launcher-opened']()
-    expect(document.documentElement.dataset.theme).toBe('moss-dark')
+    expect(document.documentElement.dataset.theme).toBe('moss-vibrant-dark')
     read.mockRestore()
   })
 

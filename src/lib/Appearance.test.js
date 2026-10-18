@@ -50,9 +50,13 @@ describe('Appearance', () => {
     expect(stored()).toEqual({ mode: 'light', palette: 'iris-vibrant' })
     await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Moss' }))
     await fireEvent.click(within(modes).getByRole('button', { name: 'System' }))
-    expect(document.documentElement.dataset.theme).toBeUndefined()
+    expect(document.documentElement.dataset.theme).toBe('moss-light')
     expect(document.documentElement.dataset.scheme).toBeUndefined()
     expect(stored()).toEqual({ mode: 'system', palette: 'moss' })
+    // The default palette in System leaves the OS media query to choose.
+    await fireEvent.click(within(vibrant).getByRole('button', { name: 'Moss vibrant' }))
+    expect(document.documentElement.dataset.theme).toBeUndefined()
+    expect(stored()).toEqual({ mode: 'system', palette: 'moss-vibrant' })
   })
 
   it('swaps the thinking indicator preview in place, one indicator at a time', async () => {

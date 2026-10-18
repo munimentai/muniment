@@ -8,6 +8,8 @@
   import Row from '../lib/ui/Row.svelte'
   import Button from '../lib/ui/Button.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
+  import StatusChip from '../lib/ui/StatusChip.svelte'
+  import { onlineTone } from '../lib/status-tone.js'
   import { agentRequest } from './agent-runtime.js'
   import { directLinks, linkLabel, linkMachines, listSwarm, memberMachine, windowRuntime } from './swarm.js'
   import { LOCAL_RUNTIME_ID, kindIcon } from '../runtimes/runtimes.js'
@@ -79,9 +81,10 @@
     {@const reached = windowRuntime(swarm, member.runtime_id)}
     {@const links = linksTo(member.runtime_id)}
     {@const machine = memberMachine(swarm, member.runtime_id, list)}
-    <Row title={machine.name} meta={member.online ? 'Online' : 'Offline'} label={`Swarm member ${machine.name}`}>
+    <Row title={machine.name} label={`Swarm member ${machine.name}`}>
       {#snippet lead()}<LucideIcon name={kindIcon(machine)} />{/snippet}
       {#snippet detail()}
+        <span class="member-state"><StatusChip tone={onlineTone(member.online)}>{member.online ? 'Online' : 'Offline'}</StatusChip></span>
         {#if reached}
           <p class="state">{directLinks(swarm.views[reached]).length ? `Links to ${directLinks(swarm.views[reached]).map((entry) => memberMachine(swarm, entry.runtime_id, list).name).join(', ')}` : 'Not linked'}</p>
         {:else}
@@ -100,7 +103,7 @@
       <div class="link-form">
         <label>From<select bind:value={from} disabled={!!busy}>{#each managed as runtime (runtime.id)}<option value={runtime.id}>{runtime.name}</option>{/each}</select></label>
         <label>To<select bind:value={to} disabled={!!busy}>{#each managed.filter((runtime) => runtime.id !== from) as runtime (runtime.id)}<option value={runtime.id}>{runtime.name}</option>{/each}</select></label>
-        <Button icon="link" disabled={!!busy || !to || to === from} onclick={() => act('link', () => linkMachines(tauri, from, to), `Linked ${nameOf(from)} and ${nameOf(to)}.`)}>{busy === 'link' ? 'Linking…' : 'Link machines'}</Button>
+        <Button icon="link" variant="primary" disabled={!!busy || !to || to === from} onclick={() => act('link', () => linkMachines(tauri, from, to), `Linked ${nameOf(from)} and ${nameOf(to)}.`)}>{busy === 'link' ? 'Linking…' : 'Link machines'}</Button>
       </div>
     </Row>
   {:else}
@@ -111,7 +114,8 @@
 <style>
   .line { margin: 0; padding: 12px 0; color: var(--muted); font-size: var(--text-13); }
   .line[role="alert"] { color: var(--oxide); }
-  .state { margin: 2px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .member-state { display: flex; }
+  .state { margin: 2px 0 0; color: var(--muted); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
   .link-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
   label { display: grid; gap: 4px; color: var(--muted); font-size: var(--text-12); }
   select { min-height: 32px; padding: 5px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); }

@@ -15,8 +15,18 @@ listed as written.
 `SearchToolbar`: the filter icon comes first, search fills the row, and actions
 sit at the right. Filters expand below the toolbar. `Button` supplies compact
 32px controls, icon-only accessible names, disabled states and focus backgrounds.
-Its primary variant uses the optional accent and accent-soft tokens. The vibrant
-sets give it their accent. Other themes keep their neutral actions.
+Its primary variant fills with `--accent` and draws `--on-accent` text, and a
+submit `Button` is primary unless it names another variant. Every theme carries
+an accent. A raw button takes the same fill with `data-variant="primary"`, and
+`settings-controls.css` fills raw submit buttons in Settings. Hover and focus mix
+the accent 86% with `--ink`. A pressed button reads `--selected`, `--on-selected`
+and `--selected-edge`. `StatusChip` draws one reported state at `--text-12`
+semibold with a 6px dot, in `--success`, `--active`, `--danger`, `--warning` or
+`--muted` over a 14% fill of the same color. `dot` keeps the mark alone and gives
+the words to screen readers. `status-tone.js` maps run, machine and update states
+to those tones. `Toggle` is a 40 by 24 pill track with an 18px round knob: off is
+`--faint` with a `--muted` knob at the left, on is `--accent` with an
+`--on-accent` knob at the right.
 `SegmentedField` supplies square, two-sided choices with pointer and arrow-key selection.
 `ChoiceField` supplies labeled choices with optional provider marks, keyboard
 navigation, Escape dismissal and focus return. It uses the overlay shadow token.
@@ -61,7 +71,7 @@ them.
 | Reduced motion | `@media (prefers-reduced-motion: reduce)` in `base.css` | Every animation and transition collapses to 0.001ms |
 | Shell button | `button` in `App.svelte` | `font: inherit` at `--text-13`, `--ink` on `--surface`, 1px `--border`, `--radius-control`, padding 5px 12px. Hover: border `--muted`. Disabled or `aria-disabled` with `.inactive`: `--muted` color |
 | Quiet button | `.quiet` in `App.svelte` and `AccountSettings.svelte` | Transparent background and border over the shell button |
-| Primary button | `.primary` in `App.svelte` and `Onboarding.svelte` | `--ink` background and border, `--paper` color. Inactive `.composer-actions .primary[aria-disabled="true"]`: `--faint` background, `--border` border, `--muted` color |
+| Primary button | `.primary` in `App.svelte` and `Onboarding.svelte` | `--accent` background and border, `--on-accent` color. Hover: the accent mixed 86% with `--ink`. Inactive `.composer-actions .primary[aria-disabled="true"]`: `--faint` background, `--border` border, `--muted` color |
 | Account settings button | `button` in `AccountSettings.svelte` | Same as the shell button. Hover: border `--muted` |
 | Onboarding button | `button` in `Onboarding.svelte` | Same as the shell button with min-height 28px and padding 5px 10px. Disabled: `--muted` color |
 

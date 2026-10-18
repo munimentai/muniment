@@ -32,11 +32,12 @@ it.each([
   ['{"mode":"system","palette":"iris"}', 'iris-light'],
   ['{"mode":"light","light":"ledger","dark":"vault"}', 'harbor-light'],
   ['{"mode":"dark","light":"ledger","dark":"vault"}', 'moss-dark'],
-  ['{"mode":"system","palette":"moss"}', undefined],
-  ['system', undefined],
-  [null, 'moss-dark'],
-  ['', 'moss-dark'],
-  ['Dark', 'moss-dark'],
+  ['{"mode":"system","palette":"moss"}', 'moss-light'],
+  ['{"mode":"system","palette":"moss-vibrant"}', undefined],
+  ['system', 'moss-light'],
+  [null, 'moss-vibrant-dark'],
+  ['', 'moss-vibrant-dark'],
+  ['Dark', 'moss-vibrant-dark'],
   ['{"theme":"dark"}', 'moss-dark'],
 ])('applies the stored theme %j before the app mounts at launch', async (stored, expected) => {
   if (stored !== null) localStorage.setItem('muniment.theme', stored)
@@ -59,11 +60,11 @@ it('mounts only the launcher in the launcher window', async () => {
   expect(mount).toHaveBeenCalledExactlyOnceWith(Launcher, { target: document.getElementById('app') })
 })
 
-it('uses Moss dark at launch when storage is unavailable', async () => {
+it('uses Moss vibrant dark at launch when storage is unavailable', async () => {
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
   document.documentElement.dataset.theme = 'stale'
   mount.mockImplementation(() => {
-    expect(document.documentElement.dataset.theme).toBe('moss-dark')
+    expect(document.documentElement.dataset.theme).toBe('moss-vibrant-dark')
   })
 
   await import('./main.js')

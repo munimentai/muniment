@@ -3,7 +3,9 @@
   // with the agent and its machine when the list spans agents.
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import MachineMark from './MachineMark.svelte'
-  import { runActive, runDuration, runNote, runStatusLabel, runTone, triggerLabel, whenLabel } from '../lib/agent-labels.js'
+  import StatusChip from '../lib/ui/StatusChip.svelte'
+  import { runStatusTone } from '../lib/status-tone.js'
+  import { runActive, runDuration, runNote, runStatusLabel, triggerLabel, whenLabel } from '../lib/agent-labels.js'
   import { agentMachine } from './agent-runtime.js'
 
   let { runs = [], agents = [], runtimeList = null, showAgent = false, showMachine = false, empty = 'No runs yet.', onopen = null } = $props()
@@ -21,7 +23,7 @@
     {@const agent = agentFor(run)}
     <li class="run">
       {#if showAgent}<span class="who">{#if agent}<AgentAvatar {agent} size={20} />{/if}<strong>{agent?.name ?? 'Removed agent'}</strong></span>{/if}
-      <span class="state" data-tone={runTone(run.status)}>{runStatusLabel(run.status)}</span>
+      <StatusChip tone={runStatusTone(run.status)}>{runStatusLabel(run.status)}</StatusChip>
       <span class="meta">
         <span>{triggerLabel(run.trigger?.kind)}</span>
         {#if runDuration(run, now)}<span>{runDuration(run, now)}</span>{/if}
@@ -42,10 +44,7 @@
   .run { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
   .run:last-child { border-bottom: 0; }
   .who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-13); }
-  .state { font-size: var(--text-13); font-weight: 600; }
-  .state[data-tone="critical"] { color: var(--oxide); }
-  .state[data-tone="caution"] { color: var(--ochre); }
-  .meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
   .silent { padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); }
   .note { flex-basis: 100%; margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; overflow-wrap: anywhere; }
   .open { min-height: 24px; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; font-size: var(--text-12); cursor: pointer; }

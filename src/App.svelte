@@ -11,7 +11,9 @@
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
   import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, threadOwner } from './runtimes/fleet.js'
-  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel, statusTone } from './runtimes/runtimes.js'
+  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
+  import { machineStatusTone } from './lib/status-tone.js'
+  import StatusChip from './lib/ui/StatusChip.svelte'
   import McpIcon from './extend/McpIcon.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
@@ -41,6 +43,7 @@
   import WorkspacePanel from './lib/WorkspacePanel.svelte'
   import WorkspaceMenu from './lib/WorkspaceMenu.svelte'
   import AgentAvatar from './lib/AgentAvatar.svelte'
+  import { agentColor } from './lib/agent-avatar.js'
   import AgentProfile from './lib/AgentProfile.svelte'
   import ActivityPanel from './agents/ActivityPanel.svelte'
   import { agentMachine, agentRequest, agentThreads, applyRunUpdate, emptyListing, listAgents, listRuns } from './agents/agent-runtime.js'
@@ -94,7 +97,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import PocketFold from './lib/PocketFold.svelte'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, settledPhases } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, settledPhases } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
@@ -2817,7 +2820,7 @@
 
 {#snippet machineBadge(summary)}
   {@const machine = summary.runtimeId && summary.runtimeId !== LOCAL_RUNTIME_ID ? runtimeList?.runtimes?.find((runtime) => runtime.id === summary.runtimeId) : null}
-  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={statusTone(machine)} aria-hidden="true"></i><span class="machine-name">{machine.name}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
+  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machine.name}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
 <!-- A row's meta line: once a machine is paired, the machine the thread lives
@@ -2825,7 +2828,7 @@
 {#snippet rowMeta(summary)}
   {@const owner = threadOwner(summary, swarm, runtimeList)}
   {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<span class="visually-hidden">, {statusLabel(machine)}</span>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -2914,7 +2917,7 @@
           <div class="titlebar-thread" data-tauri-drag-region>
             {#if catalogTitle}<span class="catalog-title" data-tauri-drag-region>{catalogTitle}</span>
             {:else}
-            {#if threadAgent}<button class="quiet agent-chat-title" aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
+            {#if threadAgent}<button class="quiet agent-chat-title" style:--agent-color={agentColor(threadAgent)} aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
             {#if !threadAgent}
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
@@ -2973,7 +2976,7 @@
             {#if roster.length}
               <div class="agent-roster" aria-label="Saved agents">
                 {#each roster.filter(agent=>!catalogArchived('agent',agent)) as agent (`${agent.runtimeId}:${agent.id}`)}
-                  <div class="catalog-sidebar-row"><button class="side-action" aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} activity={agent.activity} tooltip={false} size={20} /><span>{agent.name}</span>{#if showAgentMachines || agent.online === false || agent.replica || (agent.activity && agent.activity.state !== 'idle')}<AgentStatus {agent} activity={agent.activity} machine={showAgentMachines || agent.replica ? agent.primaryMachine ?? agentMachine(runtimeList, agent) : null} />{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
+                  <div class="catalog-sidebar-row"><button class="side-action agent-entry" style:--agent-color={agentColor(agent)} aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} activity={agent.activity} tooltip={false} size={20} /><span>{agent.name}</span>{#if showAgentMachines || agent.online === false || agent.replica || (agent.activity && agent.activity.state !== 'idle')}<AgentStatus {agent} activity={agent.activity} machine={showAgentMachines || agent.replica ? agent.primaryMachine ?? agentMachine(runtimeList, agent) : null} />{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
                 {/each}
               </div>
             {/if}
@@ -3237,6 +3240,7 @@
               {/if}
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt)}
+                {@const provider = receiptProvider(message.run.receipt)}
                 {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
                 {@const routing = routedTurns(message.run.receipt)}
                 {@const columns = receiptUsageColumns(message.run.receipt)}
@@ -3248,10 +3252,10 @@
                 <div class="receipt-line">
                   {#if recorded}
                     {#if hasDetails}
-                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}</button>
+                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}{#if provider}<span class="receipt-provider"><ProviderLogo color {provider} size={12} /></span>{/if}<span>{summary.model}</span>{/if}</button>
                     {:else}
                       <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
-                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}<span>{summary.model}</span>{/if}</p>
+                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}{#if provider}<span class="receipt-provider"><ProviderLogo color {provider} size={12} /></span>{/if}<span>{summary.model}</span>{/if}</p>
                     {/if}
                   {:else}
                     <p class="provenance">Receipt unavailable</p>
@@ -3656,8 +3660,7 @@
 
   .auth-actions { display: flex; gap: 8px; }
   .sign-in-link { justify-self: start; color: var(--ink); font-size: var(--text-12); text-decoration: underline; }
-  .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
-  .composer-action.primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .composer-actions .primary[aria-disabled="true"] { background: var(--faint); border-color: var(--border); color: var(--muted); }
 
   button {
@@ -3677,7 +3680,7 @@
   }
 
   .primary:hover:not(:disabled):not([aria-disabled="true"]) {
-    background: var(--accent, var(--ink));
+    background: color-mix(in srgb, var(--accent) 86%, var(--ink));
   }
 
   button:disabled {
@@ -3711,7 +3714,8 @@
   .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; } .creation-suggestions button[aria-pressed="true"] { border-color:var(--ink); }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
-  .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+  .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding-left: 4px; border-bottom: 2px solid var(--agent-color); background: color-mix(in srgb, var(--agent-color) 20%, transparent); }
+  .titlebar .quiet.agent-chat-title:hover:not(:disabled) { background: color-mix(in srgb, var(--agent-color) 32%, transparent); }
   .agent-chat-title span { overflow: hidden; white-space: nowrap; }
   .agent-chat-title span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .workspace.agent-profile-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--agent-panel-width); grid-template-areas: "title title title" "side thread rail"; }
@@ -3773,11 +3777,11 @@
   .side-scroll { flex: 1; min-height: 0; padding: 4px 6px 8px; overflow-y: auto; }
   .project-section { margin-top: 12px; }
   .project-heading { display: flex; align-items: center; justify-content: space-between; margin: 8px 8px 2px; }
-  .project-heading h3 { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .project-heading h3 { margin: 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .project-heading button { padding: 2px; }
   .project-threads { padding-left: 12px; }
-  .side-group { margin: 10px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .side-group h3 { margin: 0; font: var(--text-12) var(--font-mono); }
+  .side-group { margin: 10px 8px 4px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
+  .side-group h3 { margin: 0; font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .side-top { padding: 8px 6px 0; }
   .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .thread-search-field { position: relative; margin-top: 4px; }
@@ -3787,7 +3791,12 @@
   .side-empty { padding: 4px 8px; color: var(--muted); font-size: var(--text-12); }
   .side-bottom { flex: none; padding: 0 6px; }
   .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }
-  .side-action:hover, .side-action[aria-pressed="true"], .side-action[aria-current="true"] { background: var(--faint); }
+  .side-action:hover { background: var(--faint); }
+  .side-action[aria-pressed="true"], .side-action[aria-current="true"] { background: var(--selected); color: var(--on-selected); }
+  /* An agent's row carries its color: a wash on hover and while open, with an edge in that color. */
+  .side-action.agent-entry:hover { background: color-mix(in srgb, var(--agent-color) 14%, transparent); }
+  .side-action.agent-entry[aria-current="true"] { background: color-mix(in srgb, var(--agent-color) 24%, transparent); color: var(--ink); }
+  .side-action.agent-entry[aria-current="true"]::before { content: ''; position: absolute; top: 5px; bottom: 5px; left: 0; width: 2px; border-radius: var(--radius-chip); background: var(--agent-color); }
   .row-rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
   .row-rename input { width: 100%; min-width: 0; font: inherit; }
   .row-rename button { padding: 2px 6px; font-size: var(--text-12); }
@@ -3799,7 +3808,7 @@
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-color: transparent; background: transparent; text-align: left; }
   /* The bar holds the Threads heading's margins and 24px height. */
   .selection-bar { display:flex; align-items:center; gap:5px; height:24px; margin:10px 8px 4px; font-size:var(--text-12); }
-  .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-mono); }
+  .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-human); }
   .selection-bar button { min-width:24px; min-height:24px; padding:0 6px; font-size:var(--text-12); }
   .thread-row > .select-mark { flex:0 0 14px; display:inline-flex; color:var(--muted); }
   .side-action > .run-mark { flex:0 0 5px; width:5px; height:5px; margin-left:auto; border:1px solid var(--muted); border-radius:var(--radius-chip); }
@@ -3812,7 +3821,7 @@
   /* Hover is a lighter wash than the open thread's faint row, as a selection is darker, so the three never look alike. */
   button.thread-row:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--faint) 55%, transparent); }
   /* A selected row reads darker than the open thread's faint row, so a selection and the open thread never look alike. */
-  .thread-row.selected { background: color-mix(in srgb, var(--ink) 14%, var(--surface)); }
+  .thread-row.selected { background: color-mix(in srgb, var(--selected-edge) 18%, var(--surface)); }
   /* The row's actions control shows at its right end while the pointer or focus rests on the row. */
   .thread-actions { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
   .thread-record:hover .thread-actions, .thread-record:focus-within .thread-actions { opacity: 1; pointer-events: auto; }
@@ -3821,16 +3830,17 @@
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   /* Inbox rows: a small muted meta line over the title, which fades at its end. The title leads in reading order, so a row's name starts with it. */
   .thread-row-body { flex: 1 1 auto; display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; }
-  .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; }
+  .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
-  .thread-row time { flex: none; color: var(--muted); font: var(--text-provenance) var(--font-mono); white-space: nowrap; }
+  .thread-row time { flex: none; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
-  .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .machine-dot { flex: none; width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--border); }
-  .machine-dot[data-tone="ink"] { background: var(--ink); }
-  .machine-dot[data-tone="caution"] { background: var(--ochre); }
-  .machine-dot[data-tone="critical"] { background: var(--oxide); }
+  .machine-dot[data-tone="success"] { background: var(--success); }
+  .machine-dot[data-tone="active"] { background: var(--active); }
+  .machine-dot[data-tone="warning"] { background: var(--warning); }
+  .machine-dot[data-tone="danger"] { background: var(--danger); }
   .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
   .thread-row-title[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
@@ -3845,7 +3855,7 @@
   .activity-row { margin: 2px 0; }
   .side-action .side-count { flex: none; min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); line-height: 16px; text-align: center; }
   .side-heading:first-child { margin-top: 6px; }
-  .side-heading { margin: 14px 8px 4px; color: var(--muted); font: var(--text-12) var(--font-mono); font-weight: var(--weight-regular); }
+  .side-heading { margin: 14px 8px 4px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .settings-back { color: var(--muted); }
   /* The MCP mark takes a Lucide icon's 18px slot and its muted color. */
   .side-action .side-mark { flex: 0 0 18px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); mask-image: none; }
@@ -3861,9 +3871,9 @@
   /* Collapsed means gone: the column is zero wide, the empty panel drops its hairline and padding for the slide, and the thread panel takes the gap. */
   .workspace.sidebar-collapsed .sidebar { padding: 0; border-width: 0; overflow: hidden; }
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
-  .active-thread { background: var(--faint); }
-  /* §1.2 forbids signal on selection states; the mockup's current-thread dot is ink. */
-  .active-thread > span:not(.select-mark):not(.machine-badge) { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); }
+  .active-thread { background: var(--selected); }
+  /* The open thread's dot takes the selection edge: ink, or the accent in a vibrant scheme. */
+  .active-thread > span:not(.select-mark):not(.machine-badge) { width: 5px; height: 5px; border-radius: 50%; background: var(--selected-edge); }
   /* A thread whose reply still runs in the background: a quiet muted ring in the dot's place. */
   .thread-row > span.run-mark { width: 5px; height: 5px; border: 1px solid var(--muted); border-radius: var(--radius-chip); }
   .quiet { background: transparent; border-color: transparent; }
@@ -3912,10 +3922,10 @@
   .message-actions button[data-tooltip]::after { content: attr(data-tooltip); position: absolute; right: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .message-actions button[data-tooltip]:hover::after, .message-actions button[data-tooltip]:focus-visible::after { opacity: 1; transition-delay: 350ms; }
   .user-message > p { margin: 0; white-space: pre-wrap; }
-  .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .missing-prompt { color: var(--muted); font: var(--text-12) var(--font-human); }
   .prompt-storage-notice { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .silent-note { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .resume-notice { min-height: 24px; margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: 24px; }
+  .silent-note { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .resume-notice { min-height: 24px; margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 24px; }
   .resume-notice span { position: relative; }
   .resume-notice span::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; bottom: calc(100% + 6px); width: max-content; max-width: 320px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); line-height: 1.4; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .resume-notice span:hover::after, .resume-notice span:focus-visible::after { opacity: 1; transition-delay: 350ms; }
@@ -3925,7 +3935,7 @@
   .message-attachments { display: grid; justify-items: end; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
   .message-attachments li { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px 8px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .message-attachments strong { flex-basis: 100%; color: var(--muted); font-weight: 400; font-size: var(--text-12); }
-  .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .attachment-delivery-rule { margin: 4px 0 0; color: var(--muted); font: var(--text-12) var(--font-human); }
   .response { margin: 0 0 20px; }
   .response, .user-turn { content-visibility: auto; contain-intrinsic-size: auto 120px; }
   .streaming { position: relative; }
@@ -3944,7 +3954,7 @@
   .permission-field:focus { border-color: var(--muted); }
   .permission-field::placeholder { color: var(--muted); }
   .permission-editor { min-height: 84px; resize: vertical; }
-  .permission-editor-hint { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .permission-editor-hint { color: var(--muted); font: var(--text-12) var(--font-human); }
   .permission-actions, .permission-approve-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .permission-actions { align-items: flex-start; margin-top: 8px; }
   .permission-approve-actions { justify-content: flex-end; margin-left: auto; }
@@ -3964,6 +3974,7 @@
   .receipt-marker.expanded { transform: rotate(45deg); }
   /* Segments sit apart on the row's gap, with no separator glyph between them. A flex row drops its whitespace-only text nodes, so the gap and not a space carries the spacing. */
   .provenance { gap: 9px; }
+  .receipt-provider { display: inline-flex; flex: none; margin-right: -4px; }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
   .message-time { font-family: var(--font-mono); font-size: var(--text-provenance); font-weight: 400; line-height: 1.45; font-variant-numeric: tabular-nums; }
@@ -3994,9 +4005,9 @@
   @media (hover: none) { .message-actions { opacity: 1; } }
   /* Same §1.7 icon geometry as the rail, tracking whatever ink its button carries. */
   .copy-failure { margin-top: 4px; }
-  .run-error { color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
-  .run-status { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .run-error { color: var(--muted); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
+  .run-status { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-human); }
   .history-error { overflow-wrap: anywhere; }
   /* The notice keeps the background service register at the composer 12px scale.
      A 15px support line would compete with the draft text. */
@@ -4036,7 +4047,7 @@
   .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
   .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
   .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
-  .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-human); }
   .speech-install-popover { width: min(340px, 100%); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .speech-install-lead { margin: 7px 0 0; color: var(--ink); font: var(--text-13) var(--font-human); }
   .speech-install-lead .nowrap { white-space: nowrap; }
@@ -4053,7 +4064,7 @@
   .speech-install-popover button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-popover .speech-install-error { color: var(--oxide); }
   .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-human); }
   @keyframes capture { to { transform: scaleY(.55); } }
   @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
   @media (prefers-reduced-motion: reduce) {

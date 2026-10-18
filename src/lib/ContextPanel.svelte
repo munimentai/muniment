@@ -63,7 +63,7 @@
   footer { margin-top: 12px; }
   button { min-height: 24px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
   button:disabled { color: var(--muted); cursor: default; }
-  .primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .primary:disabled { background: var(--faint); border-color: var(--border); }
   .link { border: 0; padding: 0; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 </style>

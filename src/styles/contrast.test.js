@@ -65,16 +65,16 @@ describe('§1.3 text token contrast', () => {
       expect(source).toContain(`[data-swatch][data-theme="${name}"]`)
     }
     expect(themes).toHaveLength(24)
-    expect(palettes['moss-light']).toEqual(palettes['default light'])
-    expect(palettes['moss-dark']).toEqual(palettes['default dark'])
+    expect(palettes['moss-vibrant-light']).toEqual(palettes['default light'])
+    expect(palettes['moss-vibrant-dark']).toEqual(palettes['default dark'])
     expect(palettes['moss-dark'].paper).toBe('#000000')
     // Every high contrast set holds pure ink on pure paper.
     for (const color of colors) {
       expect([palettes[`${color}-contrast-light`].ink, palettes[`${color}-contrast-light`].paper]).toEqual(['#000000', '#FFFFFF'])
       expect([palettes[`${color}-contrast-dark`].ink, palettes[`${color}-contrast-dark`].paper]).toEqual(['#FFFFFF', '#000000'])
     }
-    // Every vibrant set carries an accent, and every other set leaves it out.
-    for (const name of themes) expect(source.match(themeBlock(name))[1].includes('--accent:'), name).toBe(name.includes('-vibrant-'))
+    // Every set carries an accent for its primary actions.
+    for (const name of themes) for (const token of ['accent', 'accent-soft', 'on-accent']) expect(source.match(themeBlock(name))[1], `${name} --${token}`).toMatch(new RegExp(`--${token}:`))
   })
 
   it('detects a color below the contrast floor', () => {
@@ -83,10 +83,30 @@ describe('§1.3 text token contrast', () => {
   })
 })
 
-it('keeps vibrant accents readable on action surfaces and filled buttons', () => {
-  for (const name of themes.filter((theme) => theme.includes('-vibrant-'))) {
+it('keeps every accent readable on action surfaces and filled buttons', () => {
+  for (const name of [...themes, 'default light', 'default dark']) {
     const palette = palettes[name]
     expect(contrastRatio(palette.accent, palette['accent-soft'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(palette.accent, palette['on-accent'])).toBeGreaterThanOrEqual(4.5)
+  }
+})
+
+// The state tokens hold a light and a dark value. Each clears 4.5:1 on the
+// paper, surface and faint of every theme in its scheme, and on its own chip
+// fill: 14% of the state color over surface or faint.
+const states = Object.fromEntries([...source.matchAll(/--(success|active|danger|warning):\s*light-dark\((#[\dA-F]{6}),\s*(#[\dA-F]{6})\)/gi)]
+  .map(([, token, light, dark]) => [token, { light, dark }]))
+const mixed = (color, base, share) => `#${[0, 2, 4].map((at) => Math.round(parseInt(color.slice(1 + at, 3 + at), 16) * share + parseInt(base.slice(1 + at, 3 + at), 16) * (1 - share)).toString(16).padStart(2, '0')).join('')}`
+
+it('keeps every state color readable in every theme and on its chip', () => {
+  expect(Object.keys(states)).toEqual(['success', 'active', 'danger', 'warning'])
+  for (const [name, palette] of Object.entries(palettes)) {
+    const scheme = name.endsWith('dark') ? 'dark' : 'light'
+    for (const [token, values] of Object.entries(states)) {
+      const color = values[scheme]
+      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14), mixed(color, palette.faint, .14)]) {
+        expect(contrastRatio(color, background), `${name} --${token} on ${background}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
   }
 })

@@ -91,6 +91,12 @@ pre {
   }
 }
 
+/* A raw button marked primary outside Settings matches ui/Button's primary:
+   the scheme accent with its own text color. The :root prefix outranks a
+   component's own button rule. */
+:root button[data-variant="primary"]:not([data-ui-button]) { color: var(--on-accent); background: var(--accent); border-color: var(--accent); font-weight: var(--weight-semibold); }
+:root button[data-variant="primary"]:not([data-ui-button]):is(:hover:not(:disabled), :focus-visible) { color: var(--on-accent); background: color-mix(in srgb, var(--accent) 86%, var(--ink)); border-color: color-mix(in srgb, var(--accent) 86%, var(--ink)); }
+
 /* All composer panels anchor to the full composer, above its top edge. */
 [data-composer-panel] { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); max-height: 60vh; }
 

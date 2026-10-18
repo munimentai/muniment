@@ -49,7 +49,7 @@
 
 <style>
   .sync { display: grid; gap: 4px; }
-  .sync-line { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 24px; padding: 2px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); text-align: left; cursor: pointer; }
+  .sync-line { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 24px; padding: 2px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-human); text-align: left; cursor: pointer; }
   .sync-line:hover, .sync-line:focus-visible { background: var(--faint); color: var(--ink); }
   .sync-line span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sync-line[data-state="offline"] :global(.lucide) { color: var(--ochre); }

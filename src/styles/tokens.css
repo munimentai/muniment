@@ -2,7 +2,8 @@
  * Design tokens for docs/spec/design-spec.md §1.3–1.5. This file is the single
  * source for color, radius, and type tokens; components reference the custom
  * properties, never raw values. `--signal` may only be referenced by
- * components on the §1.2 allowed list (color means computation).
+ * components on the §1.2 allowed list (color means computation). `--accent`
+ * fills primary actions, and the state tokens color reported states.
  *
  * Themes follow the OS by default (§1.3); an explicit per-device preference
  * overrides the media query through the data-theme selectors below.
@@ -38,19 +39,22 @@
 :root {
   color-scheme: light dark;
 
-  /* §1.3 light color tokens */
+  /* §1.3 light color tokens: Moss vibrant light */
   --overlay-backdrop: color-mix(in srgb, var(--paper) 64%, transparent);
-  --paper: #F6F7F6;
+  --paper: #E4F4EC;
   --surface: #FFFFFF;
-  --faint: #EDEFEE;
-  --ink: #1A1D1C;
-  --muted: #5C6461;
-  --border: #E2E5E3;
-  --signal: #2A7264;
+  --faint: #D4ECE0;
+  --ink: #10302A;
+  --muted: #3D5D55;
+  --border: #A9D5C2;
+  --signal: #006B4E;
   --signal-opacity: .10;
-  --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
-  --oxide: #B4483E;
-  --ochre: #B98A2F;
+  --signal-soft: rgba(0, 107, 78, var(--signal-opacity));
+  --oxide: #B13D42;
+  --ochre: #7A5A00;
+  --accent: #B4235A;
+  --accent-soft: #FCE3EC;
+  --on-accent: #FFFFFF;
 
   /* §1.4 type: two families, two registers */
   --font-human: 'Schibsted Grotesk', system-ui, sans-serif;
@@ -90,18 +94,21 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* §1.3 dark color tokens: Moss dark, black paper with the green cast kept on surface and faint */
-    --paper: #000000;
-    --surface: #0E1110;
-    --faint: #161A18;
-    --ink: #ECEFED;
-    --muted: #9AA29E;
-    --border: #262B28;
-    --signal: #58B39F;
+    /* §1.3 dark color tokens: Moss vibrant dark */
+    --paper: #0B1C17;
+    --surface: #102620;
+    --faint: #173128;
+    --ink: #E8FAF3;
+    --muted: #A6CCBF;
+    --border: #2E5246;
+    --signal: #4FD6A5;
     --signal-opacity: .12;
-    --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
-    --oxide: #C96A61;
-    --ochre: #CBA14E;
+    --signal-soft: rgba(79, 214, 165, var(--signal-opacity));
+    --oxide: #FF9B9B;
+    --ochre: #EFCA5A;
+    --accent: #FF8FB1;
+    --accent-soft: #4A2433;
+    --on-accent: #0B1C17;
     --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
     --shadow-overlay: 0 4px 24px rgba(0,0,0,.14);
   }
@@ -113,8 +120,8 @@
  * a dark version. A theme id reads color-scheme for the normal style and
  * color-style-scheme for the others. An explicit pick sets data-theme on the
  * root, which outranks the OS media block. A swatch element carries the same
- * block, so Appearance shows every theme without a second source. Moss light
- * and Moss dark are the two defaults above.
+ * block, so Appearance shows every theme without a second source. Moss vibrant
+ * light and Moss vibrant dark are the two defaults above.
  */
 :root[data-theme="moss-light"], [data-swatch][data-theme="moss-light"] {
   --paper: #F6F7F6;
@@ -128,6 +135,9 @@
   --signal-soft: rgba(42, 114, 100, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
+  --accent: #2A7264;
+  --accent-soft: #DCEEE8;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="moss-dark"], [data-swatch][data-theme="moss-dark"] {
@@ -142,6 +152,9 @@
   --signal-soft: rgba(88, 179, 159, var(--signal-opacity));
   --oxide: #C96A61;
   --ochre: #CBA14E;
+  --accent: #58B39F;
+  --accent-soft: #10302A;
+  --on-accent: #000000;
   color-scheme: dark;
 }
 :root[data-theme="moss-vibrant-light"], [data-swatch][data-theme="moss-vibrant-light"] {
@@ -162,12 +175,12 @@
   color-scheme: light;
 }
 :root[data-theme="moss-vibrant-dark"], [data-swatch][data-theme="moss-vibrant-dark"] {
-  --paper: #0D2A22;
-  --surface: #14362C;
-  --faint: #1B4136;
+  --paper: #0B1C17;
+  --surface: #102620;
+  --faint: #173128;
   --ink: #E8FAF3;
   --muted: #A6CCBF;
-  --border: #3B6B5D;
+  --border: #2E5246;
   --signal: #4FD6A5;
   --signal-opacity: .12;
   --signal-soft: rgba(79, 214, 165, var(--signal-opacity));
@@ -175,7 +188,7 @@
   --ochre: #EFCA5A;
   --accent: #FF8FB1;
   --accent-soft: #4A2433;
-  --on-accent: #0D2A22;
+  --on-accent: #0B1C17;
   color-scheme: dark;
 }
 :root[data-theme="moss-contrast-light"], [data-swatch][data-theme="moss-contrast-light"] {
@@ -190,6 +203,9 @@
   --signal-soft: rgba(15, 90, 75, var(--signal-opacity));
   --oxide: #A80000;
   --ochre: #6F4A00;
+  --accent: #0F5A4B;
+  --accent-soft: #DDEFE7;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="moss-contrast-dark"], [data-swatch][data-theme="moss-contrast-dark"] {
@@ -204,6 +220,9 @@
   --signal-soft: rgba(127, 224, 200, var(--signal-opacity));
   --oxide: #FF7B72;
   --ochre: #FFD166;
+  --accent: #7FE0C8;
+  --accent-soft: #0F2A22;
+  --on-accent: #000000;
   color-scheme: dark;
 }
 :root[data-theme="harbor-light"], [data-swatch][data-theme="harbor-light"] {
@@ -218,6 +237,9 @@
   --signal-soft: rgba(43, 95, 158, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
+  --accent: #2B5F9E;
+  --accent-soft: #E0EAF6;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="harbor-dark"], [data-swatch][data-theme="harbor-dark"] {
@@ -232,6 +254,9 @@
   --signal-soft: rgba(111, 166, 230, var(--signal-opacity));
   --oxide: #C96A61;
   --ochre: #CBA14E;
+  --accent: #6FA6E6;
+  --accent-soft: #182B42;
+  --on-accent: #0F1318;
   color-scheme: dark;
 }
 :root[data-theme="harbor-vibrant-light"], [data-swatch][data-theme="harbor-vibrant-light"] {
@@ -252,12 +277,12 @@
   color-scheme: light;
 }
 :root[data-theme="harbor-vibrant-dark"], [data-swatch][data-theme="harbor-vibrant-dark"] {
-  --paper: #0E1E36;
-  --surface: #152946;
-  --faint: #1C3354;
+  --paper: #0C1728;
+  --surface: #12203A;
+  --faint: #192B49;
   --ink: #EDF4FF;
   --muted: #A9BEDB;
-  --border: #3B5680;
+  --border: #34507A;
   --signal: #6CB2FF;
   --signal-opacity: .12;
   --signal-soft: rgba(108, 178, 255, var(--signal-opacity));
@@ -265,7 +290,7 @@
   --ochre: #EFCA5A;
   --accent: #FFA64D;
   --accent-soft: #433324;
-  --on-accent: #0E1E36;
+  --on-accent: #0C1728;
   color-scheme: dark;
 }
 :root[data-theme="harbor-contrast-light"], [data-swatch][data-theme="harbor-contrast-light"] {
@@ -280,6 +305,9 @@
   --signal-soft: rgba(11, 74, 140, var(--signal-opacity));
   --oxide: #A80000;
   --ochre: #6F4A00;
+  --accent: #0B4A8C;
+  --accent-soft: #DCE8F7;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="harbor-contrast-dark"], [data-swatch][data-theme="harbor-contrast-dark"] {
@@ -294,6 +322,9 @@
   --signal-soft: rgba(142, 197, 255, var(--signal-opacity));
   --oxide: #FF7B72;
   --ochre: #FFD166;
+  --accent: #8EC5FF;
+  --accent-soft: #0E2038;
+  --on-accent: #000000;
   color-scheme: dark;
 }
 :root[data-theme="clay-light"], [data-swatch][data-theme="clay-light"] {
@@ -308,6 +339,9 @@
   --signal-soft: rgba(154, 74, 26, var(--signal-opacity));
   --oxide: #B0263A;
   --ochre: #9A7020;
+  --accent: #9A4A1A;
+  --accent-soft: #F5E2D4;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="clay-dark"], [data-swatch][data-theme="clay-dark"] {
@@ -322,15 +356,18 @@
   --signal-soft: rgba(224, 149, 90, var(--signal-opacity));
   --oxide: #E07A82;
   --ochre: #D9B05C;
+  --accent: #E0955A;
+  --accent-soft: #3A2717;
+  --on-accent: #17130F;
   color-scheme: dark;
 }
 :root[data-theme="clay-vibrant-light"], [data-swatch][data-theme="clay-vibrant-light"] {
-  --paper: #FBE4D6;
-  --surface: #FFF6F0;
-  --faint: #F6D6C3;
+  --paper: #FAEBE1;
+  --surface: #FFF9F5;
+  --faint: #F3DDCF;
   --ink: #2E2220;
   --muted: #6E4C44;
-  --border: #DDB09C;
+  --border: #E2BCA7;
   --signal: #963C10;
   --signal-opacity: .10;
   --signal-soft: rgba(150, 60, 16, var(--signal-opacity));
@@ -342,12 +379,12 @@
   color-scheme: light;
 }
 :root[data-theme="clay-vibrant-dark"], [data-swatch][data-theme="clay-vibrant-dark"] {
-  --paper: #2A160E;
-  --surface: #361D13;
-  --faint: #42251A;
+  --paper: #1E130E;
+  --surface: #281912;
+  --faint: #33221A;
   --ink: #FFEFE6;
   --muted: #D4AE9C;
-  --border: #6B4030;
+  --border: #5A3A2C;
   --signal: #FF9A5C;
   --signal-opacity: .12;
   --signal-soft: rgba(255, 154, 92, var(--signal-opacity));
@@ -355,7 +392,7 @@
   --ochre: #EFCA5A;
   --accent: #5FE0D2;
   --accent-soft: #173B36;
-  --on-accent: #2A160E;
+  --on-accent: #1E130E;
   color-scheme: dark;
 }
 :root[data-theme="clay-contrast-light"], [data-swatch][data-theme="clay-contrast-light"] {
@@ -370,6 +407,9 @@
   --signal-soft: rgba(138, 51, 0, var(--signal-opacity));
   --oxide: #A80000;
   --ochre: #6F4A00;
+  --accent: #8A3300;
+  --accent-soft: #F6E2D3;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="clay-contrast-dark"], [data-swatch][data-theme="clay-contrast-dark"] {
@@ -384,6 +424,9 @@
   --signal-soft: rgba(255, 178, 122, var(--signal-opacity));
   --oxide: #FF7B72;
   --ochre: #FFD166;
+  --accent: #FFB27A;
+  --accent-soft: #2E1A0E;
+  --on-accent: #000000;
   color-scheme: dark;
 }
 :root[data-theme="iris-light"], [data-swatch][data-theme="iris-light"] {
@@ -398,6 +441,9 @@
   --signal-soft: rgba(100, 71, 176, var(--signal-opacity));
   --oxide: #B4483E;
   --ochre: #B98A2F;
+  --accent: #6447B0;
+  --accent-soft: #EAE4F8;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="iris-dark"], [data-swatch][data-theme="iris-dark"] {
@@ -412,6 +458,9 @@
   --signal-soft: rgba(168, 148, 242, var(--signal-opacity));
   --oxide: #E0707E;
   --ochre: #D4AE5C;
+  --accent: #A894F2;
+  --accent-soft: #2A2343;
+  --on-accent: #120F1A;
   color-scheme: dark;
 }
 :root[data-theme="iris-vibrant-light"], [data-swatch][data-theme="iris-vibrant-light"] {
@@ -432,12 +481,12 @@
   color-scheme: light;
 }
 :root[data-theme="iris-vibrant-dark"], [data-swatch][data-theme="iris-vibrant-dark"] {
-  --paper: #1A1235;
-  --surface: #231944;
-  --faint: #2C2052;
+  --paper: #140F27;
+  --surface: #1C1636;
+  --faint: #251D45;
   --ink: #F1ECFF;
   --muted: #B9ADE0;
-  --border: #4E3F86;
+  --border: #44377A;
   --signal: #B49CFF;
   --signal-opacity: .12;
   --signal-soft: rgba(180, 156, 255, var(--signal-opacity));
@@ -445,7 +494,7 @@
   --ochre: #EFCA5A;
   --accent: #FFC75F;
   --accent-soft: #3F3420;
-  --on-accent: #1A1235;
+  --on-accent: #140F27;
   color-scheme: dark;
 }
 :root[data-theme="iris-contrast-light"], [data-swatch][data-theme="iris-contrast-light"] {
@@ -460,6 +509,9 @@
   --signal-soft: rgba(75, 42, 158, var(--signal-opacity));
   --oxide: #A80000;
   --ochre: #6F4A00;
+  --accent: #4B2A9E;
+  --accent-soft: #E7E0F7;
+  --on-accent: #FFFFFF;
   color-scheme: light;
 }
 :root[data-theme="iris-contrast-dark"], [data-swatch][data-theme="iris-contrast-dark"] {
@@ -474,6 +526,9 @@
   --signal-soft: rgba(201, 184, 255, var(--signal-opacity));
   --oxide: #FF7B72;
   --ochre: #FFD166;
+  --accent: #C9B8FF;
+  --accent-soft: #1F1638;
+  --on-accent: #000000;
   color-scheme: dark;
 }
 
@@ -482,10 +537,31 @@
 
 :root { --reference: light-dark(#285C9E, #86B8F4); }
 
-/* Vibrant styles add an action accent beside selection and activity. Every other theme resets it. */
-:root:not([data-theme*="-vibrant-"]),
-[data-swatch]:not([data-theme*="-vibrant-"]) {
-  --accent: initial;
-  --accent-soft: initial;
-  --on-accent: initial;
+/* Every theme fills primary actions with --accent and draws --on-accent on
+   them. Vibrant styles also color selection and the composer's focus edge
+   with the accent. The defaults above are Moss vibrant, so a root without a
+   theme, or with a vibrant one, keeps the accent, and every other set
+   returns selection to the hover fill and ink. */
+:root, [data-swatch] {
+  --selected: var(--accent-soft);
+  --on-selected: var(--accent);
+  --selected-edge: var(--accent);
+  --focus-edge: var(--accent);
+}
+:root[data-theme]:not([data-theme*="-vibrant-"]),
+[data-swatch][data-theme]:not([data-theme*="-vibrant-"]) {
+  --selected: var(--faint);
+  --on-selected: var(--ink);
+  --selected-edge: var(--ink);
+  --focus-edge: var(--muted);
+}
+
+/* State colors for the states core reports: online and done in success,
+   running in active, failures in danger, queued and waiting in warning.
+   Each clears 4.5:1 on paper, surface, faint and its own chip fill. */
+:root {
+  --success: light-dark(#105E34, #5FCF8C);
+  --active: light-dark(#174E99, #7AB2F7);
+  --danger: light-dark(#9A2424, #F28B82);
+  --warning: light-dark(#6E4600, #E9BB5C);
 }

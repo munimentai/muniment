@@ -9,10 +9,6 @@ import path from 'node:path'
 const ALLOWED = {
   'src/lib/ui/Button.svelte': { 'button[data-variant="capability"][aria-pressed="true"]': 'Selected capability filters use the settings tab highlight.' },
   'src/lib/AppUpdate.svelte': { 'button': 'Verified update ready to install' },
-  'src/lib/Toggle.svelte': {
-    'button[aria-checked="true"]': 'Enabled switch track',
-    'button[aria-checked="true"] span': 'Enabled switch knob',
-  },
   'src/lib/SettingsTabs.svelte': { 'button[aria-selected=true]': 'Selected settings tab' },
   'src/extend/ExtendSection.svelte': {
     '.catalog-card.connected': 'Installed server card',

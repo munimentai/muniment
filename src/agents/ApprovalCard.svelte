@@ -75,7 +75,7 @@
   .approval { display: grid; gap: 8px; padding: 12px 0; min-width: 0; }
   .approval.inline { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   .who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; font-size: var(--text-13); }
-  .when { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .when { color: var(--muted); font: var(--text-12) var(--font-human); }
   .operation { margin: 0; font: var(--text-13) var(--font-mono); overflow-wrap: anywhere; }
   .reason { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
   .plan { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font-size: var(--text-13); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
