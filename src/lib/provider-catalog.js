@@ -261,3 +261,19 @@ export function modelChipLabel(inventory) {
   if (!current) return 'Connect a model'
   return current.label
 }
+
+// How many models one connected provider serves, as its card names it.
+export function modelCountLabel(count) {
+  if (!count) return 'No models'
+  return `${count} ${count === 1 ? 'model' : 'models'}`
+}
+
+// What a Refresh models read found: the models the picker can offer across
+// the connected providers, the router's pools included.
+export function refreshResult(inventory) {
+  const groups = pickerGroups(inventory, '', { all: true })
+  const models = groups.reduce((total, group) => total + group.models.filter((model) => model.id !== 'auto').length, 0)
+  const providers = groups.filter((group) => !group.classifier).length
+  if (!providers) return 'Models refreshed. No provider serves a model yet.'
+  return `Models refreshed. ${modelCountLabel(models)} from ${providers} ${providers === 1 ? 'provider' : 'providers'}.`
+}

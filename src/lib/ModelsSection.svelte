@@ -21,7 +21,7 @@
   import ClassifierEdit from './ClassifierEdit.svelte'
   import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders } from './provider-catalog.js'
+  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, modelCountLabel, providerFamily, providerName, refreshResult, searchProviders } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
@@ -85,6 +85,7 @@
       .map((entry) => ({
         ...entry,
         family: providerFamily(entry.id),
+        count: entry.models.length,
         models: needle ? entry.models.filter((model) => model.id.toLowerCase().includes(needle)) : entry.models,
       })).filter((entry) => !needle || entry.models.length > 0 || entry.name.toLowerCase().includes(needle))
   })
@@ -143,6 +144,7 @@
       inventory = await tauri.invoke('local_mode_provider_inventory', { force })
       loadError = ''
       oninventory?.(inventory)
+      if (force) status = refreshResult(inventory)
 
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
@@ -447,6 +449,7 @@
               <div class="line-card" data-testid="provider-connection">
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
+                <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
                 {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
                 {#if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
@@ -642,6 +645,8 @@
   .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .model-count { flex: none; white-space: nowrap; }
+  .model-count[data-tone="caution"] { color: var(--ochre); }
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .provider-list li + li { border-top: 1px solid var(--border); }
