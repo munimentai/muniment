@@ -11,7 +11,7 @@
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
   import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, threadOwner } from './runtimes/fleet.js'
-  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
+  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, machineName, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
   import { machineStatusTone } from './lib/status-tone.js'
   import StatusChip from './lib/ui/StatusChip.svelte'
   import McpIcon from './extend/McpIcon.svelte'
@@ -2875,7 +2875,7 @@
 
 {#snippet machineBadge(summary)}
   {@const machine = summary.runtimeId && summary.runtimeId !== LOCAL_RUNTIME_ID ? runtimeList?.runtimes?.find((runtime) => runtime.id === summary.runtimeId) : null}
-  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machine.name}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
+  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machineName(machine)}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
 <!-- A row's meta line: once a machine is paired, the machine the thread lives
@@ -2883,7 +2883,7 @@
 {#snippet rowMeta(summary)}
   {@const owner = threadOwner(summary, swarm, runtimeList)}
   {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}

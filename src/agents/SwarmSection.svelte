@@ -12,7 +12,7 @@
   import { onlineTone } from '../lib/status-tone.js'
   import { agentRequest } from './agent-runtime.js'
   import { directLinks, linkLabel, linkMachines, listSwarm, memberMachine, windowRuntime } from './swarm.js'
-  import { LOCAL_RUNTIME_ID, kindIcon } from '../runtimes/runtimes.js'
+  import { LOCAL_RUNTIME_ID, kindIcon, machineName } from '../runtimes/runtimes.js'
 
   let { tauri, list = null, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
   let swarm = $state(null)
@@ -51,7 +51,7 @@
     try { await work(); await load(); notice = done } catch (failure) { error = String(failure?.message ?? failure) } finally { busy = '' }
   }
 
-  const nameOf = (id) => managed.find((runtime) => runtime.id === id)?.name ?? 'Machine'
+  const nameOf = (id) => machineName(managed.find((runtime) => runtime.id === id))
 
   // The machines that keep a direct link to `coreId`, with their own view.
   function linksTo(coreId) {
@@ -101,8 +101,8 @@
   {#if managed.length > 1}
     <Row title="Join two machines" info="Both machines must accept connections. This device asks one for an invitation and gives it to the other." stacked>
       <div class="link-form">
-        <label>From<select bind:value={from} disabled={!!busy}>{#each managed as runtime (runtime.id)}<option value={runtime.id}>{runtime.name}</option>{/each}</select></label>
-        <label>To<select bind:value={to} disabled={!!busy}>{#each managed.filter((runtime) => runtime.id !== from) as runtime (runtime.id)}<option value={runtime.id}>{runtime.name}</option>{/each}</select></label>
+        <label>From<select bind:value={from} disabled={!!busy}>{#each managed as runtime (runtime.id)}<option value={runtime.id}>{machineName(runtime)}</option>{/each}</select></label>
+        <label>To<select bind:value={to} disabled={!!busy}>{#each managed.filter((runtime) => runtime.id !== from) as runtime (runtime.id)}<option value={runtime.id}>{machineName(runtime)}</option>{/each}</select></label>
         <Button icon="link" variant="primary" disabled={!!busy || !to || to === from} onclick={() => act('link', () => linkMachines(tauri, from, to), `Joined ${nameOf(from)} and ${nameOf(to)}.`)}>{busy === 'link' ? 'Joining…' : 'Join fleet'}</Button>
       </div>
     </Row>

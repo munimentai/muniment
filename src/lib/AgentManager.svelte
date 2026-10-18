@@ -13,6 +13,7 @@
   import AgentCard from '../agents/AgentCard.svelte'
   import AgentImport from '../agents/AgentImport.svelte'
   import { agentMachine, agentRuntimes, emptyListing, listAgents } from '../agents/agent-runtime.js'
+  import { machineName } from '../runtimes/runtimes.js'
   import { exportAgent } from '../agents/import.js'
   import { loadModes } from '../agents/permission-modes.js'
   // `onselect` opens the agent's chat and `onprofile` its profile alone.
@@ -20,7 +21,7 @@
   let archived = $state(false)
   let importOpen = $state(false)
   // The machines an import can land on: this computer and each that answers.
-  const importRuntimes = $derived(agentRuntimes(runtimeList).map(runtime => ({ id: runtime.id, name: runtime.local ? 'This computer' : runtime.name })))
+  const importRuntimes = $derived(agentRuntimes(runtimeList).map(runtime => ({ id: runtime.id, name: machineName(runtime) })))
   const machineOf = (agent) => agent.primaryMachine ?? agentMachine(runtimeList, agent)
   let listing=$state(emptyListing()), error=$state(''), loading=$state(true)
   let alive = true

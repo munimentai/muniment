@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { kindIcon } from '../runtimes/runtimes.js'
 import { applyApproval, directLinks, emptySwarm, linkMachines, listSwarm, memberMachine, mergeSwarm, moveOutcome, moveRequest, postTarget, swarmRoster, swarmThreads, windowRuntime } from './swarm.js'
 
 const LAPTOP = 'core-laptop'
@@ -82,6 +83,11 @@ describe('the roster', () => {
     const swarm = mergeSwarm(answers())
     expect(memberMachine(swarm, LAPTOP)).toMatchObject({ name: 'This computer', kind: 'local', online: true })
     expect(memberMachine(emptySwarm(), 'x')).toMatchObject({ name: 'Unknown machine', online: false })
+    // A reached container announces no form factor and keeps its runtime's kind and name.
+    const container = mergeSwarm([{ ...answers()[1], members: { ...answers()[1].members, members: [member(BOX, 'Muniment runtime', null, { self: true })] } }])
+    const list = { runtimes: [{ id: 'box', kind: 'container', name: 'Muniment runtime', status: 'online' }] }
+    expect(memberMachine(container, BOX, list)).toMatchObject({ name: 'Container', kind: 'container' })
+    expect(kindIcon(memberMachine(container, BOX, list))).toBe(kindIcon(list.runtimes[0]))
     const roster = swarmRoster({ agents: [{ id: 'a', name: 'A', runtimeId: 'local' }] }, emptySwarm())
     expect(roster[0]).toMatchObject({ primaryRuntime: null, primaryMachine: null, online: true, replica: false })
   })
