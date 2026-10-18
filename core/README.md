@@ -796,6 +796,9 @@ steering, gate answers and run starts through `SwarmHost`.
   KiB at most), which fetches it over the content-store want path. A want
   is answered in 48 KiB slices, as many as the exchange budget holds, so
   each slice's base64 fits the longest string an attach frame carries.
+  The budget counts an item's strings and collection entries as well as its
+  bytes, so an exchange of many small items, such as a long history of
+  events, stays within a frame's structural limits too.
   A thread attachment in `thread.history` and the run events carries its
   content hash as `sha256`, and `blob.read` takes it on the member that
   runs the thread and on every replica.

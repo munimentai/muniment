@@ -921,7 +921,7 @@ pub(super) fn outgoing(
     };
     if peer_digest.as_deref() != Some(digest.as_str()) {
         out.roster = roster;
-        *budget = budget.saturating_sub(super::json_bytes(&out.roster));
+        *budget = budget.saturating_sub(super::budget_cost(&out.roster));
     }
     let held = sealed_rows(inner)?;
     out.sealed_have = Some(
@@ -941,7 +941,7 @@ pub(super) fn outgoing(
             if !lacks {
                 continue;
             }
-            let bytes = super::json_bytes(&secret);
+            let bytes = super::budget_cost(&secret);
             if bytes > *budget {
                 out.more = true;
                 break;

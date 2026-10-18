@@ -215,9 +215,11 @@ struct Round {
 }
 
 /// One exchange from `dialer` to `answerer` and back, through JSON as a
-/// link carries it.
+/// link carries it. Each body goes out in an attach frame, so it stays
+/// within the frame's limits.
 fn round(dialer: &Node, answerer: &Node) -> Round {
     let wire = |exchange: &Exchange| -> (Exchange, usize) {
+        carried(exchange);
         let bytes = serde_json::to_vec(exchange).unwrap();
         (serde_json::from_slice(&bytes).unwrap(), bytes.len())
     };
@@ -239,10 +241,32 @@ fn round(dialer: &Node, answerer: &Node) -> Round {
     }
 }
 
+/// Frames `exchange` as the body of a `swarm.exchange` request, as a link
+/// sends it, and fails when the frame would be refused.
+fn carried(exchange: &Exchange) {
+    let request = json!({
+        "protocol": "muniment.attach",
+        "request_id": uuid::Uuid::now_v7().to_string(),
+        "operation": "swarm.exchange",
+        "capability": "c".repeat(64),
+        "idempotency_key": null,
+        "body": exchange,
+    });
+    if let Err(error) = muniment_attach::encode_frame(&request) {
+        panic!(
+            "an exchange of {} events, {} clocks, {} records and {} threads cannot be framed: {error}",
+            exchange.events.len(),
+            exchange.clocks.len(),
+            exchange.records.len(),
+            exchange.threads.len(),
+        );
+    }
+}
+
 /// Exchanges until neither side leaves anything out. Answers the rounds.
 fn settle(dialer: &Node, answerer: &Node) -> Vec<Round> {
     let mut rounds = Vec::new();
-    for _ in 0..40 {
+    for _ in 0..400 {
         let round = round(dialer, answerer);
         let more = round.request.more || round.response.more;
         rounds.push(round);
@@ -932,6 +956,32 @@ fn timed<T>(work: impl FnOnce() -> T) -> (T, std::time::Duration) {
     let started = std::time::Instant::now();
     let value = work();
     (value, started.elapsed())
+}
+
+#[test]
+fn a_member_with_a_long_history_links_within_the_frame_limits() {
+    let a = Node::scoped("a");
+    // About as many events as a few days of chats, more than one frame
+    // carries as items.
+    a.seed_journal_threads(40, 12);
+    a.inner().tick().unwrap();
+    let held = |node: &Node| -> i64 {
+        node.inner()
+            .store
+            .connect()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM log", [], |row| row.get(0))
+            .unwrap()
+    };
+    assert_eq!(held(&a), 40 * 12);
+
+    // A dials the new member B, as this computer dials a container it
+    // just paired, and each frame of the join fits the frame's limits.
+    let b = Node::scoped("b");
+    let join = settle(&a, &b);
+    assert!(join.len() > 1, "the history arrives in more than one frame");
+    b.inner().tick().unwrap();
+    assert_eq!(held(&b), held(&a));
 }
 
 #[test]
