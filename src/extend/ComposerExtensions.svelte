@@ -105,7 +105,7 @@
         </div>{/if}
       </div>
       {#if state.assist}<div class="automatic"><span>{state.assist.name} assists</span><Toggle checked={automatic} label={`${state.assist.name} assists`} onchange={checked => selection.automatic = checked} /></div>{/if}
-      <button type="button" class="manage" onclick={() => { close(); onmanage() }}>Manage extensions</button>
+      <button type="button" class="manage" onclick={() => { close(); onmanage() }}>Manage tools</button>
     </div>
   {:else if command !== null && shown.length && !active}
     <section data-composer-panel data-panel="extend" data-panel-variant="overlay" class="commands" aria-label="Slash commands">

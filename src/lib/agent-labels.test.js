@@ -50,5 +50,5 @@ it('notes what an imported template brought', async () => {
   const { templateNote } = await import('./agent-labels.js')
   expect(templateNote(null)).toBe('')
   expect(templateNote({ coverage: 'public-profile' })).toBe('Imported from a public share page, which holds the profile only.')
-  expect(templateNote({ coverage: 'provided', skills: [{ name: 'Tone' }], plugins: ['Gmail', 'Drive'] })).toBe('Imported from a template. 1 skill stays as reference text. 2 tools need setup in Extend.')
+  expect(templateNote({ coverage: 'provided', skills: [{ name: 'Tone' }], plugins: ['Gmail', 'Drive'] })).toBe('Imported from a template. 1 skill stays as reference text. 2 tools need setup in Tools.')
 })

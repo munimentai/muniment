@@ -58,7 +58,7 @@ describe('runtime labels', () => {
     expect(statusLabel({ status: 'online' })).toBe('Online')
     expect(statusHint({ status: 'online' })).toBe('')
     expect(statusLabel({ status: 'certificate_changed' })).toBe('Certificate changed')
-    expect(statusHint({ status: 'certificate_changed' })).toBe('Pair it again to trust its new certificate.')
+    expect(statusHint({ status: 'certificate_changed' })).toBe('Add it again to trust its new certificate.')
     expect(statusTone({ status: 'revoked' })).toBe('critical')
     expect(statusTone({ status: 'offline' })).toBe('caution')
     expect(statusLabel({ status: 'version_mismatch' })).toBe('Version mismatch')
@@ -143,15 +143,15 @@ describe('update labels', () => {
 describe('the machine a Settings page applies to', () => {
   it('names the selected machine on machine pages once a machine is paired, with the machines that answer', () => {
     const list = runtimeList([{ ...local, active: false }, studio, { ...buildBox, active: true }], buildBox.id)
-    const scope = settingsMachine(list, 'providers')
+    const scope = settingsMachine(list, 'models')
     expect(scope.selected.name).toBe('Build box')
     expect(scope.choices.map((runtime) => runtime.name)).toEqual(['This computer', 'Build box'])
-    expect(settingsMachine(list, 'appearance')).toBeNull()
-    expect(settingsMachine(list, 'mcp')).toBeNull()
+    expect(settingsMachine(list, 'general')).toBeNull()
+    expect(settingsMachine(list, 'machines')).toBeNull()
   })
 
   it('shows no machine while this computer is the only one', () => {
-    expect(settingsMachine(runtimeList([local]), 'providers')).toBeNull()
+    expect(settingsMachine(runtimeList([local]), 'models')).toBeNull()
   })
 })
 

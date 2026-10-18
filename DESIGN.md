@@ -128,22 +128,21 @@ Search loads older titles and includes archives. Archived threads has Restore.
 Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. In a fleet a mono sync line sits above Settings, Synced, Syncing N or Offline with the last sync time, and opens the bootstrap panel: each class with a bar and each sign-in arriving from its holder or waiting for one. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
-Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under semibold group headings: Back to threads where New thread sits,
-then Models, Extend (ending with Machines), Preferences (Appearance, Context, Permissions, Voice, Language), Personal (Profile, Memory, Storage) and Workspace (Companies). Each page has a Lucide icon and takes its sidebar label as its title, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: the title and its info control with its actions at the right, then semibold headings over bordered cards of rows. A heading or row whose explanation adds to its label carries it behind the same `InfoTip`, and a row shows a support line only when it adds what a user needs to act.
-The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
+Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows: Back to threads where New thread sits, a search field, then Account, Models, Tools, Machines, Permissions, Data and General, with no group headings. Each setting lives on one page. While the search holds words, the rows keep the matching pages with their matching parts indented under them. A page of several parts, such as Data, gives each part a smaller head and a hairline above it. Each page has a Lucide icon and takes its sidebar label as its title, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: the title and its info control with its actions at the right, then semibold headings over bordered cards of rows. A heading or row whose explanation adds to its label carries it behind the same `InfoTip`, and a row shows a support line only when it adds what a user needs to act.
+The company-record flag adds Companies to Data. The cloud flag adds MuniCloud to Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
 platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Back to threads or Escape returns focus to the opener.
 Companies lists each company as a row with Open, Rename and Delete, where Delete asks once and names it, and New company last, then Sources and the sample company,
 which open the record panel, and Backups. Account leads with the signed-in card, Sign out and the plan tiers. Memory carries Recall, the saved facts and Export.
-Machines lists This computer first with its hostname in mono, then each paired machine by its own name, or by its kind while it announces only the generic runtime name, with its kind as a small label, its version and one state chip: the update state the machine reports in place of Online while it answers, with blockers or the error in a tooltip. The Machines heading carries Update all, a unified `Button`, and each paired row's menu leads with Update when the machine takes a request. Update all reports the machines it asked and one line of skips with their reasons.
-Model providers and Decision models are two pages of one component. Account
+Machines is one list: This computer first with its hostname in mono, then every machine and device by its own name, or by its kind while it announces only the generic runtime name, each with its shape icon, a hairline kind chip, its version, one state chip and Limited for a device without admin access: the update state the machine reports in place of Online while it answers, with blockers or the error in a tooltip, and the last-seen time while it does not answer. This computer's chevron opens Network, Available offline and Log under its row. The heading carries Add machine and, while an update waits, Update all. Add machine opens one panel with this computer's code and QR and a field for the other machine's link, with SSH inside it. Each other row's menu holds Update when the machine takes a request, Rename and a red Remove. Share model connections is one row under the list with its explanation behind its info control. Update all reports the machines it asked and one line of skips with their reasons.
+Models leads with Roles, the routing and assistance switches and their decision models, then Connections. Account
 rows span the page, with allowances visible and usage in details.
-Decision models holds the routing statements. Connect
+Routing statements sit between them. Connect
 account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
 opens a picker: a column of full-color provider marks, each named on hover, that scroll to their provider, every connected provider's current generation under its name, each provider's Legacy models folded under one row,
-a search over every model, and Model providers at its foot. Each provider heading in the picker and the model on the provenance line carry the provider's mark. The
+a search over every model, and Manage models at its foot. Each provider heading in the picker and the model on the provenance line carry the provider's mark. The
 sidebar is resizable by its divider and collapses to nothing: no rail. Each divider
 shows Lucide's vertical ellipsis as its grip, and on hover, focus or drag its gap fills with `border` that fades out at both ends.
 The mark appears on the launch screen and in the thinking state, never in
@@ -206,10 +205,10 @@ host and URL path, query and fragment, with a right fade. Folder labels use the
 last folder with a left fade. Terminal and Files share the full-path scroll
 component. Hidden features leave no controls, Settings entries or empty space.
 
-## Extend
+## Tools
 
-Extend uses the shared Settings panel. MCP servers, Skills and Plugins are
-three sidebar pages of one component, and `SettingsTabs` draws its pill tabs only outside Settings.
+Settings → Tools holds MCP servers, Skills, Plugins and Search behind one `SettingsTabs` type filter,
+with one Add in its head that opens the form for the picked type.
 Their sidebar icons are the MCP mark,
 `pencil-sparkles` and `plug-zap`, the composer menu uses the same three, `unplug` means disconnect only, and catalog cards keep the MCP mark. Search, category, installation and sort filters
 search names, descriptions, publishers and categories in the official remote-server catalog.
@@ -227,7 +226,7 @@ Icon notices live in the bundled third-party notices, outside the catalog.
 
 The composer plus sits first at the left and matches the composer menu buttons. The Agents, Artifacts and Projects rows reveal a plus on hover that creates one.
 It has a background only on hover or keyboard focus.
-Its three branches are MCPs, Plugins and Skills, followed by Manage extensions.
+Its three branches are MCPs, Plugins and Skills, followed by Manage tools.
 The paperclip opens the OS picker directly. macOS accepts multiple files and folders together. Attachment chips are one 28px row: icon, name with extension, hover-only X. Folder paths reach local tools. All composer panels share one
 anchor above the full composer with an eight-pixel gap. Only one opens at a time.
 Skill and plugin commands appear inline as slash commands in the reference color.
@@ -245,6 +244,6 @@ Confirmation dialogs keep explicit decision buttons and focus the safe choice.
 Menus close on selection, Escape or outside click without an extra close row.
 Dialogs fit their content, cap height to the viewport, and scroll only as needed.
 Appearance spaces Browse color schemes below the frame control. Skills and plugins use
-managed storage under `~/.muniment`, with Open folder in Extend.
+managed storage under `~/.muniment`, with Open folder in Tools.
 Threads, agent chats and artifact chats use one-to-three-word generated titles.
 Project cards keep their vertical ellipsis menu for actions, including Rename.

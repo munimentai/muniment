@@ -167,7 +167,7 @@
       <div class="field-heading"><h3>Skills</h3></div>
       {#if catalog.skills.length}
         <ul>{#each catalog.skills as skill (skill.id)}<li><label class="check skill"><input type="checkbox" checked={(agent.skills ?? []).includes(skill.id)} disabled={busy} onchange={(event) => toggleSkill(skill.id, event.currentTarget.checked)} /><span>{skill.name}{#if skill.description}<small>{skill.description}</small>{/if}</span></label></li>{/each}</ul>
-      {:else if catalog.loaded && !catalog.error}<p class="muted">{primary.name} has no skills installed. Add them in Extend.</p>{/if}
+      {:else if catalog.loaded && !catalog.error}<p class="muted">{primary.name} has no skills installed. Add them in Tools.</p>{/if}
       {#if catalog.loaded && !catalog.error}{#each missingSkills(agent, catalog) as id (id)}<p class="record muted">{id} is not installed on {primary.name}.</p>{/each}{/if}
     </section>
 
@@ -177,7 +177,7 @@
       {:else if !modes}<p class="muted">Update {primary.name} to choose a mode.</p>
       {:else}
         <label class="inline">Mode<select aria-label="Permission mode" value={permissions.mode ?? ''} disabled={busy} onchange={(event) => chooseMode(event.currentTarget.value)}>
-          <option value="">Default: {findMode(modes, modes.default_agent_mode)?.title ?? modes.default_agent_mode}</option>
+          <option value="">Default ({findMode(modes, modes.default_agent_mode)?.title ?? modes.default_agent_mode})</option>
           {#each modes.modes as mode (mode.id)}<option value={mode.id} disabled={mode.available === false && mode.id !== permissions.mode}>{mode.title}</option>{/each}
         </select></label>
         {#if shownMode}<small>{shownMode.available === false && shownMode.reason ? shownMode.reason : shownMode.description}</small>{/if}

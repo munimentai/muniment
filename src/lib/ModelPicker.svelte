@@ -4,7 +4,7 @@
   // The composer's model picker: a column of provider marks, every connected
   // provider's current models under its name with its older ones folded under
   // Legacy models, the model in use marked, a search over every model, and
-  // Model providers at its foot. A mark scrolls to its provider. Each model
+  // Manage models at its foot. A mark scrolls to its provider. Each model
   // row moves the model between the two lists.
   import { onMount, tick } from 'svelte'
   import ProviderLogo from './ProviderLogo.svelte'
@@ -136,7 +136,7 @@
       {/if}
     </div>
   </div>
-  <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Model providers</button>
+  <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
 </div>
 
 {#snippet mark(group)}{#if group.classifier}<LucideIcon name="route" variant="action" size={14} />{:else}<ProviderLogo color provider={group.providerId} size={14} />{/if}{/snippet}
@@ -174,7 +174,7 @@
   .rail-tip { position: absolute; z-index: 1; left: 52px; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .picker-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
-  /* Routing is off or has no decision model: the heading links to Decision models. */
+  /* Routing is off or has no decision model: the heading links to Roles in Models. */
   .picker-group { position: relative; scroll-margin-top: 0; }
   .picker-group + .picker-group { margin-top: 6px; }
   .group-manage { position: absolute; top: 0; right: 8px; padding: 2px 6px; border: 0; border-radius: var(--radius-control); background: none; color: var(--ink); font: var(--text-12) var(--font-human); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }

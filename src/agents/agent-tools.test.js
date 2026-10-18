@@ -38,7 +38,7 @@ describe('agent tool catalog', () => {
     const catalog = await loadToolCatalog(tauri(answer), 'local')
     expect(missingSkills({ skills: [catalog.skills[0].id, 'gone:skills/x/SKILL.md'] }, catalog)).toEqual(['gone:skills/x/SKILL.md'])
     expect(serverTools(catalog, 'Leads')).toEqual({ tools: ['search_leads', 'get_lead'], note: '' })
-    expect(serverTools(catalog, 'Calendar').note).toBe('Test this server in Extend to list its tools.')
+    expect(serverTools(catalog, 'Calendar').note).toBe('Test this server in Tools to list its tools.')
     expect(serverTools(catalog, 'Unknown')).toEqual({ tools: [], note: '' })
   })
 })

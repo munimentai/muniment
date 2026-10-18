@@ -11,7 +11,8 @@
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
 
-  let { tauri, subject = '', onsignout = null } = $props()
+  // `children` sits under the signed-in card, such as the MuniCloud vault switch.
+  let { tauri, subject = '', onsignout = null, children } = $props()
   let access = $state(accessIdleState)
   let devices = $state(devicesIdleState)
   let companions = $state(companionsIdleState)
@@ -237,6 +238,7 @@
       {#if onsignout}<Button onclick={onsignout}>Sign out</Button>{/if}
     </Row>
   </Group>
+  {@render children?.()}
   <section class="plan-section" aria-labelledby="plan-heading">
     <h3 id="plan-heading" class="settings-heading">Plan</h3>
     <p class="section-help">Plans add what needs a server. Everything local stays free.</p>

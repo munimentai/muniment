@@ -44,6 +44,6 @@ export function missingSkills(agent, catalog = emptyCatalog()) {
 export function serverTools(catalog, name) {
   const server = catalog?.mcp?.find((entry) => entry.server === name)
   if (!server) return { tools: [], note: '' }
-  if (!server.tools.length) return { tools: [], note: server.checkedAt ? 'This server offers no tools.' : 'Test this server in Extend to list its tools.' }
+  if (!server.tools.length) return { tools: [], note: server.checkedAt ? 'This server offers no tools.' : 'Test this server in Tools to list its tools.' }
   return { tools: server.tools, note: '' }
 }

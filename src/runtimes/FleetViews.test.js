@@ -117,7 +117,7 @@ describe('the fleet log', () => {
   it('lists each fleet.audit entry with its machines from swarm.members', async () => {
     const tauri = agentBridge({ 'fleet.audit': { entries, more: false }, 'swarm.members': swarm, 'fleet.sync_status': { state: 'synced', classes: [] } })
     render(AuditLog, { tauri })
-    const log = await screen.findByRole('list', { name: 'Fleet log' })
+    const log = await screen.findByRole('list', { name: 'Machine log' })
     expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.audit', body: { limit: 50 } })
     const [op, role] = within(log).getAllByRole('listitem')
     expect(op).toHaveTextContent('Ran a forwarded action')

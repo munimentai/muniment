@@ -92,7 +92,7 @@
     <section aria-label="Setup">
       <h3>Tools</h3>
       {#each preview.tools?.matched ?? [] as tool (tool.name)}<p class="item">{tool.name}<span class="record">installed</span></p>{/each}
-      {#each preview.tools?.setup ?? [] as tool (tool.name)}<p class="item">{tool.name}<span class="record">set up in Extend</span></p>{/each}
+      {#each preview.tools?.setup ?? [] as tool (tool.name)}<p class="item">{tool.name}<span class="record">set up in Tools</span></p>{/each}
       {#if !preview.tools?.matched?.length && !preview.tools?.setup?.length}<p class="note">The template names no tools.</p>{/if}
     </section>
     {#if preview.memories?.length}

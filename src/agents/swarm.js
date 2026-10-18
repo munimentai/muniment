@@ -176,15 +176,6 @@ export function postTarget({ threadId, threadRuntime, groups = [], agent = null,
   return null
 }
 
-// Links two machines this app administers: the first issues a swarm
-// invitation and the second redeems it. The link never leaves the app.
-export async function linkMachines(tauri, from, to) {
-  if (!from || !to || from === to) throw new Error('Choose two different machines.')
-  const invitation = await agentRequest(tauri, from, 'swarm.invite', {})
-  const joined = await agentRequest(tauri, to, 'swarm.join', { link: invitation.link })
-  return joined?.member ?? null
-}
-
 // The members a machine links to directly, from its own view.
 export function directLinks(view) {
   return (view?.members ?? []).filter((member) => !member.self && member.link)
