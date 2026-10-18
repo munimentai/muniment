@@ -245,6 +245,12 @@ pub trait PiLaunchBoundaries {
     fn run_permissions(&self) -> Option<crate::permission_gate::RunPermissions> {
         self.agent_launch().and_then(|agent| agent.permissions)
     }
+
+    /// The store a run records its folder and conversation in, for rewind and
+    /// review. None records nothing.
+    fn checkpoint_store(&self) -> Option<std::sync::Arc<crate::checkpoint::CheckpointStore>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

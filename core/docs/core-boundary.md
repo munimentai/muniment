@@ -60,6 +60,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | browser_agent | It runs the browser loop a decision model drives. |
 | module | cas | It owns content-addressed storage. |
 | module | chat_coordinate | It coordinates runs and permission policy. |
+| module | checkpoint | It records each turn's folder and conversation and writes them back. |
 | module | chat_launch | It defines the launch value a run starts Pi with and answers gateway requests. |
 | module | chat_profile | It opens profile storage without a window. |
 | module | chat_prompt | It protects prompts through the system keyring, or in owner-only files without it. |

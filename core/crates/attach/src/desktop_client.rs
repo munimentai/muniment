@@ -1363,6 +1363,10 @@ impl DesktopClient {
             Operation::PreferencesImport => &["values", "imported", "skipped"],
             Operation::UsageSummary => &["totals", "series", "breakdown", "limits"],
             Operation::NotificationsList => &["runs", "upcoming", "approvals"],
+            Operation::RunChanges => &["run_id", "available", "files"],
+            Operation::RunRevert => &["outcome", "changes"],
+            Operation::ThreadRewindPreview => &["thread_id", "run_id", "available"],
+            Operation::ThreadRewind => &["thread_id", "run_id", "status"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)

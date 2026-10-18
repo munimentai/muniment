@@ -677,6 +677,12 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         })
     }
 
+    fn checkpoint_store(
+        &self,
+    ) -> Option<std::sync::Arc<muniment_core::checkpoint::CheckpointStore>> {
+        muniment_core::checkpoint::shared(&self.profile_directory().ok()?)
+    }
+
     fn run_permissions(&self) -> Option<muniment_core::permission_gate::RunPermissions> {
         match self.agent_launch() {
             Some(agent) => agent.permissions,

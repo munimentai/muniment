@@ -104,6 +104,9 @@ pub struct Receipt {
     pub classifiers: Vec<crate::model_router::wire::ClassifierUsage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routing: Vec<crate::model_router::wire::RoutingEvidence>,
+    /// The permission mode the run ended in, by its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

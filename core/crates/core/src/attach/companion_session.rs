@@ -478,6 +478,10 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::PreferencesImport
         | Operation::UsageSummary
         | Operation::NotificationsList
+        | Operation::RunChanges
+        | Operation::RunRevert
+        | Operation::ThreadRewindPreview
+        | Operation::ThreadRewind
         | Operation::FleetOpCancel
         | Operation::FleetOps
         | Operation::RemoteSettings

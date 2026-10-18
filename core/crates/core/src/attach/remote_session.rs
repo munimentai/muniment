@@ -198,13 +198,17 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::ThreadPlan
         | Operation::PreferencesGet
         | Operation::UsageSummary
-        | Operation::NotificationsList => RemoteRule::Scope(SCOPE_THREAD_READ),
+        | Operation::NotificationsList
+        | Operation::RunChanges
+        | Operation::ThreadRewindPreview => RemoteRule::Scope(SCOPE_THREAD_READ),
         // A draft spends a model call and reads the thread it names.
         Operation::AgentRunNow
         | Operation::AgentDraft
         | Operation::AgentReplay
         | Operation::ThreadPermissionModeSet
-        | Operation::ThreadPlanAnswer => RemoteRule::Scope(SCOPE_RUN_WRITE),
+        | Operation::ThreadPlanAnswer
+        | Operation::RunRevert
+        | Operation::ThreadRewind => RemoteRule::Scope(SCOPE_RUN_WRITE),
         // The settings choose how much every later run may do unasked.
         Operation::PermissionSettingsSave => RemoteRule::Scope(SCOPE_RUNTIME_ADMIN),
         // Fleet-wide preferences reach every machine of the owner.
