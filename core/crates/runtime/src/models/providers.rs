@@ -46,6 +46,10 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 #[derive(Debug, Serialize, PartialEq)]
 pub(super) struct InventoryModel {
     id: String,
+    /// The display name the endpoint's model list gives, when it gives one
+    /// other than the id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     context: String,
     max_out: String,
     thinking: bool,
@@ -61,6 +65,7 @@ impl From<&PiModelRow> for InventoryModel {
     fn from(row: &PiModelRow) -> Self {
         Self {
             id: row.id.clone(),
+            name: None,
             context: row.context.clone(),
             max_out: row.max_out.clone(),
             thinking: row.thinking,
@@ -135,6 +140,9 @@ pub(super) struct ProviderInventory {
 pub(super) struct RouterModel {
     /// The id the router serves it as: `family/model`, or the user's name.
     id: String,
+    /// The model catalog's display name, when the catalog describes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     family: String,
     model: String,
     accounts: u32,
@@ -653,10 +661,20 @@ fn provider_inventory(
                     .and_then(serde_json::Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(|model| model.get("id").and_then(serde_json::Value::as_str))
-                    .filter(|id| !id.trim().is_empty())
-                    .map(|id| InventoryModel {
+                    .filter_map(|model| {
+                        let id = model.get("id").and_then(serde_json::Value::as_str)?;
+                        let name = model
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|name| !name.is_empty() && *name != id)
+                            .map(str::to_owned);
+                        Some((id, name))
+                    })
+                    .filter(|(id, _)| !id.trim().is_empty())
+                    .map(|(id, name)| InventoryModel {
                         id: id.to_owned(),
+                        name,
                         context: String::new(),
                         max_out: String::new(),
                         thinking: false,
@@ -685,8 +703,9 @@ fn provider_inventory(
     }
     for row in models {
         if let Some(known) = providers.iter_mut().find(|known| known.id == row.provider) {
-            let model = InventoryModel::from(row);
+            let mut model = InventoryModel::from(row);
             if let Some(existing) = known.models.iter_mut().find(|entry| entry.id == model.id) {
+                model.name = existing.name.take();
                 *existing = model;
             } else {
                 known.models.push(model);
@@ -741,6 +760,11 @@ fn router_models(agent: &Path) -> Vec<RouterModel> {
                 .map(|model| model.context)
                 .filter(|context| *context > 0);
             RouterModel {
+                name: muniment_core::model_router::model_catalog::entry(
+                    &option.family,
+                    &option.model,
+                )
+                .map(|entry| entry.name.to_owned()),
                 id: option.key,
                 family: option.family,
                 model: option.model,
@@ -1206,6 +1230,34 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
     }
 
     #[test]
+    fn an_endpoint_model_keeps_the_display_name_its_list_gives() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("models.json"),
+            serde_json::json!({
+                "providers": {"ollama": {"baseUrl": "http://localhost:11434/v1", "models": [
+                    {"id": "gpt-oss-20b-MXFP4-Q8", "name": "gpt-oss 20B"},
+                    {"id": "plain", "name": "plain"},
+                    {"id": "bare"}
+                ]}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let detailed = row("ollama", "gpt-oss-20b-MXFP4-Q8", "128K");
+        let inventory = provider_inventory(&agent, &[detailed], &[]).unwrap();
+        let names: Vec<_> = inventory.providers[0]
+            .models
+            .iter()
+            .map(|model| model.name.as_deref())
+            .collect();
+        assert_eq!(names, [Some("gpt-oss 20B"), None, None]);
+        assert_eq!(inventory.providers[0].models[0].context, "128K");
+        let value = serde_json::to_value(&inventory.providers[0].models[1]).unwrap();
+        assert!(value.get("name").is_none());
+    }
+
+    #[test]
     fn an_endpoint_carries_the_decision_models_its_server_reported() {
         let agent = temporary_directory();
         fs::write(agent.join("models.json"), serde_json::json!({
@@ -1437,6 +1489,12 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         };
         // The subscriptions alone, never a key beside them, overflow or not.
         assert_eq!(count(&saved), 2);
+        // The catalog names the model for the picker.
+        let astra = router_models(&agent)
+            .into_iter()
+            .find(|entry| entry.id == "openai/gpt-6-astra")
+            .unwrap();
+        assert_eq!(astra.name.as_deref(), Some("GPT-6 Astra"));
         saved.accounts[3].enabled = false;
         assert_eq!(count(&saved), 1);
         // No subscription left: every key counts.

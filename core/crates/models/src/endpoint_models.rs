@@ -205,12 +205,41 @@ pub struct EndpointModels {
     pub windows: BTreeMap<String, Limits>,
 }
 
+/// The words that name a speech or embedding model. A server such as oMLX
+/// lists those beside its chat models in the same `/models` answer, and none
+/// of them answers a chat turn.
+const NOT_CHAT: &[&str] = &[
+    "whisper",
+    "parakeet",
+    "embed",
+    "embedding",
+    "embeddings",
+    "rerank",
+    "reranker",
+    "tts",
+    "kokoro",
+    "asr",
+    "transcribe",
+];
+
+/// Whether the id names a speech or embedding model, word by word, so
+/// `Qwen3-Embedding-0.6B` is one and `gemma-3-27b` is not.
+fn speech_or_embedding(id: &str) -> bool {
+    id.to_ascii_lowercase()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| NOT_CHAT.contains(&word))
+}
+
 /// llama.cpp 0.6.0 and later list `decisions` in a decision model's
 /// `architecture.output_modalities`. A model that also lists `text` chats too.
+/// Speech and embedding models never chat.
 fn split_openai_models(value: &Value) -> EndpointModels {
     let mut models = EndpointModels::default();
     let ids = parse_openai_models(value);
-    for id in ids {
+    for id in ids.into_iter().filter(|id| !speech_or_embedding(id)) {
         let modalities = entry_of(value, &id)
             .and_then(|entry| entry.pointer("/architecture/output_modalities"))
             .and_then(Value::as_array);
@@ -410,6 +439,28 @@ mod tests {
     use super::*;
     use crate::test_server::serve_routes;
     use serde_json::json;
+
+    #[test]
+    fn speech_and_embedding_models_never_list_as_chat_models() {
+        let models = split_openai_models(&json!({"data": [
+            {"id": "mlx-community/parakeet-tdt-0.6b-v3"},
+            {"id": "mlx-community/whisper-large-v3-turbo"},
+            {"id": "Qwen3-Embedding-0.6B-4bit-DWQ"},
+            {"id": "nomic-embed-text"},
+            {"id": "Kokoro-82M-bf16"},
+            {"id": "gemma-4-26b-a4b-it-4bit"},
+            {"id": "Qwen3.6-35B-A3B-4bit"},
+            {"id": "gpt-oss-20b-MXFP4-Q8"},
+        ]}));
+        assert_eq!(
+            models.chat,
+            [
+                "gemma-4-26b-a4b-it-4bit",
+                "Qwen3.6-35B-A3B-4bit",
+                "gpt-oss-20b-MXFP4-Q8"
+            ]
+        );
+    }
 
     #[test]
     fn decision_models_are_told_from_chat_models_by_what_the_server_reports() {
