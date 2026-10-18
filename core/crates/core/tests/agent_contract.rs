@@ -114,7 +114,7 @@ fn the_polish_fixtures_are_core_shapes() {
         serde_json::from_value(fixture("response-agent-read.json")["body"]["agent"].clone())
             .unwrap();
     let mut permissions = agent.permissions.unwrap();
-    permissions.always_allow.push(rule);
+    permissions.always_allow.push(rule.clone());
     let permissions = serde_json::to_value(&permissions).unwrap();
     assert_eq!(
         permissions["always_allow"][1],
@@ -126,7 +126,19 @@ fn the_polish_fixtures_are_core_shapes() {
         .any(|answer| answer == "always_allow_agent"));
     let gate: muniment_core::journal::reducer::PermissionGate =
         serde_json::from_value(pending.request.clone()).unwrap();
-    assert_eq!(gate.policy.unwrap().summary, pending.summary.unwrap());
+    assert_eq!(
+        gate.policy.unwrap().summary,
+        pending.summary.clone().unwrap()
+    );
+    // The approval's presentation is the one core makes for its rule.
+    assert_eq!(
+        pending.presentation,
+        Some(muniment_core::tool_presentation::describe_request(&rule))
+    );
+    assert_eq!(
+        pending.summary,
+        pending.presentation.map(|shown| shown.headline)
+    );
     assert_eq!(
         fixture("request-agent-approval-answer-always.json")["body"]["answer"],
         "always_allow_agent"

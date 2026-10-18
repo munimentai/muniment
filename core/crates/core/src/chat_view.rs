@@ -9,6 +9,8 @@ use crate::journal::reducer::{
     AttentionReason, PermissionGate, PermissionRequest, ProjectedAppliedDiff, ProjectedAttachment,
     RunStatus, ToolActivity, ToolActivityStatus,
 };
+use crate::permission_gate::PolicyRequest;
+use crate::tool_presentation::ToolPresentation;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -43,6 +45,8 @@ pub struct ChatToolActivity {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    /// The call as a person reads it, from the whole output.
+    pub presentation: ToolPresentation,
 }
 
 #[derive(Clone, Serialize)]
@@ -53,6 +57,15 @@ pub struct ChatPendingPermission {
     pub request: PermissionRequest,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<CodeDiff>,
+    /// The tool call a permission gate asks about, as a person reads it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<ToolPresentation>,
+    /// The exact request the gate asks about, for its raw details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<PolicyRequest>,
+    /// Why the gate asks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// An applied code diff as a chat event carries it: the record and, while
@@ -164,10 +177,21 @@ pub fn chat_pending_permission(
         let diff = matches!(&gate.request, PermissionRequest::CodeDiff { .. })
             .then_some(code_diff)
             .flatten();
+        // A plan gate names no tool call.
+        let policy = gate.policy.filter(|policy| policy.plan.is_none());
+        let rule = policy.as_ref().map(|policy| PolicyRequest {
+            request_kind: policy.request_kind.clone(),
+            resource: policy.resource.clone(),
+        });
         ChatPendingPermission {
             gate_id: gate.gate_id,
             request: gate.request,
             diff,
+            presentation: rule
+                .as_ref()
+                .map(crate::tool_presentation::describe_request),
+            rule,
+            reason: policy.and_then(|policy| policy.reason),
         }
     })
 }
@@ -190,6 +214,7 @@ pub fn chat_tool_activity(activity: &[ToolActivity]) -> Vec<ChatToolActivity> {
                 .is_some_and(|output| output.len() > TOOL_OUTPUT_PREVIEW_BYTES),
             started_at: activity.started_at.clone(),
             finished_at: activity.finished_at.clone(),
+            presentation: crate::tool_presentation::describe_activity(activity),
             display_name: activity.display_name.clone(),
             status: match activity.status {
                 ToolActivityStatus::Running => "running",

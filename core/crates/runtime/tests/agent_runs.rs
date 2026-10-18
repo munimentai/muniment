@@ -786,11 +786,11 @@ fn always_allow_for_this_agent_saves_the_exact_rule_unless_ask_first_covers_it()
     assert!(verdict["summary"]
         .as_str()
         .unwrap()
-        .starts_with("bash `git push origin main` in "));
+        .starts_with("Run `git push origin main` in "));
     assert!(verdict["title"]
         .as_str()
         .unwrap()
-        .starts_with("Allow bash `git push origin main`"));
+        .starts_with("Run `git push origin main` in "));
     assert_eq!(
         verdict["options"],
         json!([

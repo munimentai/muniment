@@ -18,11 +18,30 @@ export default function (pi) {
   const unanswered =
     "Nobody answered the approval request in time, so this action did not run. Nobody refused it: try another way or carry on with other work.";
   const ask = async (ctx, title, value) => JSON.parse(await ctx.ui.editor(title, JSON.stringify(value)));
+  // What each tool says about itself, so the runtime can describe its calls
+  // to the user: its description, input schema and hints. Long schemas stay
+  // behind.
+  const catalog = () =>
+    (pi.getAllTools?.() ?? []).slice(0, 512).map((tool) => {
+      const schema = tool.parameters && JSON.stringify(tool.parameters).length <= 16384 ? tool.parameters : undefined;
+      return {
+        name: tool.name,
+        description: typeof tool.description === "string" ? tool.description.slice(0, 600) : undefined,
+        parameters: schema,
+        annotations: tool.annotations,
+      };
+    });
 
   pi.on("before_agent_start", async (event, ctx) => {
     let mode;
     try {
-      mode = await ask(ctx, "muniment:permission-mode", {});
+      let tools = [];
+      try {
+        tools = catalog();
+      } catch {
+        // A run whose catalog cannot be read still asks for its mode.
+      }
+      mode = await ask(ctx, "muniment:permission-mode", { tools });
     } catch {
       return undefined;
     }

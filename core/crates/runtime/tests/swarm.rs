@@ -1605,7 +1605,8 @@ fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent(
     assert!(pending["summary"]
         .as_str()
         .unwrap()
-        .starts_with("bash `git push origin main` in "));
+        .starts_with("Run `git push origin main` in "));
+    assert_eq!(pending["presentation"]["category"], "shell");
     assert_eq!(
         pending["answers"],
         json!(["allow_once", "allow_thread", "always_allow_agent", "deny"])
