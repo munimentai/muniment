@@ -49,6 +49,7 @@ pub fn append_owner_only_record(
     max_bytes: u64,
     record: &[u8],
 ) -> io::Result<()> {
+    crate::state_root::guard_log_directory(directory);
     match fs::DirBuilder::new().mode(0o700).create(directory) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}

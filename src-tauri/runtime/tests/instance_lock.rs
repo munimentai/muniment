@@ -48,7 +48,11 @@ impl RuntimeDirectory {
                 muniment_core::state_root::STATE_DIRECTORY_OVERRIDE,
                 self.state_directory(),
             )
-            .env(WAIT_TIMEOUT_ENV, timeout_ms.to_string());
+            .env(WAIT_TIMEOUT_ENV, timeout_ms.to_string())
+            .env(
+                muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+                muniment_core::state_root::test_log_directory(),
+            );
         command
     }
 

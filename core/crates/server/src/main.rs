@@ -35,7 +35,8 @@ commands:
   prepare               install the pinned Pi and its extension packages,
                         then print the Pi executable's path
   pair [--scopes S1,S2] [--json]
-                        print a one-time pairing link for a remote client
+                        print a one-time pairing link for a remote client,
+                        which pairs a full member unless --scopes limits it
   devices [--json]      list the paired remote devices
   revoke DEVICE_ID      revoke a paired remote device
   info [--json]         print the runtime's id, certificate fingerprint and

@@ -168,7 +168,8 @@ export function listsArrived(status) {
 }
 
 // One line per model account this machine cannot use yet: who it arrives
-// from, or that no member holding it answers.
+// from, that no member holding it answers, or core's reason sharing never
+// carries it, such as a server only its own computer reaches.
 export function credentialRows(credentials, swarm) {
   return (credentials?.accounts ?? [])
     .filter((account) => !account.this_machine && !account.usable_here)
@@ -176,11 +177,12 @@ export function credentialRows(credentials, swarm) {
       const holder = swarm?.members?.find((member) => member.runtime_id === account.holder)
       const online = !!holder?.online
       const from = account.holder_name || holder?.runtime_name
+      const stays = account.shareable === false
       return {
         id: account.name,
         name: account.label || account.name,
-        line: online && from ? `arriving from ${from}` : 'waiting for a holder',
-        online,
+        line: stays ? account.reason || 'stays on its own machine' : online && from ? `arriving from ${from}` : 'waiting for a holder',
+        online: online && !stays,
       }
     })
 }

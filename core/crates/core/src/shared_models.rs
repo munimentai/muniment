@@ -330,10 +330,12 @@ pub fn connection_names(bundle: &Bundle) -> Vec<String> {
 }
 
 /// What this computer's own connections are, without their secrets: one
-/// object per connection named `pi:<provider>` or `router:<id>`, with its
-/// provider, its kind (`api_key`, `oauth` or `subscription`), its label and
-/// email when known, and whether this computer refreshes it. Connections
-/// other devices share here stay out.
+/// object per connection named `pi:<provider>`, `router:<id>` or
+/// `endpoint:<provider>`, with its provider, its kind (`api_key`, `oauth`,
+/// `subscription` or `endpoint`), its label and email when known, whether
+/// this computer refreshes it, and `shareable`, whether sharing carries it,
+/// with the `reason` it does not. Connections other devices share here stay
+/// out.
 pub fn own_accounts(agent: &Path) -> Result<Vec<Value>, String> {
     const READ_ERROR: &str =
         "This computer cannot read its model connections. Check folder access.";
@@ -357,13 +359,15 @@ pub fn own_accounts(agent: &Path) -> Result<Vec<Value>, String> {
             && entry["refresh"]
                 .as_str()
                 .is_some_and(|refresh| !refresh.is_empty());
-        accounts.push(serde_json::json!({
+        let mut value = serde_json::json!({
             "name": name,
             "provider": provider,
             "kind": kind,
             "label": provider,
             "refresher": refresher,
-        }));
+        });
+        shareability(&mut value, None);
+        accounts.push(value);
     }
     let settings = config::load(agent).map_err(|_| READ_ERROR)?;
     for account in settings.accounts {
@@ -400,9 +404,54 @@ pub fn own_accounts(agent: &Path) -> Result<Vec<Value>, String> {
         {
             value["plan"] = plan.clone().into();
         }
+        let unshared = if account
+            .base_url
+            .as_deref()
+            .is_some_and(constraints::loopback)
+        {
+            Some(LOOPBACK_REASON)
+        } else if !account.enabled {
+            Some("It is turned off.")
+        } else {
+            None
+        };
+        shareability(&mut value, unshared);
+        accounts.push(value);
+    }
+    for (provider, label, base_url) in pi_models::endpoints(agent).map_err(|_| READ_ERROR)? {
+        let mut value = serde_json::json!({
+            "name": format!("endpoint:{provider}"),
+            "provider": provider,
+            "kind": "endpoint",
+            "label": label,
+            "refresher": false,
+        });
+        shareability(
+            &mut value,
+            Some(if constraints::loopback(&base_url) {
+                LOOPBACK_REASON
+            } else {
+                ENDPOINT_REASON
+            }),
+        );
         accounts.push(value);
     }
     Ok(accounts)
+}
+
+/// Why a connection at a loopback address stays here: no other machine
+/// reaches it.
+const LOOPBACK_REASON: &str = "It runs only on its own computer.";
+/// Why a server connection stays here: sharing carries keys and sign-ins,
+/// not server addresses.
+const ENDPOINT_REASON: &str = "Server connections stay on the computer that connected them.";
+
+/// Marks whether sharing carries a connection and, when it does not, why.
+fn shareability(value: &mut Value, unshared: Option<&str>) {
+    value["shareable"] = unshared.is_none().into();
+    if let Some(reason) = unshared {
+        value["reason"] = reason.into();
+    }
 }
 
 /// Takes this computer's own sign-in `name` (`pi:<provider>` or
@@ -1480,6 +1529,56 @@ pub(crate) mod tests {
         let settings = config::load(agent).unwrap();
         assert!(!settings.enabled);
         assert!(settings.accounts.is_empty());
+    }
+
+    #[test]
+    fn each_own_connection_says_whether_sharing_carries_it_and_why_not() {
+        let dir = temp_dir();
+        let agent = dir.as_path();
+        let mut current = Map::new();
+        current.insert("openai-codex".into(), oauth_entry("live"));
+        pi_models::write_json(&agent.join("auth.json"), &current).unwrap();
+        let mut local = router_account("local", Credential::ApiKey { key: "k".into() });
+        local.base_url = Some("http://127.0.0.1:8080/v1".into());
+        config::save(
+            agent,
+            &config::RouterConfig {
+                accounts: vec![
+                    router_account("work", Credential::ApiKey { key: "k".into() }),
+                    local,
+                ],
+                ..config::RouterConfig::default()
+            },
+        )
+        .unwrap();
+        std::fs::write(
+            agent.join("models.json"),
+            serde_json::json!({"providers": {
+                "custom-omlx": {"baseUrl": "http://127.0.0.1:8080/v1", "models": []},
+                "custom-lab": {"baseUrl": "https://lab.example.net/v1", "models": []}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let accounts = own_accounts(agent).unwrap();
+        let find = |name: &str| {
+            accounts
+                .iter()
+                .find(|account| account["name"] == name)
+                .unwrap_or_else(|| panic!("{name} in {accounts:?}"))
+                .clone()
+        };
+        assert_eq!(find("pi:openai-codex")["shareable"], true);
+        assert_eq!(find("router:work")["shareable"], true);
+        assert!(find("router:work").get("reason").is_none());
+        assert_eq!(find("router:local")["shareable"], false);
+        assert_eq!(find("router:local")["reason"], LOOPBACK_REASON);
+        let omlx = find("endpoint:custom-omlx");
+        assert_eq!(omlx["kind"], "endpoint");
+        assert_eq!(omlx["shareable"], false);
+        assert_eq!(omlx["reason"], LOOPBACK_REASON);
+        assert_eq!(find("endpoint:custom-lab")["reason"], ENDPOINT_REASON);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

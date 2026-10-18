@@ -72,9 +72,13 @@ pub fn windows_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {
     windows_log_directory_from_local_app_data(&windows_local_app_data()?)
 }
 
-/// Resolves the effective user's home from the macOS user database.
+/// Resolves the effective user's home from the macOS user database. A test
+/// run, or a process `MUNIMENT_LOG_DIR` points elsewhere, logs there instead.
 #[cfg(target_os = "macos")]
 pub fn effective_user_macos_log_directory() -> Result<PathBuf, DirectoryUnavailableError> {
+    if let Some(directory) = muniment_core::state_root::log_directory_override() {
+        return Ok(directory);
+    }
     let home = muniment_core::user_diagnostics::effective_user_home()
         .map_err(|_| DirectoryUnavailableError)?;
     macos_log_directory_from_home(&home)

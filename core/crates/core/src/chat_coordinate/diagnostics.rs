@@ -5,6 +5,8 @@ use std::sync::mpsc::Receiver;
 pub(super) struct RunDiagnostics {
     run_id: String,
     pub outcome: &'static str,
+    /// The provider's own sentence for a failed reply, already cleaned.
+    pub provider_error: Option<String>,
     pub failed: bool,
     pub prompt_submitted: bool,
     stderr: Option<LineReader>,
@@ -18,6 +20,7 @@ impl RunDiagnostics {
         Self {
             run_id: run_id.into(),
             outcome: "unknown",
+            provider_error: None,
             failed: true,
             prompt_submitted: false,
             stderr: None,
@@ -124,8 +127,13 @@ impl Drop for RunDiagnostics {
                 self.run_id
             );
         }
+        let reason = self
+            .provider_error
+            .as_ref()
+            .map(|reason| format!(" reason={reason:?}"))
+            .unwrap_or_default();
         eprintln!(
-            "muniment-runtime: run_id={} provider_request outcome={} source=pi_stream",
+            "muniment-runtime: run_id={} provider_request outcome={} source=pi_stream{reason}",
             self.run_id, self.outcome
         );
         if self.failed {

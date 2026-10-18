@@ -223,7 +223,7 @@ fn prompt_contract_and_interleaved_deltas_are_typed() {
     );
     assert_eq!(
         parse_frame(&json!({"type":"error","message":"secret upstream detail"})).unwrap(),
-        PiChatEvent::Failed
+        PiChatEvent::Failed(None)
     );
 }
 

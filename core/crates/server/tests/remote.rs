@@ -50,6 +50,10 @@ fn run(root: &Root, args: &[&str], env: &[(&str, &str)]) -> Output {
         .args(args)
         .env("MUNIMENT_STATE_DIR", root.state())
         .env("HOME", &root.0)
+        .env(
+            muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+            muniment_core::state_root::test_log_directory(),
+        )
         .env_remove("MUNIMENT_REMOTE_ACCESS")
         .env_remove("MUNIMENT_REMOTE_LISTEN")
         .env_remove("MUNIMENT_REMOTE_ENDPOINTS")

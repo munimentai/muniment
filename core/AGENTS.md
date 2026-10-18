@@ -47,7 +47,9 @@ focused local checks while you develop:
 - `cargo fmt --all --check` before each commit.
 - `scripts/check-core-boundary.sh` when you add an import between modules.
 
-Core tests that spawn stub processes run with `--test-threads=1`. Keep edition,
+Core tests that spawn stub processes run with `--test-threads=1`. Tests never
+write the owner's runtime logs: a test run logs under a temporary directory,
+and a test that starts a runtime binary sets `MUNIMENT_LOG_DIR` for it. Keep edition,
 dependency versions and `Cargo.lock` stable unless the change is a dependency
 update.
 

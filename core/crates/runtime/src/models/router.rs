@@ -103,6 +103,10 @@ pub(super) struct AccountView {
     exclusion_reason: Option<&'static str>,
     base_url: Option<String>,
     models: Vec<String>,
+    /// The models this account's upstream lately refused, as the error that
+    /// names the plan says. The router leaves them out for this account for
+    /// a day, though the provider's catalog still lists them.
+    refused_models: Vec<String>,
     enabled: bool,
     weight: u32,
     /// Whether this key takes turns once every subscription of its family is
@@ -226,6 +230,7 @@ fn account_view(
     usage: Option<&AccountUsage>,
     active: u32,
     quota: Option<&quota::Quota>,
+    refused: Option<&std::collections::BTreeSet<String>>,
 ) -> AccountView {
     let (pi_provider, email, plan, renews_at_ms) = match &account.credential {
         Credential::Subscription {
@@ -265,6 +270,9 @@ fn account_view(
         },
         base_url: account.base_url.clone(),
         models: account.models.clone(),
+        refused_models: refused
+            .map(|models| models.iter().cloned().collect())
+            .unwrap_or_default(),
         enabled: account.enabled,
         weight: account.weight,
         overflow: account.overflow,
@@ -381,6 +389,7 @@ fn settings_with(
                     ledger.account(&account.id),
                     active.get(&account.id).copied().unwrap_or(0),
                     quotas.accounts.get(&account.id),
+                    config.refused.get(&account.id),
                 )
             })
             .collect(),
@@ -1186,11 +1195,18 @@ mod tests {
     }
 
     #[test]
+    fn an_account_view_names_the_models_its_upstream_refused() {
+        let refused = std::collections::BTreeSet::from(["gpt-5.5".to_owned()]);
+        let view = account_view(&account("a1"), None, 0, None, Some(&refused));
+        assert_eq!(view.refused_models, ["gpt-5.5"]);
+    }
+
+    #[test]
     fn an_account_view_carries_its_counters_and_never_its_key() {
         let mut ledger = Ledger::default();
         ledger.record_success("a1", "2026-09-17", 1_000, 300, 40);
         ledger.record_error("a1", "2026-09-17", 2_000, "429 slow down", true);
-        let view = account_view(&account("a1"), ledger.account("a1"), 2, None);
+        let view = account_view(&account("a1"), ledger.account("a1"), 2, None, None);
         let json = serde_json::to_string(&view).unwrap();
         assert!(!json.contains("sk-secret"), "{json}");
         assert_eq!(view.source, "key");
@@ -1203,6 +1219,7 @@ mod tests {
         assert_eq!(view.days.len(), 1);
         assert_eq!(view.days[0].0, "2026-09-17");
         assert_eq!(view.active, 2);
+        assert!(view.refused_models.is_empty());
         assert!(!view.allowance_readable);
     }
 
@@ -1396,7 +1413,7 @@ mod tests {
 
     #[test]
     fn an_account_that_has_served_nothing_reads_as_zero() {
-        let view = account_view(&account("a1"), None, 0, None);
+        let view = account_view(&account("a1"), None, 0, None, None);
         assert_eq!(view.requests, 0);
         assert_eq!(view.last_used_ms, None);
         assert!(view.days.is_empty());

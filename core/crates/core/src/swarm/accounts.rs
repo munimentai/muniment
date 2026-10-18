@@ -56,7 +56,8 @@ pub(super) fn publish(inner: &Inner, sharing: bool) -> Result<(), String> {
         };
         account["holder"] = origin.clone().into();
         account["holder_name"] = name.clone().into();
-        account["shared"] = sharing.into();
+        // A connection sharing cannot carry never shows as shared.
+        account["shared"] = (sharing && account["shareable"] != false).into();
         own.insert(format!("{origin}/{id}"), account);
     }
     let prefix = format!("{origin}/");

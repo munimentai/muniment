@@ -46,6 +46,13 @@ pub(crate) async fn request<R: tauri::Runtime>(
     .map_err(|_| auth::background_service_error())?
 }
 
+/// Whether the selected runtime is a paired one rather than this computer's.
+pub(crate) fn remote_selected<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    app.state::<AttachCompanionState>()
+        .remote_connector()
+        .is_some()
+}
+
 /// Opens a connection of its own to the selected runtime: the selected
 /// paired runtime, else this computer's runtime.
 fn connect_selected<R: tauri::Runtime>(
