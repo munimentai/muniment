@@ -1391,11 +1391,12 @@ window.__PROBE__ = {
       }
     }
     // `?avatars=colorful|muniment` picks the agent avatar style and `?theme=light|dark`
-    // the mode, as Appearance would store them, before the app reads them.
+    // the mode, or a theme id such as `harbor-vibrant-dark` the color scheme, as
+    // Appearance would store them, before the app reads them.
     const pick = new URLSearchParams(location.search)
     try {
       if (['colorful', 'muniment'].includes(pick.get('avatars'))) localStorage.setItem('muniment.agent-avatars', pick.get('avatars'))
-      if (['light', 'dark'].includes(pick.get('theme'))) localStorage.setItem('muniment.theme', pick.get('theme'))
+      if (/^(light|dark|(moss|harbor|clay|iris)(-vibrant|-contrast)?-(light|dark))$/.test(pick.get('theme') ?? '')) localStorage.setItem('muniment.theme', pick.get('theme'))
     } catch (_) {}
     const response = await fetch('/dist/index.html')
     if (!response.ok) throw new Error(`Could not load the built bundle: ${response.status}`)

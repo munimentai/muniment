@@ -22,7 +22,7 @@
             {#if starter}
               <AgentAvatar agent={starter} size={compact ? 28 : 40} />
             {:else}
-              <LucideIcon name={item.icon} size={compact ? 20 : 28} />
+              <LucideIcon name={item.icon} size={compact ? 20 : 28} variant="action" />
             {/if}
           </span>
           <span class="name">{item.name}{#if item.badge}<small class="badge">{item.badge}</small>{/if}</span>

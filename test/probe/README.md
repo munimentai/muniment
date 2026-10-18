@@ -4,7 +4,7 @@ Run `npm run probe` from the repository root. The command builds the frontend an
 
 Run `npm run probe:check` to build the frontend and check every fixture in headless Chromium.
 
-Open `index.html` for an empty signed-in workspace. Open `history.html` for completed and interrupted fixture runs.
+Open `index.html` for an empty signed-in workspace with the new thread's starter cards. Add `?theme=` with a theme id, such as `clay-vibrant-dark`, to open it in that color scheme. Open `history.html` for completed and interrupted fixture runs.
 Open `local-mode.html?thinking` for local mode on a model with thinking levels, with the level control beside the model chip.
 Open `index.html?accounts&fleet` for Settings → Model providers on a fleet: one sign-in on this machine, one on Studio with Hold sign-in here, and Signed in on other machines with a sign-in arriving from Studio and one Pod keeps. Add `&theme=light` or `&theme=dark`.
 Open `in-flight.html` for a thread whose newest run still streams its reply while a tool runs.
