@@ -1,9 +1,12 @@
 import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixture.js'
 import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
+import { arrangeStandIn } from '../sidebar-standin.js'
+import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsRendered, projectsSettings, projectsSummaries } from './projects-fixture.js'
 import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
 export const historyFixtures = {
   agents: [],
+  projects: [],
   'fleet-sync': [],
   'signed-out': [],
   'runtime-exit': [],
@@ -435,6 +438,7 @@ export function buildProbeCommandTable(fixtureName) {
   const fleetSyncFixture = fixtureName === 'fleet-sync'
   if (fleetSyncFixture && fleetSyncThread()) history.push(...fleetSyncHistory())
   const agentsFixture = fixtureName === 'agents'
+  const projectsFixture = fixtureName === 'projects'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
   let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' ? 'agents-offline' : 'agents') : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
@@ -444,6 +448,8 @@ export function buildProbeCommandTable(fixtureName) {
   // shows the machine badges.
   const threadSummaries = fleetSyncFixture
     ? fleetSyncSummaries()
+    : projectsFixture
+    ? projectsSummaries()
     : agentsFixture
     ? [
         { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
@@ -486,6 +492,7 @@ export function buildProbeCommandTable(fixtureName) {
   let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
   let pendingChanges = memorySeed ? probePending(savedFacts) : []
   const agentStores = probeAgentStores(agentsFixture, agentsState)
+  if (projectsFixture) Object.assign(agentStores.local, projectsAgents())
   const modesFixture = fixtureName === 'permission-modes'
   const modesState = modesFixture ? new URLSearchParams(location.search).get('state') ?? 'gate' : null
   // The gate thread was set to Ask before changes; new threads start in
@@ -682,6 +689,10 @@ export function buildProbeCommandTable(fixtureName) {
       return agentsFixture ? page : { ...page, needs_you: [], running: [], days: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 } }
     }
     if (command === 'agent_open') return null
+    if (command === 'sidebar_arrange') return projectsFixture ? projectsArrangement(payload.input) : arrangeStandIn(payload.input)
+    if (command === 'project_settings') return projectsFixture ? projectsSettings(payload.projectId) : { instructions: '' }
+    if (command === 'project_settings_save') return null
+    if (command === 'project_list' && projectsFixture) return structuredClone(projectsCatalog)
     if (command === 'project_list' && fleetSyncFixture) return structuredClone(fleetSyncProjects)
     if (command === 'project_list') return { projects: { ...projects }, threads: { ...projectThreads } }
     if (command === 'project_create') {
@@ -867,6 +878,7 @@ export function buildProbeCommandTable(fixtureName) {
     runDetails,
     agentsFixture,
     agentsState,
+    projectsFixture,
     modesFixture,
     modesState,
     onboardingFixture,
@@ -962,6 +974,7 @@ const {
   runDetails,
   agentsFixture,
   agentsState,
+  projectsFixture,
   modesFixture,
   modesState,
   onboardingFixture,
@@ -989,7 +1002,7 @@ function runtimesRendered() {
     const chip = document.querySelector('.machine-chip')
     if (!chip?.textContent.includes(runtimesState === 'remote' ? 'Build box' : 'This computer')) return false
     if (!document.querySelector('#sidebar .machine-badge')) return false
-    return runtimesState === 'remote' ? !!document.querySelector('[aria-label="Agents group"]') : !!document.querySelector('[data-fresh-thread]') && !!document.querySelector('.machine-menu')
+    return runtimesState === 'remote' ? !!document.querySelector('#sidebar [aria-label="Projects"] .project-title') :  !!document.querySelector('[data-fresh-thread]') && !!document.querySelector('.machine-menu')
   }
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
@@ -1045,7 +1058,7 @@ const AGENT_STATES = {
 }
 
 const AGENT_SCREENS = {
-  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .agent-roster .agent-status').length === 5 && !!document.querySelector('#sidebar .agent-status[data-replica]') && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`#sidebar .agent-avatar[data-activity="${state}"]`)),
+  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .project-title[aria-label^="Project "]').length >= 5 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
   notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
   approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
   'notifications-empty': () => document.querySelector('[data-panel="notifications"]')?.textContent.includes('Nothing needs you') && document.querySelectorAll('[data-panel="notifications"] .upcoming li').length === 3,
@@ -1093,6 +1106,9 @@ function cardsRendered(count) {
 }
 
 function agentsRendered() {
+  // A state that opens an agent's chat waits for the Agents page to give way to it.
+  const agent = AGENT_STATES[agentsState]?.agent
+  if (agent && (document.querySelector('[data-panel="agents"]') || !document.querySelector('aside[aria-label="Agent profile"]')?.textContent.includes(agent))) return false
   if (AGENT_SCREENS[agentsState]) return AGENT_SCREENS[agentsState]()
   const profile = document.querySelector('aside[aria-label="Agent profile"]')
   if (!profile?.textContent.includes(AGENT_STATES[agentsState].agent) || !profile.querySelector('[aria-label="Permissions"]')) return false
@@ -1107,10 +1123,24 @@ function agentsRendered() {
 }
 
 const buttonNamed = (root, name) => Array.from(root?.querySelectorAll('button') ?? []).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
+// Opens a page through the sidebar's Search, one step per render: the words,
+// then the page, once, since the page loads before it shows.
+const probePagesOpened = new Set()
+function openPage(label) {
+  if (probePagesOpened.has(label)) return
+  const search = document.querySelector('#sidebar input[aria-label="Search threads"]')
+  if (!search) return
+  if (search.value !== label) return typeInto(search, label)
+  const page = buttonNamed(document.querySelector('#sidebar [aria-label="Search results"]'), label)
+  if (!page) return
+  probePagesOpened.add(label)
+  page.click()
+}
 const probeImportRead = new WeakSet()
 let probeHistoryLoaded = false
 let probeGroupPicked = false
 let probeCardsOpened = false
+let probeChatOpened = false
 
 function advanceAgentsFixture() {
   if (!agentsFixture || fixtureRendered()) return
@@ -1118,7 +1148,6 @@ function advanceAgentsFixture() {
   probeHistoryLoaded ||= !!document.querySelector('#sidebar .thread-row-title')
   if (!probeHistoryLoaded) return
   const target = AGENT_STATES[agentsState] ?? AGENT_STATES.list
-  const sidebarButton = (name) => Array.from(document.querySelectorAll('#sidebar button')).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
   if (agentsState === 'absence') return
   if (agentsState === 'preferences') {
     if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
@@ -1128,7 +1157,7 @@ function advanceAgentsFixture() {
     return
   }
   if (agentsState === 'empty') {
-    if (!document.querySelector('[data-panel="agents"]')) sidebarButton('Agents')?.click()
+    if (!document.querySelector('[data-panel="agents"]')) openPage('Agents')
     return
   }
   if (agentsState === 'machines') {
@@ -1147,10 +1176,8 @@ function advanceAgentsFixture() {
       for (const box of Array.from(dialog.querySelectorAll('input[type="checkbox"]')).slice(0, 3)) box.click()
       return
     }
-    const groups = document.querySelector('#sidebar [aria-label="Groups group"]')
-    if (!groups) return
-    if (agentsState === 'group-create') return buttonNamed(groups, 'New group')?.click()
-    return Array.from(groups.querySelectorAll('.agent-roster button')).find((button) => button.textContent.trim().startsWith('Launch room'))?.click()
+    if (agentsState === 'group-create') return openPage('New group chat')
+    return Array.from(document.querySelectorAll('#sidebar .thread-row')).find((row) => row.querySelector('.thread-row-title')?.textContent.trim() === 'Launch room')?.click()
   }
   if (agentsState.startsWith('builder')) {
     const builder = document.querySelector('[data-panel="agent-builder"]')
@@ -1168,7 +1195,7 @@ function advanceAgentsFixture() {
     if (!builder) {
       if (Date.now() - probeBuilderOpened < 1500) return
       const catalog = document.querySelector('[data-panel="agents"]')
-      if (!catalog) return sidebarButton('Agents')?.click()
+      if (!catalog) return openPage('Agents')
       const create = buttonNamed(catalog, 'New agent')
       if (create && !create.disabled) { probeBuilderOpened = Date.now(); setTimeout(advanceAgentsFixture, 1600); create.click() }
       return
@@ -1182,14 +1209,12 @@ function advanceAgentsFixture() {
     }, 300)
     return
   }
-  const expand = sidebarButton('Expand Agents')
-  if (expand) return expand.click()
   if (agentsState === 'cards' || agentsState === 'cards-offline') {
     // Agents opens once: a second click would mount the catalog again and reset its cards.
     const catalog = document.querySelector('[data-panel="agents"]')
     if (!catalog) {
-      if (!probeCardsOpened) sidebarButton('Agents')?.click()
-      probeCardsOpened ||= !!sidebarButton('Agents')
+      if (!probeCardsOpened) openPage('Agents')
+      probeCardsOpened ||= document.querySelector('#sidebar input[aria-label="Search threads"]')?.value === 'Agents' && !!buttonNamed(document.querySelector('#sidebar [aria-label="Search results"]'), 'Agents')
       return
     }
     const cards = Array.from(catalog.querySelectorAll('.agent-card'))
@@ -1202,7 +1227,7 @@ function advanceAgentsFixture() {
   }
   if (agentsState === 'list' || agentsState === 'import') {
     const catalog = document.querySelector('[data-panel="agents"]')
-    if (!catalog) return sidebarButton('Agents')?.click()
+    if (!catalog) return openPage('Agents')
     if (agentsState !== 'import') return
     const dialog = document.querySelector('[data-panel="import"]')
     if (!dialog) return buttonNamed(catalog, 'Import agent')?.click()
@@ -1233,8 +1258,14 @@ function advanceAgentsFixture() {
   }
   const profile = document.querySelector('aside[aria-label="Agent profile"]')
   if (!profile?.textContent.includes(target.agent)) {
-    const row = Array.from(document.querySelectorAll('#sidebar .agent-roster button')).find((button) => button.textContent.trim().startsWith(target.agent))
-    if (row && !row.disabled) row.click()
+    // An agent opens from its card in Agents, with its chat and its profile.
+    const catalog = document.querySelector('[data-panel="agents"]')
+    if (!catalog) return probeChatOpened ? undefined : openPage('Agents')
+    const card = Array.from(catalog.querySelectorAll('.agent-card')).find((entry) => entry.getAttribute('aria-label') === target.agent)
+    // A thread switch can drop the click, so the driver looks again shortly.
+    const open = buttonNamed(card, 'Open chat')
+    if (open && !open.disabled) { open.click(); probeChatOpened = true }
+    setTimeout(advanceAgentsFixture, 400)
     return
   }
   if (agentsState === 'move') {
@@ -1280,6 +1311,7 @@ function fixtureRendered() {
   if (FLEET_PROBE) return fleetRendered()
   if (fleetSyncFixture) return fleetSyncRendered()
   if (agentsFixture) return agentsRendered()
+  if (projectsFixture) return projectsRendered()
   if (modesFixture) return modesRendered()
   if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
@@ -1425,6 +1457,7 @@ function markReadyAfterFixtureRender() {
   advanceAgentsFixture()
   advanceFleetFixture()
   if (fleetSyncFixture) advanceFleetSync()
+  if (projectsFixture) advanceProjects()
   if (fixtureRendered()) {
     void markProbeReady()
     return
@@ -1437,6 +1470,7 @@ function markReadyAfterFixtureRender() {
     advanceAgentsFixture()
     advanceFleetFixture()
     if (fleetSyncFixture) advanceFleetSync()
+    if (projectsFixture) advanceProjects()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
@@ -1444,7 +1478,7 @@ function markReadyAfterFixtureRender() {
   // A fixture can finish on a text change, such as a path or a scan count, or
   // on a control that turns on once its settings load. Agent dialogs mount
   // on the page body, so the agents fixture watches the whole body.
-  observer.observe(agentsFixture || fleetSyncFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
+  observer.observe(agentsFixture || fleetSyncFixture || projectsFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {

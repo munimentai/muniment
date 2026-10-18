@@ -149,5 +149,5 @@ it('builds the save body from the form', () => {
   const form = draftForm(draft)
   form.routines[0].enabled = false
   form.mode = ''
-  expect(draftAgent(form)).toEqual({ id: '', project_id: null, name: 'Inbox brief', label: 'Morning briefer', instructions: draft.instructions, schedule: null, skills: draft.skills, tools: { disabled: ['bash'] }, routines: [{ ...draft.routines[0], enabled: false, proposed: false }] })
+  expect(draftAgent(form)).toEqual({ id: '', projectId: null, name: 'Inbox brief', label: 'Morning briefer', instructions: draft.instructions, schedule: null, skills: draft.skills, tools: { disabled: ['bash'] }, routines: [{ ...draft.routines[0], enabled: false, proposed: false }] })
 })

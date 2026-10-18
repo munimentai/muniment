@@ -17,7 +17,7 @@
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
-  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, organizeThreads, listedThreads } from './lib/thread-organization.js'
+  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
@@ -34,7 +34,6 @@
 
   import AccessPanel from './lib/AccessPanel.svelte'
   const loadSettings = () => import('./lib/Settings.svelte')
-  import ThreadFilter from './lib/ThreadFilter.svelte'
   import ProjectCatalog from './lib/ProjectCatalog.svelte'
   import CatalogActions from './lib/CatalogActions.svelte'
   import ArtifactCatalog from './lib/ArtifactCatalog.svelte'
@@ -61,6 +60,7 @@
   import GroupCreate from './agents/GroupCreate.svelte'
   import AgentBuilder from './agents/AgentBuilder.svelte'
   import AbsencePrompt from './agents/AbsencePrompt.svelte'
+  import { exportAgent } from './agents/import.js'
   import ApprovalList from './agents/ApprovalList.svelte'
   import AgentStatus from './agents/AgentStatus.svelte'
   import GroupMembers from './agents/GroupMembers.svelte'
@@ -123,7 +123,9 @@
   import { downloadsAllowed, installSpeechModel, resumeSpeechModel } from './lib/large-downloads.js'
   import RunMark from './lib/RunMark.svelte'
   import ExecutionTime from './lib/ExecutionTime.svelte'
-  import ProjectRow from './lib/ProjectRow.svelte'
+  import SidebarSections from './sidebar/SidebarSections.svelte'
+  import ProjectSettings from './sidebar/ProjectSettings.svelte'
+  import { CHATS_PROJECT, arrangeSidebar, emptySidebar, holdRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar/sidebar-model.js'
   import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -232,16 +234,14 @@
   let thinkingChip = $state()
 
   let settingsOpen = $state(false)
-  let agentsExpanded = $state(false)
-  let groupsExpanded = $state(true)
   let groupCreateOpen = $state(false)
-  let artifactsExpanded = $state(false)
   let agentsOpen = $state(false)
   // The page that takes the thread's place from the sidebar's foot: 'usage', 'notifications' or none.
   let fullPage = $state(null)
   let artifactsOpen = $state(false)
   let projectsOpen = $state(false)
-  let projectsExpanded = $state(true)
+  // The project whose settings take the thread's place, from the sidebar's Projects list.
+  let settingsProject = $state(null)
   let creations = $state([])
   let artifactItems = $state([])
   let requestedArtifact = $state(null)
@@ -558,7 +558,6 @@
     try {
       if (!await chatController.newThread()) { selectedAgent = agentThreadMap[currentThreadId] ?? null; throw new Error('The agent thread could not be started.') }
       threadSearch = ''
-      archivedThreads = false
       filterThreads()
       await refreshAgents()
     } finally { startingAgent = null }
@@ -798,7 +797,7 @@
   let projectCatalog = $state({ projects: {}, threads: {} })
   let selectedProject = $state(null)
   let catalogProject = $state(null)
-  const fileContext = $derived(agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:currentThreadTitle})
+  const fileContext = $derived(agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:currentThreadTitle})
   let expandedProjects = $state(new Set())
   let projectForm = $state(null)
   let projectName = $state('')
@@ -811,23 +810,58 @@
   const regularThreads = $derived(listedThreads(threadSummaries, { agentThreads: agentThreadMap, groupThreads: swarm.groups.map(group => group.thread_id), creations }))
   let threadOrganization = $state(readThreadOrganization())
   let threadSearch = $state('')
-  let archivedThreads = $state(false)
-  let includeArchived = $state(false)
-  let threadSort = $state('recent')
+  let threadSearchInput = $state()
   let threadIndexFailed = $state(false)
   let rowRename = $state(null)
   let rowRenameInput = $state()
   let rowRenamePending = $state(false)
-  const threadGroups = $derived(organizeThreads((threadSort === 'title' ? [...regularThreads].sort((a,b) => (a.title || '').localeCompare(b.title || '')) : regularThreads).filter(thread => includeArchived || archivedThreads || !threadOrganization[thread.threadId]?.archived), threadOrganization, threadSearch, archivedThreads, includeArchived))
-  const unpinnedThreads = $derived(threadGroups.filter(group => group.name !== 'Pinned').flatMap(group => group.threads))
-  const sidebarSections = $derived([...[...projectRows, ...remoteProjectRows].filter(([id]) => expandedProjects.has(id)).map(([id]) => id), null]
-    .map(projectId => ({ projectId, threads: unpinnedThreads.filter(thread => (projectCatalog.threads[thread.threadId] || null) === projectId) })))
-  const pinnedThreads = $derived(threadGroups.find(group => group.name === 'Pinned')?.threads || [])
-  const visibleThreads = $derived([...pinnedThreads, ...sidebarSections.flatMap(section => section.threads)])
-  const showFreshThread = $derived(freshThread && !selectedAgent && !currentCreation && !archivedThreads && !threadSearch.trim() && (!selectedProject || expandedProjects.has(selectedProject)))
-  const shortcutThreads = $derived([...pinnedThreads, ...sidebarSections.flatMap(section => [
-    ...(showFreshThread && section.projectId === selectedProject ? [{ threadId: null }] : []), ...section.threads,
-  ])])
+  // The sidebar's sections from core's `sidebar::arrange`. Each answer
+  // replaces the last whole, and a read thread stays where the last answer
+  // placed it, so rows move only when their status changes.
+  let sidebarArrangement = $state.raw(emptySidebar())
+  let readState = $state.raw(readMarks())
+  const heldRows = new Map()
+  let projectFilter = $state('all')
+  let workingOpen = $state(true)
+  let settledOpen = $state(false)
+  let archivedOpen = $state(false)
+  let needsYouItems = $state.raw([])
+  let sidebarRequest = 0
+  const showFreshThread = $derived(freshThread && !selectedAgent && !currentCreation && !threadSearch.trim())
+  const sidebarRuns = $derived(runStates(activityRuns))
+  const sidebarFeed = $derived(sidebarInput({
+    summaries: threadSummaries,
+    agentListing, agents: roster.filter(agent => !catalogArchived('agent', agent)), groups: swarm.groups, catalog: projectCatalog, remote: remoteProjectRows,
+    organization: threadOrganization, marks: readState, needsYou: needsYouItems, current: freshThread ? null : currentThreadId,
+    working: [...sidebarRuns.working, ...(runningThreadId ? [runningThreadId] : [])], failed: sidebarRuns.failed, held: heldRows,
+    filter: projectFilter, query: threadSearch,
+    machineOf: (runtimeId) => pairedRuntimes(runtimeList).length ? machineName(runtimeList.runtimes.find(runtime => runtime.id === (runtimeId ?? LOCAL_RUNTIME_ID)) ?? { id: runtimeId }) : null,
+  }))
+  $effect(() => {
+    const input = sidebarFeed
+    const request = ++sidebarRequest
+    if (!tauri) return
+    Promise.resolve(arrangeSidebar(tauri, input)).then((next) => {
+      if (request !== sidebarRequest || !next) return
+      holdRows(heldRows, next)
+      sidebarArrangement = next
+    }).catch(() => {})
+  })
+  // The open thread is read while it shows, and again as its replies land.
+  $effect(() => {
+    const threadId = freshThread ? null : currentThreadId
+    void threadSummaries.find(summary => summary.threadId === threadId)?.updatedAt
+    void agentListing
+    if (threadId) untrack(() => { readState = markRead(readState, threadId) })
+  })
+  const sidebarProjectById = $derived(Object.fromEntries(sidebarArrangement.projects.map(project => [project.id, project])))
+  // The machine that holds each project: another member's project names its
+  // owner, and an agent's own project names the agent's machine when it is not this computer.
+  const projectOwners = $derived(Object.fromEntries([
+    ...roster.filter(agent => agent.replica || (agent.runtimeId ?? LOCAL_RUNTIME_ID) !== LOCAL_RUNTIME_ID).map(agent => [`agent:${agent.id}`, agent.primaryMachine ?? agentMachine(runtimeList, agent)]).filter(([, machine]) => machine),
+    ...remoteProjectRows.map(([id, , owner]) => [id, owner]),
+  ]))
+  const shortcutThreads = $derived(shownRows(sidebarArrangement, { workingOpen, expanded: expandedProjects, settledOpen, fresh: showFreshThread }).map(row => ({ threadId: row.thread_id })))
   const freshThreadPosition = $derived(shortcutThreads.findIndex(thread => thread.threadId === null))
   let moreThreads = $state(false)
   let loadingOlderThreads = $state(false)
@@ -1075,7 +1109,7 @@
   // the end of the transcript in place of the run's own gate.
   const openApprovals = $derived(threadApprovals(swarm.approvals, freshThread ? null : currentThreadId))
   // A catalog or a page covers the thread, so the title bar names it.
-  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? 'Projects' : fullPage === 'usage' ? 'Usage' : fullPage === 'notifications' ? 'Notifications' : '')
+  const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? (settingsProject ? sidebarProjectById[settingsProject]?.name ?? 'Projects' : 'Projects') : fullPage === 'usage' ? 'Usage' : fullPage === 'notifications' ? 'Notifications' : '')
   let currentThreadTitle = $derived(threadAgent?.name || threadGroup?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
   let freshThread = $state(false)
   // The machine the open thread lives on. A new thread has none until its
@@ -1226,6 +1260,8 @@
   let threadMenu = $state(null)
   const sidebarKeyShortcut = sidebarShortcut()
   const newThreadKeyShortcut = newThreadShortcut()
+  // ⌘K focuses Search. The company record, when it is on, keeps ⌘K for its panel.
+  const searchKeyShortcut = recordPanelShortcut()
   const settingsKeyShortcut = settingsShortcut()
   const modifierLabel = shortcutDisplayLabel(sidebarKeyShortcut).slice(0, -1)
   // The newest copy attempt in the thread, or null once its confirmation lapses.
@@ -1379,7 +1415,7 @@
   }
 
   $effect(() => {
-    const needsIndex = includeArchived || projectsOpen || expandedProjects.size || threadSearch.trim() || archivedThreads || Object.entries(threadOrganization)
+    const needsIndex = projectsOpen || expandedProjects.size || threadSearch.trim() || archivedOpen || settledOpen || Object.entries(threadOrganization)
       .some(([id, state]) => state.pinned && !state.archived && !threadSummaries.some((thread) => thread.threadId === id))
     if (needsIndex && moreThreads && !loadingOlderThreads && !threadIndexFailed && !projectBusy) {
       void untrack(indexOlderThreads)
@@ -1404,6 +1440,7 @@
   }
 
   async function showProjects() {
+    settingsProject = null
     projectsOpen = true; agentsOpen = false; fullPage = null; artifactsOpen = false; agentProfileOpen = false; closeRail()
     await refreshProjects()
   }
@@ -1419,10 +1456,30 @@
     expandedProjects = next
   }
 
+  // A new thread in a project. An agent's own project starts a new
+  // conversation with the agent, and Chats starts a plain thread.
   async function newProjectThread(projectId) {
     if (switchLocked || projectBusy) return
-    expandedProjects = new Set([...expandedProjects, projectId])
-    await newSidebarThread(projectId)
+    const project = sidebarProjectById[projectId]
+    const agent = project?.kind === 'agent' ? roster.find(entry => entry.id === project.agent_ids[0]) : null
+    if (agent) {
+      projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
+      return startAgentThread(agent).catch(error => { submitError = String(error) })
+    }
+    await newSidebarThread(projectId === CHATS_PROJECT ? null : projectId)
+  }
+
+  // A project's settings take the thread's place.
+  async function showProjectSettings(projectId) {
+    settingsProject = projectId
+    projectsOpen = true; agentsOpen = false; fullPage = null; artifactsOpen = false; agentProfileOpen = false; closeRail()
+    await refreshProjects()
+  }
+
+  // A trigger makes the project an agent: the agent builder drafts one that
+  // works in the project's folder, and its home thread is where runs post.
+  async function addProjectTrigger(project) {
+    await openAgentBuilder({ projectId: project.id })
   }
 
   async function saveProject() {
@@ -1438,7 +1495,7 @@
       projectName = ''
       projectError = ''
       projectBusy = false
-      if (creating) { projectsExpanded = true; await selectProject(id) }
+      if (creating) await selectProject(id)
     } catch (error) { projectError = String(error); projectBusy = false }
   }
 
@@ -1455,11 +1512,16 @@
     agentsOpen = false; fullPage = null
     agentProfileOpen = false
     selectedAgent = null
-    // A new thread starts on this computer. The composer's picker moves it.
-    if (remoteSelected(runtimeList)) await selectRuntime(runtimeList.runtimes.find((runtime) => runtime.local))
+    // A new thread starts with its project's defaults, on this computer
+    // unless the project names a machine. The composer's pickers change them.
+    const defaults = projectCatalog.settings?.[projectId ?? CHATS_PROJECT] ?? {}
+    const machine = defaults.machine ? runtimeList?.runtimes?.find((runtime) => runtime.id === defaults.machine && !runtime.local && runtime.status === 'online') : null
+    if (machine) { if (runtimeList?.selected !== machine.id) await selectRuntime(machine) }
+    else if (remoteSelected(runtimeList)) await selectRuntime(runtimeList.runtimes.find((runtime) => runtime.local))
     if (!await chatController.newThread()) return
+    if (defaults.permissionMode) pendingMode = defaults.permissionMode
+    if (defaults.model && inventory && (inventory.default_provider !== defaults.model.provider || inventory.default_model !== defaults.model.model)) void chooseModel(defaults.model.provider, defaults.model.model)
     threadSearch = ''
-    archivedThreads = false
     filterThreads()
     return true
   }
@@ -1613,6 +1675,55 @@
     event.preventDefault()
     event.currentTarget.focus()
     selectThread(threadId, event.shiftKey)
+  }
+
+  // A row core arranged opens its thread. A group's thread opens the group,
+  // and an agent's thread this window does not hold opens on the agent's machine.
+  function sidebarRowClick(event, summary) {
+    const row = summary.row
+    const plain = event.shiftKey || event.metaKey || event.ctrlKey || selectedThreadIds.size
+    if (!plain && row) {
+      const group = swarm.groups.find((entry) => entry.thread_id === row.thread_id)
+      if (group) { clearThreadSelection(); void openGroup(group).catch(error => { submitError = String(error) }); return }
+      const agent = row.agent_id && !threadSummaries.some((entry) => entry.threadId === row.thread_id) ? roster.find((entry) => entry.id === row.agent_id) : null
+      if (agent) { clearThreadSelection(); void openAgent(agent).catch(error => { submitError = String(error) }); return }
+    }
+    threadRowClick(event, summary.threadId)
+  }
+
+  // Each sidebar row names itself by its title and describes itself by its status, project, machine and time.
+  let rowIds = 0
+  const nextRowId = () => `sidebar-row-${++rowIds}`
+
+  // The pages Search finds beside threads.
+  const sidebarPages = $derived([
+    { id: 'artifacts', label: 'Artifacts', icon: 'file-code', shortcut: artifactShortcut },
+    { id: 'agents', label: 'Agents', icon: 'bot' },
+    { id: 'new-agent', label: 'New agent', icon: 'plus' },
+    { id: 'projects', label: 'Projects', icon: 'layout-dashboard' },
+    ...(roster.length > 1 ? [{ id: 'group', label: 'New group chat', icon: 'users' }] : []),
+    { id: 'notifications', label: 'Notifications', icon: 'bell' },
+    { id: 'usage', label: 'Usage', icon: 'chart-column' },
+    { id: 'settings', label: 'Settings', icon: 'settings', shortcut: settingsKeyShortcut },
+  ])
+  function openSidebarPage(id) {
+    threadSearch = ''
+    if (id === 'artifacts') void showArtifacts()
+    else if (id === 'agents') void showAgents()
+    else if (id === 'new-agent') void openAgentBuilder()
+    else if (id === 'projects') void showProjects()
+    else if (id === 'group') groupCreateOpen = true
+    else if (id === 'settings') toggleSettings()
+    else toggleFullPage(id)
+  }
+
+  // The sidebar keeps its scroll position while Settings takes its rows.
+  let sidebarScrollTop = 0
+  function keepSidebarScroll(node) {
+    node.scrollTop = sidebarScrollTop
+    const save = () => { sidebarScrollTop = node.scrollTop }
+    node.addEventListener('scroll', save, { passive: true })
+    return { destroy() { node.removeEventListener('scroll', save) } }
   }
 
   function selectThread(threadId, range) {
@@ -2303,7 +2414,7 @@
       const status = await tauri.invoke(command)
       if (version !== authRequestVersion) return
       auth = statusState(status)
-      if (action === 'sign-out') { artifactsOpen = false; projectsOpen = false; agentsOpen = false; fullPage = null; agentsExpanded = false; artifactsExpanded = false }
+      if (action === 'sign-out') { artifactsOpen = false; projectsOpen = false; agentsOpen = false; fullPage = null }
       if (auth.name === 'signed-in') await chatController.loadHistory()
       return true
     } catch (err) {
@@ -2428,7 +2539,11 @@
   let needsYouTimer = null
   async function refreshNeedsYou() {
     if (!tauri || !(auth.name === 'local' || auth.name === 'signed-in')) return
-    try { needsYou = (await readNotifications(tauri, machineRefs(runtimeList), { view: 'needs_you' }))?.counts?.needs_you ?? 0 } catch (_) {}
+    try {
+      const page = await readNotifications(tauri, machineRefs(runtimeList), { view: 'needs_you' })
+      needsYou = page?.counts?.needs_you ?? 0
+      needsYouItems = page?.needs_you ?? []
+    } catch (_) {}
   }
   function noteNotifications() {
     notificationsKey += 1
@@ -2671,6 +2786,13 @@
       if (workspaceMode() && onboarding.name === 'complete' && isArtifactRailShortcut(event)) {
         event.preventDefault()
         toggleArtifactRail()
+        return
+      }
+      if (!featureFlags.companyRecord && workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
+        event.preventDefault()
+        if (settingsOpen) closeSettings()
+        if (sidebarCollapsed) toggleSidebar()
+        void tick().then(() => { threadSearchInput?.focus(); threadSearchInput?.select() })
         return
       }
       if (featureFlags.companyRecord && workspaceMode() && onboarding.name === 'complete' && isRecordPanelShortcut(event)) {
@@ -2948,18 +3070,21 @@
   }
 </script>
 
-{#snippet projectThreadList(projectId = null)}
-            <ul class="thread-list" aria-label={projectId ? `${projectCatalog.projects[projectId] ?? projectCatalog.remote?.[projectId]?.name} threads` : "Threads"}>
-              {#if showFreshThread && selectedProject === projectId}
-                <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={threadRowShortcut(freshThreadPosition + 1)}><span></span><div class="thread-row-title">{currentThreadTitle}</div></li>
-              {/if}
-            {#each threadGroups.filter((group) => group.name !== 'Pinned').map(group => ({ ...group, threads: group.threads.filter(thread => (projectCatalog.threads[thread.threadId] || null) === projectId) })).filter(group => group.threads.length) as group (group.name)}
-                {#if group.name !== 'Threads'}<li class="side-group" role="presentation"><h3>{group.name}</h3></li>{/if}
-              {#each group.threads as summary (summary.threadId)}
-                {@render sidebarThread(summary)}
-              {/each}
-              {/each}
-            </ul>
+<!-- Artifacts keeps a quiet row under Projects, with its ⌘J shortcut. -->
+{#snippet libraryRow()}
+  <button type="button" class="side-action library-entry" aria-label="Artifacts" aria-expanded={artifactsOpen} aria-current={artifactsOpen ? 'true' : undefined} aria-keyshortcuts={artifactShortcut} disabled={switchLocked} onclick={toggleArtifactRail}><LucideIcon name="file-code" /><span>Artifacts</span><kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
+{/snippet}
+
+{#snippet freshRow()}
+  {#if showFreshThread}
+    {@const projectName = sidebarProjectById[selectedProject ?? CHATS_PROJECT]?.name}
+    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined}><span></span><div class="thread-row-body"><div class="thread-row-title">{currentThreadTitle}</div>{#if projectName}<span class="thread-row-meta"><StatusChip tone="neutral">New</StatusChip><span class="row-project">{projectName}</span></span>{/if}</div></li>
+  {/if}
+{/snippet}
+
+<!-- A row core arranged: the thread's summary when the window holds one, with core's row beside it. -->
+{#snippet coreRow(row)}
+  {@render sidebarThread({ ...(threadSummaries.find((summary) => summary.threadId === row.thread_id) ?? { threadId: row.thread_id, title: row.title, updatedAt: row.updated_at }), row })}
 {/snippet}
 
 {#snippet machineBadge(summary)}
@@ -2969,10 +3094,10 @@
 
 <!-- A row's meta line: once a machine is paired, the machine the thread lives
      on, by its shape and name, then how long ago the thread last changed. -->
-{#snippet rowMeta(summary)}
+{#snippet rowMeta(summary, id = undefined)}
   {@const owner = threadOwner(summary, swarm, runtimeList)}
   {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  <span class="thread-row-meta" {id}>{#if summary.row}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip><span class="row-project">{summary.row.project_name}</span><span aria-hidden="true">·</span>{/if}{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -2983,11 +3108,12 @@
 
 {#snippet sidebarThread(summary)}
                 {@const creation = creations.find((item) => item.threadId === summary.threadId)}
-                {@const title = creation ? creationTitle(creation, [summary]) : summary.title || 'New thread'}
+                {@const title = creation ? creationTitle(creation, [summary]) : summary.title || summary.row?.title || 'New thread'}
                 {@const current = !freshThread && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
                 {@const rowTitle = current && !creation ? summary.title || currentThreadTitle : title}
                 {@const rowPosition = shortcutThreads.findIndex((item) => item.threadId === summary.threadId) + 1}
                 {@const selected = selectedThreadIds.has(summary.threadId)}
+                {@const rowId = nextRowId()}
                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                 <li class="thread-record" class:selected oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
                   {#if rowRename?.threadId === summary.threadId}
@@ -2998,10 +3124,10 @@
                     </form>
                   {:else if current && !catalogTitle}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
+                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
                   {:else}
                     {@const running = summary.threadId === backgroundRun?.threadId}
-                    <button class="thread-row" class:selected data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => threadRowClick(event, summary.threadId)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div>{#if running}<span class="visually-hidden">Running</span>{/if}</button>
+                    <button class="thread-row" class:selected aria-labelledby={`${rowId}-title`} aria-describedby={`${rowId}-meta`} data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => sidebarRowClick(event, summary)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-body"><div class="thread-row-title" id={`${rowId}-title`}>{rowTitle}</div>{@render rowMeta(summary, `${rowId}-meta`)}</div>{#if running}<span class="visually-hidden">Running</span>{/if}</button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -3090,7 +3216,7 @@
                       {#if !threadMenu.fromTitle && !selectedThreadIds.has(summary.threadId)}<button type="button" role="menuitem" onclick={() => { const id = summary.threadId; closeThreadMenu(); selectThread(id, false); focusThreadRow(id) }}>Select</button>{/if}
                       <button type="button" role="menuitem" onclick={() => setThreadOrganization(summary.threadId, 'pinned')}>{threadOrganization[summary.threadId]?.pinned ? 'Unpin' : 'Pin'}</button>
                       <button type="button" role="menuitem" disabled={running} onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
-                      {#if !agentThreadMap[summary.threadId]}<button type="button" role="menuitem" disabled={switchLocked} onclick={() => { const { threadId, title } = summary; closeThreadMenu(); void openAgentBuilder({ threadId, threadTitle: title || rowTitle, autostart: true }) }}>Make this an agent</button>{/if}
+                      {#if !agentThreadMap[summary.threadId]}<button type="button" role="menuitem" disabled={switchLocked} onclick={() => { const { threadId, title } = summary; closeThreadMenu(); void openAgentBuilder({ threadId, threadTitle: title || rowTitle, autostart: true, projectId: projectCatalog.projects[projectCatalog.threads[threadId]] ? projectCatalog.threads[threadId] : null }) }}>Make this an agent</button>{/if}
                       <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={threadSwitching || runLocked || deletionHoldsRun(summary.threadId)} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
@@ -3116,82 +3242,33 @@
               {/each}
             </nav>
           {:else if !sidebarCollapsed}
-            <div class="side-top">
+            <!-- New and Search lead the sidebar. A selection takes the search's row, so no row moves under the pointer. -->
+            <div class="side-top sidebar-head">
               <button class="side-action new-thread" aria-label="New thread" aria-keyshortcuts={newThreadKeyShortcut} disabled={switchLocked} onclick={() => newSidebarThread()}>
-                <LucideIcon name="square-pen" /><span>New thread</span><kbd>{shortcutDisplayLabel(newThreadKeyShortcut)}</kbd>
+                <LucideIcon name="square-pen" /><span>New</span>
               </button>
+              {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
+              {:else}<div class="thread-search-field"><LucideIcon name="search" size={14} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" aria-keyshortcuts={featureFlags.companyRecord ? undefined : searchKeyShortcut} placeholder="Search" bind:this={threadSearchInput} bind:value={threadSearch} oninput={filterThreads} />{#if !featureFlags.companyRecord && !threadSearch}<kbd>{shortcutDisplayLabel(searchKeyShortcut)}</kbd>{/if}</div>{/if}
             </div>
-            <div class="side-scroll" use:panelScroll>
+            <div class="side-scroll" use:panelScroll use:keepSidebarScroll>
             {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
-            <section class="sidebar-collection" aria-label="Agents group">
-              <ProjectRow name="Agents" panelOpen={agentsOpen} label="Agents" icon="bot" newLabel="New agent" expanded={agentsExpanded} running={!agentsExpanded && !!backgroundRunAgent} disabled={switchLocked} ontoggle={() => agentsExpanded = !agentsExpanded} onactivate={() => showAgents()} onnew={() => showAgents(null,true)} />
-              {#if agentsExpanded}<div class="collection-children">
-            {#if roster.length}
-              <div class="agent-roster" aria-label="Saved agents">
-                {#each roster.filter(agent=>!catalogArchived('agent',agent)) as agent (`${agent.runtimeId}:${agent.id}`)}
-                  <div class="catalog-sidebar-row"><button class="side-action agent-entry" style:--agent-color={agentColor(agent)} aria-current={(profileOnlyAgent ?? selectedAgent) === agent.id ? "true" : undefined} disabled={switchLocked} onclick={() => openAgent(agent).catch(error => { submitError = String(error) })}><AgentAvatar {agent} activity={agent.activity} tooltip={false} size={20} /><span>{agent.name}</span>{#if showAgentMachines || agent.online === false || agent.replica || (agent.activity && agent.activity.state !== 'idle')}<AgentStatus {agent} activity={agent.activity} machine={showAgentMachines || agent.replica ? agent.primaryMachine ?? agentMachine(runtimeList, agent) : null} />{/if}{#if backgroundRunAgent === agent.id}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button>{#if !agent.replica}<CatalogActions name={agent.name} disabled={catalogHoldsRun('agent', agent)} onaction={(action,name)=>catalogAction('agent',agent,action,name)}/>{/if}</div>
-                {/each}
-              </div>
-            {/if}
-            {#if creations.some(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))}<div class="agent-roster" aria-label="Agents in progress">{#each creations.filter(item=>item.kind==='agent'&&!catalogArchived('creation',item)&&!agentListing.agents.some(agent=>agent.id===item.resultId)) as item (item.threadId)}<div class="catalog-sidebar-row"><button class="side-action" disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="bot"/><span>{creationTitle(item, threadSummaries)}</span></button><CatalogActions name={creationTitle(item, threadSummaries)} disabled={catalogHoldsRun('creation', item)} onaction={(action,name)=>catalogAction('creation',item,action,name)}/></div>{/each}</div>{/if}
-              </div>{/if}
-            </section>
-            {#if swarm.groups.length || swarm.members.length > 1}
-            <section class="sidebar-collection" aria-label="Groups group">
-              <ProjectRow name="Groups" label="Groups" icon="users" newLabel="New group" expanded={groupsExpanded} collapsible={swarm.groups.length > 0} disabled={switchLocked} ontoggle={() => groupsExpanded = !groupsExpanded} onactivate={() => groupsExpanded = !groupsExpanded} onnew={() => { groupCreateOpen = true }} />
-              {#if groupsExpanded && swarm.groups.length}<div class="collection-children"><div class="agent-roster" aria-label="Group chats">
-                {#each swarm.groups as group (group.group_id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={group.thread_id === currentThreadId ? 'true' : undefined} disabled={switchLocked} onclick={() => openGroup(group).catch(error => { submitError = String(error) })}><LucideIcon name="users" /><span>{group.name}</span>{#if group.meeting_mode}<em class="visually-hidden">Meeting</em>{/if}</button></div>{/each}
-              </div></div>{/if}
-              {#if !swarm.groups.length}<div class="collection-children"><button class="side-action group-empty" disabled={switchLocked} onclick={() => { groupCreateOpen = true }}><LucideIcon name="plus" /><span>Start a group chat</span></button></div>{/if}
-            </section>
-            {/if}
-            <section class="sidebar-collection" aria-label="Artifacts group">
-              <ProjectRow name="Artifacts" panelOpen={artifactsOpen} label="Artifacts" icon="file" newLabel="New artifact" expanded={artifactsExpanded} running={!artifactsExpanded && !!backgroundRunArtifact} disabled={switchLocked} ontoggle={() => artifactsExpanded = !artifactsExpanded} onactivate={showArtifacts} onnew={() => startCreation('artifact')} />
-              {#if artifactsExpanded}<div class="collection-children">
-            {#if artifactChats.length}<div class="agent-roster" aria-label="Saved artifacts">{#each artifactChats.filter(item=>!catalogArchived('artifact',item)) as item (item.threadId || item.id)}<div class="catalog-sidebar-row"><button class="side-action" aria-current={item.threadId===currentThreadId?'true':undefined} disabled={switchLocked} onclick={()=>openCreation(item)}><LucideIcon name="file-code"/><span>{item.name || item.goal}</span>{#if item.threadId && item.threadId === backgroundRunArtifact}<i class="run-mark" aria-hidden="true"></i><em class="visually-hidden">Running</em>{/if}</button><CatalogActions name={item.name || item.goal} disabled={catalogHoldsRun('artifact', item)} onaction={(action,name)=>catalogAction('artifact',item,action,name)}/></div>{/each}</div>{/if}
-              </div>{/if}
-            </section>
-            <div class="thread-search-field"><LucideIcon name="search" size={16} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search threads" bind:value={threadSearch} oninput={filterThreads} /></div>
-            <section class="project-section" aria-label="Projects">
-              <ProjectRow name="Projects" label="Projects" icon="layout-dashboard" panelOpen={projectsOpen} newLabel="New project" expanded={projectsExpanded && projectRows.length + remoteProjectRows.length > 0} collapsible={projectRows.length + remoteProjectRows.length > 0} disabled={switchLocked || projectBusy} ontoggle={() => projectsExpanded = !projectsExpanded} onactivate={showProjects} onnew={() => { projectsExpanded = true; projectForm = 'new'; projectName = ''; projectsOpen = false }} />
-              {#if projectForm}
-                <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveProject() }}>
-                  <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
-                  <button type="submit" disabled={projectBusy || !projectName.trim()}>{projectForm === 'new' ? 'Create' : 'Save'}</button>
-                  <button type="button" disabled={projectBusy} onclick={() => { projectForm = null }}>Cancel</button>
-                </form>
-              {/if}
-              {#if projectsExpanded && projectRows.length + remoteProjectRows.length}<div class="collection-children">
-              {#each projectRows as [projectId, name] (projectId)}
-                <ProjectRow {name} expanded={expandedProjects.has(projectId)} disabled={switchLocked || projectBusy}
-                  ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)}
-                  onrename={() => { projectForm = projectId; projectName = name }} onopen={() => openProjectFolder(projectId)} />
-                {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
-              {/each}
-              {#each remoteProjectRows as [projectId, name, owner] (projectId)}
-                <ProjectRow {name} {owner} expanded={expandedProjects.has(projectId)} disabled={switchLocked || projectBusy}
-                  ontoggle={() => selectProject(projectId)} onnew={() => newProjectThread(projectId)} />
-                {#if expandedProjects.has(projectId)}<div class="project-threads">{@render projectThreadList(projectId)}</div>{/if}
-              {/each}
-              </div>{/if}
-              {#if projectError}<p class="side-empty" role="status">{projectError} <button class="quiet" onclick={() => refreshProjects()}>Retry</button></p>{/if}
-            </section>
-            <!-- The selection takes the Threads heading's row, so no row moves under the pointer. -->
-            {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
-            {:else}<ThreadFilter status={includeArchived ? 'all' : archivedThreads ? 'archived' : 'active'} sort={threadSort} onchange={(status, sort) => { archivedThreads = status === 'archived'; includeArchived = status === 'all'; threadSort = sort; filterThreads() }} />{/if}
-            {#each threadGroups.filter((group) => group.name === 'Pinned') as group}
-              <h3 class="side-group">Pinned</h3>
-              <ul class="thread-list" aria-label="Pinned threads">{#each group.threads as summary (summary.threadId)}{@render sidebarThread(summary)}{/each}</ul>
-            {/each}
-
-            {@render projectThreadList()}
-            {#if !visibleThreads.length && !showFreshThread}
-              <p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : threadSearch.trim() ? 'No matching threads.' : archivedThreads ? 'No archived threads.' : 'No threads yet.'}</p>
-            {/if}
-            {#if threadListError}<p class="side-empty" role="alert">{threadListError} {#if threadListErrorAction}<button disabled={loadingOlderThreads} onclick={loadOlderThreads}>Retry</button>{/if}</p>{/if}
-            {#if moreThreads && !threadListError}
-              <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
-            {/if}
+            <SidebarSections sidebar={sidebarArrangement} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
+              disabled={switchLocked} expanded={expandedProjects} filter={projectFilter} bind:workingOpen bind:settledOpen bind:archivedOpen
+              {projectForm} bind:projectName {projectBusy} {projectError}
+              onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings}
+              onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
+              ongroup={roster.length > 1 ? () => { groupCreateOpen = true } : undefined}
+              onnewproject={() => { projectForm = 'new'; projectName = ''; projectsOpen = false }} onsaveproject={saveProject} oncancelproject={() => { projectForm = null }}
+              onretryprojects={() => refreshProjects()} onfilter={(next) => { projectFilter = next }}>
+              {#snippet footer()}
+                {#if threadSearch.trim() && !sidebarArrangement.results.length}<p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : 'No matching threads.'}</p>{/if}
+                {#if !threadSearch.trim() && !sidebarArrangement.recent.length && !sidebarArrangement.settled.length && !showFreshThread}<p class="side-empty">No threads yet.</p>{/if}
+                {#if threadListError}<p class="side-empty" role="alert">{threadListError} {#if threadListErrorAction}<button disabled={loadingOlderThreads} onclick={loadOlderThreads}>Retry</button>{/if}</p>{/if}
+                {#if moreThreads && !threadListError}
+                  <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
+                {/if}
+              {/snippet}
+            </SidebarSections>
             </div>
           {/if}
           {#if !sidebarCollapsed && !settingsOpen}
@@ -3700,18 +3777,24 @@
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
-  {#if fullPage === 'agent-builder' && agentBuilder}{#key agentBuilder.key}<AgentBuilder {tauri} description={agentBuilder.description} threadId={agentBuilder.threadId} threadTitle={agentBuilder.threadTitle} autostart={agentBuilder.autostart}
+  {#if fullPage === 'agent-builder' && agentBuilder}{#key agentBuilder.key}<AgentBuilder {tauri} description={agentBuilder.description} threadId={agentBuilder.threadId} threadTitle={agentBuilder.threadTitle} autostart={agentBuilder.autostart} projectId={agentBuilder.projectId ?? null}
     onsaved={openBuiltAgent} onopenchat={openBuiltAgent} onchange={() => { void refreshAgents() }}
     onrefine={(text) => { fullPage = null; agentBuilder = null; void startCreation('agent', creationDefaults('agent'), text) }} />{/key}{/if}
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
-  {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); groupsExpanded = true; await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
+  {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentBuilder(chosen?.description ? { description: chosen.description, autostart: true } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
       {inventory} latestRuns={agentListing.latestRuns} onprofile={openAgentProfile} onmanagemodels={openModelSettings} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {/key}{/if}
-  {#if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
+  {#if projectsOpen && settingsProject && sidebarProjectById[settingsProject]}
+    <ProjectSettings {tauri} project={sidebarProjectById[settingsProject]} agents={roster.filter(agent => sidebarProjectById[settingsProject].agent_ids.includes(agent.id))} {inventory} modes={modeListing?.listing ?? null} {runtimeList} latestRuns={agentListing.latestRuns} busy={switchLocked || projectBusy}
+      onback={() => { projectsOpen = false; settingsProject = null }} onnewthread={newProjectThread} onaddtrigger={addProjectTrigger}
+      onchat={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onprofile={openAgentProfile} onchange={refreshAgentsAndRuns} onmanagemodels={openModelSettings}
+      onaction={(agent, action, name) => action === 'profile' ? openAgentProfile(agent) : action === 'export' ? exportAgent(tauri, agent, 'muniment') : catalogAction('agent', agent, action, name)}
+      onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
+  {:else if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={(chosen)=>startCreation('artifact', chosen)}/>{/if}
         <!-- Settings sits in the workspace grid: its section list takes the sidebar column. -->
         {#if settingsOpen}
@@ -3755,11 +3838,6 @@
 {/if}
 
 <style>
-  .catalog-sidebar-row {display:flex;align-items:center;min-width:0;border-radius:var(--radius-control)}
-  .catalog-sidebar-row .side-action {position:relative;flex:1;min-width:0}
-  .catalog-sidebar-row :global(.catalog-actions) {opacity:0}
-  .catalog-sidebar-row:hover :global(.catalog-actions), .catalog-sidebar-row:focus-within :global(.catalog-actions), .catalog-sidebar-row :global(.catalog-actions.opened) {opacity:1}
-  @media (hover:none) { .catalog-sidebar-row :global(.catalog-actions) {opacity:1} }
 
   .sign-in-overlay { position: fixed; z-index: 100; top: 72px; left: 50%; transform: translateX(-50%); width: min(480px, calc(100% - 48px)); padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); box-shadow: var(--shadow-overlay); }
   main {
@@ -3935,16 +4013,19 @@
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 0; }
   .side-scroll { flex: 1; min-height: 0; padding: 4px 6px 8px; overflow-y: auto; }
-  .project-section { margin-top: 12px; }
   .project-heading { display: flex; align-items: center; justify-content: space-between; margin: 8px 8px 2px; }
   .project-heading h3 { margin: 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .project-heading button { padding: 2px; }
-  .project-threads { padding-left: 12px; }
-  .side-group { margin: 10px 8px 4px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
-  .side-group h3 { margin: 0; font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .side-top { padding: 8px 6px 0; }
   .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .thread-search-field { position: relative; margin-top: 4px; }
+  .sidebar-head { display: flex; align-items: center; gap: 4px; container-type: inline-size; }
+  /* A narrow sidebar keeps the search words and drops the shortcut chip, which aria-keyshortcuts still names. */
+  @container (max-width: 250px) { .sidebar-head .thread-search-field kbd { display: none; } .sidebar-head .thread-search-field:has(kbd) .thread-search { padding-right: 8px; } }
+  .sidebar-head .new-thread { flex: none; width: auto; padding-right: 10px; }
+  .library-entry kbd { flex: none; margin-left: auto; }
+  .thread-search-field { position: relative; flex: 1; min-width: 0; }
+  .thread-search-field:has(kbd) .thread-search { padding-right: 40px; }
+  .thread-search-field kbd { position: absolute; right: 8px; top: 50%; margin: 0; transform: translateY(-50%); pointer-events: none; }
   .thread-search-field :global(.lucide) { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
   .thread-search { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; padding: 6px 8px 6px 30px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); }
   .retry-review { font-size: var(--text-12); color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
@@ -3954,9 +4035,6 @@
   .side-action:hover { background: var(--faint); }
   .side-action[aria-pressed="true"], .side-action[aria-current="true"] { background: var(--selected); color: var(--on-selected); }
   /* An agent's row carries its color: a wash on hover and while open, with an edge in that color. */
-  .side-action.agent-entry:hover { background: color-mix(in srgb, var(--agent-color) 14%, transparent); }
-  .side-action.agent-entry[aria-current="true"] { background: color-mix(in srgb, var(--agent-color) 24%, transparent); color: var(--ink); }
-  .side-action.agent-entry[aria-current="true"]::before { content: ''; position: absolute; top: 5px; bottom: 5px; left: 0; width: 2px; border-radius: var(--radius-chip); background: var(--agent-color); }
   .row-rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
   .row-rename input { width: 100%; min-width: 0; font: inherit; }
   .row-rename button { padding: 2px 6px; font-size: var(--text-12); }
@@ -3967,14 +4045,12 @@
   .side-toggle:hover:not(:disabled) :global(.side-icon) { color: var(--ink); }
   .side-action, .thread-row { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-color: transparent; background: transparent; text-align: left; }
   /* The bar holds the Threads heading's margins and 24px height. */
-  .selection-bar { display:flex; align-items:center; gap:5px; height:24px; margin:10px 8px 4px; font-size:var(--text-12); }
+  .selection-bar { display:flex; flex:1; min-width:0; align-items:center; gap:5px; height:28px; margin:0; font-size:var(--text-12); }
   .selection-bar span { flex:1; color:var(--muted); font-family:var(--font-human); }
   .selection-bar button { min-width:24px; min-height:24px; padding:0 6px; font-size:var(--text-12); }
   .thread-row > .select-mark { flex:0 0 14px; display:inline-flex; color:var(--muted); }
-  .side-action > .run-mark { flex:0 0 5px; width:5px; height:5px; margin-left:auto; border:1px solid var(--muted); border-radius:var(--radius-chip); }
   .thread-row.selected > .select-mark { color:var(--ink); }
   .delete-titles { margin:4px 0 0; padding-left:18px; }
-  .thread-list { padding: 0; list-style: none; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
   .thread-record { position: relative; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); user-select: none; -webkit-user-select: none; }
@@ -3992,6 +4068,7 @@
   .thread-row-body { flex: 1 1 auto; display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; }
   .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
+  .thread-row-meta .row-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .thread-row time { flex: none; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
   .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -4011,7 +4088,6 @@
   /* Sidebar labels overrun the way thread titles do: one line, faded over the last 28px. */
   .side-action span { flex: 1; min-width: 0; white-space: nowrap; }
   .side-action span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
-  .side-action kbd { flex: none; }
   .side-action .side-count { flex: none; min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); line-height: 16px; text-align: center; }
   .settings-search { display: flex; align-items: center; gap: 6px; margin: 2px 6px 4px; padding: 0 8px; min-height: 28px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); }
   .settings-search:focus-within { border-color: var(--muted); }
@@ -4060,7 +4136,6 @@
   .artifact-empty p { margin: 0; color: var(--muted); }
   /* One grid cell: the thread fills it and the composer sits at its end, so the transcript scrolls on under the composer. */
   .thread-panel { grid-area: thread; position: relative; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); transition: margin-left 180ms ease; }
-  .collection-children { padding-left: 16px; }
 
   .workspace.sidebar-resizing .thread-panel { transition: none; }
   /* The shell clips the transcript and its fades to the panel's rounded corners, so the fade never squares them off. */
@@ -4074,7 +4149,6 @@
   .user-turn { margin: 0 0 28px auto; }
   .agent-turn { margin: 0 0 16px; }
   .thread-approvals { max-width: 760px; margin: 16px auto; }
-  .side-action.group-empty { color: var(--muted); }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
   .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); }
   .user-turn:hover .message-actions, .user-turn:focus-within .message-actions { opacity: 1; }

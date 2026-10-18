@@ -10,20 +10,8 @@ export function readThreadOrganization(storage = localStorage) {
   }
 }
 
-export function organizeThreads(summaries, organization, query, archivedOnly, includeAll = false) {
-  const search = query.trim().toLocaleLowerCase()
-  const groups = { Pinned: [], Threads: [], Archived: [] }
-  for (const summary of summaries) {
-    const state = organization[summary.threadId] || {}
-    if (search && !(summary.title || 'New thread').toLocaleLowerCase().includes(search)) continue
-    if (!includeAll && (archivedOnly ? !state.archived : state.archived && !search)) continue
-    groups[state.archived ? 'Archived' : state.pinned ? 'Pinned' : 'Threads'].push(summary)
-  }
-  return Object.entries(groups).filter(([, threads]) => threads.length).map(([name, threads]) => ({ name, threads }))
-}
-
-// The threads the sidebar's Threads list holds. A group's thread and an
-// agent's own conversations live under Agents. A chat that made an artifact
+// The threads the Projects catalog lists. A group's thread and an
+// agent's own conversations live with the group and the agent. A chat that made an artifact
 // or an agent stays a thread the user can find, beside its catalog entry,
 // whether the user started it from a catalog or the model saved the result
 // mid-chat. `creations` are core's creation records, `{ threadId }` each.

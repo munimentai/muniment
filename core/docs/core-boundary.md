@@ -37,6 +37,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | models | It holds provider and model knowledge as data and renders Pi's `models.json`. |
 | module | model_router | It selects local provider accounts and routes model requests. |
 | module | projects | It scopes threads and generated files to project folders. |
+| module | sidebar | It places every thread in one project and arranges the sidebar's sections with each row's status. |
 | module | preferences | It stores the user's preferences and marks which keys every swarm member shares. |
 | module | usage_report | It sums run receipts and subscription windows into usage by provider, model, agent, project and machine. |
 | module | notifications | It lists agent runs, waiting approvals and scheduled runs, and joins machines into the notifications page. |

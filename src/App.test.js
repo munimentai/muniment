@@ -59,6 +59,7 @@ const openDeleteMenu = async (title) => {
 const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
 
 import App from './App.svelte'
+import { arrangeStandIn } from '../test/sidebar-standin.js'
 let invoke
 let chatListener
 let launcherListener
@@ -220,6 +221,7 @@ beforeAll(async () => {
   window.__TAURI__ = {
     core: { invoke: (command, ...args) => {
       if (command === 'artifact_list') return Promise.resolve([])
+      if (command === 'sidebar_arrange') return Promise.resolve(arrangeStandIn(args[0]?.input))
       if (command === 'browser_view') return Promise.resolve()
       if (command === 'chat_thread_summaries') {
         if (args[0]?.cursor === 'older') return Promise.resolve({ summaries: olderThreadSummaryResult, nextCursor: null })
@@ -2642,12 +2644,13 @@ describe('artifact rail', () => {
   })
 
 
-  it('opens chat artifacts from the sidebar below Agents', async () => {
+  it('opens chat artifacts from the quiet row under Projects', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Artifacts' })
     const sidebar = document.querySelector('#sidebar')
     expect(sidebar).toContainElement(toggle)
-    expect([...sidebar.querySelectorAll('.side-action, .project-title')].map(b => b.textContent)).toEqual(expect.arrayContaining(['Agents', 'Artifacts']))
+    expect(within(screen.getByRole('region', { name: 'Projects' })).getByRole('button', { name: 'Artifacts' })).toBe(toggle)
+    expect(screen.queryByRole('button', { name: 'Agents', exact: true })).not.toBeInTheDocument()
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(toggle)
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
@@ -2889,8 +2892,8 @@ describe('thread name', () => {
     render(App)
 
     const heading = await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })
-    const listHeading = screen.queryByRole('heading', { name: 'Threads' })
-    const list = screen.getByRole('list', { name: 'Threads' })
+    const listHeading = screen.queryByRole('heading', { name: 'Recent' })
+    const list = screen.getByRole('list', { name: 'Recent threads' })
 
     expect(heading).toContainElement(screen.getByRole('button', { name: 'Rename thread' }))
     expect(listHeading).toBeInTheDocument()
@@ -2904,10 +2907,10 @@ describe('thread name', () => {
     render(App)
 
     const control = await screen.findByRole('button', { name: 'Older threads' })
-    const list = screen.getByRole('list', { name: 'Threads' })
+    const list = screen.getByRole('list', { name: 'Recent threads' })
     const homeSettings = screen.getByRole('button', { name: 'Settings' })
 
-    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(await within(list).findAllByRole('listitem')).toHaveLength(1)
     expect(within(list).queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
     expect(list.compareDocumentPosition(control)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     expect(control.compareDocumentPosition(homeSettings)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
@@ -2918,7 +2921,7 @@ describe('thread name', () => {
     expect(screen.queryByRole('button', { name: 'Older threads' })).not.toBeInTheDocument()
   })
 
-  it('expands project threads separately from unassigned threads without creating a chat', async () => {
+  it('lists project threads in Recent with their project and under the expanded project without creating a chat', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Project notes', updatedAt: '' },
       { threadId: 'thread-2', title: 'Unassigned notes', updatedAt: '' },
@@ -2929,8 +2932,10 @@ describe('thread name', () => {
       : baseInvoke(command, payload))
     render(App)
     const project = await screen.findByRole('button', { name: 'Project Research' })
-    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Threads' })).queryByText('Project notes')).not.toBeInTheDocument())
-    expect(within(screen.getByRole('list', { name: 'Threads' })).getByText('Unassigned notes')).toBeInTheDocument()
+    const recent = screen.getByRole('list', { name: 'Recent threads' })
+    await waitFor(() => expect(within(recent).getByText('Project notes').closest('.thread-record')).toHaveTextContent('Research'))
+    expect(within(recent).getByRole('button', { name: 'Unassigned notes' })).toHaveAccessibleDescription(/Chats/)
+    expect(screen.getAllByRole('button', { name: /^Project / }).map((button) => button.getAttribute('aria-label'))).toEqual(['Project Chats', 'Project Research'])
     await fireEvent.click(project)
     expect(project).toHaveAttribute('aria-expanded', 'true')
     expect(within(screen.getByRole('list', { name: 'Research threads' })).getByText('Project notes')).toBeInTheDocument()
@@ -2960,7 +2965,7 @@ describe('thread name', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'New thread in Contracts' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'New thread in Contracts' })).toBeEnabled())
-    if (catalogOpen) await fireEvent.click(screen.getByRole('button', { name: 'Projects', exact: true }))
+    if (catalogOpen) await openSidebarPage('Projects')
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Contracts' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
@@ -2973,9 +2978,9 @@ describe('thread name', () => {
     expect(invoke).toHaveBeenCalledWith('project_open', { projectId: 'created' })
     await fireEvent.click(screen.getByRole('button', { name: 'Project Agreements' }))
     expect(screen.getByRole('button', { name: 'Project Agreements' })).toHaveAttribute('aria-expanded', 'false')
-    await fireEvent.click(screen.getByRole('button', { name: 'New thread', exact: true }))
+    await fireEvent.click(document.querySelector('.new-thread'))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread').at(-1)).toEqual(['chat_new_thread']))
-    expect(within(screen.getByRole('list', { name: 'Threads' })).getByText('New thread')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Recent threads' })).getByText('New thread', { selector: '[data-fresh-thread] .thread-row-title' })).toBeInTheDocument()
   })
 
   it('places New thread first and keeps pin and archive choices across remounts', async () => {
@@ -2998,12 +3003,12 @@ describe('thread name', () => {
     expect(screen.queryByRole('heading', { name: 'Pinned' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Vendor audit' })).not.toBeInTheDocument()
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'vendor' } })
-    await fireEvent.click(screen.getByRole('button', {name:'Filter threads'}))
-    await fireEvent.change(screen.getByRole('combobox', {name:'Status'}), {target:{value:'all'}})
-    expect(screen.getByRole('heading', { name: 'Archived' })).toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
+    expect(await within(screen.getByRole('list', { name: 'Matching threads' })).findByRole('button', { name: 'Vendor audit' })).toBeInTheDocument()
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: '' } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Show archived (1)' }))
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Archived threads' })).getByRole('button', { name: 'Actions for Vendor audit' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }))
-    expect(screen.getByRole('heading', { name: 'Pinned' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Pinned' })).toBeInTheDocument()
   })
 
   it('searches older titles and renames a thread without opening it', async () => {
@@ -3115,7 +3120,7 @@ describe('thread name', () => {
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-3' })
-    expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0)
+    await waitFor(() => expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0))
 
     // Delete on a focused row opens the confirm for that row alone.
     const budget = screen.getByRole('button', { name: 'Budget notes' })
@@ -3140,12 +3145,12 @@ describe('thread name', () => {
     })
     render(App)
     const vendor = await screen.findByRole('button', { name: 'Vendor audit' })
-    expect(screen.getByRole('button', { name: 'Filter threads' })).toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Search threads' })).toBeInTheDocument()
     await fireEvent.contextMenu(vendor)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Select' }))
     expect(screen.getByText('1 selected')).toBeInTheDocument()
-    // The selection takes the Threads heading's row, and each row shows its check box.
-    expect(screen.queryByRole('button', { name: 'Filter threads' })).not.toBeInTheDocument()
+    // The selection takes the search's row, and each row shows its check box.
+    expect(screen.queryByRole('searchbox', { name: 'Search threads' })).not.toBeInTheDocument()
     expect(document.querySelectorAll('.thread-row .select-mark')).toHaveLength(3)
 
     // A plain click now adds or drops a row instead of opening its thread.
@@ -3164,7 +3169,7 @@ describe('thread name', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(document.querySelectorAll('.thread-row.selected')).toHaveLength(0)
     expect(document.querySelectorAll('.thread-row .select-mark')).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Filter threads' })).toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Search threads' })).toBeInTheDocument()
   })
 
   it('ranges a first Shift click from the open thread and hides the open dot while selecting', async () => {
@@ -3234,7 +3239,7 @@ describe('thread name', () => {
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
     expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
-    expect(within(screen.getByRole('list', { name: 'Threads' })).getAllByRole('listitem')).toHaveLength(2)
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Recent threads' })).getAllByRole('listitem')).toHaveLength(2))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
@@ -3269,7 +3274,7 @@ describe('thread name', () => {
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
     expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
-    expect(within(screen.getByRole('list', { name: 'Threads' })).getAllByRole('listitem')).toHaveLength(1)
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Recent threads' })).getAllByRole('listitem')).toHaveLength(1))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
@@ -3431,6 +3436,7 @@ describe('thread name', () => {
     await findWorkspaceComposer()
 
     const titlebarName = document.querySelector('.thread-title')
+    await waitFor(() => expect(document.querySelector('.thread-row')).not.toBeNull())
     const sidebarName = document.querySelector('.thread-row')
     expect(titlebarName).toHaveTextContent('New thread')
     expect(titlebarName).not.toHaveAttribute('title')
@@ -3615,6 +3621,12 @@ describe('window chrome', () => {
   })
 })
 
+// Opens a page the way the sidebar reaches Agents, Projects and the rest: through Search.
+async function openSidebarPage(label) {
+  await fireEvent.input(await screen.findByRole('searchbox', { name: 'Search threads' }), { target: { value: label } })
+  await fireEvent.click(await within(screen.getByRole('region', { name: 'Search results' })).findByRole('button', { name: label, exact: true }))
+}
+
 // The answer `agent_request` gives for `agent.list`, with each agent's primary thread.
 const agentListAnswer = (agents, primaryThreads = {}) => ({ agents, primary_threads: primaryThreads, latest_runs: {}, errors: [] })
 const isAgentList = (command, args) => command === 'agent_request' && args?.operation === 'agent.list'
@@ -3627,7 +3639,7 @@ describe('agent poll', () => {
     const agentLists = () => invoke.mock.calls.filter(([command, args]) => isAgentList(command, args)).length
     try {
       render(App)
-      await screen.findByRole('button', { name: 'Agents', exact: true })
+      await screen.findByRole('button', { name: 'New thread' })
       await waitFor(() => expect(agentLists()).toBeGreaterThan(0))
       await vi.advanceTimersByTimeAsync(15000)
       await waitFor(() => expect(agentLists()).toBeGreaterThan(1))
@@ -3661,14 +3673,14 @@ describe('sidebar collapse', () => {
       await fireEvent.click(screen.getByRole('button',{name:'Workspace tools'}))
       await fireEvent.click(screen.getByRole('menuitem',{name:'Files',exact:true}))
     }
-    await fireEvent.click(await screen.findByRole('button',{name:'Projects',exact:true}))
+    await openSidebarPage('Projects')
     const projects = await screen.findByRole('region',{name:'Projects catalog'})
     await openFiles()
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{catalog:'projects'}))
     expect(projects).toBeInTheDocument()
     await fireEvent.click(within(projects).getByRole('button',{name:/^Research/}))
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{projectId:'research'}))
-    await fireEvent.click(screen.getByRole('button',{name:'Agents',exact:true}))
+    await openSidebarPage('Agents')
     const agents=await screen.findByRole('region',{name:'Agents',exact:true})
     expect(await screen.findByRole('tab',{name:'context'})).toHaveAttribute('aria-selected','true')
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{catalog:'agents'}))
@@ -3679,24 +3691,25 @@ describe('sidebar collapse', () => {
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{agentId:'agent-1'}))
   })
 
-  it('keeps saved agents outside project thread lists', async () => {
+  it('lists a saved agent as a project with triggers and filters the projects to it', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
       ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }])
       : original(command, args))
     render(App)
-    const manager = await screen.findByRole('button', { name: 'Agents', exact: true })
-    await fireEvent.click(manager)
+    await openSidebarPage('Agents')
     const dialog = await screen.findByRole('region', { name: 'Agents', exact: true })
     await within(dialog).findByRole('article', { name: 'Scout' })
     // The catalog has no close button. The open thread's row returns to the thread.
     await fireEvent.click(document.querySelector('.thread-row[aria-current="true"]'))
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull())
-    await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
-    const scout = screen.getByRole('button', { name: 'Scout', exact: true })
-    expect(scout.closest('.agent-roster')).not.toBeNull()
-    expect(scout.closest('.project-section')).toBeNull()
+    const projects = screen.getByRole('region', { name: 'Projects' })
+    const scout = await within(projects).findByRole('button', { name: 'Project Scout' })
     expect(scout.closest('.thread-list')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Expand Agents' })).toBeNull()
+    await fireEvent.click(within(projects).getByRole('button', { name: 'Projects with triggers' }))
+    await waitFor(() => expect(within(projects).queryByRole('button', { name: 'Project Chats' })).toBeNull())
+    expect(within(projects).getByRole('button', { name: 'Project Scout' })).toBeInTheDocument()
   })
 
   it('opens an agent profile alone from the action card menu', async () => {
@@ -3705,7 +3718,7 @@ describe('sidebar collapse', () => {
       ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
       : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Agents', exact: true }))
+    await openSidebarPage('Agents')
     const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
     await fireEvent.click(within(card).getByRole('button', { name: 'Actions for Scout' }))
     const menu = screen.getByRole('menu', { name: 'Actions for Scout' })
@@ -3723,16 +3736,15 @@ describe('sidebar collapse', () => {
       : command === 'chat_thread_summaries' ? { summaries: [{ threadId: 'agent-thread', title: 'Hidden agent transcript', updatedAt: '2026-01-01T00:00:00Z' }, { threadId: 'ordinary-thread', title: 'Ordinary chat', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
       : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
     render(App)
-    const agents = await screen.findByRole('button', { name: 'Agents', exact: true })
-    await fireEvent.click(agents)
+    await openSidebarPage('Agents')
     const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
     await fireEvent.click(within(await within(catalog).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
-    expect(document.querySelector('.sidebar')?.textContent || document.querySelector('#sidebar').textContent).not.toContain('Hidden agent transcript')
+    // The agent's home thread is a row of the agent's project, open and current.
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveTextContent('Scout'))
     expect(screen.queryByRole('button', { name: 'Rename thread' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Thread actions' })).not.toBeInTheDocument()
-    await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
-    expect(screen.getByRole('button', { name: 'Scout', exact: true })).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByRole('button', { name: 'Project Scout' })).toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
     expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
@@ -3764,8 +3776,8 @@ describe('sidebar collapse', () => {
       return original(command, args)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: 'Expand Agents' }))
-    await fireEvent.click(await screen.findByRole('button', { name: 'Scout', exact: true }))
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(invoke).toHaveBeenCalledWith('chat_new_thread', { agentId: 'agent-1', projectId: 'project-1' })
     expect(document.querySelector('[data-fresh-thread]')).toBeNull()
@@ -3791,17 +3803,18 @@ describe('sidebar collapse', () => {
     expect(collapse).toHaveAttribute('aria-expanded', 'true')
     expect(collapse).toHaveAttribute('aria-controls', 'sidebar')
     expect(collapse).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+\\' : 'Control+\\')
-    expect(screen.getByRole('list', { name: 'Threads' })).toBeInTheDocument()
+    expect(await screen.findByRole('list', { name: 'Recent threads' })).toBeInTheDocument()
     const newThread = document.querySelector('.new-thread')
     expect(newThread).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+N' : 'Control+N')
-    expect(newThread.querySelector('kbd')).toHaveTextContent(navigator.platform.startsWith('Mac') ? '⌘ N' : 'Ctrl N')
+    expect(newThread).toHaveTextContent('New')
+    await waitFor(() => expect(document.querySelector('.thread-row')).not.toBeNull())
     const currentThread = document.querySelector('.thread-row')
     expect(currentThread).toHaveTextContent('New thread')
     expect(currentThread).toHaveAttribute('aria-current', 'true')
     expect(currentThread).toHaveAttribute('tabindex', '-1')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action, #sidebar .sidebar-collection > .project-row > .project-title')).toHaveLength(3)
+    expect([...document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action')].map((button) => button.getAttribute('aria-label'))).toEqual(['New thread', 'Artifacts'])
     expect([...document.querySelectorAll('#sidebar .sidebar-actions button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Settings', 'Usage', 'Notifications'])
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
     expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
@@ -3827,7 +3840,7 @@ describe('sidebar collapse', () => {
     await fireEvent.click(expand)
 
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('list', { name: 'Threads' })).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Recent threads' })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /Alice/i })).toBeInTheDocument()
   })
 
@@ -4056,7 +4069,7 @@ describe('new thread', () => {
     chatListener({ payload: { runId: 'run-new', type: 'completed', receipt: null } })
 
     await waitFor(() => expect(document.querySelector('[data-fresh-thread]')).not.toBeInTheDocument())
-    expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('First prompt')
+    await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toHaveTextContent('First prompt'))
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open')).toHaveLength(threadOpenCount)
   })
 })
@@ -5493,7 +5506,7 @@ describe('voice dictation', () => {
   it.each([
     ['its close control', async (card) => { await fireEvent.click(within(card).getByRole('button', { name: 'Close voice dictation' })) }],
     ['Escape', async () => { await fireEvent.keyDown(document, { key: 'Escape' }) }],
-    ['outside click', async () => { await fireEvent.pointerDown(screen.getByRole('button', {name:'Projects',exact:true})) }],
+    ['outside click', async () => { await fireEvent.pointerDown(screen.getByRole('button', {name:'Project Chats',exact:true})) }],
     ['another composer panel', async () => { window.dispatchEvent(new CustomEvent('muniment:composer-panel',{detail:'usage'})); await tick() }],
   ])('closes the speech model install card with %s and reopens it from Voice', async (_, close) => {
     invoke.mockImplementation(async (command) => {
@@ -5857,7 +5870,7 @@ describe('local file selection', () => {
       return original(command, payload)
     })
     render(App)
-    await fireEvent.click(await screen.findByRole('button', { name: /New thread/ }))
+    await fireEvent.click(await screen.findByRole('button', { name: 'New thread', exact: true }))
     const composer = await findWorkspaceComposer()
     await screen.findByRole('button', { name: 'Extensions' })
     await tick()
@@ -8127,7 +8140,8 @@ describe('dedicated creation chats', () => {
     })
     render(App)
     await screen.findByPlaceholderText('Ask anything')
-    await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name: section, exact: true }))
+    if (section === 'Agents') await openSidebarPage('Agents')
+    else await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name: section, exact: true }))
     const panel = await screen.findByRole('region', { name: section })
     // An empty catalog shows each starter with its sentence.
     expect((await within(panel).findByRole('region', { name: section === 'Artifacts' ? 'Make something new' : 'Give an agent a job' })).querySelectorAll('button.starter')).toHaveLength(5)
@@ -8180,7 +8194,10 @@ describe('dedicated creation chats', () => {
       return original(command,payload)
     })
     render(App)
-    const create = await screen.findByRole('button',{name:section==='Agents'?'New agent':'New artifact',exact:true})
+    await screen.findByPlaceholderText('Ask anything')
+    if (section === 'Agents') await openSidebarPage('Agents')
+    else await fireEvent.click(await screen.findByRole('button', { name: 'Artifacts', exact: true }))
+    const create = await within(await screen.findByRole('region', { name: section })).findByRole('button',{name:section==='Agents'?'New agent':'New artifact',exact:true})
     await waitFor(() => expect(create).toBeEnabled())
     await fireEvent.click(create)
     expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
@@ -8220,11 +8237,27 @@ describe('agent builder', () => {
   }
   const draftCalls = () => invoke.mock.calls.filter(([name, args]) => name === 'agent_request' && args?.operation === 'agent.draft').map(([, args]) => args.body)
 
+  it('makes a project an agent from its settings: the builder saves the agent in the project', async () => {
+    builderMock([])
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, args) => {
+      if (command === 'project_list') return Promise.resolve({ projects: { research: 'Research' }, threads: {} })
+      if (command === 'project_settings') return Promise.resolve({ instructions: '' })
+      return original(command, args)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Research actions' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }))
+    const page = await screen.findByRole('region', { name: 'Project settings' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Add a trigger' }))
+    expect(await screen.findByRole('textbox', { name: /Describe/ })).toBeInTheDocument()
+  })
+
   it('drafts an agent from a template in one model call and saves it with its trigger on', async () => {
     builderMock([])
     render(App)
     await screen.findByPlaceholderText('Ask anything')
-    await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name: 'Agents', exact: true }))
+    await openSidebarPage('Agents')
     const panel = await screen.findByRole('region', { name: 'Agents' })
     await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
     const form = await screen.findByRole('form', { name: 'Agent draft' })
@@ -8297,7 +8330,8 @@ it('opens the preview the first time a creation chat saves its artifact', async 
   const originalBridge=window.__TAURI__.core.invoke
   vi.spyOn(window.__TAURI__.core,'invoke').mockImplementation((command,...args)=>command==='artifact_list'?invoke(command,...args):originalBridge(command,...args))
   render(App)
-  const create = await screen.findByRole('button',{name:'New artifact',exact:true})
+  await fireEvent.click(await screen.findByRole('button', { name: 'Artifacts', exact: true }))
+  const create = await within(await screen.findByRole('region', { name: 'Artifacts' })).findByRole('button',{name:'New artifact',exact:true})
   await waitFor(() => expect(create).toBeEnabled())
   await fireEvent.click(create)
   await screen.findByRole('group',{name:'Template'})
@@ -8328,9 +8362,7 @@ it('gives an unlinked artifact one dedicated chat instead of using the current c
   const originalBridge=window.__TAURI__.core.invoke
   vi.spyOn(window.__TAURI__.core,'invoke').mockImplementation((command,...args)=>command==='artifact_list'?invoke(command,...args):originalBridge(command,...args))
   render(App)
-  await fireEvent.click(await screen.findByRole('button',{name:'Expand Artifacts'}))
-  await screen.findByRole('button',{name:'Existing report',exact:true})
-  await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))
+  await fireEvent.click(await screen.findByRole('button',{name:'Artifacts',exact:true}))
   const catalog=await screen.findByRole('region',{name:'Artifacts'})
   await fireEvent.click(within(catalog).getByRole('button',{name:/^Existing report/}))
   await waitFor(()=>expect(invoke).toHaveBeenCalledWith('creation_save',{creation:{threadId:id,kind:'artifact',goal:'Maintain Existing report',output:'The saved artifact and its revisions',resultId:'saved-artifact'}}))
@@ -8341,23 +8373,43 @@ it('gives an unlinked artifact one dedicated chat instead of using the current c
   expect(invoke.mock.calls.filter(([command])=>command==='chat_new_thread')).toHaveLength(1)
 })
 
-it('opens the Projects catalog independently from the sidebar disclosure', async () => {
+it('opens the Projects catalog from Search while the sidebar keeps its Projects list', async () => {
   const original = invoke.getMockImplementation()
   invoke.mockImplementation((command, args) => command === 'project_list'
     ? Promise.resolve({projects:{research:'Research'},threads:{}}) : original(command,args))
   render(App)
   await screen.findByRole('button', {name:'Project Research'})
-  await fireEvent.click(screen.getByRole('button', {name:'Collapse Projects'}))
-  expect(screen.queryByRole('button', {name:'Project Research'})).not.toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button', {name:'Projects',exact:true}))
+  await openSidebarPage('Projects')
   const catalog = await screen.findByRole('region', {name:'Projects catalog'})
   expect(within(catalog).getByRole('button', {name:'Research 0 threads'})).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button', {name:'Expand Projects'}))
   expect(screen.getByRole('button', {name:'Project Research'})).toBeInTheDocument()
-  expect(catalog).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button', {name:'Agents',exact:true}))
+  await openSidebarPage('Agents')
   await screen.findByRole('region', {name:'Agents',exact:true})
   expect(screen.queryByRole('region', {name:'Projects catalog'})).not.toBeInTheDocument()
+})
+
+it('opens the settings of a project with its defaults and instructions and saves them through core', async () => {
+  const original = invoke.getMockImplementation()
+  let saved = null
+  invoke.mockImplementation((command, args) => {
+    if (command === 'project_list') return Promise.resolve({projects:{research:'Research'},threads:{}})
+    if (command === 'project_settings') return Promise.resolve({ instructions: 'Cite sources.' })
+    if (command === 'project_settings_save') { saved = args; return Promise.resolve() }
+    return original(command,args)
+  })
+  render(App)
+  await fireEvent.click(await screen.findByRole('button', {name:'Research actions'}))
+  await fireEvent.click(screen.getByRole('menuitem', {name:'Settings'}))
+  const page = await screen.findByRole('region', {name:'Project settings'})
+  expect(within(page).getByRole('heading', {name:'Research'})).toBeInTheDocument()
+  const instructions = await within(page).findByRole('textbox', {name:'Project instructions'})
+  expect(instructions).toHaveValue('Cite sources.')
+  await fireEvent.input(instructions, {target:{value:'Cite every source.'}})
+  await fireEvent.click(within(page).getByRole('button', {name:'Save instructions'}))
+  await waitFor(() => expect(saved).toEqual({ projectId: 'research', settings: { instructions: 'Cite every source.' } }))
+  expect(within(page).getByRole('button', {name:'Add a trigger'})).toBeInTheDocument()
+  await fireEvent.click(within(page).getByRole('button', {name:'Back to the thread'}))
+  expect(screen.queryByRole('region', {name:'Project settings'})).not.toBeInTheDocument()
 })
 
 it('keeps one composer panel open and dismisses it with Escape or an outside click', async () => {
@@ -8382,7 +8434,7 @@ it('keeps one composer panel open and dismisses it with Escape or an outside cli
   await fireEvent.keyDown(document,{key:'Escape'})
   expect(screen.queryByRole('menu',{name:'Modes'})).not.toBeInTheDocument()
   await fireEvent.click(mode)
-  await fireEvent.pointerDown(screen.getByRole('button',{name:'Projects',exact:true}))
+  await fireEvent.pointerDown(screen.getByRole('button',{name:'Project Chats',exact:true}))
   expect(screen.queryByRole('menu',{name:'Modes'})).not.toBeInTheDocument()
 })
 
@@ -8758,7 +8810,8 @@ describe('the open thread under a catalog', () => {
     await waitFor(() => expect(document.querySelector('.thread-row[aria-current="true"]')).toBeInTheDocument())
     const workspace = () => document.querySelector('section.workspace')
     for (const name of ['Agents', 'Artifacts']) {
-      await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name, exact: true }))
+      if (name === 'Agents') await openSidebarPage('Agents')
+      else await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name, exact: true }))
       await waitFor(() => expect(workspace()).toHaveClass('agents-open'))
       invoke.mockClear()
       const row = document.querySelector('.thread-row[aria-current="true"]')
@@ -8777,18 +8830,18 @@ describe('catalog headers and the sidebar', () => {
     await screen.findByPlaceholderText('Ask anything')
     const sidebar = document.querySelector('#sidebar')
     for (const name of ['Agents', 'Artifacts']) {
-      const row = within(sidebar).getByRole('button', { name, exact: true })
-      await fireEvent.click(row)
+      const row = name === 'Artifacts' ? within(sidebar).getByRole('button', { name, exact: true }) : null
+      if (row) await fireEvent.click(row)
+      else await openSidebarPage(name)
       const panel = await screen.findByRole('region', { name, exact: true })
-      expect(row).toHaveAttribute('aria-current', 'true')
-      expect(row.closest('.project-row')).toHaveClass('current')
+      if (row) expect(row).toHaveAttribute('aria-current', 'true')
       expect(within(panel).queryByRole('button', { name: 'Show archived' })).toBeNull()
       expect(within(panel).queryByRole('button', { name: `Close ${name.toLowerCase()}` })).toBeNull()
       const create = within(panel).getByRole('button', { name: name === 'Agents' ? 'New agent' : 'New artifact', exact: true })
       expect(create.querySelector('[data-icon="plus"]')).not.toBeNull()
       await fireEvent.keyDown(document, { key: 'Escape' })
       await waitFor(() => expect(screen.queryByRole('region', { name, exact: true })).toBeNull())
-      expect(row).not.toHaveAttribute('aria-current')
+      if (row) expect(row).not.toHaveAttribute('aria-current')
     }
   })
 })
@@ -8827,7 +8880,7 @@ describe('a run on another thread', () => {
     await screen.findByText('Earlier answer')
   }
 
-  it('names a running agent chat by its agent and marks the agent row', async () => {
+  it('lists a running agent chat under Working with its agent project and marks the row', async () => {
     const fallback = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => isAgentList(command, payload)
       ? agentListAnswer([{ id: 'agent-1', name: 'Morning Brief', instructions: 'Brief.', projectId: null, schedule: null }], { 'agent-1': 'thread-1' })
@@ -8835,13 +8888,12 @@ describe('a run on another thread', () => {
     await renderRunning()
     await leaveForOtherThread()
     expect(screen.queryByText(/still running/)).not.toBeInTheDocument()
-    // The collapsed Agents group carries the mark, and the agent's row carries it once the group opens.
-    expect(screen.getByRole('button', { name: 'Agents, running' }).querySelector('.run-mark')).not.toBeNull()
-    await fireEvent.click(screen.getByRole('button', { name: 'Expand Agents' }))
-    expect(screen.getByRole('button', { name: 'Agents' })).toBeInTheDocument()
-    const agentRow = screen.getByRole('button', { name: /^Morning Brief/ })
-    expect(agentRow).toHaveTextContent('Running')
+    // The agent's thread sits under Working, named for its project, with the running mark.
+    const working = await screen.findByRole('list', { name: 'Working threads' })
+    const agentRow = await within(working).findByRole('button', { name: 'Blue Sky Explanation' })
+    expect(agentRow).toHaveAccessibleDescription(/Working.*Morning Brief/)
     expect(agentRow.querySelector('.run-mark')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Project Morning Brief' })).toBeInTheDocument()
   })
 
   it('opens another thread mid-run and marks the running row, which stays clickable', async () => {
@@ -8858,7 +8910,7 @@ describe('a run on another thread', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
     const runningRow = screen.getByRole('button', { name: /^Blue Sky Explanation/ })
     expect(runningRow).toHaveAttribute('data-running', 'true')
-    expect(runningRow).toHaveAccessibleName(expect.stringContaining('Running'))
+    await waitFor(() => expect(runningRow).toHaveAccessibleDescription(/Working/))
     expect(runningRow.querySelector('.run-mark')).toBeInTheDocument()
     expect(runningRow).not.toHaveAttribute('aria-disabled')
     expect(appRules.get('.thread-row > span.run-mark')).toMatch(/var\(--muted\)/)
@@ -9017,8 +9069,7 @@ describe('runtimes', () => {
     await fireEvent.click(screen.getByRole('menuitemradio', { name: /Build box/ }))
     expect(invoke).toHaveBeenCalledWith('runtime_select', { id: buildBox.id })
     expect(await screen.findByRole('button', { name: 'Machine: Build box. Choose a machine' })).toBeInTheDocument()
-    // Agents and projects stay in the sidebar, since they live on this computer.
-    expect(screen.getByRole('region', { name: 'Agents group' })).toBeInTheDocument()
+    // Projects, agents among them, stay in the sidebar, since they live on this computer.
     expect(screen.getByRole('region', { name: 'Projects' })).toBeInTheDocument()
 
     // A paired machine cannot read this computer's files, so the composer attaches none.
@@ -9095,18 +9146,15 @@ describe('runtimes', () => {
     })
     render(App)
     await findWorkspaceComposer()
-    await fireEvent.click(await screen.findByRole('button', { name: 'Expand Agents' }))
-    const roster = await screen.findByLabelText('Saved agents')
-    await waitFor(() => expect(within(roster).getByRole('button', { name: /^Test triage/ })).toBeInTheDocument())
-    // Each agent names its machine in one status mark.
-    const boxAgent = within(roster).getByRole('button', { name: /^Test triage/ })
-    expect(boxAgent.querySelector('.agent-status')).not.toBeNull()
-    expect(boxAgent).toHaveTextContent('On Build box')
-    expect(within(roster).getByRole('button', { name: /^Scout/ })).toHaveTextContent('On This computer')
+    // Each agent is a project, and one on another machine names that machine.
+    const projects = screen.getByRole('region', { name: 'Projects' })
+    const boxAgent = await within(projects).findByRole('button', { name: 'Project Test triage' })
+    expect(boxAgent).toHaveTextContent('on Build box')
+    expect(within(projects).getByRole('button', { name: 'Project Scout' })).not.toHaveTextContent('Build box')
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: buildBox.id, operation: 'agent.list', body: {} })
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.list', body: {} })
     // Opening Agents keeps the paired machine selected.
-    await fireEvent.click(screen.getByRole('button', { name: 'Agents', exact: true }))
+    await openSidebarPage('Agents')
     const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
     expect(await within(catalog).findByText('Test triage')).toBeInTheDocument()
     expect(within(catalog).getByText('Scout')).toBeInTheDocument()
@@ -9193,11 +9241,15 @@ describe('the swarm', () => {
       : core(command, ...args)
     render(App)
     await findWorkspaceComposer()
-    // The group thread lists under Groups, not among the threads.
-    const groups = await screen.findByRole('region', { name: 'Groups group' })
+    // A group chat is a thread among the others, with no Groups section in the sidebar.
+    expect(screen.queryByRole('region', { name: 'Groups group' })).toBeNull()
     await screen.findByText('Notes', { selector: '.thread-row-title' })
-    expect(screen.queryByText('Launch room', { selector: '.thread-row-title' })).toBeNull()
-    await fireEvent.click(await within(groups).findByRole('button', { name: /^Launch room/ }))
+    const recent = screen.getByRole('list', { name: 'Recent threads' })
+    // The row takes the group's name once the swarm lists the group.
+    await waitFor(() => expect(within(recent).getByRole('button', { name: 'Launch room' })).toHaveAccessibleDescription(/Chats/))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'group.list' })))
+    await tick()
+    await fireEvent.click(within(recent).getByRole('button', { name: 'Launch room' }))
     expect(await screen.findByText('Round 1 · blind')).toBeInTheDocument()
     expect(screen.getByText('Debate round 1')).toBeInTheDocument()
     expect(screen.getAllByRole('article', { name: 'Reply from Deal desk' })[0]).toHaveTextContent('Three.')

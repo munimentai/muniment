@@ -28,6 +28,7 @@
     threadId = null,
     threadTitle = '',
     autostart = false,
+    projectId = null,
     onsaved = () => {},
     onrefine = null,
     onopenchat = () => {},
@@ -107,7 +108,7 @@
     busy = true
     error = ''
     try {
-      const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent($state.snapshot(form), { saved: $state.snapshot(saved), test }) })
+      const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent($state.snapshot(form), { saved: $state.snapshot(saved), test, projectId }) })
       saved = answer.agent
       onchange({ ...saved, runtimeId: runtime })
       if (test) {

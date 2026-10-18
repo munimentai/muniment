@@ -167,14 +167,9 @@ let projectsOpened = false
 // Moves the page to the state's screen, one step per render.
 export function advanceFleetSync() {
   const state = fleetSyncState
-  if (state === 'owners' && document.querySelector('button[aria-label="Expand Agents"]')) {
-    document.querySelector('button[aria-label="Expand Agents"]').click()
-    return
-  }
   if (state === 'owners' && !projectsOpened) {
-    const projects = document.querySelector('button[aria-label="Expand Projects"]')
     const launch = [...document.querySelectorAll('.project-title')].find((button) => button.textContent.includes('Launch plan'))
-    if (!launch) { projects?.click(); return }
+    if (!launch) return
     projectsOpened = true
     launch.click()
     return
@@ -198,7 +193,10 @@ export function advanceFleetSync() {
     return
   }
   if (state === 'projects') {
-    if (!document.querySelector('[aria-label="Projects catalog"]')) document.querySelector('.project-title[aria-label="Projects"]')?.click()
+    if (document.querySelector('[aria-label="Projects catalog"]')) return
+    const search = document.querySelector('#sidebar input[aria-label="Search threads"]')
+    if (search && search.value !== 'Projects') { search.value = 'Projects'; search.dispatchEvent(new Event('input', { bubbles: true })); return }
+    document.querySelector('#sidebar [aria-label="Search results"] button[aria-label="Projects"]')?.click()
     return
   }
   if (state === 'offline-settings' || state === 'log') {

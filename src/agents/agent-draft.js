@@ -53,9 +53,10 @@ export function formProblem(form) {
 // The `agent.save` body for the form. `saved` is the agent an earlier save
 // answered, so a second save keeps its id and avatar. A test save keeps every
 // routine off, so the agent starts itself only after Save.
-export function draftAgent(form, { saved = null, test = false } = {}) {
+// A new agent with `projectId` works in that project, so the project gains its triggers.
+export function draftAgent(form, { saved = null, test = false, projectId = null } = {}) {
   const agent = {
-    ...(saved ?? { id: '', project_id: null }),
+    ...(saved ?? { id: '', projectId }),
     name: form.name.trim(),
     label: form.label.trim(),
     instructions: form.instructions.trim(),
