@@ -24,12 +24,18 @@ case "$arch" in
   *) echo "package.sh: $arch is not x86_64 or aarch64" >&2; exit 2 ;;
 esac
 context=$(cd "$(dirname "$0")/../.." && pwd)
+# The binary announces the workspace version, so the archive must name it.
+source_version=$(sed -n '/^\[workspace\.package\]$/,/^\[/s/^version = "\(.*\)"$/\1/p' "$context/Cargo.toml")
+if [ "$version" != "$source_version" ]; then
+  echo "package.sh: Cargo.toml names version $source_version, not $version" >&2
+  exit 2
+fi
 target="$arch-unknown-linux-gnu"
 target_dir=${CARGO_TARGET_DIR:-$context/target}
 
 (
   cd "$context"
-  MUNIMENT_RUNTIME_VERSION=$version CARGO_PROFILE_RELEASE_STRIP=symbols \
+  CARGO_PROFILE_RELEASE_STRIP=symbols \
     cargo zigbuild --release --locked -p muniment-server --bin muniment-server \
     --target "$target.2.36"
 )

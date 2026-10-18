@@ -12,3 +12,9 @@ members = [
     "crates/server",
 ]
 resolver = "2"
+
+# The one Muniment version: the desktop app, the CLI, the server and the
+# runtime image all release as it under one vX.Y.Z tag. scripts/version.py at
+# the repository root checks every other copy against it.
+[workspace.package]
+version = "0.4.0"

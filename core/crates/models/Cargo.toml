@@ -1,6 +1,6 @@
 [package]
 name = "muniment-models"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 
 # Every fact about providers and models: provider ids, names, sign-in methods

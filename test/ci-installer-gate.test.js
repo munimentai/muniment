@@ -245,9 +245,8 @@ it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone creden
   }
 })
 
-it('passes the core release from the full clone to the guest', () => {
-  expect(changes).toContain("git describe --tags --match 'core-v[0-9]*' --abbrev=0 HEAD")
-  expect(changes.indexOf('id: core')).toBeLessThan(changes.indexOf('id: changes'))
+it('passes no separate core version to the guest', () => {
+  expect(changes).not.toContain('core-v')
   const script = remoteSteps[0]
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'muniment-ci-core-version-'))
   try {
@@ -257,9 +256,9 @@ it('passes the core release from the full clone to the guest', () => {
       ${script}
     `], { env: { ...process.env, SERVER_URL: 'http://forgejo.test', REPO_TOKEN: 'fixture-token', REPOSITORY: 'owner/repo',
       SOURCE_SHA: 'a'.repeat(40), REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'true', RUNNER_TEMP: directory,
-      DESKTOP_CI_SSH_KEY: 'fixture-key', DESKTOP_CI_SLOT_SECONDS: '7200', CORE_VERSION: '1.15.0', CAPTURE: capture,
+      DESKTOP_CI_SSH_KEY: 'fixture-key', DESKTOP_CI_SLOT_SECONDS: '7200', CAPTURE: capture,
       DESKTOP_CI_KNOWN_HOSTS: '192.0.2.10 ssh-ed25519 fixture', DESKTOP_CI_HOST: 'ci@192.0.2.10' }, stdio: 'pipe', timeout: 10000 })
-    expect(fs.readFileSync(capture, 'utf8').trimEnd().split('\n')).toEqual(['GH_TOKEN=fixture-token', 'GITHUB_API_TOKEN=', 'MUNIMENT_CORE_VERSION=1.15.0'])
+    expect(fs.readFileSync(capture, 'utf8').trimEnd().split('\n')).toEqual(['GH_TOKEN=fixture-token', 'GITHUB_API_TOKEN='])
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 

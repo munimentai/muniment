@@ -75,11 +75,11 @@ describe('nightly macOS package build', () => {
     expect(result.stdout).toBe('750 4050\n')
   })
 
-  it('passes the core release from the full checkout to every build guest', () => {
+  it('builds every guest from the one version in the source', () => {
     const build = job('build', 'publish')
-    expect(build).toContain('          ref: ${{ needs.prepare.outputs.source_sha }}\n          fetch-depth: 0\n')
-    expect(build).toContain(`core_tag=$(git describe --tags --match 'core-v[0-9]*' --abbrev=0 "$SOURCE_SHA")`)
-    expect(build).toContain('"MUNIMENT_CORE_VERSION=${core_tag#core-v}"')
+    expect(build).toContain('"GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if')
+    expect(build).not.toContain('MUNIMENT_CORE_VERSION')
+    expect(build).not.toContain('core-v')
   })
 
   it('builds and publishes the package while signing stays disabled', () => {

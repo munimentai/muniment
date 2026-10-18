@@ -3460,7 +3460,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-acp"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "agent-client-protocol",
  "muniment-attach",
@@ -3471,14 +3471,14 @@ dependencies = [
 
 [[package]]
 name = "muniment-atomic-file"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "muniment-attach"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "getrandom 0.4.3",
  "rustls",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-cli"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "muniment-attach",
  "muniment-code-diff",
@@ -3500,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-code-diff"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3508,7 +3508,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-core"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "cap-fs-ext",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "cap-fs-ext",
@@ -3610,7 +3610,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-desktop-integration"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3639,7 +3639,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-models"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "muniment-atomic-file",
  "muniment-pins",
@@ -3656,7 +3656,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-pins"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "toml 1.1.8+spec-1.1.0",
@@ -3664,7 +3664,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-router"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3687,7 +3687,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-runtime"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "muniment-attach",
  "muniment-core",
@@ -3697,7 +3697,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-runtime-core"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "muniment-attach",
  "muniment-core",
@@ -3709,7 +3709,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-search"
-version = "0.0.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",

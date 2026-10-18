@@ -1,6 +1,6 @@
 [package]
 name = "muniment-core"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 
 # Pure backend logic (sidecar lifecycle, RPC framing, run journal).

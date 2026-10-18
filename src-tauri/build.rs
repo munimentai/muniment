@@ -221,49 +221,9 @@ fn app_version() -> String {
         .to_owned()
 }
 
-/// The core release this source builds, without its `v`, which a paired
-/// server or container is asked to run. `MUNIMENT_CORE_VERSION` names it, or
-/// the newest `core-v*` tag reachable from HEAD does. A release build needs
-/// one of them. Other builds fall back to `0.0.0`.
-fn core_version() -> String {
-    let version = std::env::var("MUNIMENT_CORE_VERSION")
-        .ok()
-        .filter(|version| !version.trim().is_empty())
-        .or_else(|| {
-            std::process::Command::new("git")
-                .args([
-                    "describe",
-                    "--tags",
-                    "--match",
-                    "core-v[0-9]*",
-                    "--abbrev=0",
-                ])
-                .output()
-                .ok()
-                .filter(|output| output.status.success())
-                .and_then(|output| String::from_utf8(output.stdout).ok())
-        })
-        .map(|tag| {
-            let tag = tag.trim();
-            tag.strip_prefix("core-v")
-                .or_else(|| tag.strip_prefix('v'))
-                .unwrap_or(tag)
-                .to_owned()
-        });
-    match version {
-        Some(version) => version,
-        None if std::env::var("PROFILE").as_deref() == Ok("release") => {
-            panic!("set MUNIMENT_CORE_VERSION or fetch the core-v* tags for a release build")
-        }
-        None => "0.0.0".to_owned(),
-    }
-}
-
 fn main() {
     println!("cargo:rerun-if-changed=../package.json");
     println!("cargo:rustc-env=MUNIMENT_APP_VERSION={}", app_version());
-    println!("cargo:rerun-if-env-changed=MUNIMENT_CORE_VERSION");
-    println!("cargo:rustc-env=MUNIMENT_CORE_VERSION={}", core_version());
     // Bind installed diagnostics to the source that built the signed executable.
     let git = |args: &[&str]| {
         std::process::Command::new("git")

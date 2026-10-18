@@ -37,7 +37,7 @@
 # directory that holds the archives, which publish.sh has verified:
 #
 #   docker buildx build -f deploy/runtime/Containerfile --platform linux/arm64 \
-#       --build-arg SERVER_STAGE=release-archive --build-arg MUNIMENT_RUNTIME_VERSION=1.15.0 \
+#       --build-arg SERVER_STAGE=release-archive --build-arg MUNIMENT_RUNTIME_VERSION=0.4.0 \
 #       --build-context server-release=dist .
 
 ARG RUST_IMAGE=rust:1-slim-trixie
@@ -45,8 +45,6 @@ ARG RUNTIME_IMAGE=debian:trixie-slim
 ARG SERVER_STAGE=build
 
 FROM ${RUST_IMAGE} AS build
-# The release the runtime announces to paired devices, such as 1.13.1.
-ARG MUNIMENT_RUNTIME_VERSION=
 WORKDIR /src
 COPY . .
 # The speech runtime libraries sit beside the binary, where its rpath looks.
@@ -57,6 +55,7 @@ RUN cargo build --release --locked -p muniment-server --bin muniment-server \
 
 FROM ${RUST_IMAGE} AS release-archive
 ARG TARGETARCH
+# The release version of the archive, such as 0.4.0.
 ARG MUNIMENT_RUNTIME_VERSION
 COPY --from=server-release . /release/
 RUN case "$TARGETARCH" in \

@@ -26,12 +26,9 @@ const INSTALL_KIND_VARIABLE: &str = "MUNIMENT_INSTALL_KIND";
 /// The name pairing links and paired devices show for this runtime.
 const NAME_VARIABLE: &str = "MUNIMENT_REMOTE_NAME";
 
-/// The release this build announces: `MUNIMENT_RUNTIME_VERSION` at build
-/// time, which a release image sets from its tag, or the crate version.
-pub const RUNTIME_VERSION: &str = match option_env!("MUNIMENT_RUNTIME_VERSION") {
-    Some(version) if !version.is_empty() => version,
-    _ => env!("CARGO_PKG_VERSION"),
-};
+/// The release this build announces: the workspace version, which the
+/// desktop app, the CLI and every server of one release share.
+pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The remote access directory under `state`.
 pub fn remote_directory(state: &Path) -> PathBuf {

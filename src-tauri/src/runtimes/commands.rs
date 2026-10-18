@@ -586,7 +586,7 @@ pub async fn runtime_update_all(app: tauri::AppHandle) -> Result<UpdateAllReport
 
 #[cfg(test)]
 mod tests {
-    use super::super::version::CORE_VERSION;
+    use super::super::version::APP_VERSION;
     use super::*;
     use crate::runtimes::update_state::UpdateInfo;
     use muniment_core::attach::SCOPE_RUNTIME_ADMIN;
@@ -749,14 +749,14 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let connector = connector_for(&registry, &id, &seen);
-        // A container is asked for the core release the app bundles.
+        // A container is asked for the app's version.
         assert_eq!(
             request_update(&connector, false),
-            Ok(CORE_VERSION.to_owned())
+            Ok(APP_VERSION.to_owned())
         );
         assert_eq!(
             runtime.access.requested_update().unwrap().version,
-            CORE_VERSION
+            APP_VERSION
         );
 
         let supervisor = super::super::RemoteSupervisor::start(
@@ -834,7 +834,7 @@ mod tests {
     #[test]
     fn an_update_needs_the_admin_scope_and_an_older_runtime() {
         let older = LoopbackRuntime::start("0.0.1");
-        let current = LoopbackRuntime::start(CORE_VERSION);
+        let current = LoopbackRuntime::start(APP_VERSION);
         let (registry, directory) = registry();
         let seen = Arc::new(Mutex::new(Vec::new()));
 
@@ -887,7 +887,7 @@ mod tests {
             .access
             .set_update_status(
                 RuntimeUpdateState::Failed,
-                Some(CORE_VERSION),
+                Some(APP_VERSION),
                 Vec::new(),
                 Some("Did not report healthy.".into()),
             )
@@ -900,13 +900,10 @@ mod tests {
             Observation::Update(UpdateInfo { capability: Some(capability), status: Some(status) })
                 if capability == "launcher" && status.state == "failed"
         )));
-        assert_eq!(
-            request_update(&connector, true),
-            Ok(CORE_VERSION.to_owned())
-        );
+        assert_eq!(request_update(&connector, true), Ok(APP_VERSION.to_owned()));
         assert_eq!(
             runtime.access.requested_update().unwrap().version,
-            CORE_VERSION
+            APP_VERSION
         );
 
         // A runtime that works toward the version is not asked again.
@@ -914,7 +911,7 @@ mod tests {
             .access
             .set_update_status(
                 RuntimeUpdateState::Downloading,
-                Some(CORE_VERSION),
+                Some(APP_VERSION),
                 Vec::new(),
                 None,
             )
@@ -922,7 +919,7 @@ mod tests {
         runtime.access.clear_update_request().unwrap();
         assert_eq!(
             request_update(&connector, false),
-            Ok(CORE_VERSION.to_owned())
+            Ok(APP_VERSION.to_owned())
         );
         assert_eq!(runtime.access.requested_update(), None);
 

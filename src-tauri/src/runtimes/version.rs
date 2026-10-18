@@ -5,19 +5,16 @@ use std::collections::BTreeSet;
 
 use muniment_core::attach::{SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE};
 
-/// This app's version from `package.json`, which a paired desktop updates to.
+/// This app's version from `package.json`. The app, the CLI, the server and
+/// the container release together under it, so every paired runtime updates
+/// to it.
 pub(crate) const APP_VERSION: &str = env!("MUNIMENT_APP_VERSION");
-
-/// The core release this app bundles, which a paired server or container
-/// updates to. Those announce core's version, not the app's.
-pub(crate) const CORE_VERSION: &str = env!("MUNIMENT_CORE_VERSION");
 
 /// The version a runtime of `kind` updates to, or none for a kind the app
 /// does not know.
 pub(crate) fn target_version(kind: Option<&str>) -> Option<&'static str> {
     match kind? {
-        "desktop" => Some(APP_VERSION),
-        "server" | "container" => Some(CORE_VERSION),
+        "desktop" | "server" | "container" => Some(APP_VERSION),
         _ => None,
     }
 }
@@ -71,12 +68,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_desktop_follows_the_app_and_a_server_follows_the_bundled_core() {
+    fn every_runtime_kind_follows_the_app_version() {
         assert_eq!(target_version(Some("desktop")), Some(APP_VERSION));
-        assert_eq!(target_version(Some("container")), Some(CORE_VERSION));
-        assert_eq!(target_version(Some("server")), Some(CORE_VERSION));
+        assert_eq!(target_version(Some("container")), Some(APP_VERSION));
+        assert_eq!(target_version(Some("server")), Some(APP_VERSION));
         assert_eq!(target_version(Some("toaster")), None);
         assert_eq!(target_version(None), None);
-        assert!(parse(CORE_VERSION).is_some());
+        assert!(parse(APP_VERSION).is_some());
     }
 }
