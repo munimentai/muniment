@@ -100,6 +100,45 @@ pub fn append_thread_delete_now(
     )
 }
 
+/// Takes a run and every later run out of the thread's conversation.
+/// Answers the runs it took out.
+pub fn append_thread_rewind_now(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    run_id: &str,
+    provenance: &Provenance,
+) -> Result<Vec<String>, ThreadMutationError> {
+    check_ownership(journal, thread_id, subject)?;
+    if journal
+        .run_thread_id(run_id)
+        .map_err(ThreadMutationError::Journal)?
+        .as_deref()
+        != Some(thread_id)
+    {
+        return Err(ThreadMutationError::NotOwned);
+    }
+    let run_ids = journal
+        .thread_runs_from(run_id)
+        .map_err(ThreadMutationError::Journal)?;
+    if run_ids.is_empty() {
+        return Ok(run_ids);
+    }
+    let last_thread_seq = journal
+        .last_thread_seq(thread_id)
+        .map_err(ThreadMutationError::Journal)?;
+    journal
+        .append_thread_rewound(
+            last_thread_seq,
+            thread_id,
+            &run_ids,
+            &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            provenance,
+        )
+        .map_err(ThreadMutationError::Journal)?;
+    Ok(run_ids)
+}
+
 /// The most words a first-turn name holds, generated or taken from the prompt.
 pub const FIRST_NAME_WORDS: usize = 6;
 /// The most characters a prompt fallback keeps before its ellipsis.

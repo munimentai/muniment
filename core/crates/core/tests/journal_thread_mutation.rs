@@ -346,3 +346,86 @@ fn a_prompt_fallback_name_keeps_whole_words_and_marks_a_cut() {
     assert_eq!(fallback_thread_name(&long), format!("{}…", "x".repeat(47)));
     assert_eq!(fallback_thread_name("   "), "");
 }
+
+fn bound(run: &EventEnvelope, locator: &str) -> EventEnvelope {
+    EventEnvelope {
+        event_id: Uuid::now_v7().to_string(),
+        run_seq: 2,
+        event_type: "runtime.pi_session.bound".into(),
+        payload: EventPayload::Inline {
+            payload_json: json!({"run_id": run.run_id, "locator": locator}),
+        },
+        ..run.clone()
+    }
+}
+
+#[test]
+fn a_rewind_takes_a_run_and_later_runs_out_of_the_conversation() {
+    use muniment_core::journal::thread_mutation::append_thread_rewind_now;
+    let (_, mut journal, thread) = journal_with_thread(Some("owner"));
+    let first = journal.thread_run_ids(&thread, 1, None).unwrap().run_ids[0].clone();
+    let first_events = journal.events(&first).unwrap();
+    journal
+        .append(1, &bound(&first_events[0], "thread.jsonl"))
+        .unwrap();
+    let mut later = Vec::new();
+    for _ in 0..2 {
+        let run = run_started(Some("owner"));
+        journal
+            .append_new_run_in_thread("workspace-a", &thread, &run)
+            .unwrap();
+        journal.append(1, &bound(&run, "thread.jsonl")).unwrap();
+        later.push(run.run_id);
+    }
+    assert_eq!(
+        append_thread_rewind_now(
+            &mut journal,
+            Some("other"),
+            &thread,
+            &later[0],
+            &provenance(Some("other")),
+        )
+        .err()
+        .map(|error| matches!(error, ThreadMutationError::NotOwned)),
+        Some(true)
+    );
+
+    let taken = append_thread_rewind_now(
+        &mut journal,
+        Some("owner"),
+        &thread,
+        &later[0],
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert_eq!(taken, later);
+    assert_eq!(
+        journal.thread_run_ids(&thread, 10, None).unwrap().run_ids,
+        std::slice::from_ref(&first)
+    );
+    assert_eq!(
+        journal
+            .thread_session_binding(&thread)
+            .unwrap()
+            .unwrap()
+            .run_id,
+        first
+    );
+    let next = run_started(Some("owner"));
+    journal
+        .append_new_run_in_thread("workspace-a", &thread, &next)
+        .unwrap();
+    assert_eq!(
+        journal
+            .previous_thread_session_binding(&next.run_id)
+            .unwrap()
+            .unwrap()
+            .run_id,
+        first
+    );
+    assert_eq!(
+        journal.thread_run_ids(&thread, 10, None).unwrap().run_ids,
+        [first, next.run_id]
+    );
+    assert_eq!(journal.events(&later[0]).unwrap().len(), 2);
+}
