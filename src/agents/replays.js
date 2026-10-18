@@ -40,7 +40,7 @@ export function replayNotes(replay) {
   return notes
 }
 
-// The run a replay queued, once Activity knows it: it gains its thread when
+// The run a replay queued, once the run list knows it: it gains its thread when
 // it starts.
 export function replayedRun(runs = [], run) {
   if (!run?.id) return null

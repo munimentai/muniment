@@ -1360,6 +1360,8 @@ impl DesktopClient {
                 &["values", "fleet_keys", "local_keys"]
             }
             Operation::PreferencesImport => &["values", "imported", "skipped"],
+            Operation::UsageSummary => &["totals", "series", "breakdown", "limits"],
+            Operation::NotificationsList => &["runs", "upcoming", "approvals"],
             _ => &[],
         };
         self.request_body(operation, None, body, expected)

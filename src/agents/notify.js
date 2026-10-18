@@ -17,13 +17,13 @@ export function notificationKey(run) {
 
 export function notificationText(run, agentName) {
   const name = agentName || 'An agent'
-  if (run.status === 'failed') return { title: `${name} failed`, body: run.error || 'Open Activity to see the run.' }
+  if (run.status === 'failed') return { title: `${name} failed`, body: run.error || 'Open Notifications to see the run.' }
   if (run.status === 'waiting_input') return { title: `${name} is waiting for you`, body: 'Open its conversation to answer.' }
   return { title: `${name} finished`, body: run.silent ? 'Nothing needed a reply.' : run.result_summary || 'Open its conversation to read the result.' }
 }
 
 // Shows a system notification when the webview offers one and the user
-// allowed it. The Activity count in the sidebar shows every run either way.
+// allowed it. The Notifications page lists every run either way.
 export function showNotification({ title, body }) {
   const Notice = globalThis.Notification
   if (typeof Notice !== 'function') return false

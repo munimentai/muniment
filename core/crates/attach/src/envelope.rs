@@ -601,6 +601,14 @@ pub enum Operation {
     /// once. A key the runtime already holds keeps its value.
     #[serde(rename = "preferences.import")]
     PreferencesImport,
+    /// Sums what this runtime's runs used over a range, by provider, model,
+    /// agent and project, with each subscription window's allowance.
+    #[serde(rename = "usage.summary")]
+    UsageSummary,
+    /// Lists this runtime's agent runs, the approvals waiting in the swarm
+    /// and the next scheduled runs, for the notifications page.
+    #[serde(rename = "notifications.list")]
+    NotificationsList,
     /// Cancels an action this member queued for another member before it
     /// leaves this member.
     #[serde(rename = "fleet.op_cancel")]
@@ -775,6 +783,8 @@ impl Operation {
             Self::PreferencesGet => "preferences.get",
             Self::PreferencesSet => "preferences.set",
             Self::PreferencesImport => "preferences.import",
+            Self::UsageSummary => "usage.summary",
+            Self::NotificationsList => "notifications.list",
             Self::FleetOpCancel => "fleet.op_cancel",
             Self::FleetOps => "fleet.ops",
         }
@@ -851,6 +861,8 @@ impl Operation {
                 | Self::PreferencesGet
                 | Self::PreferencesSet
                 | Self::PreferencesImport
+                | Self::UsageSummary
+                | Self::NotificationsList
         )
     }
 

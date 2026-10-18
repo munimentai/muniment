@@ -2,6 +2,7 @@ mod account_login;
 mod app_update;
 mod attachment_picker;
 mod agents;
+mod fleet_views;
 mod attach_service;
 mod auth;
 mod browser_language;
@@ -292,6 +293,8 @@ pub fn run() {
             agents::agent_memory,
             agents::agent_export_template,
             agents::agent_open,
+            fleet_views::usage_summary,
+            fleet_views::notifications_list,
             personal_memory::memory_profile_read,
             personal_memory::memory_profile_save,
             personal_memory::memory_facts,

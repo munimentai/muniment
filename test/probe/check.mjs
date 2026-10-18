@@ -424,7 +424,7 @@ async function checkAgentAvatars(browser, baseUrl) {
     profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .check'],
     transcript: ['.agent-message header'],
     meeting: ['.agent-post header', '#agent-mentions [role="option"]'],
-    approvals: ['.approval .who', '.run .who'],
+    approvals: ['.approval .who', '.running button'],
     import: ['.body .profile'],
     'group-create': ['.members .check'],
     move: ['.catalog-sidebar-row .side-action', '.profile .avatar'],
