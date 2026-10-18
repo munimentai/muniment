@@ -347,6 +347,17 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
     }
     page.upcoming.sort_by_key(|entry| entry.at_ms);
     page.upcoming.truncate(UPCOMING);
+    // A run that waits on a tool approval needs that approval, not a reply,
+    // so it shows once, as the approval.
+    let approved_runs: BTreeSet<String> = approvals
+        .values()
+        .filter(|(_, approval)| {
+            approval["state"]
+                .as_str()
+                .is_none_or(|state| state == "pending")
+        })
+        .filter_map(|(_, approval)| approval["run_id"].as_str().map(str::to_owned))
+        .collect();
     for (machine, approval) in approvals.into_values() {
         let agent = approval["agent_id"].as_str().unwrap_or_default().to_owned();
         if !wanted_machine(&machine.id) || !wanted_agent(&agent) {
@@ -383,7 +394,7 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
         let at = millis(&item.run.updated_at).unwrap_or(0);
         let state = status(&item.run);
         let newest_of_agent = later_runs.insert(format!("{}:{}", machine.id, item.run.agent_id));
-        if item.run.status == RunStatus::WaitingInput {
+        if item.run.status == RunStatus::WaitingInput && !approved_runs.contains(&item.run.id) {
             page.needs_you.push(NeedsYou {
                 kind: "input".into(),
                 id: item.run.id.clone(),
@@ -513,6 +524,33 @@ mod tests {
             id: id.into(),
             name: id.to_uppercase(),
         }
+    }
+
+    #[test]
+    fn a_run_that_waits_on_an_approval_needs_the_user_once_as_the_approval() {
+        let local = Listing {
+            runs: vec![run("r1", "a", RunStatus::WaitingInput, NOW - 1000)],
+            approvals: vec![json!({
+                "approval_id": "r1:g1", "run_id": "r1", "state": "pending", "agent_id": "a",
+                "agent_name": "Agent a", "summary": "web_search", "created_at": time(NOW - 500)
+            })],
+            ..Listing::default()
+        };
+        let page = merge(
+            vec![MachineAnswer {
+                machine: machine("local"),
+                listing: Ok(local),
+            }],
+            &Filter::default(),
+            NOW,
+        );
+        let kinds: Vec<&str> = page
+            .needs_you
+            .iter()
+            .map(|item| item.kind.as_str())
+            .collect();
+        assert_eq!(kinds, vec!["approval"]);
+        assert_eq!(page.counts.needs_you, 1);
     }
 
     #[test]

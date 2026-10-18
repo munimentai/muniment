@@ -159,17 +159,24 @@ pub async fn home_folder_access(
     app: AppHandle,
     home_path: String,
 ) -> Result<serde_json::Value, String> {
-    use muniment_core::folder_access::{check, failure_reason, protected_folder, FolderAccess};
+    use muniment_core::folder_access::{
+        check, failure_reason, open_home, protected_folder, FolderAccess,
+    };
     let home = PathBuf::from(home_path);
     let user_home = app.path().home_dir().ok();
     let runtime_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ask_runtime(&runtime_app);
-        let access = check(
-            &home,
-            FOLDER_ACCESS_BOUND,
-            &std::sync::atomic::AtomicBool::new(false),
-        );
+        // The app writes a thread's folder at its first run, so it writes
+        // into Home now and macOS asks while the first run shows its hint.
+        let mut access = open_home(&home, FOLDER_ACCESS_BOUND);
+        if access == FolderAccess::Open {
+            ask_runtime(&runtime_app);
+            access = check(
+                &home,
+                FOLDER_ACCESS_BOUND,
+                &std::sync::atomic::AtomicBool::new(false),
+            );
+        }
         let folder = user_home
             .as_deref()
             .and_then(|user_home| protected_folder(&home, user_home));

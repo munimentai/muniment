@@ -41,7 +41,7 @@ pub const SYSTEM_PROMPT: &str = r#"You turn a user's description of an AI agent 
 Answer with strict JSON only, with no prose and no code fence, in this shape:
 {"name":"…","job_title":"…","instructions":"…","schedule":null,"routine_prompt":null,"skills":[],"tools":[],"permission_mode":null,"question":null}
 
-"name" is a short name for the agent, one to three words. "job_title" is a few words. "instructions" are the agent's standing instructions in the second person: its job, its sources, its rules and its expected output, in at most 200 words. Leave the schedule out of the instructions. "schedule" repeats, in plain words, when the user asked the agent to run on its own, such as "every weekday at 9am" or "every 15 minutes", or null when the user named no time. "routine_prompt" says in one sentence what each scheduled run does, or null. "skills" lists ids from "skills" that the job needs. "tools" lists the ids from "builtin_tools" the job needs and no more: a job that reads the web needs "web_search" and "fetch_content", a job that reads files needs "read", "ls", "find" and "grep", and only a job that must change files or run commands gets "write", "edit" or "bash". "permission_mode" is an id from "permission_modes" when the job calls for one, such as "manual" for a job that changes files or sends messages for the user, or null for the default. "question" is null unless the job itself is unknown, such as a description that names no task. Then it is {"text":"…","options":["…","…"]} with two to four short options. Never ask about a schedule, a name, tools or anything you can choose. When "answers" is present, "question" is null."#;
+"name" is a short name for the agent, one to three words. "job_title" is a few words. "instructions" are the agent's standing instructions in the second person: its job, its sources, its rules and its expected output, in at most 200 words. Leave the schedule out of the instructions. "schedule" repeats, in plain words, when the user asked the agent to run on its own, such as "every weekday at 9am" or "every 15 minutes", or null when the user named no time. "routine_prompt" says in one sentence what each scheduled run does, or null. "skills" lists ids from "skills" that the job needs. "tools" lists the ids from "builtin_tools" the job needs and no more: a job that reads the web needs "web_search" and "fetch_content", a job that reads files needs "read", "ls", "find" and "grep", and only a job that must change files or run commands gets "write", "edit" or "bash". "permission_mode" is an id from "permission_modes" when the job calls for one, such as "manual" for a job that changes files or sends messages for the user, or null for the default. A job that only reads files or the web takes null. "question" is null unless the job itself is unknown, such as a description that names no task. Then it is {"text":"…","options":["…","…"]} with two to four short options. Never ask about a schedule, a name, tools or anything you can choose. When "answers" is present, "question" is null."#;
 
 /// What a draft starts from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,8 +252,18 @@ pub fn read_model_answer(
         .collect();
     skills.dedup();
     let tools_off = least_tools(&answer.tools, &answer.tools_off, source, answers, catalog);
+    // A job that changes nothing runs in the default mode: a drafted mode
+    // would only ask before, or refuse, the reads the job is for.
+    let changes = catalog.builtin_tools.iter().any(|id| {
+        WRITE_TOOLS
+            .iter()
+            .chain(&COMMAND_TOOLS)
+            .any(|tool| tool == id)
+            && !tools_off.contains(id)
+    });
     let permission_mode = answer
         .permission_mode
+        .filter(|_| changes)
         .and_then(|id| catalog.modes.iter().copied().find(|mode| mode.id() == id));
     let question = answer
         .question
@@ -736,6 +746,16 @@ mod tests {
     }
 
     #[test]
+    fn a_job_that_changes_files_keeps_the_mode_the_model_names() {
+        let (model, _) = counted(
+            r#"{"name":"Notes","job_title":"Writer","instructions":"Write the meeting notes into notes.md.","schedule":null,"skills":[],"tools":["read","write"],"permission_mode":"manual","question":null}"#,
+        );
+        let source = Source::Description("Write my meeting notes into notes.md.".into());
+        let drafted = draft(&source, &[], &catalog(), TZ, Some(&model));
+        assert_eq!(drafted.draft.permission_mode, Some(PermissionMode::Manual));
+    }
+
+    #[test]
     fn one_sentence_fills_the_form_with_one_model_call() {
         let (model, calls) = counted(
             r#"```json
@@ -752,7 +772,9 @@ mod tests {
         assert_eq!(drafted.draft.label, "Morning briefer");
         assert_eq!(drafted.draft.skills, ["pack:skills/brief/SKILL.md"]);
         assert_eq!(drafted.draft.tools_off, ["write", "bash"]);
-        assert_eq!(drafted.draft.permission_mode, Some(PermissionMode::Manual));
+        // The job only reads, so it runs in the default mode, not the one
+        // the model named.
+        assert_eq!(drafted.draft.permission_mode, None);
         assert!(drafted.question.is_none());
         // The model's schedule and the user's own words name the same time,
         // so one routine stands, enabled, from the trigger reader.
