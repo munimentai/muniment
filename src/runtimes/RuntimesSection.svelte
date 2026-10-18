@@ -43,6 +43,9 @@
   let phonePairing = $state()
   let error = $state('')
   let notice = $state('')
+  // Why the machine just added did not join this computer's machines. It
+  // stays until the next add, since sharing and syncing wait on the link.
+  let linkFailure = $state('')
   let busy = $state('')
   let skipped = $state([])
   let failures = $state([])
@@ -263,9 +266,24 @@
     }
   }
 
+  // A phone that must pair again loses its pairing and the new code shows.
+  async function pairPhoneAgain(row) {
+    busy = row.key
+    error = ''
+    try {
+      await phonePairing.revokePair(row.pairId)
+      phone = null
+      await phonePairing.requestChallenge()
+    } catch (failure) {
+      error = errorText(failure)
+    } finally {
+      busy = ''
+    }
+  }
+
   function onadded(next) {
     if (next?.runtimes) list = next
-    if (next?.notice) notice = next.notice
+    linkFailure = next?.notice ?? ''
     error = ''
     void readSwarm()
     void readDevices()
@@ -282,6 +300,7 @@
 
   {#if error}<FailureNote failure={error} />{/if}
   {#if notice}<p class="line" role="status">{notice}</p>{/if}
+  {#if linkFailure}<FailureNote failure={linkFailure} />{/if}
   {#each failures as failure (failure)}<FailureNote {failure} />{/each}
   {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
 
@@ -305,6 +324,7 @@
             onrename={(name) => act(row.runtime.id, 'runtime_rename', { id: row.runtime.id, name })}
             onremove={() => remove(row)}
             onupdate={row.runtime ? () => updateOne(row.runtime) : null}
+            onpairagain={row.pairAgain ? () => pairPhoneAgain(row) : null}
           />
         {/if}
       {/each}

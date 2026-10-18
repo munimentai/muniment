@@ -403,7 +403,9 @@ Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
 "latest_runs", "errors"}`), `agent.read` (`{"id"}` → `{"agent",
 "primary_thread_id"}`), `agent.save` (`{"agent"}` → `{"agent"}`),
 `agent.delete` (`{"id", "remove_memory"?}`), `agent.run_now` (`{"id",
-"prompt"?}` → `{"run"}`), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
+"prompt"?, "test"?}` → `{"run"}`; a run that opens the agent's thread titles
+it `<name> · test run` for a `test` run and `<name> · <date and time>`
+otherwise), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
 → `{"runs", "next_cursor"}`, newest first), `routine.list` (`{"agent_id"}`),
 `routine.save` (`{"agent_id", "routine"}` → `{"routine"}`),
 `routine.delete` (`{"agent_id", "routine_id"}`),
@@ -441,6 +443,8 @@ answers the same until the draft is done and then, once, `{"draft_id",
 "status": "done", "draft", "question", "via"}`. A draft is `{"name", "label",
 "instructions", "skills", "tools_off", "permission_mode", "routines"}` from one
 cheap model call over the words and this runtime's tools, skills and modes;
+`tools_off` leaves on only the tools the model and the words name, and the
+reading tools when they name none;
 its routines come from the trigger reader and start enabled. `question` is
 null or one `{"text", "options"}` when the job is unknown, and `via` is
 `router`, `pi` or `rules` when no model answered. Nothing is saved.
@@ -796,6 +800,9 @@ steering, gate answers and run starts through `SwarmHost`.
   KiB at most), which fetches it over the content-store want path. A want
   is answered in 48 KiB slices, as many as the exchange budget holds, so
   each slice's base64 fits the longest string an attach frame carries.
+  The budget counts an item's strings and collection entries as well as its
+  bytes, so an exchange of many small items, such as a long history of
+  events, stays within a frame's structural limits too.
   A thread attachment in `thread.history` and the run events carries its
   content hash as `sha256`, and `blob.read` takes it on the member that
   runs the thread and on every replica.

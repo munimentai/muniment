@@ -653,13 +653,15 @@ pub(super) fn outgoing(
     };
     let mut messages = Vec::new();
     for raw in rows {
-        if raw.len() > *budget {
+        let Ok(message) = serde_json::from_str::<Message>(&raw) else {
+            continue;
+        };
+        let size = super::budget_cost(&message);
+        if size > *budget {
             return Ok((messages, true));
         }
-        if let Ok(message) = serde_json::from_str(&raw) {
-            *budget -= raw.len();
-            messages.push(message);
-        }
+        *budget -= size;
+        messages.push(message);
     }
     Ok((messages, false))
 }

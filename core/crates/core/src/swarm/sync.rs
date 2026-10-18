@@ -736,7 +736,10 @@ pub(super) fn clock_delta(
             .map_err(sql)?
             .collect::<Result<_, _>>()
             .map_err(sql)?;
-        let size = thread.len() + 8 + clock.keys().map(|origin| origin.len() + 16).sum::<usize>();
+        let size = super::item_cost(
+            thread.len() + 8 + clock.keys().map(|origin| origin.len() + 16).sum::<usize>(),
+            1 + clock.len(),
+        );
         if size > *budget {
             return Ok((clocks, mark, false));
         }
@@ -1283,7 +1286,7 @@ fn export_rows(
             envelope,
             prompt,
         };
-        let size = serde_json::to_vec(&event).map_or(usize::MAX, |bytes| bytes.len());
+        let size = super::budget_cost(&event);
         if size > *budget {
             return Ok(false);
         }
@@ -2080,7 +2083,7 @@ pub(super) fn blob_traffic(
             }
             let end = (start + room).min(bytes.len());
             let data = STANDARD.encode(&bytes[start..end]);
-            *budget = budget.saturating_sub(data.len() + 256);
+            *budget = budget.saturating_sub(super::item_cost(data.len() + 256, 6));
             chunks.push(BlobChunk {
                 hash: want.hash.clone(),
                 offset: start as u64,

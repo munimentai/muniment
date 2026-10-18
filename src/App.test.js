@@ -2004,6 +2004,28 @@ describe('workspace composer entry', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'auth_sign_in')).toHaveLength(1)
   })
 
+  it('shows a cloud sign-in that could not start in Account with its cause behind Show log', async () => {
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'local_mode_leave') throw new Error('the local mode marker is read-only')
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByTestId('local-mode')
+    await openSettings('Account')
+    const cloudSignIn = await screen.findByRole('button', { name: 'Sign in for cloud features' })
+    await waitFor(() => expect(cloudSignIn).toBeEnabled())
+    await fireEvent.click(cloudSignIn)
+    await openSettings('Account')
+    const note = await screen.findByRole('alert')
+    expect(note).toHaveTextContent('Cloud sign-in could not start. Try again.')
+    expect(within(note).getByText('Show log')).toBeInTheDocument()
+    expect(within(note).getByText('the local mode marker is read-only')).toBeInTheDocument()
+  })
+
   it('shows the sign-in link the runtime announces while the browser sign-in waits', async () => {
     const signInRequest = deferred()
     invoke.mockImplementation(async (command) => {
@@ -2983,7 +3005,8 @@ describe('thread name', () => {
     expect(screen.getByRole('button', { name: 'Project Agreements' })).toHaveAttribute('aria-expanded', 'false')
     await fireEvent.click(document.querySelector('.new-thread'))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread').at(-1)).toEqual(['chat_new_thread']))
-    expect(within(screen.getByRole('list', { name: 'Recent threads' })).getByText('New thread', { selector: '[data-fresh-thread] .thread-row-title' })).toBeInTheDocument()
+    // An empty new thread is no row in Recent.
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
   })
 
   it('places New thread first and keeps pin and archive choices across remounts', async () => {
@@ -3241,8 +3264,8 @@ describe('thread name', () => {
     await fireEvent.click(within(screen.getByLabelText('Delete 2 threads?')).getByRole('button', { name: 'Delete 2 threads' }))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
-    expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
-    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Recent threads' })).getAllByRole('listitem')).toHaveLength(2))
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Recent threads' })).getAllByRole('listitem')).toHaveLength(1))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
@@ -3276,8 +3299,8 @@ describe('thread name', () => {
 
     await waitFor(() => expect(screen.queryByText('Answer')).not.toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
-    expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument()
-    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Recent threads' })).getAllByRole('listitem')).toHaveLength(1))
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Recent threads' })).queryAllByRole('listitem')).toHaveLength(0))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
@@ -3989,12 +4012,8 @@ describe('new thread', () => {
 
     await waitFor(() => expect(screen.queryByText('Current answer')).not.toBeInTheDocument())
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1)
-    const fresh = document.querySelector('[data-fresh-thread]')
-    expect(fresh).toHaveTextContent('New thread')
-    expect(fresh).toHaveAttribute('aria-current', 'true')
-    expect(fresh).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+1' : 'Control+1')
-    expect(fresh.tagName).toBe('LI')
-    expect(document.querySelectorAll('.thread-row[aria-current="true"]')).toHaveLength(1)
+    // The new thread lists no row until its first message.
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
     expect(document.querySelectorAll('.thread-list button[aria-current="true"]')).toHaveLength(0)
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Ask anything'))
   })
@@ -4063,11 +4082,14 @@ describe('new thread', () => {
     const newThread = screen.getByRole('button', { name: 'New thread' })
     await waitFor(() => expect(newThread).toBeEnabled())
     await fireEvent.click(newThread)
-    await waitFor(() => expect(document.querySelector('[data-fresh-thread]')).toBeInTheDocument())
+    await waitFor(() => expect(invoke.mock.calls.some(([command]) => command === 'chat_new_thread')).toBe(true))
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
     await fireEvent.input(composer, { target: { value: 'First prompt' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    expect(document.querySelector('[data-fresh-thread]')).toHaveAttribute('aria-current', 'true')
+    // The first message makes the thread a row, before its summary lists it.
+    await waitFor(() => expect(document.querySelector('[data-fresh-thread]')).toHaveAttribute('aria-current', 'true'))
+    expect(document.querySelector('[data-fresh-thread]')).toHaveAttribute('aria-keyshortcuts', navigator.platform.startsWith('Mac') ? 'Meta+1' : 'Control+1')
     const threadOpenCount = invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').length
     threadSummaryResult = [{ threadId: 'thread-new', title: 'First prompt', updatedAt: '' }]
     chatListener({ payload: { runId: 'run-new', type: 'completed', receipt: null } })

@@ -608,7 +608,9 @@ async function main() {
     // The projects fixture's states: the palette, Move to project, the
     // thread's model with its source, and the project's and an agent's tools.
     const states = ['palette', 'palette-search', 'move', 'model', 'settings', 'agent-tools'].map((state) => `projects.html?state=${state}`)
-    for (const fixture of [...fixtures, ...states]) {
+    // Every state of the Machines fixture still renders.
+    const runtimeStates = ['local', 'paired', 'remote', 'switcher', 'pairing', 'failed', 'ssh', 'pairing-off', 'pairing-on', 'link', 'devices'].map((state) => `runtimes.html?state=${state}`)
+    for (const fixture of [...fixtures, ...states, ...runtimeStates]) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {
         console.log(`${fixture}: passed`)

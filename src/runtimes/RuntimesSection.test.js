@@ -74,6 +74,50 @@ describe('Machines page', () => {
   })
 
 
+  it('shows a phone that must pair again on its row and pairs it again from the row menu', async () => {
+    let pair = { pair_id: 'p1', mobile_device_id: 'm1', created_at: '2026-10-16T08:00:00Z', remote_control: 'pair_again' }
+    const challenge = vi.fn(() => ({ qr_svg: '<svg></svg>', expires_at: new Date(Date.now() + 60_000).toISOString() }))
+    const handlers = {
+      auth_devices: () => [],
+      auth_pairing_status: () => ({ pair }),
+      auth_pairing_challenge: challenge,
+      auth_pairing_revoke: () => { pair = null },
+      app_update_prepare: () => null,
+      agent_request: () => { throw new Error('no fleet') },
+    }
+    render(RuntimesSection, { tauri: tauri(handlers), listen })
+    const row = await screen.findByRole('group', { name: 'Phone' }, { timeout: 4000 })
+    expect(within(row).getByText('Pair again')).toBeInTheDocument()
+    expect(within(row).getByText('This phone cannot open sessions from this computer until it pairs again.')).toBeInTheDocument()
+    await fireEvent.click(within(row).getByRole('button', { name: 'More for Phone' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Pair again' }))
+    await waitFor(() => expect(challenge).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Phone' })).toBeNull())
+  })
+
+  it('keeps a machine that was added but not linked in view while sharing changes', async () => {
+    const bridge = tauri({
+      runtime_pair_link: () => ({ ...runtimeList(), notice: 'The machine is paired but not linked: The exchange failed.\nMalformedFrame' }),
+      local_device_revoke: () => null,
+      app_update_prepare: () => null,
+      auth_devices: () => [],
+      auth_pairing_status: () => ({ pair: null }),
+      agent_request: ({ operation, body }) => operation === 'fleet.credentials' ? { share_models: body?.share_models ?? false } : { members: [] },
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Add machine' }))
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Link from the other machine' }), { target: { value: LINK } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('The machine is paired but not linked: The exchange failed.')
+    expect(within(alert).getByText('Show log')).toBeInTheDocument()
+    const share = screen.getByRole('switch', { name: 'Share model connections' })
+    await waitFor(() => expect(share).toBeEnabled())
+    await fireEvent.click(share)
+    await waitFor(() => expect(share).toHaveAttribute('aria-checked', 'true'))
+    expect(screen.getByRole('alert')).toHaveTextContent('paired but not linked')
+  })
+
   it('lists this computer first, then each paired machine with its kind, version and state', async () => {
     render(RuntimesSection, { tauri: tauri(), listen })
     const computer = await screen.findByRole('group', { name: 'This computer' })

@@ -4,7 +4,9 @@
   // with one model call. The form shows inline for review: name, job title,
   // instructions, triggers, tools, skills and permission mode. A question
   // shows only when core could not tell the job. Run test now saves the agent
-  // with its triggers off and starts one run; Save turns the triggers on.
+  // with its triggers off and starts one test run, whose line follows the
+  // run from `runs`, the window's agent runs, to its result with a link to
+  // its thread; Save turns the triggers on.
   // Refine in chat hands the words to the creation chat instead. New agent,
   // the thread starters, the templates and a thread's Make this an agent all
   // open this one component.
@@ -15,7 +17,8 @@
   import Button from '../lib/ui/Button.svelte'
   import Toggle from '../lib/Toggle.svelte'
   import { agentRequest } from './agent-runtime.js'
-  import { draftAgent, draftForm, formProblem, questionAnswer, requestDraft } from './agent-draft.js'
+  import { draftAgent, draftForm, formProblem, questionAnswer, requestDraft, testRunLine } from './agent-draft.js'
+  import FailureNote from '../lib/FailureNote.svelte'
   import { emptyCatalog, loadToolCatalog } from './agent-tools.js'
   import { loadModes } from './permission-modes.js'
   import { triggerSummary } from './routine-labels.js'
@@ -29,6 +32,7 @@
     threadTitle = '',
     autostart = false,
     projectId = null,
+    runs = [],
     onsaved = () => {},
     onrefine = null,
     onopenchat = () => {},
@@ -112,7 +116,7 @@
       saved = answer.agent
       onchange({ ...saved, runtimeId: runtime })
       if (test) {
-        const started = await agentRequest(tauri, runtime, 'agent.run_now', { id: saved.id })
+        const started = await agentRequest(tauri, runtime, 'agent.run_now', { id: saved.id, test: true })
         testRun = started.run ?? null
       } else {
         onsaved({ ...saved, runtimeId: runtime })
@@ -131,6 +135,9 @@
   const modeOptions = $derived((modes?.modes ?? []).filter((mode) => mode.available !== false))
   const defaultMode = $derived(modes?.modes?.find((mode) => mode.id === modes?.default_agent_mode)?.title ?? '')
   const toolsShown = $derived(catalog.builtin.filter((tool) => tool.id !== 'ask_user_question'))
+  // The test run as the window last heard of it.
+  const testLatest = $derived(testRun ? (runs.find((run) => run.id === testRun.id && (run.runtimeId ?? LOCAL_RUNTIME_ID) === runtime) ?? testRun) : null)
+  const testLine = $derived(testLatest ? testRunLine(testLatest) : null)
 </script>
 
 <section data-panel="agent-builder" class="agent-builder" aria-label="New agent">
@@ -212,9 +219,11 @@
             <Button variant="outline" icon="play" disabled={busy} onclick={() => save(true)}>Run test now</Button>
             {#if onrefine}<Button disabled={busy} onclick={refine}>Refine in chat</Button>{/if}
           </div>
-          {#if testRun}
-            <p class="state" role="status">Test run started. Its triggers stay off until you save.
-              <Button disabled={busy} onclick={() => onopenchat({ ...saved, runtimeId: runtime }, testRun)}>Open chat</Button></p>
+          {#if testLine}
+            <div class="state" role="status">
+              {#if testLine.failed}<FailureNote failure={testLine.text} role="none" />{:else}<span>{testLine.text}</span>{/if}
+              <Button disabled={busy} onclick={() => onopenchat({ ...saved, runtimeId: runtime }, testLatest)}>{testLine.done ? 'Open result' : 'Open chat'}</Button>
+            </div>
           {/if}
         </form>
       {/if}
@@ -234,8 +243,8 @@
   legend { margin-bottom: 6px; padding: 0; color: var(--muted); font: var(--text-13) var(--font-human); }
   .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .row { display: flex; align-items: center; gap: 10px; min-height: 30px; font-size: var(--text-13); }
-  .what { min-width: 0; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
-  .record { margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .what { flex: 1; min-width: 0; color: var(--ink); overflow-wrap: break-word; }
+  .record { flex: none; margin-left: auto; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
   .chips, .options { display: flex; flex-wrap: wrap; gap: 6px; }
   .typed { display: flex; gap: 8px; }
   .typed input { flex: 1; }

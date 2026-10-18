@@ -390,7 +390,7 @@ mod tests {
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
         let entry = entry();
-        let expected = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
+        let expected = compile_onboarding_home_write_plan(std::slice::from_ref(&entry), date).unwrap();
         let destination = import_destination("export", &entry);
 
         let result = confirm_import(&config, &home, &[entry], date).unwrap();

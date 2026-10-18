@@ -75,8 +75,48 @@ fn validate_payload(payload: &[u8]) -> Result<(), FrameError> {
         .and_then(Value::as_object)
         .and_then(|body| body.get("data"))
         .and_then(Value::as_str);
+    check_structure(&value, artifact_data, 1, 0)
+}
+
+/// Whether `value`, carried as the body of a request or a response, stays
+/// within the frame's structural limits with `reserve` strings and entries
+/// left for the envelope around it. A sender that packs many items into one
+/// body checks this as well as the byte length.
+pub fn fits_body_structure(value: &Value, reserve: usize) -> bool {
+    check_structure(value, None, 2, reserve).is_ok()
+}
+
+/// The strings, object keys included, and the collection entries in
+/// `value`, as the frame's structural limits count them.
+pub fn structure_counts(value: &Value) -> (usize, usize) {
+    let mut stack = vec![value];
+    let (mut strings, mut entries) = (0usize, 0usize);
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::String(_) => strings += 1,
+            Value::Array(values) => {
+                entries += values.len();
+                stack.extend(values);
+            }
+            Value::Object(values) => {
+                entries += values.len();
+                strings += values.len();
+                stack.extend(values.values());
+            }
+            _ => {}
+        }
+    }
+    (strings, entries)
+}
+
+fn check_structure(
+    value: &Value,
+    artifact_data: Option<&str>,
+    first_depth: usize,
+    reserve: usize,
+) -> Result<(), FrameError> {
     const MAX_ARTIFACT_BASE64_LENGTH: usize = (256_usize * 1024).div_ceil(3) * 4;
-    let mut stack = vec![(&value, 1usize)];
+    let mut stack = vec![(value, first_depth)];
     let (mut strings, mut entries) = (0usize, 0usize);
     while let Some((value, depth)) = stack.pop() {
         if depth > MAX_JSON_DEPTH {
@@ -106,7 +146,7 @@ fn validate_payload(payload: &[u8]) -> Result<(), FrameError> {
             }
             _ => {}
         }
-        if strings > MAX_JSON_STRINGS || entries > MAX_JSON_COLLECTION_ENTRIES {
+        if strings + reserve > MAX_JSON_STRINGS || entries + reserve > MAX_JSON_COLLECTION_ENTRIES {
             return Err(FrameError::StructureLimit);
         }
     }

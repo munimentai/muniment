@@ -32,7 +32,7 @@ pub(crate) fn install<R: tauri::Runtime>(webview: &tauri::Webview<R>) {
     };
     let features = include_str!("../../test/e2e/support/subscription-features.js");
     let script = include_str!("../../test/e2e/support/subscription-probe.js");
-    let _ = webview.eval(&format!(
+    let _ = webview.eval(format!(
         "window.__MUNIMENT_SUBSCRIPTION_PLAN__ = {plan};\n{features}\n{script}"
     ));
 }

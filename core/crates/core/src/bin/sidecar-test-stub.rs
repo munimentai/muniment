@@ -4,6 +4,10 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+/// A prompt that holds its run open until a steer, a follow-up or a stop,
+/// in any process that runs this stub.
+const HOLD_MARKER: &str = "[hold the run]";
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let first = args.next();
@@ -388,8 +392,13 @@ fn pi_resume(args: Vec<String>) {
                     "{}",
                     serde_json::json!({"type":"response", "command":"prompt", "success":true, "id":request["id"]})
                 );
-                if std::env::var_os("PI_RESUME_STUB_STEER_CAPTURE").is_some() {
-                    // Keep the run active until the test sends a queued message.
+                if std::env::var_os("PI_RESUME_STUB_STEER_CAPTURE").is_some()
+                    || request["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains(HOLD_MARKER))
+                {
+                    // Keep the run active until the test sends a queued
+                    // message or stops it.
                 } else if let Ok(plan) = std::env::var("PI_RESUME_STUB_PLAN") {
                     // The plan tool's first step: the plan check.
                     println!(

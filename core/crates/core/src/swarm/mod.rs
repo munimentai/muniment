@@ -174,6 +174,14 @@ const GOSSIP_TTL_SECONDS: i64 = 24 * 60 * 60;
 const EXCHANGE_BUDGET: usize = 448 * 1024;
 /// The most bytes of one exchange body, under the protocol's frame limit.
 const FRAME_BUDGET: usize = muniment_attach::MAX_FRAME_LENGTH - 16 * 1024;
+/// The strings and collection entries the envelope around an exchange body
+/// takes, which the body leaves free under the frame's structural limits.
+const ENVELOPE_ITEMS: usize = 256;
+/// What one string or collection entry costs of the exchange budget. A full
+/// budget then holds half the strings and entries a frame carries, which
+/// leaves the other half for the parts every exchange carries.
+const ITEM_BYTES: usize =
+    EXCHANGE_BUDGET / ((muniment_attach::MAX_JSON_STRINGS - ENVELOPE_ITEMS) / 2);
 /// The most bytes of thread clocks one exchange carries, so events still
 /// flow while a new peer pages through many threads.
 const CLOCK_BUDGET: usize = 128 * 1024;
@@ -1155,7 +1163,7 @@ impl Inner {
         let notices = approvals::recent_notices(self)?;
         let approvals = approvals::recent(self)?;
         let mut budget = EXCHANGE_BUDGET
-            .saturating_sub(json_bytes(&acks) + json_bytes(&notices) + json_bytes(&approvals));
+            .saturating_sub(budget_cost(&acks) + budget_cost(&notices) + budget_cost(&approvals));
         let (messages, more_messages) =
             messaging::outgoing(self, access.message_target(), &mut budget)?;
         let record_base = (wire != Wire::Full && !peer_vv.is_empty()).then(|| peer_vv.clone());
@@ -1306,25 +1314,22 @@ impl Inner {
             from,
         };
         roles::restrict_outgoing(self, &access, leaf.as_ref(), &mut exchange)?;
-        // A frame never grows past the protocol's limit: what does not fit
-        // waits for the next exchange.
+        // A frame never grows past the protocol's limits on bytes and on
+        // items: what does not fit waits for the next exchange.
         let length = |exchange: &Exchange| {
             serde_json::to_vec(exchange).map_or(usize::MAX, |bytes| bytes.len())
         };
-        let mut bytes = length(&exchange);
-        if bytes > FRAME_BUDGET {
+        if !fits_frame(&exchange) {
             exchange.blobs.clear();
             exchange.events.clear();
             exchange.sealed.clear();
             exchange.more = true;
-            bytes = length(&exchange);
         }
-        if bytes > FRAME_BUDGET {
+        if !fits_frame(&exchange) {
             exchange.messages.truncate(8);
             exchange.notices.clear();
-            bytes = length(&exchange);
         }
-        if bytes > FRAME_BUDGET && full {
+        if !fits_frame(&exchange) && full {
             // An older member's full state outgrew the frame; it gets the
             // directory and groups now and threads later.
             exchange.threads.clear();
@@ -1334,8 +1339,8 @@ impl Inner {
                 watermarks.complete = false;
             }
             exchange.more = true;
-            bytes = length(&exchange);
         }
+        let bytes = length(&exchange);
         self.note_sent(peer, wire, &exchange, bytes);
         Ok(exchange)
     }
@@ -1658,7 +1663,33 @@ impl PeerSync {
     }
 }
 
-/// The serialized size of a value, for the exchange budget.
+/// The serialized size of a value.
 fn json_bytes<T: serde::Serialize>(value: &T) -> usize {
     serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
+}
+
+/// What `bytes` holding `items` strings and collection entries cost of the
+/// exchange budget: the bytes, or [`ITEM_BYTES`] for each item when that is
+/// more. A frame refuses too many items as it refuses too many bytes, so
+/// many small items fill the budget before they fill the frame.
+fn item_cost(bytes: usize, items: usize) -> usize {
+    bytes.max(items.saturating_mul(ITEM_BYTES))
+}
+
+/// What a value costs of the exchange budget, by [`item_cost`].
+fn budget_cost<T: serde::Serialize>(value: &T) -> usize {
+    let Ok(value) = serde_json::to_value(value) else {
+        return usize::MAX;
+    };
+    let (strings, entries) = muniment_attach::structure_counts(&value);
+    item_cost(json_bytes(&value), strings.max(entries))
+}
+
+/// Whether an exchange body fits one frame: its bytes and its strings,
+/// entries and depth.
+fn fits_frame(exchange: &Exchange) -> bool {
+    serde_json::to_value(exchange).is_ok_and(|value| {
+        json_bytes(&value) <= FRAME_BUDGET
+            && muniment_attach::fits_body_structure(&value, ENVELOPE_ITEMS)
+    })
 }

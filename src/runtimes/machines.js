@@ -43,7 +43,8 @@ const sameName = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? 
 // machine, so they share a row.
 // With MuniCloud on, the devices on the account that are not this computer
 // and the phone paired through the relay are rows too, so every machine and
-// device is in this one list. `pairId` names the phone's pairing.
+// device is in this one list. `pairId` names the phone's pairing, and
+// `pairAgain` says the phone must pair again before it opens sessions here.
 export function machineRows({ list, swarm = null, devices = [], cloudDevices = [], phone = null }) {
   const rows = []
   const shown = new Set()
@@ -111,7 +112,7 @@ export function machineRows({ list, swarm = null, devices = [], cloudDevices = [
     })
   }
   if (phone?.pair_id) {
-    rows.push({ key: `phone:${phone.pair_id}`, name: 'Phone', kind: 'phone', icon: 'smartphone', version: '', local: false, runtime: null, coreId: null, deviceId: null, pairId: phone.pair_id, online: null, limited: true, seenAt: phone.created_at ?? null })
+    rows.push({ key: `phone:${phone.pair_id}`, name: 'Phone', kind: 'phone', icon: 'smartphone', version: '', local: false, runtime: null, coreId: null, deviceId: null, pairId: phone.pair_id, pairAgain: phone.remote_control === 'pair_again', online: null, limited: true, seenAt: phone.created_at ?? null })
   }
   for (const device of cloudDevices ?? []) {
     if (device.current || device.revoked_at) continue

@@ -591,7 +591,7 @@ impl RecordStore {
                 if !allow(&row) {
                     continue;
                 }
-                let size = serde_json::to_vec(&row).map_or(usize::MAX, |bytes| bytes.len());
+                let size = super::budget_cost(&row);
                 if size > *budget {
                     return Ok((rows, true));
                 }
@@ -1328,7 +1328,7 @@ mod tests {
             .unwrap();
         assert_eq!((rows.len(), more), (20, false));
         // A small budget sends a prefix and says more is left.
-        let mut budget = 600;
+        let mut budget = 6000;
         let (prefix, more) = a
             .records
             .delta(&b.records.version_vector().unwrap(), &mut budget)

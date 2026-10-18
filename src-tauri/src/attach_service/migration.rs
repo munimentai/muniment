@@ -16,5 +16,5 @@ pub(super) fn runtime_version_upgrade_pending(connected_version: Option<&str>) -
         .expect("minimum compatible runtime version must be valid");
     connected_version
         .and_then(|version| semver::Version::parse(version).ok())
-        .map_or(true, |version| version < minimum)
+        .is_none_or(|version| version < minimum)
 }

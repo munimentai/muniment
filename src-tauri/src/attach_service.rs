@@ -62,7 +62,7 @@ pub(crate) use migration::{runtime_upgrade_pending, runtime_version_compatible};
 
 #[cfg(test)]
 use listener::*;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 use migration::*;
 use state::*;
 

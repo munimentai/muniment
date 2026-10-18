@@ -9,6 +9,7 @@
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
+  import FailureNote from './FailureNote.svelte'
   // Settings takes over the workspace: the sidebar lists its seven pages, and
   // this panel shows the picked page across the thread and rail. A page that
   // holds several parts, such as Data, shows each under its own head.
@@ -137,11 +138,11 @@
               <Row title="Sign in" description="Pair your phone and devices on one account.">
                 <Button disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</Button>
               </Row>
-              {#if accountStatus}<p role="status">{accountStatus}</p>{/if}
+              {#if accountStatus}<FailureNote failure={accountStatus} />{/if}
             </Group>
           {:else}
             <PageHead intro="Your account holds your plan. Its phone and devices are on Machines." />
-            {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
+            {#if accountStatus}<FailureNote failure={accountStatus} />{/if}
             {#snippet vault()}<SettingsSection load={CloudVault} properties={{tauri, listen}} />{/snippet}
             <SettingsSection load={AccountSettings} properties={{tauri, subject, onsignout, children: vault}} />
           {/if}

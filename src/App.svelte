@@ -931,7 +931,9 @@
   let archivedOpen = $state(false)
   let needsYouItems = $state.raw([])
   let sidebarRequest = 0
-  const showFreshThread = $derived(freshThread && !selectedAgent && !currentCreation && !threadSearch.trim())
+  // A new thread shows in Recent once its first message is sent: an empty
+  // draft, such as the one under the agent builder, is no thread yet.
+  const showFreshThread = $derived(freshThread && messages.length > 0 && !selectedAgent && !currentCreation && !threadSearch.trim())
   const sidebarRuns = $derived(runStates(activityRuns))
   const sidebarFeed = $derived(sidebarInput({
     summaries: threadSummaries,
@@ -2758,8 +2760,9 @@
       try {
         await tauri.invoke('local_mode_leave')
         markerStartupLocalMode = false
-      } catch (_) {
-        accountStatus = 'Cloud sign-in could not start. Try again.'
+      } catch (failure) {
+        // The first line shows in Account, and the cause behind Show log.
+        accountStatus = `Cloud sign-in could not start. Try again.\n${String(failure?.message ?? failure ?? '')}`.trim()
         return
       }
     }
@@ -4071,8 +4074,8 @@
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
-  {#if fullPage === 'agent-builder' && agentBuilder}{#key agentBuilder.key}<AgentBuilder {tauri} description={agentBuilder.description} threadId={agentBuilder.threadId} threadTitle={agentBuilder.threadTitle} autostart={agentBuilder.autostart} projectId={agentBuilder.projectId ?? null}
-    onsaved={openBuiltAgent} onopenchat={openBuiltAgent} onchange={() => { void refreshAgents() }}
+  {#if fullPage === 'agent-builder' && agentBuilder}{#key agentBuilder.key}<AgentBuilder {tauri} description={agentBuilder.description} threadId={agentBuilder.threadId} threadTitle={agentBuilder.threadTitle} autostart={agentBuilder.autostart} projectId={agentBuilder.projectId ?? null} runs={activityRuns}
+    onsaved={openBuiltAgent} onopenchat={(agent, run) => (run?.thread_id ? openRunThread(run).then(() => { agentBuilder = null }) : openBuiltAgent(agent)).catch(error => { submitError = String(error) })} onchange={() => { void refreshAgents() }}
     onrefine={(text) => { fullPage = null; agentBuilder = null; void startCreation('agent', creationDefaults('agent'), text) }} />{/key}{/if}
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}

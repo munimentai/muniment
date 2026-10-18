@@ -373,6 +373,7 @@ fn run_event(run_id: &str, phase: &str, text: &str) -> ChatEvent {
         prompt_storage_notice: None,
         resume_notice: None,
         failure_reason: None,
+        failure_detail: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),
