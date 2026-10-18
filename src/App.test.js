@@ -5386,9 +5386,45 @@ describe('voice dictation', () => {
     // The card leaves once the model is on disk, and the hint carries the next step.
     expect(await screen.findByText('Installed. Press Voice again to dictate.')).toHaveAttribute('role', 'status')
     expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('parakeet_install_start')
+    expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true })
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
+  })
+
+  it('remembers the download consent and starts the next install unasked', async () => {
+    const saved = {}
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'agent_request' && args.operation === 'preferences.set') { Object.assign(saved, args.body.values); return { values: saved } }
+      if (command === 'agent_request' && args.operation === 'preferences.get') return { values: saved }
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return { identity: 'parakeet-tdt-0.6b-v3', revision: 'r', sourceRepository: 'nvidia/parakeet-tdt-0.6b-v3', totalDownloadBytes: 672_384_307, requiredFreeBytes: 940_819_763, speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT' }
+      if (command === 'parakeet_install_start') return { state: 'cancelled' }
+      if (command === 'parakeet_install_status') return { state: 'notInstalled' }
+      if (command === 'parakeet_install_cancel') return { state: 'cancelled' }
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const { unmount } = render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
+    await within(card).findByText('641 MB')
+    // Nothing downloads before the click beside the size.
+    expect(invoke.mock.calls.some(([command]) => command === 'parakeet_install_start')).toBe(false)
+    await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true }))
+    expect(saved).toEqual({ 'large-downloads': true })
+    unmount()
+
+    // The next time the model is missing, the download starts on its own.
+    invoke.mockClear()
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: false }))
   })
 
   it.each([

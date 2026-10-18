@@ -115,6 +115,7 @@
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
+  import { downloadsAllowed, installSpeechModel, resumeSpeechModel } from './lib/large-downloads.js'
   import RunMark from './lib/RunMark.svelte'
   import ExecutionTime from './lib/ExecutionTime.svelte'
   import ProjectRow from './lib/ProjectRow.svelte'
@@ -1822,12 +1823,17 @@
     try {
       const facts = await tauri.invoke('parakeet_install_facts')
       const status = await tauri.invoke('parakeet_install_status')
+      // The user allowed large downloads before, so the download starts unasked.
+      const resume = status.state === 'notInstalled' && await downloadsAllowed(tauri)
       if (destroyed) return
       speechInstallFacts = facts
       speechInstallStatus = status
       if (status.state === 'installing') {
         const epoch = ++speechInstallEpoch
         speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch), 250)
+      } else if (resume) {
+        speechInstallPending = false
+        void startSpeechInstall(resumeSpeechModel)
       }
     } catch (_) {
       if (destroyed) return
@@ -1837,14 +1843,14 @@
     }
   }
 
-  async function startSpeechInstall() {
+  async function startSpeechInstall(install = installSpeechModel) {
     if (speechInstallPending || speechInstallStatus?.state === 'installing') return
     stopSpeechInstallPolling()
     const epoch = ++speechInstallEpoch
     speechInstallPending = true
     speechInstallError = ''
     try {
-      const next = await tauri.invoke('parakeet_install_start')
+      const next = await install(tauri)
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallStatus = next
       if (next.state === 'installing') await readSpeechInstallStatus(epoch)
@@ -3408,7 +3414,7 @@
               <!-- The Install control states a missing model, so only a later state earns a line. -->
               {#if speechInstallStatus && speechInstallStatus.state !== 'notInstalled'}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
               {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
-                <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
+                <button type="button" disabled={speechInstallPending} onclick={() => startSpeechInstall()}>Install</button>
               {:else if speechInstallStatus?.state === 'installing'}
                 <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
               {/if}
