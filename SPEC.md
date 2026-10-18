@@ -378,8 +378,8 @@ The title bar menu opens Browser, Files and Terminal in a shared tab panel.
 Tabs keep a fixed width and scroll horizontally without a scrollbar. Edge fades
 stay inside the tab strip, clear of the maximize and panel-collapse controls.
 Browser labels show the host, path, query and fragment without the scheme or
-leading `www.`. Long browser labels fade on the right. Terminal and Files labels
-show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names.
+leading `www.`. Terminal and Files labels
+show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names. Browser, artifact and file tab labels keep their start and end in an ellipsis, and hover shows the full label.
 Terminal and Files path headers share `OverflowText.svelte`: the full path stays on one line, starts at its end, and scrolls horizontally without a scrollbar.
 Fades mark clipped content and clear when the content fits. A new browser tab opens https://muniment.ai/docs/. Closing a browser tab releases its native view.
 Settings → Language picks one language for the app and its Browser tab. The Browser tab applies it, and the app's own text ships in English. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Language names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
