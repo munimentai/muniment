@@ -177,7 +177,7 @@ The runtime keeps one level per model in Pi's settings, so every window shows th
 **Settings → Models is one component on two pages.** Model providers
 and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
 in account details. Decision models holds the routing statements once a decision model is connected. The chip's picker shows each provider's
-current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
+current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. A local or custom server shows every model it serves, since the user installed each one. A row shows the name core's catalog or the server gives, else a provider id formatted, or a server's id as served. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns
 and lands in the same file, or in the router's pool when the router pools

@@ -108,7 +108,7 @@ it('sets the model reference through agent.save, or clears it for the default', 
   show({ tauri: machineCore.tauri, onchange: vi.fn() })
   await fireEvent.click(screen.getByRole('tab', { name: 'Model' }))
   const models = screen.getByRole('radiogroup', { name: 'Model' })
-  expect(within(models).getByRole('radio', { name: 'Qwen 3:8B' })).toHaveAttribute('aria-checked', 'true')
+  expect(within(models).getByRole('radio', { name: 'qwen3:8b' })).toHaveAttribute('aria-checked', 'true')
   await fireEvent.click(within(models).getByRole('radio', { name: 'Gemini 3 Pro' }))
   await waitFor(() => expect(machineCore.saved()).toBeDefined())
   expect(machineCore.saved()).toEqual({ runtime: 'box', operation: 'agent.save', body: { agent: { ...machineCore.stored, model: { provider: 'google', id: 'gemini-3-pro', thinking: 'medium' }, schedule: null } } })

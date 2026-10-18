@@ -85,7 +85,7 @@ describe('provider catalog', () => {
 
   it('reads the saved default when it is shown, else the first shown model, and labels the chip', () => {
     expect(currentModel(inventory)).toMatchObject({ provider: 'ollama', model: 'llama3.2:3b' })
-    expect(modelChipLabel(inventory)).toBe('Llama 3.2:3B')
+    expect(modelChipLabel(inventory)).toBe('llama3.2:3b')
     const hiddenDefault = { ...inventory, hidden: ['openai-codex/gpt-5.5-mini', 'ollama/llama3.2:3b'] }
     expect(currentModel(hiddenDefault)).toMatchObject({ provider: 'openai-codex', model: 'gpt-5.5' })
     expect(modelChipLabel({ providers: [], hidden: [] })).toBe('Connect a model')
@@ -237,4 +237,32 @@ it('names the router models the picker hides, so the router leaves them out of t
 it('keeps Ollama decision models out of the picker and the Models list', () => {
   const ollama = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', models: ['gpt-oss:latest', 'clef-flash:latest', 'nimble:latest', 'laya:latest', 'tev1:latest', 'qwen3.6-32k:latest'].map((id) => ({ id })) }], hidden: [] }
   expect(pickerGroups(ollama, '', { all: true })[0].models.map((model) => model.id)).toEqual(['gpt-oss:latest', 'qwen3.6-32k:latest'])
+})
+
+describe('model names in the picker', () => {
+  const omlx = {
+    providers: [{ id: 'custom-omlx', name: 'oMLX', source: 'custom', models: ['Qwen3.6-35B-A3B-4bit', 'Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit', 'gpt-oss-20b-MXFP4-Q8', 'mlx-community/Devstral-Small-2-24B-Instruct-2512-4bit'].map((id) => ({ id })) }],
+    hidden: [], shown: [],
+  }
+
+  it('shows a local server\'s ids as served, without forced title case', () => {
+    expect(pickerGroups(omlx)[0].models.map((model) => model.label)).toEqual(['Qwen3.6-35B-A3B-4bit', 'Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit', 'gpt-oss-20b-MXFP4-Q8', 'Devstral-Small-2-24B-Instruct-2512-4bit'])
+  })
+
+  it('folds no model of a local server under Legacy models', () => {
+    expect(pickerGroups(omlx, '', { all: true })[0].models.filter((model) => !model.shown)).toEqual([])
+  })
+
+  it('uses the display name the server or the model catalog gives', () => {
+    const named = {
+      providers: [
+        { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'gpt-oss-20b-MXFP4-Q8', name: 'gpt-oss 20B' }] },
+        { id: 'muniment-router', name: 'Router', source: 'router', models: [] },
+      ],
+      hidden: [], shown: [],
+      router_models: [{ id: 'openai/gpt-6-astra', family: 'openai', model: 'gpt-6-astra', name: 'GPT-6 Astra', accounts: 1 }],
+    }
+    const labels = pickerGroups(named).flatMap((group) => group.models.map((model) => model.label))
+    expect(labels).toEqual(expect.arrayContaining(['gpt-oss 20B', 'GPT-6 Astra']))
+  })
 })

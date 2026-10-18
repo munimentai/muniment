@@ -196,7 +196,7 @@
             {@const chosen = mode.id === currentMode?.id}
             {@const line = mode.available === false && mode.reason ? mode.reason : mode.description}
             <!-- One line per mode keeps all six in the card. The chosen mode shows its description. -->
-            <button type="button" role="radio" class="row mode" aria-checked={chosen} aria-label={mode.title} aria-describedby={`agent-${key}-mode-${mode.id}`} title={chosen ? undefined : line} disabled={readOnly || busy || mode.available === false} onclick={() => chooseMode(mode)}>
+            <button type="button" role="radio" class="row mode" aria-checked={chosen} aria-label={mode.title} aria-describedby={`agent-${key}-mode-${mode.id}`} disabled={readOnly || busy || mode.available === false} onclick={() => chooseMode(mode)}>
               <LucideIcon name={modeIcon(mode)} variant="action" size={16} />
               <span class="mode-text"><span class="mode-title">{mode.title}{#if chosen && !currentMode.chosen}<span class="default">Default</span>{/if}</span><span class="mode-line" class:visually-hidden={!chosen} id={`agent-${key}-mode-${mode.id}`}>{line}</span></span>
               {#if chosen}<LucideIcon name="check" variant="action" size={14} />{/if}

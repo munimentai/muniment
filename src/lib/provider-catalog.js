@@ -1,4 +1,4 @@
-import { modelLabel } from './model-label.js'
+import { modelLabel, modelName } from './model-label.js'
 import { newestFirst, pastModels } from './model-recency.js'
 import { currentGeneration } from './model-generation.js'
 import { isDecisionModel } from './classifier-connections.js'
@@ -133,7 +133,7 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       // An Ollama decision model answers only the router's choice, so it lists with the classifiers.
       models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
         .filter((model) => !isDecisionModel(provider, model.id))
-        .map((model) => ({ ...model, label: modelLabel(model.id), provider: provider.id, choice: model.id, accounts: 0, off: hidden.has(modelKey(provider.id, model.id)) })),
+        .map((model) => ({ ...model, label: rowLabel(provider, model.id, model.name), provider: provider.id, choice: model.id, accounts: 0, off: hidden.has(modelKey(provider.id, model.id)) })),
     }))
   if (router) {
     for (const entry of inventory.router_models ?? []) {
@@ -148,12 +148,13 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       if (existing) {
         existing.accounts = entry.accounts
         existing.off ||= off
+        if (entry.name && !existing.name) existing.label = entry.name
         if (entry.accounts > 0) {
           existing.provider = router.id
           existing.choice = entry.id
         }
       } else {
-        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
+        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: entry.name || modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
       }
     }
     // Automatic routes each message through a decision model, so its row
@@ -178,8 +179,11 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       group.models.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
     }
     const ids = group.models.map((model) => model.id)
-    const current = group.classifier ? null : currentGeneration(ids)
-    const past = group.classifier ? null : pastModels(groupCatalogId(group.id), ids)
+    // A local or custom server serves only the models the user installed on
+    // it, so none of them is legacy.
+    const installed = group.source === 'local' || group.source === 'custom'
+    const current = group.classifier || installed ? null : currentGeneration(ids)
+    const past = group.classifier || installed ? null : pastModels(groupCatalogId(group.id), ids)
     for (const model of group.models) {
       const saved = (inventory.default_provider === model.provider && inventory.default_model === model.choice)
         || (inventory.default_provider === group.id && inventory.default_model === model.id)
@@ -196,6 +200,15 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
     }))
     // The router heading stays in the picker for its Manage link while routing is off.
     .filter((group) => group.models.length > 0 || (group.manage && !needle))
+}
+
+// A picker row's name: the name the registry or the server gives, else the
+// id. A provider's catalog id reads well formatted, as `claude-opus-4-8` does
+// as Claude Opus 4.8. A local or custom server's id is a repository name the
+// formatter would mangle, so it shows as served.
+function rowLabel(provider, id, name) {
+  if (name && name !== id) return name
+  return provider.source === 'local' || provider.source === 'custom' ? modelName(id) : modelLabel(id)
 }
 
 // The router models the picker hides, as the router's sorted `family/model`
