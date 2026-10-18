@@ -112,17 +112,20 @@ pub fn check_as(
 /// Home's folder of thread workspaces, which a thread's first run writes.
 const SESSIONS: &str = "sessions";
 
-/// Creates Home and its sessions folder and lists that folder from a thread
-/// of this process, and waits `bound` at most for the answer. macOS asks the
-/// process that writes into a protected folder, and a listing of a folder
-/// that does not exist yet asks nothing, so the process that later writes a
-/// thread's folder raises its prompt here, during the first run.
+/// Creates Home and its sessions folder, lists that folder and opens the
+/// folder that holds Home from a thread of this process, and waits `bound` at
+/// most for the answer. macOS lets the app that created Home use Home without
+/// asking, so only a read of the protected folder around it, such as
+/// Documents, raises the prompt. The memory scan opens that folder at the
+/// first chat, so the prompt shows here, during the first run, instead.
 pub fn open_home(home: &Path, bound: Duration) -> FolderAccess {
     let sessions = home.join(SESSIONS);
+    let holder = home.parent().map(Path::to_path_buf);
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let opened = std::fs::create_dir_all(&sessions)
-            .and_then(|()| std::fs::read_dir(&sessions).map(drop));
+            .and_then(|()| std::fs::read_dir(&sessions).map(drop))
+            .and_then(|()| holder.map_or(Ok(()), |holder| std::fs::read_dir(holder).map(drop)));
         let _ = sender.send(opened);
     });
     match receiver.recv_timeout(bound) {
@@ -228,6 +231,22 @@ mod tests {
         let access = open_home(&parent.join("Muniment"), Duration::from_secs(10));
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_dir_all(&parent).unwrap();
+        assert_eq!(access, FolderAccess::Denied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_whose_holding_folder_the_process_may_not_read_is_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent =
+            std::env::temp_dir().join(format!("muniment-unlisted-home-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let access = open_home(&parent.join("Muniment"), Duration::from_secs(10));
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let sessions = parent.join("Muniment").join("sessions").is_dir();
+        std::fs::remove_dir_all(&parent).unwrap();
+        assert!(sessions);
         assert_eq!(access, FolderAccess::Denied);
     }
 
