@@ -11,6 +11,7 @@ Open `in-flight.html` for a thread whose newest run still streams its reply whil
 Open `access.html` for the signed-in shell with the profile popover open.
 Open `signed-out.html` for the signed-out screen.
 Open `markdown.html` for a completed Markdown reply.
+Open `long-thread.html` for a thread of 5,000 settled turns, or `?turns=` that many. The transcript renders a bounded window of them.
 Open `onboarding.html` for first-run setup.
 Open `approved-files.html` for the approved-files review.
 Open `permission.html` for a run paused on a permission decision.
@@ -28,6 +29,8 @@ Open `agents.html` for agents on three machines in the catalog and sidebar, with
 Open `fleet-sync.html` for a laptop in a fleet with a Studio desktop that is away and a Pod container, reached only through the swarm. `?state=synced`, `syncing` and `offline` show the sidebar sync line, `bootstrap` its per-class panel with sign-ins arriving or waiting, `owners` the owner chips on threads, agents and projects, `queued` a message queued for offline Studio with Cancel and Move here, `replica` a thread whose history still arrives from Pod, `offload` the machine menu starting a new thread on Pod, `offline-settings` this computer's settings on Machines at Available offline, `log` the machine log, and `projects` the Projects catalog with Studio's and Pod's projects after this laptop's. Add `&theme=light` or `&theme=dark`.
 
 Open `avatars.html` for 48 agent heads of each style, Colorful and Muniment, at the sidebar, card and profile sizes in Moss light and Moss dark, with center guides and each drawing's bounds. `?style=` and `?theme=` narrow it to one panel, and `&compact` shows the profile size alone.
+
+`npm run probe:check` also runs the speed budgets in `speed.mjs` and the layout stability walk in `stability.mjs`. `docs/speed-budgets.md` lists each budget.
 
 Inspect `window.__PROBE__.invokedCommands` and `window.__PROBE__.eventListeners` in the browser console. Emit an event with `window.__PROBE__.emit(event, payload)`.
 

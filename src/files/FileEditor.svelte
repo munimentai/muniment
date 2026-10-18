@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
+  import { TYPE_EVENT, codeFontSize } from '../lib/type-state.js'
   let { file, tauri, threadId, ondirty = () => {} } = $props()
   let host
   let editor, model, baseline = '', revision = '', path = ''
@@ -27,19 +28,22 @@
     let disposed = false, subscription
     const media = matchMedia('(prefers-color-scheme: dark)')
     let theme = () => {}
+    // The text size step reaches the editor too, so the super key with = and - sizes every pane.
+    const sized = (event) => editor?.updateOptions({ fontSize: codeFontSize(event.detail) })
+    window.addEventListener(TYPE_EVENT, sized)
     Promise.all([import('./code-editor.js'), tauri.invoke('workspace_read_text', {path:file.path, threadId})]).then(([{monaco}, result]) => {
       if (disposed) return
       baseline = result.content; revision = result.revision; path = result.path
       const uri = monaco.Uri.from({scheme:'muniment', path, query:crypto.randomUUID()})
       model = monaco.editor.createModel(baseline, undefined, uri)
-      editor = monaco.editor.create(host, {model, automaticLayout:true, fontFamily:'CommitMono, monospace', fontSize:13, minimap:{enabled:false}, scrollBeyondLastLine:false, padding:{top:12}, scrollbar:{verticalScrollbarSize:3,horizontalScrollbarSize:3}, ariaLabel:`Edit ${file.name}`})
+      editor = monaco.editor.create(host, {model, automaticLayout:true, fontFamily:'CommitMono, monospace', fontSize:codeFontSize(), minimap:{enabled:false}, scrollBeyondLastLine:false, padding:{top:12}, scrollbar:{verticalScrollbarSize:3,horizontalScrollbarSize:3}, ariaLabel:`Edit ${file.name}`})
       theme = () => monaco.editor.setTheme(media.matches ? 'muniment-vs-dark' : 'muniment-vs')
       theme(); media.addEventListener('change', theme)
       subscription = model.onDidChangeContent(changed)
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, save)
       ready = true
     }).catch(e => { if (!disposed) error = String(e) }).finally(() => { if (!disposed) busy = false })
-    return () => { disposed = true; subscription?.dispose(); media.removeEventListener('change',theme); editor?.dispose(); model?.dispose() }
+    return () => { disposed = true; subscription?.dispose(); media.removeEventListener('change',theme); window.removeEventListener(TYPE_EVENT, sized); editor?.dispose(); model?.dispose() }
   })
 </script>
 <section class="file-editor" aria-label={`Editor for ${file.name}`}>

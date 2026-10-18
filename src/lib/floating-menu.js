@@ -1,6 +1,7 @@
 import { Window, getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { listen } from '@tauri-apps/api/event'
+import { currentZoom } from './display-state.js'
 
 // Keep action handlers in the main window; render their menu above native webviews.
 export function floatingMenu(node) {
@@ -26,9 +27,11 @@ export function floatingMenu(node) {
       const rect = node.getBoundingClientRect()
       const items = buttons().map((button, index) => ({ id: index, name: button.textContent.trim(), disabled: button.disabled, icon: button.querySelector('svg')?.getAttribute('data-icon') }))
       const width = Math.min(320, Math.max(180, rect.width + 16))
-      const height = Math.min(innerHeight, items.length * 36 + 30)
+      // The page measures CSS pixels, and the interface zoom scales them to window pixels.
+      const zoom = currentZoom()
+      const height = Math.min(innerHeight * zoom, items.length * 36 + 30)
       await popup.setSize(new LogicalSize(width, height))
-      await popup.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, Math.min(rect.left - 8, innerWidth - width)) * scale), Math.round(origin.y + Math.max(0, Math.min(rect.top - 8, innerHeight - height)) * scale)))
+      await popup.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, Math.min(rect.left * zoom - 8, innerWidth * zoom - width)) * scale), Math.round(origin.y + Math.max(0, Math.min(rect.top * zoom - 8, innerHeight * zoom - height)) * scale)))
       if (disposed) return
       floating = true
       node.dataset.floatingMenu = 'true'

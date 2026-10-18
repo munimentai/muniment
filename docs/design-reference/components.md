@@ -378,13 +378,14 @@ label tracking, the 1.45 provenance line height, and every opacity.
 
 | Test | Rule |
 | --- | --- |
-| `signal-allowlist.test.js` | `--signal` appears only on the listed App selectors, never in markup, every component focus ring is 2px `--ink` at offset 2, and base.css collapses all motion under reduced motion |
+| `signal-allowlist.test.js` | `--signal` appears only on the listed App selectors, never in markup, one global rule draws every 2px `--focus-ring` focus ring and no component redraws or clears it, and base.css collapses all motion under `data-motion="reduce"`, which every component reads in place of a media query |
 | `target-size.test.js` | `.thread-menu button`, the delete confirm buttons, `.run-error button`, `.provenance`, `.companion-revoke`, `.profile-menu button`, and the retention radios hold a 24 by 24 minimum |
 | `control-name.test.js` | Every input and textarea in App and Onboarding carries `aria-label`, `aria-labelledby`, or a `label for` |
 | `shape-scale.test.js` | Every radius is one of the three radius tokens and every shadow one of the two depth tokens, except the listed dots, the divider reset, and the segmented control corners |
 | `type-scale.test.js` | Every `font-size` and `font` shorthand resolves through a `--text-*` token, with `font: inherit` the one size-free form |
 | `record-font.test.js` | `.record`, `.tool-card`, `.provenance`, `.receipt-record`, the onboarding chips, and the onboarding path rows read `--font-mono` |
-| `contrast.test.js` | `--ink`, `--muted`, and `--signal` clear 4.5:1 on `--paper`, `--surface`, and `--faint` in all four palettes |
+| `contrast.test.js` | `--ink`, `--muted`, and `--signal` clear 4.5:1 on `--paper`, `--surface`, and `--faint` in all 24 themes, `--muted` also on the selection fill and both sidebar frames, the focus ring 3:1, and no dark surface is pure black |
+| `icon-button-name.test.js` | Every button whose content is only an icon carries `aria-label` or `aria-labelledby` |
 | `text-wrap.test.js` | `.provenance`, `.user-message`, `.response-prose`, `.tool-name`, `.permission-card p`, `.receipt-record dd`, and `.assistant-markdown` set `overflow-wrap: anywhere` |
 | `class-usage.test.js` | Every class in markup has a rule in its component or in base.css, and class expressions stay literal |
 

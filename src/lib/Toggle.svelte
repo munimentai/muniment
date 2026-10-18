@@ -14,5 +14,5 @@
   button[aria-checked="true"]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 86%, var(--ink)); background: color-mix(in srgb, var(--accent) 86%, var(--ink)); }
   button:focus-visible { border-color: var(--ink); }
   button:disabled { opacity: .45; cursor: default; }
-  @media (prefers-reduced-motion: reduce) { button, span { transition: none; } }
+  :global(:root[data-motion="reduce"]) button, :global(:root[data-motion="reduce"]) span { transition: none; }
 </style>
