@@ -43,7 +43,7 @@
 {/if}
 
 <style>
-  .run-line { margin: 0 0 10px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .run-line { margin: 0 0 10px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   summary, .plain { min-height: 24px; padding: 2px 0; }
   summary { display: block; width: max-content; max-width: 100%; margin-left: -8px; padding: 2px 8px; border-radius: var(--radius-control); cursor: pointer; list-style: none; }
   summary::-webkit-details-marker { display: none; }

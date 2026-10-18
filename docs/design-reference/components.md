@@ -166,7 +166,7 @@ them.
 | Caret | `.caret` | Caret on the active line | 2px right border `--signal`, `blink 800ms step-end infinite` | Allowed signal use |
 | Thinking | `.thinking` | The mark in its thinking state with the word Routing | `--muted`, `--text-12 --font-mono`, gap 9px, 17px mark | `.thinking path`: `--signal` fill, `breathe 1.8s ease-in-out infinite`. Reduced motion: none |
 | Assistant markdown | `AssistantMarkdown.svelte` | Rendered complete reply | See the assistant markdown table | None |
-| Provenance | `.provenance` | Receipt line under a reply, toggles the record when it holds a second row | Transparent button, 24px floor, `--muted`, `--text-provenance` at line-height 1.45 (no token) in `--font-mono`, tabular figures, wraps anywhere | Hover: `--ink`. `.route-segment`: `--signal` (allowed). Unavailable: a `p.provenance` with the same register |
+| Provenance | `.provenance` | Receipt line under a reply, toggles the record when it holds a second row | Transparent button, 24px floor, `--muted`, `--text-provenance` at line-height 1.45 (no token) in `--font-human`, tabular figures, wraps anywhere | Hover: `--ink`. `.route-segment`: `--signal` (allowed). Unavailable: a `p.provenance` with the same register |
 | Receipt marker | `.receipt-marker` | Chevron on the provenance line. A one-row receipt shows a 12px `clock` icon in its place on a plain `p.provenance` that never expands | 5px box, 1px `currentColor` edges, rotated -45deg, transition `transform 120ms ease` (raw, `--motion-popover` exists) | `.expanded`: 45deg. Reduced motion: no transition |
 | Receipt record | `.receipt-record` | Expanded receipt list, plain under the provenance line | 329px, no border, no padding, `--muted`, `--text-12 --font-mono`, 88px label column | `.route-value`: `--signal` (allowed). `dd` wraps anywhere |
 | Message actions | `.message-actions` | Copy row under a complete reply | opacity 0, transition `opacity 120ms ease` (raw, `--motion-popover` exists), gap 2px | Response hover or focus-within: opacity 1 |
@@ -383,7 +383,7 @@ label tracking, the 1.45 provenance line height, and every opacity.
 | `control-name.test.js` | Every input and textarea in App and Onboarding carries `aria-label`, `aria-labelledby`, or a `label for` |
 | `shape-scale.test.js` | Every radius is one of the three radius tokens and every shadow one of the two depth tokens, except the listed dots, the divider reset, and the segmented control corners |
 | `type-scale.test.js` | Every `font-size` and `font` shorthand resolves through a `--text-*` token, with `font: inherit` the one size-free form |
-| `record-font.test.js` | `.record`, `.tool-card`, `.provenance`, `.receipt-record`, the onboarding chips, and the onboarding path rows read `--font-mono` |
+| `record-font.test.js` | `.record`, `.tool-card`, `.receipt-record`, the onboarding chips, and the onboarding path rows read `--font-mono`; `.provenance`, `.response-meta` and the run line read `--font-human` |
 | `contrast.test.js` | `--ink`, `--muted`, and `--signal` clear 4.5:1 on `--paper`, `--surface`, and `--faint` in all 24 themes, `--muted` also on the selection fill and both sidebar frames, the focus ring 3:1, and no dark surface is pure black |
 | `icon-button-name.test.js` | Every button whose content is only an icon carries `aria-label` or `aria-labelledby` |
 | `text-wrap.test.js` | `.provenance`, `.user-message`, `.response-prose`, `.tool-name`, `.permission-card p`, `.receipt-record dd`, and `.assistant-markdown` set `overflow-wrap: anywhere` |

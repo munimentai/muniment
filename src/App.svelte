@@ -4499,9 +4499,9 @@
   .agent-turn { margin: 0 0 16px; }
   .thread-approvals { max-width: 760px; margin: 16px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }
-  .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); }
+  .user-message-meta.message-actions { justify-content: flex-end; align-items: center; gap: 12px; margin-top: 5px; min-height: 28px; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); }
   .user-turn:hover .message-actions, .user-turn:focus-within .message-actions { opacity: 1; }
-  .response-meta { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); flex-shrink: 0; }
+  .response-meta { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); flex-shrink: 0; }
   .message-actions button[data-tooltip] { position: relative; }
   .message-actions button[data-tooltip]::after { content: attr(data-tooltip); position: absolute; right: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .message-actions button[data-tooltip]:hover::after, .message-actions button[data-tooltip]:focus-visible::after { opacity: 1; transition-delay: 350ms; }
@@ -4548,9 +4548,9 @@
   .receipt-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   .live-receipt { min-height: 28px; }
   .copy-slot { width: 32px; height: 28px; flex: none; }
-  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-mono); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
-  /* §2.2 mono 11.5px; §1.4 records line up their figures. The shorthand resets
-     font-variant-numeric, so tabular-nums follows it. */
+  .provenance { display: flex; align-items: center; min-width: 24px; min-height: 24px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font: var(--text-provenance)/1.45 var(--font-human); font-variant-numeric: tabular-nums; text-align: left; overflow-wrap: anywhere; }
+  /* The line names a model and a time, so it takes the UI face; its figures
+     line up. The shorthand resets font-variant-numeric, so tabular-nums follows it. */
   /* The receipt toggle takes the copy control's padding and hover, and its negative margin keeps the line's text on the prose edge. */
   button.provenance { padding: 4px 8px; margin-left: -8px; border-radius: var(--radius-control); }
   button.provenance:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
@@ -4561,7 +4561,7 @@
   .receipt-provider { display: inline-flex; flex: none; margin-right: -4px; }
   /* §1.2 permits --signal on the route segment only. */
   .provenance .route-segment { color: var(--signal); }
-  .message-time { font-family: var(--font-mono); font-size: var(--text-provenance); font-weight: 400; line-height: 1.45; font-variant-numeric: tabular-nums; }
+  .message-time { font-family: var(--font-human); font-size: var(--text-provenance); font-weight: 400; line-height: 1.45; font-variant-numeric: tabular-nums; }
   .receipt-time { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   /* The expanded receipt sits plain under the provenance line: no box. */
   .receipt-usage { max-width: 100%; overflow-x: auto; margin-top: 8px; color: var(--muted); font: var(--text-12) var(--font-mono); }

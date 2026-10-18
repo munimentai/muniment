@@ -62,9 +62,9 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    `--accent` fills each view's primary action (a `Button` marked primary or a submit) and an enabled switch. `StatusChip` colors a reported state: success online and done, active running, danger failed, warning queued and waiting, neutral offline and idle.
    Other buttons, links, icons at rest and badges are ink on paper, and selection reads `--selected`. A starter card's icon takes its `--tint-*` hue over a soft fill of it.
    `src/styles/signal-allowlist.test.js` enforces the list.
-2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
-   entries, costs, ids, versions, code, file paths and keyboard chips render in Commit
-   Mono. Conversation, labels, headings, states, times and model names render in Schibsted Grotesk.
+2. **If it is a record, it is mono.** Receipt rows, audit
+   entries, ids, versions, code, file paths and keyboard chips render in Commit
+   Mono. Conversation, labels, headings, states, times, model names and the run and provenance lines render in Schibsted Grotesk.
 3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no decorative sparkles or wands, no emoji in UI
@@ -108,7 +108,7 @@ never dots. Tool activity folds under one `N tools used` line with a chevron. A 
 It opens to groups of file reads, searches, commands and edits, indented. Each group opens its action list,
 and each action, named by core's headline and result, opens its details, state and duration, with the raw input and output behind Show details. A neutral text
 sheen marks active actions and stops with reduced motion. Lucide icons name
-the action type. The receipt's Tools row tallies the calls only when the transcript shows none, and the receipt never lists memory reads. Routing details appear only for a turn whose model the router chose, not for a model the user picked, and open in an overlay: the blurred scrim, a 1080 by 760 panel, and the turns scrolling inside. The provenance line sits under every response in mono at
+the action type. The receipt's Tools row tallies the calls only when the transcript shows none, and the receipt never lists memory reads. Routing details appear only for a turn whose model the router chose, not for a model the user picked, and open in an overlay: the blurred scrim, a 1080 by 760 panel, and the turns scrolling inside. The provenance line sits under every response in the UI face at
 `--text-provenance`, with the route in signal. Composer focus shifts the
 border to `--focus-edge`: `muted`, or the accent in a Vibrant set, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
@@ -191,7 +191,7 @@ Components: [docs/design-reference/components.md](docs/design-reference/componen
 lists every control and surface, its states, and the token each state reads.
 
 The file panel shares the record panel rail, resize and maximize behavior.
-The changed-files chip sits above the composer, opens its list on hover and opens Review changes on click: turns and their files at the left, the diff with Revert file and per-hunk Revert change at the right. A settled turn opens with a mono run line, machine, model, mode, time, tokens and the estimate labeled API estimate, that opens to its tool calls. A user message shows Rewind to here beside Copy; its dialog names what returns, what goes and what cannot be undone, focuses Cancel, and a partial rewind reports itself with triangle-alert in `--warning`, never as done.
+The changed-files chip sits above the composer, opens its list on hover and opens Review changes on click: turns and their files at the left, the diff with Revert file and per-hunk Revert change at the right. A settled turn opens with a compact run line in the UI face, machine, model, mode, time, tokens and the estimate labeled API estimate, that opens to its tool calls. A user message shows Rewind to here beside Copy; its dialog names what returns, what goes and what cannot be undone, focuses Cancel, and a partial rewind reports itself with triangle-alert in `--warning`, never as done.
 File links open an editable Monaco tab with syntax highlighting. Only actions with more details use disclosure arrows.
 The account name shows a pencil on hover or focus and edits inline.
 
