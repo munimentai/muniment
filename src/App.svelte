@@ -470,10 +470,13 @@
   let agentPanelMaximum = $state(560)
   let agentPanelPointer = $state()
   let lastProfileAgent = null
+  // The thread a run's link opened. Its agent's profile stays closed, so
+  // the thread keeps the view until the user reveals the profile.
+  let profileHeldFor = null
   function revealAgentProfile() { browserPanel = null; projectsOpen = false; agentsOpen = false; fullPage = null; closeRail(); agentProfileOpen = true; agentResize.fit() }
   $effect(() => {
     const id = profileAgent?.id
-    if (id && id !== lastProfileAgent && !browserPanel) untrack(() => revealAgentProfile())
+    if (id && id !== lastProfileAgent && !browserPanel && untrack(() => profileHeldFor !== currentThreadId)) untrack(() => revealAgentProfile())
     lastProfileAgent = id
   })
   let agentOpening = $state(false)
@@ -1868,6 +1871,8 @@
     if (!plain && row) {
       const group = swarm.groups.find((entry) => entry.thread_id === row.thread_id)
       if (group) { clearThreadSelection(); void openGroup(group).catch(error => { submitError = String(error) }); return }
+      // A row that needs the user opens the thread that waits on them.
+      if (row.status === 'needs_you' && row.thread_id) { clearThreadSelection(); void showThread(row.thread_id).catch(error => { submitError = String(error) }); return }
       const agent = row.agent_id && !threadSummaries.some((entry) => entry.threadId === row.thread_id) ? roster.find((entry) => entry.id === row.agent_id) : null
       if (agent) { clearThreadSelection(); void openAgent(agent).catch(error => { submitError = String(error) }); return }
     }
@@ -2838,9 +2843,26 @@
     const timer = setInterval(poll, 60_000)
     return () => { clearInterval(timer); clearTimeout(needsYouTimer); window.removeEventListener('muniment:notify-preferences', chosen) }
   })
+  // A run's thread takes the view: the page, catalog or agent profile that
+  // covers it closes, also when it is the open thread already. A run that
+  // names no thread yet is read again, since core names the thread once the
+  // run starts.
   async function openRunThread(run) {
-    if (!await chatController.openThread(run.thread_id, true)) return
-    fullPage = null
+    let threadId = run?.thread_id
+    if (!threadId && run?.id && run?.agent_id) {
+      const runs = await listRuns(tauri, runtimeList, { agentId: run.agent_id, runtimeId: run.runtimeId ?? LOCAL_RUNTIME_ID, limit: 20 })
+      threadId = runs.find((entry) => entry.id === run.id)?.thread_id
+    }
+    if (!threadId) throw new Error('The run has not started its thread yet. Try again in a moment.')
+    return showThread(threadId)
+  }
+  async function showThread(threadId) {
+    profileHeldFor = threadId
+    if ((threadId !== currentThreadId || freshThread) && !await chatController.openThread(threadId, true)) return false
+    await tick()
+    fullPage = null; agentBuilder = null; agentsOpen = false; projectsOpen = false; artifactsOpen = false
+    agentProfileOpen = false; profileOnlyAgent = null
+    return true
   }
   function agentRunUpdated(update) {
     const run = update?.run
@@ -4078,12 +4100,12 @@
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings}
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; profileOnlyAgent = null; void refreshAgents() }}
-        onopen={(id) => chatController.openThread(id, true)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onactivity={() => showNotifications()} />{/key}
+        onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onactivity={() => showNotifications()} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
   {#if fullPage === 'agent-builder' && agentBuilder}{#key agentBuilder.key}<AgentBuilder {tauri} description={agentBuilder.description} threadId={agentBuilder.threadId} threadTitle={agentBuilder.threadTitle} autostart={agentBuilder.autostart} projectId={agentBuilder.projectId ?? null} runs={activityRuns}
-    onsaved={openBuiltAgent} onopenchat={(agent, run) => (run?.thread_id ? openRunThread(run).then(() => { agentBuilder = null }) : openBuiltAgent(agent)).catch(error => { submitError = String(error) })} onchange={() => { void refreshAgents() }}
+    onsaved={openBuiltAgent} onopenchat={(agent, run) => (run ? openRunThread(run) : openBuiltAgent(agent)).catch(error => { submitError = String(error) })} onchange={() => { void refreshAgents() }}
     onrefine={(text) => { fullPage = null; agentBuilder = null; void startCreation('agent', creationDefaults('agent'), text) }} />{/key}{/if}
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}

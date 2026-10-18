@@ -8300,6 +8300,66 @@ describe('agent builder', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'New agent' })).toBeNull())
   })
 
+  it('opens the test run\'s thread in place of the builder, the agent profile and the sidebar row', async () => {
+    const saved = []
+    builderMock(saved)
+    const original = invoke.getMockImplementation()
+    let primary = {}
+    let runs = []
+    const gated = [{ runId: 'run-test', phase: 'pending-permission', text: '', prompt: 'Carry out your saved agent instructions.', receipt: null, toolActivity: [], pendingPermission: { kind: 'select', title: 'Allow web_search?', options: ['Allow once', 'Deny'] } }]
+    invoke.mockImplementation((command, payload) => {
+      if (isAgentList(command, payload)) return Promise.resolve(agentListAnswer(saved, primary))
+      if (command === 'agent_request' && payload?.operation === 'agent.run_now') return Promise.resolve({ run: { id: 'run-test', agent_id: payload.body.id, status: 'queued', thread_id: null } })
+      if (command === 'agent_request' && payload?.operation === 'agent.runs') return Promise.resolve({ runs, next_cursor: null })
+      if (command === 'chat_thread_open' && payload.threadId === 'thread-test') return Promise.resolve(gated)
+      if (command === 'chat_new_thread') return Promise.resolve('thread-new')
+      return original(command, payload)
+    })
+    // The run's thread shows when its first message is in the transcript.
+    const shown = () => [...document.querySelectorAll('.user-message')].some((message) => message.textContent.includes('Carry out your saved agent instructions.'))
+    const profileOpen = () => !!document.querySelector('.workspace.agent-profile-open')
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const form = await screen.findByRole('form', { name: 'Agent draft' })
+    await fireEvent.click(within(form).getByRole('button', { name: 'Run test now' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.run_now' })))
+    // Core names the run's thread once the run starts; the builder still
+    // holds the run as it was queued, so Open chat reads the run again.
+    primary = { 'agent-1': 'thread-test' }
+    const run = { id: 'run-test', agent_id: 'agent-1', status: 'waiting_input', thread_id: 'thread-test', updated_at: new Date().toISOString(), trigger: { kind: 'manual', source: 'test' } }
+    runs = [run]
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'New agent' })).toBeNull())
+    expect(shown()).toBe(true)
+    expect(profileOpen()).toBe(false)
+
+    // The agent profile's Open conversation shows the thread in its place.
+    await fireEvent.click(await screen.findByRole('button', { name: 'Reveal agent profile' }))
+    await waitFor(() => expect(profileOpen()).toBe(true))
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open conversation' }))
+    await waitFor(() => expect(profileOpen()).toBe(false))
+    expect(shown()).toBe(true)
+
+    // The sidebar's Needs you row opens the run's thread from another
+    // thread, also while the thread list does not name it yet.
+    await fireEvent.click(document.querySelector('.side-action.new-thread'))
+    await waitFor(() => expect(shown()).toBe(false))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'sidebar_arrange'
+      ? Promise.resolve({ ...arrangeStandIn(args[0]?.input), needs_you: [{ thread_id: 'thread-test', title: 'Weekly recap · test run', project_id: 'agent:agent-1', project_name: 'Weekly recap', status: 'needs_you', status_label: 'Answer', agent_id: 'agent-1', home: true, pinned: false, updated_at: run.updated_at }] })
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: '' } })
+    const needsYou = await screen.findByRole('list', { name: 'Threads that need you' })
+    await fireEvent.click(within(needsYou).getByRole('button', { name: 'Weekly recap · test run' }))
+    await waitFor(() => expect(shown()).toBe(true))
+    expect(profileOpen()).toBe(false)
+  })
+
   it('makes an agent from a thread through its menu', async () => {
     builderMock([])
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }, { threadId: 'thread-2', title: 'Release notes', updatedAt: '' }]
