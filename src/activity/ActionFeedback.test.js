@@ -95,3 +95,23 @@ it('reads the whole output of a truncated action when its detail opens', async (
   expect(await view.findByText('all of the build log')).toBeInTheDocument()
   expect(view.getByText('Showing the first 20 B of 391 KB.')).toBeInTheDocument()
 })
+
+it('nests a script call under its script and keeps the script one disclosure away', async () => {
+  const script = (effectId, uses) => ({ effectId, displayName: 'codemode', status: 'completed', input: JSON.stringify({ code: `await tools.${uses}({})` }), presentation: { category: 'code', kind: 'command', icon: 'file-code', headline: `Run a script that uses ${uses}`, progress: 'Running a script', result: 'Script completed' } })
+  const made = (effectId, parentEffectId, headline) => ({ effectId, parentEffectId, displayName: 'web_search', status: 'completed', input: '{"query":"x"}', presentation: { category: 'web', kind: 'web', icon: 'globe', headline, progress: 'Searching the web', result: 'Found 2 results', via: 'via script' } })
+  const view = render(ActionFeedback, { activities: [script('s1', 'Web search'), made('s1/1', 's1', 'Search A'), script('s2', 'Fetch content'), made('s2/1', 's2', 'Fetch 3 pages'), made('s2/2', 's2', 'Fetch 1 page')] })
+  await fireEvent.click(view.getByText('3 tools used').closest('summary'))
+  // One call stands in for its script, with the note.
+  const single = view.getByText('Search A').closest('details')
+  expect(single.querySelector('summary')).toHaveTextContent('via script')
+  expect(single.querySelector('summary')).not.toHaveTextContent('Run a script')
+  await fireEvent.click(single.querySelector('summary'))
+  expect(single).toHaveAttribute('open')
+  expect(single.querySelector('.action-detail')).toHaveTextContent('Run a script that uses Web search')
+  expect(single.querySelectorAll('details.tool-raw')).toHaveLength(2)
+  // Several calls nest under their script's row.
+  const nested = view.getByText('Fetch 3 pages').closest('.action-list.nested')
+  expect(nested).toHaveTextContent('Fetch 1 page')
+  expect(nested.previousElementSibling).toHaveTextContent('Run a script that uses Fetch content')
+  expect(nested).not.toHaveTextContent('via script')
+})

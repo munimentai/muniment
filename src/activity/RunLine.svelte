@@ -31,7 +31,7 @@
       {#if open}
         <ol class="timeline" aria-label="Tool calls">
           {#each timeline as entry (entry.id)}
-            <li><ToolCall presentation={entry.presentation} label={entry.label} running={entry.running} result={entry.result || (entry.state === 'Completed' ? '' : entry.state)} failed={entry.failed} iconSize={14} />{#if entry.duration}<span class="duration">{entry.duration}</span>{/if}</li>
+            <li><ToolCall presentation={entry.presentation} label={entry.label} running={entry.running} result={entry.result || (entry.state === 'Completed' ? '' : entry.state)} failed={entry.failed} via={entry.via ?? ''} iconSize={14} />{#if entry.duration}<span class="duration">{entry.duration}</span>{/if}</li>
           {/each}
         </ol>
         {#if onreview}<button type="button" class="review" onclick={onreview}>Review changes</button>{/if}

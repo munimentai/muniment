@@ -1,6 +1,7 @@
 // The tools gallery: one turn that called every kind of tool core describes
 // (shipped tools, MCP tools with and without a schema, a tool that sets its
-// own presentation, an unknown plugin tool, failed calls and long inputs),
+// own presentation, an unknown plugin tool, failed calls, long inputs and
+// script calls nested under their scripts),
 // opened to each call's details and its run line, and a turn waiting at a
 // web search gate. `agents.html?state=tool-approvals` shows the gallery's
 // gates as agent approvals on Notifications.
@@ -9,8 +10,24 @@ import { galleryCalls, galleryGates } from './presentations.js'
 const GALLERY = (id) => !/^(probe|trust|preview)-/.test(id)
 const at = (seconds) => new Date(Date.parse('2026-10-18T12:00:00Z') + seconds * 1000).toISOString()
 
+// Script calls as core sends them: each names its script, and a script with
+// one call shows as that call with its note. The second script nests two.
+function scriptCalls(calls) {
+  const like = (id, effectId, extra = {}) => ({ ...structuredClone(calls.find((call) => call.effectId === id)), effectId, ...extra })
+  const made = (id, effectId, parentEffectId) => {
+    const call = like(id, effectId, { parentEffectId })
+    call.presentation.via = 'via script'
+    return call
+  }
+  return [
+    like('script', 'script-search'), made('web', 'script-search/1', 'script-search'),
+    like('script', 'script-reads'), made('read', 'script-reads/1', 'script-reads'), made('grep', 'script-reads/2', 'script-reads'),
+  ]
+}
+
 export function toolsHistory() {
-  const calls = galleryCalls().filter((call) => GALLERY(call.effectId))
+  const gallery = galleryCalls().filter((call) => GALLERY(call.effectId))
+  const calls = [...gallery, ...scriptCalls(gallery)]
   const web = galleryGates().find((gate) => gate.id === 'gate-web')
   return [
     {
@@ -78,6 +95,6 @@ export function toolsRendered() {
   if (!feedback) return false
   const details = [...feedback.querySelectorAll('.tool-groups details:not(.tool-raw)')]
   return details.length > 0 && details.every((entry) => entry.open)
-    && workspace.querySelectorAll('details.run-line[open] .timeline li').length === galleryCalls().filter((call) => GALLERY(call.effectId)).length
+    && workspace.querySelectorAll('details.run-line[open] .timeline li').length === galleryCalls().filter((call) => GALLERY(call.effectId)).length + 3
     && !!workspace.querySelector('.permission-card .tool-call-card')
 }

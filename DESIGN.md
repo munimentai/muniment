@@ -104,7 +104,7 @@ messages sit right in `faint` bubbles at radius 10. Another agent's message sits
 36px gutter, and render as Markdown from the first token. The transcript renders a window of at most 120 items and adds older ones as the reader scrolls up. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
 surface above it. Streaming is one signal underscore caret,
-never dots. Tool activity folds under one `N tools used` line with a chevron.
+never dots. Tool activity folds under one `N tools used` line with a chevron. A script's tool calls nest under its row and count in its place, and a script with one call shows as that call with core's muted `via script` note.
 It opens to groups of file reads, searches, commands and edits, indented. Each group opens its action list,
 and each action, named by core's headline and result, opens its details, state and duration, with the raw input and output behind Show details. A neutral text
 sheen marks active actions and stops with reduced motion. Lucide icons name

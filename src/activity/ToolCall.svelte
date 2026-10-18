@@ -1,13 +1,13 @@
 <script>
   // One tool call as core presents it. `line` is its row in the transcript
-  // and the run line: icon, headline or the words while it runs, and how it
-  // ended. `card` leads an approval with the headline, the reason and the
+  // and the run line: icon, headline or the words while it runs, how it ran
+  // when a script made it, and how it ended. `card` leads an approval with the headline, the reason and the
   // details. `detail` is an open row's body: the details and its state. The
   // raw input and output stay behind Show details in both.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { headlineParts, presentationOf } from './tool-call.js'
 
-  let { presentation = null, variant = 'line', label = '', running = false, result = '', failed = false, state = '', reason = '', input = '', raw = undefined, iconSize = 16 } = $props()
+  let { presentation = null, variant = 'line', label = '', running = false, result = '', failed = false, state = '', reason = '', input = '', raw = undefined, via = '', iconSize = 16 } = $props()
   const shown = $derived(presentationOf({ presentation }))
   const parts = $derived(headlineParts(label || shown.headline))
   const details = $derived((shown.details ?? []).filter((detail) => detail?.label && detail?.value))
@@ -53,6 +53,7 @@
   <span class="tool-line" data-tool-kind={shown.kind}>
     <LucideIcon name={shown.icon} size={iconSize} />
     <span class="tool-label" class:active-sheen={running}>{@render headline()}</span>
+    {#if via}<span class="tool-via">{via}</span>{/if}
     {#if result}<span class="tool-result" class:failed>{result}</span>{:else if state === 'Failed' || state === 'Interrupted'}<span class="tool-result" class:failed={state === 'Failed'}>{state}</span>{/if}
   </span>
 {/if}
@@ -63,6 +64,7 @@
   .tool-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .tool-result { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--text-12); }
   .tool-result.failed { color: var(--danger); }
+  .tool-via { flex: none; color: var(--muted); font-size: var(--text-12); }
   code { font-family: var(--font-mono); }
   .tool-call-card { display: grid; gap: 6px; min-width: 0; }
   .tool-title { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--ink); font: 500 var(--text-15)/1.4 var(--font-human); overflow-wrap: anywhere; }
