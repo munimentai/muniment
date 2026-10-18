@@ -7,7 +7,7 @@
   // long, how many tokens and what it would cost at API prices. It opens to
   // the turn's tool calls in order. A long transcript holds many of these,
   // so the closed line is one element and its parts render only once open.
-  let { run, machine = null, modes = [], live = false, liveMode = null, onreview = null } = $props()
+  let { run, machine = null, modes = [], live = false, liveMode = null, sources = {}, onreview = null } = $props()
 
   let now = $state(Date.now())
   let open = $state(false)
@@ -18,7 +18,7 @@
   })
   const started = $derived(run?.startedAt ? new Date(run.startedAt).getTime() : NaN)
   const elapsed = $derived(live && Number.isFinite(started) ? executionTime((now - started) / 1000) : null)
-  const parts = $derived(runLineParts(run, { machine, modes, elapsed, liveMode }))
+  const parts = $derived(runLineParts(run, { machine, modes, elapsed, liveMode, sources }))
   const timeline = $derived(open ? runTimeline(run?.toolActivity ?? [], live) : [])
   const text = $derived([parts.machine, parts.model, parts.mode, parts.time, parts.tokens, parts.cost && `${parts.cost} API estimate`].filter(Boolean).join(' · '))
   const expandable = $derived((run?.toolActivity?.length ?? 0) > 0)

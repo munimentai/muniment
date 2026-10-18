@@ -773,6 +773,19 @@
     return actions
   })
 
+  // The newest turn's run line names where its model and mode come from
+  // while the thread still runs on them.
+  const newestRunId = $derived(messages.findLast((message) => message.run && settledPhases.has(message.run.phase))?.run.id ?? null)
+  function runSources(run) {
+    const receipt = run?.receipt ?? {}
+    const model = typeof receipt.model === 'string' ? receipt.model : ''
+    const sameModel = !!chipModel && (model === chipModel.model || model.endsWith(`/${chipModel.model}`))
+    return {
+      model: sameModel && threadModel?.thread_id === currentThreadId ? modelSource : null,
+      mode: receipt.permission_mode && receipt.permission_mode === composerMode?.id && composerThreadId ? modeSource : null,
+    }
+  }
+
   // A pick changes the open thread's model. With no thread yet it waits for
   // the first message, which starts the thread with it.
   async function chooseModel(provider, model) {
@@ -3631,7 +3644,7 @@
             {:else}
             {@const parts = responseParts(message.run)}
             <div class="response">
-              {#if settledPhases.has(message.run.phase)}<RunLine run={message.run} machine={runMachine} modes={modeListing?.listing?.modes ?? []} onreview={message.run.phase === 'complete' && !threadGroup && !currentSummary?.replica ? () => { reviewing = { runId: message.run.id } } : null} />{/if}
+              {#if settledPhases.has(message.run.phase)}<RunLine run={message.run} machine={runMachine} modes={modeListing?.listing?.modes ?? []} sources={message.run.id === newestRunId ? runSources(message.run) : {}} onreview={message.run.phase === 'complete' && !threadGroup && !currentSummary?.replica ? () => { reviewing = { runId: message.run.id } } : null} />{/if}
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
                   <summary>Prompt text stays in runtime memory for this run.</summary>
