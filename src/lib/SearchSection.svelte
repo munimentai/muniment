@@ -234,7 +234,7 @@
       <input type="text" placeholder={FIELDS[field] ?? field} aria-label={`${provider.name} ${FIELDS[field] ?? field}`} autocomplete="off" bind:value={draftExtra[field]}>
     {/each}
     <input type="password" placeholder="API key" aria-label={`${provider.name} API key`} autocomplete="off" bind:value={draftKey} onkeydown={event => { if (event.key === 'Enter') saveKey(provider) }}>
-    <Button variant="outline" disabled={saving || !draftKey.trim()} onclick={() => saveKey(provider)}>Save</Button>
+    <Button variant="primary" disabled={saving || !draftKey.trim()} onclick={() => saveKey(provider)}>Save</Button>
     <Button onclick={cancelKey}>Cancel</Button>
     {#if error}<p role="alert">{error}</p>{/if}
   </div>

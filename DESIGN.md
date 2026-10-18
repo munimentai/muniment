@@ -8,15 +8,14 @@ default. The interface is the user's territory and the model is a visitor.
 ## Tokens
 
 `src/styles/tokens.css` is the token source. Code has theme-aware syntax tokens. Light and dark are both
-first-class, Framed Moss dark is the default, and a user override follows the user to every machine in a fleet.
+first-class, Framed Moss vibrant dark is the default for a new install, and a user override follows the user to every machine in a fleet.
 Every theme carries ten core color tokens in one `:root[data-theme]`
 block. Appearance offers four colors, Moss, Harbor, Clay and Iris, in three
 rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
 version, and Mode picks between them, so System follows the OS with the
-picked palette. Normal sets are quiet neutrals tinted by the color, with the
-color as signal. Vibrant sets tint paper and add an accent. High contrast sets
-hold pure ink on pure paper, with the color on strong hairlines and hovers. Moss light and Moss dark
-are the two defaults below.
+picked palette. Normal sets are quiet neutrals tinted by the color, with the color as signal and accent. Vibrant sets tint paper, add a complementary accent and color selection and the composer's focus edge with it. High contrast sets
+hold pure ink on pure paper, with the color on strong hairlines and hovers. The table holds Moss light and Moss dark.
+Every set adds `--accent`, `--accent-soft` and `--on-accent`. `--success`, `--active`, `--danger` and `--warning` color the states core reports.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
@@ -54,21 +53,22 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
 
 ## Laws
 
-1. **Color means computation.** The setup mark's folded ear also uses
+1. **Color means computation, action, state and agents.** The setup mark's folded ear also uses
    `--signal`. Otherwise `--signal` appears only on the mark's thinking
    state, the streaming underscore and caret on
    the active line, the route segment of the provenance line, the live voice
    polish flash, the green globe of a machine that answers in the machine menu, and workflow-run
-   indicators. Settings tabs, selected capability filters, verified updates, enabled extension switches and the Confirm check on an unconfirmed memory row use the theme signal.
-   Other buttons, links, selection, icons at rest and badges are ink on paper.
+   indicators. Settings tabs, selected capability filters, verified updates and the Confirm check on an unconfirmed memory row use the theme signal.
+   `--accent` fills each view's primary action (a `Button` marked primary or a submit) and an enabled switch. `StatusChip` colors a reported state: success online and done, active running, danger failed, warning queued and waiting, neutral offline and idle.
+   Other buttons, links, icons at rest and badges are ink on paper, and selection reads `--selected`.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
-   entries, costs, model names, file paths and keyboard chips render in Commit
-   Mono. Conversation renders in Schibsted Grotesk.
+   entries, costs, ids, versions, code, file paths and keyboard chips render in Commit
+   Mono. Conversation, labels, headings, states, times and model names render in Schibsted Grotesk.
 3. **Anti-patterns are hard fails.** No surface gradients, no violet, no glassmorphism
    or backdrop blur on a surface, no orbs or ambient animation, no assistant
    avatar, no typing dots, no decorative sparkles or wands, no emoji in UI
-   copy, pill radius only on Settings tabs, no "AI", "magic", "supercharge" or "unlock" in copy.
+   copy, pill radius only on Settings tabs and switches, no "AI", "magic", "supercharge" or "unlock" in copy.
    The one blur is the routing details scrim: the workspace under it blurs
    behind the theme's paper, dark in dark mode and light in light mode, while
    the overlay covers most of it.
@@ -98,8 +98,8 @@ writes, raises its front on the hind hip with both feet down and curls its trunk
 ## Grammar
 
 Layout is sidebar, thread, and one rail column for workspace tabs or the optional Record panel (⌘K).
-Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. The Agents, Artifacts and Projects catalogs share PanelPage and PageHead with Settings, so an intro, not a title, leads each. An agent's action card takes the model picker's geometry: the avatar and the name, which shows a pencil on hover and edits in place, over a hairline, a column of 34px panel icons named on hover with the picked one on the hover fill and an ink edge, and the picked panel's 30px rows beside it, the chosen row on the hover fill with a check. Cards keep one row height and their panels scroll inside. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
-messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Agent avatars are heads with no tile from the brand's two generators, Colorful by default or Muniment as Appearance picks, in the theme's light or dark tone; their palettes stand outside the color law. An outline on the head names what the agent does: signal breathing while it runs, ochre while it waits, oxide after a failure. Responses sit plain on
+Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output, listed in its own sidebar section. Artifacts (⌘J) opens their catalog or a creation chat. The Agents, Artifacts and Projects catalogs share PanelPage and PageHead with Settings, so an intro, not a title, leads each. An agent's action card takes the model picker's geometry: the avatar and the name, which shows a pencil on hover and edits in place, over a hairline, a column of 34px panel icons named on hover with the picked one on the selection fill and edge, and the picked panel's 30px rows beside it, the chosen row on the selection fill with a check. Each agent has a color, its colorful head's fill (a white or paper head draws in a hued fill from its seed), which tints its card header under a band of it, its template tile, its open sidebar row and its thread title. Cards keep one row height and their panels scroll inside. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
+messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Agent avatars are heads with no tile of their own from the brand's two generators, Colorful by default or Muniment as Appearance picks, in the theme's light or dark tone; their palettes stand outside the color law. An outline on the head names what the agent does: signal breathing while it runs, ochre while it waits, oxide after a failure. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
 36px gutter, and render as Markdown from the first token. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
@@ -110,7 +110,7 @@ and each action opens its input, output, state and duration. A neutral text
 sheen marks active actions and stops with reduced motion. Lucide icons name
 the action type. The receipt's Tools row tallies the calls only when the transcript shows none, and the receipt never lists memory reads. Routing details appear only for a turn whose model the router chose, not for a model the user picked, and open in an overlay: the blurred scrim, a 1080 by 760 panel, and the turns scrolling inside. The provenance line sits under every response in mono at
 `--text-provenance`, with the route in signal. Composer focus shifts the
-border to `muted`, never signal.
+border to `--focus-edge`: `muted`, or the accent in a Vibrant set, never signal.
 Platform chrome follows the OS and brand tokens stay identical across platforms.
 On macOS the app row sits in the 36px band above the panels beside the native
 traffic lights, and the row's controls and the lights center on that band. The
@@ -121,14 +121,14 @@ control with the same padding. State is background, never a border: the
 composer and the thread title's rename control alone show hover, focus and
 editing as the composer's muted hairline, and no control shows a focus ring or any
 other focus state. Windows keeps its native caption
-controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small mono meta line over its title, the machine's shape and name once a machine is paired, or `on Studio` for a thread another fleet member owns with an ochre slashed globe while that member is away, then the time ago. Hover is a lighter wash than the open thread,
-New thread leads the sidebar, followed by Agents, Groups once a machine is in a swarm, Artifacts, Activity and title search, with no static Threads heading. Activity counts the agent runs that raised a notification since it last opened and the approvals waiting, in a mono chip, and lists those approvals above the runs. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers and every agent the swarm knows, each card with its primary machine's shape icon, an ochre slashed globe when that machine does not answer and a sync icon on a synced copy, and each row with one status mark, ochre when the machine does not answer and a ring on a synced copy, whose hover names the machine and the activity, and Artifacts and Projects open on this computer.
+controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small meta line over its title, the machine's shape and name once a machine is paired, or `on Studio` for a thread another fleet member owns with an ochre slashed globe while that member is away, then the time ago. Hover is a lighter wash than the open thread,
+New thread leads the sidebar, followed by Agents, Groups once a machine is in a swarm, Artifacts, Activity and title search, with no static Threads heading. Activity counts the agent runs that raised a notification since it last opened and the approvals waiting, in a mono chip, and lists those approvals above the runs. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers and every agent the swarm knows, each card with its primary machine's shape icon, an ochre slashed globe when that machine does not answer and a sync icon on a synced copy, and each row with one status mark, success while the machine answers, muted when it does not and a ring on a synced copy, whose hover names the machine and the activity, and Artifacts and Projects open on this computer.
 Pinned threads precede recent threads, with a heading only when pins exist.
 Search loads older titles and includes archives. Archived threads has Restore.
 Pins and archives persist on the device. Projects group ordinary chats and automatically recall relevant sibling chat context before each reply. The Settings footer has one hairline. In a fleet a mono sync line sits above Settings, Synced, Syncing N or Offline with the last sync time, and opens the bootstrap panel: each class with a bar and each sign-in arriving from its holder or waiting for one. The cloud flag adds the account controls.
 Hover or focus shows Rename, Pin or Unpin, Archive or Restore, and Delete
 in one compact menu shared with the title. Shift and Command select rows. The count stays visible; Delete and Super+Delete open one dialog with Cancel focused.
-Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under mono group headings: Back to threads where New thread sits,
+Settings keeps the sidebar, its width, divider and collapse state, and swaps its threads for pages in the same rows under semibold group headings: Back to threads where New thread sits,
 then Models, Extend (ending with Machines), Preferences (Appearance, Context, Permissions, Voice, Language), Personal (Profile, Memory, Storage) and Workspace (Companies). Each page has a Lucide icon and no title of its own, and builds from `src/lib/ui/` PanelPage, PageHead, Group and Row: a muted 15px intro with its actions at the right, then semibold headings over bordered cards of rows.
 The company-record flag adds Companies. The cloud flag adds Account, with phone pairing. It shows the
 section across the thread and rail; the sidebar control, the composer's model chip and the
@@ -136,14 +136,14 @@ platform's settings shortcut, ⌘, on macOS and Ctrl+, on Windows and Linux,
 open it. Back to threads or Escape returns focus to the opener.
 Companies lists each company as a row with Open, Rename and Delete, where Delete asks once and names it, and New company last, then Sources and the sample company,
 which open the record panel, and Backups. Account leads with the signed-in card, Sign out and the plan tiers. Memory carries Recall, the saved facts and Export.
-Machines lists this computer first, then each paired machine with its version and one state line: the update state the machine reports in place of Online while it answers, with blockers or the error in a tooltip. The Machines heading carries Update all, a unified `Button`, and each paired row's menu leads with Update when the machine takes a request. Update all reports the machines it asked and one line of skips with their reasons.
+Machines lists this computer first, then each paired machine with its version and one state chip: the update state the machine reports in place of Online while it answers, with blockers or the error in a tooltip. The Machines heading carries Update all, a unified `Button`, and each paired row's menu leads with Update when the machine takes a request. Update all reports the machines it asked and one line of skips with their reasons.
 Model providers and Decision models are two pages of one component. Account
 rows span the page, with allowances visible and usage in details.
 Decision models holds the routing statements. Connect
 account opens the provider catalog and its connection methods. The model
 chip shows the provider's mark in its brand colors beside the model id, and
 opens a picker: a column of full-color provider marks, each named on hover, the picked provider's current generation, Legacy models folded under one row,
-a search over every model, and Model providers at its foot. The
+a search over every model, and Model providers at its foot. Each provider heading in the picker and the model on the provenance line carry the provider's mark. The
 sidebar is resizable by its divider and collapses to nothing: no rail. Each divider
 shows Lucide's vertical ellipsis as its grip, and on hover, focus or drag its gap fills with `border` that fades out at both ends.
 The mark appears on the launch screen and in the thinking state, never in
@@ -152,7 +152,7 @@ Both share one geometry, a one-pixel frame and a 35px title band, so a switch mo
 and draws the thread and rail as `surface` cards clipped `--card-ring` inside their boxes with a hairline. Frameless fills it with `border` seams, a sidebar panel a step toward `ink`, and flat panels. The update control is a circular
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
-The composer band is one mono row under the composer. The plus, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level, usage and permission mode menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine, model and mode. The mode menu sits under a mono Modes heading: a row per mode with its Lucide icon (hand, pencil, map, zap, shield-check, triangle-alert), its title over one muted line, a check on the current one, Bypass permissions on a new thread by default, and a Shift+Tab chip at its foot. A narrow composer keeps each to its icon with a hover label.
+The composer band is one row under the composer. The plus, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level, usage and permission mode menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine, model and mode. The mode menu sits under a Modes heading: a row per mode with its Lucide icon (hand, pencil, map, zap, shield-check, triangle-alert), its title over one muted line, a check on the current one, Bypass permissions on a new thread by default, and a Shift+Tab chip at its foot. A narrow composer keeps each to its icon with a hover label.
 The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A window no source knows shows no meter. The model picker shows no window and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
 opens with Add files and folders. Voice sits beside the send control. The band's one action control sits at its right
 end: absent while the draft is empty, an ink up-arrow button once the draft has
@@ -219,7 +219,7 @@ Twelve popular entries precede the remaining catalog. Compact cards use three
 columns, two in narrower panels, and one when needed. Each card shows its
 provider logo with initials as a fallback. Pagination appears only for multiple pages. Provider marks show their brand colors on the first run and the model Settings pages, and the composer shows the light or dark mark.
 Installed entries stay in catalog order and use the theme signal-soft surface.
-An unlabeled signal toggle controls availability, with an accessible name.
+An unlabeled accent switch controls availability, with an accessible name.
 The Show filter includes Installed. Connect starts provider authentication when available.
 A sliders icon reveals filters. Custom opens a dialog and attempts to load the service favicon.
 Package review separates instructions, MCP servers and executable code.

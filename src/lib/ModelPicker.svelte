@@ -95,14 +95,14 @@
       {:else if searching}
         {#each groups as group (group.id)}
           <section class="picker-group" aria-label={group.label}>
-            <h4>{group.label}</h4>
+            <h4>{@render mark(group)}{group.label}</h4>
             <ul>{#each [...group.shown, ...group.legacy] as model (model.id)}{@render row(group, model)}{/each}</ul>
           </section>
         {/each}
       {:else if selected}
         <section class="picker-group" aria-label={selected.label}>
           {#if selected.manage}<button type="button" class="quiet group-manage" aria-label="Manage model routing" onclick={onrouting}>Manage</button>{/if}
-          <h4>{selected.label}</h4>
+          <h4>{@render mark(selected)}{selected.label}</h4>
           <ul>{#each selected.shown as model (model.id)}{@render row(selected, model)}{/each}</ul>
           {#if selected.legacy.length}
             <button type="button" class="quiet legacy-toggle" aria-expanded={legacyOpen} onclick={() => legacyOpen = !legacyOpen}>
@@ -117,6 +117,8 @@
   </div>
   <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Model providers</button>
 </div>
+
+{#snippet mark(group)}{#if group.classifier}<LucideIcon name="route" variant="action" size={14} />{:else}<ProviderLogo color provider={group.providerId} size={14} />{/if}{/snippet}
 
 {#snippet row(group, model)}
   {@const used = inUse(model)}
@@ -146,11 +148,11 @@
   /* The provider column: full-color marks, the picked one on the hover fill with an ink edge. */
   .provider-rail { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-right: 1px solid var(--border); overflow-y: auto; outline: 0; }
   .rail-mark { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-color: transparent; background: transparent; }
-  .rail-mark[aria-selected="true"] { background: var(--faint); }
-  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--ink); }
+  .rail-mark[aria-selected="true"] { background: var(--selected); }
+  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
   .rail-tip { position: absolute; z-index: 1; left: 52px; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .picker-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
-  .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   /* Routing is off or has no decision model: the heading links to Decision models. */
   .picker-group { position: relative; }
   .group-manage { position: absolute; top: 0; right: 8px; padding: 2px 6px; border: 0; border-radius: var(--radius-control); background: none; color: var(--ink); font: var(--text-12) var(--font-human); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
@@ -162,13 +164,13 @@
   .picker-group ul { margin: 0; padding: 0; list-style: none; }
   .picker-item { position: relative; }
   .picker-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 34px 5px 8px; text-align: left; font-size: var(--text-13); }
-  .picker-row[aria-pressed="true"] { color: var(--ink); background: var(--faint); }
+  .picker-row[aria-pressed="true"] { color: var(--on-selected); background: var(--selected); }
   /* The row's visibility control shows while the pointer or focus rests on the row. */
   .visibility { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--muted); opacity: 0; }
   .picker-item:hover .visibility, .visibility:focus-visible { opacity: 1; }
   .visibility:hover:not(:disabled) { color: var(--ink); }
   .model-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-12); }
+  .model-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-human); font-size: var(--text-13); }
   .legacy-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; padding: 6px 8px; text-align: left; }
   .legacy-text { display: grid; gap: 2px; }
   .legacy-count { color: var(--muted); font-size: var(--text-12); }

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 const RECORD_SELECTORS = new Map([
   ['src/App.svelte', ['.record', '.tool-card', '.provenance', '.receipt-record']],
-  ['src/lib/Onboarding.svelte', ['.path, .error']],
+  ['src/lib/Onboarding.svelte', ['.path']],
   ['src/lib/FirstRunConnect.svelte', ['.mono']],
   ['src/lib/MemoryImports.svelte', ['.root', '.mono']],
 ])

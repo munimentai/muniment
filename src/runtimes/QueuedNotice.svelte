@@ -31,7 +31,7 @@
 
 <style>
   .queued-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 6px 0 8px; }
-  .queued-line { flex: 1 1 240px; margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); line-height: var(--leading-body); }
+  .queued-line { flex: 1 1 240px; margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: var(--leading-body); }
   .queued-actions { display: flex; flex: none; gap: 6px; }
   .queued-error { flex: 1 1 100%; margin: 0; color: var(--ink); font-size: var(--text-12); }
 </style>

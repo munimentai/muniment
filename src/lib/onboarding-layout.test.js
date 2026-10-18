@@ -35,8 +35,9 @@ describe('onboarding layout', () => {
     expect(connect.indexOf('class="more"')).toBeLessThan(connect.indexOf('class="home"'))
   })
 
-  it('uses the mono record register for addresses and errors', () => {
-    expect(rules.get('.path, .error')).toMatch(/font:\s*var\(--text-12\) var\(--font-mono\)/)
+  it('uses the mono record register for addresses and the UI font for errors', () => {
+    expect(rules.get('.path')).toMatch(/font:\s*var\(--text-12\) var\(--font-mono\)/)
+    expect(rules.get('.error')).toMatch(/font:\s*var\(--text-12\) var\(--font-human\)/)
     expect(connectRules.get('.mono')).toMatch(/font-family:\s*var\(--font-mono\)/)
     expect(source).toContain('{#if modelError}<p class="error" role="alert">{modelError}</p>{/if}')
   })

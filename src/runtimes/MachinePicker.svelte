@@ -122,7 +122,7 @@
 
 <style>
   .machine-picker { flex: none; display: inline-flex; }
-  .machine-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-height: 24px; max-width: 180px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; }
+  .machine-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; min-height: 24px; max-width: 180px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
   .machine-chip :global(.lucide) { flex: none; color: var(--muted); }
   .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
   .machine-menu { display: grid; gap: 2px; width: min(280px, 100%); padding: 4px; }
@@ -137,7 +137,7 @@
   .machine-menu .state :global(.lucide) { color: inherit; }
   .separator { height: 1px; margin: 2px 4px; background: var(--border); }
   .manage { color: var(--muted) !important; }
-  .heading { margin: 2px 8px 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .heading { margin: 2px 8px 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .machine-chip .state { margin-left: 0; color: var(--ochre); }
   .machine-chip .state :global(.lucide) { color: inherit; }
 </style>

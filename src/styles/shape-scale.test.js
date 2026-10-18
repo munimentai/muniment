@@ -8,6 +8,10 @@ import path from 'node:path'
 const RADIUS_EXCEPTIONS = {
   'src/lib/AppUpdate.svelte': { 'button': ['var(--radius-pill)', 'Update control shares the settings pill shape.'] },
   'src/lib/SettingsTabs.svelte': { 'button': ['var(--radius-pill)', 'Shared settings pill tabs.'] },
+  'src/lib/Toggle.svelte': {
+    'button': ['var(--radius-pill)', 'A switch is a pill track.'],
+    'span': ['50%', 'A switch knob is round.'],
+  },
   'src/App.svelte': {
     '.active-thread > span:not(.select-mark):not(.machine-badge)': ['50%', '§1.5 circular current-thread status dot'],
     '.artifact-divider': ['0', '§4 square divider reset'],

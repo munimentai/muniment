@@ -3,7 +3,7 @@ import path from 'node:path'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import { describe, expect, it } from 'vitest'
-import { avatarBounds, avatarFor, avatarSvg, newAvatar } from './agent-avatar.js'
+import { agentColor, avatarBounds, avatarFor, avatarSvg, huedHead, newAvatar } from './agent-avatar.js'
 import AgentAvatar from './AgentAvatar.svelte'
 import * as colorful from './colorful-avatar.js'
 import * as muniment from './muniment-avatar.js'
@@ -61,7 +61,8 @@ describe('agent avatars', () => {
         for (let i = 0; i < 100; i++) {
           const seed = `${i}<script>alert(1)</script>"`
           const markup = avatarSvg({ seed }, { style, tone })
-          expect(markup).toContain(generator.svg(seed, { tone, background: false }).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, ''))
+          const head = generator.svg(seed, { tone, background: false })
+          expect(markup).toContain((style === 'colorful' ? huedHead(head, seed) : head).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, ''))
           expect(markup).not.toMatch(/<script|alert|href=|<image|<foreignObject|onload=|aria-label|<rect width="120"/)
           expect(markup).toMatch(new RegExp(`^<svg [^>]*viewBox="0 0 120 120" preserveAspectRatio="xMidYMid meet" data-style="${style}" data-tone="${tone}">`))
         }
@@ -69,6 +70,27 @@ describe('agent avatars', () => {
     }
     expect(avatarSvg({ seed: 'scout' }, { style: 'muniment', tone: 'light' })).not.toBe(avatarSvg({ seed: 'scout' }, { style: 'muniment', tone: 'dark' }))
     expect(avatarSvg({ seed: 'scout' }, { style: 'nope', tone: 'nope' })).toBe(avatarSvg({ seed: 'scout' }, { style: 'colorful', tone: 'dark' }))
+  })
+
+  it('give every agent a hued color and draw a neutral colorful head in it', () => {
+    const neutral = ['#ffffff', '#ece6d6']
+    let recolored = 0
+    for (let i = 0; i < 400; i++) {
+      const seed = `hue-${i}`
+      const color = agentColor({ avatar: { seed } })
+      expect(neutral).not.toContain(color)
+      expect(agentColor({ avatar: { style: 'muniment', seed } })).toBe(color)
+      const fill = colorful.traits(seed).fill
+      if (neutral.includes(fill)) {
+        recolored++
+        const markup = avatarSvg({ seed }, { style: 'colorful' })
+        expect(markup).not.toMatch(new RegExp(`(fill|stroke)="${fill}"`))
+        expect(markup).toContain(`="${color}"`)
+      } else {
+        expect(color).toBe(fill)
+      }
+    }
+    expect(recolored).toBeGreaterThan(0)
   })
 
   it('center each head across the box and keep it inside', () => {

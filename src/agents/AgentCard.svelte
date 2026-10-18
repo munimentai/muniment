@@ -7,6 +7,9 @@
   // A synced copy, or an agent whose machine does not answer, is read only.
   import { tick, untrack } from 'svelte'
   import AgentAvatar from '../lib/AgentAvatar.svelte'
+  import { agentColor } from '../lib/agent-avatar.js'
+  import StatusChip from '../lib/ui/StatusChip.svelte'
+  import { runStatusTone } from '../lib/status-tone.js'
   import CatalogActions from '../lib/CatalogActions.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ProviderLogo from '../lib/ProviderLogo.svelte'
@@ -15,7 +18,7 @@
   import { panelScroll } from '../lib/panel-scroll.js'
   import { pickerGroups, providerName } from '../lib/provider-catalog.js'
   import { classifierProvider } from '../lib/classifier-catalog.js'
-  import { runActive, runDuration, runStatusLabel, runTone, triggerLabel, whenLabel } from '../lib/agent-labels.js'
+  import { runActive, runDuration, runStatusLabel, triggerLabel, whenLabel } from '../lib/agent-labels.js'
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
   import InlineEdit from './InlineEdit.svelte'
   import MachineMark from './MachineMark.svelte'
@@ -134,7 +137,7 @@
   const kebabActions = $derived([{ id: 'profile', label: 'Open profile', icon: 'user' }, ...(agent.replica ? [] : [{ id: 'export', label: 'Export', icon: 'download' }])])
 </script>
 
-<article class="agent-card" data-agent-card={agent.id} class:read-only={readOnly} aria-label={agent.name}>
+<article class="agent-card" data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
   <header class="card-head">
     <span class="head-avatar"><AgentAvatar {agent} activity={agent.activity} size={28} /></span>
     <div class="head-name">
@@ -160,12 +163,12 @@
         <h4>Overview</h4>
         <dl class="facts">
           <div class="fact"><dt>Job title</dt><dd><InlineEdit value={agent.label ?? ''} label="Job title" placeholder="Add a job title" disabled={readOnly} onsave={(label) => saveField({ label })} /></dd></div>
-          <div class="fact"><dt>Machine</dt><dd class="machine"><MachineMark {machine} />{#if agent.online === false}<span class="offline"><LucideIcon name="globe-off" variant="action" size={12} />Offline</span>{:else}<span class="online">Online</span>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</dd></div>
+          <div class="fact"><dt>Machine</dt><dd class="machine"><MachineMark {machine} />{#if agent.online === false}<StatusChip tone="neutral">Offline</StatusChip>{:else}<StatusChip tone="success">Online</StatusChip>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</dd></div>
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
-          <div class="fact"><dt>Last run</dt><dd class="record">{#if latestRun}<span class="state" data-tone={runTone(latestRun.status)}>{runStatusLabel(latestRun.status)}</span> · {whenLabel(latestRun.updated_at)}{:else}No runs yet{/if}</dd></div>
+          <div class="fact"><dt>Last run</dt><dd class="record">{#if latestRun}<StatusChip tone={runStatusTone(latestRun.status)}>{runStatusLabel(latestRun.status)}</StatusChip><span class="when">{whenLabel(latestRun.updated_at)}</span>{:else}No runs yet{/if}</dd></div>
         </dl>
         <div class="actions">
-          <Button icon="play" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
+          <Button icon="play" variant="primary" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
           <Button icon="messages-square" onclick={() => onchat(agent)}>Open chat</Button>
         </div>
       {:else if panel === 'model'}
@@ -227,7 +230,7 @@
         {:else}
           <ul class="runs" aria-label="Recent runs">
             {#each runs.list.slice(0, 5) as run (run.id)}
-              <li class="run"><span class="dot" data-tone={runTone(run.status) === 'quiet' && runActive(run.status) ? 'active' : runTone(run.status)} aria-hidden="true"></span><span class="run-state">{runStatusLabel(run.status)}</span><span class="record">{triggerLabel(run.trigger?.kind)}{runDuration(run) ? ` · ${runDuration(run)}` : ''}</span><time class="record" datetime={run.updated_at}>{whenLabel(run.updated_at)}</time></li>
+              <li class="run"><span class="dot" data-tone={runStatusTone(run.status)} aria-hidden="true"></span><span class="run-state">{runStatusLabel(run.status)}</span><span class="record">{triggerLabel(run.trigger?.kind)}{runDuration(run) ? ` · ${runDuration(run)}` : ''}</span><time class="record" datetime={run.updated_at}>{whenLabel(run.updated_at)}</time></li>
             {:else}
               <li class="empty">No runs yet. Run now starts one.</li>
             {/each}
@@ -242,18 +245,19 @@
   /* The picker's geometry: a hairline under the top row, a 34px mark column with a
      hairline at its right, 6px insets, 30px rows on the hover fill. */
   .agent-card { position: relative; display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
-  .card-head { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); }
-  .head-avatar { display: grid; place-items: center; }
+  /* The header carries the agent's color: a tinted band with the head on a stronger tile. */
+  .card-head { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 6px 8px 6px 0; border-top: 3px solid var(--agent-color); border-bottom: 1px solid color-mix(in srgb, var(--agent-color) 40%, var(--border)); background: color-mix(in oklab, var(--agent-color) 18%, var(--surface)); }
+  .head-avatar { display: grid; place-items: center; width: 34px; height: 34px; margin-left: 6px; border-radius: var(--radius-control); background: color-mix(in oklab, var(--agent-color) 34%, var(--surface)); }
   .head-name { min-width: 0; }
   .card-body { position: relative; flex: 1; min-height: 0; display: flex; }
   .panel-rail { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-right: 1px solid var(--border); overflow-y: auto; outline: 0; }
   .rail-mark { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
   .rail-mark:hover { background: var(--faint); color: var(--ink); }
-  .rail-mark[aria-selected="true"] { background: var(--faint); color: var(--ink); }
-  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--ink); }
+  .rail-mark[aria-selected="true"] { background: var(--selected); color: var(--on-selected); }
+  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
   .rail-tip { position: absolute; z-index: 2; left: 52px; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .panel-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
-  h4 { display: flex; align-items: center; gap: 6px; margin: 6px 8px 2px; color: var(--muted); font: var(--text-12) var(--font-mono); }
+  h4 { display: flex; align-items: center; gap: 6px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   h4.provider { margin-top: 10px; }
   .facts { display: grid; margin: 0; }
   .fact { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 30px; padding: 0 0 0 8px; }
@@ -261,27 +265,24 @@
   dd { min-width: 0; margin: 0; }
   dd.record, .fact .machine { padding: 0 6px; }
   .machine { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-  .online { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .offline { display: inline-flex; align-items: center; gap: 4px; color: var(--ochre); font: var(--text-12) var(--font-mono); }
-  .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .record { min-width: 0; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-  .state[data-tone="critical"] { color: var(--oxide); }
-  .state[data-tone="caution"] { color: var(--ochre); }
+  .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .record { min-width: 0; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); text-overflow: ellipsis; white-space: nowrap; }
+  dd.record:has(.when) { display: flex; align-items: center; gap: 8px; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 8px 4px; }
   .choices { display: grid; }
   .row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .row:hover:not(:disabled) { background: var(--faint); }
-  .row[aria-checked="true"] { background: var(--faint); }
+  .row[aria-checked="true"] { background: var(--selected); color: var(--on-selected); }
   .row:disabled { cursor: default; }
   .row:disabled:not([aria-checked="true"]) { color: var(--muted); }
   .row-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .model-id { font: var(--text-12) var(--font-mono); }
+  .model-id { font: var(--text-13) var(--font-human); }
   .mode { justify-content: flex-start; align-items: flex-start; }
   .mode > :global(svg:first-child) { flex: none; margin-top: 2px; }
   .mode > :global(svg:last-child:not(:first-child)) { flex: none; margin: 2px 0 0 auto; }
   .mode-text { display: grid; gap: 2px; min-width: 0; }
   .mode-title { display: flex; align-items: baseline; gap: 6px; font-size: var(--text-13); }
-  .default { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .default { color: var(--muted); font: var(--text-12) var(--font-human); }
   .mode-line { color: var(--muted); font-size: var(--text-12); line-height: 1.4; }
   .routines, .runs { display: grid; margin: 0; padding: 0; list-style: none; }
   .routine { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 2px 4px 2px 0; }
@@ -291,13 +292,14 @@
   .run { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; }
   .run-state { font-size: var(--text-13); }
   .dot { width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--muted); }
-  .dot[data-tone="active"] { background: var(--ink); }
-  .dot[data-tone="critical"] { background: var(--oxide); }
-  .dot[data-tone="caution"] { background: var(--ochre); }
+  .dot[data-tone="success"] { background: var(--success); }
+  .dot[data-tone="active"] { background: var(--active); }
+  .dot[data-tone="danger"] { background: var(--danger); }
+  .dot[data-tone="warning"] { background: var(--warning); }
   .empty { margin: 0; padding: 6px 8px; color: var(--muted); font-size: var(--text-12); }
   .note { display: flex; align-items: flex-start; gap: 6px; margin: 2px 2px 6px; padding: 6px 8px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font-size: var(--text-12); line-height: 1.4; }
   .note > :global(svg) { flex: none; margin-top: 2px; color: var(--ochre); }
-  .read-only:not(:has(.offline)) .note > :global(svg) { color: var(--muted); }
+  .read-only:not(.away) .note > :global(svg) { color: var(--muted); }
   .error { margin: 2px 8px 6px; color: var(--oxide); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
   /* The picker's foot action, under a separator inset to the list's padding. */
   .foot { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin-top: 6px; padding: 7px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }

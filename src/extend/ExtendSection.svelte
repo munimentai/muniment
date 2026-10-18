@@ -192,7 +192,7 @@
       </div>
       <div class="detail-actions actions">
         <button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'test')}>Test connection</button>
-        {#if detailsInstalled.definition.url}<button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'auth')}>Sign in</button>{/if}
+        {#if detailsInstalled.definition.url}<button type="button" data-variant="primary" disabled={busy} onclick={() => connection(detailsInstalled, 'auth')}>Sign in</button>{/if}
         <button type="button" disabled={busy} onclick={() => { const item = detailsInstalled; detailsDialog.close(); add(item); config = JSON.stringify(item.definition, null, 2) }}>Configure</button>
         <button type="button" disabled={busy} onclick={() => { const id = detailsInstalled.id; detailsDialog.close(); void mutate('remove', { id }) }}>Uninstall</button>
       </div>
@@ -200,7 +200,7 @@
       {#if status}<p role="status">{status}</p>{/if}
     {:else}
       <p class="requirements">The provider may require an account or subscription. Configure authentication when you add the server.</p>
-      <div class="detail-actions"><button type="button" disabled={busy} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>Connect</button></div>
+      <div class="detail-actions"><button type="button" data-variant="primary" disabled={busy} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>Connect</button></div>
     {/if}
   {/if}
 </dialog>

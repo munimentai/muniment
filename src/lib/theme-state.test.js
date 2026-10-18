@@ -17,9 +17,11 @@ import {
   themeScheme,
 } from './theme-state.js'
 
-const system = { mode: THEME_SYSTEM, palette: 'moss' }
-// Missing or malformed data restores the default: Moss dark.
-const fallback = { mode: THEME_DARK, palette: 'moss' }
+const system = { mode: THEME_SYSTEM, palette: 'moss-vibrant' }
+// Missing or malformed data restores the default: Moss vibrant dark.
+const fallback = { mode: THEME_DARK, palette: 'moss-vibrant' }
+// A saved value that names no palette keeps Moss.
+const saved = { mode: THEME_DARK, palette: 'moss' }
 
 describe('theme state', () => {
   it('names four colors in three styles, each with a light and a dark theme', () => {
@@ -35,7 +37,7 @@ describe('theme state', () => {
     expect(paletteName('clay')).toBe('Clay')
   })
 
-  it('round-trips each state and defaults missing or malformed data to Moss dark', () => {
+  it('round-trips each state and defaults missing or malformed data to Moss vibrant dark', () => {
     expect(THEME_STORAGE_KEY).toBe('muniment.theme')
     for (const state of [system, fallback, { mode: 'light', palette: 'harbor-vibrant' }, { mode: 'dark', palette: 'iris-contrast' }]) {
       expect(parseTheme(serializeTheme(state))).toEqual(state)
@@ -43,14 +45,14 @@ describe('theme state', () => {
     expect(parseTheme(null)).toEqual(fallback)
     expect(parseTheme('')).toEqual(fallback)
     expect(parseTheme('Dark')).toEqual(fallback)
-    expect(parseTheme('{"theme":"dark"}')).toEqual(fallback)
-    expect(parseTheme('{"mode":"light","palette":"neon"}')).toEqual({ ...fallback, mode: 'light' })
+    expect(parseTheme('{"theme":"dark"}')).toEqual(saved)
+    expect(parseTheme('{"mode":"light","palette":"neon"}')).toEqual({ ...saved, mode: 'light' })
     expect(parseTheme('[1]')).toEqual(fallback)
     expect(serializeTheme('invalid')).toBe(JSON.stringify(fallback))
   })
 
   it('reads bare modes, bare theme names and the earlier light and dark picks', () => {
-    expect(parseTheme('light')).toEqual({ ...fallback, mode: 'light' })
+    expect(parseTheme('light')).toEqual({ ...saved, mode: 'light' })
     expect(parseTheme('clay-vibrant-dark')).toEqual({ mode: 'dark', palette: 'clay-vibrant' })
     expect(parseTheme('moss')).toEqual({ mode: 'dark', palette: 'moss' })
     expect(parseTheme('vellum')).toEqual({ mode: 'light', palette: 'clay' })

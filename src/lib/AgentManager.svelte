@@ -59,7 +59,7 @@
       {#snippet actions()}
         {#if archived || (agents ?? listing.agents).some(agent=>isArchived('agent',agent)) || pending.some(plan=>isArchived('creation',plan))}<Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>{/if}
         <Button icon="download" onclick={()=>importOpen=true}>Import agent</Button>
-        <Button icon="plus" onclick={()=>oncreate?.()}>New agent</Button>
+        <Button icon="plus" variant="primary" onclick={()=>oncreate?.()}>New agent</Button>
       {/snippet}
     </PageHead>
     {#if error}<p role="alert">{error}</p>{/if}

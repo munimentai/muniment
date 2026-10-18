@@ -47,9 +47,34 @@ function reach(kind, seed, mode) {
   return { head: COLORFUL_HEADS[t.head], left: both, right: Math.max(5, both) }
 }
 
+// The colorful generator's head fills. White and paper carry no hue, so a head
+// that lands on one draws in a hued fill picked from the same seed. The head
+// keeps its shape and features, and every agent has a color of its own.
+const NEUTRAL_FILLS = ['#ffffff', '#ece6d6']
+const HUED_FILLS = ['#f2b0ea', '#a9e38f', '#f4d36c', '#9fd6f2', '#f8b994', '#c6b6f5', '#8fe3cf', '#f6a0a0']
+function hash(text) { let n = 2166136261; for (const c of text) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return n >>> 0 }
+function huedFill(seed) {
+  const fill = colorfulTraits(seed).fill
+  return NEUTRAL_FILLS.includes(fill) ? HUED_FILLS[hash(`agent-color:${seed.trim().toLowerCase()}`) % HUED_FILLS.length] : fill
+}
+
+// An agent's color: its colorful head's fill, in either avatar style. Cards,
+// sidebar rows and the thread title tint with it.
+export function agentColor(agent) {
+  return huedFill(String(avatarFor(agent).seed))
+}
+
+// A colorful head on a neutral fill, redrawn in its hued fill.
+export function huedHead(markup, seed) {
+  const fill = colorfulTraits(seed).fill
+  if (!NEUTRAL_FILLS.includes(fill)) return markup
+  const hued = huedFill(seed)
+  return markup.replaceAll(`fill="${fill}"`, `fill="${hued}"`).replaceAll(`stroke="${fill}"`, `stroke="${hued}"`)
+}
+
 function drawing(kind, seed, mode) {
-  const draw = kind === 'muniment' ? munimentSvg : colorfulSvg
-  return draw(seed, { tone: mode, background: false })
+  if (kind === 'muniment') return munimentSvg(seed, { tone: mode, background: false })
+  return huedHead(colorfulSvg(seed, { tone: mode, background: false }), seed)
 }
 
 // The box around everything a head draws, in view box units, after the

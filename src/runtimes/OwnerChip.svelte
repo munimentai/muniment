@@ -17,7 +17,7 @@
 {/if}
 
 <style>
-  .owner-chip { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-provenance) var(--font-mono); line-height: 16px; white-space: nowrap; }
+  .owner-chip { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .owner-chip :global(.lucide) { flex: none; color: var(--muted); }
   .owner-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .owner-offline { display: inline-flex; flex: none; }
