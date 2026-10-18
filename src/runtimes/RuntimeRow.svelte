@@ -8,9 +8,11 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import StatusChip from '../lib/ui/StatusChip.svelte'
   import { machineStatusTone, updateStatusTone } from '../lib/status-tone.js'
-  import { canRequestUpdate, kindIcon, kindLabel, statusHint, statusLabel, updateLabel, versionLabel } from './runtimes.js'
+  import { canRequestUpdate, kindIcon, kindLabel, machineName, statusHint, statusLabel, updateLabel, versionLabel } from './runtimes.js'
 
-  let { runtime, busy = false, onrename, onremove, onupdate } = $props()
+  // `hostname` names this computer to the OS, under its one name in the app.
+  let { runtime, hostname = '', busy = false, onrename, onremove, onupdate } = $props()
+  const name = $derived(machineName(runtime))
   let mode = $state('view')
   let draft = $state('')
   let menu = $state(false)
@@ -37,22 +39,22 @@
 </script>
 
 {#if mode === 'rename'}
-  <form class="runtime-form" aria-label="Rename {runtime.name}" onsubmit={rename}>
+  <form class="runtime-form" aria-label="Rename {name}" onsubmit={rename}>
     <input type="text" aria-label="Machine name" maxlength="80" bind:value={draft}>
     <Button type="submit" disabled={busy || !draft.trim()}>Save</Button>
     <button type="button" class="quiet" onclick={() => { mode = 'view' }}>Cancel</button>
   </form>
 {:else if mode === 'remove'}
-  <Row title="Remove {runtime.name}?" description="This computer forgets its access. Its threads stay on it.">
+  <Row title="Remove {name}?" description="This computer forgets its access. Its threads stay on it.">
     <Button disabled={busy} onclick={remove}>Remove</Button>
     <button type="button" class="quiet" onclick={() => { mode = 'view' }}>Keep</button>
   </Row>
 {:else}
-  <Row title={runtime.name} meta={versionLabel(runtime)} label={runtime.name}>
+  <Row title={name} meta={versionLabel(runtime)} label={name}>
     {#snippet lead()}<span class="runtime-mark" aria-hidden="true"><LucideIcon name={kindIcon(runtime)} size={16} variant="action" /></span>{/snippet}
     {#snippet detail()}
       <p class="runtime-facts">
-        {#if !runtime.local}<span>{kindLabel(runtime)}</span>{/if}
+        {#if runtime.local && hostname}<span class="record">{hostname}</span>{:else if !runtime.local && kindLabel(runtime) !== name}<span>{kindLabel(runtime)}</span>{/if}
         {#if runtime.sshHost}<span class="record">ssh {runtime.sshHost}</span>{/if}
         {#if update}
           <span class="runtime-state" data-tooltip={update.tooltip || undefined} tabindex={update.tooltip ? 0 : undefined}><StatusChip tone={updateTone}>{update.text}</StatusChip></span>
@@ -64,9 +66,9 @@
     {/snippet}
     {#if !runtime.local}
       <span class="menu-wrap" bind:this={root}>
-        <button type="button" class="quiet more" disabled={busy} aria-label="More for {runtime.name}" aria-haspopup="menu" aria-expanded={menu} onclick={() => { menu = !menu }}><LucideIcon name="ellipsis" size={16} variant="action" /></button>
+        <button type="button" class="quiet more" disabled={busy} aria-label="More for {name}" aria-haspopup="menu" aria-expanded={menu} onclick={() => { menu = !menu }}><LucideIcon name="ellipsis" size={16} variant="action" /></button>
         {#if menu}
-          <div class="row-menu" role="menu" aria-label="{runtime.name} actions">
+          <div class="row-menu" role="menu" aria-label="{name} actions">
             {#if canRequestUpdate(runtime) && onupdate}<button type="button" role="menuitem" onclick={() => { menu = false; onupdate() }}>Update</button>{/if}
             <button type="button" role="menuitem" onclick={() => { menu = false; draft = runtime.name; mode = 'rename' }}>Rename</button>
             <button type="button" role="menuitem" onclick={() => { menu = false; mode = 'remove' }}>Remove</button>

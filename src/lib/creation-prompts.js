@@ -1,8 +1,28 @@
 export function creationDefaults(kind) {
   return kind === 'agent' ? {goal:'Create a reusable agent for my work',output:'A saved agent with a clear task, instructions, and expected output'} : {goal:'Create an interactive artifact',output:'A verified HTML artifact available in Muniment'}
 }
-export function creationPrompt(kind, plan) {
-  return `I want to create ${kind === 'agent' ? 'an agent' : 'an artifact'} in this dedicated chat. Goal: ${plan.goal}. Expected output: ${plan.output}. Ask a few focused questions about any missing requirements, then build it and save it in Muniment. Keep this chat for future revisions.`
+// The message a creation chat sends first. The composer shows the template as
+// a chip, so `details` holds only what the user typed beside it.
+export function creationPrompt(kind, plan, details = '') {
+  const prompt = `I want to create ${kind === 'agent' ? 'an agent' : 'an artifact'} in this dedicated chat. Goal: ${plan.goal}. Expected output: ${plan.output}. Ask a few focused questions about any missing requirements, then build it and save it in Muniment. Keep this chat for future revisions.`
+  return details.trim() ? `${prompt}\n\n${details.trim()}` : prompt
+}
+
+const SENT = /^I want to create (an agent|an artifact) in this dedicated chat\. Goal: (.+?)\. Expected output: (.+?)\. Ask a few focused questions about any missing requirements, then build it and save it in Muniment\. Keep this chat for future revisions\.(?:\n\n([\s\S]*))?$/
+
+// A sent creation message read back as its template: the kind, the goal,
+// the output and the user's own details. Any other text gives null.
+export function sentCreation(text) {
+  const match = SENT.exec(String(text ?? '').trim())
+  if (!match) return null
+  const kind = match[1] === 'an agent' ? 'agent' : 'artifact'
+  const plan = { kind, goal: match[2], output: match[3] }
+  return { ...plan, name: creationName(kind, plan), details: match[4]?.trim() ?? '' }
+}
+
+// The short name a creation shows: its starter's name, else New agent or New artifact.
+export function creationName(kind, plan) {
+  return creationStarters[kind]?.find((starter) => starter.goal === plan?.goal)?.name ?? (kind === 'agent' ? 'New agent' : 'New artifact')
 }
 // The starters an empty catalog shows, and the row above a full one. Each opens
 // a dedicated creation chat with its goal and output filled in.

@@ -37,7 +37,7 @@
   import ProjectCatalog from './lib/ProjectCatalog.svelte'
   import CatalogActions from './lib/CatalogActions.svelte'
   import ArtifactCatalog from './lib/ArtifactCatalog.svelte'
-  import {creationStarters, creationDefaults, creationPrompt} from './lib/creation-prompts.js'
+  import {creationStarters, creationDefaults, creationName, creationPrompt, sentCreation} from './lib/creation-prompts.js'
   import { overflowLabels } from './lib/overflow-labels.js'
   import AgentManager from './lib/AgentManager.svelte'
   import WorkspacePanel from './lib/WorkspacePanel.svelte'
@@ -97,7 +97,7 @@
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import PocketFold from './lib/PocketFold.svelte'
-  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, settledPhases } from './lib/chat-state.js'
+  import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureDetails, runFailureMessage, settledPhases } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
   import { createChatController } from './lib/chat-controller.js'
@@ -310,14 +310,13 @@
     if (switchLocked) return
     if (!await newSidebarThread(selectedProject) || !currentThreadId) return
     pendingCreation = { threadId: currentThreadId, kind, goal: chosen.goal, output: chosen.output, resultId: null }
-    draft = creationPrompt(kind, pendingCreation)
+    draft = ''
     await tick()
     composer?.focus()
   }
   async function useCreationSuggestion(chosen) {
     if (pendingCreation) {
       pendingCreation = { ...pendingCreation, goal: chosen.goal, output: chosen.output }
-      draft = creationPrompt(pendingCreation.kind, pendingCreation)
     }
     await tick()
     composer?.focus()
@@ -683,7 +682,9 @@
   function prepareRetry(run, chooseModel = false) {
     if (active || (draft.trim() && draft !== run.prompt) || selectedFiles.length || !run.prompt?.trim()) return
     draft = run.prompt
-    retryReview = { threadId: currentThreadId, chooseModel, previousProvider: chipModel?.provider, previousModel: chipModel?.model }
+    // The tools warning shows only when the failed turn ran a tool.
+    const ranTools = !!run.toolActivity?.length || (run.receipt?.tools ?? []).some((tool) => Number(tool?.calls) > 0)
+    retryReview = { threadId: currentThreadId, chooseModel, ranTools, previousProvider: chipModel?.provider, previousModel: chipModel?.model }
     if (chooseModel) openComposerPanel('model')
     void tick().then(() => composer?.focus())
   }
@@ -698,6 +699,8 @@
   }
   const taskDrafts = new Map()
   let pendingCreation = $state(null)
+  // The names the user gave providers, such as a custom endpoint, for the provenance line.
+  const providerNames = $derived(Object.fromEntries((inventory?.providers ?? []).filter((provider) => provider.id?.startsWith('custom-') && provider.name).map((provider) => [provider.id, provider.name])))
   let turnExtensions = $state({ enabled: [], blocked: [], automatic: null })
   function selectTask(next) {
     if (next === currentThreadId) return
@@ -885,6 +888,12 @@
     }
   }
   // `/compact` runs here and sends no message to the model.
+  // A creation chat shows its template as a chip and sends the full creation
+  // prompt with whatever the user typed beside it.
+  function outgoingDraft() {
+    return pendingCreation ? creationPrompt(pendingCreation.kind, pendingCreation, draft) : draft
+  }
+
   function sendOrRun() {
     const command = compactCommand(draft)
     if (command) void compactThread(command.instructions, true)
@@ -1260,7 +1269,7 @@
     readMessages: () => messages,
     readActive: () => active,
     readAnnounced: () => announcedRun,
-    readDraft: () => draft,
+    readDraft: outgoingDraft,
     readFiles: () => selectedFiles,
     readThinkingLevel: () => chipThinking?.level ?? null,
     readPermissionMode: () => composerThreadId ? null : pendingMode,
@@ -2761,7 +2770,7 @@
       cycleMode()
       return
     }
-    const action = composerAction(event, draft, active)
+    const action = composerAction(event, outgoingDraft(), active)
     if (action) {
       event.preventDefault()
       if (action === 'submit' && needsModel()) openModelProviders()
@@ -2787,7 +2796,7 @@
   }
 
   function sendDisabled() {
-    return runtimeUpgradePending() || !!unreachableMachine || !draft.trim() || !!backgroundRun || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
+    return runtimeUpgradePending() || !!unreachableMachine || !outgoingDraft().trim() || !!backgroundRun || active?.phase === 'resuming' || active?.id === 'pending' || (!active && (dictationBusy() || threadSwitching))
   }
 
   // The band's one action control: an up arrow that sends while the draft has
@@ -3085,7 +3094,7 @@
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : threadAgent ? `Chat with ${threadAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}{/if}</p>{/if}
           {#if currentCreation}
-            <section class="creation-goal" aria-label="Creation goal"><strong>{currentCreation.kind === 'agent' ? 'Agent' : 'Artifact'}</strong><p>Goal: {currentCreation.goal}</p><p>Output: {currentCreation.output}</p>{#if pendingCreation}<button type="button" onclick={cancelCreation}>Cancel creation</button>{/if}</section>
+            {#if !pendingCreation}<details class="creation-goal" aria-label="Creation goal"><summary><strong>{creationName(currentCreation.kind, currentCreation)}</strong> <span>{currentCreation.goal}</span></summary><p>Output: {currentCreation.output}</p></details>{/if}
             {#if !messages.length && pendingCreation && creationStarters[currentCreation.kind].concat(creationDefaults(currentCreation.kind)).some(option=>option.goal===currentCreation.goal)}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationStarters[currentCreation.kind] as option (option.id)}<button aria-pressed={option.goal===currentCreation.goal} onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
           {/if}
           {#each transcriptItems as item (item.post ? `post:${item.post.message_id}` : messageKeys.get(item.message))}
@@ -3099,9 +3108,11 @@
             {:else if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
                 {@const sent = promptFolders(message.text)}
+                {@const created = sentCreation(sent.text)}
               <div class="user-turn">
                 <div class="user-message">
-                  {#if sent.text}<p>{sent.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
+                  {#if created}<details class="creation-request"><summary><strong>{created.name}</strong> <span>{created.goal}</span></summary><p>{sent.text}</p></details>{#if created.details}<p>{created.details}</p>{/if}
+                  {:else if sent.text}<p>{sent.text}</p>{:else}<p class="missing-prompt">Prompt unavailable</p>{/if}
                   {#if sent.folders.length}
                     <ul class="message-attachments" aria-label="Attached folders">
                       {#each sent.folders as folder}
@@ -3168,7 +3179,7 @@
                   </div>
                 {/if}
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <span>Retry prepares the message for review.</span> <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button></div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Details</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && !openApprovals.some(approval => approval.run_id === message.run.id)}
@@ -3239,11 +3250,11 @@
                 </div>
               {/if}
               {#if message.run.phase === 'complete'}
-                {@const summary = receiptSummary(message.run.receipt)}
+                {@const summary = receiptSummary(message.run.receipt, providerNames)}
                 {@const provider = receiptProvider(message.run.receipt)}
                 {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
                 {@const routing = routedTurns(message.run.receipt)}
-                {@const columns = receiptUsageColumns(message.run.receipt)}
+                {@const columns = receiptUsageColumns(message.run.receipt, providerNames)}
                 {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
                 {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}
                 {@const expanded = hasDetails && expandedReceipts.has(message.run.id)}
@@ -3252,10 +3263,10 @@
                 <div class="receipt-line">
                   {#if recorded}
                     {#if hasDetails}
-                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}{#if provider}<span class="receipt-provider"><ProviderLogo color {provider} size={12} /></span>{/if}<span>{summary.model}</span>{/if}</button>
+                      <button class="provenance" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} receipt: ${receiptLabel(message.run.receipt, providerNames)}`} onclick={() => toggleReceipt(message.run.id)}><span class:expanded class="receipt-marker" aria-hidden="true"></span>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}{#if provider}<span class="receipt-provider"><ProviderLogo color {provider} size={12} /></span>{/if}<span>{summary.model}</span>{/if}</button>
                     {:else}
                       <!-- One row adds nothing beyond the line: a clock stands where the chevron would, and nothing expands. -->
-                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}{#if provider}<span class="receipt-provider"><ProviderLogo color {provider} size={12} /></span>{/if}<span>{summary.model}</span>{/if}</p>
+                      <p class="provenance" aria-label={`Receipt: ${receiptLabel(message.run.receipt, providerNames)}`}>{#if summary.route !== null}<span class="route-segment">{summary.route}</span>{/if}{#if summary.model !== null}{#if summary.route !== null}{' '}<span aria-hidden="true">→</span>{' '}{/if}{#if provider}<span class="receipt-provider"><ProviderLogo color {provider} size={12} /></span>{/if}<span>{summary.model}</span>{/if}</p>
                     {/if}
                   {:else}
                     <p class="provenance">Receipt unavailable</p>
@@ -3303,8 +3314,8 @@
         <ChatComposer bind:element={composerBox}>
         {#if retryReview}
           <section aria-label="Review retry" class="retry-review">
-            <p>This is a new attempt in the current conversation, including earlier replies and tool results.</p>
-            <p>Earlier actions are not undone. Sending may run tools again. Review the message and reattach files if needed before sending.</p>
+            <p>Retry sends this message again in this conversation.</p>
+            {#if retryReview.ranTools}<p>Earlier actions are not undone. Sending may run tools again.</p>{/if}
             {#if retryReview.chooseModel}<button type="button" onclick={() => openComposerPanel('model')}>Choose a different model for this retry</button>{/if}
             <button type="button" onclick={() => { retryReview = null; draft = ''; pickerOpen = false }}>Cancel retry</button>
           </section>
@@ -3368,6 +3379,14 @@
             <div class="composer-chips">
               <FileChanges files={changed} onopen={openFile} />
               {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={scrollToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
+            </div>
+          {/if}
+          {#if pendingCreation}
+            <div class="creation-chip" role="group" aria-label="Template" data-tooltip={`Goal: ${pendingCreation.goal}`}>
+              <LucideIcon name={pendingCreation.kind === 'agent' ? 'bot' : 'file-code'} size={14} />
+              <span class="creation-chip-name">{creationName(pendingCreation.kind, pendingCreation)}</span>
+              <span class="visually-hidden">Goal: {pendingCreation.goal}. Output: {pendingCreation.output}.</span>
+              <PopupClose label="Cancel creation" onclick={cancelCreation} />
             </div>
           {/if}
           {#if selectedFiles.length}
@@ -3445,7 +3464,7 @@
             </div>
             <div class="composer-actions">
               <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={!!active || dictationFinishing} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
-              {#if active || draft.trim()}
+              {#if active || outgoingDraft().trim()}
                 <button type="button" class="composer-action primary" class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
                   <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" size={active ? 12 : 16} />
                 </button>
@@ -3711,7 +3730,7 @@
   .workspace { --frame-width: 4px; --titlebar-band: 36px; --titlebar-height: 30px; position: fixed; inset: 0; display: grid; grid-template-rows: var(--titlebar-height) minmax(0, 1fr); padding: 0 var(--frame-width) var(--frame-width); row-gap: calc(var(--titlebar-band) - var(--titlebar-height)); column-gap: var(--frame-width); background: var(--paper); }
   /* The sidebar column is the element's --sidebar-column: the kept width, or zero collapsed, and the 180ms slide carries both. */
   .workspace { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side thread"; transition: grid-template-columns 180ms ease; }
-  .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; } .creation-suggestions button[aria-pressed="true"] { border-color:var(--ink); }
+  .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0 0; } .creation-goal summary, .creation-request summary { cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .creation-goal strong, .creation-request strong { color:var(--ink); font-weight:600; } .creation-request p { margin:6px 0 0; color:var(--muted); font-size:var(--text-13); } .creation-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; min-height:28px; margin:0 0 6px; padding:0 4px 0 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--faint); color:var(--ink); font-size:var(--text-13); } .creation-chip-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .creation-chip { position:relative; } .creation-chip::after { content:attr(data-tooltip); position:absolute; left:0; bottom:calc(100% + 6px); z-index:6; width:max-content; max-width:min(420px, 80vw); padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); color:var(--ink); font-size:var(--text-12); white-space:normal; pointer-events:none; opacity:0; transition:opacity 80ms ease; } .creation-chip:hover::after { opacity:1; transition-delay:200ms; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; } .creation-suggestions button[aria-pressed="true"] { border-color:var(--ink); }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
   .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding-left: 4px; border-bottom: 2px solid var(--agent-color); background: color-mix(in srgb, var(--agent-color) 20%, transparent); }
@@ -4014,6 +4033,7 @@
   .update-notice { display: grid; gap: 2px; margin: 6px 0 8px; }
   .update-notice .support { font-size: var(--text-12); }
   .run-error button { min-width: 24px; min-height: 24px; padding: 2px 6px; background: transparent; font: inherit; }
+  .run-error-details { margin-top: 4px; } .run-error-details summary { width: fit-content; cursor: pointer; } .run-error-details p { margin: 4px 0 0; }
   .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 -12px 8px; padding: 0 12px 8px; border-bottom: 1px solid var(--border); list-style: none; }
   .attachments li { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(260px, 100%); height: 28px; padding: 0 0 0 6px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

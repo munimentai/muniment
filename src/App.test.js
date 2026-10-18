@@ -4089,7 +4089,7 @@ describe('Home onboarding', () => {
     // Each card is one line: the name and its action.
     expect(option('Ollama')).toHaveTextContent(/^Ollama\s*Connect$/)
     expect(option('oMLX')).toHaveTextContent(/^oMLX\s*Add key$/)
-    expect(option('ChatGPT')).toHaveTextContent(/^ChatGPT\s*Connect$/)
+    expect(option('ChatGPT')).toHaveTextContent(/^ChatGPT\s*Sign in$/)
     expect(option('Grok')).toHaveTextContent(/^Grok\s*Sign in$/)
   })
 
@@ -4150,7 +4150,7 @@ describe('Home onboarding', () => {
     await fireEvent.click(await ready('LM Studio'))
     expect(screen.getByText('Open LM Studio and start its local server.')).toBeInTheDocument()
     providerScan = { servers: [{ ...ollama, id: 'lmstudio', name: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1' }], hints: [] }
-    await fireEvent.click(screen.getByRole('button', { name: 'Look again' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Scan again' }))
     await waitFor(() => expect(option('LM Studio')).toHaveTextContent('Connect'))
     expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_provider_scan')).toHaveLength(2)
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
@@ -4163,7 +4163,7 @@ describe('Home onboarding', () => {
     invoke.mockImplementation((command, payload) => command === 'local_mode_claude_code_status' ? Promise.resolve({ installed: true, logged_in: true, path: '/usr/local/bin/claude' }) : original(command, payload))
     render(App)
     await more()
-    await waitFor(() => expect(option('Claude')).toHaveTextContent('Connect'))
+    await waitFor(() => expect(option('Claude')).toHaveTextContent('Sign in'))
     await fireEvent.click(option('Claude'))
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
     expect(await within(dialog).findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
@@ -4199,11 +4199,11 @@ describe('Home onboarding', () => {
     let fail = true
     invoke.mockImplementation((command, payload) => command === 'onboarding_provider_scan' && fail ? Promise.reject('unavailable') : original(command, payload))
     render(App)
-    expect(await screen.findByRole('alert')).toHaveTextContent('Muniment could not look for local models.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('The scan for local models failed.')
     expect(optionNames()).toEqual(SUBSCRIPTION_NAMES)
     fail = false
     providerScan = { servers: [ollama], hints: [] }
-    await fireEvent.click(screen.getByRole('button', { name: 'Look again' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Scan again' }))
     await waitFor(() => expect(option('Ollama')).toBeDefined())
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
@@ -6769,7 +6769,9 @@ it('does not offer another-model retry in a completed reply', async () => {
     const retry = within(error).getByRole('button', { name: 'Try again' })
     await fireEvent.click(retry)
     expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('Sending may run tools again.')
+    // The failed turn ran no tool, so the review names no tools warning.
+    expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('Retry sends this message again in this conversation.')
+    expect(screen.getByRole('region', { name: 'Review retry' })).not.toHaveTextContent('Sending may run tools again.')
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'A question', files: [] })
     expect(retry).toBeDisabled()
@@ -8050,11 +8052,14 @@ describe('dedicated creation chats', () => {
     await screen.findByPlaceholderText('Ask anything')
     await fireEvent.click(within(document.querySelector('#sidebar')).getByRole('button', { name: section, exact: true }))
     const panel = await screen.findByRole('region', { name: section })
-    // An empty catalog shows each starter with its sentence and the benefit lines.
+    // An empty catalog shows each starter with its sentence.
     expect((await within(panel).findByRole('region', { name: section === 'Artifacts' ? 'Make something new' : 'Give an agent a job' })).querySelectorAll('button.starter')).toHaveLength(5)
-    expect(panel.querySelector('.benefits')).not.toBeNull()
     await fireEvent.click(within(panel).getByRole('button', { name: new RegExp(`^${tile}`) }))
-    await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain(`Goal: ${goal}.`))
+    // The composer shows the template as a chip with its goal, not the prompt it sends.
+    const chip = await screen.findByRole('group', { name: 'Template' })
+    expect(chip).toHaveTextContent(tile)
+    expect(chip).toHaveTextContent(`Goal: ${goal}.`)
+    expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
   })
@@ -8076,12 +8081,12 @@ describe('dedicated creation chats', () => {
     await waitFor(() => expect(create).toBeEnabled())
     await fireEvent.click(create)
     expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
-    await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain('Expected output:'))
+    await screen.findByRole('group',{name:'Template'})
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     expect(document.querySelector(`[data-thread-id="${id}"]`)).toBeNull()
     if(section==='Artifacts') await fireEvent.click(screen.getByRole('button',{name:'Calculator'}))
     else await fireEvent.click(screen.getByRole('button',{name:'Research desk'}))
-    await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain(section==='Artifacts'?'calculator':'Research topics'))
+    await waitFor(()=>expect(screen.getByRole('group',{name:'Template'})).toHaveTextContent(section==='Artifacts'?'calculator':'Research topics'))
     await fireEvent.click(screen.getByRole('button', {name:'Cancel creation'}))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')
     expect(invoke.mock.calls.some(([name]) => name === 'creation_save')).toBe(false)
@@ -8108,9 +8113,10 @@ it('opens the preview the first time a creation chat saves its artifact', async 
   const create = await screen.findByRole('button',{name:'New artifact',exact:true})
   await waitFor(() => expect(create).toBeEnabled())
   await fireEvent.click(create)
-  await waitFor(()=>expect(screen.getByPlaceholderText('Ask anything').value).toContain('Expected output:'))
+  await screen.findByRole('group',{name:'Template'})
   await fireEvent.click(screen.getByRole('button',{name:'Send'}))
   await screen.findByRole('button',{name:'Stop'})
+  await waitFor(()=>expect(invoke.mock.calls.find(([name])=>name==='chat_submit')?.[1]?.prompt).toContain('Expected output:'))
   expect(screen.queryByRole('region',{name:'Artifacts'})).toBeNull()
   plans=[{...plans[0],resultId:'loan-comparison'}]
   artifacts=[{id:'loan-comparison',name:'Loan Comparison',threadId:id}]

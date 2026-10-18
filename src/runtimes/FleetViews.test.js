@@ -121,10 +121,10 @@ describe('the fleet log', () => {
     expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.audit', body: { limit: 50 } })
     const [op, role] = within(log).getAllByRole('listitem')
     expect(op).toHaveTextContent('Ran a forwarded action')
-    expect(op).toHaveTextContent('Studio → Laptop')
+    expect(op).toHaveTextContent('Studio → This computer')
     expect(op).toHaveTextContent('thread.post · applied')
     expect(role).toHaveTextContent('Changed a role')
-    expect(role).toHaveTextContent('Laptop → Studio')
+    expect(role).toHaveTextContent('This computer → Studio')
     expect(role).toHaveTextContent('full to worker')
   })
 

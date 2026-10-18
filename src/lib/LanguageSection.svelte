@@ -6,7 +6,7 @@
 </script>
 
 <div class="language-preferences">
-  <PageHead intro="Choose the language the Browser tab uses." />
+  <PageHead intro="The language of the Browser tab's pages and site requests." />
   <BrowserLanguage {tauri} />
 </div>
 

@@ -44,7 +44,7 @@
   {#if choices.length}
     <label>Move to<select bind:value={to} disabled={busy}>{#each choices as member (member.runtime_id)}<option value={member.runtime_id}>{memberMachine(swarm, member.runtime_id, runtimeList).name}{member.online ? '' : ' (offline)'}</option>{/each}</select></label>
   {:else}
-    <p class="note">Link another machine in Settings, Machines, to move this agent.</p>
+    <p class="note">Add a machine to the fleet in Settings, Machines, to move this agent.</p>
   {/if}
   {#if plan && !plan.primaryOnline}
     <div class="warning" role="note">

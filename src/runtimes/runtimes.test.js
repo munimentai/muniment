@@ -3,6 +3,7 @@ import {
   activeRuntime,
   errorLine,
   kindIcon,
+  machineName,
   kindLabel,
   looksLikePairingLink,
   pairedRuntimes,
@@ -135,5 +136,14 @@ describe('update labels', () => {
     expect(canRequestUpdate(status('failed'))).toBe(true)
     expect(skipLabel({ name: 'Rack', reason: 'manual' })).toBe('Rack (manual install)')
     expect(skipLabel({ name: 'Lab', reason: 'no_permission' })).toBe('Lab (no permission)')
+  })
+})
+
+describe('machineName', () => {
+  it('names this computer one way, and a runtime with the generic name by its kind', () => {
+    expect(machineName({ id: 'local', local: true, name: 'This computer' })).toBe('This computer')
+    expect(machineName({ id: 'pod', kind: 'container', name: 'Muniment runtime' })).toBe('Container')
+    expect(machineName({ id: 'box', kind: 'server', name: 'Build box' })).toBe('Build box')
+    expect(machineName(null)).toBe('Machine')
   })
 })

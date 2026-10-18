@@ -12,6 +12,7 @@
   // computer and adds another machine, and Log lists the fleet's audit log.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
+  import PageHead from '../lib/ui/PageHead.svelte'
   import Row from '../lib/ui/Row.svelte'
   import Button from '../lib/ui/Button.svelte'
   import Toggle from '../lib/Toggle.svelte'
@@ -182,14 +183,17 @@
   {#each failures as failure (failure)}<p class="line" role="alert">{failure}</p>{/each}
   {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
 
-  <Group heading="Machines" count={list?.runtimes?.length ?? null}>
+  <PageHead intro="This computer and the machines paired with it.">
     {#snippet actions()}
       <Button icon="arrow-down" disabled={!list || !!busy} onclick={updateAll}>Update all</Button>
     {/snippet}
+  </PageHead>
+  <Group label="Machine list">
     {#if list}
       {#each list.runtimes as runtime (runtime.id)}
         <RuntimeRow
           {runtime}
+          hostname={runtime.local ? list.deviceName ?? '' : ''}
           busy={busy === runtime.id || busy === 'all'}
           onrename={(name) => act(runtime.id, 'runtime_rename', { id: runtime.id, name })}
           onremove={() => act(runtime.id, 'runtime_remove', { id: runtime.id })}
@@ -204,11 +208,11 @@
   {#if list}<SwarmSection {tauri} {list} {listen} />{/if}
 
   <Group label="Model sharing">
-    <Row title="Share model connections" description="Paired machines use the providers, sign-ins and keys connected on this computer.">
+    <Row title="Share model connections" info="Paired machines use the providers, sign-ins and keys connected on this computer.">
       <Toggle checked={shareModels ?? false} label="Share model connections" disabled={shareModels === null || busy === 'share'} onchange={setSharing} />
     </Row>
     {#if signedIn}
-      <Row title="Keep them in MuniCloud" description="MuniCloud holds them encrypted and renews sign-ins. A free account shares with up to five machines.">
+      <Row title="Keep them in MuniCloud" info="MuniCloud holds them encrypted and renews sign-ins. A free account shares with up to five machines.">
         <Toggle checked={viaCloud} label="Keep them in MuniCloud" disabled={!list || !shareModels || busy === 'share'} onchange={(next) => act('share', 'runtime_share_models', { cloud: next })} />
       </Row>
     {/if}
@@ -217,9 +221,9 @@
   <div class="share-notice" role="note">
     <span class="share-notice-icon"><LucideIcon name="info" size={16} variant="action" /></span>
     {#if viaCloud}
-      <p>MuniCloud renews shared sign-ins, so paired machines keep them while this computer is off. Each machine counts toward your account's pairings.</p>
+      <p>MuniCloud renews shared sign-ins while this computer is off. Each machine counts toward your pairings.</p>
     {:else}
-      <p>Shared subscriptions depend on this computer. When it sleeps or goes offline, a paired machine can lose them within 30 minutes. Shared API keys keep working.</p>
+      <p>Shared subscriptions depend on this computer. Paired machines can lose them 30 minutes after it sleeps. API keys keep working.</p>
     {/if}
   </div>
 

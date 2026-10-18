@@ -56,7 +56,7 @@
 </script>
 
 {#if shown}
-  <Group heading="Log" count={rows.length} description="Seals, forwarded actions, role changes and removals across the fleet.">
+  <Group heading="Log" count={rows.length} info="Seals, forwarded actions, role changes and removals across the fleet.">
     {#snippet actions()}<Button icon="refresh-cw" disabled={busy} onclick={load}>Refresh</Button>{/snippet}
     {#if rows.length}
       <ol class="audit" aria-label="Fleet log">

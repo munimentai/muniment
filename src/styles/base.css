@@ -100,8 +100,8 @@ pre {
 /* All composer panels anchor to the full composer, above its top edge. */
 [data-composer-panel] { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); max-height: 60vh; }
 
-/* Panel pages read the same: an intro line with the page's actions at its
-   right, then sections under semibold sentence-case headings with their rows
+/* Panel pages read the same: a title with its info control and the page's
+   actions at its right, then sections under semibold sentence-case headings with their rows
    in bordered cards, and support text in muted 13px. A page names no section
    after itself. ui/PageHead, ui/Group and ui/Row draw this. */
 .panel-page .settings-intro { color: var(--muted); font: var(--text-15) / var(--leading-body) var(--font-human); }

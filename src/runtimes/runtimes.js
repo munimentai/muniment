@@ -22,6 +22,19 @@ export function kindLabel(runtime) {
   return KINDS[runtime?.kind]?.[0] ?? 'Runtime'
 }
 
+// The name core gives a runtime that announces no name of its own.
+const GENERIC_NAMES = new Set(['Muniment runtime'])
+
+// The one name the app shows for a machine: This computer for the local one,
+// else the machine's own name, or its kind while it announces only the
+// generic runtime name.
+export function machineName(runtime) {
+  if (!runtime) return 'Machine'
+  if (runtime.local || runtime.id === LOCAL_RUNTIME_ID) return 'This computer'
+  const name = String(runtime.name ?? '').trim()
+  return name && !GENERIC_NAMES.has(name) ? name : kindLabel(runtime)
+}
+
 export function kindIcon(runtime) {
   const kind = runtime?.kind
   if (kind === 'container') return 'container'
@@ -206,11 +219,11 @@ export function listenPort(access) {
 
 export function seenLabel(value, now = Date.now()) {
   const date = value ? new Date(value) : null
-  if (!date || Number.isNaN(date.getTime())) return 'Not seen yet'
+  if (!date || Number.isNaN(date.getTime())) return 'Never seen'
   const minutes = Math.round((now - date.getTime()) / 60000)
-  if (minutes < 2) return 'Seen just now'
-  if (minutes < 60) return `Seen ${minutes} minutes ago`
+  if (minutes < 2) return 'Now'
+  if (minutes < 60) return `${minutes}m ago`
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `Seen ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`
-  return `Seen ${date.toLocaleDateString()}`
+  if (hours < 24) return `${hours}h ago`
+  return date.toLocaleDateString()
 }

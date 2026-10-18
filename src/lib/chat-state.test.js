@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureDetails, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -147,6 +147,16 @@ describe('chat composer and projection', () => {
       expect(runFailureMessage({ failureReason })).toBe('Reply failed.')
     },
   )
+
+  it('maps a raw runtime record to a sentence and keeps the record and the provider reason under Details', () => {
+    const failureReason = 'muniment-runtime: desktop request rejected operation="run.submit" code="invalid_request" reason="The prompt is empty."'
+    expect(runFailureMessage({ failureReason })).toBe('The runtime rejected the request.')
+    expect(runFailureDetails({ failureReason })).toEqual([failureReason])
+    const run = applyChatEvent({ id: 'r', phase: 'streaming', text: '' }, { runId: 'r', type: 'failed', failureReason: 'The model could not complete this reply.', failureDetail: 'Rate limit reached for requests.' })
+    expect(runFailureMessage(run)).toBe('The model could not complete this reply.')
+    expect(runFailureDetails(run)).toEqual(['Rate limit reached for requests.'])
+    expect(runFailureDetails({ failureReason: 'Reply failed.' })).toEqual([])
+  })
 
   it('keeps cause punctuation and folds line breaks without changing addresses or decimals', () => {
     expect(runFailureMessage({ failureReason: '  Cannot reach\nhttps://example.com after 1.5 seconds  ' }))
