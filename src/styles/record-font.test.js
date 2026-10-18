@@ -37,6 +37,8 @@ describe('record fonts', () => {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const rule = css.match(new RegExp(`(?:^|})\\s*${escaped}\\s*\\{([^}]*)}`, 'm'))
       expect(rule?.[1], selector).toMatch(/font\s*:[^;}]*var\(--font-human\)/)
+      // Tabular figures in the UI face draw `$0.38` with a gap at the point.
+      expect(rule?.[1], selector).not.toMatch(/tabular-nums/)
     }
   })
 
