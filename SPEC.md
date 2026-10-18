@@ -570,8 +570,8 @@ Every file the app, the runtime and the agent harness keep sits under
 `~/.muniment` or the directory `MUNIMENT_STATE_DIR` names. Home is the document
 folder, a different thing, and logs keep their platform paths.
 
-Thread names use a separate model request on the first message, limited to one
-to three words. A failed request keeps a short prompt fallback. Manual names
+Thread names use a separate model request on the first message, limited to six
+words. A failed request keeps the prompt's first words, cut at a word with an ellipsis. Manual names
 win over generated names. Action feedback groups reads, searches, commands
 and edits with expandable, bounded, credential-filtered details. Saved runs
 retain those details. Cancel sign-in returns to local mode and rejects a late

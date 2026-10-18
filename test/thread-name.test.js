@@ -24,7 +24,8 @@ it('skips a named thread and lets a failed naming call leave the reply available
   context.ui.editor.mockResolvedValue('{"prompt":"First message"}')
   await expect(nameFirstThread(context, complete)).resolves.toBeUndefined()
   expect(context.ui.editor).toHaveBeenCalledTimes(2)
-  for (const name of ['', 'One two three four', 'Two\nlines']) expect(threadName(name)).toBeNull()
+  for (const name of ['', 'One two three four five six seven', 'Two\nlines']) expect(threadName(name)).toBeNull()
+  expect(threadName('Plan a weekend trip to Lisbon.')).toBe('Plan a weekend trip to Lisbon')
 })
 
 it('uses the current model registry completion boundary without reading credentials directly', async () => {
