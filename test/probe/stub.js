@@ -1,7 +1,7 @@
 import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixture.js'
 import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
-import { arrangeStandIn } from '../sidebar-standin.js'
-import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsRendered, projectsSettings, projectsSummaries } from './projects-fixture.js'
+import { arrangeStandIn, toolsStandIn } from '../sidebar-standin.js'
+import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsPalette, projectsRendered, projectsSettings, projectsSummaries, projectsThreadSettings } from './projects-fixture.js'
 import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
 export const historyFixtures = {
@@ -553,7 +553,7 @@ export function buildProbeCommandTable(fixtureName) {
       }
       return null
     }
-    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage'].includes(fixtureName)
+    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage', 'projects'].includes(fixtureName)
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
     if (command === 'local_mode_provider_inventory') return {
@@ -690,6 +690,18 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'agent_open') return null
     if (command === 'sidebar_arrange') return projectsFixture ? projectsArrangement(payload.input) : arrangeStandIn(payload.input)
+    // The palette answers core's ranking of the projects fixture.
+    if (command === 'palette_rank') return projectsPalette(payload.input)
+    if (command === 'project_tools') return toolsStandIn(payload.input)
+    if (command === 'project_move_thread') {
+      const catalog = projectsFixture ? projectsCatalog : { threads: projectThreads }
+      if (payload.projectId === 'chats') delete catalog.threads[payload.threadId]
+      else catalog.threads[payload.threadId] = payload.projectId
+      return null
+    }
+    // Each thread keeps its own model; the default model never changes.
+    if (command === 'thread_settings') return projectsThreadSettings(payload.threadId)
+    if (command === 'thread_settings_set') return projectsThreadSettings(payload.threadId, payload)
     if (command === 'project_settings') return projectsFixture ? projectsSettings(payload.projectId) : { instructions: '' }
     if (command === 'project_settings_save') return null
     if (command === 'project_list' && projectsFixture) return structuredClone(projectsCatalog)
@@ -1549,6 +1561,9 @@ window.__TAURI__ = {
     },
   },
 }
+
+// The event plugin's half of an unlisten, for listeners the Tauri API registers.
+window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
 
 window.__TAURI_INTERNALS__ = {
   metadata: {

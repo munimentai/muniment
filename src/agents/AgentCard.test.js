@@ -200,3 +200,32 @@ it('shows an agent whose machine is offline read only, with a note', async () =>
   expect(screen.getAllByRole('radio')).toHaveLength(6)
   expect(screen.getAllByRole('radio').every((radio) => radio.disabled)).toBe(true)
 })
+
+it('lists its machine tools with the layer that decides each and saves a choice over its project', async () => {
+  const machineCore = core()
+  const invoke = machineCore.tauri.invoke
+  const catalog = { builtin: [{ id: 'bash', label: 'Shell commands' }, { id: 'read', label: 'Read files' }], mcp: [{ id: 'crm-server', server: 'crm', tools: [] }], plugins: [], skills: [] }
+  machineCore.tauri.invoke = vi.fn(async (command, args) => {
+    if (command === 'agent_request' && args.operation === 'agent.tool_catalog') return catalog
+    if (command === 'project_tools') {
+      const { policy, agent: tools } = args.input
+      return [
+        { id: 'bash', kind: 'builtin', label: 'Shell commands', allowed: !!tools?.allowed?.includes('bash'), layer: tools?.allowed?.includes('bash') ? 'agent' : policy.disabledTools?.includes('bash') ? 'project' : 'default' },
+        { id: 'read', kind: 'builtin', label: 'Read files', allowed: true, layer: 'default' },
+        { id: 'crm-server', kind: 'mcp', label: 'crm', allowed: true, layer: 'default' },
+      ]
+    }
+    return invoke(command, args)
+  })
+  show({ tauri: machineCore.tauri, projectTools: { disabledTools: ['bash'] }, projectName: 'Homelab' })
+  await fireEvent.click(screen.getByRole('tab', { name: 'Tools' }))
+  const list = await screen.findByRole('list', { name: 'Tools' })
+  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.tool_catalog', body: {} })
+  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('project_tools', { input: { catalog, policy: { disabledTools: ['bash'] }, agent: {} } })
+  expect(list).toHaveTextContent('Built-in tool · off in project Homelab')
+  expect(list).toHaveTextContent('MCP server · default')
+  const shell = within(list).getByRole('switch', { name: 'Shell commands on' })
+  expect(shell).toHaveAttribute('aria-checked', 'false')
+  await fireEvent.click(shell)
+  await waitFor(() => expect(machineCore.saved()?.body.agent.tools).toEqual({ disabled: [], disabled_extensions: [], allowed: ['bash'] }))
+})

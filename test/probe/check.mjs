@@ -599,7 +599,10 @@ async function main() {
     await checkComposerActions(browser, baseUrl)
     await checkAgentAvatars(browser, baseUrl)
     await checkCreationBudget(browser, baseUrl)
-    for (const fixture of fixtures) {
+    // The projects fixture's states: the palette, Move to project, the
+    // thread's model with its source, and the project's and an agent's tools.
+    const states = ['palette', 'palette-search', 'move', 'model', 'settings', 'agent-tools'].map((state) => `projects.html?state=${state}`)
+    for (const fixture of [...fixtures, ...states]) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {
         console.log(`${fixture}: passed`)

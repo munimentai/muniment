@@ -13,7 +13,9 @@
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from '../lib/composer-panels.js'
   import { activeRuntime, kindIcon, machineName, pairedRuntimes, statusLabel } from './runtimes.js'
 
-  let { list = null, locked = null, owner = null, fleet = [], offload = null, disabled = false, onselect = () => {}, onoffload = () => {}, onmanage = () => {} } = $props()
+  // `source` names where the new thread's machine comes from, such as
+  // `from project Homelab` or `default`.
+  let { list = null, locked = null, owner = null, fleet = [], offload = null, source = '', disabled = false, onselect = () => {}, onoffload = () => {}, onmanage = () => {} } = $props()
   let open = $state(false)
   let root = $state()
   let toggle = $state()
@@ -111,6 +113,7 @@
               </button>
             {/each}
           {/if}
+          {#if source}<p class="source">{shownName} · {source}</p>{/if}
           <div class="separator" role="separator"></div>
           <button type="button" role="menuitem" class="manage" onclick={() => { close(); onmanage() }}>
             <LucideIcon name="plus" size={14} /><span class="name">Add a machine</span>
@@ -138,6 +141,7 @@
   .machine-menu .state :global(.lucide) { color: inherit; }
   .separator { height: 1px; margin: 2px 4px; background: var(--border); }
   .manage { color: var(--muted) !important; }
+  .source { margin: 2px 0 0; padding: 4px 8px 2px; border-top: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-human); }
   .heading { margin: 2px 8px 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   .machine-chip .state { margin-left: 0; color: var(--ochre); }
   .machine-chip .state :global(.lucide) { color: inherit; }

@@ -474,13 +474,15 @@ pub async fn chat_new_thread(
             Ok(thread)
         })?
     } else {
-        crate::projects::prepare_thread(
+        let thread = crate::projects::prepare_thread(
             &app_handle,
             &state,
             subject.as_deref(),
             project.as_deref(),
             true,
-        )?
+        )?;
+        crate::projects::seed_thread(&app_handle, &thread, project.as_deref()).await;
+        thread
     };
     if let Some(agent) = agent {
         muniment_core::agents::assign(&profile, &thread, &agent.id)?;

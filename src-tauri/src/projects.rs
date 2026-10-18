@@ -1,4 +1,4 @@
-use muniment_core::{projects, sidebar};
+use muniment_core::{inherit, palette, projects, sidebar};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -33,6 +33,51 @@ pub fn project_settings_save(
 #[tauri::command]
 pub fn sidebar_arrange(input: sidebar::Input) -> sidebar::Sidebar {
     sidebar::arrange(&input)
+}
+/// The command palette's groups for a query, ranked by core.
+#[tauri::command]
+pub fn palette_rank(input: palette::Input) -> Vec<palette::Group> {
+    palette::rank(&input)
+}
+/// Every tool of a machine's catalog with whether a project, and an agent
+/// in it, allows it, and the layer that decides.
+#[tauri::command]
+pub fn project_tools(input: inherit::ToolsInput) -> Vec<inherit::ToolRow> {
+    inherit::tools(&input)
+}
+#[tauri::command]
+pub fn project_move_thread(thread_id: String, project_id: String) -> Result<(), String> {
+    projects::move_thread(&profile()?, &thread_id, &project_id)
+}
+
+/// Starts a new thread with its project's defaults on the runtime that
+/// holds it. A project without defaults leaves the thread on the default.
+pub(crate) async fn seed_thread(app: &AppHandle, thread: &str, project_id: Option<&str>) {
+    let project = project_id.unwrap_or(sidebar::CHATS);
+    let Ok(settings) = projects::settings(&profile().unwrap_or_default(), project) else {
+        return;
+    };
+    let defaults = settings.defaults;
+    if defaults.model.is_none() && defaults.permission_mode.is_none() && defaults.machine.is_none() {
+        return;
+    }
+    let seed = muniment_core::thread_settings::Seed {
+        project_id: project.into(),
+        model: defaults.model,
+        permission_mode: defaults.permission_mode,
+        machine: defaults.machine,
+    };
+    let body = serde_json::json!({ "thread_id": thread, "seed": seed });
+    if crate::model_service::request(
+        app,
+        muniment_core::attach::ModelAction::ThreadSettingsSet,
+        body,
+    )
+    .await
+    .is_err()
+    {
+        eprintln!("muniment-desktop: thread_seed outcome=failed");
+    }
 }
 #[tauri::command]
 pub fn project_open(app: AppHandle, project_id: String) -> Result<(), String> {

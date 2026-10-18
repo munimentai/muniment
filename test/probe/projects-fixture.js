@@ -5,7 +5,11 @@
 // `arranged.json`, with every time moved so the fixture's now is this moment.
 // `?state=settled` opens Show settled, `triggers` filters Projects to the
 // projects with triggers, `search` searches for "re", and `settings` opens
-// Homelab's settings with its webhook agent.
+// Homelab's settings with its webhook agent, each default's source and its
+// tools. `agent-tools` opens that agent's Tools panel. `palette` opens the
+// command palette and `palette-search` searches it for "re". `move` opens
+// Move to project for Trip ideas, and `model` opens the model picker on
+// Release notes, which runs Homelab's model.
 const FIXTURE_NOW = Date.parse('2026-10-18T13:00:00Z')
 const params = typeof location === 'undefined' ? new URLSearchParams() : new URLSearchParams(location.search)
 export const projectsState = params.get('state') ?? 'sidebar'
@@ -35,10 +39,42 @@ export const projectsSummaries = () => [
   'Clean the build folder', 'Release notes', 'Fix sync bug', 'Reindex search', 'Roadmap', 'Trip ideas', 'Pricing watch', 'Dinner recipes', 'Deploy runs', 'Lease renewal', 'Vendor audit', 'Budget notes', 'Kitchen quotes',
 ].map((title, index) => ({ threadId: ['t-clean', 't-branch', 't-sync', 't-index', 't-roadmap', 't-trip', 't-price', 't-dinner', 't-deploy', 't-lease', 't-vendor', 't-budget', 't-kitchen'][index], title, updatedAt: shift('2026-10-18T12:00:00Z') }))
 
+const HOMELAB_MODEL = { provider: 'google', model: 'gemini-3-pro' }
 export const projectsCatalog = {
   projects: { 'p-muniment': 'Muniment', 'p-homelab': 'Homelab', 'p-garden': 'Garden' },
   threads: { 't-clean': 'p-muniment', 't-sync': 'p-muniment', 't-index': 'p-muniment', 't-roadmap': 'p-muniment', 't-branch': 'p-homelab', 't-vendor': 'p-homelab', 't-kitchen': 'p-garden' },
-  settings: { 'p-homelab': { permissionMode: 'manual' } },
+  settings: { 'p-homelab': { permissionMode: 'manual', model: HOMELAB_MODEL, tools: { disabledTools: ['bash'], disabledExtensions: ['mail-server'] } } },
+}
+
+// Each thread's model, as core's `thread_settings` answers it. Homelab's
+// threads started with its model; every other thread runs the default.
+const threadModels = {
+  't-branch': { model: HOMELAB_MODEL, seed: { project_id: 'p-homelab', model: HOMELAB_MODEL, permission_mode: 'manual' } },
+  't-vendor': { model: HOMELAB_MODEL, seed: { project_id: 'p-homelab', model: HOMELAB_MODEL, permission_mode: 'manual' } },
+}
+const DEFAULT_MODEL = { provider: 'ollama', model: 'llama3.2:3b' }
+const same = (a, b) => !!a && !!b && a.provider === b.provider && a.model === b.model
+export function projectsThreadSettings(threadId, change = null) {
+  const own = threadModels[threadId] ??= {}
+  if (change?.seed) { own.seed = change.seed; own.model = change.seed.model ?? null }
+  if (change?.model) own.model = change.model
+  if (change?.reset) own.model = own.seed?.model ?? null
+  const seeded = same(own.model, own.seed?.model)
+  return {
+    thread_id: threadId,
+    model: own.model ?? DEFAULT_MODEL,
+    layer: own.model ? (seeded ? 'project' : 'thread') : 'default',
+    ...(seeded ? { project_id: own.seed.project_id } : {}),
+    ...(own.seed ? { seed: own.seed } : {}),
+  }
+}
+
+// Core's palette ranking of `core/protocol-fixtures/palette/input.json`,
+// which core's tests keep in `ranked.json`, for the queries it holds.
+let ranked = null
+export async function projectsPalette(request) {
+  ranked ??= await (await fetch('../../core/protocol-fixtures/palette/ranked.json')).json()
+  return structuredClone(ranked[request?.query ?? ''] ?? ranked[''])
 }
 
 // The two agents of the fixture, as `agent.list` answers them.
@@ -57,7 +93,7 @@ export function projectsAgents() {
 }
 
 export const projectsSettings = (projectId) => projectId === 'p-homelab'
-  ? { permissionMode: 'manual', instructions: 'Use the Ansible playbooks. Never edit the hosts by hand.' }
+  ? { ...structuredClone(projectsCatalog.settings['p-homelab']), instructions: 'Use the Ansible playbooks. Never edit the hosts by hand.' }
   : projectId === 'chats' ? {} : { instructions: '' }
 
 const button = (root, name) => [...(root?.querySelectorAll('button') ?? [])].find((entry) => entry.getAttribute('aria-label') === name || entry.textContent.trim() === name)
@@ -81,10 +117,36 @@ export function advanceProjects() {
     if (search && search.value !== 're') { search.value = 're'; search.dispatchEvent(new Event('input', { bubbles: true })) }
     return
   }
-  if (projectsState === 'settings' && !document.querySelector('[aria-label="Project settings"]')) {
+  if (['settings', 'agent-tools'].includes(projectsState) && !document.querySelector('[aria-label="Project settings"]')) {
     const menu = document.querySelector('[role="menu"][aria-label="Homelab actions"]')
     if (menu) return button(menu, 'Settings')?.click()
     return button(sidebar, 'Homelab actions')?.click()
+  }
+  if (projectsState === 'agent-tools') {
+    const tab = document.querySelector('[aria-label="Project settings"] .agent-card [role="tab"][aria-label="Tools"]')
+    if (tab?.getAttribute('aria-selected') === 'false') tab.click()
+    tab?.closest('.agent-card')?.scrollIntoView({ block: 'center' })
+    return
+  }
+  if (projectsState.startsWith('palette')) {
+    const field = document.querySelector('[role="dialog"][aria-label="Search"] input')
+    if (!field) {
+      const mac = navigator.platform.startsWith('Mac')
+      return document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: mac, ctrlKey: !mac, bubbles: true }))
+    }
+    if (projectsState === 'palette-search' && field.value !== 're') { field.value = 're'; field.dispatchEvent(new Event('input', { bubbles: true })) }
+    return
+  }
+  if (projectsState === 'move' && !document.querySelector('[aria-labelledby="move-project-title"]')) {
+    const menu = document.querySelector('.thread-menu')
+    if (menu) return button(menu, 'Move to project')?.click()
+    return sidebar.querySelector('button[aria-label="Actions for Trip ideas"]')?.click()
+  }
+  if (projectsState === 'model') {
+    const row = sidebar.querySelector('.thread-row[data-thread-id="t-branch"]')
+    if (row && row.tagName === 'BUTTON' && !row.getAttribute('aria-current')) return row.click()
+    const chip = document.querySelector('[data-menu="model"][aria-expanded="false"]')
+    if (chip && document.querySelector('.thread-row.active-thread[data-thread-id="t-branch"]')) chip.click()
   }
 }
 
@@ -96,6 +158,12 @@ export function projectsRendered() {
   if (!sections) return false
   if (projectsState === 'settled') return !!sidebar.querySelector('[aria-label="Settled threads"] .thread-row')
   if (projectsState === 'triggers') return sidebar.querySelectorAll('[aria-label="Projects"] .project-title').length === 2
-  if (projectsState === 'settings') return !!document.querySelector('[aria-label="Project settings"] .agent-card') && !!document.querySelector('[aria-label="Project settings"] textarea')?.value
+  const settings = document.querySelector('[aria-label="Project settings"]')
+  if (projectsState === 'settings') return !!settings?.querySelector('.agent-card') && !!settings.querySelector('textarea')?.value && settings.textContent.includes('Gemini 3 Pro · this project') && settings.textContent.includes('off in this project')
+  if (projectsState === 'agent-tools') return !!settings?.querySelector('.agent-card .tools .tool') && settings.textContent.includes('off in project Homelab')
+  if (projectsState === 'palette') return !!document.querySelector('[role="dialog"][aria-label="Search"] .palette-row') && document.querySelector('[role="dialog"][aria-label="Search"]').textContent.includes('Needs you')
+  if (projectsState === 'palette-search') return document.querySelector('[role="dialog"][aria-label="Search"] input')?.value === 're' && !!document.querySelector('[role="dialog"][aria-label="Search"]')?.textContent.includes('Reindex search')
+  if (projectsState === 'move') return !!document.querySelector('[aria-labelledby="move-project-title"] button[aria-current="true"]')
+  if (projectsState === 'model') return !!document.querySelector('.picker-source')?.textContent.includes('from project Homelab')
   return sidebar.textContent.includes('every day 9:00') && sidebar.textContent.includes('webhook') && sidebar.textContent.includes('Approve')
 }
