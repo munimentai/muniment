@@ -599,7 +599,9 @@ async function main() {
     await checkComposerActions(browser, baseUrl)
     await checkAgentAvatars(browser, baseUrl)
     await checkCreationBudget(browser, baseUrl)
-    for (const fixture of fixtures) {
+    // Every state of the Machines fixture still renders.
+    const runtimeStates = ['local', 'paired', 'remote', 'switcher', 'pairing', 'failed', 'ssh', 'pairing-off', 'pairing-on', 'link', 'devices']
+    for (const fixture of [...fixtures, ...runtimeStates.map((state) => `runtimes.html?state=${state}`)]) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {
         console.log(`${fixture}: passed`)

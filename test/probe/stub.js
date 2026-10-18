@@ -422,7 +422,8 @@ export function buildProbeCommandTable(fixtureName) {
   const accessFixture = fixtureName === 'access'
   const signedOutFixture = fixtureName === 'signed-out'
   // `runtimes.html?state=` picks local, paired, remote, switcher, pairing,
-  // failed or ssh. Every other fixture holds this computer's runtime alone.
+  // failed, ssh, pairing-off, pairing-on, link or devices. Every other
+  // fixture holds this computer's runtime alone.
   const runtimesFixture = fixtureName === 'runtimes'
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
   // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals,
@@ -998,11 +999,15 @@ function recordInvoke(surface, command, payload) {
 }
 
 function runtimesRendered() {
+  // Each row's meta line names the machine its thread lives on. A thread on
+  // a paired runtime names it in its title row, and a new thread's machine
+  // menu lists every machine.
   if (runtimesState === 'remote' || runtimesState === 'switcher') {
-    const chip = document.querySelector('.machine-chip')
-    if (!chip?.textContent.includes(runtimesState === 'remote' ? 'Build box' : 'This computer')) return false
-    if (!document.querySelector('#sidebar .machine-badge')) return false
-    return runtimesState === 'remote' ? !!document.querySelector('#sidebar [aria-label="Projects"] .project-title') :  !!document.querySelector('[data-fresh-thread]') && !!document.querySelector('.machine-menu')
+    const machines = Array.from(document.querySelectorAll('#sidebar .thread-row-meta .machine-name')).map((name) => name.textContent)
+    if (!machines.includes('Build box')) return false
+    if (runtimesState === 'remote') return !!document.querySelector('.thread-title-heading')?.textContent.includes('Nightly test triage') && !!document.querySelector('header .machine-badge')?.textContent.includes('Build box')
+    const menu = document.querySelector('.machine-menu')
+    return !!menu?.textContent.includes('Build box') && !!document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label')?.includes('This computer')
   }
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
@@ -1392,14 +1397,16 @@ function typeInto(input, value) {
 // state pastes a link and presses Pair.
 function advanceRuntimesFixture() {
   if (!runtimesFixture || fixtureRendered()) return
-  // An open thread keeps its machine, so the picker opens on a new thread.
+  // An open thread keeps its machine, so the picker opens on a new thread,
+  // and the remote state opens the thread that lives on Build box.
   if (runtimesState === 'switcher') {
-    const chip = document.querySelector('button.machine-chip[aria-expanded="false"]')
-    if (chip) return chip.click()
-    if (document.querySelector('span.machine-chip.locked')) document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
-    return
+    if (document.querySelector('span.machine-chip')) return document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
+    return document.querySelector('button[data-menu="machine"][aria-expanded="false"]')?.click()
   }
-  if (runtimesState === 'remote') return
+  if (runtimesState === 'remote') {
+    if (document.querySelector('.thread-title-heading')?.textContent.includes('Nightly test triage')) return
+    return Array.from(document.querySelectorAll('#sidebar .thread-row-title')).find((title) => title.textContent.includes('Nightly test triage'))?.closest('button')?.click()
+  }
   if (!document.querySelector('.settings-layout')) {
     document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
