@@ -1823,6 +1823,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             )
             .map_err(ProtocolError::invalid_request_with_reason);
         }
+        if operation == muniment_core::attach::Operation::AgentDraft {
+            return self.agent_draft(body);
+        }
         self.require_home()?;
         if operation == muniment_core::attach::Operation::AgentThreads {
             #[derive(serde::Deserialize)]
@@ -2021,6 +2024,32 @@ impl RuntimeAttachBoundaries {
             ));
         }
         Ok(())
+    }
+
+    /// `agent.draft`: a named thread's text is read here, and the one model
+    /// call runs on the draft's own thread, so the request answers at once.
+    fn agent_draft(&self, body: serde_json::Value) -> Result<serde_json::Value, ProtocolError> {
+        let profile = self.profile_directory.clone();
+        let catalog_profile = profile.clone();
+        muniment_core::agent_draft::operation(
+            muniment_core::agent_draft::Drafts::shared(),
+            body,
+            |thread_id| {
+                let mut storage = self
+                    .storage
+                    .lock()
+                    .map_err(|_| "The thread could not be read.".to_string())?;
+                storage
+                    .journal
+                    .thread_texts(thread_id, muniment_core::agent_draft::THREAD_RUNS)
+                    .map(|runs| muniment_core::agent_draft::thread_text(&runs))
+                    .map_err(|_| "The thread could not be read.".to_string())
+            },
+            move || muniment_core::agent_draft::Catalog::local(&catalog_profile),
+            muniment_core::agent_routines::local_time_zone(),
+            Some(muniment_core::memory_extract::extraction_model(profile)),
+        )
+        .map_err(ProtocolError::invalid_request_with_reason)
     }
 }
 

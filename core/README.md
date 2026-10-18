@@ -434,10 +434,19 @@ first, each with `prompt_preview`, `prompt_bytes` and `definition_changed`
 in place of the prompt. `agent.replay` (`{"id", "replay_id"}` → `{"run",
 "replay"}`) queues the saved prompt again as a run of the agent's current
 definition with the failed run's trigger kind, `source: "replay"` and
-`origin_run_id` set to the replay id.
+`origin_run_id` set to the replay id. `agent.draft` (`{"description"}` or
+`{"thread_id"}`, with `answers`? as `[{"question", "answer"}]`) starts a
+draft and answers `{"draft_id", "status": "drafting"}` at once; `{"draft_id"}`
+answers the same until the draft is done and then, once, `{"draft_id",
+"status": "done", "draft", "question", "via"}`. A draft is `{"name", "label",
+"instructions", "skills", "tools_off", "permission_mode", "routines"}` from one
+cheap model call over the words and this runtime's tools, skills and modes;
+its routines come from the trigger reader and start enabled. `question` is
+null or one `{"text", "options"}` when the job is unknown, and `via` is
+`router`, `pi` or `rules` when no model answered. Nothing is saved.
 Remotely the reads, `agent.routine_proposals`, `agent.threads`,
 `agent.tool_catalog`, `agent.replays` and `routine.webhook_info` take
-`thread.read`, `agent.run_now` and `agent.replay` take
+`thread.read`, `agent.run_now`, `agent.draft` and `agent.replay` take
 `run.write`, and the changes, imports and exports take `agents.manage`. A chat-event subscription that sends `{"agent_runs": true}`
 also receives `agent.run_updated` events whose body is the changed `Run`
 with `notify`, true when the change warrants a notification: the run
