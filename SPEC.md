@@ -189,8 +189,8 @@ method, an account where Pi signs in, Claude Code for Anthropic through
 `pi-claude-bridge`, an API key, or a server URL, with its other methods one
 switch away. The OpenAI redirect lands on the runtime's own page on port
 1455, held on both loopback addresses, in muniment's mark and voice, and the
-runtime hands Pi the code. A port another program holds stops the sign-in
-with its number. A
+runtime hands Pi the code. For a paired runtime's sign-in the app holds that port on this computer and forwards the redirect to the runtime. A port another program holds stops the sign-in
+with its number, and a sign-in the browser never finishes fails after fifteen minutes. A
 connect adopts the provider's largest-context model that answers a probe as
 the default, and an account sign-in brings the app to the front. A local server is a
 first-class provider beside the hosted ones, never a fallback. The custom

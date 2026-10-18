@@ -47,6 +47,9 @@ pub use macos_activation::{
 };
 #[cfg(unix)]
 pub use macos_activation::{write_macos_diagnostic, write_macos_diagnostic_with};
+// The desktop holds a sign-in's callback port for a paired runtime with these.
+pub use muniment_runtime_core::models::callback as sign_in_callback;
+pub use sign_in_page::sign_in_page;
 // The desktop shell reads the one state root through this crate.
 pub use muniment_runtime_core::{
     adopt_state_directory, config_directory, profile_directory, DirectoryUnavailableError,
