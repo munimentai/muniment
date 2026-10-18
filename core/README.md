@@ -267,11 +267,16 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   policies beside the global rules and the thread's own journaled policies.
   The gate shows the call's exact request and a summary and offers "Allow
   once", "Allow for this thread", "Always allow for this agent" and "Deny".
+  A run of no agent offers "Always allow" in place of the agent answer.
   "Allow for this thread" journals an allow policy in the thread. "Always
   allow for this agent" also appends the request to `always_allow` through
-  the agent save path. A call an ask policy covers never offers it, a
-  protected path or critical command offers neither, and the save refuses a
-  request `ask_first` names.
+  the agent save path, and "Always allow" to the global `always_allow` in
+  `permission-settings.json`, which every later run reads at launch and fleet
+  sync carries to every member. The thread policy is journaled first, so a
+  refused save still covers the thread, and the answer then names the
+  reason. A call an ask policy covers never offers either, a protected path
+  or critical command offers neither, and the save refuses a request
+  `ask_first` names.
 - `primary_runtime`, the runtime id that runs the agent's routines;
   `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
   `paused_reason`, which stops the routines while set.
@@ -1016,6 +1021,19 @@ The catalog (`crates/models/catalog.toml`) is a list of `[[model]]` tables with
 `output` in US dollars per million tokens, `context` (`400K`, `1M`),
 `strengths` and `limits`. A file that fails the check keeps the last good
 catalog in force.
+
+### Endpoint keys
+
+The runtime keeps the key of each Ollama, LM Studio or custom endpoint in its
+credential store, the keychain on the desktop and `FileCredentialStore` on a
+headless host, under the service `ai.muniment.endpoints` with the provider id
+as the name. Pi's `models.json` holds a command in its place,
+`!"<runtime executable>" secret get <provider>`, which Pi runs for the key and
+which `muniment-runtime` and `muniment-server` answer from the same store. At
+startup and after every model action the runtime moves any plain key it finds
+in `models.json` into the store and points each command at its current
+executable. A stand-in key, an environment reference and a command the user
+wrote stay as they are. A key the store refuses stays in the file.
 
 ### Account credentials
 

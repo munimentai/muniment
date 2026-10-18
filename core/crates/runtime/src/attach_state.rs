@@ -82,10 +82,11 @@ impl RuntimeAttachState {
         muniment_core::model_router::native_auth::set_provider_clients(
             host.provider_clients.clone(),
         );
-        let models = Arc::new(ModelService::new(
-            &profile_directory,
-            Arc::clone(&host.sign_in_page),
-        ));
+        let mut models = ModelService::new(&profile_directory, Arc::clone(&host.sign_in_page));
+        if let Some(executable) = host.secret_executable.clone() {
+            models = models.with_endpoint_keys(Arc::clone(&host.credentials), executable);
+        }
+        let models = Arc::new(models);
         let active = RunRegistry::default();
         let swarm_host = Arc::new(crate::swarm_host::RuntimeSwarmHost {
             active: active.clone(),

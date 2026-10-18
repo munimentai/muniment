@@ -11,6 +11,7 @@ export default function (pi) {
   const saves = {
     "Allow for this thread": "muniment:permission-allow",
     "Always allow for this agent": "muniment:permission-always",
+    "Always allow": "muniment:permission-always-global",
   };
   // A gate nobody answered in time closes without a choice. That is not a
   // refusal, so the agent may try another way.
@@ -92,7 +93,8 @@ export default function (pi) {
     if (choice === "Allow once") return undefined;
     if (saves[choice]) {
       try {
-        await ctx.ui.editor(saves[choice], JSON.stringify(call));
+        const saved = JSON.parse(await ctx.ui.editor(saves[choice], JSON.stringify(call)));
+        if (saved?.saved === false) ctx.ui.notify?.(`This action ran, but the rule was not saved. ${saved.reason ?? ""}`.trim(), "warning");
       } catch {
         // The answer still allows this call when the policy cannot be saved.
       }

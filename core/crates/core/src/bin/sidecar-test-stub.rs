@@ -583,6 +583,11 @@ fn pi_resume(args: Vec<String>) {
                                 "method":"editor", "title":"muniment:permission-always",
                                 "prefill":call
                             })),
+                            Some("Always allow") => Some(serde_json::json!({
+                                "type":"extension_ui_request", "id":"gate-save",
+                                "method":"editor", "title":"muniment:permission-always-global",
+                                "prefill":call
+                            })),
                             Some("Allow for this thread") => Some(serde_json::json!({
                                 "type":"extension_ui_request", "id":"gate-save",
                                 "method":"editor", "title":"muniment:permission-allow",

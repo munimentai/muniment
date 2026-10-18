@@ -85,10 +85,12 @@
     finally { busy = false }
   }
   // Reads the agent from its machine before applying a change, so edits made
-  // elsewhere stay. A null schedule leaves the routines as they are.
+  // elsewhere stay, such as a rule an approval saved. A patch may be a
+  // function of that latest agent. A null schedule leaves the routines as they are.
   async function saveAgent(patch) {
     const { agent: latest } = await agentRequest(tauri, agent.runtimeId, 'agent.read', { id: agent.id })
-    await agentRequest(tauri, agent.runtimeId, 'agent.save', { agent: { ...latest, ...patch, schedule: null } })
+    const changes = typeof patch === 'function' ? patch(latest) : patch
+    await agentRequest(tauri, agent.runtimeId, 'agent.save', { agent: { ...latest, ...changes, schedule: null } })
     await onchange()
   }
   const change = (patch) => action(() => saveAgent(patch))
@@ -104,8 +106,10 @@
     void change({ model: { provider, id: choice, ...(agent.model?.thinking ? { thinking: agent.model.thinking } : {}) } })
   }
   function chooseMode(id) {
-    const { mode: _saved, ...rules } = permissions
-    void change({ permissions: id ? { ...rules, mode: id } : rules })
+    void change((latest) => {
+      const { mode: _saved, ...rules } = latest?.permissions ?? permissions
+      return { permissions: id ? { ...rules, mode: id } : rules }
+    })
   }
   function disableTool(event) {
     event.preventDefault()
@@ -182,7 +186,7 @@
         </select></label>
         {#if shownMode}<small>{shownMode.available === false && shownMode.reason ? shownMode.reason : shownMode.description}</small>{/if}
       {/if}
-      <PermissionRules rules={permissions} {busy} onsave={(list, requests) => change({ permissions: { ...permissions, [list]: requests } })} />
+      <PermissionRules rules={permissions} {busy} onsave={(list, requests) => change((latest) => ({ permissions: { ...(latest?.permissions ?? permissions), [list]: requests } }))} />
     </section>
 
     <details class="field advanced">

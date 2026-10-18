@@ -60,6 +60,7 @@ pub const CLASSES: [&str; 9] = [
     memory::CLASS,
 ];
 
+pub use permissions::CLASS as PERMISSIONS_CLASS;
 pub use preferences::CLASS as PREFERENCES_CLASS;
 
 /// One value an adapter keeps on records.

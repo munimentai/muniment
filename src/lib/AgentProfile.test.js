@@ -114,6 +114,16 @@ it('turns skills on and off, sets the mode from core, edits permission rules and
   await waitFor(() => expect(saved().messaging).toEqual({ allow: [] }))
 })
 
+it('keeps an always allow rule an approval saved while the profile was open', async () => {
+  const push = { request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push'], working_directory: '/work' } }
+  // The open profile shows no rule, and the agent's machine already holds one.
+  const { invoke, saved } = machine({ ...agent, permissions: { ...agent.permissions, always_allow: [push] } })
+  render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
+  const mode = await screen.findByRole('combobox', { name: 'Permission mode' })
+  await fireEvent.change(mode, { target: { value: 'dont_ask' } })
+  await waitFor(() => expect(saved().permissions).toEqual({ mode: 'dont_ask', always_allow: [push], ask_first: [] }))
+})
+
 it('keeps the deprecated disabled tools under Advanced', async () => {
   const { invoke, saved } = machine()
   render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })

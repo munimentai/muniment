@@ -5450,9 +5450,45 @@ describe('voice dictation', () => {
     // The card leaves once the model is on disk, and the hint carries the next step.
     expect(await screen.findByText('Installed. Press Voice again to dictate.')).toHaveAttribute('role', 'status')
     expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('parakeet_install_start')
+    expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true })
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument()
+  })
+
+  it('remembers the download consent and starts the next install unasked', async () => {
+    const saved = {}
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'agent_request' && args.operation === 'preferences.set') { Object.assign(saved, args.body.values); return { values: saved } }
+      if (command === 'agent_request' && args.operation === 'preferences.get') return { values: saved }
+      if (command === 'dictation_start') return { state: 'modelNotInstalled', message: 'The speech model is not installed.' }
+      if (command === 'parakeet_install_facts') return { identity: 'parakeet-tdt-0.6b-v3', revision: 'r', sourceRepository: 'nvidia/parakeet-tdt-0.6b-v3', totalDownloadBytes: 672_384_307, requiredFreeBytes: 940_819_763, speechModelLicense: 'CC BY 4.0', voiceActivityModelLicense: 'MIT' }
+      if (command === 'parakeet_install_start') return { state: 'cancelled' }
+      if (command === 'parakeet_install_status') return { state: 'notInstalled' }
+      if (command === 'parakeet_install_cancel') return { state: 'cancelled' }
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    const { unmount } = render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
+    await within(card).findByText('641 MB')
+    // Nothing downloads before the click beside the size.
+    expect(invoke.mock.calls.some(([command]) => command === 'parakeet_install_start')).toBe(false)
+    await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true }))
+    expect(saved).toEqual({ 'large-downloads': true })
+    unmount()
+
+    // The next time the model is missing, the download starts on its own.
+    invoke.mockClear()
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: false }))
   })
 
   it.each([
@@ -7908,11 +7944,11 @@ describe('signed-in access popover', () => {
 
     expect(within(dialog).getByText('Checking your current access…')).toBeInTheDocument()
     expect(profile).toHaveTextContent('Acme · owner')
-    expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Start with' })).toBeInTheDocument()
 
     rejectOpen(new Error('offline'))
     const retry = await within(dialog.querySelector('.entitlements-section')).findByRole('button', { name: 'Try again' })
-    expect(screen.getByText(/Ask a question or request a file/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Start with' })).toBeInTheDocument()
     await fireEvent.click(retry)
     expect(accessCalls).toBe(3)
 
@@ -8180,6 +8216,29 @@ describe('dedicated creation chats', () => {
     expect(screen.getByPlaceholderText('Ask anything')).toHaveValue('')
     expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
     expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
+  })
+
+  it('starts a new thread from its starter cards', async () => {
+    const original=invoke.getMockImplementation()
+    invoke.mockImplementation((command,payload)=>{
+      if(command==='creation_list') return Promise.resolve([])
+      if(command==='artifact_list') return Promise.resolve([])
+      if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
+      if(command==='chat_new_thread') return Promise.resolve('01900000-0000-7000-8000-000000000098')
+      return original(command,payload)
+    })
+    render(App)
+    const composer = await findReadyWorkspaceComposer()
+    const starters = await screen.findByRole('region', { name: 'Start with' })
+    expect(within(starters).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Make a page', 'Research a topic', 'Summarize a file', 'Set up an agent'])
+    // Each card's icon takes its own tint.
+    expect([...starters.querySelectorAll('button.starter')].map((button) => button.style.getPropertyValue('--tint'))).toEqual(['var(--tint-blue)', 'var(--tint-green)', 'var(--tint-amber)', 'var(--tint-rose)'])
+    await fireEvent.click(within(starters).getByRole('button', { name: 'Research a topic' }))
+    await waitFor(() => expect(composer).toHaveValue('Research this topic and cite your sources: '))
+    expect(invoke.mock.calls.some(([name])=>name==='chat_start')).toBe(false)
+    await fireEvent.input(composer, { target: { value: '' } })
+    await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Set up an agent' }))
+    expect(await screen.findByRole('group', { name: 'Template' })).toHaveTextContent('Goal: Create a reusable agent for my work.')
   })
 
   it.each(['Artifacts','Agents'])('starts %s with a goal and draft, without sending or listing an ordinary thread', async (section) => {

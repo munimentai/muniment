@@ -52,8 +52,8 @@
   --signal-soft: rgba(0, 107, 78, var(--signal-opacity));
   --oxide: #B13D42;
   --ochre: #7A5A00;
-  --accent: #B4235A;
-  --accent-soft: #FCE3EC;
+  --accent: #00707A;
+  --accent-soft: #D3F0EF;
   --on-accent: #FFFFFF;
 
   /* §1.4 type: two families, two registers */
@@ -106,8 +106,8 @@
     --signal-soft: rgba(79, 214, 165, var(--signal-opacity));
     --oxide: #FF9B9B;
     --ochre: #EFCA5A;
-    --accent: #FF8FB1;
-    --accent-soft: #4A2433;
+    --accent: #5ED6E3;
+    --accent-soft: #12373A;
     --on-accent: #0B1C17;
     --shadow-window: 0 1px 2px rgba(0,0,0,.05), 0 12px 40px rgba(0,0,0,.08);
     --shadow-overlay: 0 4px 24px rgba(0,0,0,.14);
@@ -169,8 +169,8 @@
   --signal-soft: rgba(0, 107, 78, var(--signal-opacity));
   --oxide: #B13D42;
   --ochre: #7A5A00;
-  --accent: #B4235A;
-  --accent-soft: #FCE3EC;
+  --accent: #00707A;
+  --accent-soft: #D3F0EF;
   --on-accent: #FFFFFF;
   color-scheme: light;
 }
@@ -186,8 +186,8 @@
   --signal-soft: rgba(79, 214, 165, var(--signal-opacity));
   --oxide: #FF9B9B;
   --ochre: #EFCA5A;
-  --accent: #FF8FB1;
-  --accent-soft: #4A2433;
+  --accent: #5ED6E3;
+  --accent-soft: #12373A;
   --on-accent: #0B1C17;
   color-scheme: dark;
 }
@@ -271,8 +271,8 @@
   --signal-soft: rgba(11, 95, 165, var(--signal-opacity));
   --oxide: #B13D42;
   --ochre: #7A5A00;
-  --accent: #A94700;
-  --accent-soft: #FFE8D5;
+  --accent: #1F55D6;
+  --accent-soft: #DFE8FD;
   --on-accent: #FFFFFF;
   color-scheme: light;
 }
@@ -288,8 +288,8 @@
   --signal-soft: rgba(108, 178, 255, var(--signal-opacity));
   --oxide: #FF9B9B;
   --ochre: #EFCA5A;
-  --accent: #FFA64D;
-  --accent-soft: #433324;
+  --accent: #8AB4FF;
+  --accent-soft: #1B2D55;
   --on-accent: #0C1728;
   color-scheme: dark;
 }
@@ -373,8 +373,8 @@
   --signal-soft: rgba(150, 60, 16, var(--signal-opacity));
   --oxide: #9A2731;
   --ochre: #785000;
-  --accent: #00706B;
-  --accent-soft: #D6F2EE;
+  --accent: #A63F1C;
+  --accent-soft: #FBE3D8;
   --on-accent: #FFFFFF;
   color-scheme: light;
 }
@@ -390,8 +390,8 @@
   --signal-soft: rgba(255, 154, 92, var(--signal-opacity));
   --oxide: #FF9BA3;
   --ochre: #EFCA5A;
-  --accent: #5FE0D2;
-  --accent-soft: #173B36;
+  --accent: #F08A5D;
+  --accent-soft: #46261A;
   --on-accent: #1E130E;
   color-scheme: dark;
 }
@@ -475,8 +475,8 @@
   --signal-soft: rgba(91, 50, 200, var(--signal-opacity));
   --oxide: #B13D42;
   --ochre: #7A5A00;
-  --accent: #9A5A00;
-  --accent-soft: #FFF0D1;
+  --accent: #7A3BD1;
+  --accent-soft: #EEE3FC;
   --on-accent: #FFFFFF;
   color-scheme: light;
 }
@@ -492,8 +492,8 @@
   --signal-soft: rgba(180, 156, 255, var(--signal-opacity));
   --oxide: #FF9B9B;
   --ochre: #EFCA5A;
-  --accent: #FFC75F;
-  --accent-soft: #3F3420;
+  --accent: #CDA8FF;
+  --accent-soft: #33244F;
   --on-accent: #140F27;
   color-scheme: dark;
 }
@@ -554,6 +554,18 @@
   --on-selected: var(--ink);
   --selected-edge: var(--ink);
   --focus-edge: var(--muted);
+}
+
+/* Starter tints: each starter card on an empty screen draws its icon in one
+   of these, over a soft fill of it. They stand outside the color law like the
+   agent palettes, and each clears 3:1 on every theme's surfaces. */
+:root {
+  --tint-green: light-dark(#1F7A4D, #5FD39A);
+  --tint-blue: light-dark(#2563C9, #7DB0FF);
+  --tint-amber: light-dark(#8A5A00, #F0B54A);
+  --tint-rose: light-dark(#B83A62, #FF8FB0);
+  --tint-teal: light-dark(#0F7680, #5ED6E3);
+  --tint-orange: light-dark(#A84B14, #FF9E5E);
 }
 
 /* State colors for the states core reports: online and done in success,

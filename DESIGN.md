@@ -13,7 +13,7 @@ Every theme carries ten core color tokens in one `:root[data-theme]`
 block. Appearance offers four colors, Moss, Harbor, Clay and Iris, in three
 rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
 version, and Mode picks between them, so System follows the OS with the
-picked palette. Normal sets are quiet neutrals tinted by the color, with the color as signal and accent. Vibrant sets tint paper, add a complementary accent and color selection and the composer's focus edge with it. High contrast sets
+picked palette. Normal sets are quiet neutrals tinted by the color, with the color as signal and accent. Vibrant sets tint paper, add a brighter accent from the color's own family and color selection and the composer's focus edge with it. High contrast sets
 hold pure ink on pure paper, with the color on strong hairlines and hovers. The table holds Moss light and Moss dark.
 Every set adds `--accent`, `--accent-soft` and `--on-accent`. `--success`, `--active`, `--danger` and `--warning` color the states core reports.
 
@@ -30,7 +30,7 @@ Every set adds `--accent`, `--accent-soft` and `--on-accent`. `--success`, `--ac
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Vibrant sets pair the color with a complementary accent: Moss with raspberry, Harbor with orange, Clay with teal and Iris with amber. Moss neutrals carry a faint green cast. The one
+Vibrant accents stay in the color's hue family: Moss with teal, Harbor with azure, Clay with terracotta and Iris with violet. Moss neutrals carry a faint green cast. The one
 exception is Moss dark's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 
@@ -60,7 +60,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
    polish flash, the green globe of a machine that answers in the machine menu, and workflow-run
    indicators. Settings tabs, selected capability filters, verified updates and the Confirm check on an unconfirmed memory row use the theme signal.
    `--accent` fills each view's primary action (a `Button` marked primary or a submit) and an enabled switch. `StatusChip` colors a reported state: success online and done, active running, danger failed, warning queued and waiting, neutral offline and idle.
-   Other buttons, links, icons at rest and badges are ink on paper, and selection reads `--selected`.
+   Other buttons, links, icons at rest and badges are ink on paper, and selection reads `--selected`. A starter card's icon takes its `--tint-*` hue over a soft fill of it.
    `src/styles/signal-allowlist.test.js` enforces the list.
 2. **If it is a record, it is mono.** Provenance lines, receipt rows, audit
    entries, costs, ids, versions, code, file paths and keyboard chips render in Commit
@@ -75,7 +75,7 @@ rare: the mark's thinking state, the active action's text sheen, the streaming u
 4. **Voice.** Sentence case everywhere. Buttons say what happens, in a label
    or, for the composer's send and stop control, in a glyph with an accessible
    name that says it. Errors state what happened and the next step and never
-   apologize. Empty states are one line and no illustration. The one
+   apologize. Empty states are one line and no illustration, or a few starter cards that each start a flow: a new thread offers Make a page, Research a topic, Summarize a file and Set up an agent. The one
    exception is the record panel's first screen on a machine that holds no
    company: it carries a headline, one sentence, a proof line in mono, the
    create form, the sources and the sample company, and it still

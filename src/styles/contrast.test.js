@@ -88,6 +88,27 @@ it('keeps every accent readable on action surfaces and filled buttons', () => {
     const palette = palettes[name]
     expect(contrastRatio(palette.accent, palette['accent-soft'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(palette.accent, palette['on-accent'])).toBeGreaterThanOrEqual(4.5)
+    // Selection draws the accent on its soft fill over paper and surface.
+    for (const background of ['paper', 'surface']) expect(contrastRatio(palette.accent, palette[background]), `${name} accent on ${background}`).toBeGreaterThanOrEqual(4.5)
+    for (const foreground of ['ink', 'muted']) expect(contrastRatio(palette[foreground], palette['accent-soft']), `${name} ${foreground} on accent-soft`).toBeGreaterThanOrEqual(4.5)
+  }
+})
+
+// Each accent stays in its color's hue family, so selection, focus and primary
+// buttons sit in harmony with the surfaces the color tints.
+const hue = (hex) => {
+  const [r, g, b] = hex.match(/[\dA-F]{2}/gi).map((channel) => parseInt(channel, 16) / 255)
+  const [max, min] = [Math.max(r, g, b), Math.min(r, g, b)]
+  const delta = max - min
+  const sector = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4
+  return (sector * 60 + 360) % 360
+}
+const hueDistance = (first, second) => Math.min(Math.abs(first - second), 360 - Math.abs(first - second))
+
+it('keeps every accent in the hue family of its color', () => {
+  for (const name of [...themes, 'default light', 'default dark']) {
+    const palette = palettes[name]
+    expect(hueDistance(hue(palette.accent), hue(palette.signal)), `${name} accent hue`).toBeLessThanOrEqual(30)
   }
 })
 
@@ -106,6 +127,24 @@ it('keeps every state color readable in every theme and on its chip', () => {
       const color = values[scheme]
       for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14), mixed(color, palette.faint, .14)]) {
         expect(contrastRatio(color, background), `${name} --${token} on ${background}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  }
+})
+
+// Starter tints are icon colors: each clears 3:1 on the paper, surface and
+// faint of every theme in its scheme, and on its own soft fill.
+const tints = Object.fromEntries([...source.matchAll(/--tint-([a-z]+):\s*light-dark\((#[\dA-F]{6}),\s*(#[\dA-F]{6})\)/gi)]
+  .map(([, token, light, dark]) => [token, { light, dark }]))
+
+it('keeps every starter tint visible in every theme', () => {
+  expect(Object.keys(tints)).toEqual(['green', 'blue', 'amber', 'rose', 'teal', 'orange'])
+  for (const [name, palette] of Object.entries(palettes)) {
+    const scheme = name.endsWith('dark') ? 'dark' : 'light'
+    for (const [token, values] of Object.entries(tints)) {
+      const color = values[scheme]
+      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14)]) {
+        expect(contrastRatio(color, background), `${name} --tint-${token} on ${background}`).toBeGreaterThanOrEqual(3)
       }
     }
   }

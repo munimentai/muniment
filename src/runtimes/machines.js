@@ -68,7 +68,7 @@ export function machineRows({ list, swarm = null, devices = [] }) {
       key: member.runtime_id,
       name: machine.name,
       kind,
-      icon: kindIcon({ kind: kind === 'container' ? 'container' : 'desktop', formFactor: machine.formFactor }),
+      icon: kindIcon(machine),
       version: '',
       local: false,
       runtime: null,

@@ -108,12 +108,15 @@ export function memberMachine(swarm, coreId, runtimeList = null) {
       ? { ...runtime, online: runtime.local || runtime.status === 'online' }
       : { id: coreId, name: 'Unknown machine', kind: 'server', online: false }
   }
+  // A machine this window reaches keeps the kind and form factor its runtime
+  // reports, so it draws the same icon here as on the Machines page.
   const formFactor = member.form_factor
+  const kind = formFactor === 'container' ? 'container' : reached === LOCAL_RUNTIME_ID ? 'local' : runtime?.kind ?? 'desktop'
   return {
     id: coreId,
-    name: reached === LOCAL_RUNTIME_ID ? 'This computer' : machineName({ name: member.runtime_name || runtime?.name, kind: formFactor === 'container' ? 'container' : runtime?.kind ?? 'desktop' }),
-    kind: formFactor === 'container' ? 'container' : reached === LOCAL_RUNTIME_ID ? 'local' : 'desktop',
-    formFactor,
+    name: reached === LOCAL_RUNTIME_ID ? 'This computer' : machineName({ name: member.runtime_name || runtime?.name, kind }),
+    kind,
+    formFactor: runtime ? runtime.formFactor : formFactor,
     online: !!member.online,
   }
 }

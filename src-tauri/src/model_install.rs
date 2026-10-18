@@ -381,9 +381,29 @@ fn redact_parakeet_failure(
     }
 }
 
+/// Starts the speech model download. It starts only when this call carries
+/// the user's consent, an Install click beside the download size, or the
+/// user allowed large downloads on this machine before.
 #[tauri::command]
-pub fn parakeet_install_start(state: State<'_, ParakeetInstallState>) -> ParakeetInstallStatus {
-    state.start()
+pub fn parakeet_install_start(
+    state: State<'_, ParakeetInstallState>,
+    consent: Option<bool>,
+) -> Result<ParakeetInstallStatus, String> {
+    let remembered = || {
+        muniment_runtime::profile_directory()
+            .map(|profile| muniment_core::preferences::large_downloads_allowed(&profile))
+            .unwrap_or(false)
+    };
+    if !download_allowed(consent, remembered) {
+        return Err("Allow the speech model download first.".into());
+    }
+    Ok(state.start())
+}
+
+/// Whether a large download may start: consent in this request, or consent
+/// the user gave before.
+fn download_allowed(consent: Option<bool>, remembered: impl FnOnce() -> bool) -> bool {
+    consent == Some(true) || remembered()
 }
 
 #[tauri::command]
@@ -401,6 +421,14 @@ pub fn parakeet_install_cancel(state: State<'_, ParakeetInstallState>) -> Parake
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_download_waits_for_consent_given_now_or_before() {
+        assert!(download_allowed(Some(true), || false));
+        assert!(download_allowed(None, || true));
+        assert!(!download_allowed(None, || false));
+        assert!(!download_allowed(Some(false), || false));
+    }
 
     fn progress_inner(generation: u64) -> Arc<Mutex<ParakeetInner>> {
         Arc::new(Mutex::new(ParakeetInner {

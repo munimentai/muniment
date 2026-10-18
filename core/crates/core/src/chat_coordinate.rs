@@ -1993,6 +1993,7 @@ fn coordinate_agent_permission(
         "muniment:permission-check"
             | "muniment:permission-allow"
             | "muniment:permission-always"
+            | "muniment:permission-always-global"
             | "muniment:permission-mode"
             | "muniment:plan-check"
             | "muniment:plan-approve"
@@ -2132,7 +2133,7 @@ fn coordinate_agent_permission(
             .active_thread_permission_policies(&thread)
             .unwrap_or_default();
         drop(storage);
-        if title == "muniment:permission-always" {
+        if title == "muniment:permission-always" || title == "muniment:permission-always-global" {
             if crate::permission_gate::asks_first(permissions, &thread_policies, &policy_request)
                 || !rules_can_allow
             {
@@ -2146,13 +2147,22 @@ fn coordinate_agent_permission(
                 .ok()
                 .and_then(|root| root.parent().map(std::path::Path::to_path_buf))
                 .ok_or("Agent settings are unavailable.")?;
-            let agent_id = agent_id.ok_or("This run belongs to no agent.")?;
-            crate::agents::always_allow(&profile, agent_id, policy_request.clone())?;
+            // The thread keeps the rule even when the lasting one cannot be saved.
             let mut storage = journal
                 .lock()
                 .map_err(|_| "Conversation history is busy.".to_string())?;
-            journal_thread_allow(app, &mut storage, &thread, policy_request, subject)?;
-            return Ok(json!({"saved": true}));
+            journal_thread_allow(app, &mut storage, &thread, policy_request.clone(), subject)?;
+            drop(storage);
+            let saved = if title == "muniment:permission-always-global" {
+                crate::permission_gate::settings::always_allow(&profile, policy_request).map(drop)
+            } else {
+                let agent_id = agent_id.ok_or("This run belongs to no agent.")?;
+                crate::agents::always_allow(&profile, agent_id, policy_request).map(drop)
+            };
+            return Ok(match saved {
+                Ok(()) => json!({"saved": true}),
+                Err(reason) => json!({"saved": false, "reason": reason}),
+            });
         }
         let decision = crate::permission_gate::decide_tool_call(
             permissions,
@@ -2166,8 +2176,7 @@ fn coordinate_agent_permission(
         let mut verdict = serde_json::to_value(&decision)
             .map_err(|_| "The permission check failed.".to_string())?;
         if let crate::permission_gate::GateDecision::Ask { reason } = &decision {
-            let agent_rule = agent_id.is_some()
-                && !crate::permission_gate::asks_first(
+            let always_rule = !crate::permission_gate::asks_first(
                     permissions,
                     &thread_policies,
                     &policy_request,
@@ -2187,7 +2196,8 @@ fn coordinate_agent_permission(
             verdict["title"] = json!(gate_title);
             verdict["options"] = json!(crate::permission_gate::gate_options(
                 rules_can_allow,
-                agent_rule
+                always_rule,
+                agent_id.is_some()
             ));
             verdict["summary"] = json!(summary);
             verdict["request"] = json!(policy_request);

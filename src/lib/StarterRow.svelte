@@ -2,10 +2,11 @@
   import AgentAvatar from './AgentAvatar.svelte'
   import { agentColor } from './agent-avatar.js'
   import LucideIcon from './LucideIcon.svelte'
-  // The row of starters at the top of the Artifacts and Agents catalogs. Each
-  // tile opens a creation chat with its goal filled in. An empty catalog shows
-  // the full tiles with a sentence each; a full one shows them as one compact
-  // line above its cards.
+  // The row of starters at the top of the Artifacts, Agents and Projects
+  // catalogs. Each tile opens a creation flow with its goal filled in. An
+  // empty catalog shows the full tiles with a sentence each; a full one shows
+  // them as one compact line above its cards. A tile with a `tint` draws its
+  // icon in that starter tint over a soft fill of it.
   let { heading, lede = '', kind, items = [], compact = false, oncreate } = $props()
 </script>
 
@@ -16,16 +17,16 @@
     {#each items as item (item.id)}
       {@const starter = kind === 'agent' ? { id: item.id, avatar: { style: 'muniment', seed: `starter-${item.id}` } } : null}
       <li>
-        <button type="button" class="starter" class:agent={!!starter} style:--agent-color={starter ? agentColor(starter) : undefined} onclick={() => oncreate?.(item)}>
+        <button type="button" class="starter" class:agent={!!starter} class:tinted={!starter && !!item.tint} style:--agent-color={starter ? agentColor(starter) : undefined} style:--tint={!starter && item.tint ? `var(--tint-${item.tint})` : undefined} onclick={() => oncreate?.(item)}>
           <span class="thumb" aria-hidden="true">
             {#if starter}
               <AgentAvatar agent={starter} size={compact ? 28 : 40} />
             {:else}
-              <LucideIcon name={item.icon} size={compact ? 20 : 28} />
+              <LucideIcon name={item.icon} size={compact ? 20 : 28} variant="action" />
             {/if}
           </span>
           <span class="name">{item.name}{#if item.badge}<small class="badge">{item.badge}</small>{/if}</span>
-          {#if !compact}<span class="sentence">{item.sentence}</span>{/if}
+          {#if !compact && item.sentence}<span class="sentence">{item.sentence}</span>{/if}
         </button>
       </li>
     {/each}
@@ -49,6 +50,8 @@
   .agent .thumb { border-color: transparent; background: color-mix(in oklab, var(--agent-color) 28%, var(--surface)); }
   .agent:hover .thumb { background: color-mix(in oklab, var(--agent-color) 40%, var(--surface)); }
   .starter:hover .thumb { color: var(--ink); }
+  .tinted .thumb { border-color: transparent; background: color-mix(in oklab, var(--tint) 14%, var(--surface)); color: var(--tint); }
+  .starter.tinted:hover .thumb { background: color-mix(in oklab, var(--tint) 22%, var(--surface)); color: var(--tint); }
   .name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; font-weight: 600; }
   .badge { padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); font-weight: 400; }
   .sentence { color: var(--muted); font-size: var(--text-12); }

@@ -94,9 +94,9 @@ describe('installed local-mode chat', () => {
     await closeSettings()
     await settings.waitForDisplayed({ reverse: true, timeout: 10000 })
 
-    await browser.waitUntil(async () => await emptyChat.getText() === 'Ask a question or request a file.', {
+    await (await localMode.$('.thread .thread-starters')).waitForDisplayed({
       timeout: 30000,
-      timeoutMsg: 'empty chat did not become ready after connecting a model',
+      timeoutMsg: 'empty chat did not show its starters after connecting a model',
     })
     await waitForDesktopClient()
     const prompt = `Muniment local E2E chat ${Date.now()}`

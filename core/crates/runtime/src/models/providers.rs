@@ -338,6 +338,7 @@ pub(super) fn endpoint_key_for(models_file: &Path, provider: &str, url: &str) ->
     (rest.is_empty() || rest.starts_with('/'))
         .then(|| saved_endpoint_key(models_file, provider))
         .flatten()
+        .and_then(|key| pi_models::resolve_key(&key))
 }
 
 /// Saves an Ollama server and makes its default model Pi's default.

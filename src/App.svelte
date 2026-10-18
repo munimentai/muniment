@@ -11,7 +11,7 @@
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
   import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, threadOwner } from './runtimes/fleet.js'
-  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
+  import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, machineName, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
   import { machineStatusTone } from './lib/status-tone.js'
   import StatusChip from './lib/ui/StatusChip.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
@@ -39,6 +39,7 @@
   import CatalogActions from './lib/CatalogActions.svelte'
   import ArtifactCatalog from './lib/ArtifactCatalog.svelte'
   import {creationStarters, creationDefaults, creationName, creationPrompt, sentCreation} from './lib/creation-prompts.js'
+  import ThreadStarters from './lib/ThreadStarters.svelte'
   import { overflowLabels } from './lib/overflow-labels.js'
   import AgentManager from './lib/AgentManager.svelte'
   import WorkspacePanel from './lib/WorkspacePanel.svelte'
@@ -118,6 +119,7 @@
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
+  import { downloadsAllowed, installSpeechModel, resumeSpeechModel } from './lib/large-downloads.js'
   import RunMark from './lib/RunMark.svelte'
   import ExecutionTime from './lib/ExecutionTime.svelte'
   import ProjectRow from './lib/ProjectRow.svelte'
@@ -324,6 +326,20 @@
     draft = ''
     await tick()
     composer?.focus()
+  }
+  // A new thread's starter card: a creation chat, or a prompt in the composer,
+  // after the file picker for a starter about files.
+  async function pickThreadStarter(starter) {
+    if (starter.kind === 'artifact') return startCreation('artifact', { goal: starter.goal, output: starter.output })
+    if (starter.kind === 'agent') return startCreation('agent')
+    if (starter.kind === 'files') {
+      await chooseFiles()
+      if (!selectedFiles.length) return
+    }
+    draft = starter.prompt
+    await tick()
+    composer?.focus()
+    composer?.setSelectionRange?.(draft.length, draft.length)
   }
   async function useCreationSuggestion(chosen) {
     if (pendingCreation) {
@@ -1832,12 +1848,17 @@
     try {
       const facts = await tauri.invoke('parakeet_install_facts')
       const status = await tauri.invoke('parakeet_install_status')
+      // The user allowed large downloads before, so the download starts unasked.
+      const resume = status.state === 'notInstalled' && await downloadsAllowed(tauri)
       if (destroyed) return
       speechInstallFacts = facts
       speechInstallStatus = status
       if (status.state === 'installing') {
         const epoch = ++speechInstallEpoch
         speechInstallTimer = setTimeout(() => readSpeechInstallStatus(epoch), 250)
+      } else if (resume) {
+        speechInstallPending = false
+        void startSpeechInstall(resumeSpeechModel)
       }
     } catch (_) {
       if (destroyed) return
@@ -1847,14 +1868,14 @@
     }
   }
 
-  async function startSpeechInstall() {
+  async function startSpeechInstall(install = installSpeechModel) {
     if (speechInstallPending || speechInstallStatus?.state === 'installing') return
     stopSpeechInstallPolling()
     const epoch = ++speechInstallEpoch
     speechInstallPending = true
     speechInstallError = ''
     try {
-      const next = await tauri.invoke('parakeet_install_start')
+      const next = await install(tauri)
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallStatus = next
       if (next.state === 'installing') await readSpeechInstallStatus(epoch)
@@ -2918,7 +2939,7 @@
 
 {#snippet machineBadge(summary)}
   {@const machine = summary.runtimeId && summary.runtimeId !== LOCAL_RUNTIME_ID ? runtimeList?.runtimes?.find((runtime) => runtime.id === summary.runtimeId) : null}
-  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machine.name}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
+  {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machineName(machine)}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
 <!-- A row's meta line: once a machine is paired, the machine the thread lives
@@ -2926,7 +2947,7 @@
 {#snippet rowMeta(summary)}
   {@const owner = threadOwner(summary, swarm, runtimeList)}
   {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machine.name}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  <span class="thread-row-meta">{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -3187,7 +3208,7 @@
         <div class="thread-shell" data-panel-fade="chat">
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={handleThreadScroll}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
-          {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : threadAgent ? `Chat with ${threadAgent.name} using ${modelSourceLabel}.` : 'Ask a question or request a file.'}{/if}</p>{/if}
+          {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation}{#if !threadGroup && !threadAgent && !(auth.name === 'local' && (inventoryError || !inventory || !chipModel || !currentModelAvailable(inventory)))}<ThreadStarters disabled={switchLocked || !!active} onpick={pickThreadStarter} />{:else}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : `Chat with ${threadAgent?.name} using ${modelSourceLabel}.`}{/if}</p>{/if}{/if}
           {#if currentCreation}
             {#if !pendingCreation}<details class="creation-goal" aria-label="Creation goal"><summary><strong>{creationName(currentCreation.kind, currentCreation)}</strong> <span>{currentCreation.goal}</span></summary><p>Output: {currentCreation.output}</p></details>{/if}
             {#if !messages.length && pendingCreation && creationStarters[currentCreation.kind].concat(creationDefaults(currentCreation.kind)).some(option=>option.goal===currentCreation.goal)}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationStarters[currentCreation.kind] as option (option.id)}<button aria-pressed={option.goal===currentCreation.goal} onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
@@ -3456,7 +3477,7 @@
               <!-- The Install control states a missing model, so only a later state earns a line. -->
               {#if speechInstallStatus && speechInstallStatus.state !== 'notInstalled'}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
               {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
-                <button type="button" disabled={speechInstallPending} onclick={startSpeechInstall}>Install</button>
+                <button type="button" disabled={speechInstallPending} onclick={() => startSpeechInstall()}>Install</button>
               {:else if speechInstallStatus?.state === 'installing'}
                 <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
               {/if}

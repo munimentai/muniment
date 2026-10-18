@@ -845,6 +845,69 @@ fn always_allow_for_this_agent_saves_the_exact_rule_unless_ask_first_covers_it()
 }
 
 #[test]
+fn always_allow_saves_a_global_rule_that_later_runs_in_other_threads_read() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-always-global", true, RuntimeHost::default());
+    let ask = |name: &str| -> Agent {
+        let agent: Agent = serde_json::from_value(json!({
+            "name": name,
+            "instructions": "Release carefully.",
+            "permissions": {"mode": "ask"}
+        }))
+        .unwrap();
+        agents::save(setup.profile(), agent).unwrap()
+    };
+    let first = ask("Releaser");
+    let second = ask("Reviewer");
+    // A tool call's rule names the tool and its input, not the agent's folder.
+    let push = json!({"tool": "mcp__crm__archive", "input": {"id": "lead-9"}});
+    assert_eq!(
+        bridge_answer(&setup, &second.id, "muniment:permission-check", &push)["decision"],
+        "ask"
+    );
+
+    // "Always allow" saves the exact request to the global rules on disk,
+    // which every later run reads at launch and fleet sync carries.
+    let saved = bridge_answer(
+        &setup,
+        &first.id,
+        "muniment:permission-always-global",
+        &push,
+    );
+    assert_eq!(saved["saved"], true, "{saved}");
+    let settings = muniment_core::permission_gate::settings::load(setup.profile());
+    assert_eq!(settings.always_allow.len(), 1);
+    assert!(agents::get(setup.profile(), &first.id)
+        .unwrap()
+        .permissions
+        .unwrap()
+        .always_allow
+        .is_empty());
+
+    // Another agent's thread, in a run that starts after the save, runs it.
+    assert_eq!(
+        bridge_answer(&setup, &second.id, "muniment:permission-check", &push)["decision"],
+        "allow"
+    );
+    // A second answer for the same request keeps one rule.
+    let again = bridge_answer(
+        &setup,
+        &first.id,
+        "muniment:permission-always-global",
+        &push,
+    );
+    assert_eq!(again["saved"], true, "{again}");
+    assert_eq!(
+        muniment_core::permission_gate::settings::load(setup.profile())
+            .always_allow
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn a_failed_run_keeps_its_inputs_without_secrets_and_replays_against_the_current_agent() {
     let _environment = ENVIRONMENT
         .lock()

@@ -672,10 +672,11 @@ impl RunPermissions {
 
 /// The agent gate's answers, as the gate offers them and as
 /// `agent.approval_answer` names them.
-pub const GATE_ANSWERS: [(&str, &str); 4] = [
+pub const GATE_ANSWERS: [(&str, &str); 5] = [
     ("allow_once", "Allow once"),
     ("allow_thread", "Allow for this thread"),
     ("always_allow_agent", "Always allow for this agent"),
+    ("always_allow", "Always allow"),
     ("deny", "Deny"),
 ];
 
@@ -749,15 +750,17 @@ pub fn gate_answer(option: &str) -> Option<&'static str> {
 }
 
 /// The options the gate offers for one call. "Allow for this thread" is
-/// left out when no rule can allow the call, such as a protected path, and
-/// "Always allow for this agent" also when the run has no agent or an ask
-/// policy covers the call, since ask-first outranks every allow.
-pub fn gate_options(thread_rule: bool, agent_rule: bool) -> Vec<String> {
+/// left out when no rule can allow the call, such as a protected path. A
+/// run of an agent offers "Always allow for this agent" and any other run
+/// "Always allow", which saves a global rule; both are left out also when an
+/// ask policy covers the call, since ask-first outranks every allow.
+pub fn gate_options(thread_rule: bool, always_rule: bool, agent: bool) -> Vec<String> {
     GATE_ANSWERS
         .iter()
         .filter(|(id, _)| match *id {
             "allow_thread" => thread_rule,
-            "always_allow_agent" => thread_rule && agent_rule,
+            "always_allow_agent" => thread_rule && always_rule && agent,
+            "always_allow" => thread_rule && always_rule && !agent,
             _ => true,
         })
         .map(|(_, option)| (*option).to_owned())
@@ -1426,11 +1429,29 @@ mod tests {
         );
         assert_eq!(summary(&long).chars().count(), 240);
         assert!(summary(&long).ends_with('…'));
-        assert_eq!(gate_options(true, true).len(), 4);
-        assert!(!gate_options(true, false)
-            .iter()
-            .any(|option| option == "Always allow for this agent"));
-        assert_eq!(gate_options(false, true), ["Allow once", "Deny"]);
+        assert_eq!(
+            gate_options(true, true, true),
+            [
+                "Allow once",
+                "Allow for this thread",
+                "Always allow for this agent",
+                "Deny"
+            ]
+        );
+        assert_eq!(
+            gate_options(true, true, false),
+            [
+                "Allow once",
+                "Allow for this thread",
+                "Always allow",
+                "Deny"
+            ]
+        );
+        assert_eq!(
+            gate_options(true, false, true),
+            ["Allow once", "Allow for this thread", "Deny"]
+        );
+        assert_eq!(gate_options(false, true, false), ["Allow once", "Deny"]);
         for (id, option) in GATE_ANSWERS {
             assert_eq!(gate_option(id), Some(option));
             assert_eq!(gate_answer(option), Some(id));

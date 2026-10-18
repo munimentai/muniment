@@ -11,6 +11,7 @@
   import Button from './ui/Button.svelte'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
   import { formatBytes, installStateWords } from './speech-install.js'
+  import { installSpeechModel } from './large-downloads.js'
   import { readVoiceSettings, saveVoiceSettings } from './voice-settings.js'
 
   let { tauri, voiceShortcut = '', voiceShortcutChanging = false, onVoiceShortcutChange = async () => true, defaultVoiceShortcut = '' } = $props()
@@ -82,7 +83,7 @@
   }
   async function startInstall() {
     installError = ''
-    try { await tauri.invoke('parakeet_install_start'); await readInstall() } catch (failure) { installError = String(failure?.message ?? failure) }
+    try { await installSpeechModel(tauri); await readInstall() } catch (failure) { installError = String(failure?.message ?? failure) }
   }
   async function cancelInstall() {
     try { await tauri.invoke('parakeet_install_cancel') } catch (_) {}
