@@ -276,7 +276,9 @@ export function dedupeThreads(summaries, swarm) {
   for (const summary of summaries ?? []) {
     const known = kept.get(summary.threadId)
     if (!known) { kept.set(summary.threadId, summary); continue }
-    const owns = (entry) => !!entry.owner_runtime && entry.owner_runtime === coreRuntime(swarm, entry.runtimeId)
+    // A runtime that lists a thread it runs marks it no replica, even
+    // before the app knows that runtime's fleet id.
+    const owns = (entry) => !!entry.owner_runtime && (entry.owner_runtime === coreRuntime(swarm, entry.runtimeId) || !entry.replica)
     if (!owns(known) && owns(summary)) kept.set(summary.threadId, summary)
   }
   return [...kept.values()]

@@ -25,6 +25,7 @@
   const NotificationSettings = () => import('../notifications/NotificationSettings.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
+  const ThreadRetention = () => import('./ThreadRetention.svelte')
   import { LOCAL_PARTS, settingsMachine } from '../runtimes/runtimes.js'
   import MachineScope from '../runtimes/MachineScope.svelte'
 
@@ -124,7 +125,7 @@
     {:else if page === 'permissions'}
       <SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: remoteRuntime?.name ?? 'this computer', onsaved: onpermissions}} />
     {:else if page === 'account'}
-      <PageHead intro="Your profile, and the MuniCloud account that links your devices." />
+      <PageHead intro="Your profile, and the MuniCloud account that holds your plan." />
       <SettingsPart id="profile" title="Profile" focus={part === 'profile'}>
         <SettingsSection load={MemorySection} properties={{tauri, part: 'profile'}} />
       </SettingsPart>
@@ -139,7 +140,7 @@
               {#if accountStatus}<p role="status">{accountStatus}</p>{/if}
             </Group>
           {:else}
-            <PageHead intro="Your account links this desktop to your phone and devices, and holds your plan." />
+            <PageHead intro="Your account holds your plan. Its phone and devices are on Machines." />
             {#if accountStatus}<p class="support" role="status">{accountStatus}</p>{/if}
             {#snippet vault()}<SettingsSection load={CloudVault} properties={{tauri, listen}} />{/snippet}
             <SettingsSection load={AccountSettings} properties={{tauri, subject, onsignout, children: vault}} />
@@ -153,6 +154,9 @@
       </SettingsPart>
       <SettingsPart id="context" title="Context" focus={part === 'context'}>
         <SettingsSection load={ContextSettings} properties={{tauri}} />
+      </SettingsPart>
+      <SettingsPart id="retention" title="Retention" note={localNote('retention')} focus={part === 'retention'}>
+        <SettingsSection load={ThreadRetention} properties={{tauri}} />
       </SettingsPart>
       <SettingsPart id="storage" title="Storage" note={localNote('storage')} focus={part === 'storage'}>
         <PageHead intro="Your workspace folder on this device." />

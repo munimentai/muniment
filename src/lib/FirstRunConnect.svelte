@@ -1,4 +1,5 @@
 <script>
+  import FailureNote from './FailureNote.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import { SERVER_STATES, connectOptions } from './first-run-providers.js'
@@ -48,7 +49,7 @@
       </button>
       {#if signIn?.option === option.id}
         <div class="step" aria-live="polite">
-          <p>{signIn.message}</p>
+          {#if signIn.stage === 'failed'}<FailureNote failure={signIn.message} detail={signIn.detail} />{:else}<p>{signIn.message}</p>{/if}
           {#if signIn.code}<p class="code">{signIn.code}</p>{/if}
           {#if signIn.url}<button type="button" onclick={() => onsigninopen?.(signIn.url)}>Open the sign-in page</button>{/if}
           {#if signIn.prompt?.kind === 'select'}

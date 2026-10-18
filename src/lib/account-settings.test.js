@@ -119,114 +119,14 @@ describe('contract entitlement snapshot', () => {
 })
 
 describe('account settings layout', () => {
-  it('renders thread retention after access with the default choice selected', async () => {
+  it('leaves devices, the phone and thread retention to Machines and Data', async () => {
     renderPanel(companionInvoke())
-
-    const sections = [...document.querySelectorAll('.account-sections > section')]
-    expect(sections.slice(-2).map((section) => section.getAttribute('aria-labelledby'))).toEqual([
-      'entitlements-heading',
-      'retention-heading',
-    ])
-    expect(screen.getByText('Choose how long Muniment keeps completed threads.')).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Keep every thread' })).toBeChecked()
-    expect(screen.getByRole('radio', { name: 'Delete after 30 days' })).not.toBeChecked()
-    expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).not.toBeChecked()
-    expect(screen.getByRole('radio', { name: 'Delete after 1 year' })).not.toBeChecked()
-  })
-
-  it('records a thread retention choice and restores it on a later read', async () => {
-    let recordedChoice = null
-    const invoke = companionInvoke(async () => {})
-    invoke.mockImplementation(async (command, args) => {
-      if (command === 'thread_retention_choice') return recordedChoice
-      if (command === 'record_thread_retention_choice') {
-        recordedChoice = args.choice
-        return
-      }
-      if (command === 'auth_entitlement_snapshot') return snapshot
-      if (command === 'auth_devices') return []
-      if (command === 'auth_pairing_status') return { pair: null }
-      if (command === 'attach_companions') return [companion]
-      if (command === 'attach_listener_status') return { started: true, failure: null }
-      throw new Error(`unexpected command: ${command}`)
-    })
-    renderPanel(invoke)
-    await fireEvent.click(screen.getByRole('radio', { name: 'Delete after 90 days' }))
-
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('record_thread_retention_choice', { choice: 'delete_after_90_days' }))
-
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked())
-
-    // A later visit to the section reads the saved choice back.
-    cleanup()
-    renderPanel(invoke)
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked())
-    expect(invoke.mock.calls.filter(([command]) => command === 'thread_retention_choice')).toHaveLength(2)
-  })
-
-  it('keeps a save active when the popover reloads before the save resolves', async () => {
-    const save = deferred()
-    const reload = deferred()
-    let loadCalls = 0
-    const invoke = companionInvoke()
-    invoke.mockImplementation(async (command) => {
-      if (command === 'thread_retention_choice') {
-        loadCalls += 1
-        return loadCalls === 1 ? 'keep_every_thread' : reload.promise
-      }
-      if (command === 'record_thread_retention_choice') return save.promise
-      if (command === 'auth_entitlement_snapshot') return snapshot
-      if (command === 'auth_devices') return []
-      if (command === 'auth_pairing_status') return { pair: null }
-      if (command === 'attach_companions') return [companion]
-      if (command === 'attach_listener_status') return { started: true, failure: null }
-      throw new Error(`unexpected command: ${command}`)
-    })
-    renderPanel(invoke)
-    await fireEvent.click(screen.getByRole('radio', { name: 'Delete after 90 days' }))
-
-    expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeDisabled()
-    save.resolve()
-
-    await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked()
-      expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeEnabled()
-    })
-    reload.resolve(null)
-    await reload.promise
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(screen.getByRole('radio', { name: 'Delete after 90 days' })).toBeChecked()
-  })
-
-  it('restores the recorded choice and retries a failed save', async () => {
-    const firstSave = deferred()
-    const invoke = companionInvoke()
-    invoke.mockImplementation(async (command, args) => {
-      if (command === 'thread_retention_choice') return 'keep_every_thread'
-      if (command === 'record_thread_retention_choice') {
-        if (invoke.mock.calls.filter(([called]) => called === command).length === 1) return firstSave.promise
-        expect(args).toEqual({ choice: 'delete_after_30_days' })
-        return
-      }
-      if (command === 'auth_entitlement_snapshot') return snapshot
-      if (command === 'auth_devices') return []
-      if (command === 'auth_pairing_status') return { pair: null }
-      if (command === 'attach_companions') return [companion]
-      if (command === 'attach_listener_status') return { started: true, failure: null }
-      throw new Error(`unexpected command: ${command}`)
-    })
-    renderPanel(invoke)
-    await fireEvent.click(screen.getByRole('radio', { name: 'Delete after 30 days' }))
-    firstSave.reject(new Error('save failed'))
-
-    expect(await screen.findByText('Thread retention could not be saved.')).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Keep every thread' })).toBeChecked()
-    expect(screen.getByRole('radio', { name: 'Delete after 30 days' })).not.toBeChecked()
-    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Delete after 30 days' })).toBeChecked())
-    expect(screen.queryByText('Thread retention could not be saved.')).not.toBeInTheDocument()
-    expect(invoke.mock.calls.filter(([command]) => command === 'record_thread_retention_choice')).toHaveLength(2)
+    await screen.findByText('Alice')
+    const sections = [...document.querySelectorAll('.account-sections > section')].map((section) => section.getAttribute('aria-labelledby'))
+    expect(sections).not.toContain('devices-heading')
+    expect(sections).not.toContain('retention-heading')
+    expect(document.querySelector('.pairing-section')).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Keep every thread' })).toBeNull()
   })
 
   it('renders every connected program state and a missing approval time', () => {

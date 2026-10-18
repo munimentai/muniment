@@ -45,6 +45,9 @@ pub struct ChatEvent {
     /// a runtime update.
     pub resume_notice: Option<String>,
     pub failure_reason: Option<String>,
+    /// The cause a failed run names beside its reason, which the window
+    /// shows behind Show log.
+    pub failure_detail: Option<String>,
     pub receipt: Option<Value>,
     pub tool_activity: Vec<ChatToolActivity>,
     pub attachments: Vec<ChatAttachment>,
@@ -93,6 +96,8 @@ struct ChatEventWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_reason: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    failure_detail: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     receipt: Option<&'a Value>,
     tool_activity: &'a [ChatToolActivity],
     attachments: &'a [ChatAttachment],
@@ -140,6 +145,7 @@ impl Serialize for ChatEvent {
             prompt_storage_notice: self.prompt_storage_notice.as_deref(),
             resume_notice: self.resume_notice.as_deref(),
             failure_reason: self.failure_reason.as_deref(),
+            failure_detail: self.failure_detail.as_deref(),
             receipt: self.receipt.as_ref(),
             tool_activity: &self.tool_activity,
             attachments: &self.attachments,
@@ -244,6 +250,7 @@ pub fn chat_event(
         prompt_storage_notice: projection.prompt_storage_notice,
         resume_notice: projection.resume_notice,
         failure_reason: crate::chat_view::failure_reason(&projection.status),
+        failure_detail: projection.failure_detail,
         receipt: projection.receipt,
         tool_activity: chat_tool_activity(&projection.tool_activity),
         attachments: chat_attachments(&projection.attachments),
@@ -351,6 +358,7 @@ pub(crate) fn text_delta(
         prompt_storage_notice: None,
         resume_notice: None,
         failure_reason: None,
+        failure_detail: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),
@@ -499,6 +507,35 @@ pub fn fail_start(
 ) {
     if !resuming {
         fail(sink, storage, projector, run_id, seq, reason, subject);
+    }
+}
+
+/// Fails a run that never started like [`fail_start`], and keeps `detail`
+/// as the failure's cause.
+#[allow(clippy::too_many_arguments)]
+pub fn fail_start_with_detail(
+    sink: &impl ChatEventSink,
+    storage: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    reason: &str,
+    detail: Option<&str>,
+    subject: Option<&str>,
+    resuming: bool,
+) {
+    if !resuming {
+        fail_with_detail(
+            sink,
+            storage,
+            projector,
+            run_id,
+            seq,
+            &mut BTreeSet::new(),
+            reason,
+            detail,
+            subject,
+        );
     }
 }
 
@@ -981,6 +1018,49 @@ mod tests {
         let events = sink.events.lock().unwrap();
         let phases: Vec<_> = events.iter().map(|event| event.phase.as_str()).collect();
         assert_eq!(phases, ["thinking", "failed"]);
+    }
+
+    #[test]
+    fn a_start_failure_carries_its_detail_to_the_event_and_the_projection() {
+        let sink = RecordingSink::default();
+        let storage = storage();
+        let mut projector = ChatProjector::new();
+        let mut seq = 0;
+        let run_id = Uuid::now_v7().to_string();
+        append_emit(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            None,
+        )
+        .unwrap();
+        fail_start_with_detail(
+            &sink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "Reply setup timed out. Try again.",
+            Some("Waiting on: unknown."),
+            None,
+            false,
+        );
+        let events = sink.events.lock().unwrap();
+        let last = events.last().unwrap();
+        assert_eq!(last.phase, "failed");
+        assert_eq!(last.failure_detail.as_deref(), Some("Waiting on: unknown."));
+        let wire = serde_json::to_value(last).unwrap();
+        assert_eq!(wire["failureDetail"], "Waiting on: unknown.");
+        let stored = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        let projection = crate::journal::reducer::project_chat(&stored).unwrap();
+        assert_eq!(
+            projection.failure_detail.as_deref(),
+            Some("Waiting on: unknown.")
+        );
     }
 
     #[test]

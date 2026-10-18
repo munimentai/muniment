@@ -185,6 +185,8 @@ const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 
 
 export function stageWord(stage = 'routing') {
   if (typeof stage === 'string' && stage.startsWith('tool:')) return toolVerb(stage.slice(5))
+  if (stage === 'folder-access') return 'macOS is asking for access to this folder. Choose Allow.'
+  if (typeof stage === 'string' && stage.startsWith('folder-access:')) return `macOS is asking for access to ${stage.slice('folder-access:'.length)}. Choose Allow.`
   return stageWords[stage] ?? stageWords.routing
 }
 
@@ -195,11 +197,13 @@ export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
   if (running) return `tool:${running.displayName ?? ''}`
   if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
+  // The run waits on a macOS consent prompt for its folder.
+  if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:'))) return next.routingStage
   // A restored run has no earlier projection: its phase names the word.
   if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
   if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
   if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
-  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage)) return previous.stage
+  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage) && !previous.stage.startsWith('folder-access')) return previous.stage
   return next.turnStarted ? 'thinking' : 'routing'
 }
 

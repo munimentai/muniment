@@ -168,11 +168,13 @@ export function swarmThreads(swarm) {
 // thread, an agent thread this machine holds as a replica of another
 // member's, or an ordinary thread another member owns. Core sends a post on
 // to the owner. Answers the request, or null for an ordinary run.
-export function postTarget({ threadId, threadRuntime, groups = [], agent = null, swarm, owner = null }) {
+export function postTarget({ threadId, threadRuntime, groups = [], agent = null, swarm, owner = null, replica = false }) {
   if (!threadId) return null
   const runtime = threadRuntime || LOCAL_RUNTIME_ID
   const group = groups.find((entry) => entry.thread_id === threadId)
   if (group) return { runtime, body: { thread_id: threadId }, group }
+  // The runtime that lists the thread says it holds a replica.
+  if (replica && !agent) return { runtime, body: { thread_id: threadId }, group: null }
   const holder = swarm?.self?.[runtime]
   const primary = agent ? agent.primaryRuntime ?? agent.primary_runtime : owner
   if (holder && primary && primary !== holder) return { runtime, body: { thread_id: threadId }, group: null }

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import ModelPicker from './ModelPicker.svelte'
+import { currentModel } from './provider-catalog.js'
 afterEach(cleanup)
 
 const props = (inventory, extra = {}) => ({ inventory, onchoose: vi.fn(), onmanage: vi.fn(), onclose: vi.fn(), ...extra })
@@ -115,4 +116,19 @@ it('lists every connected provider\'s models without a search', () => {
   expect(screen.getByRole('region', { name: 'Models' })).toBeInTheDocument()
   expect([...container.querySelectorAll('.picker-row')].map((row) => row.dataset.model)).toEqual(expect.arrayContaining(['Qwen3.8-27B-4bit', 'openai/gpt-6-astra', 'openai/gpt-6-luna']))
   expect(within(screen.getByRole('region', { name: 'OpenAI' })).getByRole('button', { name: 'GPT-6 Astra' })).toBeInTheDocument()
+})
+
+it('shows a model every plan refused as unavailable with the reason and leads with one the plan offers', () => {
+  const reason = 'The plan of pat@example.com from Laptop does not offer this model.'
+  const inventory = { providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], hidden: [], shown: [],
+    router_models: [
+      { id: 'openai/gpt-5.3-codex-spark', family: 'openai', model: 'gpt-5.3-codex-spark', accounts: 0, unavailable: reason },
+      { id: 'openai/gpt-6-astra', family: 'openai', model: 'gpt-6-astra', name: 'GPT-6 Astra', accounts: 1 },
+    ] }
+  render(ModelPicker, props(inventory))
+  const refused = screen.getByText(`Unavailable. ${reason}`).closest('button')
+  expect(refused).toBeDisabled()
+  expect(refused).toHaveAccessibleDescription(`Unavailable. ${reason}`)
+  expect(screen.getByRole('button', { name: 'GPT-6 Astra' })).toBeEnabled()
+  expect(currentModel(inventory)).toMatchObject({ provider: 'muniment-router', model: 'openai/gpt-6-astra' })
 })

@@ -202,6 +202,14 @@ fn a_held_working_folder_names_the_consent_prompt_instead_of_timing_out() {
         if allow_at.is_some() {
             // The answer arrived while the run waited, so Pi read its folder and replied.
             assert_eq!(last.phase, "complete", "{phases:?}");
+            // The run named the prompt it waited on, and the answer cleared it.
+            let named = events
+                .iter()
+                .position(|event| event.routing_stage.as_deref() == Some("folder-access"))
+                .expect("the run named the folder wait");
+            assert!(events[named..]
+                .iter()
+                .any(|event| event.routing_stage.is_none()));
             assert!(events
                 .iter()
                 .any(|event| event.phase == "streaming" && !event.text.is_empty()));

@@ -106,6 +106,9 @@ describe('posting', () => {
     // An ordinary thread another member owns takes a post for its owner.
     expect(postTarget({ threadId: 'p1', threadRuntime: 'local', groups: [], agent: null, swarm, owner: STUDIO })).toEqual({ runtime: 'local', body: { thread_id: 'p1' }, group: null })
     expect(postTarget({ threadId: 'p2', threadRuntime: 'local', groups: [], agent: null, swarm, owner: LAPTOP })).toBeNull()
+    // A thread its runtime marks a replica takes a post even before the app
+    // knows that runtime's fleet id.
+    expect(postTarget({ threadId: 'p3', threadRuntime: 'pod', groups: [], agent: null, swarm: emptySwarm(), owner: 'core-pod', replica: true })).toEqual({ runtime: 'pod', body: { thread_id: 'p3' }, group: null })
   })
 })
 
