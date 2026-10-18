@@ -638,7 +638,22 @@ pub(super) fn members_view(inner: &Inner) -> Result<Value, String> {
     }))
 }
 
-/// `swarm.invite`: issues a `swarm.peer` pairing link.
+/// Why a runtime that accepts no connections cannot invite another.
+pub(super) const NO_ENDPOINTS: &str = "This machine does not accept connections from other machines, so it cannot invite one. Link from the other machine, or turn on remote access here.";
+
+/// The sentence a protocol refusal carries.
+fn error_text(error: &crate::attach::ProtocolError) -> String {
+    match error.details() {
+        Some(muniment_attach::ErrorDetails::RequestReason { reason }) => reason.clone(),
+        _ => serde_json::to_value(error.message())
+            .ok()
+            .and_then(|message| message.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "The invitation could not be created.".into()),
+    }
+}
+
+/// `swarm.invite`: issues a `swarm.peer` pairing link. A runtime that
+/// advertises no endpoint refuses, since no member could dial it.
 pub(super) fn invite(inner: &Inner, body: Value) -> Result<Value, String> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -659,12 +674,18 @@ pub(super) fn invite(inner: &Inner, body: Value) -> Result<Value, String> {
     let access = inner
         .access()
         .ok_or("Turn on remote access before linking runtimes.")?;
+    let endpoints = body
+        .endpoints
+        .unwrap_or_else(|| access.advertised_endpoints());
+    if endpoints.is_empty() {
+        return Err(NO_ENDPOINTS.into());
+    }
     let created = access
         .create_pairing_link(PairingLinkRequest {
             scopes: Some(BTreeSet::from([SCOPE_SWARM_PEER.to_owned()])),
-            endpoints: body.endpoints,
+            endpoints: Some(endpoints),
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error_text(&error))?;
     super::fleet::note_invite(inner, &created.link.secret, role, &created.expires_at)?;
     Ok(json!({
         "link": created.link.to_uri(),
@@ -884,5 +905,39 @@ impl crate::attach::OutboundLinks for OutboundHook {
         if let Some(runtime) = runtime {
             end_membership(&inner, &runtime);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_members::TestMember;
+    use super::*;
+    use crate::attach::{InstallKind, RemoteAccessOptions};
+
+    #[test]
+    fn a_runtime_that_accepts_no_connections_refuses_to_invite_with_a_sentence() {
+        let member = TestMember::new("quiet");
+        let access = RemoteAccess::open(
+            member.profile.join("remote"),
+            RemoteAccessOptions {
+                runtime_name: Some("quiet".into()),
+                runtime_version: "1.0.0".into(),
+                install_kind: InstallKind::Desktop,
+            },
+        )
+        .unwrap();
+        assert!(access.advertised_endpoints().is_empty());
+        lock(&member.swarm.inner.identity).as_mut().unwrap().access = Some(access);
+        assert_eq!(
+            invite(&member.swarm.inner, json!({})).unwrap_err(),
+            NO_ENDPOINTS
+        );
+        let error = invite(
+            &member.swarm.inner,
+            json!({"endpoints": ["not an endpoint"]}),
+        )
+        .unwrap_err();
+        assert!(!error.contains("code="), "{error}");
+        assert!(error.contains("host:port"), "{error}");
     }
 }

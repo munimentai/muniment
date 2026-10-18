@@ -136,7 +136,8 @@ listener is off until the host binds it.
   `swarm.peer`, which a linked runtime holds alone and which reaches only
   `swarm.exchange`. A link
   grants `thread.read`, `run.write` and `runtime.update` unless its creator
-  names others, and a client can ask for fewer, never more. Only the local owner and `runtime.admin` devices create
+  names others, and a client can ask for fewer, never more. `muniment-server
+  pair` grants `runtime.admin` with the first three by default. Only the local owner and `runtime.admin` devices create
   links, list devices and revoke other devices, and a device delegates only
   scopes it holds. Any device may revoke itself. `runtime.update` or `runtime.admin` sends `runtime.update`.
 - `remote_rule` names what a remote client may send: the desktop client
@@ -545,7 +546,8 @@ steering, gate answers and run starts through `SwarmHost`.
   the other, which redeems it, saves the record under
   `<profile>/swarm/links/` and dials with backoff from one second to a
   minute. Data flows both ways in each `swarm.exchange`, so one reachable end
-  suffices. The answering runtime lists the link as a `swarm-peer` device, the
+  suffices. A runtime that advertises no endpoint refuses `swarm.invite` with
+  a sentence that names the other direction. The answering runtime lists the link as a `swarm-peer` device, the
   dialing one as an `outbound` device, and `remote.device_revoke` drops it on
   either side; `swarm.leave` (`{"runtime_id"}`) drops every link to a member.
 - **Relay.** Members gossip to every linked member, which passes everything
@@ -1102,7 +1104,10 @@ process, such as over SSH or `docker exec`:
 
 - `muniment-server pair [--scopes thread.read,run.write] [--json]` prints a
   one-time pairing link that names the endpoints the serving listener
-  published. `--json` prints `{"link", "expires_at", "scopes", "endpoints",
+  published. Without `--scopes` it grants `thread.read`, `run.write`,
+  `runtime.update` and `runtime.admin`, so the owner's app pairs as a full
+  member and links the runtime into its fleet. `--scopes` pairs a limited
+  device. `--json` prints `{"link", "expires_at", "scopes", "endpoints",
   "fingerprint", "runtime_id", "runtime_name"}`.
 - `muniment-server devices [--json]` lists the paired devices.
 - `muniment-server revoke <device-id>` revokes one. Its live sessions close
