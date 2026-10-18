@@ -1396,6 +1396,38 @@ mod tests {
     }
 
     #[test]
+    fn completed_receipts_lists_each_finished_run_after_the_bound() {
+        let path =
+            std::env::temp_dir().join(format!("muniment-receipts-{}.sqlite3", Uuid::now_v7()));
+        let mut journal =
+            RunJournal::open_with_busy_timeout(&path, Duration::from_secs(60)).unwrap();
+        let with_receipt = Uuid::now_v7().to_string();
+        for (run_id, receipt) in [
+            (
+                with_receipt.clone(),
+                json!({"receipt": {"model": "anthropic/claude", "tokens": {"input": 3}}}),
+            ),
+            (Uuid::now_v7().to_string(), json!({})),
+        ] {
+            journal
+                .append_new_run("workspace", &envelope(&run_id, 1, "run.started", json!({})))
+                .unwrap();
+            journal
+                .append(1, &envelope(&run_id, 2, "run.completed", receipt))
+                .unwrap();
+        }
+        let receipts = journal.completed_receipts("2026-08-01T00:00:00Z").unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].run_id, with_receipt);
+        assert_eq!(receipts[0].receipt["tokens"]["input"], 3);
+        assert!(journal
+            .completed_receipts("2026-09-01T00:00:00Z")
+            .unwrap()
+            .is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn a_later_stream_page_projects_only_the_events_after_the_cached_ones() {
         let path =
             std::env::temp_dir().join(format!("muniment-run-stream-{}.sqlite3", Uuid::now_v7()));

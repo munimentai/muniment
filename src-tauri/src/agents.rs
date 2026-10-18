@@ -120,25 +120,36 @@ pub async fn agent_request(
     body: Option<Value>,
 ) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let attach = app.state::<AttachCompanionState>();
-        forward(
+        request_runtime(
+            &app,
             runtime.as_deref(),
             &operation,
             body.unwrap_or_else(|| serde_json::json!({})),
-            |target| {
-                let session = match target {
-                    Target::Local => attach.local_client_session_within(AGENT_CONNECT_WAIT),
-                    Target::Paired(id) => attach.paired_session(id),
-                };
-                match session {
-                    DesktopClientSession::Connected(client) => Some(client),
-                    DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => None,
-                }
-            },
         )
     })
     .await
     .map_err(|_| crate::auth::background_service_error())?
+}
+
+/// Sends one agent operation to this computer's runtime or a paired one and
+/// waits for the answer. It blocks, so callers run it off the async runtime.
+pub(crate) fn request_runtime(
+    app: &tauri::AppHandle,
+    runtime: Option<&str>,
+    operation: &str,
+    body: Value,
+) -> Result<Value, String> {
+    let attach = app.state::<AttachCompanionState>();
+    forward(runtime, operation, body, |target| {
+        let session = match target {
+            Target::Local => attach.local_client_session_within(AGENT_CONNECT_WAIT),
+            Target::Paired(id) => attach.paired_session(id),
+        };
+        match session {
+            DesktopClientSession::Connected(client) => Some(client),
+            DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => None,
+        }
+    })
 }
 
 /// The `thread.create` body that starts a thread on the fleet member
@@ -576,6 +587,8 @@ mod tests {
             ("agent.tool_catalog", Operation::AgentToolCatalog),
             ("agent.replays", Operation::AgentReplays),
             ("agent.replay", Operation::AgentReplay),
+            ("usage.summary", Operation::UsageSummary),
+            ("notifications.list", Operation::NotificationsList),
         ] {
             assert_eq!(agent_operation(name), Some(operation));
         }

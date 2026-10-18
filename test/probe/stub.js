@@ -1,3 +1,4 @@
+import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixture.js'
 import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
 import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
@@ -311,7 +312,7 @@ function fleetAnswer({ operation }) {
 const fleetRendered = () => document.querySelectorAll('[data-hold]').length === 2 && !!document.querySelector('[data-hold] button') && document.body.textContent.includes('Signed in on Studio, arriving')
 function advanceFleetFixture() {
   if (!FLEET_PROBE || fleetRendered()) return
-  if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+  if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
   const providers = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Models')
   if (providers && providers.getAttribute('aria-current') !== 'true') providers.click()
 }
@@ -422,9 +423,10 @@ export function buildProbeCommandTable(fixtureName) {
   const runtimesFixture = fixtureName === 'runtimes'
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
   // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals,
-  // activity, machines, move, transcript, group-create, meeting, approvals,
-  // approval-inline, replays, import, absence, preferences, empty or
-  // empty-activity, with agents on three machines that all answer and a
+  // notifications, machines, move, transcript, group-create, meeting, approvals,
+  // approval-inline, replays, import, absence, preferences, empty,
+  // notifications-empty, usage, usage-tokens, usage-cost, usage-partial or
+  // composer-limit, with agents on three machines that all answer and a
   // synced copy from a fourth. `cards` opens the catalog's action cards, and
   // `cards-offline` the same with the Studio machine offline.
   // `fleet-sync.html?state=` shows a fleet this laptop reaches only through
@@ -666,6 +668,17 @@ export function buildProbeCommandTable(fixtureName) {
       if (answer !== undefined) return answer
     }
     if (command === 'agent_request') return handleAgentRequest(agentStores, payload)
+    // Usage and Notifications answer from the agents fixture's states; every
+    // other page reads a quiet fleet, so the composer shows no limit.
+    if (command === 'usage_summary') {
+      const usage = probeUsage(payload, agentsState)
+      return agentsState?.startsWith('usage') || agentsState === 'composer-limit' ? usage : { ...usage, limits: [], unmetered: [] }
+    }
+    if (command === 'notifications_list') {
+      const page = probeNotifications(payload, agentsState)
+      if (agentsState === 'approvals') return { ...page, needs_you: [...probeApprovalItems(), ...page.needs_you.filter((item) => item.kind !== 'approval')] }
+      return agentsFixture ? page : { ...page, needs_you: [], running: [], days: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 } }
+    }
     if (command === 'agent_open') return null
     if (command === 'project_list' && fleetSyncFixture) return structuredClone(fleetSyncProjects)
     if (command === 'project_list') return { projects: { ...projects }, threads: { ...projectThreads } }
@@ -994,7 +1007,7 @@ function runtimesRendered() {
 }
 
 // The agents fixture opens the catalog, an agent's profile, one routine's
-// editor, Activity, Settings → Machines, a dialog or a conversation, as its
+// editor, Notifications, Usage, Settings → Machines, a dialog or a conversation, as its
 // state names.
 const AGENT_STATES = {
   list: { agent: null },
@@ -1005,8 +1018,13 @@ const AGENT_STATES = {
   proposals: { agent: 'Inbox triage' },
   move: { agent: 'Front desk' },
   transcript: { agent: 'Inbox triage' },
-  activity: { agent: null },
+  notifications: { agent: null },
   approvals: { agent: null },
+  usage: { agent: null },
+  'usage-tokens': { agent: null },
+  'usage-cost': { agent: null },
+  'usage-partial': { agent: null },
+  'composer-limit': { agent: 'Lead scout' },
   machines: { agent: null },
   'group-create': { agent: null },
   meeting: { agent: null },
@@ -1018,20 +1036,25 @@ const AGENT_STATES = {
   cards: { agent: null },
   'cards-offline': { agent: null },
   empty: { agent: null },
-  'empty-activity': { agent: null },
+  'notifications-empty': { agent: null },
 }
 
 const AGENT_SCREENS = {
   list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .agent-roster .agent-status').length === 5 && !!document.querySelector('#sidebar .agent-status[data-replica]') && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`#sidebar .agent-avatar[data-activity="${state}"]`)),
-  activity: () => document.querySelectorAll('[data-panel="activity"] .run').length >= 9,
-  approvals: () => document.querySelectorAll('[data-panel="activity"] .approval').length === 5,
+  notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
+  approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
+  'notifications-empty': () => document.querySelector('[data-panel="notifications"]')?.textContent.includes('Nothing needs you') && document.querySelectorAll('[data-panel="notifications"] .upcoming li').length === 3,
+  usage: () => document.querySelectorAll('[data-panel="usage"] .limit-card').length === 5 && !!document.querySelector('[data-panel="usage"] .unmetered'),
+  'usage-tokens': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7 && document.querySelectorAll('[data-panel="usage"] .breakdown li').length === 5,
+  'usage-cost': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 30 && document.querySelector('[data-panel="usage"] .tiles')?.textContent.includes('API estimate'),
+  'usage-partial': () => document.querySelector('[data-panel="usage"]')?.textContent.includes('Build box did not answer') && document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7,
+  'composer-limit': () => !!document.querySelector('.limit-banner') && document.querySelector('.titlebar')?.textContent.includes('Lead scout'),
   'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
   replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="Failed runs"] .replay').length === 2,
   preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
   empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .agent-card'),
   cards: () => cardsRendered(5),
   'cards-offline': () => cardsRendered(5) && !!document.querySelector('[data-agent-card="018f0000-0000-4000-8000-0000000000a3"].read-only [role="note"]'),
-  'empty-activity': () => document.querySelector('[data-panel="activity"]')?.textContent.includes('No agent runs yet.'),
   machines: () => !!document.querySelector('.settings-runtimes [aria-label="Office mini"]') && document.querySelector('.settings-runtimes [aria-label="Office mini"]')?.textContent.includes('Offline'),
   'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
   meeting: () => document.querySelector('.thread')?.textContent.includes('Debate round 1') && document.querySelectorAll('.thread .round').length === 3,
@@ -1085,7 +1108,7 @@ function advanceAgentsFixture() {
   const sidebarButton = (name) => Array.from(document.querySelectorAll('#sidebar button')).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
   if (agentsState === 'absence') return
   if (agentsState === 'preferences') {
-    if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     const appearance = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'General')
     if (appearance && appearance.getAttribute('aria-current') !== 'true') return appearance.click()
     document.querySelector('[aria-label="Agent avatars"]')?.scrollIntoView({ block: 'center' })
@@ -1096,7 +1119,7 @@ function advanceAgentsFixture() {
     return
   }
   if (agentsState === 'machines') {
-    if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     const machines = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Machines')
     if (machines && machines.getAttribute('aria-current') !== 'true') machines.click()
     return
@@ -1153,8 +1176,16 @@ function advanceAgentsFixture() {
     }, 100)
     return
   }
-  if (agentsState === 'activity' || agentsState === 'approvals' || agentsState === 'empty-activity') {
-    if (!document.querySelector('[data-panel="activity"]')) document.querySelector('#sidebar .activity-row')?.click()
+  if (agentsState === 'notifications' || agentsState === 'approvals' || agentsState === 'notifications-empty') {
+    if (!document.querySelector('[data-panel="notifications"]')) document.querySelector('#sidebar .sidebar-actions button[aria-label^="Notifications"]')?.click()
+    return
+  }
+  if (agentsState.startsWith('usage')) {
+    const usage = document.querySelector('[data-panel="usage"]')
+    if (!usage) return document.querySelector('#sidebar .sidebar-actions button[aria-label="Usage"]')?.click()
+    const pick = (group, label) => { const button = Array.from(usage.querySelectorAll(`[role="radiogroup"][aria-label="${group}"] button`)).find((entry) => entry.textContent.trim() === label); if (button?.getAttribute('aria-checked') === 'false') button.click() }
+    if (agentsState === 'usage-tokens' || agentsState === 'usage-partial') pick('Usage view', 'Tokens')
+    if (agentsState === 'usage-cost') { pick('Usage view', 'Cost'); pick('Range', '30d') }
     return
   }
   const profile = document.querySelector('aside[aria-label="Agent profile"]')
@@ -1197,7 +1228,7 @@ function advanceModesFixture() {
   if (modesState === 'menu') return document.querySelector('[data-menu="mode"][aria-expanded="false"]')?.click()
   if (modesState === 'new') return document.querySelector('[data-menu="mode"][aria-label="Permission mode: Bypass permissions"][aria-expanded="false"]')?.click()
   if (modesState !== 'settings') return
-  if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+  if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
   const page = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Permissions')
   if (page && page.getAttribute('aria-current') !== 'true') page.click()
 }
@@ -1255,7 +1286,7 @@ function fixtureRendered() {
 function advanceScanFixture() {
   if (!scanFixture || fixtureRendered()) return
   if (!document.querySelector('.settings-layout')) {
-    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
   const memory = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
@@ -1269,7 +1300,7 @@ function advanceAccessFixture() {
   if (!accessFixture || fixtureRendered()) return
   const panel = document.querySelector('.settings-layout')
   if (!panel) {
-    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
   const account = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
@@ -1295,7 +1326,7 @@ function advanceRuntimesFixture() {
   }
   if (runtimesState === 'remote') return
   if (!document.querySelector('.settings-layout')) {
-    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
   const runtimes = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))

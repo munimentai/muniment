@@ -29,6 +29,7 @@ it('maps every older page id to the page and part that hold it', () => {
   expect(settingsTarget('home')).toEqual(['data', 'storage'])
   expect(settingsTarget('appearance')).toEqual(['general', 'appearance'])
   expect(settingsTarget('voice')).toEqual(['general', 'voice'])
+  expect(settingsTarget('notifications')).toEqual(['general', 'notifications'])
   expect(settingsTarget('this-computer')).toEqual(['machines', 'this-computer'])
 })
 
@@ -39,5 +40,6 @@ it('narrows the sidebar to the pages and parts a search matches', () => {
   expect(settingsNav('network').map(([id]) => id)).toEqual(['machines'])
   // A page's own label matches with no part under it.
   expect(settingsNav('perm').map(([id, , , parts]) => [id, parts])).toEqual([['permissions', []]])
+  expect(settingsNav('notifications').map(([id, , , parts]) => [id, parts])).toEqual([['general', [['notifications', 'Notifications']]]])
   expect(settingsNav('no such setting')).toEqual([])
 })

@@ -202,7 +202,7 @@ export function advanceFleetSync() {
     return
   }
   if (state === 'offline-settings' || state === 'log') {
-    if (!document.querySelector('.settings-layout')) return document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     const machines = [...document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')].find((button) => button.textContent.trim() === 'Machines')
     if (machines && machines.getAttribute('aria-current') !== 'true') return machines.click()
     const details = document.querySelector('.settings-runtimes [aria-label="Settings for This computer"][aria-expanded="false"]')
