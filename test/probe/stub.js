@@ -1248,7 +1248,7 @@ function fixtureRendered() {
   if (signedOutFixture) {
     // Signed out is the local workspace with its empty thread and the sidebar's cloud sign-in control.
     const signIn = [...document.querySelectorAll('.workspace button')].find((button) => button.textContent.trim() === 'Sign in to cloud')
-    return document.querySelector('.workspace .empty') !== null && signIn !== undefined
+    return document.querySelector('.workspace .empty, .workspace .thread-starters') !== null && signIn !== undefined
   }
   if (onboardingFixture) {
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
@@ -1271,7 +1271,8 @@ function fixtureRendered() {
   }
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
-  if (history.length === 0) return workspace.querySelector('.empty') !== null
+  // An empty thread shows its one line or, once a model is ready, its starter cards.
+  if (history.length === 0) return workspace.querySelector('.empty, .thread-starters') !== null
   if (fixtureName === 'markdown') {
     return workspace.querySelector('.assistant-markdown h3')?.textContent === 'Release notes'
       && workspace.querySelector('.assistant-markdown pre code')
