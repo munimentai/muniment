@@ -148,6 +148,10 @@ pub(super) struct RouterModel {
     accounts: u32,
     /// The model's context window in tokens, when the router knows it.
     context_window: Option<u64>,
+    /// Why no account serves the model now, such as a plan that refused it.
+    /// The picker shows the model as unavailable with this reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unavailable: Option<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -748,7 +752,40 @@ fn router_models(agent: &Path) -> Vec<RouterModel> {
         return Vec::new();
     }
     // The hidden ones too: the picker hides them, and Settings turns them back on.
-    all_options(&config)
+    let served = all_options(&config);
+    let mut unrefused = config.clone();
+    unrefused.refused.clear();
+    let refused: Vec<RouterModel> = all_options(&unrefused)
+        .into_iter()
+        .filter(|option| !served.iter().any(|known| known.key == option.key))
+        .map(|option| {
+            let plans: Vec<&str> = config
+                .accounts
+                .iter()
+                .filter(|account| {
+                    account.family == option.family && config.refuses(&account.id, &option.model)
+                })
+                .map(|account| account.label.as_str())
+                .collect();
+            RouterModel {
+                name: muniment_core::model_router::model_catalog::entry(
+                    &option.family,
+                    &option.model,
+                )
+                .map(|entry| entry.name.to_owned()),
+                unavailable: Some(format!(
+                    "The plan of {} does not offer this model.",
+                    plans.join(" or ")
+                )),
+                id: option.key,
+                family: option.family,
+                model: option.model,
+                accounts: 0,
+                context_window: None,
+            }
+        })
+        .collect();
+    served
         .into_iter()
         .map(|option| {
             let accounts = muniment_core::model_router::balance::balanced(
@@ -771,8 +808,10 @@ fn router_models(agent: &Path) -> Vec<RouterModel> {
                 model: option.model,
                 accounts,
                 context_window,
+                unavailable: None,
             }
         })
+        .chain(refused)
         .collect()
 }
 
@@ -967,12 +1006,26 @@ fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
     if saved_shown {
         return;
     }
+    // The router's own pick leads its models: the most capable model the
+    // catalog knows that some plan behind it offers. A model the catalog does
+    // not describe, which a plan may not offer, never becomes the default
+    // ahead of it.
+    let pooled = super::router::default_choice(agent);
     let first = inventory.providers.iter().find_map(|group| {
-        group
-            .models
-            .iter()
-            .find(|model| !hidden(&group.id, &model.id))
-            .map(|model| (group.id.clone(), model.id.clone()))
+        let pick = (group.id == ROUTER_PROVIDER)
+            .then_some(pooled.as_deref())
+            .flatten()
+            .filter(|model| {
+                group.models.iter().any(|entry| entry.id == *model) && !hidden(&group.id, model)
+            });
+        pick.or_else(|| {
+            group
+                .models
+                .iter()
+                .find(|model| !hidden(&group.id, &model.id))
+                .map(|model| model.id.as_str())
+        })
+        .map(|model| (group.id.clone(), model.to_owned()))
     });
     let Some((provider, model)) = first else {
         return;
@@ -1202,6 +1255,80 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         let mut again = provider_inventory(&agent, &models, &[]).unwrap();
         adopt_shown_default(&agent, &mut again);
         assert_eq!(again.default_model.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn a_shared_plan_defaults_to_a_model_it_offers_and_names_the_models_it_refused() {
+        use muniment_core::model_router::config::{self, Account, Credential, RouterConfig};
+        use muniment_core::model_router::usage;
+        let agent = temporary_directory();
+        let spark = "openai/gpt-5.3-codex-spark";
+        let saved = RouterConfig {
+            enabled: true,
+            accounts: vec![Account {
+                id: "s1".into(),
+                family: "openai".into(),
+                label: "pat@example.com from Laptop".into(),
+                credential: Credential::Subscription {
+                    provider: "openai-codex".into(),
+                    access: "at".into(),
+                    refresh: None,
+                    expires_ms: None,
+                    account_id: Some("s1".into()),
+                    email: None,
+                    plan: None,
+                    renews_at_ms: None,
+                },
+                base_url: None,
+                // The provider lists a model the catalog does not describe first.
+                models: vec!["gpt-5.3-codex-spark".into(), "gpt-6-astra".into()],
+                enabled: true,
+                weight: 1,
+                overflow: false,
+            }],
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &saved).unwrap();
+        fs::write(
+            agent.join("models.json"),
+            serde_json::json!({"providers": {ROUTER_PROVIDER: {"baseUrl": "http://127.0.0.1:1/v1",
+                "models": [{"id": spark}, {"id": "openai/gpt-6-astra"}]}}})
+            .to_string(),
+        )
+        .unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some(ROUTER_PROVIDER));
+        assert_eq!(
+            inventory.default_model.as_deref(),
+            Some("openai/gpt-6-astra")
+        );
+        assert!(router_models(&agent)
+            .iter()
+            .all(|model| model.unavailable.is_none()));
+
+        // Once the plan refuses a model, the picker shows it unavailable with
+        // the reason, and no account stands behind it.
+        let mut ledger = usage::Ledger::default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        ledger.record_refusal("s1", "gpt-5.3-codex-spark", now);
+        usage::save(&agent, &ledger).unwrap();
+        let models = router_models(&agent);
+        let refused = models.iter().find(|model| model.id == spark).unwrap();
+        assert_eq!(refused.accounts, 0);
+        assert_eq!(
+            refused.unavailable.as_deref(),
+            Some("The plan of pat@example.com from Laptop does not offer this model.")
+        );
+        let astra = models
+            .iter()
+            .find(|model| model.id == "openai/gpt-6-astra")
+            .unwrap();
+        assert!(astra.unavailable.is_none());
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]

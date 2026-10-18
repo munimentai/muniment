@@ -869,7 +869,7 @@ impl RuntimeAttachBoundaries {
         if let (Some(thread), Some(swarm)) = (thread_id.as_deref(), &self.swarm) {
             if swarm.is_replica_thread(thread).is_some() {
                 return Err(RunStartError::InvalidRequest(
-                    "Another machine runs this thread. Post the message with thread.post.".into(),
+                    "Another machine runs this thread. Send the message to that machine.".into(),
                 ));
             }
         }
@@ -1710,6 +1710,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 prompt_storage_notice: None,
                 resume_notice: None,
                 failure_reason: Some(cause.to_owned()),
+                failure_detail: None,
                 receipt: None,
                 tool_activity: Vec::new(),
                 attachments: Vec::new(),
@@ -2072,6 +2073,7 @@ fn sign_in_link_event(url: &str) -> muniment_core::run_events::ChatEvent {
         prompt_storage_notice: None,
         resume_notice: None,
         failure_reason: None,
+        failure_detail: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),

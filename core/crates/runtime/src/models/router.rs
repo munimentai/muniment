@@ -476,6 +476,16 @@ fn pooled_default(config: &RouterConfig, family: Option<&str>) -> Option<String>
     chosen
 }
 
+/// The router model a picker default names when none is saved: the pooled
+/// default, or none while the router is off.
+pub(super) fn default_choice(agent: &Path) -> Option<String> {
+    let config = load(agent).ok()?;
+    if !config.enabled {
+        return None;
+    }
+    pooled_default(&config, None)
+}
+
 /// The router models only plan refusals keep out: what the router would
 /// serve if no account's plan had refused anything, less what it serves.
 fn refused_models(config: &RouterConfig) -> Vec<String> {

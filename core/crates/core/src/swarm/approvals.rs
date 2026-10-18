@@ -547,6 +547,7 @@ pub(super) fn phone_event(approval: &Approval) -> Option<crate::run_events::Chat
         prompt_storage_notice: None,
         resume_notice: None,
         failure_reason: None,
+        failure_detail: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),

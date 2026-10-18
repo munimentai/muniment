@@ -1041,7 +1041,24 @@ fn routing_stages_replay_and_reply_output_clears_the_wait() {
     let projection = projector.projection().unwrap();
     assert_eq!(projection.routing_stage.as_deref(), Some("fallback"));
     assert_eq!(projection, project_chat(&events).unwrap());
-    events.push(event(6, "model.stream.delta", json!({"text":"hello"})));
+    // A consent prompt the run waits on names its folder, and `routing` ends the wait.
+    for (seq, stage, expected) in [
+        (
+            6,
+            "folder-access:Documents",
+            Some("folder-access:Documents"),
+        ),
+        (7, "routing", None),
+        (8, "fallback", Some("fallback")),
+    ] {
+        events.push(event(seq, "model.routing.stage", json!({ "stage": stage })));
+        projector.apply(events.last().unwrap()).unwrap();
+        assert_eq!(
+            projector.projection().unwrap().routing_stage.as_deref(),
+            expected
+        );
+    }
+    events.push(event(9, "model.stream.delta", json!({"text":"hello"})));
     projector.apply(events.last().unwrap()).unwrap();
     assert_eq!(projector.projection().unwrap().routing_stage, None);
     assert_eq!(

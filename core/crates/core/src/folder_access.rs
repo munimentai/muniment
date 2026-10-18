@@ -74,6 +74,26 @@ pub fn check(directory: &Path, bound: Duration, cancelled: &AtomicBool) -> Folde
     }
 }
 
+/// Starts a read of `directory` in a child process of this one and returns at
+/// once. macOS tracks folder consent per process that reads, so the runtime
+/// that runs Pi reads its Home while the user looks at the first run, and the
+/// prompt that read raises never waits for the first chat.
+pub fn ask_ahead(directory: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let directory = directory.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = check(
+                &directory,
+                Duration::from_secs(600),
+                &AtomicBool::new(false),
+            );
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = directory;
+}
+
 /// The name macOS gives the protected folder that holds `directory`, if any.
 /// Logs and messages name the folder, never the path.
 pub fn protected_folder(directory: &Path, home: &Path) -> Option<&'static str> {
@@ -120,6 +140,13 @@ mod tests {
             check(&directory, Duration::from_secs(10), &AtomicBool::new(false)),
             FolderAccess::Open
         );
+    }
+
+    #[test]
+    fn asking_ahead_returns_before_the_read_answers() {
+        let started = std::time::Instant::now();
+        ask_ahead(&std::env::temp_dir());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

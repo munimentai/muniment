@@ -791,10 +791,16 @@ fn an_ordinary_thread_reaches_every_member_and_a_post_runs_on_its_owner() {
         "C never read the run its post started"
     );
     assert_eq!(history_entries(&mut writer, &thread).len(), 2);
-    // Only the owner writes runs into the thread.
-    assert!(reader
+    // Only the owner writes runs into the thread, and the refusal names no
+    // operation a person could not act on.
+    let refused = reader
         .run_submit("Write here.", &[], Some(&thread), None, None)
-        .is_err());
+        .unwrap_err();
+    let reason = format!("{:?} {refused:?}", reader.last_request_error());
+    assert!(
+        reason.contains("Another machine runs this thread") && !reason.contains("thread.post"),
+        "{reason}"
+    );
 
     // A mode set on C goes to A, which sets it, and it replicates back.
     let answer = reader

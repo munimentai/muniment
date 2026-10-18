@@ -699,7 +699,29 @@ fn coordinate_work(
             )?;
             if let Some(directory) = config.working_directory.as_deref() {
                 diagnostics.startup_stage("folder_access");
-                await_folder_access(&app, &run_id, directory, config.startup_timeout, &cancelled)?;
+                // The run names the wait while macOS asks, so the window can
+                // say which prompt to answer.
+                let mut name_wait = |stage: &str| {
+                    crate::run_events::append_emit_detailed(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "model.routing.stage",
+                        json!({ "stage": stage }),
+                        subject.as_deref(),
+                    )
+                    .map_err(|error| PiLaunchError::rejected("folder_access_stage_append", error))
+                };
+                await_folder_access(
+                    &app,
+                    &run_id,
+                    directory,
+                    config.startup_timeout,
+                    &cancelled,
+                    &mut name_wait,
+                )?;
             }
             diagnostics.startup_stage("acquire_completed");
             if matches!(
@@ -855,6 +877,12 @@ fn coordinate_work(
                 &cancelled,
             );
             diagnostics.readiness_failed(readiness_status, startup_timeout, &waiting_on);
+            let detail = readiness_detail(
+                startup_timeout,
+                readiness_status,
+                &waiting_on,
+                diagnostics.stderr_error(),
+            );
             let reason = if let StartupWait::Folder { access, folder } = waiting_on {
                 crate::folder_access::failure_reason(access, folder)
             } else if grant.is_local() {
@@ -870,13 +898,14 @@ fn coordinate_work(
                     startup_timeout.as_secs()
                 )
             };
-            fail_start(
+            crate::run_events::fail_start_with_detail(
                 &app,
                 &journal,
                 &mut projector,
                 &run_id,
                 &mut seq,
                 &reason,
+                Some(&detail),
                 subject.as_deref(),
                 resume.is_some(),
             );
@@ -2426,16 +2455,34 @@ fn append_terminal(
 /// operating system's consent prompt.
 const FOLDER_ACCESS_GRACE: Duration = Duration::from_secs(2);
 
-/// Waits, `bound` at most, until the operating system lets Pi read
-/// `directory`. Pi reads its working folder before it answers its first
-/// command, so a consent prompt nobody answers would otherwise hold Pi silent
-/// until its readiness bound.
+/// How long a run waits for the answer to the operating system's consent
+/// prompt once it shows. The user reads the prompt and answers it, so the
+/// wait outlasts Pi's own startup bound; Stop ends it sooner.
+const FOLDER_PROMPT_BOUND: Duration = Duration::from_secs(600);
+
+/// The routing stage a run reports while the operating system asks about
+/// its folder: `folder-access`, with the protected folder's name after a
+/// colon when it is one.
+fn folder_wait_stage(folder: Option<&str>) -> String {
+    folder.map_or_else(
+        || "folder-access".to_owned(),
+        |folder| format!("folder-access:{folder}"),
+    )
+}
+
+/// Waits until the operating system lets Pi read `directory`. Pi reads its
+/// working folder before it answers its first command, so a consent prompt
+/// nobody answers would otherwise hold Pi silent until its readiness bound.
+/// Once the read waits past a short grace, `name_wait` reports the wait as a
+/// routing stage, and the run waits [`FOLDER_PROMPT_BOUND`] or `bound`,
+/// whichever is longer, for the answer. An answer clears the stage.
 fn await_folder_access(
     app: &impl PiLaunchBoundaries,
     run_id: &str,
     directory: &std::path::Path,
     bound: Duration,
     cancelled: &AtomicBool,
+    name_wait: &mut dyn FnMut(&str) -> Result<(), PiLaunchError>,
 ) -> Result<(), PiLaunchError> {
     use crate::folder_access::FolderAccess;
     let folder = crate::state_root::home_directory_value().and_then(|home| {
@@ -2443,12 +2490,17 @@ fn await_folder_access(
     });
     let mut access = app.folder_access(directory, FOLDER_ACCESS_GRACE.min(bound), cancelled);
     if access == FolderAccess::Waiting && !cancelled.load(Ordering::SeqCst) {
+        let prompt_bound = bound.max(FOLDER_PROMPT_BOUND);
         eprintln!(
             "muniment-runtime: run_id={run_id} pi_spawn waiting_on=folder_access folder={} bound_ms={}",
             folder.unwrap_or("other"),
-            bound.as_millis()
+            prompt_bound.as_millis()
         );
-        access = app.folder_access(directory, bound, cancelled);
+        name_wait(&folder_wait_stage(folder))?;
+        access = app.folder_access(directory, prompt_bound, cancelled);
+        if access == FolderAccess::Open {
+            name_wait("routing")?;
+        }
     }
     if cancelled.load(Ordering::SeqCst) {
         return Err(PiLaunchError::Acquisition(
@@ -2508,6 +2560,25 @@ fn startup_waiting_on(
     wiring
         .pending_request()
         .map_or(StartupWait::Unknown, StartupWait::Dialog)
+}
+
+/// What a reply that never became ready keeps as its detail: the bound, the
+/// state Pi reached, what it waited on and the first error it wrote.
+fn readiness_detail(
+    bound: Duration,
+    status: SidecarStatus,
+    waiting_on: &StartupWait,
+    stderr_error: Option<String>,
+) -> String {
+    let mut detail = format!(
+        "The agent runtime did not report ready within {} seconds. Status: {status:?}. Waiting on: {waiting_on}.",
+        bound.as_secs()
+    );
+    if let Some(error) = stderr_error {
+        detail.push(' ');
+        detail.push_str(&error);
+    }
+    detail
 }
 
 /// The line a failed reply shows: the provider's own sentence after ours,
