@@ -12,7 +12,7 @@
 
 {#if text}
   <span class="info-tip" data-open={pinned ? 'true' : undefined}>
-    <button type="button" class="info-button" aria-label={label} aria-describedby={tipId} aria-expanded={pinned}
+    <button type="button" class="info-button" data-ui-button aria-label={label} aria-describedby={tipId} aria-expanded={pinned}
       onclick={() => (pinned = !pinned)}
       onblur={() => (pinned = false)}
       onkeydown={(event) => { if (event.key === 'Escape' && pinned) { event.stopPropagation(); pinned = false } }}>
