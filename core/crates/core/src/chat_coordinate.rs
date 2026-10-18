@@ -553,12 +553,7 @@ fn coordinate_work(
     }
     diagnostics.startup_stage("thread_name");
     if resume.is_none() && compaction.is_none() {
-        let fallback = prompt
-            .split_whitespace()
-            .take(3)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let fallback: String = fallback.chars().take(80).collect();
+        let fallback = crate::journal::thread_mutation::fallback_thread_name(&prompt);
         if let Ok(mut storage) = journal.lock() {
             let _ = crate::journal::thread_mutation::save_first_thread_name(
                 &mut storage.journal,
