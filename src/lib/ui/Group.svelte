@@ -6,8 +6,10 @@
   // `trail` puts a control after the heading text, before the count. `info`
   // holds an explanation behind an info control beside the heading, where
   // `description` stays visible under it.
+  // A group inside a part of a Settings page sits one heading level down.
+  import { getContext } from 'svelte'
   import InfoTip from './InfoTip.svelte'
-  let { heading = '', description = '', info = '', label = '', count = null, level = 4, plain = false, lead, trail, actions, children } = $props()
+  let { heading = '', description = '', info = '', label = '', count = null, level = getContext('page-part') ? 5 : 4, plain = false, lead, trail, actions, children } = $props()
   const id = $props.id()
 </script>
 

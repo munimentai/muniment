@@ -126,9 +126,9 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     }
     await settings.waitForDisplayed()
     const sections = await $('nav[aria-label="Settings sections"]')
-    expect(await (await sections.$('button=Account')).isExisting()).toBe(false)
+    expect(await (await sections.$('button=Models')).isExisting()).toBe(true)
     expect(await (await $('button=Sign in for cloud features')).isExisting()).toBe(false)
-    // More providers opens the provider catalog. The sidebar's Settings opens the Model providers list.
+    // More providers opens the provider catalog. The sidebar's Settings opens the Models page.
     await (await settings.$(firstRun ? 'h4=Connect account' : 'button=Connect account')).waitForDisplayed()
     await closeSettings()
     expect(await (await $('textarea[placeholder="Ask anything"]')).isDisplayed()).toBe(true)

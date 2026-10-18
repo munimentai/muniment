@@ -6,12 +6,12 @@
   import PageHead from './ui/PageHead.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
-  // Settings → Models, one screen: every connection is a named account under
-  // its provider, key or subscription, with its allowance and usage on the
-  // card, the provider's models once, the connector that adds a provider, and
-  // routing controls. The composer's model picker shows and hides models.
-  import { onDestroy, onMount, tick, untrack } from 'svelte'
-  import SettingsTabs from './SettingsTabs.svelte'
+  // Settings → Models, one screen: the Roles that route and assist at the top,
+  // then every connection as a named account under its provider, key or
+  // subscription, with its allowance and usage on the card, the provider's
+  // models once, and the connector that adds a provider. The composer's model
+  // picker shows and hides models.
+  import { onDestroy, onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import HoldSignIn from './HoldSignIn.svelte'
@@ -29,29 +29,17 @@
   // draws at once and the fresh read replaces it.
   // `connect` opens a connect view at once: a catalog id opens that provider's
   // sign-in, and an empty string opens the provider catalog.
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts', sidebarTab = null, ontab, connect = null } = $props()
+  // `focus` names the part a link opens: `roles` or `connections`.
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, focus = null, connect = null } = $props()
 
   // svelte-ignore state_referenced_locally
   let inventory = $state(initial)
   let loadError = $state('')
   let status = $state('')
   let query = $state('')
-  // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row. A tab
-  // this section moves to itself reports through `ontab`.
-  // svelte-ignore state_referenced_locally
-  let tab = $state(sidebarTab ?? initialTab)
-  $effect(() => {
-    if (sidebarTab && sidebarTab !== untrack(() => tab)) { tab = sidebarTab; view = 'list' }
-  })
-  const INTROS = {
-    accounts: 'The accounts, keys and local servers your models run on.',
-    routing: 'Decision models route each message to a model and assist chats with tools and the browser.',
-  }
-  function showTab(next) {
-    tab = next
-    ontab?.(next)
-  }
   let view = $state('list')
+  let connectionsPart = $state()
+  $effect(() => { if (focus === 'connections' && view === 'list' && connectionsPart) connectionsPart.scrollIntoView?.({ block: 'start' }) })
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
   const accounts = accountCache(tauri)
@@ -60,7 +48,7 @@
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let classifierId = $state('')
-  // The saved classifier connection whose form is open in Model providers.
+  // The saved classifier connection whose form is open in Models.
   let editingClassifier = $state('')
   const classifierEntry = $derived(CLASSIFIERS.find(entry => entry.id === classifierId))
   let providerId = $state('')
@@ -419,41 +407,32 @@
   }
 </script>
 
-{#snippet tabAction()}
-  {#if tab === 'accounts'}<Button icon="plus" variant="primary" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
-  <Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>{/if}
+{#snippet pageActions()}
+  <Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>
+  <Button icon="plus" variant="primary" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
 {/snippet}
 
-<div class="models" data-settings-controls use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
+<div class="models" data-settings-controls use:resetPageScroll={[view, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
-    {#if sidebarTab}
-      <PageHead intro={INTROS[tab]} actions={tab === 'routing' ? undefined : tabAction} />
-    {:else}
-      <div class="tabs-row">
-        <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />
-        {#if tab !== 'routing'}<div class="tab-action">{@render tabAction()}</div>{/if}
-      </div>
-    {/if}
-    {#if tab === 'routing'}
+    <PageHead intro="The accounts, keys and local servers your models run on, and the models that route and assist." actions={pageActions} />
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection onconnect={() => { showTab('accounts'); openConnector() }} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={openConnector} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
 
-    {:else if tab === 'accounts'}
-    <section class="accounts-section" aria-label="Accounts">
+    <section class="accounts-section" aria-label="Connections" bind:this={connectionsPart}>
     
     {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
+    <Group heading="Connections" label="Connected providers" plain>
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if shownProviders.length || poolOnlyFamilies.length}
       <!-- Each provider is a heading over its own cards. A pooled subscription is a card and a pooled
            key a one-line card, each with its own controls. The provider's own connection, when it
            has no pooled account, is a one-line card with edit and disconnect icons at the far right. -->
-      <Group label="Connected providers" plain>
         {#each shownProviders as entry (entry.id)}
           {@const pooled = !!entry.family && !!router?.accounts?.some((account) => account.family === entry.family)}
           {@const endpoint = entry.source === 'local' || entry.source === 'custom'}
@@ -484,8 +463,8 @@
             <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />
           </section>
         {/each}
-      </Group>
     {/if}
+    </Group>
     {#if elsewhere.length}
       <Group heading="Signed in on other machines" description="A shared sign-in arrives here on its own.">
         {#each elsewhere as signIn (signIn.id)}
@@ -500,15 +479,14 @@
         {#each router.classifier_connections as connection (connection.id)}
           <Row title={connection.name} meta={connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}>
             {#snippet icon()}<ProviderLogo color provider={connection.catalog_id} size={16} />{/snippet}
-            {#if connection.connection.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
-            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another in Decisions.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            {#if connection.connection?.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
+            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another under Roles.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
           </Row>
           {#if editingClassifier === connection.id}<div class="classifier-edit"><ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} /></div>{/if}
         {/each}
       </Group>
     {/if}
     </section>
-    {/if}
   {:else}
     <header class="connect-head">
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
@@ -546,7 +524,7 @@
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list'; showTab('accounts') }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <Group label={`${provider.name} key`}>
@@ -670,8 +648,6 @@
   .search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); }
   .search:focus-within { border-color: var(--muted); }
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
-  .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-count { flex: none; white-space: nowrap; }
   .model-count[data-tone="caution"] { color: var(--ochre); }

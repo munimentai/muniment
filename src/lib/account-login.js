@@ -1,6 +1,6 @@
 // One provider sign-in, as the `local-mode-login` events move it: started,
 // waiting in the browser, showing a device code, asking a question, then done,
-// failed or cancelled. Model providers and the first run share it.
+// failed or cancelled. Models and the first run share it.
 
 export function loginStart(provider, label = '') {
   return { provider, label, stage: 'start', message: 'Starting the sign-in…', url: '', code: '', prompt: null }

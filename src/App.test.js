@@ -1483,22 +1483,30 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-layout \{[^}]*grid-column:\s*2 \/ -1/)
     expect(appStyles).toMatch(/\.workspace\.settings-open > :global\(:not\(\.titlebar, \.sidebar, \.sidebar-divider,/)
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
-    // Pages sit under group headings: Models, Extend, Preferences, Personal and Workspace.
-    expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Models', 'Extend', 'Preferences', 'Personal', 'Workspace'])
-    // Machines closes Extend under the network mark, and Storage closes Personal.
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Model providers', 'Decision models', 'MCP servers', 'Skills', 'Plugins', 'Machines', 'Appearance', 'Context', 'Permissions', 'Voice', 'Search', 'Language', 'Profile', 'Memory', 'Account', 'Storage', 'Companies'])
+    // Seven pages, each holding its settings once, with no group headings.
+    expect(within(nav).queryAllByRole('heading')).toEqual([])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Account', 'Models', 'Tools', 'Machines', 'Permissions', 'Data', 'General'])
     expect(within(nav).getByRole('button', { name: 'Machines' }).querySelector('[data-icon=network]')).not.toBeNull()
-    expect(within(nav).getByRole('button', { name: 'Model providers' })).toHaveAttribute('aria-current', 'true')
+    expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Refresh models' })).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Appearance' }))
+    await fireEvent.click(within(nav).getByRole('button', { name: 'General' }))
     expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
     expect(within(dialog).queryByText('Summarize older messages to make room. Full history stays saved.')).not.toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Context' }))
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Data' }))
+    await vi.dynamicImportSettled()
     expect(await within(dialog).findByText('Summarize older messages to make room. Full history stays saved.')).toBeInTheDocument()
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Storage' }))
     expect(within(dialog).getByRole('button', { name: 'Change workspace folder…' })).toBeInTheDocument()
+    // The search narrows the sidebar to matching pages and names the matching parts under them.
+    const search = within(document.getElementById('sidebar')).getByRole('searchbox', { name: 'Search settings' })
+    await fireEvent.keyDown(dialog, navigator.platform.startsWith('Mac') ? { key: 'f', metaKey: true } : { key: 'f', ctrlKey: true })
+    expect(document.activeElement).toBe(search)
+    await fireEvent.input(search, { target: { value: 'dictation' } })
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['General', 'Voice'])
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Voice' }))
+    expect(within(nav).getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'true')
+    await fireEvent.input(search, { target: { value: '' } })
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
     expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
 
@@ -1539,7 +1547,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     localStorage.setItem('muniment.theme', 'light')
     render(App)
-    await openSettings('Appearance')
+    await openSettings('General')
     const appearance = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(appearance.getAllByRole('button').map((button) => button.textContent)).toEqual(['System', 'Light', 'Dark'])
     expect(appearance.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true')
@@ -1557,7 +1565,7 @@ describe('workspace composer entry', () => {
     const reopened = await screen.findByRole('button', { name: 'Settings' })
     expect(screen.queryByRole('group', { name: 'Mode' })).not.toBeInTheDocument()
     await fireEvent.click(reopened)
-    await fireEvent.click(within(await screen.findByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'Appearance' }))
+    await fireEvent.click(within(await screen.findByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'General' }))
     const restored = within(await screen.findByRole('group', { name: 'Mode' }))
     expect(restored.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true')
     expect(invoke).not.toHaveBeenCalledWith('auth_sign_in')
@@ -1568,7 +1576,7 @@ describe('workspace composer entry', () => {
     localModeStatus = true
     localStorage.removeItem('muniment.type')
     render(App)
-    await openSettings('Appearance')
+    await openSettings('General')
     const size = within(await screen.findByRole('group', { name: 'Size' }))
     expect(size.getByRole('status')).toHaveTextContent('15 px body')
     expect(size.getByRole('button', { name: 'Default type size' })).toBeDisabled()
@@ -2045,7 +2053,7 @@ describe('workspace composer entry', () => {
     const composer = await findWorkspaceComposer()
     expect(composer).toHaveFocus()
 
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.queryByPlaceholderText('Ask anything')).not.toBeInTheDocument()
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
@@ -2070,7 +2078,7 @@ describe('workspace composer entry', () => {
     })
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Resume' }))
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
 
@@ -4355,7 +4363,7 @@ describe('Home onboarding', () => {
 
   // Home changes in Home settings, which Settings → Storage opens.
   async function homeSettings() {
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     return screen.findByRole('region', { name: 'Home settings' })
   }
@@ -4495,7 +4503,7 @@ describe('Home onboarding', () => {
       { assistantId: 'codex', displayName: 'Codex CLI', fileCount: 0, root: '/Users/alex/.codex', byteTotal: 0, capped: true, warnings: [] },
     ], errors: [] }
     render(App)
-    const dialog = await openSettings('Memory')
+    const dialog = await openSettings('Data')
     const imports = await within(dialog).findByRole('region', { name: 'Imports' })
     expect(invoke).not.toHaveBeenCalledWith('onboarding_scan')
     await fireEvent.click(within(imports).getByRole('button', { name: 'Look for memory' }))
@@ -4509,7 +4517,7 @@ describe('Home onboarding', () => {
 
   it('saves recall choices on the Memory page to the profile', async () => {
     render(App)
-    const dialog = await openSettings('Memory')
+    const dialog = await openSettings('Data')
     const recall = await within(dialog).findByRole('region', { name: 'Recall' })
     const ask = within(recall).getByRole('switch', { name: 'Ask before saving' })
     await waitFor(() => expect(ask).toBeEnabled())
@@ -4529,7 +4537,7 @@ describe('Home onboarding', () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => command === 'memory_recall_settings_save' ? Promise.reject('Memory settings cannot be saved.') : original(command, payload))
     render(App)
-    const dialog = await openSettings('Memory')
+    const dialog = await openSettings('Data')
     const recall = await within(dialog).findByRole('region', { name: 'Recall' })
     const use = within(recall).getByRole('switch', { name: 'Use memories in replies' })
     await waitFor(() => expect(use).toBeEnabled())
@@ -4545,14 +4553,14 @@ describe('Home onboarding', () => {
 
   it('saves a changed Home from the existing settings control', async () => {
     render(App)
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     dialogResult = '/Other/Home'
     await fireEvent.click(screen.getByTestId('onboarding-picker'))
     await fireEvent.click(screen.getByRole('button', { name: 'Save Home' }))
     expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Other/Home' })
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Other/Home')
   })
@@ -4560,7 +4568,7 @@ describe('Home onboarding', () => {
   it('keeps a configured Home and cancels settings back to the workspace', async () => {
     homeStatus = { configured: true, homePath: '/Saved/Home' }
     render(App)
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
     expect(screen.queryByText('Local AI')).not.toBeInTheDocument()
@@ -4570,7 +4578,7 @@ describe('Home onboarding', () => {
     await fireEvent.click(screen.getByTestId('onboarding-cancel'))
     expect(await screen.findByPlaceholderText('Ask anything')).toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('home_confirm', expect.anything())
-    await openSettings('Storage')
+    await openSettings('Data')
     await fireEvent.click(await screen.findByRole('button', { name: 'Change workspace folder…' }))
     expect(screen.getByTestId('onboarding-home-path')).toHaveTextContent('/Saved/Home')
   })
@@ -4863,7 +4871,7 @@ describe('voice dictation', () => {
     const composer = await findReadyWorkspaceComposer()
     await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
-    const dialog = await openSettings('Voice')
+    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
 
     await fireEvent.click(capture)
@@ -4888,7 +4896,7 @@ describe('voice dictation', () => {
   it('captures the artifact rail chord without toggling the rail', async () => {
     render(App)
     const railToggle = await screen.findByRole('button', { name: 'Artifacts' })
-    const dialog = await openSettings('Voice')
+    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     const mac = navigator.platform.startsWith('Mac')
 
@@ -4906,7 +4914,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    const dialog = await openSettings('Voice')
+    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -4922,7 +4930,7 @@ describe('voice dictation', () => {
   it('keeps the registered and displayed shortcut when persistence fails', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
     const view = render(App)
-    const dialog = await openSettings('Voice')
+    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -4943,7 +4951,7 @@ describe('voice dictation', () => {
       registeredShortcuts.delete(shortcut)
     })
     render(App)
-    const dialog = await openSettings('Voice')
+    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -4964,7 +4972,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    await openSettings('Voice')
+    await openSettings('General')
     const capture = within(screen.getByRole('dialog', { name: 'Settings' })).getByRole('button', { name: /Change voice shortcut/ })
     expect(capture).toBeDisabled()
     await fireEvent.click(capture)
@@ -4990,7 +4998,7 @@ describe('voice dictation', () => {
         registeredShortcuts.delete(shortcut)
       })
     }
-    const dialog = await openSettings('Voice')
+    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -7949,7 +7957,7 @@ describe('signed-in access popover', () => {
 
   it('applies and persists an accessible per-device appearance choice', async () => {
     render(App)
-    await openSettings('Appearance')
+    await openSettings('General')
     const appearance = within(screen.getByRole('group', { name: 'Mode' }))
     const system = appearance.getByRole('button', { name: 'System' })
     const dark = appearance.getByRole('button', { name: 'Dark' })
@@ -7983,6 +7991,7 @@ describe('signed-in access popover', () => {
     expect(within(card).getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
     expect([...content.querySelectorAll(':scope > section')].map((section) => section.getAttribute('aria-labelledby') ?? section.getAttribute('aria-label'))).toEqual([
       'Signed-in account',
+      'Shared model connections',
       'plan-heading',
       'devices-heading',
       'pairing-heading',
@@ -8501,9 +8510,16 @@ describe('release feature flags', () => {
     expect(Boolean(screen.queryByRole('button', {name: 'Open record panel'}))).toBe(companyRecord)
     const dialog = await openSettings()
     const nav = screen.getByRole('navigation', {name: 'Settings sections'})
-    expect(Boolean(within(nav).queryByRole('button', {name: 'Account', exact: true}))).toBe(cloud)
-    expect(Boolean(within(nav).queryByRole('button', {name: 'Companies', exact: true}))).toBe(companyRecord)
-    expect(within(nav).getByRole('button', {name: 'Model providers'})).toBeInTheDocument()
+    expect(within(nav).getByRole('button', {name: 'Models'})).toBeInTheDocument()
+    // The cloud flag adds the MuniCloud part of Account, and the company record the Companies part of Data.
+    await fireEvent.click(within(nav).getByRole('button', {name: 'Account', exact: true}))
+    await vi.dynamicImportSettled()
+    expect(await within(dialog).findByRole('region', {name: 'Profile'})).toBeInTheDocument()
+    expect(Boolean(dialog.querySelector('[data-settings-part="cloud"]'))).toBe(cloud)
+    await fireEvent.click(within(nav).getByRole('button', {name: 'Data', exact: true}))
+    await vi.dynamicImportSettled()
+    expect(await within(dialog).findByRole('button', {name: 'Change workspace folder…'})).toBeInTheDocument()
+    expect(Boolean(dialog.querySelector('[data-settings-part="companies"]'))).toBe(companyRecord)
     await fireEvent.click(screen.getByRole('button', {name: 'Back to threads'}))
     if (!companyRecord) {
       await fireEvent.keyDown(window, {key: 'k', metaKey: true, ctrlKey: true})
@@ -8535,7 +8551,7 @@ describe('release feature flags', () => {
     const Settings = (await import('./lib/Settings.svelte')).default
     for (const section of ['account', 'companies']) {
       const view = render(Settings, {tauri: {invoke}, section, onclose: vi.fn()})
-      await waitFor(() => expect(screen.getByRole('heading', {name: 'Model providers'})).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByRole('heading', {name: section === 'account' ? 'Account' : 'Data', level: 3})).toBeInTheDocument())
       expect(invoke).not.toHaveBeenCalledWith('auth_entitlement_snapshot')
       expect(invoke.mock.calls.some(([command]) => command.startsWith('record_'))).toBe(false)
       view.unmount()
@@ -8916,13 +8932,17 @@ describe('runtimes', () => {
     expect(files).toHaveTextContent('Files stay on this computer. A paired runtime cannot read them.')
     await fireEvent.keyDown(window, { key: 'Escape' })
 
-    // The cloud account belongs to this computer, so Settings hides Account and notes the local pages.
-    await openSettings('Storage')
+    // Storage belongs to this computer, so its part says so under its head.
+    const dialog = await openSettings('Data')
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
-    const pages = within(nav).getAllByRole('button').map((button) => button.textContent)
-    expect(pages).not.toContain('Account')
-    expect(pages).toContain('Machines')
-    expect(screen.getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toContain('Machines')
+    expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="context"]')).queryByRole('note')).toBeNull()
+    // The cloud account belongs to this computer, so Account keeps only the profile of the selected machine.
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
+    await vi.dynamicImportSettled()
+    expect(await within(dialog).findByRole('region', { name: 'Profile' })).toBeInTheDocument()
+    expect(dialog.querySelector('[data-settings-part="cloud"]')).toBeNull()
   })
 
   it('names the machine Model providers applies to and switches it from Settings', async () => {
@@ -8938,7 +8958,7 @@ describe('runtimes', () => {
     })
     render(App)
     await findWorkspaceComposer()
-    await openSettings('Model providers')
+    await openSettings('Models')
     const machine = await screen.findByRole('combobox', { name: 'Settings for' })
     expect(machine).toHaveValue(buildBox.id)
     expect([...machine.options].map((option) => option.textContent)).toEqual(['This computer', 'Build box'])
@@ -8946,7 +8966,7 @@ describe('runtimes', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('runtime_select', { id: 'local' }))
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue('local'))
     // Appearance belongs to this window, so it names no machine.
-    await fireEvent.click(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'Appearance' }))
+    await fireEvent.click(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: 'General' }))
     await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Settings for' })).not.toBeInTheDocument())
   })
 
@@ -9011,7 +9031,7 @@ describe('runtimes', () => {
     })
     render(App)
     expect(await screen.findByText('Build box: Access revoked')).toHaveClass('record', 'error-record')
-    expect(screen.getByText('This thread lives on Build box. Pair it again with a new link.')).toHaveClass('support')
+    expect(screen.getByText('This thread lives on Build box. Add it again with a new code.')).toHaveClass('support')
     const composer = await findReadyWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Still there?' } })
     expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true')

@@ -1,5 +1,5 @@
 <script>
-  // Settings → Voice: the system-wide dictation shortcut, the microphone, the
+  // Settings → General → Voice: the system-wide dictation shortcut, the microphone, the
   // on-device speech model and how a transcript lands. Each dictation reads
   // these choices when it starts.
   import { onDestroy, onMount } from 'svelte'

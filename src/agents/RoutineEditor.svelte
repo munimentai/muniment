@@ -124,7 +124,7 @@
           </div>
           <datalist id={`${id}-servers`}>{#each catalog?.mcp ?? [] as entry (entry.server)}<option value={entry.server}></option>{/each}</datalist>
           <datalist id={`${id}-tools`}>{#each offered.tools as name (name)}<option value={name}></option>{/each}</datalist>
-          {#if offered.note}<p class="note">{offered.note}</p>{:else if catalog?.loaded && !catalog.error && !(catalog.mcp ?? []).length}<p class="note">This machine has no MCP servers. Add one in Extend.</p>{/if}
+          {#if offered.note}<p class="note">{offered.note}</p>{:else if catalog?.loaded && !catalog.error && !(catalog.mcp ?? []).length}<p class="note">This machine has no MCP servers. Add one in Tools.</p>{/if}
           <label>Arguments<textarea class="mono" rows="3" bind:value={args} disabled={busy} spellcheck="false"></textarea></label>
           <CronEditor bind:schedule={every} label="Check" disabled={busy} />
           <div class="condition"><span class="legend">Start the agent when</span><ConditionBuilder bind:node={condition} disabled={busy} /></div>

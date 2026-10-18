@@ -32,7 +32,7 @@ it('previews a share link, then imports it without its memories when asked', asy
   expect(within(dialog).getByRole('region', { name: 'Routines' })).toHaveTextContent('1 routine arrives off, as proposals to accept.')
   expect(within(dialog).getByRole('region', { name: 'Routines' })).toHaveTextContent('On new mail: No schedule, webhook or MCP trigger fits this routine.')
   expect(within(dialog).getByRole('region', { name: 'Skills' })).toHaveTextContent('Tonekept as reference text')
-  expect(within(dialog).getByRole('region', { name: 'Setup' })).toHaveTextContent('Gmailset up in Extend')
+  expect(within(dialog).getByRole('region', { name: 'Setup' })).toHaveTextContent('Gmailset up in Tools')
   await fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Import 1 memory as outside facts' }))
   await fireEvent.click(within(dialog).getByRole('button', { name: 'Import agent' }))
   await waitFor(() => expect(onimported).toHaveBeenCalledWith({ id: 'new-agent', name: 'Dewey', runtimeId: 'box' }))

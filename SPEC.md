@@ -29,7 +29,7 @@ These are developer build options, not controls in user Settings.
 
 The flags are independent. Enabling either does not enable the other.
 Disabled sections have no visible controls, empty placeholders or working
-shortcuts. A request for a hidden Settings page opens Model providers.
+shortcuts. A request for a hidden Settings part opens its page without it.
 With cloud disabled, startup enters local mode without reading a cloud session.
 A local startup failure offers a local retry, never a cloud sign-in prompt.
 Provider sign-in, model routing, allowances, MCP pairing and local tools remain
@@ -66,8 +66,8 @@ Agent panels and maximized record panels fill the chat area while the expanded s
 Agent threads retain their agent across replies.
 Import agent reads a share link, a template file or pasted text through the runtime and shows a preview before Import saves it: the profile, routines as proposals that stay off, skills matched or kept as reference text, tools to set up, routine notes, and memories to keep or drop. A public share page's preview says it holds the profile only. Import never starts a run.
 Export for Muniment and Export for Grok Bot save the file the runtime writes. Exports omit project assignments, conversation history, credentials, webhook secrets and private memory.
-Linked machines form a fleet. Settings → Machines lists each member with its link state, joins two machines this device administers with no link to copy, and removes a member or leaves. The catalog lists every agent the fleet knows with its primary machine's shape, an offline mark, and a sync mark on an agent seen only as a synced copy; the Agents group folds those into one status mark per row. The profile's Move hands an agent to another member after a confirm, and offers a forced move with a warning when the primary does not answer.
-A message to a group thread, or to a synced copy of another machine's agent or ordinary thread, posts through the runtime to the group or to the owner. While the owner is offline the composer says the message is queued, with Cancel, and an agent whose machine has been away a day offers Move here. A replica thread fetches its history from its owner on open. The composer's machine menu also lists fleet members the app does not reach itself, containers included, and a new thread started on one runs there. Settings → Machines sets what this computer keeps available offline and lists the fleet's audit log. Available offline keeps each project's details and membership, and a project's files stay on the machine that owns it. The Projects catalog lists other members' projects after this computer's, each with its owner. Model providers names the machine each sign-in is signed in on. Theme, type, avatar style, the thinking mark, browser search and homepage, and memory recall follow the user across the fleet. Transcripts show another agent's message with its sender, intent and hop count, and a handoff or a silent run as a note.
+Linked machines form a fleet. A machine added with admin access links into this computer's fleet as it pairs, and Settings → Machines lists every machine once. The catalog lists every agent the fleet knows with its primary machine's shape, an offline mark, and a sync mark on an agent seen only as a synced copy; the Agents group folds those into one status mark per row. The profile's Move hands an agent to another member after a confirm, and offers a forced move with a warning when the primary does not answer.
+A message to a group thread, or to a synced copy of another machine's agent or ordinary thread, posts through the runtime to the group or to the owner. While the owner is offline the composer says the message is queued, with Cancel, and an agent whose machine has been away a day offers Move here. A replica thread fetches its history from its owner on open. The composer's machine menu also lists fleet members the app does not reach itself, containers included, and a new thread started on one runs there. This computer's row on Settings → Machines sets what it keeps available offline and lists the fleet's audit log. Available offline keeps each project's details and membership, and a project's files stay on the machine that owns it. The Projects catalog lists other members' projects after this computer's, each with its owner. Model providers names the machine each sign-in is signed in on. Theme, type, avatar style, the thinking mark, browser search and homepage, and memory recall follow the user across the fleet. Transcripts show another agent's message with its sender, intent and hop count, and a handoff or a silent run as a note.
 Groups hold two to six agents from any machine, with a lead, a meeting mode and its debate rounds. In a group the composer's @ list offers its agents and @everyone, and meeting replies show under their round.
 Activity, and the agent's own thread in place of the run's gate, show each waiting approval as a card: the agent, its machine, core's summary of the exact operation and its inputs, long ones folded, the reason the gate asks, a plan waiting for approval, and only the answers core lists of Allow once, Allow for this thread, Always allow for this agent, Always allow and Deny, or the plan's approvals into Ask before changes, Edit automatically or Auto review and Keep planning. An answer another device gave first says so. Group posts arrive live from `group.posted`, with their round from core, and a group's composer names its members instead of a model. After 14 days without a client the runtime pauses routines, and the sidebar asks to resume them.
 Chat can list, read, save and run agents through harness tools backed by the same files as manual editing.
@@ -129,10 +129,10 @@ There is no custom tap. Acceptance belongs to the Homebrew maintainers.
 **muniment-site.** `docs/public-evidence/` is lifted verbatim into the public
 docs, and a change to what an outside user sees updates it, law 12.
 
-**Other runtimes.** The app keeps its own runtime and attaches to one selected runtime at a time: this computer, another desktop, or a `muniment-server` host or container. Settings → Runtimes pairs one from its one-time `muniment://pair` link, pasted or read over SSH from `<command> pair --json`, with no account, and keeps its device credential in an owner-only file under `~/.muniment/runtimes/`.
+**Other runtimes.** The app keeps its own runtime and attaches to one selected runtime at a time: this computer, another desktop, or a `muniment-server` host or container. Settings → Machines → Add machine pairs one from its one-time `muniment://pair` link, pasted or read over SSH from `<command> pair --json`, with no account, and keeps its device credential in an owner-only file under `~/.muniment/runtimes/`.
 An SSH runtime attaches through `ssh -N -L` to a loopback port, which opens with the attach and closes when the app leaves the runtime or quits. Threads, models, memory, search and context come from the selected runtime, and a thread stays on the runtime that holds it. Once a machine is paired, the Settings pages that read the selected runtime name it at their top with a switch to another machine that answers. Pairing a machine never selects it. The cloud account, phone pairing, extensions and Storage stay with this computer, so Account hides and those pages say so.
-Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Every paired desktop, server and container updates to the app's version, which they all release under. The app subscribes to each runtime's `runtime.update_status` and reads `update_capability` and `update_status` from `runtime.info`, so a row shows only what the runtime reports: Update queued, Downloading vX, Finishing current work with the blockers in a tooltip, Updating to vX while it installs or restarts, Update failed with the error in a tooltip, or vX available, update manually for a behind runtime that installs by hand. A request the runtime has not acted on shows Update requested, and an older runtime without the fields shows only its version. The app asks a behind runtime to update on each welcome while it reports no pending or failed update for that version, at most once per runtime and version in ten minutes, and never asks a manual runtime or again for a version the runtime failed until a newer one exists. A paired desktop that runs a newer app moves this app to it. A newer server or container never does. The row menu's Update asks one runtime where this device holds `runtime.update` or `runtime.admin`. Update all asks every runtime that is behind and online, lists the ones it skips as offline, no permission, manual install or already current, and updates this computer last. Remove first revokes the device there when it holds that scope. The composer attaches no local file while a paired runtime is selected. The composer's machine menu marks a machine that answers with a green globe and one that does not with a red slashed globe, and picking one that does not answer opens Settings → Machines.
-This computer turns pairing on and off, off by default, sets the listen port and the addresses links name, creates a one-time link with its QR code, and lists and revokes paired devices. An update request to this computer's runtime runs the app updater, and the app clears the request once it runs that version. The app saves each step in the runtime's update status, so paired devices see it.
+Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Every paired desktop, server and container updates to the app's version, which they all release under. The app subscribes to each runtime's `runtime.update_status` and reads `update_capability` and `update_status` from `runtime.info`, so a row shows only what the runtime reports: Update queued, Downloading vX, Finishing current work with the blockers in a tooltip, Updating to vX while it installs or restarts, Update failed with the error in a tooltip, or vX available, update manually for a behind runtime that installs by hand. A request the runtime has not acted on shows Update requested, and an older runtime without the fields shows only its version. The app asks a behind runtime to update on each welcome while it reports no pending or failed update for that version, at most once per runtime and version in ten minutes, and never asks a manual runtime or again for a version the runtime failed until a newer one exists. A paired desktop that runs a newer app moves this app to it. A newer server or container never does. The row menu's Update asks one runtime where this device holds `runtime.update` or `runtime.admin`. Update all shows while an update waits. It asks every runtime that is behind and online, lists the ones it skips as offline, no permission, manual install or already current, and updates this computer last. Remove drops every link to the machine from each machine this app reaches, revokes the access it holds on this computer, and revokes this device there when it holds that scope. A device without `runtime.admin` shows Limited. The composer attaches no local file while a paired runtime is selected. The composer's machine menu marks a machine that answers with a green globe and one that does not with a red slashed globe, and picking one that does not answer opens Settings → Machines.
+Add machine creates this computer's one-time admin link with its QR code, and turns connections on the first time. This computer's row sets the listen port and the addresses links name. An update request to this computer's runtime runs the app updater, and the app clears the request once it runs that version. The app saves each step in the runtime's update status, so paired devices see it.
 
 **Updates.** The in-app updater reads the public stable release feed, sends nothing that identifies the user or machine, and verifies signatures bound to the announced version. It shows one install control after download. Before an install the app asks this computer's runtime to drain: it refuses new runs, waits for its runs, records each run it stops and answers. An install the owner starts confirms how many replies it stops and stops them at once. A requested or automatic install waits up to 120 seconds for idle, then proceeds. Core resumes each stopped run after the restart, and the thread notes Resumed after update. Windows preserves MSI scope or NSIS identity, macOS uses the signed app bundle, and Linux uses AppImage. Debian updates use the system package manager.
 
@@ -174,9 +174,9 @@ provider answers it reads `Connect a model`, and the chip and Send open the prov
 Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
-**Settings → Models is one component on two pages.** Model providers
-and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
-in account details. Decision models holds the routing statements once a decision model is connected. The chip's picker lists every connected provider's
+**Settings → Models is one page.** Roles leads it with routing, assistance and their decision models,
+then the routing statements once a decision model is connected, then Connections. Full-width account rows show allowance, with usage
+in account details. The chip's picker lists every connected provider's
 current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. A local or custom server shows every model it serves, since the user installed each one. A row shows the name core's catalog or the server gives, else a provider id formatted, or a server's id as served. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns
@@ -197,7 +197,7 @@ first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
 chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
 
-**Routing leads Settings → Decision models.** Pi's `auth.json` holds one credential per
+**Routing leads Settings → Models → Roles.** Pi's `auth.json` holds one credential per
 provider id, so a second account of one provider cannot live there. The router, which the runtime runs,
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
@@ -283,10 +283,10 @@ balancer mark, and picking it balances across them with no other step. A saved c
 
 **Home.** A line under the list shows `~/Documents/muniment`, lowercase, with no
 control. A configured Home keeps its path, and a pick creates the four folders.
-Settings → Storage → `Change workspace folder…` changes Home later. When one Obsidian
+Settings → Data → Storage → `Change workspace folder…` changes Home later. When one Obsidian
 vault holds most of the memory files found, that picker offers the vault's parent and says why.
 
-**Imports.** Settings → Memory runs the memory scan on request and lists one row
+**Imports.** Settings → Data → Memory runs the memory scan on request and lists one row
 per assistant that holds files. Import copies that assistant's files under
 `memory/imports/<assistant>/` through the onboarding write plan with its secret
 rejection and size caps: 128 files, 256 KB in all and 64 KB per file. A store
@@ -371,7 +371,7 @@ onboarding spec proves the connect question, the Home picker and More providers.
     writes back to a source.
 14. **Monetization, launch and publicity are maintainer-only.**
 
-Settings loads on demand. Its sidebar groups pages under Models, Extend, which ends with Machines, Preferences, Personal, which ends with Storage, and Workspace, which holds Companies. Storage distinguishes the workspace from managed extensions.
+Settings loads on demand. Its sidebar holds a search and seven pages: Account, Models, Tools, Machines, Permissions, Data and General. Each setting lives on one page, and a link to an older page id opens the page and part that hold it. The search narrows the pages to the ones that match and lists the matching parts, and the platform's find shortcut focuses it.
 ## Workspace panels
 
 The title bar menu opens Browser, Files and Terminal in a shared tab panel.
@@ -382,7 +382,7 @@ leading `www.`. Terminal and Files labels
 show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names. Browser, artifact and file tab labels keep their start and end in an ellipsis, and hover shows the full label.
 Terminal and Files path headers share `OverflowText.svelte`: the full path stays on one line, starts at its end, and scrolls horizontally without a scrollbar.
 Fades mark clipped content and clear when the content fits. A new browser tab opens https://muniment.ai/docs/. Closing a browser tab releases its native view.
-Settings → Language picks one language for the app and its Browser tab. The Browser tab applies it, and the app's own text ships in English. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Language names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
+Settings → General → Language picks one language for the app and its Browser tab. The Browser tab applies it, and the app's own text ships in English. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Language names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
 
 **The file panel.** A read or edited file opens in the shared rail, exclusive
 with records and artifacts, with the same resize and maximize controls.
@@ -394,7 +394,7 @@ through a hover pencil and inline form. Grok allowance uses its credits window.
 
 The composer highlights URLs and attached file references. Typing `@` searches
 file names under the selected Files folder or the active workspace; selecting a result attaches it. Search excludes hidden
-files, generated folders and symbolic links. The composer's context meter opens Compact now, `/compact` runs it with an optional summary focus, and Settings → Context controls automatic
+files, generated folders and symbolic links. The composer's context meter opens Compact now, `/compact` runs it with an optional summary focus, and Settings → Data → Context controls automatic
 compaction and its token limits. Compaction preserves the conversation, runs in the runtime,
 and reports start, completion with token counts, cancellation or failure in the action feed.
 Web search returns sources without opening a browser unless configured to do so.
@@ -503,7 +503,7 @@ the exact pin.
 ## Local models
 
 **The cloud-routing classifier is bundled.** It is separate from the optional
-local provider classifier configured in Decision models. Its taxonomy is three
+local provider classifier configured in Models → Roles. Its taxonomy is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, about
 282 MB with its tokenizer. The
@@ -578,8 +578,8 @@ retain those details. Cancel sign-in returns to local mode and rejects a late
 browser result. Partial replies remain visible with their interruption cause. A reply keeps running in the runtime while the user opens another thread, a new thread, an agent, an artifact or a project. Its sidebar row, or its collapsed Agents or Artifacts group, carries a quiet running mark, and the row reopens the live reply. Send in any other thread waits with no notice until that reply settles. The running thread cannot be renamed, archived or deleted. Other threads stay deletable.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
-### Extend
-Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect starts browser OAuth sign-in directly. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
+### Tools
+Settings → Tools manages MCP servers, skills, plugins and web search without a Muniment account, behind one type filter and one Add. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect starts browser OAuth sign-in directly. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
 Search matches names, descriptions, publishers and categories. Category, installed and setup-required filters combine before pagination. Provider account requirements and unsupported setup methods remain visible.
 
 Skills and plugins use managed storage under `~/.muniment/extensions/packages`, with Open folder controls. They install from GitHub repositories, local folders or ZIP/TAR archives. A preview
