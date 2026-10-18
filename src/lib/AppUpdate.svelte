@@ -65,5 +65,5 @@
   button:hover span, button:focus-visible span, .installing span { max-width: 90px; opacity: 1; margin: 0 4px 0 2px; }
   button:disabled { cursor: default; opacity: .6; }
   p { position: absolute; right: 0; top: 100%; width: 260px; padding: 12px; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-panel); z-index: 20; }
-  @media (prefers-reduced-motion: reduce) { span { transition: none; } }
+  :global(:root[data-motion="reduce"]) span { transition: none; }
 </style>

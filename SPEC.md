@@ -549,8 +549,8 @@ is open work: closing it is a gate change first and a symptom ticket second.
    line is on every reply. Enforcers: the three law steps in the `ci.yml` smoke job.
 7. The update path follows the Updates paragraph above. Enforcers:
    `.github/lib/updater-signature.test.js` and `.github/lib/update-feed.test.js`.
-8. The steering files obey the rules in `AGENTS.md`. Enforcer:
-   `scripts/check-steering.sh .` in the `ci.yml` smoke job.
+8. The steering files obey the rules in `AGENTS.md`. Enforcer: `scripts/check-steering.sh .` in the `ci.yml` smoke job.
+9. The speed, layout stability and focus ring budgets hold. Enforcers: `test/probe/speed.mjs`, `stability.mjs` and `focus.mjs` in `npm run probe:check`, and `scripts/speed-timing.mjs` nightly on one Mac, as `docs/speed-budgets.md` describes.
 
 ## Folder hierarchy standard
 

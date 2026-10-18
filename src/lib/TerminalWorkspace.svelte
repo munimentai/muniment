@@ -4,6 +4,7 @@
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
+  import { TYPE_EVENT, codeFontSize } from './type-state.js'
   let { tauri, context = null, hidden = false, path = '', threadId = null, projectId = null, oncwd } = $props()
   let host
   let terminal
@@ -58,14 +59,17 @@
   }
   $effect(() => { if (!hidden) void tick().then(() => { theme(); void resize() }) })
   onMount(() => {
-    terminal = new Terminal({ fontFamily: 'Commit Mono, monospace', fontSize: 13, cursorBlink: true, scrollback: 5000, allowProposedApi: false })
+    terminal = new Terminal({ fontFamily: 'Commit Mono, monospace', fontSize: codeFontSize(), cursorBlink: true, scrollback: 5000, allowProposedApi: false })
     fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host); theme()
     const input = terminal.onData(data => { if (!id || exited) return; const session = id; inputQueue = inputQueue.then(() => tauri.invoke('terminal_write', { id: session, data })).catch(e => { if (active) error = String(e) }) })
     const observer = new ResizeObserver(() => { void resize() }); observer.observe(host)
     const themes = new MutationObserver(theme); themes.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']})
     const media = matchMedia('(prefers-color-scheme: dark)'); media.addEventListener('change',theme)
+    // The text size step reaches the terminal too, so the super key with = and - sizes every pane.
+    const sized = (event) => { terminal.options.fontSize = codeFontSize(event.detail); void resize() }
+    window.addEventListener(TYPE_EVENT, sized)
     void start()
-    return () => { active = false; clearTimeout(timer); observer.disconnect(); themes.disconnect(); media.removeEventListener('change',theme); input.dispose(); terminal.dispose(); if (id) void tauri.invoke('terminal_close',{id}).catch(() => {}) }
+    return () => { active = false; clearTimeout(timer); observer.disconnect(); themes.disconnect(); media.removeEventListener('change',theme); window.removeEventListener(TYPE_EVENT, sized); input.dispose(); terminal.dispose(); if (id) void tauri.invoke('terminal_close',{id}).catch(() => {}) }
   })
 </script>
 <section class="terminal-workspace" class:hidden aria-label="Terminal">

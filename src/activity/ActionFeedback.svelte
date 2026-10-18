@@ -116,6 +116,6 @@
   pre { font-family: var(--font-mono); font-size: var(--text-13); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; margin: 8px 0 12px; }
   .active-sheen { background: linear-gradient(100deg, var(--muted) 35%, var(--ink) 50%, var(--muted) 65%); background-size: 250% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: action-sheen 2.4s linear infinite; }
   @keyframes action-sheen { from { background-position: 140% 0; } to { background-position: -40% 0; } }
-  @media (prefers-reduced-motion: reduce) { .active-sheen { animation: none; background: none; color: var(--muted); } }
+  :global(:root[data-motion="reduce"]) .active-sheen { animation: none; background: none; color: var(--muted); }
   @media (forced-colors: active) { .active-sheen { background: none; color: CanvasText; } }
 </style>

@@ -14,42 +14,42 @@ block. Appearance offers four colors, Moss, Harbor, Clay and Iris, in three
 rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
 version, and Mode picks between them, so System follows the OS with the
 picked palette. Normal sets are quiet neutrals tinted by the color, with the color as signal and accent. Vibrant sets tint paper, add a brighter accent from the color's own family and color selection and the composer's focus edge with it. High contrast sets
-hold pure ink on pure paper, with the color on strong hairlines and hovers. The table holds Moss light and Moss dark.
+hold pure ink on white paper in light and white ink on near-black `#0A0A0A` paper in dark, which keeps white ink above 19:1, with the color on strong hairlines and hovers. No dark set paints a surface pure black. The table holds Moss light and Moss dark.
 Every set adds `--accent`, `--accent-soft` and `--on-accent`. `--success`, `--active`, `--danger` and `--warning` color the states core reports.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--paper` | `#F6F7F6` | `#000000` | App background |
-| `--surface` | `#FFFFFF` | `#0E1110` | Cards, composer, bars |
-| `--faint` | `#EDEFEE` | `#161A18` | User bubbles, kbd chips, hover |
+| `--paper` | `#F6F7F6` | `#0E1110` | App background |
+| `--surface` | `#FFFFFF` | `#151917` | Cards, composer, bars |
+| `--faint` | `#EDEFEE` | `#1C211F` | User bubbles, kbd chips, hover |
 | `--ink` | `#1A1D1C` | `#ECEFED` | Text, primary buttons |
 | `--muted` | `#5C6461` | `#9AA29E` | Secondary text, icons at rest |
-| `--border` | `#E2E5E3` | `#262B28` | Hairlines |
+| `--border` | `#E2E5E3` | `#2B312E` | Hairlines |
 | `--signal` | `#2A7264` | `#58B39F` | Computation only |
 | `--signal-soft` | `rgba(42,114,100,.10)` | `rgba(88,179,159,.12)` | Signal backgrounds |
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Vibrant accents stay in the color's hue family: Moss with teal, Harbor with azure, Clay with terracotta and Iris with violet. Moss neutrals carry a faint green cast. The one
-exception is Moss dark's black paper: its surface and faint keep the cast, so the
-frame is black and every panel on it still ties to signal.
+Vibrant accents stay in the color's hue family: Moss with teal, Harbor with azure, Clay with terracotta and Iris with violet. Moss neutrals carry a faint green cast,
+Moss dark's near-black gray paper included, so every panel on the frame still ties to signal.
+Secondary text clears 4.5:1 on paper, surface, faint, the selection fill and both sidebar frames, and the focus ring 3:1.
 
 Type: Schibsted Grotesk for everything human, Commit Mono for everything that
 is evidence. Every component type size resolves through the named `--text-*`
 register. Desktop scale 12 / 13 / 15 body / 17 / 22 / 28, mono one step
 smaller than adjacent body text, line-height 1.55 body and 1.3 headings. No
 display serif. No italic except semantic emphasis in user content.
-Appearance moves two things and nothing else: a size step scales every
-`--text-*` token and `--text-provenance` together by a tenth per step, from
+Appearance's Text size scales text alone: a size step scales every
+`--text-*` token, `--text-provenance` and the terminal and editor code together by a tenth per step, from
 two steps down to four up, and a family picked from the device's installed
 fonts sits in front of the shipped stack in `--font-human`, `--font-heading` or `--font-mono`. Headers have a separate picker.
-The super key with `=`, `-` and `0` moves the same step. Both follow the
-theme across the fleet and the shipped pair stays the default.
+The super key with `=`, `-` and `0` moves the same step in every pane. Both follow the
+theme across the fleet and the shipped pair stays the default. Display holds Zoom, which scales the whole window, Comfortable or Compact density, which tightens spacing alone, and Motion; these stay on the device.
 
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
 Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide, a running agent's outline. `prefers-reduced-motion` removes all of it.
+rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide, a running agent's outline. Reduced motion removes all of it: Motion follows the OS under System, Reduce or Full overrides it, and the root's `data-motion` carries the result to every rule.
 
 ## Laws
 
@@ -101,7 +101,7 @@ Layout is sidebar, thread, and one rail column for workspace tabs or the optiona
 Browser, Files, Terminal and artifact previews share tabs beside chat. Each agent or artifact has one dedicated chat with a goal and specified output. Artifacts (⌘J) opens their catalog or a creation chat. The Agents, Artifacts and Projects catalogs share PanelPage and PageHead with Settings, so a title leads each, with its explanation behind an info control. An agent's action card takes the model picker's geometry: the avatar and the name, which shows a pencil on hover and edits in place, over a hairline, a column of 34px panel icons named on hover with the picked one on the selection fill and edge, and the picked panel's 30px rows beside it, the chosen row on the selection fill with a check. Each agent has a color, its colorful head's fill (a white or paper head draws in a hued fill from its seed), which tints its card header under a band of it, its template tile, its open sidebar row and its thread title. Cards keep one row height and their panels scroll inside. Files has creation icons beside its filter, multi-selection, and a context menu with red Delete that moves items to Trash. User
 messages sit right in `faint` bubbles at radius 10. Another agent's message sits in a hairline card with its sender's avatar, a mono intent chip and its hop count, and a group reply carries its agent's avatar and name. Agent avatars are heads with no tile of their own from the brand's two generators, Colorful by default or Muniment as Appearance picks, in the theme's light or dark tone; their palettes stand outside the color law. An outline on the head names what the agent does: signal breathing while it runs, ochre while it waits, oxide after a failure. Responses sit plain on
 `paper` with no bubble and no avatar, run the thread's full width inside a
-36px gutter, and render as Markdown from the first token. The composer keeps
+36px gutter, and render as Markdown from the first token. The transcript renders a window of at most 120 items and adds older ones as the reader scrolls up. The composer keeps
 its 760px column, and the transcript scrolls on under it and fades into the
 surface above it. Streaming is one signal underscore caret,
 never dots. Tool activity folds under one `N tools used` line with a chevron.
@@ -117,11 +117,11 @@ traffic lights, and the row's controls and the lights center on that band. The
 row is the drag region and holds the sidebar toggle, the thread
 title with its actions menu, optional Record, then the vertical ellipsis for workspace tools.
 Seti icons identify file types. Scrollbars share a faint 3px thumb. The title and Record use a quiet row
-control with the same padding. State is background, never a border: the
-composer and the thread title's rename control alone show hover, focus and
-editing as the composer's muted hairline, and no control shows a focus ring or any
-other focus state. Windows keeps its native caption
-controls and Linux keeps its decorations. The sidebar is dense: 28px rows, and a thread row carries a small meta line over its title, its status in words on a `StatusChip` and its project, then the machine's shape and name once a machine is paired, or `on Studio` for a thread another fleet member owns with an ochre slashed globe while that member is away, then the time ago. Hover is a lighter wash than the open thread,
+control with the same padding. State is background, never a border, except
+keyboard focus: every control shows a 2px ring in `--focus-ring`, ink or a
+vibrant set's accent, and the composer draws it as its own 2px edge.
+No control moves during a session. Windows keeps its native caption
+controls and Linux keeps its decorations. The sidebar is dense: 28px rows, 24px in Compact, and a thread row carries a small meta line over its title, its status in words on a `StatusChip` and its project, then the machine's shape and name once a machine is paired, or `on Studio` for a thread another fleet member owns with an ochre slashed globe while that member is away, then the time ago. Hover is a lighter wash than the open thread,
 New and Search (⌘K, which the company record keeps for its panel when it is on) lead the sidebar. Core arranges the rest in a fixed order: Needs you, a folding Working (n), Pinned, Projects with each project's triggers in muted words and a filter to the projects with triggers, a quiet Artifacts row with ⌘J, then Recent across projects with Show settled (n) and Show archived (n) folds. A row's status is a word, never a mark alone. A project row's New thread and menu lie over its right end on hover, so nothing moves. The sidebar's foot is one row of three 32px icon buttons, Settings, Usage and Notifications, each named on hover with its shortcut (⌘, ⌘⇧U ⌘⇧A). The bell's mono badge in `--warning` counts only what needs the user. Usage and Notifications take the thread's place as full pages with a title, `›` filters, segmented controls at the right and no info control. The agent builder takes it too: its title, Describe your agent, then the filled form in the composer's 760px column with Save as its primary action. Usage's bars take each provider's brand color like its mark; `--warning` with triangle-alert marks a window under a fifth left and `--danger` with circle-x a spent one. Notifications pins Needs you, then a Running strip, then the day groups, each row's status icon in `--active`, `--success`, `--warning` or `--danger`. Once a runtime is paired, a runtime switcher row under New thread names the runtime in use. Agents then lists the agents of every machine that answers and every agent the fleet knows, each card with its primary machine's shape icon, an ochre slashed globe when that machine does not answer and a sync icon on a synced copy, and each row with one status mark, success while the machine answers, muted when it does not and a ring on a synced copy, whose hover names the machine and the activity, and Artifacts and Projects open on this computer.
 Search loads older titles, includes archives and finds the pages, Agents and Projects among them. Archived threads has Restore.
 Pins and archives persist on the device. Every thread belongs to one project, and Chats holds the rest. Projects automatically recall relevant sibling chat context before each reply. The foot row has one hairline. In a fleet a mono sync line sits above the foot row, Synced, Syncing N or Offline with the last sync time, and opens the bootstrap panel: each class with a bar and each sign-in arriving from its holder or waiting for one. The cloud flag adds the account controls.
@@ -150,10 +150,10 @@ Both share one geometry, a one-pixel frame and a 35px title band, so a switch mo
 and draws the thread and rail as `surface` cards clipped `--card-ring` inside their boxes with a hairline. Frameless fills it with `border` seams, a sidebar panel a step toward `ink`, and flat panels. The update control is a circular
 down arrow beside the title-bar menu in `signal-soft` and `signal`. It reveals
 `Update` on hover or focus after a signed download. Click installs and restarts.
-The composer band is one row under the composer. The plus, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level and permission mode menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine, model and mode. The mode menu sits under a Modes heading: a row per mode with its Lucide icon (hand, pencil, map, zap, shield-check, triangle-alert), its title over one muted line, a check on the current one, Bypass permissions on a new thread by default, and a Shift+Tab chip at its foot. A narrow composer keeps each to its icon with a hover label.
+The composer band is one row under the composer. The plus, disabled in place during a reply, the menu buttons and the context meter share their height and spacing. The machine, model, thinking level and permission mode menus share one button: muted at rest, the hover fill in ink while hovered or open, and arrows that flip on machine, model and mode. The mode menu sits under a Modes heading: a row per mode with its Lucide icon (hand, pencil, map, zap, shield-check, triangle-alert), its title over one muted line, a check on the current one, Bypass permissions on a new thread by default, and a Shift+Tab chip at its foot. A narrow composer keeps each to its icon with a hover label.
 The meter is a mono ring and percent that shows once a known window is a quarter full, ochre near the compaction point. A one-line banner over the band names a spent or nearly spent subscription window and its reset, with View usage. A window no source knows shows no meter. The model picker shows no window and marks a model the conversation compacts on with the combine icon and `will compact` in ochre. The plus menu
 opens with Add files and folders. Voice sits beside the send control. The band's one action control sits at its right
-end: absent while the draft is empty, an ink up-arrow button once the draft has
+end: absent while the draft is empty with its slot kept, an ink up-arrow button once the draft has
 text, and the same button with a filled stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
 next check, and the stop control ends the reply. The band shows no hint in

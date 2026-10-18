@@ -461,7 +461,7 @@
   .fact { position: relative; min-width: 0; }
   .fact + .fact::before { content: ''; position: absolute; top: 0; left: 12px; right: 12px; border-top: 1px solid var(--border); }
   .fact-head { display: grid; grid-template-columns: 14px minmax(0, clamp(96px, 30%, 240px)) minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; padding: 8px 12px; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); line-height: 20px; text-align: left; cursor: pointer; }
-  .fact-head:hover, .fact-head:focus-visible { outline: none; background: var(--faint); }
+  .fact-head:hover, .fact-head:focus-visible { background: var(--faint); }
   .chevron { display: inline-flex; color: var(--muted); }
   .chevron.open { transform: rotate(90deg); }
   .fact-title, .fact-preview { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

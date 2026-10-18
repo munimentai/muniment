@@ -3,6 +3,7 @@ import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, 
 import { arrangeStandIn } from '../sidebar-standin.js'
 import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsRendered, projectsSettings, projectsSummaries } from './projects-fixture.js'
 import { advanceTrust, trustAnswer, trustHistory, trustRendered } from './trust-fixture.js'
+import { longThreadHistory } from './long-thread-fixture.js'
 import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
 
 export const historyFixtures = {
@@ -17,6 +18,8 @@ export const historyFixtures = {
   scan: [],
   access: [],
   empty: [],
+  // Generated when the page loads, so other fixtures never copy it.
+  'long-thread': [],
   'prompt-storage': [
     {
       runId: 'probe-prompt-storage',
@@ -415,7 +418,7 @@ export function buildProbeCommandTable(fixtureName) {
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
   // The permission-modes fixture's `?state=new` starts on a new thread.
   const newThread = fixtureName === 'permission-modes' && new URLSearchParams(location.search).get('state') === 'new'
-  const history = newThread ? [] : structuredClone(fixtureHistory)
+  const history = newThread ? [] : fixtureName === 'long-thread' ? longThreadHistory() : structuredClone(fixtureHistory)
   // The bodies the stub answers through chat_run_detail.
   const runDetails = { appliedDiff: null }
   if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
@@ -756,7 +759,12 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'chat_answer_permission') return null
     if (command === 'chat_thread_open' && agentsFixture) return { entries: probeAgentHistory(payload.threadId), posted: probePosts(agentStores, payload.threadId), nextCursor: null }
-    if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
+    // Pages follow the runtime's: oldest first, `limit` entries each, and a cursor while more remain.
+    if (command === 'chat_thread_open') {
+      const from = Number(payload?.cursor ?? 0)
+      const until = payload?.limit ? from + payload.limit : history.length
+      return { entries: structuredClone(history.slice(from, until)), nextCursor: until < history.length ? String(until) : null }
+    }
     // Chat events leave out tool output bodies and applied diffs. These come from the run's record.
     if (command === 'chat_run_detail') {
       if (payload.kind === 'code_diff' && payload.effectId === 'probe-applied-effect' && runDetails.appliedDiff) return { kind: 'code_diff', diff: structuredClone(runDetails.appliedDiff) }
@@ -1363,6 +1371,8 @@ function fixtureRendered() {
       && workspace.querySelector('.assistant-markdown table')
       && workspace.querySelector('.assistant-markdown a')?.textContent.startsWith('Ready')
   }
+  // A long thread renders its newest turns, so the newest reply marks it ready.
+  if (fixtureName === 'long-thread') return workspace.querySelector('.thread')?.textContent.includes(history.at(-1).text.split('\n').at(-1))
   const renderedText = workspace.textContent.replaceAll(/\s/g, '')
   return history.every((run) => renderedText.includes((run.prompt ?? '').replaceAll(/\s/g, ''))
     && renderedText.includes(run.text.replaceAll(/\s/g, '')))

@@ -10,6 +10,7 @@
   import { FRAME_OPTIONS, commitFrame, readStoredFrame } from './frame-state.js'
   import { AVATAR_STYLE_EVENT, AVATAR_STYLE_OPTIONS, commitAvatarStyle, readStoredAvatarStyle } from './avatar-style-state.js'
   import AgentAvatar from './AgentAvatar.svelte'
+  import { DENSITY_OPTIONS, DISPLAY_EVENT, MOTION_OPTIONS, ZOOM_OPTIONS, commitDisplay, readStoredDisplay, zoomLabel } from './display-state.js'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
   let { tauri } = $props()
@@ -32,6 +33,9 @@
   let avatarStyle = $state(readStoredAvatarStyle())
   const AVATAR_SAMPLES = ['scout', 'inbox', 'editor', 'triage'].map((seed) => ({ id: seed, name: seed, avatar: { seed } }))
   let frame = $state(readStoredFrame())
+  // Zoom, density and motion: the window's scale, its spacing and its animation.
+  let display = $state(readStoredDisplay())
+  const chooseDisplay = (change) => { display = commitDisplay({ ...display, ...change }) }
 
   // Type: one size step for the body register, and a family for each register
   // picked from the fonts installed on this device. The shipped pair stays the default.
@@ -48,6 +52,7 @@
       [THEME_EVENT, (event) => { theme = event.detail }],
       [MARK_EVENT, (event) => { mark = event.detail }],
       [AVATAR_STYLE_EVENT, (event) => { avatarStyle = event.detail }],
+      [DISPLAY_EVENT, (event) => { display = event.detail }],
     ]
     for (const [name, follow] of follows) window.addEventListener(name, follow)
     void (async () => {
@@ -146,8 +151,8 @@
   </Group>
 
   <Group heading="Type">
-  <Row title="Size" info="Every text size scales from the body size.">
-  <div class="type-size" role="group" aria-label="Size">
+  <Row title="Text size" info="Scales text in every pane, the terminal and the editor included. Controls and spacing keep their size.">
+  <div class="type-size" role="group" aria-label="Text size">
     <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
     <span class="type-readout" role="status">{bodySize(type.step)} px body</span>
     <button type="button" aria-label="Larger type" aria-keyshortcuts={typeSizeShortcut('larger')} disabled={type.step >= SIZE_STEP_MAX} onclick={() => step(1)}>Larger <kbd>{typeSizeShortcutLabel('larger')}</kbd></button>
@@ -169,6 +174,30 @@
       </details>
     </div>
   {/each}
+  </Group>
+
+  <Group heading="Display">
+  <Row title="Zoom" info="Scales the whole window, controls and spacing included. Text size scales text alone.">
+  <div class="theme-options" role="group" aria-label="Zoom">
+    {#each ZOOM_OPTIONS as zoom (zoom)}
+      <button type="button" aria-pressed={display.zoom === zoom} onclick={() => chooseDisplay({ zoom })}>{zoomLabel(zoom)}</button>
+    {/each}
+  </div>
+  </Row>
+  <Row title="Density" info="Compact tightens rows and spacing. Text keeps its size and every control keeps a 24 px target.">
+  <div class="theme-options" role="group" aria-label="Density">
+    {#each DENSITY_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={display.density === id} onclick={() => chooseDisplay({ density: id })}>{label}</button>
+    {/each}
+  </div>
+  </Row>
+  <Row title="Motion" info="System follows the reduced motion setting of this device. Reduce stills every animation. Full keeps them.">
+  <div class="theme-options" role="group" aria-label="Motion">
+    {#each MOTION_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={display.motion === id} onclick={() => chooseDisplay({ motion: id })}>{label}</button>
+    {/each}
+  </div>
+  </Row>
   </Group>
 
   <Group heading="Thinking indicator">

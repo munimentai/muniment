@@ -21,7 +21,7 @@
 </div>
 
 <style>
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-width: 0; min-height: 44px; padding: 10px 0; box-sizing: border-box; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-width: 0; min-height: var(--settings-row-height); padding: var(--settings-row-pad) 0; box-sizing: border-box; }
   .row-lead { flex: none; display: inline-flex; align-items: center; }
   .row-text { flex: 1 1 200px; display: grid; gap: 2px; min-width: 0; }
   .row-text > strong { display: flex; align-items: center; gap: 4px 8px; min-width: 0; font-size: var(--text-13); font-weight: 600; overflow-wrap: anywhere; }
