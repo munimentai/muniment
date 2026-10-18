@@ -198,6 +198,7 @@ export function createChatController({
       resumeNotice: run.resumeNotice,
       turnStarted: run.turnStarted,
       failureReason: run.failureReason,
+      failureDetail: run.failureDetail,
       receipt: run.receipt,
       recalls: run.recalls,
       toolActivity: run.toolActivity,

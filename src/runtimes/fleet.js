@@ -213,7 +213,7 @@ export const AUDIT_LIMIT = 500
 function machineName(swarm, runtimeId) {
   if (!runtimeId) return ''
   const member = swarm?.members?.find((entry) => entry.runtime_id === runtimeId)
-  if (member?.runtime_name) return member.runtime_name
+  if (member) return memberMachine(swarm, runtimeId).name
   return `${String(runtimeId).slice(0, 8)}`
 }
 
@@ -237,7 +237,7 @@ export function auditRow(entry, swarm) {
     record.note,
     record.error,
   ].filter((part) => typeof part === 'string' && part).join(' · ')
-    .replace(RUNTIME_ID, (id) => swarm?.members?.find((member) => member.runtime_id === id)?.runtime_name ?? id)
+    .replace(RUNTIME_ID, (id) => (swarm?.members?.some((member) => member.runtime_id === id) ? machineName(swarm, id) : id))
   const actor = machineName(swarm, entry?.actor_runtime)
   const other = machineName(swarm, entry?.runtime_id)
   const [from, to] = FROM_MACHINE.has(entry?.kind) ? [other, actor] : [actor, other]

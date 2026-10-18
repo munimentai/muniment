@@ -173,7 +173,7 @@
   {/if}
 {/snippet}
 
-<Group heading="Imports" description="Memory that other assistants keep on this computer.">
+<Group heading="Imports" info="Notes that Claude Code, Codex, Obsidian and other assistants keep on this computer.">
   {#snippet actions()}
     <Button disabled={scanning} onclick={scan}>{report ? 'Look again' : 'Look for memory'}</Button>
     <Button disabled={archive?.previewing || archive?.pending} onclick={pickArchive}>Import an export ZIP…</Button>
@@ -183,7 +183,7 @@
   {:else if error}
     <p role="alert">{error}</p>
   {:else if !report}
-    <p>Claude Code, Codex, Obsidian and other assistants keep notes you can bring in.</p>
+    <p>Bring in notes from other assistants.</p>
   {:else}
     {#each rows as row (row.assistantId)}
       {@const copy = imports[row.assistantId]}

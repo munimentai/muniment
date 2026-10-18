@@ -53,9 +53,8 @@
   }
 </script>
 <section data-panel="agents" class="panel" aria-label="Agents">
-  <h2 class="visually-hidden">Agents</h2>
   <PanelPage>
-    <PageHead intro="Each agent keeps its own instructions and memory, and works in its own chat.">
+    <PageHead title="Agents" level={2} intro="Each agent keeps its own instructions and memory, works in its own chat, and can run on a schedule, a webhook or a tool check.">
       {#snippet actions()}
         {#if archived || (agents ?? listing.agents).some(agent=>isArchived('agent',agent)) || pending.some(plan=>isArchived('creation',plan))}<Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>{/if}
         <Button icon="download" onclick={()=>importOpen=true}>Import agent</Button>
@@ -67,13 +66,6 @@
     {#if !archived && !loading}
       {@const some = (agents ?? listing.agents).some(agent=>!isArchived('agent',agent)) || pending.some(plan=>!isArchived('creation',plan))}
       <StarterRow heading="Give an agent a job" kind="agent" items={creationStarters.agent} compact={some} oncreate={(item)=>oncreate?.({goal:item.goal,output:item.output})} />
-      {#if !some}
-        <ul class="benefits">
-          <li><LucideIcon name="brain" />Keeps its own instructions and memory</li>
-          <li><LucideIcon name="clock" />Runs on a schedule, a webhook or a tool check</li>
-          <li><LucideIcon name="messages-square" />Works in a chat of its own</li>
-        </ul>
-      {/if}
     {/if}
     <CardGrid min={340} rows={300}>
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
@@ -94,6 +86,4 @@
 <style>
   .panel { grid-area: thread; display: flex; flex-direction: column; overflow: hidden; }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .benefits { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: var(--text-13); }
-  .benefits li { display: inline-flex; align-items: center; gap: 8px; }
 </style>

@@ -3,7 +3,7 @@
   // with a switch to another machine that answers. The composer's machine
   // chip and this switch select the same machine.
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import { kindIcon } from './runtimes.js'
+  import { kindIcon, machineName } from './runtimes.js'
 
   let { scope, disabled = false, onselect = () => {} } = $props()
 
@@ -18,7 +18,7 @@
   <label for="settings-machine">Settings for</label>
   <select id="settings-machine" value={scope.selected.id} {disabled} onchange={change}>
     {#each scope.choices as runtime (runtime.id)}
-      <option value={runtime.id}>{runtime.name}</option>
+      <option value={runtime.id}>{machineName(runtime)}</option>
     {/each}
   </select>
 </div>

@@ -11,7 +11,7 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ComposerMenuButton from '../composer/ComposerMenuButton.svelte'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from '../lib/composer-panels.js'
-  import { activeRuntime, kindIcon, pairedRuntimes, statusLabel } from './runtimes.js'
+  import { activeRuntime, kindIcon, machineName, pairedRuntimes, statusLabel } from './runtimes.js'
 
   let { list = null, locked = null, owner = null, fleet = [], offload = null, disabled = false, onselect = () => {}, onoffload = () => {}, onmanage = () => {} } = $props()
   let open = $state(false)
@@ -21,6 +21,7 @@
   const active = $derived(activeRuntime(list))
   const held = $derived(locked ? list?.runtimes?.find((runtime) => runtime.id === locked) ?? null : null)
   const shown = $derived(owner ?? held ?? (offload && !locked ? offload : active))
+  const shownName = $derived(machineName(shown))
   const visible = $derived(!!shown && (pairedRuntimes(list).length > 0 || fleet.length > 0 || !!owner))
 
   onMount(() => {
@@ -81,10 +82,10 @@
 
 {#if visible}
   {#if locked || owner}
-    <span class="machine-chip" role="note" aria-label="This thread stays on {shown.name}"><LucideIcon name={kindIcon(shown)} size={14} /><span class="name">{owner ? `on ${shown.name}` : shown.name}</span>{#if owner?.online === false}<span class="state" role="img" aria-label="Offline"><LucideIcon name="globe-off" variant="action" size={14} /></span>{/if}</span>
+    <span class="machine-chip" role="note" aria-label="This thread stays on {shownName}"><LucideIcon name={kindIcon(shown)} size={14} /><span class="name">{owner ? `on ${shownName}` : shownName}</span>{#if owner?.online === false}<span class="state" role="img" aria-label="Offline"><LucideIcon name="globe-off" variant="action" size={14} /></span>{/if}</span>
   {:else}
     <span class="machine-picker" bind:this={root}>
-      <ComposerMenuButton menu="machine" {open} chevrons label="Machine: {shown.name}. Choose a machine" text={shown.name} {disabled} bind:element={toggle} onclick={() => openComposerPanel(open ? null : 'machine')}>
+      <ComposerMenuButton menu="machine" {open} chevrons label="Machine: {shownName}. Choose a machine" text={shownName} {disabled} bind:element={toggle} onclick={() => openComposerPanel(open ? null : 'machine')}>
         {#snippet icon()}<LucideIcon name={kindIcon(shown)} size={14} />{/snippet}
         {#snippet compact()}<LucideIcon name="network" size={14} />{/snippet}
       </ComposerMenuButton>
@@ -95,7 +96,7 @@
             {@const online = reachable(runtime)}
             <button type="button" role="menuitemradio" aria-checked={runtime.active && !offload} onclick={() => pick(runtime)}>
               <LucideIcon name={kindIcon(runtime)} size={14} />
-              <span class="name">{runtime.name}</span>
+              <span class="name">{machineName(runtime)}</span>
               <span class="state" class:online role="img" aria-label={online ? 'Online' : statusLabel(runtime)}><LucideIcon name={online ? 'globe' : 'globe-off'} variant="action" size={14} /></span>
             </button>
           {/each}

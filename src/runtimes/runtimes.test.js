@@ -3,6 +3,7 @@ import {
   activeRuntime,
   errorLine,
   kindIcon,
+  machineName,
   kindLabel,
   looksLikePairingLink,
   pairedRuntimes,
@@ -151,5 +152,14 @@ describe('the machine a Settings page applies to', () => {
 
   it('shows no machine while this computer is the only one', () => {
     expect(settingsMachine(runtimeList([local]), 'providers')).toBeNull()
+  })
+})
+
+describe('machineName', () => {
+  it('names this computer one way, and a runtime with the generic name by its kind', () => {
+    expect(machineName({ id: 'local', local: true, name: 'This computer' })).toBe('This computer')
+    expect(machineName({ id: 'pod', kind: 'container', name: 'Muniment runtime' })).toBe('Container')
+    expect(machineName({ id: 'box', kind: 'server', name: 'Build box' })).toBe('Build box')
+    expect(machineName(null)).toBe('Machine')
   })
 })

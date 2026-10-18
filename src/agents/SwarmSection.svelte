@@ -1,6 +1,6 @@
 <script>
-  // The swarm on the Machines page: every member with its link state, Link
-  // machines for two machines this device manages, and Unlink and Leave.
+  // The fleet on the Machines page: every member with its link state, Join
+  // for two machines this device manages, and Remove and Leave.
   // Linking asks one machine for an invitation and hands it to the other,
   // so no link passes through the user. Core keeps and dials the links.
   import { onMount } from 'svelte'
@@ -60,54 +60,54 @@
 
   function unlink(coreId, name) {
     const holders = linksTo(coreId)
-    return act(`unlink:${coreId}`, () => Promise.all(holders.map(({ runtime }) => agentRequest(tauri, runtime, 'swarm.leave', { runtime_id: coreId }))), `Unlinked ${name}.`)
+    return act(`unlink:${coreId}`, () => Promise.all(holders.map(({ runtime }) => agentRequest(tauri, runtime, 'swarm.leave', { runtime_id: coreId }))), `Removed ${name} from the fleet.`)
   }
 
   function leave(runtime) {
     const view = swarm?.views?.[runtime]
-    return act(`leave:${runtime}`, () => Promise.all(directLinks(view).map((member) => agentRequest(tauri, runtime, 'swarm.leave', { runtime_id: member.runtime_id }))), `${nameOf(runtime)} left the swarm.`)
+    return act(`leave:${runtime}`, () => Promise.all(directLinks(view).map((member) => agentRequest(tauri, runtime, 'swarm.leave', { runtime_id: member.runtime_id }))), `${nameOf(runtime)} left the fleet.`)
   }
 </script>
 
-<Group heading="Swarm" count={members.length || null} description="Linked machines share their agents, agent threads, groups and approvals.">
+<Group heading="Fleet" count={members.length || null} info="Machines in a fleet share their agents, agent threads, groups and approvals.">
   {#if error}<p class="line" role="alert">{error}</p>{/if}
   {#if notice}<p class="line" role="status">{notice}</p>{/if}
   {#if !swarm}
-    <p role="status">Loading the swarm…</p>
-  {:else if !linked}
-    <p>No machines are linked yet.</p>
+    <p role="status">Loading the fleet…</p>
+  {:else if !linked && managed.length > 1}
+    <p>No other machines in the fleet.</p>
   {/if}
   {#each members as member (member.runtime_id)}
     {@const reached = windowRuntime(swarm, member.runtime_id)}
     {@const links = linksTo(member.runtime_id)}
     {@const machine = memberMachine(swarm, member.runtime_id, list)}
-    <Row title={machine.name} label={`Swarm member ${machine.name}`}>
+    <Row title={machine.name} label={`Fleet member ${machine.name}`}>
       {#snippet lead()}<LucideIcon name={kindIcon(machine)} />{/snippet}
       {#snippet detail()}
         <span class="member-state"><StatusChip tone={onlineTone(member.online)}>{member.online ? 'Online' : 'Offline'}</StatusChip></span>
         {#if reached}
-          <p class="state">{directLinks(swarm.views[reached]).length ? `Links to ${directLinks(swarm.views[reached]).map((entry) => memberMachine(swarm, entry.runtime_id, list).name).join(', ')}` : 'Not linked'}</p>
+          <p class="state">{directLinks(swarm.views[reached]).length ? `With ${directLinks(swarm.views[reached]).map((entry) => memberMachine(swarm, entry.runtime_id, list).name).join(', ')}` : 'No direct link'}</p>
         {:else}
           {#each links as entry (entry.runtime)}<p class="state">{linkLabel(entry.link)}</p>{:else}<p class="state">{linkLabel(null)}</p>{/each}
         {/if}
       {/snippet}
       {#if reached && managed.some((runtime) => runtime.id === reached) && directLinks(swarm.views[reached]).length}
-        <Button variant="outline" disabled={!!busy} onclick={() => leave(reached)}>Leave swarm</Button>
+        <Button variant="outline" disabled={!!busy} onclick={() => leave(reached)}>Leave fleet</Button>
       {:else if !reached && links.length}
-        <Button variant="outline" disabled={!!busy} onclick={() => unlink(member.runtime_id, machine.name)}>Unlink</Button>
+        <Button variant="outline" disabled={!!busy} onclick={() => unlink(member.runtime_id, machine.name)}>Remove from fleet</Button>
       {/if}
     </Row>
   {/each}
   {#if managed.length > 1}
-    <Row title="Link machines" description="Both machines must accept connections. This device asks one for an invitation and gives it to the other." stacked>
+    <Row title="Join two machines" info="Both machines must accept connections. This device asks one for an invitation and gives it to the other." stacked>
       <div class="link-form">
         <label>From<select bind:value={from} disabled={!!busy}>{#each managed as runtime (runtime.id)}<option value={runtime.id}>{runtime.name}</option>{/each}</select></label>
         <label>To<select bind:value={to} disabled={!!busy}>{#each managed.filter((runtime) => runtime.id !== from) as runtime (runtime.id)}<option value={runtime.id}>{runtime.name}</option>{/each}</select></label>
-        <Button icon="link" variant="primary" disabled={!!busy || !to || to === from} onclick={() => act('link', () => linkMachines(tauri, from, to), `Linked ${nameOf(from)} and ${nameOf(to)}.`)}>{busy === 'link' ? 'Linking…' : 'Link machines'}</Button>
+        <Button icon="link" variant="primary" disabled={!!busy || !to || to === from} onclick={() => act('link', () => linkMachines(tauri, from, to), `Joined ${nameOf(from)} and ${nameOf(to)}.`)}>{busy === 'link' ? 'Joining…' : 'Join fleet'}</Button>
       </div>
     </Row>
   {:else}
-    <p>Pair another machine with admin access to link it here.</p>
+    <p>Pair a machine with admin access to add it.</p>
   {/if}
 </Group>
 

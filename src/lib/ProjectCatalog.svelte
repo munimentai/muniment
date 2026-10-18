@@ -28,9 +28,8 @@
   }
 </script>
 <section data-panel="projects" class="panel" aria-label="Projects catalog">
-  <h2 class="visually-hidden">{project ? project[1] : 'Projects'}</h2>
   <PanelPage>
-    <PageHead intro={project ? `Threads in ${project[1]}.` : 'Projects group related threads, and each reply recalls context from the others.'}>
+    <PageHead title={project ? project[1] : 'Projects'} level={2} intro={project ? '' : 'Projects group related threads, and each reply recalls context from the others.'}>
       {#snippet lead()}{#if project}<button type="button" class="back" aria-label="Back to projects" onclick={() => selected = null}><LucideIcon name="arrow-left" /></button>{/if}{/snippet}
       {#snippet actions()}
         {#if project}{#if project[2]}<OwnerChip machine={project[2]} prefix="files on" />{/if}<Button icon="square-pen" disabled={busy} onclick={() => onnewthread(selected)}>New thread</Button>
@@ -49,7 +48,7 @@
       <CardGrid aria-label="Project threads">
         {#each projectThreads as thread (thread.threadId)}<CatalogCard disabled={busy} onclick={() => onthread(thread.threadId)}><LucideIcon name="file-text" size={24}/><strong>{thread.title || 'Untitled thread'}</strong></CatalogCard>{/each}
       </CardGrid>
-      {#if !projectThreads.length}<p>{loading ? 'Loading threads…' : 'No threads yet. Start a new thread in this project.'}</p>{/if}
+      {#if !projectThreads.length}<p>{loading ? 'Loading threads…' : 'No threads yet.'}</p>{/if}
     {:else}
       {#if projects.length + remote.length}<SearchToolbar label="Search projects" placeholder="Search projects" bind:value={search} />{/if}
       <CardGrid>

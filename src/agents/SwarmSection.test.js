@@ -24,16 +24,16 @@ it('links two machines it manages with no link to copy, then unlinks a member', 
     return { self, absence: { paused: false }, members: [member(self, runtime === 'local' ? 'Laptop' : 'Build box', { self: true }), ...(linked ? [member(other, runtime === 'local' ? 'Build box' : 'Laptop', { link: { direction: runtime === 'local' ? 'inbound' : 'outbound', state: 'connected', last_seen_at: new Date().toISOString() } })] : [])] }
   })
   render(SwarmSection, { tauri: { invoke }, list, listen: null })
-  expect(await screen.findByText('No machines are linked yet.')).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button', { name: 'Link machines' }))
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Linked This computer and Build box.'))
+  expect(await screen.findByText('No other machines in the fleet.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Join fleet' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Joined This computer and Build box.'))
   expect(requests.filter((request) => request.operation !== 'swarm.members' && !request.operation.startsWith('swarm.agents') && request.operation !== 'group.list' && request.operation !== 'agent.approvals')).toEqual([
     { runtime: 'local', operation: 'swarm.invite', body: {} },
     { runtime: 'box', operation: 'swarm.join', body: { link: 'muniment://pair?v=1&id=core-box' } },
   ])
-  const laptop = await screen.findByRole('group', { name: 'Swarm member This computer' })
-  expect(laptop).toHaveTextContent('Links to Build box')
-  await fireEvent.click(within(laptop).getByRole('button', { name: 'Leave swarm' }))
+  const laptop = await screen.findByRole('group', { name: 'Fleet member This computer' })
+  expect(laptop).toHaveTextContent('With Build box')
+  await fireEvent.click(within(laptop).getByRole('button', { name: 'Leave fleet' }))
   await waitFor(() => expect(requests.some((request) => request.operation === 'swarm.leave' && request.runtime === 'local' && request.body.runtime_id === 'core-box')).toBe(true))
 })
 
@@ -42,9 +42,9 @@ it('shows a member it does not manage with the link state its own machines repor
     ? { self: 'core-local', absence: { paused: false }, members: [member('core-local', 'Laptop', { self: true }), member('core-studio', 'Studio', { online: false, link: { direction: 'outbound', state: 'backoff', last_error: 'The machine did not answer.' } })] }
     : {})
   render(SwarmSection, { tauri: { invoke }, list: { runtimes: [list.runtimes[0]] }, listen: null })
-  const studio = await screen.findByRole('group', { name: 'Swarm member Studio' })
+  const studio = await screen.findByRole('group', { name: 'Fleet member Studio' })
   expect(studio).toHaveTextContent('Offline')
-  expect(studio).toHaveTextContent('Dials out · retrying: The machine did not answer.')
-  expect(within(studio).getByRole('button', { name: 'Unlink' })).toBeInTheDocument()
-  expect(screen.getByText('Pair another machine with admin access to link it here.')).toBeInTheDocument()
+  expect(studio).toHaveTextContent('Retrying: The machine did not answer.')
+  expect(within(studio).getByRole('button', { name: 'Remove from fleet' })).toBeInTheDocument()
+  expect(screen.getByText('Pair a machine with admin access to add it.')).toBeInTheDocument()
 })

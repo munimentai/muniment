@@ -34,7 +34,7 @@
   {#if scanning}
     <p class="state" role="status">Looking for models on this computer…</p>
   {:else if scanError}
-    <p class="state" role="alert">{scanError} <button type="button" class="link" onclick={onrescan}>Look again</button></p>
+    <p class="state" role="alert">{scanError} <button type="button" class="link" onclick={onrescan}>Scan again</button></p>
   {/if}
 
   {#snippet card(option)}
@@ -82,7 +82,7 @@
       {:else if open === option.id && server?.state === 'not-running'}
         <div class="step">
           <p>Open {server.name} and start its local server.</p>
-          <button type="button" onclick={onrescan}>Look again</button>
+          <button type="button" onclick={onrescan}>Scan again</button>
         </div>
       {/if}
     </li>

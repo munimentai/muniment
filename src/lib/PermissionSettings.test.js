@@ -43,8 +43,8 @@ it('reads the runtime settings and saves each change on its own', async () => {
   expect(screen.getByRole('button', { name: /^Default thread mode:/ })).toHaveTextContent('Bypass permissions')
   expect(screen.getByRole('button', { name: /^Default agent mode:/ })).toHaveTextContent('Bypass permissions')
   expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).toBeChecked()
-  expect(screen.getByText(/Nothing else asks first/)).toBeInTheDocument()
-  expect(screen.getByText(/Turn it off and new threads and agents start in Ask before changes/)).toBeInTheDocument()
+  expect(screen.getByText(/Everything runs except deny and ask-first rules/)).toBeInTheDocument()
+  expect(screen.getByText(/Off, new threads and agents start in Ask before changes/)).toBeInTheDocument()
 
   await fireEvent.click(screen.getByRole('button', { name: /^Default thread mode:/ }))
   await fireEvent.click(within(screen.getByRole('menu', { name: 'Default thread mode' })).getByRole('menuitemradio', { name: 'Plan first' }))

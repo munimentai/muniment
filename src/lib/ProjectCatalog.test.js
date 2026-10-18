@@ -61,7 +61,7 @@ it('lists other members\' projects after own ones with their owner, and opens on
   await fireEvent.input(screen.getByRole('searchbox'), {target:{value:'launch'}})
   expect(screen.queryByRole('button', { name: /^Research/ })).toBeNull()
   await fireEvent.click(screen.getByRole('button', { name: /^Launch plan/ }))
-  expect(screen.getByText('Threads in Launch plan.')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Launch plan', level: 2 })).toBeInTheDocument()
   expect(screen.getByText('files on Studio')).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('button', { name: 'Checklist' }))
   expect(onthread).toHaveBeenCalledWith('two')

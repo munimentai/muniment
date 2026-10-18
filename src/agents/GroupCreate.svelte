@@ -27,7 +27,7 @@
   }
 
   async function create() {
-    if (draft.error || !runtime) { error = draft.error ?? 'Link this computer into a swarm first.'; return }
+    if (draft.error || !runtime) { error = draft.error ?? 'Add this computer to a fleet first.'; return }
     busy = true
     error = ''
     try {

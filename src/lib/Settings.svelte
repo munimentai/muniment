@@ -10,7 +10,7 @@
   import Button from './ui/Button.svelte'
   // Settings takes over the workspace: the sidebar lists its pages under group
   // headings, and this panel shows the picked page across the thread and rail.
-  import { onMount } from 'svelte'
+  import { onMount, setContext } from 'svelte'
   const Appearance = () => import('./Appearance.svelte')
   const MemorySection = () => import('./MemorySection.svelte')
   const ModelsSection = () => import('./ModelsSection.svelte')
@@ -67,6 +67,8 @@
   let panel = $state()
   const machine = $derived(settingsMachine(runtimeList, settingsPage(section)))
   const sectionLabel = $derived(sections.find(([id]) => id === settingsPage(section))?.[1] ?? 'Settings')
+  // Each page's PageHead shows the sidebar label as its title.
+  setContext('page-title', () => sectionLabel)
   // A Models tab that moves itself, such as Connect account from Decision models, moves the sidebar with it.
   const showModelTab = (tab) => { section = pageForTab(MODEL_TABS, tab) ?? section }
 
@@ -94,8 +96,6 @@
 </script>
 
 <div data-panel="settings" class="settings-layout" role="dialog" aria-label="Settings" bind:this={panel}>
-  <!-- The sidebar already names the page, so its heading is for assistive tech only. -->
-  <h3 id="settings-section-title" class="visually-hidden">{sectionLabel}</h3>
   <PanelPage>
     {#if machine}<MachineScope scope={machine} disabled={runtimeSwitchDisabled} onselect={onselectruntime} />{/if}
     {#if remoteRuntime && LOCAL_PAGES.includes(section)}
@@ -122,13 +122,13 @@
     {:else if section === 'profile' || section === 'memory'}
       <SettingsSection load={MemorySection} properties={{tauri, part: section}} />
     {:else if section === 'home'}
-      <PageHead intro="Muniment keeps your work and its extensions in two places on this device." />
+      <PageHead intro="Your workspace folder and the managed extension folder, both on this device." />
       <Group heading="Folders">
-        <Row title="Workspace folder" description="Holds memory, agents, projects and session files.">
+        <Row title="Workspace folder" description="Memory, agents, projects and sessions.">
           {#snippet detail()}<p class="settings-path">{homePath}</p>{/snippet}
           <Button onclick={onchangehome}>Change workspace folder…</Button>
         </Row>
-        <Row title="Managed extensions" description="Installed skills and plugins, kept apart from your workspace.">
+        <Row title="Managed extensions" description="Installed skills and plugins.">
           {#snippet detail()}<p class="settings-path">~/.muniment</p>{/snippet}
           <Button onclick={() => tauri.invoke('extend_command', {action:'open_folder',data:{}}).catch(() => storageError = 'The extension folder could not open.')}>Open extension folder</Button>
         </Row>
@@ -142,7 +142,7 @@
       {#if local}
         <PageHead intro="Local mode runs on this device with your own providers. A free account adds the mobile relay." />
         <Group heading="Account">
-          <Row title="Sign in" description="Pair your phone and use your devices on one account.">
+          <Row title="Sign in" description="Pair your phone and devices on one account.">
             <Button disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</Button>
           </Row>
           {#if accountStatus}<p role="status">{accountStatus}</p>{/if}

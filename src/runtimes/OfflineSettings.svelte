@@ -48,20 +48,20 @@
 </script>
 
 {#if shown}
-  <Group heading="Available offline" description="What this computer keeps when the machine that owns it is away.">
-    <Row title="Threads" description="Older threads load from their machine on open.">
+  <Group heading="Available offline" info="What this computer keeps when the machine that owns it is away.">
+    <Row title="Threads" info="Older threads load from their machine on open.">
       <SegmentedField label="Threads" hideLabel value={scope.threads} options={THREAD_CHOICES} onchange={(value) => { if (!busy) void setThreads(value) }} />
     </Row>
-    <Row title="Attachments" description="Files in threads download when you open them, or all at once.">
+    <Row title="Attachments" info="Files in threads download when you open them, or all at once.">
       <SegmentedField label="Attachments" hideLabel value={scope.attachments} options={ATTACHMENT_CHOICES} onchange={(value) => { if (!busy) void setAttachments(value) }} />
     </Row>
-    <Row title="Artifacts" description="Pin an artifact to keep its files here.">
+    <Row title="Artifacts" info="Pin an artifact to keep its files here.">
       <SegmentedField label="Artifacts" hideLabel value={scope.artifacts} options={ARTIFACT_CHOICES} onchange={(value) => { if (!busy) void setArtifacts(value) }} />
     </Row>
-    <Row title="Projects" description="Details only. Files stay on the machine that owns the project.">
+    <Row title="Projects" info="Details only. Files stay on the machine that owns the project.">
       <span class="fixed">Details</span>
     </Row>
-    <Row title="Skills and plugins" description="Every skill and plugin enabled here stays available.">
+    <Row title="Skills and plugins" info="Every skill and plugin enabled here stays available.">
       <span class="fixed">All</span>
     </Row>
   </Group>

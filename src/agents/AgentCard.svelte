@@ -5,6 +5,7 @@
   // that edit in one step; the rest stay in the profile. Every change is an
   // agent operation on the agent's own machine, and core validates it.
   // A synced copy, or an agent whose machine does not answer, is read only.
+  import { machineName as machineLabel } from '../runtimes/runtimes.js'
   import { tick, untrack } from 'svelte'
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import { agentColor } from '../lib/agent-avatar.js'
@@ -46,8 +47,8 @@
 
   const key = $derived(`${agent.runtimeId ?? 'local'}-${agent.id}`)
   const readOnly = $derived(!!agent.replica || agent.online === false)
-  const machineName = $derived(machine?.name ?? 'its machine')
-  const readOnlyNote = $derived(agent.online === false ? `${machineName} is offline. This card is read only until it answers.` : `A synced copy. Its settings live on ${machineName}.`)
+  const machineName = $derived(machine ? machineLabel(machine) : 'its machine')
+  const readOnlyNote = $derived(agent.online === false ? `Read only while ${machineName} is offline.` : `Synced copy. Edit it on ${machineName}.`)
   const currentMode = $derived(agentMode(agent, modes))
   const routines = $derived(agent.routines ?? [])
   const inUse = (model) => agent.model?.provider === model.provider && agent.model?.id === model.choice
@@ -165,7 +166,7 @@
           <div class="fact"><dt>Job title</dt><dd><InlineEdit value={agent.label ?? ''} label="Job title" placeholder="Add a job title" disabled={readOnly} onsave={(label) => saveField({ label })} /></dd></div>
           <div class="fact"><dt>Machine</dt><dd class="machine"><MachineMark {machine} />{#if agent.online === false}<StatusChip tone="neutral">Offline</StatusChip>{:else}<StatusChip tone="success">Online</StatusChip>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</dd></div>
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
-          <div class="fact"><dt>Last run</dt><dd class="record">{#if latestRun}<StatusChip tone={runStatusTone(latestRun.status)}>{runStatusLabel(latestRun.status)}</StatusChip><span class="when">{whenLabel(latestRun.updated_at)}</span>{:else}No runs yet{/if}</dd></div>
+          <div class="fact"><dt>Last run</dt><dd class="record">{#if latestRun}<StatusChip tone={runStatusTone(latestRun.status)}>{runStatusLabel(latestRun.status)}</StatusChip><span class="when">{whenLabel(latestRun.updated_at)}</span>{:else}Never{/if}</dd></div>
         </dl>
         <div class="actions">
           <Button icon="play" variant="primary" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
@@ -219,7 +220,7 @@
               {#if !isProposal(routine)}<Toggle checked={routine.enabled} label={`${routine.name} on`} disabled={readOnly || busy} onchange={(enabled) => toggleRoutine(routine, enabled)} />{/if}
             </li>
           {:else}
-            <li class="empty">No routines. It runs only when you ask.</li>
+            <li class="empty">No routines.</li>
           {/each}
         </ul>
         {#if agent.paused_reason}<p class="empty">Routines are paused.</p>{/if}
@@ -234,7 +235,7 @@
             {#each runs.list.slice(0, 5) as run (run.id)}
               <li class="run"><span class="dot" data-tone={runStatusTone(run.status)} aria-hidden="true"></span><span class="run-state">{runStatusLabel(run.status)}</span><span class="record">{triggerLabel(run.trigger?.kind)}{runDuration(run) ? ` · ${runDuration(run)}` : ''}</span><time class="record" datetime={run.updated_at}>{whenLabel(run.updated_at)}</time></li>
             {:else}
-              <li class="empty">No runs yet. Run now starts one.</li>
+              <li class="empty">No runs yet.</li>
             {/each}
           </ul>
         {/if}

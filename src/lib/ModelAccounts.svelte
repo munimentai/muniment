@@ -39,6 +39,17 @@
   let key = $state('')
   let baseUrl = $state('')
   let signIn = $state(null)
+  // The sign-in page's address stays off the page. Copy puts it on the clipboard.
+  let signInLinkCopied = $state(false)
+  async function copySignInLink() {
+    try {
+      await navigator.clipboard.writeText(signIn.url)
+      signInLinkCopied = true
+      setTimeout(() => { signInLinkCopied = false }, 1500)
+    } catch {
+      signIn = { ...signIn, message: 'The link could not be copied.' }
+    }
+  }
   let signInAnswer = $state('')
   let unlisten = null
   onDestroy(() => stopListening())
@@ -303,8 +314,10 @@
       <p class="support">{signIn.message}</p>
       {#if signIn.code}<p class="login-code">{signIn.code}</p>{/if}
       {#if signIn.url}
-        <button type="button" onclick={() => tauri.invoke('local_mode_open_url', { url: signIn.url }).catch(() => {})}>Open the sign-in page</button>
-        <p class="record login-url">{signIn.url}</p>
+        <div class="login-links">
+          <button type="button" onclick={() => tauri.invoke('local_mode_open_url', { url: signIn.url }).catch(() => {})}>Open again</button>
+          <button type="button" class="quiet" onclick={copySignInLink}>{signInLinkCopied ? 'Copied' : 'Copy sign-in link'}</button>
+        </div>
       {/if}
       {#if signIn.prompt?.kind === 'select'}
         <p class="support">{signIn.prompt.title}</p>
@@ -402,7 +415,7 @@
   .sign-in { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .login { display: grid; gap: 8px; justify-items: start; }
   .login-code { margin: 0; font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
-  .login-url { max-width: 100%; overflow-wrap: anywhere; }
+  .login-links { display: flex; flex-wrap: wrap; gap: 8px; }
   .login-options { display: flex; flex-wrap: wrap; gap: 6px; }
   .add { display: grid; gap: 6px; }
   .actions { display: flex; gap: 6px; }

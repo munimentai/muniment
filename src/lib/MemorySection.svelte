@@ -257,12 +257,12 @@
         <Button disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
       {/snippet}
     </PageHead>
-    <Group heading="About you" description="Saved in memory/profile.md.">
+    <Group heading="About you" info="Saved in memory/profile.md.">
       <Row title="Name"><input class="row-input" aria-label="Name" bind:value={profile.name} disabled={!loaded || busy} autocomplete="name" /></Row>
-      <Row title="Preferred name" description="What replies call you."><input class="row-input" aria-label="Preferred name" bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></Row>
+      <Row title="Preferred name"><input class="row-input" aria-label="Preferred name" bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></Row>
       <Row title="Work"><input class="row-input" aria-label="Work" bind:value={profile.work} disabled={!loaded || busy} placeholder="What do you do?" /></Row>
     </Group>
-    <Group heading="Instructions" description="How Muniment should respond to you.">
+    <Group heading="Instructions">
       <div class="field"><textarea aria-label="Instructions" bind:value={profile.instructions} disabled={!loaded || busy} rows="5" placeholder="How should Muniment respond?"></textarea></div>
       {#if profile.extra}<label class="field">Other profile details<textarea bind:value={profile.extra} disabled={!loaded || busy} rows="4"></textarea></label>{/if}
     </Group>
@@ -278,7 +278,7 @@
     {#if part === 'memory'}
       <Group heading="Recall">
         {#each RECALL as [key, label, help] (key)}
-          <Row title={label} description={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
+          <Row title={label} info={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
         {/each}
       </Group>
       <MemoryImports {tauri} />
@@ -312,7 +312,7 @@
       {@render factList(shown, 'saved', limit, () => { limit += PAGE }, filter ? 'No matching memories.' : trustFilter === 'external' ? 'No unconfirmed memories.' : 'No saved memories yet.')}
     </Group>
     {#if showDeleted}
-      <Group heading="Deleted memories" description="Deleted memories stay out of recall. Restore one if it was removed by mistake." plain>
+      <Group heading="Deleted memories" info="Deleted memories stay out of recall. Restore one if it was removed by mistake." plain>
         {@render factList(deletedFacts, 'deleted', deletedLimit, () => { deletedLimit += PAGE }, 'No deleted memories.')}
       </Group>
     {/if}

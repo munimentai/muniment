@@ -45,10 +45,10 @@ describe('Routing settings', () => {
     }) }
     render(Settings, { tauri, inventory, section: 'routing', onclose: vi.fn() })
     await screen.findByRole('alert')
-    expect(screen.queryByText('Connect an account to choose models automatically.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Connect an account to route messages.')).not.toBeInTheDocument()
     failed = false
     await fireEvent.click(screen.getByRole('button', { name: 'Retry routing settings' }))
-    await screen.findByText('Connect an account to choose models automatically.')
+    await screen.findByText('Connect an account to route messages.')
   })
 
   it('enables routing with a connected classifier and keeps balancing on', async () => {

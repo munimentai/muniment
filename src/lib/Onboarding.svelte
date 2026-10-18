@@ -49,7 +49,7 @@
       const scan = await scanProviders((command) => tauri.invoke(command))
       if (request === scanRequest) providerScan = scan
     } catch (_) {
-      if (request === scanRequest) providerScanError = 'Muniment could not look for local models.'
+      if (request === scanRequest) providerScanError = 'The scan for local models failed.'
     } finally {
       if (request === scanRequest) providerScanning = false
     }

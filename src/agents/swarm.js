@@ -3,7 +3,7 @@
 // answers. Core owns links, sync, moves and approval routing. This module
 // gathers the answers, names the machine behind each core runtime id, and
 // picks the runtime a request goes to.
-import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
+import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { agentRequest, agentRuntimes } from './agent-runtime.js'
 
 export function emptySwarm() {
@@ -111,7 +111,7 @@ export function memberMachine(swarm, coreId, runtimeList = null) {
   const formFactor = member.form_factor
   return {
     id: coreId,
-    name: reached === LOCAL_RUNTIME_ID ? 'This computer' : member.runtime_name || runtime?.name || 'Machine',
+    name: reached === LOCAL_RUNTIME_ID ? 'This computer' : machineName({ name: member.runtime_name || runtime?.name, kind: formFactor === 'container' ? 'container' : runtime?.kind ?? 'desktop' }),
     kind: formFactor === 'container' ? 'container' : reached === LOCAL_RUNTIME_ID ? 'local' : 'desktop',
     formFactor,
     online: !!member.online,
@@ -232,12 +232,11 @@ export function applyApproval(approvals, update) {
 
 // One line for a link: whether it answers and since when, or why not.
 export function linkLabel(link, now = Date.now()) {
-  if (!link) return 'Reached through another member'
+  if (!link) return 'Through another machine'
   const seen = Date.parse(link.last_seen_at ?? '')
   const minutes = Number.isFinite(seen) ? Math.max(0, Math.round((now - seen) / 60_000)) : null
-  const ago = minutes === null ? '' : minutes < 1 ? ' · seen just now' : minutes < 60 ? ` · seen ${minutes}m ago` : ` · seen ${Math.round(minutes / 60)}h ago`
-  const direction = link.direction === 'outbound' ? 'Dials out' : 'Accepts'
-  if (link.state === 'connected') return `${direction} · connected${ago}`
-  if (link.state === 'revoked') return 'Access revoked. Link the machines again.'
-  return `${direction} · retrying${link.last_error ? `: ${link.last_error}` : ''}`
+  const ago = minutes === null ? '' : minutes < 1 ? ' · now' : minutes < 60 ? ` · ${minutes}m ago` : ` · ${Math.round(minutes / 60)}h ago`
+  if (link.state === 'connected') return `Connected${ago}`
+  if (link.state === 'revoked') return 'Access revoked. Join the machines again.'
+  return `Retrying${link.last_error ? `: ${link.last_error}` : ''}`
 }

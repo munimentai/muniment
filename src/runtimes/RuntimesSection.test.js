@@ -34,7 +34,7 @@ function tauri(handlers = {}) {
 }
 
 const listen = vi.fn(async () => () => {})
-const machineRows = () => within(screen.getByRole('heading', { name: /^Machines/ }).closest('section')).getAllByRole('group')
+const machineRows = () => within(screen.getByRole('region', { name: 'Machine list' })).getAllByRole('group')
 
 describe('Machines page', () => {
   it('lists this computer first, then each paired machine with its kind, version and state', async () => {

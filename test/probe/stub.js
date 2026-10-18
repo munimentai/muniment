@@ -1032,7 +1032,7 @@ const AGENT_SCREENS = {
   cards: () => cardsRendered(5),
   'cards-offline': () => cardsRendered(5) && !!document.querySelector('[data-agent-card="018f0000-0000-4000-8000-0000000000a3"].read-only [role="note"]'),
   'empty-activity': () => document.querySelector('[data-panel="activity"]')?.textContent.includes('No agent runs yet.'),
-  machines: () => !!document.querySelector('.settings-runtimes [aria-label="Swarm member Office mini"]') && document.querySelector('.settings-runtimes')?.textContent.includes('retrying'),
+  machines: () => !!document.querySelector('.settings-runtimes [aria-label="Fleet member Office mini"]') && document.querySelector('.settings-runtimes')?.textContent.includes('Retrying'),
   'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
   meeting: () => document.querySelector('.thread')?.textContent.includes('Debate round 1') && document.querySelectorAll('.thread .round').length === 3,
   import: () => !!document.querySelector('[data-panel="import"] [aria-label="Skills"]'),

@@ -44,7 +44,7 @@
     if (sidebarTab && sidebarTab !== untrack(() => tab)) { tab = sidebarTab; view = 'list' }
   })
   const INTROS = {
-    accounts: 'Connect the accounts, keys and local servers your models run on.',
+    accounts: 'The accounts, keys and local servers your models run on.',
     routing: 'Decision models route each message to a model and assist chats with tools and the browser.',
   }
   function showTab(next) {
@@ -405,6 +405,18 @@
   function openUrl(url) {
     void tauri.invoke('local_mode_open_url', { url }).catch(() => { formError = 'The browser could not open. Copy the link instead.' })
   }
+
+  // The sign-in page's address stays off the page. Copy puts it on the clipboard.
+  let loginLinkCopied = $state(false)
+  async function copyLoginLink() {
+    try {
+      await navigator.clipboard.writeText(login.url)
+      loginLinkCopied = true
+      setTimeout(() => { loginLinkCopied = false }, 1500)
+    } catch {
+      formError = 'The link could not be copied.'
+    }
+  }
 </script>
 
 {#snippet tabAction()}
@@ -589,8 +601,10 @@
           <p class="support">{login.message}</p>
           {#if login.code}<p class="login-code">{login.code}</p>{/if}
           {#if login.url}
-            <button type="button" onclick={() => openUrl(login.url)}>Open the sign-in page</button>
-            <p class="record login-url">{login.url}</p>
+            <div class="login-links">
+              <button type="button" onclick={() => openUrl(login.url)}>{login.stage === 'browser' ? 'Open again' : 'Open the sign-in page'}</button>
+              <button type="button" class="quiet" onclick={copyLoginLink}>{loginLinkCopied ? 'Copied' : 'Copy sign-in link'}</button>
+            </div>
           {/if}
           {#if login.prompt?.kind === 'select'}
             <p class="support">{login.prompt.title}</p>
@@ -675,7 +689,7 @@
   .models > button, .login > button { justify-self: start; min-height: 28px; padding: 4px 10px; }
   .login { display: grid; gap: 8px; justify-items: start; }
   .login-code { margin: 0; font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
-  .login-url { max-width: 100%; }
+  .login-links { display: flex; flex-wrap: wrap; gap: 8px; }
   .login-options { display: flex; flex-wrap: wrap; gap: 6px; }
   .method-switch { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
   .method-switch button { min-height: 24px; padding: 2px 8px; color: var(--muted); font-size: var(--text-12); }

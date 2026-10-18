@@ -34,8 +34,8 @@
     finally { pending = false; downloading = false }
   }
 </script>
-<Group heading="Browser language" description="The Browser tab's pages and site requests use this language.">
-  <Row title="Language" description={view?.languages.some(language => language.state === 'available') ? `Languages marked Download fetch about ${megabytes} MB once.` : 'The system language unless you pick one.'}>
+<Group heading="Browser language">
+  <Row title="Language" description={view?.languages.some(language => language.state === 'available') ? `Download fetches about ${megabytes} MB once` : ''}>
     {#if view}<div class="choice"><ChoiceField label="Language" hideLabel value={view.selected ?? 'system'} {options} disabled={pending} onchange={choose} /></div>{/if}
   </Row>
   {#if downloading}<p role="status">Downloading the language…</p>{/if}

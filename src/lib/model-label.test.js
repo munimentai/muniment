@@ -25,3 +25,8 @@ it('leaves off the latest tag Ollama names no version with', () => {
   expect(modelLabel('gpt-oss:latest')).toBe('GPT Oss')
   expect(modelLabel('clef-flash:latest')).toBe('Clef Flash')
 })
+
+it('names a custom endpoint as the user named it', () => {
+  expect(modelLabel('custom-omlx/llama3.2:3b', { 'custom-omlx': 'oMLX' })).toBe('oMLX · Llama 3.2:3B')
+  expect(modelLabel('custom-omlx/llama3.2:3b')).toBe('Custom Omlx · Llama 3.2:3B')
+})

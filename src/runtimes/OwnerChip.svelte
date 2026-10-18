@@ -3,15 +3,16 @@
   // mono, with an ochre slashed globe while that member does not answer.
   // `compact` keeps the icons and gives the name to screen readers alone.
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import { kindIcon } from './runtimes.js'
+  import { kindIcon, machineName } from './runtimes.js'
   let { machine, prefix = 'on', compact = false } = $props()
+  const name = $derived(machine ? machineName(machine) : '')
   const offline = $derived(machine?.online === false)
 </script>
 
 {#if machine}
   <span class="owner-chip" data-offline={offline ? 'true' : undefined}>
     <LucideIcon name={kindIcon(machine)} size={12} />
-    {#if compact}<span class="visually-hidden">{prefix ? `${prefix} ` : ''}{machine.name}</span>{:else}<span class="owner-name">{prefix ? `${prefix} ` : ''}{machine.name}</span>{/if}
+    {#if compact}<span class="visually-hidden">{prefix ? `${prefix} ` : ''}{name}</span>{:else}<span class="owner-name">{prefix ? `${prefix} ` : ''}{name}</span>{/if}
     {#if offline}<span class="owner-offline"><LucideIcon name="globe-off" size={12} variant="action" /><span class="visually-hidden">, offline</span></span>{/if}
   </span>
 {/if}
