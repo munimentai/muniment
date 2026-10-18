@@ -20,3 +20,17 @@ it('shows the colored mark where color is asked for and the light and dark marks
   // A provider whose mark is one color keeps its light and dark marks.
   expect(render(ProviderLogo, { provider: 'openai', color: true }).container.querySelector('.dark svg')).not.toBeNull()
 })
+it('shows the oMLX mark for the oMLX server and its custom endpoint, and the generic mark for other endpoints', () => {
+  const mark = (provider) => render(ProviderLogo, { provider }).container.querySelector('svg')?.outerHTML
+  const omlx = mark('omlx')
+  expect(omlx).toContain('omlx-tile')
+  cleanup()
+  expect(mark('custom-omlx')).toBe(omlx)
+  cleanup()
+  expect(mark('custom-omlx-2')).toBe(omlx)
+  cleanup()
+  const generic = mark('custom-my-litellm-proxy')
+  expect(generic).not.toContain('omlx-tile')
+  cleanup()
+  expect(mark('custom-proxy')).toBe(generic)
+})
