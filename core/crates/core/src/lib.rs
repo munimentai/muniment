@@ -119,12 +119,15 @@ pub mod agent_runs;
 pub mod agent_templates;
 pub mod agents;
 pub mod fleet_sync;
+pub mod inherit;
 pub mod notifications;
+pub mod palette;
 pub mod preferences;
 pub mod project_context;
 pub mod projects;
 pub mod sidebar;
 pub mod swarm;
+pub mod thread_settings;
 pub mod usage_report;
 pub mod workspace_names;
 

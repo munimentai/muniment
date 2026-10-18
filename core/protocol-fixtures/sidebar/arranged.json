@@ -57,7 +57,7 @@
       "project_name": "Muniment",
       "updated_at": "2026-10-18T09:10:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "home": false,
       "pinned": true
     }
@@ -88,7 +88,7 @@
           "project_name": "Chats",
           "updated_at": "2026-10-18T11:30:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "home": false,
           "pinned": false
         },
@@ -99,7 +99,7 @@
           "project_name": "Chats",
           "updated_at": "2026-10-17T16:00:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "home": false,
           "pinned": false
         },
@@ -110,7 +110,7 @@
           "project_name": "Chats",
           "updated_at": "2026-10-15T10:00:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "home": false,
           "pinned": false
         }
@@ -130,7 +130,7 @@
           "project_name": "Garden",
           "updated_at": "2026-10-12T10:00:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "home": false,
           "pinned": false
         }
@@ -152,7 +152,7 @@
           "project_name": "Homelab",
           "updated_at": "2026-10-18T08:15:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "agent_id": "deploy-bot",
           "home": true,
           "pinned": false
@@ -175,7 +175,7 @@
           "project_name": "Homelab",
           "updated_at": "2026-10-16T10:00:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "home": false,
           "pinned": false
         }
@@ -230,7 +230,7 @@
           "project_name": "Muniment",
           "updated_at": "2026-10-18T09:10:00Z",
           "status": "read",
-          "status_label": "Read",
+          "status_label": "",
           "home": false,
           "pinned": true
         }
@@ -279,7 +279,7 @@
       "project_name": "Chats",
       "updated_at": "2026-10-18T11:30:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "home": false,
       "pinned": false
     },
@@ -304,7 +304,7 @@
       "project_name": "Homelab",
       "updated_at": "2026-10-18T08:15:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "agent_id": "deploy-bot",
       "home": true,
       "pinned": false
@@ -316,7 +316,7 @@
       "project_name": "Chats",
       "updated_at": "2026-10-17T16:00:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "home": false,
       "pinned": false
     },
@@ -327,7 +327,7 @@
       "project_name": "Homelab",
       "updated_at": "2026-10-16T10:00:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "home": false,
       "pinned": false
     },
@@ -338,7 +338,7 @@
       "project_name": "Chats",
       "updated_at": "2026-10-15T10:00:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "home": false,
       "pinned": false
     },
@@ -349,7 +349,7 @@
       "project_name": "Garden",
       "updated_at": "2026-10-12T10:00:00Z",
       "status": "read",
-      "status_label": "Read",
+      "status_label": "",
       "home": false,
       "pinned": false
     }

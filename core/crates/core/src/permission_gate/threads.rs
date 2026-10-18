@@ -74,12 +74,25 @@ fn describe(scope: &ThreadScope<'_>, thread_id: &str) -> Result<Value, String> {
         (None, None) => (settings.default_thread_mode, "default"),
     };
     let mode = settings.effective(mode);
+    // A mode the thread started with from its project names that project.
+    let seed = crate::thread_settings::read(scope.profile, thread_id)
+        .ok()
+        .and_then(|settings| settings.seed);
+    let mode_id = serde_json::to_value(mode)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let (layer, project) = crate::inherit::mode_layer(source, &mode_id, seed.as_ref());
     let mut answer = json!({
         "thread_id": thread_id,
         "mode": mode,
         "title": mode.title(),
         "source": source,
+        "layer": layer,
     });
+    if let Some(project) = project {
+        answer["project_id"] = json!(project);
+    }
     if let Some(set) = &set {
         answer["set_by"] = json!(set.source);
     }

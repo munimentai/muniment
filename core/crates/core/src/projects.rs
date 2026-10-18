@@ -36,6 +36,31 @@ pub struct Defaults {
     /// The runtime id of the machine a new thread runs on. None is this computer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// The tools every run in the project may use. None allows every tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolPolicy>,
+}
+
+/// The tools a project leaves out of its runs. Every tool it does not name
+/// stays allowed, so a tool installed later is allowed until the user turns
+/// it off.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolPolicy {
+    /// Built-in tool ids, such as `bash`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_tools: Vec<String>,
+    /// Extension ids: an MCP server's or a plugin's item id, a plugin's
+    /// server as `<item>:<server>`, or a skill as `<item>:<path>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_extensions: Vec<String>,
+}
+
+impl ToolPolicy {
+    /// Whether the policy allows every tool.
+    pub fn is_empty(&self) -> bool {
+        self.disabled_tools.is_empty() && self.disabled_extensions.is_empty()
+    }
 }
 
 /// A provider and model id.
@@ -262,6 +287,51 @@ pub fn unassign(profile: &Path, thread: &str) -> Result<(), String> {
     let mut catalog = read(profile)?;
     catalog.threads.remove(thread);
     save(profile, &catalog)
+}
+/// Moves a thread into `project`, a catalog project or `chats`. Its
+/// conversation keeps its id, so its history and session go with it, and its
+/// next run works in the new project's folder. Files it wrote stay where it
+/// wrote them. An agent's thread stays in its agent's project.
+pub fn move_thread(profile: &Path, thread: &str, project: &str) -> Result<(), String> {
+    if crate::agents::state(profile)?.threads.contains_key(thread) {
+        return Err("An agent's thread stays in its agent's project.".into());
+    }
+    if project == crate::sidebar::CHATS {
+        return unassign(profile, thread);
+    }
+    if saved(profile)?.remote.contains_key(project) {
+        return Err("Move threads into that project on the machine that holds it.".into());
+    }
+    assign(profile, thread, project)
+}
+/// The project a thread belongs to: its agent's project, its catalog
+/// project, or `chats`.
+pub fn thread_project(profile: &Path, thread: &str) -> Result<String, String> {
+    if let Some(agent) = crate::agents::thread_agent(profile, thread)? {
+        return Ok(agent
+            .project_id
+            .unwrap_or_else(|| format!("{}{}", crate::sidebar::AGENT_PROJECT_PREFIX, agent.id)));
+    }
+    Ok(read(profile)?
+        .threads
+        .get(thread)
+        .cloned()
+        .unwrap_or_else(|| crate::sidebar::CHATS.into()))
+}
+/// The tools a thread's runs leave out: its project's policy, with its
+/// agent's own choices over it.
+pub fn thread_tools(profile: &Path, thread: &str) -> Result<ToolPolicy, String> {
+    let agent = crate::agents::thread_agent(profile, thread)?;
+    let project = thread_project(profile, thread)?;
+    let policy = read(profile)?
+        .settings
+        .get(&project)
+        .and_then(|defaults| defaults.tools.clone())
+        .unwrap_or_default();
+    Ok(crate::inherit::tool_policy(
+        &policy,
+        agent.as_ref().and_then(|agent| agent.tools.as_ref()),
+    ))
 }
 pub fn thread_folder(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
     let catalog = read(profile)?;
@@ -613,6 +683,10 @@ mod tests {
                 }),
                 permission_mode: Some("plan".into()),
                 machine: Some("studio".into()),
+                tools: Some(ToolPolicy {
+                    disabled_tools: vec!["bash".into()],
+                    disabled_extensions: vec!["mcp-crm".into()],
+                }),
             },
             instructions: Some("Answer in short lines.".into()),
         };
@@ -651,6 +725,70 @@ mod tests {
         assert_eq!(read_back.instructions, None);
         assert_eq!(read_back.defaults.permission_mode.as_deref(), Some("ask"));
         assert!(settings(&profile, "missing").is_err());
+    }
+    #[test]
+    fn a_thread_moves_between_projects_and_runs_with_its_tools() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let homelab = create(&profile, "Homelab").unwrap();
+        let chats = crate::sidebar::CHATS;
+        assert_eq!(thread_project(&profile, "t-1").unwrap(), chats);
+        move_thread(&profile, "t-1", &homelab).unwrap();
+        assert_eq!(thread_project(&profile, "t-1").unwrap(), homelab);
+        assert_eq!(
+            workspace(&profile, "t-1").unwrap(),
+            folder(&profile, &homelab).unwrap()
+        );
+        let policy = ToolPolicy {
+            disabled_tools: vec!["bash".into()],
+            disabled_extensions: vec!["mcp-crm".into()],
+        };
+        save_settings(
+            &profile,
+            &homelab,
+            &Settings {
+                defaults: Defaults {
+                    tools: Some(policy.clone()),
+                    ..Defaults::default()
+                },
+                instructions: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(thread_tools(&profile, "t-1").unwrap(), policy);
+        move_thread(&profile, "t-1", chats).unwrap();
+        assert_eq!(thread_project(&profile, "t-1").unwrap(), chats);
+        assert!(thread_tools(&profile, "t-1").unwrap().is_empty());
+        assert!(move_thread(&profile, "t-1", "missing").is_err());
+
+        let agent = crate::agents::save(
+            &profile,
+            crate::agents::Agent {
+                name: "Deploy bot".into(),
+                instructions: "Deploy the stack.".into(),
+                project_id: Some(homelab.clone()),
+                tools: Some(crate::agents::AgentTools {
+                    allowed: vec!["bash".into()],
+                    ..crate::agents::AgentTools::default()
+                }),
+                ..crate::agents::Agent::default()
+            },
+        )
+        .unwrap();
+        let mut state = crate::agents::state(&profile).unwrap();
+        state.threads.insert("t-agent".into(), agent.id.clone());
+        crate::agents::persist_state(&profile, &state).unwrap();
+        assert_eq!(thread_project(&profile, "t-agent").unwrap(), homelab);
+        assert_eq!(
+            thread_tools(&profile, "t-agent").unwrap(),
+            ToolPolicy {
+                disabled_tools: vec![],
+                disabled_extensions: vec!["mcp-crm".into()],
+            }
+        );
+        assert!(move_thread(&profile, "t-agent", chats)
+            .unwrap_err()
+            .contains("agent"));
     }
     #[test]
     fn discovers_existing_folders_and_rejects_collisions_and_escapes() {

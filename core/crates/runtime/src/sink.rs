@@ -647,16 +647,34 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
     }
 
     fn local_default_model(&self) -> Option<String> {
-        // An agent's model is a reference into the same provider/model the
-        // default names, so it resolves exactly as the default does.
-        self.agent_launch()
-            .and_then(|agent| agent.model)
-            .map(|model| format!("{}/{}", model.provider, model.id))
-            .or_else(|| {
-                muniment_core::state_root::state_directory()
-                    .map(|state| muniment_core::state_root::agent_directory(&state))
-                    .and_then(|agent| muniment_core::launch_facts::read_local_default_model(&agent))
-            })
+        // The thread's own model leads, then its agent's, then the default.
+        // Each is a reference into the same provider/model the default
+        // names, so it resolves exactly as the default does.
+        let default = muniment_core::state_root::state_directory()
+            .map(|state| muniment_core::state_root::agent_directory(&state))
+            .and_then(|agent| muniment_core::launch_facts::read_local_default_model(&agent));
+        let agent = self.agent_launch().and_then(|agent| agent.model);
+        match self.profile_directory() {
+            Ok(profile) => muniment_core::thread_settings::run_model(
+                &profile,
+                &self.thread_id,
+                agent.as_ref(),
+                default.as_deref(),
+            ),
+            Err(_) => agent
+                .map(|model| format!("{}/{}", model.provider, model.id))
+                .or(default),
+        }
+    }
+
+    fn tool_policy(&self) -> muniment_core::projects::ToolPolicy {
+        let Ok(profile) = self.profile_directory() else {
+            return Default::default();
+        };
+        muniment_core::projects::thread_tools(&profile, &self.thread_id).unwrap_or_else(|error| {
+            eprintln!("muniment-runtime: project tools unreadable error={error}");
+            Default::default()
+        })
     }
 
     fn run_permissions(&self) -> Option<muniment_core::permission_gate::RunPermissions> {

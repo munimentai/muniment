@@ -20,6 +20,17 @@
 //! level as the model's default and answers null. A missing level restores
 //! the engine's own default.
 //!
+//! `thread_settings` takes `{"thread_id"}` and answers the thread's model
+//! with its layer, `{"thread_id", "model": {"provider", "model"}|null,
+//! "layer": "thread"|"agent"|"project"|"default", "project_id"?, "seed"?}`,
+//! where `seed` is the project defaults the thread started with.
+//! `thread_settings_set` takes `{"thread_id", "model"?, "reset"?,
+//! "seed"?}` and answers the same. A `model` sets the thread's own model,
+//! `"reset": true` returns it to the one it started with, and a `seed`,
+//! `{"project_id", "model"?, "permission_mode"?, "machine"?}`, starts the
+//! thread with its project's defaults. None of them changes the default
+//! model.
+//!
 //! `login_start` and `router_subscription_start` answer
 //! `{"callback": {"port", "path"}}` when the sign-in's browser redirect lands
 //! on a fixed loopback port of the runtime's computer, else null. A client on
@@ -97,11 +108,13 @@ pub enum ModelAction {
     MemoryPending,
     MemoryPendingApply,
     MemoryPendingDismiss,
+    ThreadSettings,
+    ThreadSettingsSet,
 }
 
 impl ModelAction {
     /// Every action, in wire order.
-    pub const ALL: [ModelAction; 51] = [
+    pub const ALL: [ModelAction; 53] = [
         Self::ProviderStatus,
         Self::StoreProviderKey,
         Self::StoreLocalProvider,
@@ -153,6 +166,8 @@ impl ModelAction {
         Self::MemoryPending,
         Self::MemoryPendingApply,
         Self::MemoryPendingDismiss,
+        Self::ThreadSettings,
+        Self::ThreadSettingsSet,
     ];
 
     /// Whether the action changes a setting, a credential or a sign-in, so its
@@ -173,16 +188,19 @@ impl ModelAction {
                 | Self::MemoryDeletedFacts
                 | Self::MemoryRecallSettings
                 | Self::MemoryPending
+                | Self::ThreadSettings
         )
     }
 
     /// Whether the action is a choice for the runs a device starts, the
-    /// model, its thinking level, the models the picker hides, or a fresh
-    /// capacity reading, rather than a change to the runtime's connections.
+    /// model, a thread's model, its thinking level, the models the picker
+    /// hides, or a fresh capacity reading, rather than a change to the
+    /// runtime's connections.
     pub fn run_choice(self) -> bool {
         matches!(
             self,
             Self::SetDefaultModel
+                | Self::ThreadSettingsSet
                 | Self::SetThinkingLevel
                 | Self::RouterSetHidden
                 | Self::RouterRefreshQuota
@@ -262,6 +280,8 @@ impl ModelAction {
             Self::MemoryPending => "memory_pending",
             Self::MemoryPendingApply => "memory_pending_apply",
             Self::MemoryPendingDismiss => "memory_pending_dismiss",
+            Self::ThreadSettings => "thread_settings",
+            Self::ThreadSettingsSet => "thread_settings_set",
         }
     }
 }
@@ -317,6 +337,10 @@ mod tests {
         assert!(ModelAction::MemoryPendingApply.mutates());
         assert!(ModelAction::MemoryPendingDismiss.mutates());
         assert!(ModelAction::SetThinkingLevel.mutates());
+        assert!(!ModelAction::ThreadSettings.mutates());
+        assert!(
+            ModelAction::ThreadSettingsSet.mutates() && ModelAction::ThreadSettingsSet.run_choice()
+        );
         assert_eq!(
             ModelRequest::from_body(
                 &serde_json::json!({"action": "memory_pending_apply", "data": {"id": "x"}})
