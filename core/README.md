@@ -403,7 +403,9 @@ Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
 "latest_runs", "errors"}`), `agent.read` (`{"id"}` → `{"agent",
 "primary_thread_id"}`), `agent.save` (`{"agent"}` → `{"agent"}`),
 `agent.delete` (`{"id", "remove_memory"?}`), `agent.run_now` (`{"id",
-"prompt"?}` → `{"run"}`), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
+"prompt"?, "test"?}` → `{"run"}`; a run that opens the agent's thread titles
+it `<name> · test run` for a `test` run and `<name> · <date and time>`
+otherwise), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
 → `{"runs", "next_cursor"}`, newest first), `routine.list` (`{"agent_id"}`),
 `routine.save` (`{"agent_id", "routine"}` → `{"routine"}`),
 `routine.delete` (`{"agent_id", "routine_id"}`),

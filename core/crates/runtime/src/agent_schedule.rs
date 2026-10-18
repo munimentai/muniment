@@ -496,6 +496,12 @@ impl RuntimeAttachState {
                     workspace.to_owned(),
                     attach_profile,
                     owner,
+                    &agents::run_thread_title(
+                        &agent.name,
+                        run,
+                        muniment_core::chrono::Utc::now(),
+                        &agent_routines::local_time_zone(),
+                    ),
                     self.runtime_version(),
                 )?
             }

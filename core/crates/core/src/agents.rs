@@ -977,6 +977,37 @@ pub fn with_state<T>(
 pub fn queue_run(profile: &Path, id: &str) -> Result<(), String> {
     run_now(profile, id, None, Some("desktop")).map(drop)
 }
+/// The trigger source of a test run that the agent builder starts.
+pub const TEST_RUN_SOURCE: &str = "test";
+
+/// The title of the thread an agent run opens: `<name> · test run` for a
+/// test run from the agent builder, and `<name> · <date and time>` in the
+/// time zone `tz` for any other run, so the thread names the agent and the
+/// run rather than the run's standing prompt.
+pub fn run_thread_title(
+    name: &str,
+    run: &Run,
+    now: chrono::DateTime<chrono::Utc>,
+    tz: &str,
+) -> String {
+    let name: String = name.trim().chars().take(60).collect();
+    let name = if name.is_empty() {
+        "Agent".to_owned()
+    } else {
+        name
+    };
+    if run.trigger.kind == TriggerKind::Manual
+        && run.trigger.source.as_deref() == Some(TEST_RUN_SOURCE)
+    {
+        return format!("{name} · test run");
+    }
+    let at = crate::agent_routines::parse_time_zone(tz).map_or_else(
+        |_| now.format("%b %-d, %H:%M").to_string(),
+        |zone| now.with_timezone(&zone).format("%b %-d, %H:%M").to_string(),
+    );
+    format!("{name} · {at}")
+}
+
 /// Queues a manual run with an optional prompt and answers the run.
 pub fn run_now(
     profile: &Path,
@@ -1289,6 +1320,9 @@ pub fn operation(
         id: String,
         #[serde(default)]
         prompt: Option<String>,
+        /// A test run from the agent builder, which titles its thread so.
+        #[serde(default)]
+        test: bool,
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -1387,7 +1421,11 @@ pub fn operation(
                 profile,
                 &request.id,
                 request.prompt.as_deref(),
-                Some("client"),
+                Some(if request.test {
+                    TEST_RUN_SOURCE
+                } else {
+                    "client"
+                }),
             )?;
             Ok(json!({"run": run}))
         }
@@ -2165,6 +2203,44 @@ mod tests {
         assert!(store.latest(&removed.id).unwrap().is_none());
         assert!(list(&profile).unwrap().agents.is_empty());
         fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_run_thread_names_the_agent_and_the_test_or_the_time() {
+        let (_root, profile) = profile();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "HN AI Desktop".into(),
+                instructions: "Work.".into(),
+                ..Agent::default()
+            },
+        )
+        .unwrap();
+        let now = chrono::Utc
+            .with_ymd_and_hms(2026, 10, 18, 13, 5, 0)
+            .unwrap();
+        let test = operation(
+            &profile,
+            "agent.run_now",
+            serde_json::json!({"id": agent.id, "test": true}),
+        )
+        .unwrap();
+        let test: Run = serde_json::from_value(test["run"].clone()).unwrap();
+        assert_eq!(
+            run_thread_title(&agent.name, &test, now, "America/New_York"),
+            "HN AI Desktop · test run"
+        );
+        let mut scheduled = test.clone();
+        scheduled.trigger = RunTrigger {
+            kind: TriggerKind::Cron,
+            routine_id: Some("schedule".into()),
+            source: None,
+        };
+        assert_eq!(
+            run_thread_title(&agent.name, &scheduled, now, "America/New_York"),
+            "HN AI Desktop · Oct 18, 09:05"
+        );
     }
 
     #[test]

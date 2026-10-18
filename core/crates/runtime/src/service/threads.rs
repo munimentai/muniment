@@ -98,12 +98,15 @@ pub fn create_thread(
     create_thread_now(&mut storage.journal, &workspace, provenance).map_err(journal_error)
 }
 
-/// Creates a thread that `owner` owns, as the subject a run in it records.
+/// Creates a thread that `owner` owns, as the subject a run in it records,
+/// named `title`. A thread with a title keeps it: its first run does not
+/// name it from the prompt.
 pub fn create_owned_thread(
     storage: SharedStorage,
     workspace: String,
     attach_profile: String,
     owner: Option<String>,
+    title: &str,
     runtime_version: &str,
 ) -> Result<String, String> {
     let mut provenance = runtime_provenance(runtime_version);
@@ -112,7 +115,21 @@ pub fn create_owned_thread(
         .extra
         .insert("attach_profile".into(), attach_profile.into());
     let mut storage = storage.lock().map_err(lock_error)?;
-    create_thread_now(&mut storage.journal, &workspace, provenance).map_err(journal_error)
+    let journal = &mut storage.journal;
+    let thread =
+        create_thread_now(journal, &workspace, provenance.clone()).map_err(journal_error)?;
+    let seq = journal.last_thread_seq(&thread).map_err(journal_error)?;
+    journal
+        .append_thread_title_renamed(
+            seq,
+            &thread,
+            title,
+            &muniment_core::chrono::Utc::now()
+                .to_rfc3339_opts(muniment_core::chrono::SecondsFormat::AutoSi, true),
+            &provenance,
+        )
+        .map_err(journal_error)?;
+    Ok(thread)
 }
 
 /// Renames one thread owned by one subject.

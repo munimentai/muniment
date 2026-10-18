@@ -658,6 +658,12 @@ fn a_thread_the_queue_creates_belongs_to_the_signed_in_owner() {
         Some("owner-subject")
     );
     assert_eq!(created.provenance.extra["attach_profile"], "desktop-owner");
+    // The thread names the agent and when it ran, not the run's prompt.
+    let renamed = &events[1];
+    assert_eq!(renamed.event_type, "thread.title.renamed");
+    let renamed = serde_json::to_value(renamed).unwrap();
+    let title = renamed["payload_json"]["title"].as_str().unwrap();
+    assert!(title.starts_with("Owned · "), "{title}");
 }
 
 #[test]
