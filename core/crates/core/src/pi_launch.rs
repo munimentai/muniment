@@ -214,14 +214,19 @@ pub trait PiLaunchBoundaries {
     }
 
     /// Whether the operating system lets Pi read its working folder, waiting
-    /// `bound` at most for the user to answer a consent prompt.
+    /// `bound` at most for the user to answer a consent prompt. The read runs
+    /// as the installed Pi, which macOS asks on its own.
     fn folder_access(
         &self,
         directory: &Path,
         bound: std::time::Duration,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> crate::folder_access::FolderAccess {
-        crate::folder_access::check(directory, bound, cancelled)
+        let pi = self
+            .pi_install_root()
+            .ok()
+            .and_then(|root| resolve_current_for(&root, self.pi_artifact()).ok());
+        crate::folder_access::check_as(pi.as_deref(), directory, bound, cancelled)
     }
 
     /// Models that answered earlier runs of this thread, once each, in order.
