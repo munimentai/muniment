@@ -42,6 +42,9 @@ export function createChatController({
   // The permission mode picked for a new thread before its first message, or
   // null. Core sets it before the run starts, so it covers the first tool call.
   readPermissionMode = () => null,
+  // The model the composer picked before any thread exists. The first
+  // message carries it to the thread it starts.
+  readPendingModel = () => null,
   readThreadId = () => null,
   readThreadSummaries = () => [],
   blocked = () => false,
@@ -916,7 +919,8 @@ export function createChatController({
       const thinkingLevel = readThinkingLevel()
       // A launcher thread takes no mode from the main composer.
       const permissionMode = preserveDraft ? null : readPermissionMode()
-      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}) })
+      const model = preserveDraft ? null : readPendingModel()
+      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}) })
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
       if (!preserveDraft) {

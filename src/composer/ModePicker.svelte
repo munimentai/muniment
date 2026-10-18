@@ -7,7 +7,8 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { modeIcon } from '../agents/permission-modes.js'
 
-  let { modes, current, onchoose, onclose } = $props()
+  // `source` names where the thread's mode comes from, such as `default`.
+  let { modes, current, source = '', onchoose, onclose } = $props()
   let menu = $state()
 
   const items = () => [...(menu?.querySelectorAll('[role="menuitemradio"]:not(:disabled)') ?? [])]
@@ -48,6 +49,7 @@
       {#if mode.id === current}<LucideIcon name="check" variant="action" size={14} />{/if}
     </button>
   {/each}
+  {#if source}{@const mode = modes.find((entry) => entry.id === current)}<p class="source">{mode ? `${mode.title} · ${source}` : source}</p>{/if}
   <p class="hint"><kbd>Shift+Tab</kbd>cycles modes</p>
 </div>
 
@@ -62,6 +64,8 @@
   .mode-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
   .mode-title { font-size: var(--text-13); }
   .mode-line { overflow: hidden; color: var(--muted); font-size: var(--text-12); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+  .source { margin: 4px 0 0; padding: 7px 8px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-12); }
+  .source + .hint { margin-top: 0; border-top: 0; }
   .hint { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; padding: 7px 8px 3px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-12); }
   kbd { padding: 1px 5px; border-radius: var(--radius-chip); background: var(--faint); color: var(--ink); font: var(--text-12) var(--font-mono); }
 </style>

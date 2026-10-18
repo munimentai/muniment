@@ -21,20 +21,23 @@
   import { classifierProvider } from '../lib/classifier-catalog.js'
   import { runActive, runDuration, runStatusLabel, triggerLabel, whenLabel } from '../lib/agent-labels.js'
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
+  import { TOOL_KINDS, agentToolChoice, projectTools as resolveTools } from './agent-tools.js'
   import InlineEdit from './InlineEdit.svelte'
   import MachineMark from './MachineMark.svelte'
   import { agentMode, modeIcon, modePermissions } from './permission-modes.js'
   import { isProposal, nextRunLabel, triggerSummary } from './routine-labels.js'
 
   // `modes` is core's `permission.modes` from the agent's machine: undefined
-  // while it loads, null when the machine lists none.
-  let { agent, tauri, machine, inventory = null, latestRun = null, modes = undefined, archived = false,
+  // while it loads, null when the machine lists none. `projectTools` is the
+  // tools of the agent's project, which the agent's choices sit over.
+  let { agent, tauri, machine, inventory = null, latestRun = null, modes = undefined, archived = false, projectTools = null, projectName = '',
     onchat = () => {}, onprofile = () => {}, onaction = async () => {}, onchange = async () => {}, onrun = () => {}, onmanagemodels = () => {} } = $props()
 
   const PANELS = [
     { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
     { id: 'model', label: 'Model', icon: 'cpu' },
     { id: 'permissions', label: 'Permissions', icon: 'shield-check' },
+    { id: 'tools', label: 'Tools', icon: 'wrench' },
     { id: 'routines', label: 'Routines', icon: 'clock' },
     { id: 'activity', label: 'Activity', icon: 'activity' },
   ]
@@ -102,6 +105,36 @@
       await onchange()
     } catch (failure) { error = String(failure?.message ?? failure) }
     finally { busy = false }
+  }
+
+  // Tools reads the agent's machine's catalog while it shows, and core's
+  // `project_tools` says whether the agent may use each tool and which
+  // layer decides: the agent's own choice, its project, or the default.
+  let tools = $state({ rows: [], loading: false, error: '' })
+  let toolCatalog = $state(null)
+  $effect(() => {
+    if (panel !== 'tools' || readOnly) return
+    let alive = true
+    tools = { ...untrack(() => tools), loading: true, error: '' }
+    agentRequest(tauri, agent.runtimeId, 'agent.tool_catalog', {})
+      .then((answer) => { if (alive) toolCatalog = answer ?? {} })
+      .catch((failure) => { if (alive) tools = { rows: [], loading: false, error: String(failure?.message ?? failure) } })
+    return () => { alive = false }
+  })
+  $effect(() => {
+    const catalog = toolCatalog
+    const choices = agent.tools ?? {}
+    const policy = projectTools
+    if (!catalog) return
+    let alive = true
+    Promise.resolve(resolveTools(tauri, catalog, policy, choices))
+      .then((rows) => { if (alive) tools = { rows: rows ?? [], loading: false, error: '' } })
+      .catch((failure) => { if (alive) tools = { rows: [], loading: false, error: String(failure?.message ?? failure) } })
+    return () => { alive = false }
+  })
+  const toolSource = (row) => row.layer === 'agent' ? 'this agent' : row.layer === 'project' ? (projectName ? `off in project ${projectName}` : 'off in its project') : 'default'
+  function chooseTool(row, enabled) {
+    void change({ tools: agentToolChoice(agent, projectTools, row, enabled) })
   }
 
   // Activity reads the newest runs from the agent's machine while it shows,
@@ -208,6 +241,23 @@
           {/each}
         </div>
         <button type="button" class="foot" onclick={() => onprofile(agent)}><LucideIcon name="list-checks" variant="action" size={14} />Rules in the profile</button>
+      {:else if panel === 'tools'}
+        <h4>Tools</h4>
+        {#if readOnly}<p class="empty">Tools show once {machineName} answers.</p>
+        {:else if tools.loading && !tools.rows.length}<p class="empty" role="status">Loading tools…</p>
+        {:else if tools.error}<p class="error" role="alert">{tools.error}</p>
+        {:else}
+          <ul class="tools" aria-label="Tools">
+            {#each tools.rows as row (`${row.kind}:${row.id}`)}
+              <li class="tool">
+                <span class="tool-text"><span class="tool-name">{row.label}</span><span class="record">{TOOL_KINDS[row.kind] ?? row.kind} · {toolSource(row)}</span></span>
+                <Toggle checked={row.allowed} label={`${row.label} on`} disabled={busy} onchange={(enabled) => chooseTool(row, enabled)} />
+              </li>
+            {:else}
+              <li class="empty">No tools.</li>
+            {/each}
+          </ul>
+        {/if}
       {:else if panel === 'routines'}
         <h4>Routines</h4>
         <ul class="routines" aria-label="Routines">
@@ -287,7 +337,10 @@
   .mode-title { display: flex; align-items: baseline; gap: 6px; font-size: var(--text-13); }
   .default { color: var(--muted); font: var(--text-12) var(--font-human); }
   .mode-line { color: var(--muted); font-size: var(--text-12); line-height: 1.4; }
-  .routines, .runs { display: grid; margin: 0; padding: 0; list-style: none; }
+  .routines, .runs, .tools { display: grid; margin: 0; padding: 0; list-style: none; }
+  .tool { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 2px 4px 2px 8px; }
+  .tool-text { display: grid; gap: 1px; min-width: 0; }
+  .tool-name { overflow: hidden; font-size: var(--text-13); text-overflow: ellipsis; white-space: nowrap; }
   .routine { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 2px 4px 2px 0; }
   .routine-text { display: grid; gap: 2px; min-width: 0; padding: 4px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
   .routine-text:hover { background: var(--faint); }

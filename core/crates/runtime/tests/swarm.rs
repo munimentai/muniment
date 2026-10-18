@@ -1054,7 +1054,7 @@ fn a_move_hands_over_webhook_secrets_and_the_mcp_servers_routines_call() {
         .unwrap();
     assert_eq!(
         catalog["mcp"],
-        json!([{"server": "crm", "tools": [{"name": "search_leads"}]}])
+        json!([{"id": "crm-1", "server": "crm", "tools": [{"name": "search_leads"}]}])
     );
 
     // The new primary takes the hook's deliveries with the same secret; the

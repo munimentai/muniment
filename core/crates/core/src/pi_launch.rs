@@ -235,6 +235,11 @@ pub trait PiLaunchBoundaries {
         None
     }
 
+    /// The tools the run's project and its agent leave out.
+    fn tool_policy(&self) -> crate::projects::ToolPolicy {
+        crate::projects::ToolPolicy::default()
+    }
+
     /// The permission gate the run applies: its agent's, else the one the
     /// host gives threads that belong to no agent. None loads no gate.
     fn run_permissions(&self) -> Option<crate::permission_gate::RunPermissions> {
@@ -625,6 +630,7 @@ pub fn pi_launch_config_for_executable(
     // Extension loading precedes the first RPC response.
     config.startup_timeout = std::time::Duration::from_secs(120);
     let agent = boundaries.agent_launch();
+    let tools = boundaries.tool_policy();
     // The prompt states what the assistant does; the facts state where it runs.
     let model = if grant.is_local() {
         boundaries.local_default_model()
@@ -695,20 +701,30 @@ pub fn pi_launch_config_for_executable(
         let agent_skills = agent
             .as_ref()
             .map_or(&[][..], |agent| agent.skills.as_slice());
-        crate::extend::prepare(&root, &thread, agent_skills, &mut config, &mut prompt)
-            .map_err(|e| PiLaunchError::rejected("extensions", e))?;
+        crate::extend::prepare(
+            &root,
+            &thread,
+            agent_skills,
+            &tools.disabled_extensions,
+            &mut config,
+            &mut prompt,
+        )
+        .map_err(|e| PiLaunchError::rejected("extensions", e))?;
     }
     config.args.extend(["--system-prompt".into(), prompt]);
     let identity = session_root.join(IDENTITY_EXTENSION_FILE);
     install_identity_extension(&identity)?;
-    let excluded = std::iter::once(EXCLUDED_TOOLS)
-        .chain(
-            agent
-                .iter()
-                .flat_map(|agent| agent.disabled_tools.iter().map(String::as_str)),
-        )
-        .collect::<Vec<_>>()
-        .join(",");
+    let mut excluded: Vec<&str> = vec![EXCLUDED_TOOLS];
+    for tool in agent
+        .iter()
+        .flat_map(|agent| agent.disabled_tools.iter())
+        .chain(&tools.disabled_tools)
+    {
+        if !excluded.contains(&tool.as_str()) {
+            excluded.push(tool);
+        }
+    }
+    let excluded = excluded.join(",");
     config.args.extend([
         "--extension".into(),
         identity.to_string_lossy().into_owned(),

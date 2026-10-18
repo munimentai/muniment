@@ -61,6 +61,13 @@
   onMount(() => {
     terminal = new Terminal({ fontFamily: 'Commit Mono, monospace', fontSize: codeFontSize(), cursorBlink: true, scrollback: 5000, allowProposedApi: false })
     fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host); theme()
+    // A focused terminal keeps ⌘K on macOS to clear itself; elsewhere Ctrl+K reaches the shell.
+    const mac = navigator.platform.startsWith('Mac')
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (!mac || event.type !== 'keydown' || event.key.toLowerCase() !== 'k' || !event.metaKey || event.shiftKey || event.altKey || event.ctrlKey) return true
+      terminal.clear()
+      return false
+    })
     const input = terminal.onData(data => { if (!id || exited) return; const session = id; inputQueue = inputQueue.then(() => tauri.invoke('terminal_write', { id: session, data })).catch(e => { if (active) error = String(e) }) })
     const observer = new ResizeObserver(() => { void resize() }); observer.observe(host)
     const themes = new MutationObserver(theme); themes.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']})

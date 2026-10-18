@@ -282,8 +282,9 @@ function toolCatalog(runtime) {
       { id: 'web_search', label: 'Web search', read_only: true }, { id: 'fetch_content', label: 'Fetch web pages', read_only: true },
     ],
     mcp: runtime === 'local'
-      ? [{ server: 'crm', tools: [{ name: 'search_leads' }, { name: 'get_lead' }, { name: 'delete_lead' }], checked_at: at(60) }, { server: 'mail', tools: [{ name: 'list_unread' }, { name: 'send' }], checked_at: at(60) }, { server: 'calendar', tools: [] }]
-      : [{ server: 'tracker', tools: [{ name: 'create_issue' }, { name: 'search_issues' }], checked_at: at(120) }],
+      ? [{ id: 'crm-server', server: 'crm', tools: [{ name: 'search_leads' }, { name: 'get_lead' }, { name: 'delete_lead' }], checked_at: at(60) }, { id: 'mail-server', server: 'mail', tools: [{ name: 'list_unread' }, { name: 'send' }], checked_at: at(60) }, { id: 'calendar-server', server: 'calendar', tools: [] }]
+      : [{ id: 'tracker-server', server: 'tracker', tools: [{ name: 'create_issue' }, { name: 'search_issues' }], checked_at: at(120) }],
+    plugins: [],
     skills: [
       { id: 'review', name: 'Code review', description: 'Review a change against the house style.' },
       { id: 'summarize', name: 'Summaries', description: 'Write a five-line summary of a long thread.' },
@@ -323,7 +324,8 @@ function threadMode(store, runtime, threadId) {
   const set = store.threadModes?.[threadId]
   const agent = store.agents.find((entry) => store.primaryThreads[entry.id] === threadId)
   const mode = set ?? agent?.permissions?.mode ?? (agent ? settings.default_agent_mode : settings.default_thread_mode)
-  return { thread_id: threadId, mode, title: MODES.find((entry) => entry.id === mode)?.title ?? mode, source: set ? 'thread' : agent?.permissions?.mode ? 'agent' : 'default', ...(set ? { set_by: 'user' } : {}), ...(agent ? { agent_id: agent.id } : {}) }
+  const source = set ? 'thread' : agent?.permissions?.mode ? 'agent' : 'default'
+  return { thread_id: threadId, mode, title: MODES.find((entry) => entry.id === mode)?.title ?? mode, source, layer: source, ...(set ? { set_by: 'user' } : {}), ...(agent ? { agent_id: agent.id } : {}) }
 }
 
 export function handleAgentRequest(stores, { runtime, operation, body = {} }) {

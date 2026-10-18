@@ -67,14 +67,17 @@ export function artifactRailShortcut(platform = navigator.platform) {
   return platform.startsWith('Mac') ? 'Meta+J' : 'Control+J'
 }
 
+// The record panel takes Shift with the palette's key, which opens Search.
 export function recordPanelShortcut(platform = navigator.platform) {
-  return platform.startsWith('Mac') ? 'Meta+K' : 'Control+K'
+  return platform.startsWith('Mac') ? 'Meta+Shift+K' : 'Control+Shift+K'
 }
 
 export function shortcutDisplayLabel(shortcut) {
-  // One space between the modifier and the key on every platform, so the chip reads as two parts.
-  if (shortcut.startsWith('Meta+')) return `⌘ ${shortcut.slice('Meta+'.length)}`
-  if (shortcut.startsWith('Control+')) return `Ctrl ${shortcut.slice('Control+'.length)}`
+  // One space between the modifiers and the key on every platform, so the chip reads as parts.
+  const shifted = shortcut.includes('+Shift+')
+  const key = shortcut.slice(shortcut.lastIndexOf('+') + 1)
+  if (shortcut.startsWith('Meta+')) return shifted ? `⌘ ⇧ ${key}` : `⌘ ${key}`
+  if (shortcut.startsWith('Control+')) return shifted ? `Ctrl Shift ${key}` : `Ctrl ${key}`
   return shortcut
 }
 
@@ -91,7 +94,11 @@ export function isArtifactRailShortcut(event, platform = navigator.platform) {
 }
 
 export function isRecordPanelShortcut(event, platform = navigator.platform) {
-  return isPlainSuperKey(event, 'k', platform)
+  const mac = platform.startsWith('Mac')
+  return event.key.toLowerCase() === 'k'
+    && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+    && !event.altKey
+    && event.shiftKey
 }
 
 // The one rail column's controller. `readOccupant` answers null, 'artifacts'

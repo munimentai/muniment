@@ -9,6 +9,9 @@ describe('the run line', () => {
     const parts = runLineParts(run, { machine: 'Studio', modes })
     expect(parts).toEqual({ machine: 'Studio', model: 'Anthropic · Claude Sonnet 4.5', mode: 'Bypass permissions', time: '42s', tokens: '18k tokens', cost: '$0.09' })
     expect(runLineLabel(parts)).toBe('On Studio, model Anthropic · Claude Sonnet 4.5, mode Bypass permissions, took 42s, 18k tokens, $0.09 API estimate')
+    // The newest turn names where its model and mode come from.
+    const sourced = runLineParts(run, { machine: 'Studio', modes, sources: { model: 'from project Homelab', mode: 'default' } })
+    expect([sourced.model, sourced.mode]).toEqual(['Anthropic · Claude Sonnet 4.5 (from project Homelab)', 'Bypass permissions (default)'])
   })
 
   it('leaves out what the run did not record, and a live run shows its elapsed time and the mode in force', () => {

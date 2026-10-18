@@ -145,7 +145,8 @@ pub struct Row {
     pub machine: Option<String>,
     pub updated_at: String,
     pub status: Status,
-    /// The status in words, such as `Approve`, `Working` or `Done`.
+    /// The status in words, such as `Approve`, `Working` or `Done`. Empty
+    /// for a read thread.
     pub status_label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
@@ -310,7 +311,8 @@ fn status_label(status: Status) -> &'static str {
         Status::Working => "Working",
         Status::Failed => "Failed",
         Status::Done => "Done",
-        Status::Read => "Read",
+        // A settled thread shows only its time.
+        Status::Read => "",
     }
 }
 
@@ -709,7 +711,11 @@ mod tests {
         assert_eq!(sidebar.recent[0].status_label, "Failed");
         assert_eq!(sidebar.recent[1].status_label, "Done");
         assert_eq!(ids(&sidebar.settled), vec!["old"]);
-        assert_eq!(sidebar.settled[0].status_label, "Read");
+        assert_eq!(sidebar.settled[0].status, Status::Read);
+        assert_eq!(
+            sidebar.settled[0].status_label, "",
+            "a settled thread shows only its time"
+        );
         assert_eq!(ids(&sidebar.archived), vec!["gone"]);
     }
 

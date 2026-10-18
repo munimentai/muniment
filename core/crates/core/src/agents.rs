@@ -52,11 +52,20 @@ pub struct AgentModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
 }
-/// The account's tools an agent leaves out. Built-in tools are on by default.
+/// The account's tools an agent leaves out, and its choices over its
+/// project's tools. Built-in tools are on by default.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTools {
     #[serde(default)]
     pub disabled: Vec<String>,
+    /// Extension ids, as a project's tools name them, the agent leaves out
+    /// although its project allows them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_extensions: Vec<String>,
+    /// Built-in tool ids and extension ids the agent uses although its
+    /// project leaves them out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<String>,
 }
 /// Which agents an agent may message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -572,6 +581,13 @@ fn validate_v2(agent: &Agent) -> Result<(), String> {
             return Err(format!(
                 "Turn off at most {MAX_DISABLED_TOOLS} tools by their names."
             ));
+        }
+        for ids in [&tools.disabled_extensions, &tools.allowed] {
+            if ids.len() > MAX_DISABLED_TOOLS || !ids.iter().all(|id| short(id, 512)) {
+                return Err(format!(
+                    "Choose at most {MAX_DISABLED_TOOLS} project tools by their ids."
+                ));
+            }
         }
     }
     if let Some(skills) = &agent.skills {
