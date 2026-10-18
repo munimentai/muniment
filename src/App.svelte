@@ -23,6 +23,7 @@
   import { actionGroups, responseParts } from './activity/action-feedback.js'
   import ActionFeedback from './activity/ActionFeedback.svelte'
   import { onMount, tick, untrack } from 'svelte'
+  import { workspaceOnNavigate } from './lib/workspace-panel-state.js'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
   import { open } from '@tauri-apps/plugin-dialog'
@@ -372,6 +373,13 @@
     artifactsOpen=true;projectsOpen=false; agentsOpen=false; activityOpen = false;agentProfileOpen=false;closeRail()
   }
   let browserPanel = $state(null)
+  // The tool put aside while Settings or a catalog page shows.
+  let parkedPanel = null
+  const threadView = $derived(!settingsOpen && !agentsOpen && !artifactsOpen && !projectsOpen && !activityOpen)
+  $effect(() => {
+    const view = threadView
+    untrack(() => { ({ panel: browserPanel, parked: parkedPanel } = workspaceOnNavigate({ panel: browserPanel, parked: parkedPanel }, view)) })
+  })
   let workspacePanelWidth = $state(500)
   let workspacePanelMaximum = $state(1200)
   let workspacePanelPointer = $state()
