@@ -723,6 +723,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("blob-read", Operation::BlobRead),
         ("usage-summary", Operation::UsageSummary),
         ("notifications-list", Operation::NotificationsList),
+        ("agent-draft", Operation::AgentDraft),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -1040,6 +1041,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("fleet-ops", json!({"ops": [fixture_op("queued")]})),
         ("usage-summary", fixture_usage()),
         ("notifications-list", fixture_notifications()),
+        ("agent-draft", fixture_agent_draft()),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1838,6 +1840,7 @@ fn request_body(operation: Operation) -> serde_json::Value {
         }
         Operation::AgentThreads | Operation::AgentReplays => json!({"id": FIXTURE_AGENT_ID}),
         Operation::AgentToolCatalog => json!({}),
+        Operation::AgentDraft => json!({"draft_id": FIXTURE_DRAFT_ID}),
         Operation::AgentReplay => json!({"id": FIXTURE_AGENT_ID, "replay_id": FIXTURE_REPLAY_ID}),
         Operation::PermissionModes | Operation::PermissionSettings => json!({}),
         Operation::PermissionSettingsSave => json!({
@@ -1857,6 +1860,37 @@ fn request_body(operation: Operation) -> serde_json::Value {
 }
 
 const PERMISSION_DEFAULT_TIMEOUT: u64 = 4 * 60 * 60;
+const FIXTURE_DRAFT_ID: &str = "019965a0-0000-4000-8000-0000000000d7";
+
+/// A finished agent draft, as `agent.draft` answers a poll once: one enabled
+/// weekday routine from the trigger reader and no question.
+fn fixture_agent_draft() -> serde_json::Value {
+    json!({
+        "draft_id": FIXTURE_DRAFT_ID,
+        "status": "done",
+        "draft": {
+            "name": "Inbox brief",
+            "label": "Morning briefer",
+            "instructions": "Summarize the new email in my inbox and list what needs a reply.",
+            "skills": [],
+            "tools_off": [],
+            "permission_mode": "manual",
+            "routines": [{
+                "id": FIXTURE_PROPOSAL_ID,
+                "name": "Summarize the new email in my inbox",
+                "enabled": true,
+                "trigger": {"kind": "cron", "expr": "0 9 * * 1-5", "tz": "America/New_York"},
+                "prompt": "Summarize the new email in my inbox.",
+                "created_from": "instructions",
+                "last_fired_at": null,
+                "last_result": null
+            }]
+        },
+        "question": null,
+        "via": "router"
+    })
+}
+
 const FIXTURE_PLAN_SUMMARY: &str = "1. Add a `--dry-run` flag to the export script.";
 const FIXTURE_PLAN: &str = "1. Add a `--dry-run` flag to the export script.\n2. Print each file it would write.\n3. Test it on the sample folder.";
 
@@ -2915,6 +2949,7 @@ mod tests {
             Operation::GroupUpdate,
             Operation::AgentThreads,
             Operation::AgentToolCatalog,
+            Operation::AgentDraft,
             Operation::AgentReplays,
             Operation::AgentReplay,
             Operation::PermissionModes,
@@ -3010,6 +3045,7 @@ mod tests {
             "response-routine-webhook-info.json",
             "response-agent-threads.json",
             "response-agent-tool-catalog.json",
+            "response-agent-draft.json",
             "response-agent-replays.json",
             "response-agent-replay.json",
             "event-agent-activity.json",
@@ -3050,7 +3086,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4 + 2,
             "every canonical fixture must be inventoried"
         );
     }

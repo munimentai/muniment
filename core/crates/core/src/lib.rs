@@ -109,6 +109,7 @@ pub use muniment_attach::{
     write_scaffold_file_if_missing,
 };
 
+pub mod agent_draft;
 pub mod agent_extract;
 pub mod agent_hooks;
 pub mod agent_poll;

@@ -585,6 +585,7 @@ mod tests {
             ("routine.delete", Operation::RoutineDelete),
             ("agent.threads", Operation::AgentThreads),
             ("agent.tool_catalog", Operation::AgentToolCatalog),
+            ("agent.draft", Operation::AgentDraft),
             ("agent.replays", Operation::AgentReplays),
             ("agent.replay", Operation::AgentReplay),
             ("usage.summary", Operation::UsageSummary),
