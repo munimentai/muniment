@@ -3777,8 +3777,8 @@ describe('sidebar collapse', () => {
     expect(currentThread).toHaveAttribute('tabindex', '-1')
     expect(currentThread.tabIndex).toBe(-1)
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument()
-    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action, #sidebar .sidebar-collection > .project-row > .project-title')).toHaveLength(5)
-    expect(screen.getByRole('button', { name: 'Settings' })).toHaveTextContent('Settings')
+    expect(document.querySelectorAll('.titlebar .new-thread, #sidebar .side-action, #sidebar .sidebar-collection > .project-row > .project-title')).toHaveLength(3)
+    expect([...document.querySelectorAll('#sidebar .sidebar-actions button')].map((button) => button.getAttribute('aria-label'))).toEqual(['Settings', 'Usage', 'Notifications'])
     expect(document.querySelectorAll('.titlebar .new-thread kbd')).toHaveLength(0)
     expect(document.querySelectorAll('#sidebar kbd')).toHaveLength(1)
 
@@ -8236,28 +8236,32 @@ it('opens the Projects catalog independently from the sidebar disclosure', async
 
 it('keeps one composer panel open and dismisses it with Escape or an outside click', async () => {
   localModeStatus = true
+  threadSummaryResult = []
   const original = invoke.getMockImplementation()
-  invoke.mockImplementation((command,args) => command === 'model_router_settings' ? Promise.resolve({accounts:[{id:'subscription',source:'account',family:'anthropic',label:'Anthropic'}]}) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
+  invoke.mockImplementation((command,args) => command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory)
+    : command === 'agent_request' && args?.operation === 'permission.modes' ? Promise.resolve(JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/response-permission-modes.json'), 'utf8')).body)
+      : original(command,args))
   render(App)
-  await findWorkspaceComposer()
-  await fireEvent.click(await screen.findByRole('button',{name:'Usage',exact:true}))
-  expect(screen.getByRole('dialog',{name:'Account usage'})).toBeInTheDocument()
+  await findReadyWorkspaceComposer()
+  const mode = await screen.findByRole('button',{name:/^Permission mode/})
+  await fireEvent.click(mode)
+  expect(await screen.findByRole('menu',{name:'Modes'})).toBeInTheDocument()
   expect(document.querySelector('.model-chip [data-icon=chevrons-up-down]')).not.toBeNull()
   await fireEvent.click(document.querySelector('.model-chip'))
   expect(document.querySelector('.model-chip [data-icon=chevrons-down-up]')).not.toBeNull()
-  expect(screen.queryByRole('dialog',{name:'Account usage'})).not.toBeInTheDocument()
+  expect(screen.queryByRole('menu',{name:'Modes'})).not.toBeInTheDocument()
   expect(screen.getByRole('dialog',{name:'Model'})).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button',{name:'Usage',exact:true}))
+  await fireEvent.click(mode)
   expect(screen.queryByRole('dialog',{name:'Model'})).not.toBeInTheDocument()
   await fireEvent.keyDown(document,{key:'Escape'})
-  expect(screen.queryByRole('dialog',{name:'Account usage'})).not.toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('button',{name:'Usage',exact:true}))
+  expect(screen.queryByRole('menu',{name:'Modes'})).not.toBeInTheDocument()
+  await fireEvent.click(mode)
   await fireEvent.pointerDown(screen.getByRole('button',{name:'Projects',exact:true}))
-  expect(screen.queryByRole('dialog',{name:'Account usage'})).not.toBeInTheDocument()
+  expect(screen.queryByRole('menu',{name:'Modes'})).not.toBeInTheDocument()
 })
 
 
-it('draws the machine, model, thinking level, usage and permission mode menus with one shared button', async () => {
+it('draws the machine, model, thinking level and permission mode menus with one shared button', async () => {
   localModeStatus = true
   threadSummaryResult = []
   const reasoning = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [
@@ -8280,17 +8284,16 @@ it('draws the machine, model, thinking level, usage and permission mode menus wi
     machine: await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }),
     model: await screen.findByRole('button', { name: 'Model: GPT 5.5' }),
     thinking: await screen.findByRole('button', { name: 'Thinking level: Medium' }),
-    usage: await screen.findByRole('button', { name: 'Usage', exact: true }),
     mode: await screen.findByRole('button', { name: 'Permission mode: Bypass permissions' }),
   }
-  const panels = { machine: () => screen.queryByRole('menu', { name: 'Machines' }), model: () => screen.queryByRole('dialog', { name: 'Model' }), thinking: () => screen.queryByRole('menu', { name: 'Thinking level' }), usage: () => screen.queryByRole('dialog', { name: 'Account usage' }), mode: () => screen.queryByRole('menu', { name: 'Modes' }) }
+  const panels = { machine: () => screen.queryByRole('menu', { name: 'Machines' }), model: () => screen.queryByRole('dialog', { name: 'Model' }), thinking: () => screen.queryByRole('menu', { name: 'Thinking level' }), mode: () => screen.queryByRole('menu', { name: 'Modes' }) }
   // Every menu button is the one shared button, so none can drift from the others.
   for (const [menu, button] of Object.entries(buttons)) {
     expect(button, menu).toHaveClass('composer-menu-button')
     expect(button, menu).toHaveAttribute('data-menu', menu)
     expect(button, menu).not.toHaveAttribute('data-open')
   }
-  expect(document.querySelectorAll('.composer-row button[aria-haspopup]:not([aria-label="Extensions"]):not(.context-trigger)')).toHaveLength(5)
+  expect(document.querySelectorAll('.composer-row button[aria-haspopup]:not([aria-label="Extensions"]):not(.context-trigger)')).toHaveLength(4)
   expect(buttons.machine.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
   expect(buttons.model.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
   expect(buttons.mode.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
@@ -8304,7 +8307,6 @@ it('draws the machine, model, thinking level, usage and permission mode menus wi
       if (other !== menu) expect(panels[other](), `${menu} open, ${other}`).toBeNull()
     }
   }
-  expect(buttons.usage.querySelector('[data-icon=gauge]')).not.toBeNull()
   await fireEvent.click(buttons.machine)
   expect(buttons.machine.querySelector('[data-icon=chevrons-down-up]')).not.toBeNull()
   // A narrow composer keeps the network mark for the machine, the provider mark for the model and the gauge for usage.
@@ -8382,14 +8384,19 @@ it('shows no thinking control for a model without reasoning', async () => {
   expect(screen.queryByRole('button', { name: /^Thinking level/ })).not.toBeInTheDocument()
 })
 
-it.each([[], [{id:'api',source:'key',family:'openai'}]])('hides composer usage without subscriptions: %j', async (accounts) => {
+it.each([
+  ['no window is low', [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 40, status: 'ok', accounts: [] }], null],
+  ['a window is spent', [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000, accounts: [] }], 'OpenAI weekly limit reached.'],
+])('keeps usage out of the composer and warns only when %s', async (_, limits, line) => {
   localModeStatus = true
   const original = invoke.getMockImplementation()
-  invoke.mockImplementation((command,args) => command === 'model_router_settings' ? Promise.resolve({accounts}) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
+  invoke.mockImplementation((command,args) => command === 'usage_summary' ? Promise.resolve({ limits }) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
   render(App)
   await findWorkspaceComposer()
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
-  expect(screen.queryByRole('button',{name:'Usage',exact:true})).not.toBeInTheDocument()
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }], body: expect.objectContaining({ range: '24h' }) }))
+  expect(document.querySelector('.composer-row [data-menu="usage"]')).toBeNull()
+  if (line) expect(await screen.findByRole('region', { name: 'Usage limit' })).toHaveTextContent(line)
+  else expect(screen.queryByRole('region', { name: 'Usage limit' })).not.toBeInTheDocument()
 })
 
 it('renames, archives, restores and deletes a pending artifact through its catalog menu',async()=>{
@@ -9070,18 +9077,20 @@ describe('the swarm', () => {
     expect(screen.queryByText('NO_RESPONSE')).not.toBeInTheDocument()
   })
 
-  it('answers an approval from Activity and says when another device answered first', async () => {
+  it('answers an approval from Notifications and says when another device answered first', async () => {
     const rule = { request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push origin main'], working_directory: '/work/scout' } }
     const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-box', run_id: 'r1', gate_id: 'g1', thread_id: 't1', state: 'pending', created_at: new Date().toISOString(), request: { kind: 'select', title: 'Allow bash? Writes need a yes.', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] }, rule, summary: 'bash `git push origin main` in /work/scout', answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'] }
     swarmMachine({ approvals: [approval], answers: { 'agent.approval_answer': () => ({ status: 'already_answered', approval: { ...approval, state: 'answered' } }), 'agent.runs': () => ({ runs: [] }) } })
+    const swarmed = invoke.getMockImplementation()
+    const page = { needs_you: [{ kind: 'approval', id: approval.approval_id, machine: { id: 'local', name: 'This computer' }, agent_id: 'a1', agent_name: 'Lead scout', approval, at: approval.created_at }], running: [], days: [], upcoming: [], counts: { needs_you: 1, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+    invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(page) : swarmed(command, args))
     render(App)
-    const activity = await screen.findByRole('button', { name: /^Activity/ })
-    await waitFor(() => expect(activity).toHaveTextContent('1'))
-    await fireEvent.click(activity)
-    const list = await screen.findByRole('list', { name: 'Waiting for approval' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Notifications, 1 need you' })).toHaveTextContent('1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'Notifications, 1 need you' }))
+    const list = await screen.findByRole('region', { name: /^Needs you/ })
     expect(list).toHaveTextContent('bash `git push origin main` in /work/scout')
     expect(list).toHaveTextContent('/work/scout')
-    expect(list).toHaveTextContent('Build box')
+    await waitFor(() => expect(list).toHaveTextContent('Build box'))
     expect(within(list).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny', 'Open conversation'])
     await fireEvent.click(within(list).getByRole('button', { name: 'Always allow for this agent' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: 'always_allow_agent' } }))

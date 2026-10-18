@@ -1792,6 +1792,29 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             )
             .map_err(ProtocolError::invalid_request_with_reason);
         }
+        if operation == muniment_core::attach::Operation::UsageSummary {
+            return muniment_core::usage_report::operation(
+                &self.profile_directory,
+                |since| {
+                    let mut storage = self
+                        .storage
+                        .lock()
+                        .map_err(|_| "Usage could not be read from the run history.".to_string())?;
+                    muniment_core::usage_report::receipts(&mut storage.journal, since)
+                },
+                body,
+                muniment_core::chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(ProtocolError::invalid_request_with_reason);
+        }
+        if operation == muniment_core::attach::Operation::NotificationsList {
+            return muniment_core::notifications::operation(
+                &self.profile_directory,
+                body,
+                muniment_core::chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(ProtocolError::invalid_request_with_reason);
+        }
         if operation == muniment_core::attach::Operation::AgentToolCatalog {
             return muniment_core::agents::operation(
                 &self.profile_directory,

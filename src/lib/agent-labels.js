@@ -1,4 +1,4 @@
-// The words the agent profile, the routines and Activity show for a run and
+// The words the agent profile, the routines and Notifications show for a run and
 // a trigger. The runtime decides every state, and these only name it.
 import { executionTime } from './execution-time.js'
 

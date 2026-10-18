@@ -22,6 +22,7 @@
   const ContextSettings = () => import('../activity/ContextSettings.svelte')
   const PermissionSettings = () => import('./PermissionSettings.svelte')
   const LanguageSection = () => import('./LanguageSection.svelte')
+  const NotificationSettings = () => import('../notifications/NotificationSettings.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
   import { LOCAL_PARTS, settingsMachine } from '../runtimes/runtimes.js'
@@ -168,7 +169,7 @@
         </SettingsPart>
       {/if}
     {:else if page === 'general'}
-      <PageHead intro="How Muniment looks, listens and reads, on every machine." />
+      <PageHead intro="How Muniment looks, listens, reads and notifies, on every machine." />
       <SettingsPart id="appearance" title="Appearance" focus={part === 'appearance'}>
         <SettingsSection load={Appearance} properties={{tauri}} />
       </SettingsPart>
@@ -177,6 +178,9 @@
       </SettingsPart>
       <SettingsPart id="voice" title="Voice" focus={part === 'voice'}>
         <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
+      </SettingsPart>
+      <SettingsPart id="notifications" title="Notifications" focus={part === 'notifications'}>
+        <SettingsSection load={NotificationSettings} properties={{tauri}} />
       </SettingsPart>
       <SettingsPart id="about" title="About" focus={part === 'about'}>
         <PageHead />

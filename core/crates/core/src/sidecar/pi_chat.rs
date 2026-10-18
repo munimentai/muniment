@@ -84,6 +84,9 @@ pub struct Receipt {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<String>,
+    /// The catalog's estimate in US dollars that `cost` shows rounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -567,6 +567,19 @@ impl RunStore {
         )
     }
 
+    /// Every run's id with its agent and thread, for usage by agent.
+    pub fn agents_by_run(&self) -> Result<Vec<(String, String, Option<String>)>, String> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare("SELECT id, agent_id, thread_id FROM runs")
+            .map_err(|_| "Agent run history could not be read.".to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|_| "Agent run history could not be read.".to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "Agent run history could not be read.".to_string())
+    }
+
     /// One agent's newest run, if it has one.
     pub fn latest(&self, agent_id: &str) -> Result<Option<Run>, String> {
         Ok(self.page(Some(agent_id), 1, None)?.runs.into_iter().next())

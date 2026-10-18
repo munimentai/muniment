@@ -721,6 +721,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("fleet-pins", Operation::FleetPins),
         ("fleet-pin-set", Operation::FleetPinSet),
         ("blob-read", Operation::BlobRead),
+        ("usage-summary", Operation::UsageSummary),
+        ("notifications-list", Operation::NotificationsList),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -1036,6 +1038,8 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         }),
         ("fleet-op-cancel", json!({"op": fixture_op("cancelled")})),
         ("fleet-ops", json!({"ops": [fixture_op("queued")]})),
+        ("usage-summary", fixture_usage()),
+        ("notifications-list", fixture_notifications()),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1792,6 +1796,10 @@ fn request_body(operation: Operation) -> serde_json::Value {
             "muniment.theme": "light",
             "muniment.browser.homepage": "https://example.com/"
         }}),
+        Operation::UsageSummary => {
+            json!({"range": "7d", "provider": "anthropic", "utc_offset_minutes": -240})
+        }
+        Operation::NotificationsList => json!({"limit": 50}),
         Operation::AgentApprovalAnswer => json!({
             "approval_id": FIXTURE_APPROVAL_ID,
             "answer": {"type": "confirm", "value": true}
@@ -1939,6 +1947,99 @@ const FIXTURE_APPROVAL_ID: &str =
     "019965a0-0000-7000-8000-0000000000b3:019965a0-0000-7000-8000-0000000000b4";
 
 const FIXTURE_OP_ID: &str = "019965a0-0000-7000-8000-0000000000d6";
+
+/// One machine's `usage.summary` for a week of Anthropic turns.
+fn fixture_usage() -> serde_json::Value {
+    let amount = json!({
+        "tokens": {"input": 1200, "output": 800, "cache_read": 9000, "cache_write": 400, "reasoning": 0},
+        "processed": 11400,
+        "runs": 3,
+        "cost_usd": 0.42,
+        "unpriced_runs": 0
+    });
+    let mut row = amount.clone();
+    row["key"] = json!("anthropic/claude-opus-5");
+    row["label"] = json!("claude-opus-5");
+    row["provider"] = json!("anthropic");
+    json!({
+        "range": "7d",
+        "start_ms": 1767225600000_i64,
+        "end_ms": 1767830400000_i64,
+        "bucket": "day",
+        "totals": {
+            "processed": 11400,
+            "cached_input": 9000,
+            "uncached_input": 1600,
+            "output": 800,
+            "cache_hit_percent": 84.9,
+            "runs": 3,
+            "cost_usd": 0.42,
+            "unpriced_runs": 0
+        },
+        "series": [{"start_ms": 1767744000000_i64, "providers": {"anthropic": amount}}],
+        "breakdown": {"model": [row], "agent": [], "project": []},
+        "providers": ["anthropic"],
+        "limits": [{
+            "provider": "anthropic",
+            "kind": "five_hour",
+            "scope": "",
+            "window_seconds": 18000,
+            "remaining_percent": 62.0,
+            "resets_at_ms": 1767830400000_i64,
+            "elapsed_percent": 40.0,
+            "pace": "on",
+            "status": "ok",
+            "accounts": [{"id": "acct-1", "label": "work@example.com", "plan": "max", "remaining_percent": 62.0, "limit_reached": false, "resets_at_ms": 1767830400000_i64}]
+        }],
+        "unmetered": [{"provider": "ollama", "label": "Ollama", "reason": "local"}],
+        "windows": [{
+            "account_id": "acct-1",
+            "label": "work@example.com",
+            "provider": "anthropic",
+            "kind": "five_hour",
+            "scope": "",
+            "plan": "max",
+            "remaining_percent": 62.0,
+            "limit_reached": false,
+            "resets_at_ms": 1767830400000_i64,
+            "observed_at_ms": 1767823200000_i64
+        }]
+    })
+}
+
+/// One machine's `notifications.list`: a run waiting for an answer.
+fn fixture_notifications() -> serde_json::Value {
+    json!({
+        "runs": [{
+            "id": "019965a0-0000-7000-8000-0000000000f1",
+            "agent_id": FIXTURE_AGENT_ID,
+            "thread_id": FIXTURE_THREAD_ID,
+            "trigger": {"kind": "cron", "routine_id": "weekday-briefing"},
+            "status": "waiting_input",
+            "attempt": 1,
+            "hop": 0,
+            "created_at": "2026-01-01T14:00:00Z",
+            "updated_at": "2026-01-01T14:05:00Z",
+            "result_summary": null,
+            "silent": false,
+            "error": null,
+            "waiting_since": "2026-01-01T14:05:00Z",
+            "reminded_at": null,
+            "prompt": "Write the weekday briefing.",
+            "agent_name": "Lead scout",
+            "limit_stop": false
+        }],
+        "upcoming": [{
+            "agent_id": FIXTURE_AGENT_ID,
+            "agent_name": "Lead scout",
+            "routine_id": "weekday-briefing",
+            "routine_name": "Weekday briefing",
+            "at_ms": 1767276000000_i64
+        }],
+        "approvals": [],
+        "read_at": "2026-01-01T13:00:00Z"
+    })
+}
 
 /// The preferences `preferences.get`, `preferences.set` and
 /// `preferences.import` answer, with the import's homepage when `imported`.
@@ -2829,6 +2930,8 @@ mod tests {
             Operation::PreferencesImport,
             Operation::FleetOpCancel,
             Operation::FleetOps,
+            Operation::UsageSummary,
+            Operation::NotificationsList,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -2947,7 +3050,7 @@ mod tests {
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4,
             "every canonical fixture must be inventoried"
         );
     }

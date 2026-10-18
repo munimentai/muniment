@@ -44,6 +44,7 @@ export function settingsIndex({ remote = false } = {}) {
     ['general', 'appearance', 'Appearance', 'theme mode dark light frame color scheme type size font avatars thinking indicator'],
     ['general', 'language', 'Language', 'browser language translation'],
     ['general', 'voice', 'Voice', 'dictation shortcut microphone speech model filler words custom words'],
+    ['general', 'notifications', 'Notifications', 'system notifications alerts needs you finished approvals questions failures usage limit bell'],
     ['general', 'about', 'About', 'version'],
   ]
 }
@@ -87,6 +88,7 @@ const TARGETS = {
   appearance: ['general', 'appearance'],
   voice: ['general', 'voice'],
   language: ['general', 'language'],
+  notifications: ['general', 'notifications'],
 }
 
 export function settingsTarget(id) {
