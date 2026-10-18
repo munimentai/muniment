@@ -13,7 +13,7 @@ Every theme carries ten core color tokens in one `:root[data-theme]`
 block. Appearance offers four colors, Moss, Harbor, Clay and Iris, in three
 rows: Normal, Vibrant and High contrast. Each pick has a light and a dark
 version, and Mode picks between them, so System follows the OS with the
-picked palette. Normal sets are quiet neutrals tinted by the color, with the color as signal and accent. Vibrant sets tint paper, add a complementary accent and color selection and the composer's focus edge with it. High contrast sets
+picked palette. Normal sets are quiet neutrals tinted by the color, with the color as signal and accent. Vibrant sets tint paper, add a brighter accent from the color's own family and color selection and the composer's focus edge with it. High contrast sets
 hold pure ink on pure paper, with the color on strong hairlines and hovers. The table holds Moss light and Moss dark.
 Every set adds `--accent`, `--accent-soft` and `--on-accent`. `--success`, `--active`, `--danger` and `--warning` color the states core reports.
 
@@ -30,7 +30,7 @@ Every set adds `--accent`, `--accent-soft` and `--on-accent`. `--success`, `--ac
 | `--oxide` | `#B4483E` | `#C96A61` | Deny, critical |
 | `--ochre` | `#B98A2F` | `#CBA14E` | Caution, budget |
 
-Vibrant sets pair the color with a complementary accent: Moss with raspberry, Harbor with orange, Clay with teal and Iris with amber. Moss neutrals carry a faint green cast. The one
+Vibrant accents stay in the color's hue family: Moss with teal, Harbor with azure, Clay with terracotta and Iris with violet. Moss neutrals carry a faint green cast. The one
 exception is Moss dark's black paper: its surface and faint keep the cast, so the
 frame is black and every panel on it still ties to signal.
 

@@ -88,6 +88,27 @@ it('keeps every accent readable on action surfaces and filled buttons', () => {
     const palette = palettes[name]
     expect(contrastRatio(palette.accent, palette['accent-soft'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(palette.accent, palette['on-accent'])).toBeGreaterThanOrEqual(4.5)
+    // Selection draws the accent on its soft fill over paper and surface.
+    for (const background of ['paper', 'surface']) expect(contrastRatio(palette.accent, palette[background]), `${name} accent on ${background}`).toBeGreaterThanOrEqual(4.5)
+    for (const foreground of ['ink', 'muted']) expect(contrastRatio(palette[foreground], palette['accent-soft']), `${name} ${foreground} on accent-soft`).toBeGreaterThanOrEqual(4.5)
+  }
+})
+
+// Each accent stays in its color's hue family, so selection, focus and primary
+// buttons sit in harmony with the surfaces the color tints.
+const hue = (hex) => {
+  const [r, g, b] = hex.match(/[\dA-F]{2}/gi).map((channel) => parseInt(channel, 16) / 255)
+  const [max, min] = [Math.max(r, g, b), Math.min(r, g, b)]
+  const delta = max - min
+  const sector = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4
+  return (sector * 60 + 360) % 360
+}
+const hueDistance = (first, second) => Math.min(Math.abs(first - second), 360 - Math.abs(first - second))
+
+it('keeps every accent in the hue family of its color', () => {
+  for (const name of [...themes, 'default light', 'default dark']) {
+    const palette = palettes[name]
+    expect(hueDistance(hue(palette.accent), hue(palette.signal)), `${name} accent hue`).toBeLessThanOrEqual(30)
   }
 })
 
