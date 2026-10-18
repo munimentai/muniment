@@ -16,7 +16,7 @@
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
-  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, organizeThreads } from './lib/thread-organization.js'
+  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, organizeThreads, listedThreads } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
@@ -744,7 +744,7 @@
   // Projects another fleet member owns, each with its owner. Their files
   // stay on that member.
   const remoteProjectRows = $derived(Object.entries(projectCatalog.remote ?? {}).map(([id, project]) => [id, project.name, projectOwner(project, swarm, runtimeList)]).sort((a, b) => a[1].localeCompare(b[1])))
-  const regularThreads = $derived(threadSummaries.filter(thread => !agentThreadMap[thread.threadId] && !swarm.groups.some(group => group.thread_id === thread.threadId) && !creations.some(item=>item.threadId===thread.threadId) && !artifactItems.some(item=>item.threadId===thread.threadId)))
+  const regularThreads = $derived(listedThreads(threadSummaries, { agentThreads: agentThreadMap, groupThreads: swarm.groups.map(group => group.thread_id), creations }))
   let threadOrganization = $state(readThreadOrganization())
   let threadSearch = $state('')
   let archivedThreads = $state(false)
