@@ -3,7 +3,7 @@
 // by provider, and core joins the machines, so this module only asks,
 // formats and names what core answers.
 import { agentRuntimes } from '../agents/agent-runtime.js'
-import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
+import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { familyName, providerName } from '../lib/provider-catalog.js'
 
 export const USAGE_VIEWS = [
@@ -24,11 +24,12 @@ export const BREAKDOWNS = [
   { value: 'machine', label: 'Machine' },
 ]
 
-// This computer and each paired machine that answers, as core's merge names them.
+// This computer and each paired machine that answers, each under the one
+// name the Machines list shows for it.
 export function machineRefs(runtimeList) {
   return agentRuntimes(runtimeList).map((runtime) => ({
     id: runtime.local ? LOCAL_RUNTIME_ID : runtime.id,
-    name: runtime.local ? 'This computer' : runtime.name || 'Paired machine',
+    name: machineName(runtime),
   }))
 }
 

@@ -2,6 +2,7 @@
   import { tick, onMount } from 'svelte'
   import ProviderLogo from '../ProviderLogo.svelte'
   import LucideIcon from '../LucideIcon.svelte'
+  import { followPointer } from '../menu-pointer.js'
   let { label, value, options, onchange, disabled = false, placeholder = 'Choose', inline = true, hideLabel = false } = $props()
   let open = $state(false), root = $state(), trigger = $state()
   const selected = $derived(options.find(option => option.value === value))
@@ -30,7 +31,7 @@
     <button data-ui-choice type="button" bind:this={trigger} {disabled} aria-label={`${label}: ${selected?.label ?? placeholder}`} aria-haspopup="menu" aria-expanded={open} onclick={show}>
       {#if selected?.provider}<ProviderLogo color provider={selected.provider} size={16} />{/if}<span>{selected?.label ?? placeholder}</span><LucideIcon name="chevron-down" size={14} variant="action" />
     </button>
-    {#if open}<div class="choices" role="menu" aria-label={label}>
+    {#if open}<div class="choices" role="menu" aria-label={label} use:followPointer>
       {#each options as option (option.value)}<button data-ui-choice type="button" role="menuitemradio" aria-checked={option.value === value} onclick={() => { close(); onchange(option.value) }}>
         {#if option.provider}<ProviderLogo color provider={option.provider} size={16} />{/if}<span>{option.label}</span>{#if option.value === value}<LucideIcon name="check" size={14} variant="action" />{/if}
       </button>{/each}
@@ -43,7 +44,7 @@
   .control { position: relative; min-width: 0; } .inline .control { flex: 1; min-width: min(180px, 100%); }
   button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 7px 10px; box-sizing: border-box; font: inherit; line-height: 1.4; text-align: left; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); cursor: pointer; }
   button span { flex: 1; } button:disabled { opacity: .5; cursor: default; }
-  button:focus-visible { background: var(--faint); color: var(--ink); }
+  button:not([role="menuitemradio"]):focus-visible { background: var(--faint); color: var(--ink); }
   .choices { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 3; display: grid; gap: 2px; max-height: 240px; overflow: auto; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); box-shadow: var(--shadow-overlay); }
   .choices button { border-color: transparent; } .choices button:hover, .choices button[aria-checked="true"] { background: var(--faint); }
 </style>

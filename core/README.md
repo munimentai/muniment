@@ -1150,7 +1150,9 @@ access settings without changing them: `MUNIMENT_REMOTE_ACCESS` (`on` or
 `0.0.0.0:7443`), `MUNIMENT_REMOTE_ENDPOINTS` (a comma list of `host:port`
 the links name) and `MUNIMENT_REMOTE_ALLOW_PUBLIC` (`on` or `off`). `install_kind` is `server`, or `container` when
 `MUNIMENT_INSTALL_KIND=container`. `MUNIMENT_REMOTE_NAME` sets the name links
-and paired devices show, which defaults to `Muniment runtime`. The runtime
+and paired devices show. Without it the runtime names itself `Docker container`
+or `Podman container` inside a container and `<hostname> (server)` on any other
+host. The runtime
 announces the workspace version it was built from, which the release of the
 same tag shares. At start `serve` logs the runtime id, the certificate fingerprint and
 the listen address.

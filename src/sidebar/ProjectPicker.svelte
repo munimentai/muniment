@@ -7,6 +7,7 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import PopupClose from '../lib/PopupClose.svelte'
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
+  import { followPointer } from '../lib/menu-pointer.js'
 
   // `projects` are [{ id, name }], with No project as id null.
   let { title, projects = [], current, busy = false, error = '', onmove, onclose } = $props()
@@ -34,7 +35,7 @@
   <div data-panel="move-project" data-panel-variant="overlay" class="project-picker" role="dialog" aria-modal="true" aria-labelledby="move-project-title" tabindex="-1" onkeydown={keydown}>
     <header><h2 id="move-project-title">Move to project</h2><PopupClose label="Close move to project" disabled={busy} onclick={onclose} /></header>
     <p class="support">{title}</p>
-    <div class="choices" role="group" aria-label="Projects" bind:this={list}>
+    <div class="choices" role="group" aria-label="Projects" bind:this={list} use:followPointer={'.choice'}>
       {#each projects as project (project.id)}
         <button type="button" class="choice" aria-current={project.id === current ? 'true' : undefined} disabled={busy || project.id === current} onclick={() => onmove(project.id)}>
           <LucideIcon name={project.id === null ? 'message-square' : 'folder'} size={16} />

@@ -4,6 +4,7 @@
   import { listen, emitTo } from '@tauri-apps/api/event'
   import { applyTheme, readStoredTheme } from './theme-state.js'
   import LucideIcon from './LucideIcon.svelte'
+  import { followPointer } from './menu-pointer.js'
   let selected = $state(null)
   let actionId = $state(null)
   let label = $state('Workspace tools')
@@ -12,6 +13,12 @@
   let menu
   let shown = false
   const popup = getCurrentWindow()
+  // The opener says whether a pointer press opened the menu, so the first
+  // item shows the focus fill only when the keys opened it.
+  function markFocusSource(pointer) {
+    if (pointer) document.documentElement.dataset.pointer = ''
+    else delete document.documentElement.dataset.pointer
+  }
   async function close() { if (!shown) return; shown = false; await popup.hide(); await emitTo('main', actionId ? 'action-menu-closed' : 'workspace-menu-closed', actionId) }
   async function choose(id) { const source = actionId; shown = false; await popup.hide(); await emitTo('main', source ? 'action-menu-select' : 'workspace-menu-select', source ? {id: source, item: id} : id) }
   function keys(event) {
@@ -32,6 +39,7 @@
       label = 'Workspace tools'
       items = workspaceItems
       selected = payload.selected
+      markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
       await tick()
       shown = true; await popup.show()
@@ -40,6 +48,7 @@
     }).then(retain)
     void listen('action-menu-open', async ({payload}) => {
       actionId = payload.id; label = payload.label; items = payload.items; selected = null
+      markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
       await tick(); shown = true; await popup.show(); await popup.setFocus(); menu.querySelector('button:not(:disabled)')?.focus()
     }).then(retain)
@@ -48,7 +57,7 @@
   })
 </script>
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} onkeydown={keys}>
+<div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} use:followPointer onkeydown={keys}>
   {#each items as item}
     <button type="button" role="menuitem" disabled={item.disabled} onclick={() => choose(item.id)}>{#if item.icon}<LucideIcon name={item.icon}/>{/if}<span>{item.name}</span>{#if !actionId && selected === item.id}<LucideIcon name="check"/>{/if}</button>
   {/each}
@@ -58,5 +67,5 @@
   .tools { margin: 8px; padding: 6px;     }
   button { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; padding:8px; border:0; text-align:left; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; font:var(--text-13) var(--font-human); }
   button:disabled { opacity: .5; cursor: default; }
-  button:hover:not(:disabled), button:focus-visible { background:var(--faint); } span { flex:1; }
+  button:hover:not(:disabled) { background:var(--faint); } span { flex:1; }
 </style>

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
 import LimitBanner from './LimitBanner.svelte'
+import { machineRows } from '../runtimes/machines.js'
 import { accountLine, composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, providerLabel, resetsIn, rowLabel, totalTiles, windowLabel } from './usage.js'
 
 afterEach(cleanup)
@@ -49,6 +50,13 @@ describe('usage words', () => {
 
   it('asks this computer and each paired machine that answers', () => {
     expect(machineRefs(runtimeList)).toEqual([{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }])
+  })
+
+  it('names each machine as the Machines list does', () => {
+    const list = { runtimes: [{ id: 'local', local: true, name: 'studio' }, { id: 'pod', name: 'Muniment runtime', kind: 'container', status: 'online' }, { id: 'box', name: 'Build box', kind: 'server', status: 'online' }] }
+    const rows = Object.fromEntries(machineRows({ list }).map((row) => [row.key, row.name]))
+    expect(machineRefs(list)).toEqual([{ id: 'local', name: 'This computer' }, { id: 'pod', name: 'Container' }, { id: 'box', name: 'Build box' }])
+    expect(machineRefs(list).map((ref) => ref.name)).toEqual(list.runtimes.map((runtime) => rows[runtime.id]))
   })
 
   it('warns the composer only at or near a limit, for the provider in use', () => {

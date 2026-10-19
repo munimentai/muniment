@@ -12,6 +12,7 @@
   import ComposerMenuButton from '../composer/ComposerMenuButton.svelte'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from '../lib/composer-panels.js'
   import { activeRuntime, kindIcon, machineName, pairedRuntimes, statusLabel } from './runtimes.js'
+  import { followPointer } from '../lib/menu-pointer.js'
 
   // `source` names where the new thread's machine comes from, such as
   // `from project Homelab` or `default`.
@@ -93,7 +94,7 @@
       </ComposerMenuButton>
       {#if open}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div data-composer-panel data-panel="machine-menu" data-panel-variant="overlay" class="machine-menu" role="menu" tabindex="-1" aria-label="Machines" bind:this={menu} onkeydown={keydown}>
+        <div data-composer-panel data-panel="machine-menu" data-panel-variant="overlay" class="machine-menu" role="menu" tabindex="-1" aria-label="Machines" bind:this={menu} use:followPointer onkeydown={keydown}>
           {#each list?.runtimes ?? [] as runtime (runtime.id)}
             {@const online = reachable(runtime)}
             <button type="button" role="menuitemradio" aria-checked={runtime.active && !offload} onclick={() => pick(runtime)}>
@@ -131,7 +132,7 @@
   .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
   .machine-menu { display: grid; gap: 2px; width: min(280px, 100%); padding: 4px; }
   .machine-menu button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
-  .machine-menu button:hover, .machine-menu button:focus-visible { background: var(--faint); }
+  .machine-menu button:hover { background: var(--faint); }
   .machine-menu button[aria-checked="true"] .name { font-weight: var(--weight-semibold, 600); }
   .machine-menu :global(.lucide) { flex: none; color: var(--muted); }
   .machine-menu .name { flex: 1; }

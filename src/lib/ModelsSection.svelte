@@ -513,7 +513,7 @@
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list' }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnectollama={() => chooseProvider('ollama')} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <Group label={`${provider.name} key`}>

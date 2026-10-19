@@ -85,7 +85,8 @@
   .project-title span { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
   .project-title :global(span[data-overflow="true"]) { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .project-title :global(.lucide) { flex: none; width: 16px; height: 16px; color: var(--muted); }
-  .triggers { flex: 0 3 auto; min-width: 24px; margin-left: auto; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
+  /* The name gives up its width before the triggers, which show in full up to most of the row. */
+  .triggers { flex: none; max-width: 70%; margin-left: auto; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
   .project-title:hover { background: var(--faint); }
   .dropping .project-title { background: var(--selected); color: var(--on-selected); }
   .project-controls { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; border-radius: var(--radius-control); background: var(--faint); opacity: 0; pointer-events: none; }
@@ -96,5 +97,5 @@
   .project-menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 160px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .project-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
   .project-menu button:disabled { opacity: .55; cursor: default; }
-  .project-menu button:hover:not(:disabled), .project-menu button:focus-visible { background: var(--faint); }
+  .project-menu button:hover:not(:disabled) { background: var(--faint); }
 </style>

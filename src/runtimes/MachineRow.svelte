@@ -13,6 +13,7 @@
   import { machineStatusTone, onlineTone, updateStatusTone } from '../lib/status-tone.js'
   import { canRequestUpdate, seenLabel, statusHint, statusLabel, updateLabel } from './runtimes.js'
   import { rowKind } from './machines.js'
+  import { followPointer } from '../lib/menu-pointer.js'
 
   // `hostname` names this computer to the OS, under its one name in the app.
   let { row, hostname = '', busy = false, removable = false, open = $bindable(false), onrename, onremove, onupdate, onpairagain = null, details } = $props()
@@ -95,7 +96,7 @@
       <span class="menu-wrap" bind:this={root}>
         <button type="button" class="quiet more" disabled={busy} aria-label="More for {row.name}" aria-haspopup="menu" aria-expanded={menu} onclick={() => { menu = !menu }}><LucideIcon name="ellipsis" size={16} variant="action" /></button>
         {#if menu}
-          <div class="row-menu" role="menu" aria-label="{row.name} actions">
+          <div class="row-menu" role="menu" aria-label="{row.name} actions" use:followPointer>
             {#if canUpdate}<button type="button" role="menuitem" onclick={() => { menu = false; onupdate() }}>Update</button>{/if}
             {#if canRename}<button type="button" role="menuitem" onclick={() => { menu = false; draft = runtime.name; mode = 'rename' }}>Rename</button>{/if}
             {#if canPairAgain}<button type="button" role="menuitem" onclick={() => { menu = false; onpairagain() }}>Pair again</button>{/if}
@@ -125,7 +126,7 @@
   .row-menu { position: absolute; z-index: 4; top: calc(100% + 4px); right: 0; display: grid; gap: 2px; min-width: 140px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .row-menu button { padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .row-menu button.critical { color: var(--danger); }
-  .row-menu button:hover, .row-menu button:focus-visible { background: var(--faint); }
+  .row-menu button:hover { background: var(--faint); }
   .runtime-form { display: flex; align-items: center; gap: 8px; padding: 10px 0; }
   .runtime-form input { flex: 1; min-width: 0; }
   .details { display: grid; gap: var(--page-gap); padding: 4px 0 16px 48px; }

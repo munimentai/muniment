@@ -57,7 +57,9 @@ a:hover {
    outranks a component's own outline, so no component can drop it. A text
    field marked data-focus-frame leaves the ring to its frame, which shows
    focus itself: the composer and the command palette. Menu items and options
-   mark keyboard focus with the hover fill. While the pointer leads, as
+   mark keyboard focus with the hover fill, and focus follows the pointer in a
+   menu (menu-pointer.js), so while the keys lead a hovered item that lost
+   focus to them drops its fill and one item shows it. While the pointer leads, as
    data-pointer on the root says, a control draws no ring, since the pointer
    shows where it is. A text field keeps its ring.
    Declared once here because Svelte <style> blocks are component-scoped. */
@@ -74,6 +76,9 @@ a:hover {
 }
 :root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible:not([aria-checked="true"], [aria-selected="true"]) {
   background-color: var(--faint);
+}
+:root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):hover:not(:focus, [aria-checked="true"], [aria-selected="true"]) {
+  background-color: transparent !important;
 }
 
 

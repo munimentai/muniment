@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::remote_identity::{
-    ensure_private_directory, read_private, write_private, RemoteIdentity,
+    default_runtime_name, ensure_private_directory, read_private, write_private, RemoteIdentity,
 };
 
 /// How long a pairing link stays redeemable.
@@ -47,7 +47,8 @@ pub(super) const LOCAL_OWNER: &str = "local";
 /// What a runtime host says about itself when it opens remote access.
 #[derive(Clone, Debug)]
 pub struct RemoteAccessOptions {
-    /// The display name clients see. `None` keeps the stored name.
+    /// The display name clients see. `None` keeps the stored name, or names
+    /// a new runtime by its host, such as `Docker container`.
     pub runtime_name: Option<String>,
     /// The version the runtime announces.
     pub runtime_version: String,
@@ -229,8 +230,12 @@ impl RemoteAccess {
         let directory = directory.as_ref().to_path_buf();
         ensure_private_directory(&directory).map_err(RemoteAccessOpenError)?;
         let lock = lock_file(&directory, true).map_err(RemoteAccessOpenError)?;
-        let identity = RemoteIdentity::load_or_create(&directory, options.runtime_name.as_deref())
-            .map_err(RemoteAccessOpenError)?;
+        let identity = RemoteIdentity::load_or_create(
+            &directory,
+            options.runtime_name.as_deref(),
+            &default_runtime_name(options.install_kind),
+        )
+        .map_err(RemoteAccessOpenError)?;
         drop(lock);
         let server_config = identity
             .server_config()
