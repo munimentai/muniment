@@ -1,25 +1,27 @@
 <script>
-  // The sidebar's threads as core arranges them, under the window's New and
-  // Search: Needs you, Working, Pinned, Projects and Recent, with settled and
-  // archived threads folded at the foot, or the search's pages and threads.
-  // A thread row dragged onto Chats or a project moves the thread there.
-  // Every thread sits in one project, and each row states its status in
-  // words. The window renders each row with its `row` snippet, so a row's menu, rename and selection stay one
-  // control everywhere. The sections hold their order: a row moves only when
-  // its status changes, and a folded section stays folded until the user
-  // opens it.
+  // The sidebar under the window's New and Search: the Agents and Artifacts
+  // rows, then Projects as core arranges them, pinned rows first and then
+  // newest activity first, with archived threads folded at the end, or the
+  // search's pages and threads. A thread in no project is its own row. A
+  // project row groups its threads and agents and opens to show them. Each
+  // thread shows once, and each row states its status in words. A thread row
+  // dragged onto a project moves the thread there. The window renders each
+  // thread row with its `row` snippet, so a row's menu, rename and selection
+  // stay one control everywhere.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ProjectItem from './ProjectItem.svelte'
+  import { freshIndex } from './sidebar-model.js'
   let {
-    sidebar, row, fresh = null, query = '', pages = [], owners = {},
-    disabled = false, expanded = new Set(), filter = 'all', workingOpen = $bindable(true), settledOpen = $bindable(false), archivedOpen = $bindable(false),
+    sidebar, row, fresh = null, showFresh = false, query = '', pages = [], owners = {},
+    disabled = false, expanded = new Set(), archivedOpen = $bindable(false),
     projectForm = null, projectName = $bindable(''), projectBusy = false, projectError = '',
-    onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, onfilter, library, footer,
-    // A thread row dropped on Chats or a project of this computer moves there.
+    onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, library, footer,
+    // A thread row dropped on a project of this computer moves there.
     dragType = '', onmovethread,
   } = $props()
   const searching = $derived(!!query.trim())
   const matchedPages = $derived(searching ? pages.filter((page) => page.label.toLowerCase().includes(query.trim().toLowerCase())) : [])
+  const freshAt = $derived(showFresh ? freshIndex(sidebar) : -1)
   const kbd = (shortcut) => shortcut.replace('Meta+', '⌘ ').replace('Control+', 'Ctrl ')
 </script>
 
@@ -34,28 +36,10 @@
       <ul class="thread-list" aria-label="Matching threads">{#each sidebar.results as item (item.thread_id)}{@render row(item)}{/each}</ul>
     </section>
   {:else}
-    {#if sidebar.needs_you.length}
-      <section class="side-section" aria-label="Needs you">
-        <h3>Needs you</h3>
-        <ul class="thread-list" aria-label="Threads that need you">{#each sidebar.needs_you as item (item.thread_id)}{@render row(item)}{/each}</ul>
-      </section>
-    {/if}
-    {#if sidebar.working.length}
-      <section class="side-section" aria-label="Working">
-        <button type="button" class="section-toggle" aria-expanded={workingOpen} onclick={() => workingOpen = !workingOpen}><span>Working ({sidebar.working.length})</span><LucideIcon name={workingOpen ? 'chevron-down' : 'chevron-right'} size={14} /></button>
-        {#if workingOpen}<ul class="thread-list" aria-label="Working threads">{#each sidebar.working as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
-      </section>
-    {/if}
-    {#if sidebar.pinned.length}
-      <section class="side-section" aria-label="Pinned">
-        <h3>Pinned</h3>
-        <ul class="thread-list" aria-label="Pinned threads">{#each sidebar.pinned as item (item.thread_id)}{@render row(item)}{/each}</ul>
-      </section>
-    {/if}
+    {#if library}<div class="library">{@render library()}</div>{/if}
     <section class="side-section" aria-label="Projects">
       <div class="section-head">
         <h3>Projects</h3>
-        <button type="button" class="section-control" aria-label="Projects with triggers" aria-pressed={filter === 'triggers'} data-tooltip="With triggers" onclick={() => onfilter(filter === 'triggers' ? 'all' : 'triggers')}><LucideIcon name="bot" size={14} /></button>
         <button type="button" class="section-control" aria-label="New project" data-tooltip="New project" disabled={disabled || projectBusy} onclick={onnewproject}><LucideIcon name="plus" size={14} /></button>
       </div>
       {#if projectForm}
@@ -65,28 +49,28 @@
           <button type="button" disabled={projectBusy} onclick={oncancelproject}>Cancel</button>
         </form>
       {/if}
-      {#each sidebar.projects as project (project.id)}
-        <ProjectItem name={project.name} triggers={project.triggers} kind={project.kind} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
-          ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
-          onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
-          onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
-          ongroup={ongroup ? () => ongroup(project.id) : undefined}
-          {dragType} ondropthread={onmovethread && (project.kind === 'chats' || (project.kind === 'project' && !project.owner)) ? (threadId) => onmovethread(threadId, project.id) : undefined} />
-        {#if expanded.has(project.id) && project.threads.length}<ul class="thread-list project-threads" aria-label={`${project.name} threads`}>{#each project.threads as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
-      {/each}
-      {#if filter === 'triggers' && !sidebar.projects.length}<p class="side-empty">No project has a trigger yet.</p>{/if}
-      {@render library?.()}
+      <ul class="thread-list" aria-label="Projects list">
+        {#each sidebar.projects as project, index (project.id)}
+          {#if index === freshAt}{@render fresh?.()}{/if}
+          {#if project.kind === 'thread'}
+            {@render row(project.threads[0])}
+          {:else}
+            <li class="project-entry">
+              <ProjectItem name={project.name} triggers={project.triggers} kind={project.kind} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
+                ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
+                onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
+                onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
+                ongroup={ongroup ? () => ongroup(project.id) : undefined}
+                {dragType} ondropthread={onmovethread && project.kind === 'project' && !project.owner ? (threadId) => onmovethread(threadId, project.id) : undefined} />
+              {#if expanded.has(project.id) && project.threads.length}<ul class="thread-list project-threads" aria-label={`${project.name} threads`}>{#each project.threads as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
+            </li>
+          {/if}
+        {/each}
+        {#if freshAt >= sidebar.projects.length}{@render fresh?.()}{/if}
+      </ul>
       {#if projectError}<p class="side-empty" role="status">{projectError} <button type="button" onclick={onretryprojects}>Retry</button></p>{/if}
-    </section>
-    <section class="side-section" aria-label="Recent">
-      <h3>Recent</h3>
-      <ul class="thread-list" aria-label="Recent threads">{@render fresh?.()}{#each sidebar.recent as item (item.thread_id)}{@render row(item)}{/each}</ul>
-      {#if sidebar.settled.length}
-        <button type="button" class="section-toggle fold" aria-expanded={settledOpen} onclick={() => settledOpen = !settledOpen}><span>{settledOpen ? 'Hide settled' : `Show settled (${sidebar.settled.length})`}</span></button>
-        {#if settledOpen}<ul class="thread-list" aria-label="Settled threads">{#each sidebar.settled as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
-      {/if}
       {#if sidebar.archived.length}
-        <button type="button" class="section-toggle fold" aria-expanded={archivedOpen} onclick={() => archivedOpen = !archivedOpen}><span>{archivedOpen ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}</span></button>
+        <button type="button" class="section-toggle" aria-expanded={archivedOpen} onclick={() => archivedOpen = !archivedOpen}><span>{archivedOpen ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}</span></button>
         {#if archivedOpen}<ul class="thread-list" aria-label="Archived threads">{#each sidebar.archived as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
       {/if}
     </section>
@@ -112,13 +96,14 @@
   .section-head { display: flex; align-items: center; gap: 2px; padding-right: 2px; }
   .section-head h3 { flex: 1; }
   .section-control { position: relative; display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
-  .section-control:hover:not(:disabled), .section-control[aria-pressed="true"] { background: var(--faint); color: var(--ink); }
+  .section-control:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .section-control:disabled { opacity: .5; cursor: default; }
-  .section-toggle { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 24px; padding: 2px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); text-align: left; cursor: pointer; }
+  .section-toggle { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 24px; padding: 2px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-human); text-align: left; cursor: pointer; }
   .section-toggle span { flex: 1; }
-  .section-toggle.fold { font-weight: normal; }
   .section-toggle:hover { background: var(--faint); color: var(--ink); }
   .project-threads { margin-left: 16px; }
+  .project-entry { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
+  .library { display: grid; gap: 1px; margin-top: 10px; }
   .page-results { display: grid; gap: 1px; }
   .page-results kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
 </style>

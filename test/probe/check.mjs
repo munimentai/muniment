@@ -421,29 +421,32 @@ async function checkComposerActions(browser, baseUrl) {
 }
 
 // Creation keeps to one model round trip before the user sees its result.
-// The agent builder starts one core draft, which is one model call, before
-// the filled form shows, and asks at most one question. A page starter sends
-// one message, the user's own words, as a plain message does, so the thread
-// takes their title and no question loop runs first.
+// Each message of a new agent's chat starts one core draft, which is one
+// model call, before its reply shows, and asks at most one question. A page
+// starter sends one message, the user's own words, as a plain message does,
+// so the thread takes their title and no question loop runs first.
 async function checkCreationBudget(browser, baseUrl) {
   const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
   const commands = () => page.evaluate(() => window.__PROBE__.invokedCommands.map(({ command, payload }) => ({ command, operation: payload?.operation, body: payload?.body, prompt: payload?.prompt })))
   const draftStarts = async () => (await commands()).filter(({ command, operation, body }) => command === 'agent_request' && operation === 'agent.draft' && !body?.draft_id)
-  const formShown = (name) => page.waitForFunction((name) => document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"] input')?.value === name && !document.querySelector('[data-panel="agent-builder"] [role="status"]'), name)
+  const replies = (count) => page.waitForFunction((count) => document.querySelectorAll('.agent-chat article').length === count && !document.querySelector('.agent-chat [role="status"]'), count)
   try {
     await page.goto(`${baseUrl}/test/probe/agents.html?state=builder`)
     await page.waitForSelector('[data-probe-ready]')
-    assert.deepEqual((await draftStarts()).map(({ body }) => body), [{ description: 'Every weekday at 9am, summarize my inbox and list what needs a reply.' }])
-    const form = page.getByRole('form', { name: 'Agent draft' })
-    assert.equal(await form.getByRole('switch', { name: 'Run Summarize the new email in my inbox' }).getAttribute('aria-checked'), 'true')
-    // A draft again is one more round trip, and the form returns within the budget.
+    const first = await draftStarts()
+    assert.deepEqual(first.map(({ body }) => body.message), ['Every weekday at 9am, summarize my inbox and list what needs a reply.'])
+    assert.ok(first[0].body.chat_id)
+    const reply = page.getByRole('article', { name: 'Draft: Inbox brief' })
+    assert.ok((await reply.textContent()).includes('Weekdays at 09:00'))
+    // A change is one more message and one more round trip, and its reply returns within the budget.
     const started = Date.now()
-    await page.getByRole('button', { name: 'Draft again', exact: true }).click()
-    await formShown('Inbox brief')
+    await page.locator('#composer-message').fill('Group the summary by sender.')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await replies(2)
     assert.ok(Date.now() - started < 3000, `the draft took ${Date.now() - started} ms`)
-    assert.equal((await draftStarts()).length, 2)
-    await form.getByRole('button', { name: 'Save', exact: true }).click()
-    await page.waitForFunction(() => !document.querySelector('[data-panel="agent-builder"]'))
+    assert.deepEqual((await draftStarts()).map(({ body }) => body.chat_id), [first[0].body.chat_id, first[0].body.chat_id])
+    await page.getByRole('article').last().getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByText('Saved.', { exact: true }).waitFor()
     const saves = (await commands()).filter(({ command, operation }) => command === 'agent_request' && operation === 'agent.save')
     assert.equal(saves.length, 1)
     assert.equal(saves[0].body.agent.routines[0].enabled, true)
@@ -453,9 +456,9 @@ async function checkCreationBudget(browser, baseUrl) {
     await page.waitForSelector('[data-probe-ready]')
     assert.equal((await draftStarts()).length, 1)
     await page.getByRole('group', { name: 'Question' }).getByRole('button', { name: 'Research topics' }).click()
-    await formShown('Inbox brief')
-    assert.equal(await page.getByRole('group', { name: 'Question' }).count(), 0)
-    assert.deepEqual((await draftStarts()).map(({ body }) => body.answers ?? null), [null, [{ question: 'What should the agent do?', answer: 'Research topics' }]])
+    await replies(2)
+    assert.equal(await page.getByRole('article').last().getByRole('group', { name: 'Question' }).count(), 0)
+    assert.deepEqual((await draftStarts()).map(({ body }) => body.message), ['Make me an agent', 'Research topics'])
 
     await page.goto(`${baseUrl}/test/probe/agents.html?state=builder-thread`)
     await page.waitForSelector('[data-probe-ready]')

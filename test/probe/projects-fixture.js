@@ -1,10 +1,9 @@
 // The projects probe: several projects, an agent on a schedule, one on a
-// webhook in its project, threads that need the user, threads at work and
-// settled threads. The sidebar shows core's own arrangement of
-// `core/protocol-fixtures/sidebar/input.json`, which core's tests keep in
-// `arranged.json`, with every time moved so the fixture's now is this moment.
-// `?state=settled` opens Show settled, `triggers` filters Projects to the
-// projects with triggers, `search` searches for "re", and `settings` opens
+// webhook in its project, threads in no project, threads that need the user,
+// threads at work and settled threads. The sidebar shows core's own
+// arrangement of `core/protocol-fixtures/sidebar/input.json`, which core's
+// tests keep in `arranged.json`, with every time moved so the fixture's now
+// is this moment. `?state=search` searches for "re", and `settings` opens
 // Homelab's settings with its webhook agent, each default's source and its
 // tools. `agent-tools` opens that agent's Tools panel. `palette` opens the
 // command palette and `palette-search` searches it for "re". `move` opens
@@ -28,10 +27,9 @@ async function load() {
 export async function projectsArrangement(request) {
   await load()
   const rows = (list) => list.map((row) => ({ ...row, updated_at: shift(row.updated_at) }))
-  const sidebar = Object.fromEntries(Object.entries(arranged).map(([key, value]) => [key, key === 'projects' ? value.map((project) => ({ ...project, threads: rows(project.threads) })) : rows(value)]))
-  if (request?.filter === 'triggers') sidebar.projects = sidebar.projects.filter((project) => project.kind !== 'chats' && project.agent_ids.length)
+  const sidebar = Object.fromEntries(Object.entries(arranged).map(([key, value]) => [key, key === 'projects' ? value.map((project) => ({ ...project, updated_at: shift(project.updated_at), threads: rows(project.threads) })) : rows(value)]))
   const query = request?.query?.trim().toLowerCase()
-  if (query) sidebar.results = [...sidebar.needs_you, ...sidebar.working, ...sidebar.pinned, ...sidebar.recent, ...sidebar.settled].filter((row) => row.title.toLowerCase().includes(query))
+  if (query) sidebar.results = [...sidebar.projects.flatMap((project) => project.threads), ...sidebar.archived].filter((row) => row.title.toLowerCase().includes(query))
   return sidebar
 }
 
@@ -94,24 +92,14 @@ export function projectsAgents() {
 
 export const projectsSettings = (projectId) => projectId === 'p-homelab'
   ? { ...structuredClone(projectsCatalog.settings['p-homelab']), instructions: 'Use the Ansible playbooks. Never edit the hosts by hand.' }
-  : projectId === 'chats' ? {} : { instructions: '' }
+  : { instructions: '' }
 
 const button = (root, name) => [...(root?.querySelectorAll('button') ?? [])].find((entry) => entry.getAttribute('aria-label') === name || entry.textContent.trim() === name)
 
 // Moves the page to the state's screen, one step per render.
 export function advanceProjects() {
   const sidebar = document.querySelector('#sidebar')
-  if (!sidebar?.querySelector('[aria-label="Needs you"]')) return
-  if (projectsState === 'settled') {
-    const settled = sidebar.querySelector('[aria-label="Settled threads"]')
-    if (settled) return settled.scrollIntoView({ block: 'end' })
-    return button(sidebar, 'Show settled (5)')?.click()
-  }
-  if (projectsState === 'triggers') {
-    const filter = button(sidebar, 'Projects with triggers')
-    if (filter?.getAttribute('aria-pressed') === 'false') filter.click()
-    return
-  }
+  if (!sidebar?.querySelector('[aria-label="Projects list"] .project-title')) return
   if (projectsState === 'search') {
     const search = sidebar.querySelector('input[aria-label="Search threads"]')
     if (search && search.value !== 're') { search.value = 're'; search.dispatchEvent(new Event('input', { bubbles: true })) }
@@ -143,6 +131,8 @@ export function advanceProjects() {
     return sidebar.querySelector('button[aria-label="Actions for Trip ideas"]')?.click()
   }
   if (projectsState === 'model') {
+    const homelab = sidebar.querySelector('.project-title[aria-label^="Project Homelab"]')
+    if (homelab?.getAttribute('aria-expanded') === 'false' && !sidebar.querySelector('[aria-label="Homelab threads"]')) return homelab.click()
     const row = sidebar.querySelector('.thread-row[data-thread-id="t-branch"]')
     if (row && row.tagName === 'BUTTON' && !row.getAttribute('aria-current')) return row.click()
     const chip = document.querySelector('[data-menu="model"][aria-expanded="false"]')
@@ -153,11 +143,8 @@ export function advanceProjects() {
 export function projectsRendered() {
   const sidebar = document.querySelector('#sidebar')
   if (!sidebar) return false
-  const sections = ['Needs you', 'Working', 'Pinned', 'Projects', 'Recent'].every((name) => sidebar.querySelector(`[aria-label="${name}"]`))
   if (projectsState === 'search') return !!sidebar.querySelector('[aria-label="Matching threads"] .thread-row')
-  if (!sections) return false
-  if (projectsState === 'settled') return !!sidebar.querySelector('[aria-label="Settled threads"] .thread-row')
-  if (projectsState === 'triggers') return sidebar.querySelectorAll('[aria-label="Projects"] .project-title').length === 2
+  if (!sidebar.querySelector('[aria-label="Projects list"] .project-title')) return false
   const settings = document.querySelector('[aria-label="Project settings"]')
   if (projectsState === 'settings') return !!settings?.querySelector('.agent-card') && !!settings.querySelector('textarea')?.value && settings.textContent.includes('Gemini 3 Pro · this project') && settings.textContent.includes('off in this project')
   if (projectsState === 'agent-tools') return !!settings?.querySelector('.agent-card .tools .tool') && settings.textContent.includes('off in project Homelab')

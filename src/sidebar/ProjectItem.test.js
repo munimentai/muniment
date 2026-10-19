@@ -28,9 +28,15 @@ it('states the triggers in words and names them with the project', () => {
 
 it('offers only the actions the project has in its menu', async () => {
   const onsettings = vi.fn(), onrename = vi.fn()
-  render(ProjectItem, { name: 'Chats', kind: 'chats', expanded: false, ontoggle: vi.fn(), onnew: vi.fn(), onsettings, onrename })
-  await fireEvent.click(screen.getByRole('button', { name: 'Chats actions' }))
+  render(ProjectItem, { name: 'Research', expanded: false, ontoggle: vi.fn(), onnew: vi.fn(), onsettings, onrename })
+  await fireEvent.click(screen.getByRole('button', { name: 'Research actions' }))
   expect(screen.getAllByRole('menuitem').map((item) => item.textContent.trim())).toEqual(['New thread', 'Settings', 'Rename'])
   await fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }))
   expect(onsettings).toHaveBeenCalledOnce()
+})
+
+it('shows the most urgent status of its threads in words', () => {
+  render(ProjectItem, { name: 'Homelab', status: 'needs_you', statusLabel: 'Approve', expanded: false, ontoggle: vi.fn(), onnew: vi.fn() })
+  const title = screen.getByRole('button', { name: 'Project Homelab, Approve' })
+  expect(title).toHaveTextContent('Approve')
 })
