@@ -214,9 +214,12 @@ pub struct AccountWindow {
     pub shared: bool,
 }
 
+/// A window's provider, account identity, kind order and scope.
+type WindowKey = (String, String, u8, String);
+
 impl AccountWindow {
     /// The key one account's window has on every machine.
-    fn key(&self) -> (String, String, u8, String) {
+    fn key(&self) -> WindowKey {
         let identity = if self.identity.is_empty() {
             // A shared copy's id is the sender's id behind the shared prefix.
             self.account_id
@@ -240,8 +243,7 @@ impl AccountWindow {
 /// copies hold it: the freshest reading, under the name and id of a copy
 /// from the machine where the account signed in when one is present.
 pub fn distinct(windows: Vec<AccountWindow>) -> Vec<AccountWindow> {
-    let mut held: BTreeMap<(String, String, u8, String), (AccountWindow, Option<AccountWindow>)> =
-        BTreeMap::new();
+    let mut held: BTreeMap<WindowKey, (AccountWindow, Option<AccountWindow>)> = BTreeMap::new();
     for window in windows {
         let own = (!window.shared).then(|| window.clone());
         match held.entry(window.key()) {
