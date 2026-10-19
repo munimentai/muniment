@@ -6,9 +6,9 @@ import { registry } from './model-registry.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
 // method each one offers, and the helpers the section and the picker share.
 // The model registry supplies the providers and their names. `account` names
-// the Pi provider that signs in with an account and the label the method
-// shows. Anthropic's account is the Claude Code sign-in through the
-// pi-claude-bridge package, so it carries no Pi OAuth provider here.
+// the provider that signs in with an account and the label the method
+// shows. Anthropic's account sign-in runs Claude Code's own login, and its
+// chats run through the pi-claude-bridge package.
 
 export const PROVIDERS = registry.providers
 

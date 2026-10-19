@@ -62,7 +62,6 @@
   let endpointModels = $state('')
   let pending = $state(false)
   let formError = $state('')
-  let claude = $state(null)
   let login = $state(null)
   let loginAnswer = $state('')
   let unlisten = null
@@ -228,7 +227,6 @@
     formError = ''
     login = null
     view = 'method'
-    if (next === 'claude-code') void loadClaudeStatus()
   }
 
   function back() {
@@ -303,29 +301,6 @@
       await finishConnect(`Muniment saved the ${providerId === 'lmstudio' ? 'LM Studio' : endpointName.trim()} endpoint.`)
     } catch (error) {
       formError = String(error?.message ?? error) || 'Muniment could not save the endpoint. Check the URL, then retry.'
-    } finally {
-      pending = false
-    }
-  }
-
-  async function loadClaudeStatus() {
-    claude = null
-    try {
-      claude = await tauri.invoke('local_mode_claude_code_status')
-    } catch (_) {
-      claude = { installed: false, logged_in: false, path: null }
-    }
-  }
-
-  async function connectClaudeCode() {
-    if (pending || !claude?.path) return
-    pending = true
-    formError = ''
-    try {
-      await tauri.invoke('local_mode_connect_claude_code', { executable: claude.path })
-      await finishConnect('Anthropic is connected through Claude Code. Its models appear after the next message.')
-    } catch (error) {
-      formError = String(error?.message ?? error)
     } finally {
       pending = false
     }
@@ -434,9 +409,13 @@
            key a one-line card, each with its own controls. The provider's own connection, when it
            has no pooled account, is a one-line card with edit and disconnect icons at the far right. -->
         {#each shownProviders as entry (entry.id)}
-          {@const pooled = !!entry.family && !!router?.accounts?.some((account) => account.family === entry.family)}
+          {@const bridgeAccounts = entry.id === 'claude-bridge' && entry.source === 'account'}
+          {@const pooled = bridgeAccounts || (!!entry.family && !!router?.accounts?.some((account) => account.family === entry.family && account.pi_provider !== 'claude-bridge'))}
+          {@const firstOfFamily = shownProviders.find((other) => other.family === entry.family) === entry}
           {@const endpoint = entry.source === 'local' || entry.source === 'custom'}
           <section class="provider-group" aria-label={entry.name}>
+            <!-- The bridge's Anthropic accounts are their own cards, so the bridge shows a row only for a
+                 Claude Code connection, and those accounts never hide another connection's row. -->
             <Row title={entry.name}>
               {#snippet icon()}<ProviderLogo color provider={entry.id} size={16} />{/snippet}
             </Row>
@@ -452,7 +431,7 @@
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
             {/if}
-            {#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
+            {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
           </section>
         {/each}
         {#each poolOnlyFamilies as family (family)}
@@ -555,23 +534,8 @@
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
-    {:else if method === 'claude-code'}
-      <p class="support">Anthropic through your Claude Code sign-in. Muniment installs the bridge package and routes Claude models through it.</p>
-      {#if claude === null}
-        <p class="support" role="status">Checking Claude Code…</p>
-      {:else if !claude.installed}
-        <p class="support" role="status">Claude Code is not installed on this device. Install it, run <code>claude</code> once to sign in, then retry.</p>
-        <button type="button" data-variant="primary" onclick={loadClaudeStatus}>Check again</button>
-      {:else if !claude.logged_in}
-        <p class="support" role="status">Claude Code is installed but not signed in. Run <code>claude</code> in a terminal and sign in, then retry.</p>
-        <button type="button" data-variant="primary" onclick={loadClaudeStatus}>Check again</button>
-      {:else}
-        <p class="support" role="status">Claude Code is signed in.</p>
-        {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-        <button type="button" data-variant="primary" disabled={pending} onclick={connectClaudeCode}>Connect Claude Code</button>
-      {/if}
     {:else if method === 'account'}
-      <p class="support">Sign in with your {methodLabel(provider, 'account')}. The browser opens, and the token stays on this device.</p>
+      <p class="support">Sign in with your {methodLabel(provider, 'account')}. {provider.id === 'anthropic' ? 'The browser opens, and Claude Code keeps the token.' : 'The browser opens, and the token stays on this device.'}</p>
       {#if !login}
         <button type="button" data-variant="primary" disabled={pending} onclick={startLogin}>Sign in</button>
       {:else}
@@ -641,7 +605,6 @@
   .accounts-section { display: grid; gap: var(--page-gap); }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .support code { font: var(--text-12) var(--font-mono); }
   .empty { padding: 12px 0; }
   .connect { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px; white-space: nowrap; }
   .back { min-width: 28px; min-height: 28px; padding: 5px; line-height: 0; }

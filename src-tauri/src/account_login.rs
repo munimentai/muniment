@@ -51,6 +51,17 @@ fn callback_port(started: &Value) -> Option<u16> {
         .and_then(|port| u16::try_from(port).ok())
 }
 
+/// The path the redirect lands on: the one the start answer names, else
+/// OpenAI's.
+fn callback_path(started: &Value) -> String {
+    started
+        .pointer("/callback/path")
+        .and_then(Value::as_str)
+        .filter(|path| path.starts_with('/') && !path.contains(['?', '#', ' ']))
+        .unwrap_or(sign_in_callback::CALLBACK_PATH)
+        .to_owned()
+}
+
 /// Holds the callback port the paired runtime's sign-in names on this
 /// computer's loopback, and forwards each redirect to the runtime.
 fn hold_callback<R: tauri::Runtime>(
@@ -64,8 +75,10 @@ fn hold_callback<R: tauri::Runtime>(
     };
     let listeners = sign_in_callback::bind(port)?;
     let forward_app = app.clone();
-    let server = CallbackServer::start(
+    let server = CallbackServer::start_on(
         listeners,
+        port,
+        callback_path(started),
         Arc::new(muniment_runtime::sign_in_page),
         sign_in_callback::provider_display_name(provider).to_owned(),
         Arc::new(move |url| {
@@ -219,6 +232,18 @@ mod tests {
         );
         assert_eq!(callback_port(&Value::Null), None);
         assert_eq!(callback_port(&json!({"callback": {"port": 70000}})), None);
+        assert_eq!(
+            callback_path(&json!({"callback": {"port": 40259, "path": "/callback"}})),
+            "/callback"
+        );
+        assert_eq!(
+            callback_path(&json!({"callback": {"port": 1455}})),
+            "/auth/callback"
+        );
+        assert_eq!(
+            callback_path(&json!({"callback": {"path": "/x?y"}})),
+            "/auth/callback"
+        );
     }
 
     #[test]

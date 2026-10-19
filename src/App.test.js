@@ -1654,7 +1654,9 @@ describe('workspace composer entry', () => {
     expect(within(dialog).getByText(/Sign in with your Grok Build account\./)).toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Anthropic/ }))
-    expect(within(dialog).getByText(/Anthropic through your Claude Code sign-in\./)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Sign in' })).toHaveAttribute('data-variant', 'primary')
+    expect(within(dialog).getByText(/Sign in with your Claude Pro or Max account\. The browser opens, and Claude Code keeps the token\./)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/Claude Code is not installed/)).not.toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Use an API key instead' })).toBeInTheDocument()
   })
 
@@ -1663,12 +1665,12 @@ describe('workspace composer entry', () => {
     render(App)
     const dialog = await openSettings()
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Connect account' }))
-    for (const name of [/^Anthropic.*Claude Code/, /^OpenAI.*ChatGPT/, /^xAI.*Grok Build/,
+    for (const name of [/^Anthropic.*Claude Pro or Max/, /^OpenAI.*ChatGPT/, /^xAI.*Grok Build/,
       /^Google.*Antigravity/, /^Devin.*Devin account/, /^Kimi.*Kimi Code account/, /^Meta.*Muse Code/]) {
       expect(within(dialog).getByRole('button', { name })).toBeVisible()
     }
     for (const [query, row, signIn] of [
-      ['Antigravity', /^Google/, 'antigravity'], ['Devin', /^Devin/, 'devin'],
+      ['Claude Pro', /^Anthropic/, 'anthropic'], ['Antigravity', /^Google/, 'antigravity'], ['Devin', /^Devin/, 'devin'],
       ['Kimi Code', /^Kimi/, 'kimi'], ['Muse Code', /^Meta/, 'meta'],
     ]) {
       await fireEvent.input(within(dialog).getByRole('searchbox'), { target: { value: query } })
@@ -4273,7 +4275,8 @@ describe('Home onboarding', () => {
     firstRun()
     providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true }] }
     const original = invoke.getMockImplementation()
-    invoke.mockImplementation((command, payload) => command === 'local_mode_claude_code_status' ? Promise.resolve({ installed: true, logged_in: true, path: '/usr/local/bin/claude' }) : original(command, payload))
+    invoke.mockImplementation((command, payload) => command === 'local_mode_claude_code_status' ? Promise.resolve({ installed: true, logged_in: true, path: '/usr/local/bin/claude' })
+      : command === 'local_mode_connect_claude_code' ? Promise.resolve(null) : original(command, payload))
     render(App)
     await more()
     await waitFor(() => expect(option('Claude')).toHaveTextContent('Connect'))
@@ -4285,16 +4288,16 @@ describe('Home onboarding', () => {
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
 
-  it('opens Model providers for a subscription with no sign-in to start here', async () => {
+  it('signs in to a Claude account from the first run when Claude Code holds no sign-in to reuse', async () => {
     firstRun()
     providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is installed', reuse: false }] }
     render(App)
     await more()
     await waitFor(() => expect(option('Claude')).toHaveTextContent('Sign in'))
     await fireEvent.click(option('Claude'))
-    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-    expect(await within(dialog).findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
-    expect(firstRunScreen()).not.toBeInTheDocument()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic' }))
+    expect(firstRunScreen()).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
     expect(invoke).not.toHaveBeenCalledWith('local_mode_connect_claude_code', expect.anything())
   })
 
