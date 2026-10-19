@@ -12,13 +12,7 @@ use super::callback::{self, provider_display_name, CallbackServer, CALLBACK_PATH
 use super::{providers, router, ModelService};
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const ACCOUNT_PROVIDERS: [&str; 5] = [
-    "openai-codex",
-    "xai",
-    "openrouter",
-    "github-copilot",
-    "anthropic",
-];
+const ACCOUNT_PROVIDERS: [&str; 4] = ["openai-codex", "xai", "openrouter", "github-copilot"];
 pub(super) const START_ERROR: &str = "The sign-in could not start. Try again.";
 const TIMEOUT_MESSAGE: &str = "The sign-in timed out. Start it again.";
 const NO_REDIRECT_WAIT: &str = "No sign-in is waiting for a browser redirect.";
@@ -143,6 +137,10 @@ enum Target {
 
 /// Starts the Connect list's sign-in.
 pub(super) fn start(service: &Arc<ModelService>, provider: &str) -> Result<Value, String> {
+    // Claude Code's own login signs in to each Anthropic account.
+    if provider == super::claude::PROVIDER {
+        return super::claude::start(service);
+    }
     if target_for(provider) == Target::Pool {
         start_into_pool(service, provider)
     } else {
@@ -166,6 +164,9 @@ pub(super) fn start_into_pool(
     service: &Arc<ModelService>,
     provider: &str,
 ) -> Result<Value, String> {
+    if provider == super::claude::PROVIDER {
+        return super::claude::start(service);
+    }
     if muniment_core::model_router::family::family_for_pi_provider(provider).is_none() {
         return Err("This provider has no subscription the router can pool.".into());
     }
@@ -187,6 +188,7 @@ fn start_with(
     }
     let state = &service.sign_ins;
     state.stop();
+    service.claude_sign_ins.stop();
     // A pool sign-in runs Pi in a directory of its own, so the credential
     // never lands in Pi's one slot for the provider.
     let agent = match target {
@@ -389,6 +391,7 @@ pub(super) fn answer(
 pub(super) fn cancel(service: &ModelService) {
     service.sign_ins.stop();
     service.pool_sign_ins.stop();
+    service.claude_sign_ins.stop();
     service.emit(json!({ "stage": "cancelled" }));
 }
 

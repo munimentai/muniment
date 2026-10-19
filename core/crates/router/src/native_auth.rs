@@ -738,32 +738,20 @@ pub fn devin_profile(
     Some((text(body.get("user_name")), text(body.get("org_id"))))
 }
 
-/// Refreshes the OAuth credentials used by the native Codex and Claude wires.
+/// Refreshes the OAuth credentials used by the native Codex wire.
 fn inference_refresh(
     provider: &str,
     refresh: &str,
     now_ms: i64,
     timeout: Duration,
 ) -> Result<Credential, String> {
-    let client = agent(timeout);
-    let call = if provider == "openai-codex" {
-        client
-            .post(&refresh_endpoint("https://auth.openai.com/oauth/token"))
-            .send_form(&[
-                ("client_id", "app_EMoamEEZ73f0CkXaXp7hrann"),
-                ("grant_type", "refresh_token"),
-                ("refresh_token", refresh),
-            ])
-    } else {
-        client
-            .post(&refresh_endpoint(
-                "https://platform.claude.com/v1/oauth/token",
-            ))
-            .send_json(serde_json::json!({
-                "client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-                "grant_type":"refresh_token", "refresh_token":refresh,
-            }))
-    };
+    let call = agent(timeout)
+        .post(&refresh_endpoint("https://auth.openai.com/oauth/token"))
+        .send_form(&[
+            ("client_id", "app_EMoamEEZ73f0CkXaXp7hrann"),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh),
+        ]);
     let (status, body) = read(call)?;
     if status != 200 {
         return Err(format!(
@@ -908,7 +896,7 @@ pub fn refresh_if_expiring_within(
         ),
         "antigravity" => antigravity_refresh(GOOGLE_TOKEN_URL, refresh, now_ms, timeout),
         "xai" => xai_refresh(XAI_TOKEN_URL, refresh, now_ms, timeout),
-        "openai-codex" | "anthropic" => inference_refresh(provider, refresh, now_ms, timeout),
+        "openai-codex" => inference_refresh(provider, refresh, now_ms, timeout),
         _ => return None,
     };
     Some(refreshed.map(|mut fresh| {

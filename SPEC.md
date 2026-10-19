@@ -185,11 +185,11 @@ its family, and a local or custom endpoint goes into Pi's `models.json`, so Pi u
 to that provider. Startup and Settings supplement bundled models through xAI key or subscription discovery and OpenAI, Anthropic and Google key discovery. Unsupported sign-ins keep bundled models. Refresh models bypasses the ten-minute cache. Failed requests preserve saved models, overrides and defaults. Discoveries feed the picker, routing and classifier choices. The section
 lists connected providers with their source and Disconnect. Connect account
 opens the provider catalog and searches its connection methods. A provider opens on one view with its first
-method, an account where Pi signs in, Claude Code for Anthropic through
-`pi-claude-bridge`, an API key, or a server URL, with its other methods one
+method, an account where Pi signs in or, for Anthropic, Claude Code's own
+login, an API key, or a server URL, with its other methods one
 switch away. The OpenAI redirect lands on the runtime's own page on port
 1455, held on both loopback addresses, in muniment's mark and voice, and the
-runtime hands Pi the code. For a paired runtime's sign-in the app holds that port on this computer and forwards the redirect to the runtime. A port another program holds stops the sign-in
+runtime hands Pi the code. For a paired runtime's sign-in the app holds that port on this computer and forwards the redirect to the runtime. Each Anthropic account has its own Claude Code config folder under the agent directory, where the bundled Claude Code at the pinned version runs `claude auth login`, exchanges the code and keeps the token, so Muniment never holds an Anthropic token. The runtime hands the client the URL Claude Code opens, and a paired runtime's client holds the port of Claude Code's own loopback listener and forwards the redirect to it. When Claude Code opens no browser, the client shows its code URL and types the pasted code into its prompt. `claude auth status` names the account, and Claude Code's `get_usage` control request reads its 5-hour and weekly windows. A thread keeps the account it first ran on, and a new thread takes the account with no spent window and the fewest threads. A port another program holds stops the sign-in
 with its number, and a sign-in the browser never finishes fails after fifteen minutes. A
 connect adopts the provider's largest-context model that answers a probe as
 the default, and an account sign-in brings the app to the front. A local server is a
@@ -215,10 +215,10 @@ the family, named by its email. Kimi, Antigravity and Devin have no Pi
 sign-in, so the router runs its own: Kimi by device code at `auth.kimi.com`,
 Antigravity and Devin through the browser, each landing on a loopback page in
 muniment's mark. Antigravity is a Google account and pools into Google. A
-Kimi, Google, xAI, Codex or Claude token refreshes before it dies, ahead of the turn that
+Kimi, Google, xAI or Codex token refreshes before it dies, ahead of the turn that
 would find it dead. The router asks the upstream
 what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
-Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
+Kimi at
 `api.kimi.com/coding/v1/usages`, Antigravity at
 `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, and Devin
 at its seat service's `GetUserStatus`, and xAI at Grok Build's
@@ -228,8 +228,8 @@ seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. A weekly window with no 5-hour window says the plan reports none. The store in `muniment-router-quota.json` is keyed by account, so a
 second account of one provider keeps its own windows, and carries
 no token and no prompt. An account's windows are read as soon as it connects and
-every two minutes while the app runs, without overlapping probes. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
-and Kimi subscriptions use Messages. Native streams preserve tool calls and
+every two minutes while the app runs, without overlapping probes. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Kimi
+subscriptions use Messages, and Anthropic accounts never join a pool. Native streams preserve tool calls and
 usage. Other subscriptions remain ineligible until their transport exists.
 
 **The router balances, and a refusal moves the turn.** Among the accounts of a
@@ -449,8 +449,8 @@ the graph, never from the source API.
 
 ## Pi version policy
 
-The desktop owns its Pi release cycle. Its agent harness is Pi. The optional Claude provider bridge uses the
-user's Claude Code connection. Other providers use their configured transports.
+The desktop owns its Pi release cycle. Its agent harness is Pi. The optional Claude provider bridge runs
+Claude Code on the thread's Anthropic account. Other providers use their configured transports.
 
 ### Production pin and candidate
 
@@ -477,7 +477,7 @@ The desktop's Pi carries four items:
 
 1. **The extension packages** `pins/pins.toml` lists: `npm:pi-web-access`,
    `npm:pi-subagents`, `npm:pi-background-tasks`, and `npm:pi-claude-bridge`
-   for Anthropic through the Claude Code sign-in. They give Pi web search and
+   for Anthropic through Claude Code. They give Pi web search and
    fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
    `bg_result`. They render into `settings.json` as
    `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` searches

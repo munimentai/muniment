@@ -56,3 +56,28 @@ it('offers the servers found on this computer under Connect account and connects
   expect(tauri.invoke).toHaveBeenCalledWith('onboarding_connect_server', { id: 'omlx', baseUrl: 'http://127.0.0.1:8000/v1', key: null, keyFromFile: true })
   expect(await screen.findByText('Muniment connected oMLX.')).toBeInTheDocument()
 })
+
+it('shows each Anthropic account Claude Code signed in to as its own card, and adds another through the same sign-in', async () => {
+  const claudeAccount = (id, email) => ({ id, family: 'anthropic', label: email, email, source: 'account', pi_provider: 'claude-bridge', plan: 'max', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [], allowance_readable: true, requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 })
+  const router = {
+    families: [{ id: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com/v1' }],
+    subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }],
+    accounts: [claudeAccount('a1', 'work@example.test'), claudeAccount('a2', 'home@example.test')],
+  }
+  const claude = { providers: [{ id: 'claude-bridge', name: 'Anthropic', source: 'account', base_url: null, models: [{ id: 'claude-opus-5' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return claude
+    if (command === 'model_router_settings' || command === 'model_router_remove_account') return router
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: claude } })
+  const group = await screen.findByRole('region', { name: 'Anthropic' })
+  expect(await within(group).findByText('work@example.test')).toBeInTheDocument()
+  expect(within(group).getByText('home@example.test')).toBeInTheDocument()
+  // The accounts are the cards. No Claude Code connection row stands over them.
+  expect(within(group).queryByTestId('provider-connection')).not.toBeInTheDocument()
+  await fireEvent.click(within(group).getByRole('button', { name: 'Disconnect home@example.test' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' })
+  await fireEvent.click(within(group).getByRole('button', { name: 'Subscription: Claude Pro or Max' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'anthropic' })
+})

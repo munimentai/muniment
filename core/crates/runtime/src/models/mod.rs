@@ -10,6 +10,7 @@
 //! events.
 
 pub mod callback;
+mod claude;
 mod connections;
 pub mod endpoint_secrets;
 mod memory;
@@ -47,6 +48,7 @@ pub struct ModelService {
     search: search::SearchState,
     sign_ins: sign_in::SignInState,
     pool_sign_ins: pool_sign_in::PoolSignIns,
+    claude_sign_ins: claude::ClaudeSignIns,
     sign_in_page: Arc<SignInPage>,
     subscribers: Mutex<Vec<Sender<Value>>>,
     replays: Mutex<VecDeque<Replay>>,
@@ -86,6 +88,7 @@ impl ModelService {
             search: search::SearchState::default(),
             sign_ins: sign_in::SignInState::default(),
             pool_sign_ins: pool_sign_in::PoolSignIns::default(),
+            claude_sign_ins: claude::ClaudeSignIns::default(),
             sign_in_page,
             subscribers: Mutex::new(Vec::new()),
             replays: Mutex::new(VecDeque::new()),
@@ -151,6 +154,7 @@ impl ModelService {
         self.search.stop(&self.agent);
         self.sign_ins.stop();
         self.pool_sign_ins.stop();
+        self.claude_sign_ins.stop();
     }
 
     /// Subscribes to the sign-in steps, each a `models.login` event body.
@@ -314,7 +318,7 @@ impl ModelService {
             }
             ModelAction::ClaudeCodeStatus => {
                 parse::<Empty>(data)?;
-                answer(Ok::<_, String>(providers::claude_code_status()))
+                answer(Ok::<_, String>(providers::claude_code_status(agent)))
             }
             ModelAction::ConnectClaudeCode => {
                 let data: ClaudeCode = parse(data)?;
@@ -336,7 +340,14 @@ impl ModelService {
             }
             ModelAction::RouterRemoveAccount => {
                 let data: Named = parse(data)?;
-                answer(router::remove_account(agent, &self.router, &data.id))
+                if claude::is_account(agent, &data.id) {
+                    answer(
+                        claude::remove(agent, &data.id)
+                            .and_then(|()| router::settings(agent, &self.router)),
+                    )
+                } else {
+                    answer(router::remove_account(agent, &self.router, &data.id))
+                }
             }
             ModelAction::RouterSetHidden => {
                 let data: HiddenKeys = parse(data)?;
@@ -362,7 +373,14 @@ impl ModelService {
             }
             ModelAction::RouterRefreshQuota => {
                 let data: OptionalId = parse(data)?;
-                answer(router::refresh_quotas(agent, &self.router, data.id))
+                // Claude Code reads its own accounts' plan limits.
+                claude::refresh_all(agent, data.id.as_deref());
+                match data.id {
+                    Some(id) if claude::is_account(agent, &id) => {
+                        answer(router::settings(agent, &self.router))
+                    }
+                    id => answer(router::refresh_quotas(agent, &self.router, id)),
+                }
             }
             ModelAction::RouterSetAssist => {
                 let data: Assist = parse(data)?;
@@ -400,6 +418,12 @@ impl ModelService {
             }
             ModelAction::LoginAnswer => {
                 let data: LoginAnswer = parse(data)?;
+                if self.claude_sign_ins.has_prompt(&data.id) {
+                    return Ok(answer(
+                        self.claude_sign_ins
+                            .answer(data.value.as_deref().unwrap_or_default()),
+                    ));
+                }
                 answer(sign_in::answer(
                     &self.sign_ins,
                     &data.id,
@@ -409,7 +433,11 @@ impl ModelService {
             }
             ModelAction::LoginCallback => {
                 let data: LoginCallback = parse(data)?;
-                answer(sign_in::deliver_redirect(&self.sign_ins, &data.url))
+                if self.claude_sign_ins.active() {
+                    answer(self.claude_sign_ins.deliver(&data.url))
+                } else {
+                    answer(sign_in::deliver_redirect(&self.sign_ins, &data.url))
+                }
             }
             ModelAction::LoginCancel => {
                 parse::<Empty>(data)?;

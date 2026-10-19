@@ -20,7 +20,7 @@ use super::providers;
 fn start_claude_code_check() -> mpsc::Receiver<ClaudeCode> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let status = providers::claude_code_status();
+        let status = providers::user_claude_code_status();
         let _ = sender.send(if status.logged_in {
             ClaudeCode::SignedIn
         } else if status.installed {

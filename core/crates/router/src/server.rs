@@ -2613,9 +2613,9 @@ mod tests {
         let agent = agent_dir();
         let (url, seen) = upstream(vec![(200, "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n".into(), true)]);
         let mut native = account("s1", &url);
-        native.family = "anthropic".into();
+        native.family = "kimi".into();
         native.credential = Credential::Subscription {
-            provider: "anthropic".into(),
+            provider: "kimi".into(),
             access: "token".into(),
             refresh: None,
             expires_ms: None,
@@ -2707,7 +2707,7 @@ mod tests {
 
     #[test]
     fn routing_balances_like_subscriptions_without_api_spillover() {
-        for provider in ["openai-codex", "anthropic", "xai", "kimi"] {
+        for provider in ["openai-codex", "xai", "kimi"] {
             check_subscription_pool(provider);
         }
     }
@@ -2782,10 +2782,10 @@ mod tests {
     /// A subscription account of the test family on `url`.
     fn subscription(id: &str, url: &str) -> Account {
         let mut account = account(id, url);
-        account.family = "anthropic".into();
+        account.family = "kimi".into();
         account.models = vec!["claude-test".into()];
         account.credential = Credential::Subscription {
-            provider: "anthropic".into(),
+            provider: "kimi".into(),
             access: format!("token-{id}"),
             refresh: None,
             expires_ms: None,
@@ -2800,7 +2800,7 @@ mod tests {
     /// A key of the same family as [`subscription`] on `url`.
     fn family_key(id: &str, url: &str, overflow: bool) -> Account {
         let mut account = account(id, url);
-        account.family = "anthropic".into();
+        account.family = "kimi".into();
         account.models = vec!["claude-test".into()];
         account.overflow = overflow;
         account
@@ -2808,9 +2808,9 @@ mod tests {
 
     fn anthropic_route() -> config::Route {
         config::Route {
-            key: "anthropic/claude-test".into(),
+            key: "kimi/claude-test".into(),
             description: String::new(),
-            family: "anthropic".into(),
+            family: "kimi".into(),
             model: "claude-test".into(),
         }
     }
@@ -2883,7 +2883,7 @@ mod tests {
             handle.endpoint(),
             "POST",
             "/v1/chat/completions",
-            Some(&turn("anthropic/claude-test", false)),
+            Some(&turn("kimi/claude-test", false)),
             &handle.endpoint().token,
         );
         assert_ne!(status, 200, "{body}");
@@ -2897,15 +2897,12 @@ mod tests {
     fn an_overflow_key_serves_a_turn_after_every_subscription_cools() {
         let agent = agent_dir();
         let (limited, seen_limited) = upstream(vec![(429, "limited".into(), false); 2]);
-        let reply = [
-            json!({"type":"message_start","message":{"model":"claude-test"}}),
-            json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"from the key"}}),
-            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
-            json!({"type":"message_stop"}),
-        ]
-        .iter()
-        .map(|event| format!("data: {event}\n\n"))
-        .collect::<String>();
+        // The family's key answers the OpenAI chat wire.
+        let reply = format!(
+            "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+            json!({"model":"claude-test","choices":[{"index":0,"delta":{"content":"from the key"}}]}),
+            json!({"model":"claude-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}})
+        );
         let (key, seen_key) = upstream(vec![(200, reply, true)]);
         let mut saved = config(vec![
             family_key("k1", &key, true),
@@ -2920,7 +2917,7 @@ mod tests {
             handle.endpoint(),
             "POST",
             "/v1/chat/completions",
-            Some(&turn("anthropic/claude-test", true)),
+            Some(&turn("kimi/claude-test", true)),
             &handle.endpoint().token,
         );
         assert_eq!(status, 200, "{body}");

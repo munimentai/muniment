@@ -3,6 +3,7 @@
 //! providers report, context windows, output limits and prices. The crate also
 //! renders that data into Pi's `models.json`.
 
+pub mod claude_accounts;
 pub mod endpoint_models;
 pub mod family;
 pub mod http;

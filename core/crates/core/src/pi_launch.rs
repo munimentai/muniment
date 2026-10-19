@@ -631,6 +631,17 @@ pub fn pi_launch_config_for_executable(
             "PI_CODING_AGENT_DIR".into(),
             agent.to_string_lossy().into_owned(),
         );
+        // The bridge runs Claude Code on the Anthropic account this thread
+        // runs on, through that account's own config folder.
+        let thread = boundaries.extension_thread_id();
+        if let Some(folder) =
+            crate::models::claude_accounts::folder_for_thread(&agent, thread.as_deref())
+        {
+            config.env.insert(
+                "CLAUDE_CONFIG_DIR".into(),
+                folder.to_string_lossy().into_owned(),
+            );
+        }
     }
     // Extension loading precedes the first RPC response.
     config.startup_timeout = std::time::Duration::from_secs(120);

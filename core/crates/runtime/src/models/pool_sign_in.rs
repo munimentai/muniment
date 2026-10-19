@@ -68,6 +68,7 @@ pub(super) fn start(service: &Arc<ModelService>, provider: &str) -> Result<(), S
     if !muniment_core::model_router::family::native_sign_in(provider) {
         return Err("This provider has no subscription the router can pool.".into());
     }
+    service.claude_sign_ins.stop();
     let flag = service.pool_sign_ins.arm();
     let app = Arc::clone(service);
     let provider = provider.to_owned();

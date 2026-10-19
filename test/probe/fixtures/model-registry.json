@@ -5,9 +5,13 @@
       "name": "Anthropic",
       "popular": true,
       "methods": [
-        "claude-code",
+        "account",
         "key"
-      ]
+      ],
+      "account": {
+        "provider": "anthropic",
+        "label": "Claude Pro or Max account"
+      }
     },
     {
       "id": "openai",
@@ -449,7 +453,7 @@
     {
       "id": "anthropic",
       "name": "Claude",
-      "plan": "Pro or Max, through Claude Code",
+      "plan": "Pro or Max",
       "logo": "anthropic",
       "catalog": "anthropic"
     },

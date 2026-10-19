@@ -24,7 +24,7 @@ pub fn prepare(account: &Account, request: &Value, model: &str) -> Result<Reques
     let provider = account.credential.pi_provider();
     let protocol = match provider {
         Some("openai-codex" | "xai" | "meta") => Protocol::Responses,
-        Some("anthropic" | "kimi") => Protocol::Messages,
+        Some("kimi") => Protocol::Messages,
         Some(_) => return Err("This subscription does not support routed turns yet.".into()),
         None if account.family == "anthropic" => Protocol::Messages,
         None => Protocol::Chat,
@@ -55,17 +55,6 @@ pub fn prepare(account: &Account, request: &Value, model: &str) -> Result<Reques
     }
     if protocol == Protocol::Messages {
         headers.push(("anthropic-version", "2023-06-01".into()));
-        if provider == Some("anthropic") {
-            headers.push((
-                "anthropic-beta",
-                "claude-code-20250219,oauth-2025-04-20".into(),
-            ));
-            headers.push((
-                "user-agent",
-                format!("claude-cli/{}", muniment_pins::CLAUDE_CODE.version),
-            ));
-            headers.push(("x-app", "cli".into()));
-        }
         if matches!(account.credential, Credential::ApiKey { .. }) {
             headers.clear();
             headers.push(("x-api-key", account.credential.bearer().to_owned()));
@@ -96,16 +85,6 @@ pub fn prepare(account: &Account, request: &Value, model: &str) -> Result<Reques
     };
     if account.family == "anthropic" {
         body["cache_control"] = json!({"type":"ephemeral"});
-    }
-    if provider == Some("anthropic") {
-        // Match Pi's OAuth adapter. Anthropic requires this separate identity
-        // block for subscription requests; preserve the harness prompt after it.
-        let system = body
-            .as_object_mut()
-            .unwrap()
-            .entry("system")
-            .or_insert_with(|| json!([]));
-        system.as_array_mut().unwrap().insert(0, json!({"type":"text", "text":"You are Claude Code, Anthropic's official CLI for Claude."}));
     }
     Ok(Request {
         url: format!("{base}/{path}"),
@@ -498,33 +477,24 @@ mod tests {
     }
 
     #[test]
-    fn subscription_identity_is_separate_from_the_harness_prompt_and_api_key_requests() {
+    fn an_anthropic_subscription_is_refused_and_a_key_sends_only_the_harness_prompt() {
         let mut account: Account = serde_json::from_value(json!({
             "id":"claude", "family":"anthropic", "label":"Claude", "enabled":true,
             "weight":1, "models":["claude-opus-5"],
             "credential":{"type":"subscription", "provider":"anthropic", "access":"test-token", "refresh":"test-refresh", "expires_ms":9999999999999_i64}
         })).unwrap();
         let request = json!({"messages":[{"role":"system","content":"Harness instructions"},{"role":"user","content":"Hello"}]});
-        let oauth = prepare(&account, &request, "claude-opus-5").unwrap();
-        assert_eq!(
-            oauth.body["system"][0]["text"],
-            "You are Claude Code, Anthropic's official CLI for Claude."
-        );
-        assert_eq!(oauth.body["system"][1]["text"], "Harness instructions");
-        assert!(oauth.headers.iter().any(
-            |(name, value)| *name == "anthropic-beta" && value.contains("claude-code-20250219")
-        ));
-        assert!(oauth
-            .headers
-            .iter()
-            .any(|(name, value)| *name == "user-agent"
-                && *value == format!("claude-cli/{}", muniment_pins::CLAUDE_CODE.version)));
+        assert!(!account.credential.servable());
+        assert!(prepare(&account, &request, "claude-opus-5").is_err());
         account.credential = Credential::ApiKey {
             key: "test-key".into(),
         };
         let api = prepare(&account, &request, "claude-opus-5").unwrap();
         assert_eq!(api.body["system"].as_array().unwrap().len(), 1);
         assert_eq!(api.body["system"][0]["text"], "Harness instructions");
+        assert!(api.headers.iter().all(|(name, value)| *name != "user-agent"
+            && *name != "x-app"
+            && !value.contains("claude-code")));
     }
 
     #[test]

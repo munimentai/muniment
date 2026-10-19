@@ -379,6 +379,12 @@ fn settings_with(
                 family,
                 label,
             })
+            // Claude Code's own login adds an Anthropic account beside the pool.
+            .chain(std::iter::once(SubscriptionView {
+                provider: "anthropic",
+                family: "anthropic",
+                label: "Claude Pro or Max",
+            }))
             .collect(),
         accounts: config
             .accounts
@@ -392,6 +398,12 @@ fn settings_with(
                     config.refused.get(&account.id),
                 )
             })
+            .chain(
+                muniment_core::models::claude_accounts::load(agent)
+                    .accounts
+                    .iter()
+                    .map(claude_account_view),
+            )
             .collect(),
         options: all_options(&config)
             .into_iter()
@@ -430,6 +442,62 @@ fn settings_with(
 }
 
 /// The router settings with what the running listener reports.
+/// An Anthropic account Claude Code signed in to, as a subscription card.
+/// Its chats run through the bridge, so the router keeps no counts for it.
+fn claude_account_view(account: &muniment_core::models::claude_accounts::Account) -> AccountView {
+    let usage = account.usage.as_ref();
+    AccountView {
+        id: account.id.clone(),
+        family: "anthropic".into(),
+        label: account.label(),
+        source: "account",
+        servable: true,
+        exclusion_reason: None,
+        base_url: None,
+        models: Vec::new(),
+        refused_models: Vec::new(),
+        enabled: true,
+        weight: 1,
+        overflow: false,
+        requests: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        errors: 0,
+        last_used_ms: None,
+        last_error: None,
+        cooldown_until_ms: None,
+        active: 0,
+        pi_provider: muniment_core::models::claude_accounts::PROVIDER.into(),
+        email: account.email.clone(),
+        plan: account.plan.clone(),
+        renews_at_ms: None,
+        windows: usage
+            .map(|usage| {
+                usage
+                    .windows
+                    .iter()
+                    .map(|window| WindowView {
+                        label: claude_window_kind(&window.kind).label().to_owned(),
+                        scope: window.scope.clone(),
+                        remaining_percent: window.remaining_percent,
+                        resets_at_ms: window.resets_at_ms,
+                        limit_reached: window.limit_reached,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        banked_resets: None,
+        quota_observed_ms: usage.map(|usage| usage.observed_at_ms),
+        allowance_readable: true,
+        days: Vec::new(),
+    }
+}
+
+/// The window kind a Claude account's reading names.
+fn claude_window_kind(kind: &str) -> quota::WindowKind {
+    serde_json::from_value(Value::String(kind.to_owned())).unwrap_or(quota::WindowKind::Other)
+}
+
 pub(super) fn settings(agent: &Path, state: &RouterState) -> Result<RouterSettings, String> {
     settings_with(
         agent,
@@ -973,32 +1041,8 @@ pub(super) fn import_credential(
 ) -> Result<String, String> {
     let family = family_for_pi_provider(provider)
         .ok_or_else(|| "This provider has no subscription the router can pool.".to_string())?;
-    let mut credential = credential;
-    quota::identify_claude(&mut credential, quota::TIMEOUT);
-    // Identify older opaque credentials outside the settings lock. Apply each
-    // answer only if another sign-in has not replaced that credential.
-    let mut identities = Vec::new();
-    if provider == "anthropic" {
-        for account in load(agent)?.accounts {
-            let original = account.credential;
-            let mut identified = original.clone();
-            quota::identify_claude(&mut identified, quota::TIMEOUT);
-            if identified != original {
-                identities.push((account.id, original, identified));
-            }
-        }
-    }
     let lock = lock_pi_auth_file(&config::config_path(agent))?;
     let mut config = load(agent)?;
-    for (id, original, identified) in identities {
-        if let Some(account) = config
-            .accounts
-            .iter_mut()
-            .find(|account| account.id == id && account.credential == original)
-        {
-            account.credential = identified;
-        }
-    }
     // A pooled subscription serves through the router alone, so the account
     // that joins turns the router on.
     config.enabled = true;

@@ -3,7 +3,8 @@
 //!
 //! `usage.summary` reads the receipts of finished runs from the run journal,
 //! where each receipt sums Pi's usage on every assistant message of its run,
-//! and the router's last quota probe of each account. It answers totals, a
+//! the router's last quota probe of each account, and the plan limits Claude
+//! Code last reported for each Anthropic account. It answers totals, a
 //! series of hourly or daily buckets by provider, a breakdown by model, agent
 //! and project, one limit card per account and window, and each provider's
 //! pool of a window, which the composer warns about. [`merge`] joins the
@@ -761,8 +762,52 @@ pub fn account_windows(agent: &Path) -> (Vec<AccountWindow>, Vec<Unmetered>) {
             }
         }
     }
+    claude_windows(agent, &mut windows, &mut unmetered);
     unmetered.extend(local_servers(agent));
     (windows, unmetered.into_iter().collect())
+}
+
+/// The windows Claude Code last reported for each Anthropic account it
+/// signed in to.
+fn claude_windows(
+    agent: &Path,
+    windows: &mut Vec<AccountWindow>,
+    unmetered: &mut BTreeSet<Unmetered>,
+) {
+    for account in crate::models::claude_accounts::load(agent).accounts {
+        let label = account.label();
+        let Some(usage) = account
+            .usage
+            .as_ref()
+            .filter(|usage| !usage.windows.is_empty())
+        else {
+            unmetered.insert(Unmetered {
+                provider: "anthropic".into(),
+                label: "Anthropic".into(),
+                reason: match &account.usage {
+                    None => "pending",
+                    Some(_) => "unread",
+                }
+                .into(),
+            });
+            continue;
+        };
+        for window in &usage.windows {
+            windows.push(AccountWindow {
+                account_id: account.id.clone(),
+                label: label.clone(),
+                provider: "anthropic".into(),
+                kind: serde_json::from_value(Value::String(window.kind.clone()))
+                    .unwrap_or(quota::WindowKind::Other),
+                scope: window.scope.clone(),
+                plan: account.plan.clone(),
+                remaining_percent: window.remaining_percent,
+                limit_reached: window.limit_reached,
+                resets_at_ms: window.resets_at_ms,
+                observed_at_ms: usage.observed_at_ms,
+            });
+        }
+    }
 }
 
 /// The providers in Pi's `models.json` served from this machine.

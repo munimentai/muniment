@@ -30,37 +30,48 @@ pub fn provider_display_name(provider: &str) -> &str {
     }
 }
 
-/// The redirect URL for a request line that hits the callback path with a
-/// code, else nothing.
+/// The redirect URL for a request line that hits the OpenAI callback path
+/// with a code, else nothing.
 pub fn callback_redirect(request_line: &str) -> Option<String> {
+    callback_redirect_on(request_line, CALLBACK_PORT, CALLBACK_PATH)
+}
+
+/// The redirect URL for a request line that hits `path` with a code, as the
+/// browser sent it to `port`, else nothing.
+pub fn callback_redirect_on(request_line: &str, port: u16, path: &str) -> Option<String> {
     let mut parts = request_line.split_whitespace();
     if parts.next()? != "GET" {
         return None;
     }
     let target = parts.next()?;
-    let (path, query) = target.split_once('?')?;
-    if path != CALLBACK_PATH
+    let (target_path, query) = target.split_once('?')?;
+    if target_path != path
         || !query
             .split('&')
             .any(|pair| pair.starts_with("code=") && pair.len() > "code=".len())
     {
         return None;
     }
-    Some(format!("http://localhost:{CALLBACK_PORT}{target}"))
+    Some(format!("http://localhost:{port}{target}"))
 }
 
 /// The redirect a client forwards, checked the way the runtime's own page
 /// checks it: a loopback origin on the callback port, the callback path and
 /// a code. Anything else answers nothing.
 pub fn forwarded_redirect(url: &str) -> Option<String> {
+    forwarded_redirect_on(url, CALLBACK_PORT, CALLBACK_PATH)
+}
+
+/// [`forwarded_redirect`] for a sign-in whose redirect lands on `port` and `path`.
+pub fn forwarded_redirect_on(url: &str, port: u16, path: &str) -> Option<String> {
     let rest = ["http://localhost", "http://127.0.0.1", "http://[::1]"]
         .into_iter()
         .find_map(|origin| url.strip_prefix(origin))?;
-    let target = rest.strip_prefix(&format!(":{CALLBACK_PORT}"))?;
+    let target = rest.strip_prefix(&format!(":{port}"))?;
     if !target.starts_with('/') || target.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return None;
     }
-    callback_redirect(&format!("GET {target} HTTP/1.1"))
+    callback_redirect_on(&format!("GET {target} HTTP/1.1"), port, path)
 }
 
 pub(crate) fn write_response(stream: &mut TcpStream, status: &str, body: &str) {
@@ -123,6 +134,25 @@ impl CallbackServer {
         provider_name: String,
         deliver: Arc<Deliver>,
     ) -> Self {
+        Self::start_on(
+            listeners,
+            CALLBACK_PORT,
+            CALLBACK_PATH.to_owned(),
+            page,
+            provider_name,
+            deliver,
+        )
+    }
+
+    /// [`CallbackServer::start`] for a redirect that lands on `port` and `path`.
+    pub fn start_on(
+        listeners: Vec<TcpListener>,
+        port: u16,
+        path: String,
+        page: Arc<SignInPage>,
+        provider_name: String,
+        deliver: Arc<Deliver>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let servers = listeners
             .into_iter()
@@ -131,9 +161,11 @@ impl CallbackServer {
                 let page = Arc::clone(&page);
                 let deliver = Arc::clone(&deliver);
                 let provider_name = provider_name.clone();
+                let path = path.clone();
                 std::thread::spawn(move || {
                     serve(
                         listener,
+                        (port, &path),
                         &stop,
                         page.as_ref(),
                         &provider_name,
@@ -162,6 +194,7 @@ impl Drop for CallbackServer {
 
 fn serve(
     listener: TcpListener,
+    (port, path): (u16, &str),
     stop: &AtomicBool,
     page: &SignInPage,
     provider_name: &str,
@@ -180,7 +213,7 @@ fn serve(
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
         let line = request_line(&mut stream);
-        match callback_redirect(&line).map(deliver) {
+        match callback_redirect_on(&line, port, path).map(deliver) {
             Some(true) => write_response(&mut stream, "200 OK", &page(Some(provider_name))),
             Some(false) => write_response(&mut stream, "502 Bad Gateway", &page(None)),
             None => write_response(&mut stream, "404 Not Found", &page(None)),
@@ -243,6 +276,18 @@ mod tests {
         ] {
             assert_eq!(forwarded_redirect(url), expected, "{url}");
         }
+        assert_eq!(
+            forwarded_redirect_on(
+                "http://127.0.0.1:40259/callback?code=c&state=s",
+                40259,
+                "/callback"
+            ),
+            Some("http://localhost:40259/callback?code=c&state=s".to_owned())
+        );
+        assert_eq!(
+            forwarded_redirect_on("http://localhost:1455/callback?code=c", 40259, "/callback"),
+            None
+        );
         for url in [
             "https://localhost:1455/auth/callback?code=c",
             "http://example.com:1455/auth/callback?code=c",

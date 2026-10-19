@@ -28,8 +28,9 @@ describe('provider catalog', () => {
     expect(methodLabel(catalogProvider('openai'), 'account')).toBe('ChatGPT Plus or Pro account')
     expect(catalogProvider('openai').account.provider).toBe('openai-codex')
     expect(methodLabel(catalogProvider('xai'), 'account')).toBe('Grok Build account')
-    expect(catalogProvider('anthropic').methods).toEqual(['claude-code', 'key'])
-    expect(methodLabel(catalogProvider('anthropic'), 'claude-code')).toBe('Claude Code sign-in')
+    expect(catalogProvider('anthropic').methods).toEqual(['account', 'key'])
+    expect(methodLabel(catalogProvider('anthropic'), 'account')).toBe('Claude Pro or Max account')
+    expect(catalogProvider('anthropic').account.provider).toBe('anthropic')
     expect(catalogProvider('google').methods).toEqual(['account', 'key'])
     expect(catalogProvider('lmstudio').methods).toEqual(['endpoint'])
     expect(catalogProvider('ollama').baseUrl).toBe('http://localhost:11434/v1')
@@ -43,7 +44,7 @@ describe('provider catalog', () => {
     const cases = [
       ['Antigravity', 'google', 'antigravity'],
       ['ChatGPT', 'openai', 'openai-codex'],
-      ['Claude Code', 'anthropic', null],
+      ['Claude Pro', 'anthropic', 'anthropic'],
       ['Grok', 'xai', 'xai'],
       ['Devin', 'devin', 'devin'],
       ['Kimi Code', 'kimi', 'kimi'],
@@ -53,8 +54,8 @@ describe('provider catalog', () => {
       const results = searchProviders(query)
       expect([...results.popular, ...results.other].map((p) => p.id)).toContain(id)
       const provider = catalogProvider(id)
-      expect(provider.methods).toContain(signIn ? 'account' : 'claude-code')
-      if (signIn) expect(provider.account.provider).toBe(signIn)
+      expect(provider.methods).toContain('account')
+      expect(provider.account.provider).toBe(signIn)
     }
   })
 
