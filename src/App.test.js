@@ -1632,6 +1632,8 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
     expect(within(dialog).getByLabelText('Ollama server URL')).toHaveValue('http://localhost:11434/v1')
     expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeEnabled()
+    // Each connect view draws its main action in the primary style.
+    expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toHaveAttribute('data-variant', 'primary')
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^OpenAI/ }))
@@ -1641,6 +1643,7 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Use an API key instead' }))
     expect(within(dialog).getByLabelText('OpenAI API key')).toBeVisible()
     expect(within(dialog).getByRole('button', { name: 'Save key' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: 'Save key' })).toHaveAttribute('data-variant', 'primary')
     expect(within(dialog).queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: /Sign in with your ChatGPT Plus or Pro account instead/ }))
     expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()

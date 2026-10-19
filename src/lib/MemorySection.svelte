@@ -254,7 +254,7 @@
     <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
       {#snippet actions()}
         <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
-        <Button disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
+        <Button variant="primary" disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
       {/snippet}
     </PageHead>
     <Group heading="About you" info="Saved in memory/profile.md.">

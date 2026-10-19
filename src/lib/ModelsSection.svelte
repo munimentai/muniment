@@ -535,7 +535,7 @@
       {/each}
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
+      <button type="button" data-variant="primary" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
@@ -543,7 +543,7 @@
       <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : 'For a server behind a key'} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
     {:else if method === 'endpoint'}
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       <Group label="Endpoint">
@@ -555,21 +555,21 @@
       <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
     {:else if method === 'claude-code'}
       <p class="support">Anthropic through your Claude Code sign-in. Muniment installs the bridge package and routes Claude models through it.</p>
       {#if claude === null}
         <p class="support" role="status">Checking Claude Code…</p>
       {:else if !claude.installed}
         <p class="support" role="status">Claude Code is not installed on this device. Install it, run <code>claude</code> once to sign in, then retry.</p>
-        <button type="button" onclick={loadClaudeStatus}>Check again</button>
+        <button type="button" data-variant="primary" onclick={loadClaudeStatus}>Check again</button>
       {:else if !claude.logged_in}
         <p class="support" role="status">Claude Code is installed but not signed in. Run <code>claude</code> in a terminal and sign in, then retry.</p>
-        <button type="button" onclick={loadClaudeStatus}>Check again</button>
+        <button type="button" data-variant="primary" onclick={loadClaudeStatus}>Check again</button>
       {:else}
         <p class="support" role="status">Claude Code is signed in.</p>
         {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-        <button type="button" disabled={pending} onclick={connectClaudeCode}>Connect Claude Code</button>
+        <button type="button" data-variant="primary" disabled={pending} onclick={connectClaudeCode}>Connect Claude Code</button>
       {/if}
     {:else if method === 'account'}
       <p class="support">Sign in with your {methodLabel(provider, 'account')}. The browser opens, and the token stays on this device.</p>
@@ -581,7 +581,7 @@
           {#if login.code}<p class="login-code">{login.code}</p>{/if}
           {#if login.url}
             <div class="login-links">
-              <button type="button" onclick={() => openUrl(login.url)}>{login.stage === 'browser' ? 'Open again' : 'Open the sign-in page'}</button>
+              <button type="button" data-variant={login.prompt?.kind === 'input' ? undefined : 'primary'} onclick={() => openUrl(login.url)}>{login.stage === 'browser' ? 'Open again' : 'Open the sign-in page'}</button>
               <button type="button" class="quiet" onclick={copyLoginLink}>{loginLinkCopied ? 'Copied' : 'Copy sign-in link'}</button>
             </div>
           {/if}
@@ -594,10 +594,10 @@
             </div>
           {:else if login.prompt?.kind === 'input'}
             <div class="connection-field"><label for="login-answer">{login.prompt.title}</label><input id="login-answer" type="text" placeholder={login.prompt.placeholder ?? ''} bind:value={loginAnswer}></div>
-            <button type="button" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
+            <button type="button" data-variant="primary" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
           {/if}
           {#if login.stage === 'failed' || login.stage === 'cancelled'}
-            <button type="button" onclick={startLogin}>Try again</button>
+            <button type="button" data-variant="primary" onclick={startLogin}>Try again</button>
           {:else}
             <button type="button" class="quiet" onclick={cancelLogin}>Cancel</button>
           {/if}

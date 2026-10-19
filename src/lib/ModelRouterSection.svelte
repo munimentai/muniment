@@ -114,7 +114,7 @@
     {/if}
     {#if !choices.length}
       <Row title="No decision model" description="Needed for routing and assistance">
-        <Button onclick={onconnect}>Connect decision model</Button>
+        <Button variant="primary" onclick={onconnect}>Connect decision model</Button>
       </Row>
     {/if}
     {#if !settings.options?.length}<p>Connect an account to route messages.</p>{/if}

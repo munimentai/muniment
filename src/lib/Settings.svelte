@@ -147,7 +147,7 @@
             <PageHead intro="Local mode runs on this device with your own providers. A free account adds the mobile relay." />
             <Group label="Account">
               <Row title="Sign in" description="Pair your phone and devices on one account.">
-                <Button disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</Button>
+                <Button variant="primary" disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</Button>
               </Row>
               {#if accountStatus}<FailureNote failure={accountStatus} />{/if}
             </Group>

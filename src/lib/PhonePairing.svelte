@@ -236,7 +236,7 @@
     {/if}
   {:else}
     <Row title="Phone" description="No phone is paired.">
-      <Button disabled={requesting} onclick={requestChallenge}>Pair a phone</Button>
+      <Button variant="primary" disabled={requesting} onclick={requestChallenge}>Pair a phone</Button>
     </Row>
     {#if error && !open}<p class="revoke-error" role="alert">{error}</p>{/if}
   {/if}
@@ -256,10 +256,10 @@
       {#if requesting}
         <p role="status">The pairing request is in progress.</p>
       {:else if !challenge}
-        <button type="button" onclick={requestChallenge}>Try again</button>
+        <button type="button" data-variant="primary" onclick={requestChallenge}>Try again</button>
       {:else if challengeExpired(challenge.expiresAt, now)}
         <p class="access-status" role="status">The code expired.</p>
-        <button type="button" disabled={!replacementReady(challenge.requestedAt, now)} onclick={requestChallenge}>New code</button>
+        <button type="button" data-variant="primary" disabled={!replacementReady(challenge.requestedAt, now)} onclick={requestChallenge}>New code</button>
       {:else}
         <div class="pairing-qr">{@html challenge.qrSvg}</div>
         <p class="expiry">Code expires in {remainingLabel(challenge.expiresAt, now)}</p>
