@@ -192,6 +192,8 @@
     "allow-home-status",
     "allow-home-confirm",
     "allow-home-folder-access",
+    "allow-home-folder-state",
+    "allow-home-folder-settings",
     "allow-home-confirm-import",
     "allow-onboarding-import-preview",
     "allow-onboarding-import-extract",

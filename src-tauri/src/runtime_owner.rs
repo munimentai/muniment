@@ -8,6 +8,10 @@ use crate::linux_runtime_service::RuntimeChild;
 use std::process::Child as RuntimeChild;
 
 const DWELL: Duration = Duration::from_secs(2);
+/// The wait before the first automatic start after a failed one. Each
+/// further failure doubles it up to [`RETRY_LIMIT`].
+const RETRY_FIRST: Duration = Duration::from_secs(2);
+const RETRY_LIMIT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,10 +64,37 @@ struct Lifecycle {
     #[cfg(any(test, target_os = "macos"))]
     startup_attempt: Option<Instant>,
     awaiting_disconnect: bool,
+    /// Automatic starts since the runtime last connected.
+    retries: u32,
+    /// When the owner starts the runtime again after a failed start.
+    retry_at: Option<Instant>,
+    /// Set while an automatic start runs, so its request keeps the failure on screen.
+    retrying: bool,
+}
+
+/// How long the owner waits before its automatic start after `retries` earlier ones.
+fn retry_delay(retries: u32) -> Duration {
+    RETRY_FIRST
+        .saturating_mul(2u32.saturating_pow(retries))
+        .min(RETRY_LIMIT)
+}
+
+/// Whether a start reports only that its request went out, and the clients
+/// still have to connect.
+fn start_requested(event: RuntimeEvent) -> bool {
+    #[cfg(target_os = "macos")]
+    if event == RuntimeEvent::ChildStarted {
+        return true;
+    }
+    event == RuntimeEvent::Starting
 }
 
 impl Lifecycle {
     fn change(&mut self, event: RuntimeEvent, visible: bool) {
+        if event == RuntimeEvent::Connected {
+            self.retries = 0;
+            self.retry_at = None;
+        }
         self.snapshot.last_event = event;
         self.snapshot.visible = visible;
         self.snapshot.cause = None;
@@ -220,6 +251,7 @@ impl Lifecycle {
         if !self.start() {
             return false;
         }
+        self.retry_at = None;
         #[cfg(any(test, target_os = "macos"))]
         {
             self.startup_attempt = Some(Instant::now());
@@ -227,7 +259,32 @@ impl Lifecycle {
         true
     }
 
+    /// Claims an automatic start once a failed start has waited out its
+    /// backoff. The runtime can fail to answer for a while, for example while
+    /// a macOS folder prompt holds it, and it must not stay down until the
+    /// user starts it by hand.
+    fn retry_due(&mut self, now: Instant) -> bool {
+        if self.snapshot.last_event != RuntimeEvent::StartFailed || self.snapshot.busy {
+            return false;
+        }
+        let at = *self
+            .retry_at
+            .get_or_insert_with(|| now + retry_delay(self.retries));
+        if now < at || !self.start_attempt() {
+            return false;
+        }
+        self.retries = self.retries.saturating_add(1);
+        self.retrying = true;
+        true
+    }
+
     fn started(&mut self, event: RuntimeEvent) {
+        if std::mem::take(&mut self.retrying) && start_requested(event) {
+            // The failure stays on screen until the clients connect, and the
+            // next automatic start waits out a longer backoff.
+            self.snapshot.busy = false;
+            return;
+        }
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
         self.snapshot.busy = self.awaiting_disconnect;
         self.outage = None;
@@ -521,6 +578,12 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             #[cfg(target_os = "windows")]
             state.observe(connected, disconnected, Instant::now());
         });
+        let mut retry = false;
+        owner.update(&app, |state| retry = state.retry_due(Instant::now()));
+        if retry {
+            let retry_app = app.clone();
+            std::thread::spawn(move || finish_start(&retry_app));
+        }
         std::thread::sleep(Duration::from_millis(100));
     });
 }
@@ -1010,6 +1073,83 @@ mod tests {
         state.observe(true, false, Instant::now());
         assert_eq!(state.snapshot.cause, None);
         assert!(!state.snapshot.visible);
+    }
+
+    #[test]
+    fn a_failed_start_retries_with_backoff_until_the_clients_connect() {
+        let now = Instant::now();
+        let cause = "The runtime clients did not connect within 10 seconds.";
+        let mut state = Lifecycle::default();
+        assert!(state.start());
+        state.windows_start_finished(Err(cause.into()));
+        let failure = state.snapshot.clone();
+        assert_eq!(failure.last_event, RuntimeEvent::StartFailed);
+        let mut at = now;
+        for seconds in [2, 4, 8, 16, 32, 60, 60] {
+            let delay = Duration::from_secs(seconds);
+            assert!(!state.retry_due(at));
+            assert!(!state.retry_due(at + delay - Duration::from_millis(1)));
+            assert!(state.retry_due(at + delay));
+            assert!(state.snapshot.busy);
+            assert!(!state.retry_due(at + delay + RETRY_LIMIT));
+            // The injected start sends its request, and the clients stay away.
+            state.windows_start_finished(Ok(()));
+            assert!(!state.snapshot.busy);
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+            assert!(state.snapshot.visible);
+            assert_eq!(state.snapshot.cause, failure.cause);
+            at += delay;
+            state.observe(false, true, at);
+            assert_eq!(state.snapshot.cause, failure.cause);
+        }
+        // An injected start that fails outright waits out the next backoff too.
+        assert!(!state.retry_due(at));
+        assert!(state.retry_due(at + RETRY_LIMIT));
+        state.windows_start_finished(Err(cause.into()));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        assert!(!state.snapshot.busy);
+        at += RETRY_LIMIT;
+        assert!(!state.retry_due(at));
+        assert!(!state.retry_due(at + RETRY_LIMIT - Duration::from_millis(1)));
+        assert!(state.retry_due(at + RETRY_LIMIT));
+        state.windows_start_finished(Ok(()));
+
+        state.observe(true, false, at + Duration::from_secs(1));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert!(!state.snapshot.visible);
+        assert!(!state.retry_due(at + Duration::from_secs(600)));
+
+        // A later failure starts again from the first delay.
+        assert!(state.start());
+        state.windows_start_finished(Err(cause.into()));
+        let later = at + Duration::from_secs(700);
+        assert!(!state.retry_due(later));
+        assert!(state.retry_due(later + RETRY_FIRST));
+    }
+
+    #[test]
+    fn a_retry_that_reports_a_state_for_the_user_stops_retrying() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        state.observe(false, true, now);
+        state.observe(false, true, now + Duration::from_secs(10));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        let due = now + Duration::from_secs(10);
+        assert!(!state.retry_due(due));
+        assert!(state.retry_due(due + RETRY_FIRST));
+        state.started(RuntimeEvent::RequiresApproval);
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::RequiresApproval);
+        assert!(state.snapshot.visible);
+        assert!(!state.retry_due(due + RETRY_LIMIT + RETRY_LIMIT));
+    }
+
+    #[test]
+    fn retry_delays_double_up_to_the_limit() {
+        assert_eq!(retry_delay(0), RETRY_FIRST);
+        assert_eq!(retry_delay(1), RETRY_FIRST * 2);
+        assert_eq!(retry_delay(4), Duration::from_secs(32));
+        assert_eq!(retry_delay(5), RETRY_LIMIT);
+        assert_eq!(retry_delay(u32::MAX), RETRY_LIMIT);
     }
 
     #[test]

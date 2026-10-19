@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
 import LimitBanner from './LimitBanner.svelte'
@@ -93,6 +93,13 @@ describe('Usage page', () => {
     expect(screen.getByText('No limit')).toBeInTheDocument()
     expect(screen.getByText('Allowance pending')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
+  })
+
+  it('names a pending folder prompt in place of a silent computer', async () => {
+    const machines = [{ id: 'local', name: 'This computer', state: 'error', error: 'timeout' }, { id: 'box', name: 'Build box', state: 'error', error: 'offline' }]
+    const folderAccess = { state: 'waiting', folder: 'Documents', message: 'macOS is asking whether Muniment may open your Documents folder. Choose Allow in that prompt, then try again.' }
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => summary({ machines })) }, runtimeList, folderAccess })
+    await waitFor(() => expect(screen.getAllByRole('status').map((note) => note.textContent)).toEqual([folderAccess.message, 'Build box did not answer. The totals leave it out.']))
   })
 
   it('says when a weekly window has no 5-hour window beside it', async () => {

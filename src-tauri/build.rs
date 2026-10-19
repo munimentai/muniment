@@ -177,6 +177,8 @@ const APP_COMMANDS: &[&str] = &[
     "home_status",
     "home_confirm",
     "home_folder_access",
+    "home_folder_state",
+    "home_folder_settings",
     "home_confirm_import",
     "onboarding_import_preview",
     "onboarding_import_extract",

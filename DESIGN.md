@@ -179,7 +179,7 @@ A diff uses the stored change and stacks its sides below 480 pixels.
 The workspace has one `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
 The background service notice reuses the auth error state's mono record register.
-One owner starts, watches and stops the runtime for every window. When the runtime exits, every window shows the same one-sentence notice and one control that starts it again.
+One owner starts, watches and stops the runtime for every window. When the runtime exits, every window shows the same one-sentence notice and one control that starts it again. A failed start is tried again on its own with a growing wait. A pending or refused macOS folder prompt is an ochre-edged card at the top of the sidebar's list, its folder in the heading, core's message and one primary Allow access.
 The notice waits out a two second dwell, so a drop shorter than that leaves the workspace on screen. A first status that already reports the service unreachable shows the notice at once.
 An error that rejects one item from a set names that item.
 Prose wraps unbreakable strings. Tab labels and path headers stay on one line.

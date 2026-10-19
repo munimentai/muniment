@@ -31,14 +31,14 @@ The flags are independent. Enabling either does not enable the other.
 Disabled sections have no visible controls, empty placeholders or working
 shortcuts. A request for a hidden Settings part opens its page without it.
 With cloud disabled, startup enters local mode without reading a cloud session.
-A local startup failure offers a local retry, never a cloud sign-in prompt.
+A local startup failure offers a local retry, never a cloud sign-in prompt. The runtime owner also starts the runtime again on its own after a failed start, 2 seconds later and then twice as long each time up to a minute, until its clients connect, and the failure stays on screen meanwhile.
 Provider sign-in, model routing, allowances, MCP pairing and local tools remain
 available. They are not Muniment cloud features. These UI flags do not replace
 backend authorization and do not remove stored sessions, companies or graph APIs.
 
 ## Project folders
 
-The default Home is `Documents/muniment`. Existing Home choices persist.
+The default Home is `Documents/muniment`. Existing Home choices persist. The runtime names session folders from older versions on a thread of its own, so a Home read that a macOS folder prompt holds never holds the runtime's start. Once Home is set, each launch reads Home beside that start: while macOS asks about or refuses the folder that holds Home, the sidebar names the folder with core's message and one Allow access action, which reads Home again or, after a refusal, opens Files & Folders, and Usage shows that message for this computer in place of did not answer.
 Projects are folders under Home's `projects/`, with stable thread membership. Before each reply, the app automatically retrieves relevant context from other ordinary chats in that project. Recall excludes other projects, other owners, and agent or artifact chats.
 Create makes the folder. Rename moves the folder and preserves its files and threads. A project thread runs in its folder. Generated files stay there unless the user names another path.
 A project is a group of threads and agents, and a thread that no catalog project or agent holds is a project of its own. A new thread starts in no project unless it starts in one, and a thread assigned to the retired `chats` id belongs to no project. A thread in no project uses `sessions/<thread-name>-<short-id>/` and shares no recall. Project folders use `<project-name>-<short-id>`. Search and previews use the same folder.
