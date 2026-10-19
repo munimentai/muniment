@@ -4487,9 +4487,12 @@
   .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
   .thread-row-meta .row-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* The owner chip keeps its machine name whole while the project name clips first. */
+  .thread-row-meta :global(.owner-chip) { flex: none; max-width: 60%; }
   .thread-row time { flex: none; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
   .thread-row > span { flex: 0 0 5px; }
-  .machine-badge { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The badge keeps its machine name whole while the thread title beside it clips first. */
+  .machine-badge { flex: none; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .machine-dot { flex: none; width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--border); }
   .machine-dot[data-tone="success"] { background: var(--success); }
