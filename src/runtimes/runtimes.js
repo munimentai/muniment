@@ -169,10 +169,6 @@ export function skipLabel(skip) {
   return `${skip.name} (${SKIPS[skip.reason] ?? skip.reason})`
 }
 
-// The parts of Settings pages that keep this computer's data while a paired
-// runtime is selected. Each says so in one line.
-export const LOCAL_PARTS = ['mcp', 'skill', 'plugin', 'retention', 'storage', 'companies']
-
 // Settings pages that read and change the selected machine, in whole or in
 // part. Once another machine answers, each names its scope at its top:
 // All machines, or one machine.
@@ -192,13 +188,25 @@ export function settingsMachine(list, page) {
   return selected && choices.some((runtime) => !runtime.local) ? { selected, choices } : null
 }
 
-// The line a part shows while Settings changes all machines and the part
-// stays on each machine. `machine` names the machine the change reaches.
-export function allMachinesNote(part, machine = 'this computer') {
-  if (['mcp', 'skill', 'plugin'].includes(part)) return 'What you add reaches every machine. On or off changes only this computer.'
-  if (part === 'models') return 'Sign-ins stay on the machine that holds them. Machines can share them with the others.'
-  if (['context', 'storage', 'companies'].includes(part)) return `This part changes only ${['storage', 'companies'].includes(part) ? 'this computer' : machine}. Each machine keeps its own.`
-  return ''
+// Where each Settings part keeps its values, from core's `settings.scope`:
+// shared across the fleet, kept on each machine, or kept on this computer.
+// `scope` is that answer, or null before it arrives.
+function scopePart(scope, part) {
+  return scope?.parts?.find((entry) => entry.id === part) ?? null
+}
+
+// The line core gives a part: `all` while Settings changes all machines,
+// else the one for another picked machine. `machine` names the machine the
+// change reaches.
+export function scopeNote(scope, part, { all = false, machine = 'this computer' } = {}) {
+  const notes = scopePart(scope, part)?.notes
+  return String((all ? notes?.all : notes?.one) ?? '').replaceAll('{machine}', machine)
+}
+
+// The settings of a part that stay on one machine, each with its field and
+// line, while Settings changes all machines.
+export function machineLocal(scope, part) {
+  return scopePart(scope, part)?.machine_local ?? []
 }
 
 // One sentence from a command failure, ending in a period.

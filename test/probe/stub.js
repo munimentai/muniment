@@ -691,6 +691,10 @@ export function buildProbeCommandTable(fixtureName) {
       if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
     }
     if (command === 'agent_export_template') return true
+    // Core's `settings.scope` answers from its protocol fixture on every page.
+    if (command === 'agent_request' && payload?.operation === 'settings.scope') {
+      return fetch('/core/protocol-fixtures/muniment.attach/1/response-settings-scope.json').then((response) => response.json()).then((fixture) => fixture.body)
+    }
     if (FLEET_PROBE && command === 'agent_request' && payload?.operation?.startsWith('fleet.')) return fleetAnswer(payload)
     if (fleetSyncFixture && command === 'agent_request') {
       const answer = fleetSyncAnswer(payload)
