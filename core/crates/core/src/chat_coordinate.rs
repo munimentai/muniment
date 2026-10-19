@@ -209,6 +209,7 @@ impl MarkedGate {
 #[derive(Default)]
 struct LocalRunLedger {
     model: Option<String>,
+    provider_name: Option<String>,
     tokens: Option<crate::sidecar::pi_chat::TokenUsage>,
     cost: Option<f64>,
     cost_incomplete: bool,
@@ -255,6 +256,8 @@ impl LocalRunLedger {
                     }
                 }
                 self.model = Some(format!("{provider}/{model}"));
+                self.provider_name =
+                    crate::models::registry::display_name(provider).map(str::to_owned);
                 self.turns += 1;
                 if let Some(usage) = usage {
                     self.tokens.get_or_insert_with(Default::default).add(usage);
@@ -293,6 +296,7 @@ impl LocalRunLedger {
 fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::pi_chat::Receipt {
     crate::sidecar::pi_chat::Receipt {
         model: ledger.model.clone(),
+        provider_name: ledger.provider_name.clone(),
         classifiers: ledger.classifiers.clone(),
         routing: ledger.routing.clone(),
         cost: ledger
@@ -2829,6 +2833,28 @@ mod tests {
             cost: None,
         });
         assert_eq!(local_receipt(Duration::ZERO, &ledger).cost, None);
+    }
+
+    #[test]
+    fn a_receipt_names_the_provider_as_the_models_page_does() {
+        let mut ledger = LocalRunLedger::default();
+        ledger.record(&PiChatEvent::ModelReported {
+            routing: None,
+            classifier: None,
+            provider: "claude-bridge".into(),
+            model: "claude-sonnet-5".into(),
+            usage: None,
+            cost: None,
+        });
+        let receipt = local_receipt(Duration::ZERO, &ledger);
+        assert_eq!(
+            receipt.model.as_deref(),
+            Some("claude-bridge/claude-sonnet-5")
+        );
+        assert_eq!(receipt.provider_name.as_deref(), Some("Anthropic"));
+        // An unpriced subscription turn shows no cost, never $0.00.
+        assert_eq!(receipt.cost_usd, None);
+        assert_eq!(receipt.cost, None);
     }
 
     fn assert_local_receipt(duration: Duration, expected_range: std::ops::Range<f64>) {
