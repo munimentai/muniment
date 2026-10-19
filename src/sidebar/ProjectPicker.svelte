@@ -1,13 +1,14 @@
 <script>
-  // Move to project: Chats and every project on this computer, the thread's
-  // own project checked. A pick moves the thread, and its next run works in
-  // that project's folder with its instructions and tools.
+  // Move to project: every project on this computer and No project, the
+  // thread's own choice checked. A pick moves the thread, and its next run
+  // works in that project's folder with its instructions and tools. No
+  // project makes the thread a project of its own.
   import { onMount, tick } from 'svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import PopupClose from '../lib/PopupClose.svelte'
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
 
-  // `projects` are [{ id, name, kind }], Chats first.
+  // `projects` are [{ id, name }], with No project as id null.
   let { title, projects = [], current, busy = false, error = '', onmove, onclose } = $props()
   let list = $state()
 
@@ -36,7 +37,7 @@
     <div class="choices" role="group" aria-label="Projects" bind:this={list}>
       {#each projects as project (project.id)}
         <button type="button" class="choice" aria-current={project.id === current ? 'true' : undefined} disabled={busy || project.id === current} onclick={() => onmove(project.id)}>
-          <LucideIcon name={project.kind === 'chats' ? 'message-square' : 'folder'} size={16} />
+          <LucideIcon name={project.id === null ? 'message-square' : 'folder'} size={16} />
           <span>{project.name}</span>
           {#if project.id === current}<LucideIcon name="check" size={14} />{/if}
         </button>

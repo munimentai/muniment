@@ -1,16 +1,19 @@
 <script>
-  // One row of the sidebar's Projects list: the project's name with its
-  // triggers in words, such as `every day 9:00` or `webhook`, the pencil that
-  // starts a thread in it, and its chevron. The menu holds Settings, Rename,
+  // One project row of the sidebar's Projects list: the project's name, the
+  // most urgent status of its threads in words, its triggers in words, such
+  // as `every day 9:00` or `webhook`, and the pencil that starts a thread in
+  // it. The menu holds Settings, Rename,
   // Open folder and New group chat where the project has each. A thread row
   // dropped on it moves the thread into the project.
   import { floatingMenu } from '../lib/floating-menu.js'
   import { tick } from 'svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import OwnerChip from '../runtimes/OwnerChip.svelte'
+  import StatusChip from '../lib/ui/StatusChip.svelte'
+  import { statusTone } from './sidebar-model.js'
   // `owner` names the fleet member that holds a shared project's files.
   // `ondropthread` makes the row a drop target for a thread row dragged as `dragType`.
-  let { owner = null, name, triggers = '', kind = 'project', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondropthread } = $props()
+  let { owner = null, name, triggers = '', kind = 'project', status = 'read', statusLabel = '', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondropthread } = $props()
   let open = $state(false)
   let dropping = $state(false)
   const carries = (event) => !!ondropthread && !!dragType && [...(event.dataTransfer?.types ?? [])].includes(dragType)
@@ -30,7 +33,7 @@
   let row = $state()
   let trigger = $state()
   let menu = $state()
-  const icon = $derived(kind === 'chats' ? 'message-square' : kind === 'agent' ? 'bot' : expanded ? 'folder-open' : 'folder')
+  const icon = $derived(kind === 'agent' ? 'bot' : expanded ? 'folder-open' : 'folder')
   const actions = $derived([
     onsettings && { id: 'settings', label: 'Settings', icon: 'settings', run: onsettings },
     onrename && { id: 'rename', label: 'Rename', icon: 'pencil', run: onrename },
@@ -62,7 +65,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="project-row" class:dropping bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
-  <button class="project-title" aria-label={triggers ? `Project ${name}, ${triggers}` : `Project ${name}`} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if triggers}<em class="triggers">{triggers}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix={kind === 'agent' ? 'on' : 'files on'} compact />{/if}</button>
+  <button class="project-title" aria-label={[`Project ${name}`, statusLabel, triggers].filter(Boolean).join(', ')} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if statusLabel}<StatusChip tone={statusTone(status)}>{statusLabel}</StatusChip>{/if}{#if triggers}<em class="triggers">{triggers}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix={kind === 'agent' ? 'on' : 'files on'} compact />{/if}</button>
   <!-- The controls sit over the row's right end and show on hover or focus, so the triggers keep the row's width at rest. -->
   <span class="project-controls" class:visible={open}>
     <button class="project-control" aria-label={`New thread in ${name}`} {disabled} onclick={onnew}><LucideIcon name="square-pen" size={14} /></button>

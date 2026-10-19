@@ -24,7 +24,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | crate | muniment-server | It runs the runtime headless, with no keychain and no OS service registration. |
 | crate | muniment-search | It searches the web without a key and answers the SearXNG JSON format on loopback. |
 | module | account | It defines the session, device, pairing, and entitlement values attach carries. |
-| module | agent_draft | It drafts an agent's settings from one description or a thread with one model call. |
+| module | agent_draft | It drafts an agent's settings from one description, a thread or a creation chat's messages with one model call. |
 | module | agent_extract | It proposes agent routines from saved instructions. |
 | module | agent_hooks | It verifies webhook deliveries and queues their agent runs. |
 | module | agent_poll | It polls MCP routines and evaluates their conditions. |
@@ -37,7 +37,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | models | It holds provider and model knowledge as data and renders Pi's `models.json`. |
 | module | model_router | It selects local provider accounts and routes model requests. |
 | module | projects | It scopes threads and generated files to project folders. |
-| module | sidebar | It places every thread in one project and arranges the sidebar's sections with each row's status. |
+| module | sidebar | It arranges the sidebar's Projects list, each thread once in its project or as its own row, with each row's status. |
 | module | palette | It finds and orders the command palette's threads, pages and actions. |
 | module | inherit | It resolves each thread value from the thread, its agent, its project or the default, and names the layer. |
 | module | thread_settings | It keeps each thread's own model and the project defaults it started with. |

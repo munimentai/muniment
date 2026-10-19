@@ -54,8 +54,6 @@
     { "kind": "approval", "thread_id": "t-clean", "agent_id": null },
     { "kind": "input", "thread_id": "t-branch", "agent_id": null }
   ],
-  "held": { "t-dinner": "recent" },
   "current": null,
-  "filter": "all",
   "query": ""
 }

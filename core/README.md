@@ -447,7 +447,13 @@ cheap model call over the words and this runtime's tools, skills and modes;
 reading tools when they name none;
 its routines come from the trigger reader and start enabled. `question` is
 null or one `{"text", "options"}` when the job is unknown, and `via` is
-`router`, `pi` or `rules` when no model answered. Nothing is saved.
+`router`, `pi` or `rules` when no model answered. `{"chat_id", "message"}`
+drafts in an agent's creation chat: the model reads every message the chat's
+creation record keeps, the first describing the agent and each later one
+changing it, and a `thread_id` beside the first message starts the chat from
+that thread. Its done answer adds `creation`, the record with the message and
+its draft kept as one more of its `turns`. A draft saves no agent: only
+`agent.save` does.
 Remotely the reads, `agent.routine_proposals`, `agent.threads`,
 `agent.tool_catalog`, `agent.replays` and `routine.webhook_info` take
 `thread.read`, `agent.run_now`, `agent.draft` and `agent.replay` take

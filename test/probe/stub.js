@@ -1,5 +1,5 @@
 import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixture.js'
-import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeExtensions, probePosts } from './agents-fixture.js'
+import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeCreations, probeExtensions, probePosts } from './agents-fixture.js'
 import { arrangeStandIn, toolsStandIn } from '../sidebar-standin.js'
 import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsPalette, projectsRendered, projectsSettings, projectsSummaries, projectsThreadSettings } from './projects-fixture.js'
 import { advanceTrust, trustAnswer, trustHistory, trustRendered } from './trust-fixture.js'
@@ -553,9 +553,16 @@ export function buildProbeCommandTable(fixtureName) {
       return { tokensBefore: 152400, estimatedTokensAfter: 31900 }
     }
     if (command === 'launcher_register') return null
-    if (command === 'artifact_list' || command === 'creation_list') return []
+    if (command === 'artifact_list') return []
+    if (command === 'creation_list') return JSON.parse(JSON.stringify(probeCreations))
     // The plan arrives as the app's live state, which only serializes as JSON.
-    if (command === 'creation_save') return JSON.parse(JSON.stringify(payload.creation))
+    if (command === 'creation_save') {
+      const plan = JSON.parse(JSON.stringify(payload.creation))
+      const kept = probeCreations.find((item) => item.threadId === plan.threadId)
+      if (!plan.turns?.length && kept?.turns) plan.turns = kept.turns
+      probeCreations.splice(0, probeCreations.length, ...probeCreations.filter((item) => item.threadId !== plan.threadId), plan)
+      return plan
+    }
     if (command === 'extend_command' && payload?.action === 'read') return agentsFixture ? structuredClone(probeExtensions) : { items: [] }
     if (command === 'browser_view') return null
     if (command === 'runtime_state') return runtimeState
@@ -713,7 +720,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'project_tools') return toolsStandIn(payload.input)
     if (command === 'project_move_thread') {
       const catalog = projectsFixture ? projectsCatalog : { threads: projectThreads }
-      if (payload.projectId === 'chats') delete catalog.threads[payload.threadId]
+      if (!payload.projectId) delete catalog.threads[payload.threadId]
       else catalog.threads[payload.threadId] = payload.projectId
       return null
     }
@@ -1125,12 +1132,13 @@ const AGENT_SCREENS = {
   absence: () => !!document.querySelector('#sidebar [aria-label="Routines paused"]'),
   transcript: () => !!document.querySelector('.thread [aria-label="Message from Lead scout"]') && !!document.querySelector('.thread .silent-note'),
   move: () => !!document.querySelector('[data-panel="move"] [role="note"]') && !!document.querySelector('[data-panel="move"] input:checked'),
-  builder: () => document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"] input')?.value === 'Inbox brief',
-  'builder-question': () => !!document.querySelector('[data-panel="agent-builder"] [aria-label="Question"]') && !!document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"]'),
-  'builder-thread': () => document.querySelector('[data-panel="agent-builder"] form[aria-label="Agent draft"] input')?.value === 'Release notes',
+  builder: () => !!document.querySelector('.thread [aria-label="Draft: Inbox brief"]') && !document.querySelector('.agent-chat [role="status"]'),
+  'builder-question': () => !!document.querySelector('.thread [aria-label="Draft: Helper"] [aria-label="Question"]'),
+  'builder-thread': () => !!document.querySelector('.thread [aria-label="Draft: Release notes"]'),
 }
 
-// The builder states describe an agent in one sentence, or vaguely, and draft it.
+// The builder states open a new agent chat and describe an agent in one
+// message, or vaguely, or make one from a thread.
 const BUILDER_WORDS = { builder: 'Every weekday at 9am, summarize my inbox and list what needs a reply.', 'builder-question': 'Make me an agent' }
 const probeBuildersTyped = new WeakSet()
 let probeBuilderOpened = 0
@@ -1225,9 +1233,9 @@ function advanceAgentsFixture() {
     return Array.from(document.querySelectorAll('#sidebar .thread-row')).find((row) => row.querySelector('.thread-row-title')?.textContent.trim() === 'Launch room')?.click()
   }
   if (agentsState.startsWith('builder')) {
-    const builder = document.querySelector('[data-panel="agent-builder"]')
+    const chat = document.querySelector('#composer-message[placeholder^="Describe your agent"]')
     if (agentsState === 'builder-thread') {
-      if (builder) return
+      if (document.querySelector('.agent-chat')) return
       const menuItem = Array.from(document.querySelectorAll('.thread-menu [role="menuitem"]')).find((item) => item.textContent.trim() === 'Make this an agent')
       if (Date.now() - probeBuilderOpened < 1500) return
       probeBuilderOpened = Date.now()
@@ -1235,22 +1243,21 @@ function advanceAgentsFixture() {
       if (menuItem) return menuItem.click()
       return document.querySelector('#sidebar button[aria-label^="Actions for"]')?.click()
     }
-    // A press while the builder opens would mount it again, so the driver
-    // presses again only after a pause, and types into each builder once.
-    if (!builder) {
-      if (Date.now() - probeBuilderOpened < 1500) return
+    // A press while the chat opens would open another, so the driver presses
+    // again only after a pause, and sends into each chat once.
+    if (!chat) {
+      if (document.querySelector('.agent-chat article') || Date.now() - probeBuilderOpened < 1500) return
       const catalog = document.querySelector('[data-panel="agents"]')
       if (!catalog) return openPage('Agents')
       const create = buttonNamed(catalog, 'New agent')
       if (create && !create.disabled) { probeBuilderOpened = Date.now(); setTimeout(advanceAgentsFixture, 1600); create.click() }
       return
     }
-    if (probeBuildersTyped.has(builder)) return
-    probeBuildersTyped.add(builder)
+    if (probeBuildersTyped.has(chat)) return
+    probeBuildersTyped.add(chat)
     setTimeout(() => {
-      if (document.querySelector('[data-panel="agent-builder"]') !== builder) return advanceAgentsFixture()
-      typeInto(builder.querySelector('textarea'), BUILDER_WORDS[agentsState])
-      setTimeout(() => buttonNamed(builder, 'Draft')?.click(), 50)
+      typeInto(chat, BUILDER_WORDS[agentsState])
+      setTimeout(() => buttonNamed(document, 'Send')?.click(), 50)
     }, 300)
     return
   }

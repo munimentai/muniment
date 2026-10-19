@@ -3,7 +3,7 @@ import { ariaShortcut, isPaletteShortcut, paletteInput, paletteShortcut, rankPal
 import { layerLabel, sourceLine } from './sources.js'
 import { emptySidebar } from './sidebar-model.js'
 
-const row = (id, title, extra = {}) => ({ thread_id: id, title, project_id: 'chats', project_name: 'Chats', updated_at: '2026-10-18T10:00:00Z', status: 'read', status_label: '', ...extra })
+const row = (id, title, extra = {}) => ({ thread_id: id, title, project_id: '', project_name: '', updated_at: '2026-10-18T10:00:00Z', status: 'read', status_label: '', ...extra })
 
 describe('command palette', () => {
   it('takes the plain key on each platform and leaves Shift to the record panel', () => {
@@ -38,16 +38,17 @@ describe('command palette', () => {
   it('hands core every thread the sidebar knows with its row shortcut and leaves archived threads out', () => {
     const sidebar = {
       ...emptySidebar(),
-      needs_you: [row('a', 'Approve me', { status: 'needs_you', status_label: 'Approve' })],
-      recent: [row('b', 'Recent one')],
       archived: [row('c', 'Archived one')],
-      projects: [{ id: 'chats', name: 'Chats', kind: 'chats', threads: [row('b', 'Recent one'), row('d', 'Folded one')] }],
+      projects: [
+        { id: 'a', name: 'Approve me', kind: 'thread', threads: [row('a', 'Approve me', { status: 'needs_you', status_label: 'Approve' })] },
+        { id: 'p1', name: 'Homelab', kind: 'project', threads: [row('b', 'Recent one', { project_id: 'p1', project_name: 'Homelab' }), row('d', 'Folded one', { project_id: 'p1', project_name: 'Homelab' })] },
+      ],
     }
     const input = paletteInput({ query: 're', sidebar, positions: new Map([['a', 1], ['b', 2]]), thread: { thread_id: 'b', pinned: false, movable: true }, machines: 2, modes: true })
     expect(input.query).toBe('re')
-    expect(input.needs_you).toEqual([{ thread_id: 'a', title: 'Approve me', project_name: 'Chats', status_label: 'Approve', updated_at: '2026-10-18T10:00:00Z', shortcut: 'mod+1' }])
-    expect(input.threads.map((thread) => thread.thread_id)).toEqual(['b', 'b', 'd'])
-    expect(input.threads[0].shortcut).toBe('mod+2')
+    expect(input.needs_you).toEqual([{ thread_id: 'a', title: 'Approve me', project_name: '', status_label: 'Approve', updated_at: '2026-10-18T10:00:00Z', shortcut: 'mod+1' }])
+    expect(input.threads.map((thread) => thread.thread_id)).toEqual(['a', 'b', 'd'])
+    expect(input.threads[1].shortcut).toBe('mod+2')
     expect(input.threads.some((thread) => thread.thread_id === 'c')).toBe(false)
     expect(input).toMatchObject({ machines: 2, modes: true, thread: { thread_id: 'b', movable: true } })
   })
@@ -64,7 +65,6 @@ describe('value sources', () => {
     expect(layerLabel('thread')).toBe('this thread')
     expect(layerLabel('agent', { agentName: 'Deploy bot' })).toBe('from agent Deploy bot')
     expect(layerLabel('project', { projectName: 'Homelab' })).toBe('from project Homelab')
-    expect(layerLabel('project', { chats: true })).toBe('from Chats')
     expect(layerLabel('default')).toBe('default')
     expect(sourceLine('GPT-6 Astra', 'project', { projectName: 'Homelab' })).toBe('GPT-6 Astra · from project Homelab')
     expect(sourceLine('Bypass permissions', 'default')).toBe('Bypass permissions · default')

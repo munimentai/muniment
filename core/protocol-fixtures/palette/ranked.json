@@ -40,7 +40,7 @@
           "title": "Reindex search"
         },
         {
-          "detail": "Done · Chats",
+          "detail": "Done",
           "icon": "message-square",
           "id": "t-trip",
           "kind": "thread",
@@ -48,7 +48,7 @@
           "title": "Trip ideas"
         },
         {
-          "detail": "Chats",
+          "detail": "",
           "icon": "message-square",
           "id": "t-dinner",
           "kind": "thread",
@@ -79,7 +79,7 @@
           "title": "Deploy runs"
         },
         {
-          "detail": "Chats",
+          "detail": "",
           "icon": "message-square",
           "id": "t-lease",
           "kind": "thread",
@@ -273,7 +273,7 @@
           "title": "Release notes"
         },
         {
-          "detail": "Chats",
+          "detail": "",
           "icon": "message-square",
           "id": "t-dinner",
           "kind": "thread",
@@ -281,7 +281,7 @@
           "title": "Dinner recipes"
         },
         {
-          "detail": "Chats",
+          "detail": "",
           "icon": "message-square",
           "id": "t-lease",
           "kind": "thread",

@@ -45,15 +45,19 @@ pub fn palette_rank(input: palette::Input) -> Vec<palette::Group> {
 pub fn project_tools(input: inherit::ToolsInput) -> Vec<inherit::ToolRow> {
     inherit::tools(&input)
 }
+/// Moves a thread into a project, or with no project out of every project.
 #[tauri::command]
-pub fn project_move_thread(thread_id: String, project_id: String) -> Result<(), String> {
-    projects::move_thread(&profile()?, &thread_id, &project_id)
+pub fn project_move_thread(thread_id: String, project_id: Option<String>) -> Result<(), String> {
+    projects::move_thread(&profile()?, &thread_id, project_id.as_deref())
 }
 
 /// Starts a new thread with its project's defaults on the runtime that
-/// holds it. A project without defaults leaves the thread on the default.
+/// holds it. A thread in no project, or a project without defaults, leaves
+/// the thread on the default.
 pub(crate) async fn seed_thread(app: &AppHandle, thread: &str, project_id: Option<&str>) {
-    let project = project_id.unwrap_or(sidebar::CHATS);
+    let Some(project) = project_id else {
+        return;
+    };
     let Ok(settings) = projects::settings(&profile().unwrap_or_default(), project) else {
         return;
     };

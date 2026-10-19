@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attention, holdRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
+import { attention, freshIndex, listedRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
 
 function memoryStorage(values = {}) {
   return { getItem: (key) => values[key] ?? null, setItem: (key, value) => { values[key] = value }, values }
@@ -44,29 +44,37 @@ describe('sidebar model', () => {
       agentListing: { primaryThreads: { a1: 'home' }, threads: { a1: [{ thread_id: 'home', title: 'Runs', updated_at: '2026-10-18T09:00:00Z' }] }, latestRuns: {} },
       agents: [{ id: 'a1', name: 'Watch', projectId: 'p1', routines: [{ enabled: true, trigger: { kind: 'webhook' } }] }],
       groups: [{ thread_id: 'g1', name: 'Launch room' }],
+      agentChats: [{ threadId: 'c1', title: 'Inbox brief', updatedAt: '2026-10-18T11:00:00Z', agentId: 'a1' }, { threadId: 't1', title: '', updatedAt: '2026-10-18T12:00:00Z', agentId: null }],
       catalog: { projects: { p1: 'Homelab' }, threads: { t1: 'p1' } },
       organization: { t1: { pinned: true, archived: false } },
-      held: new Map([['t1', 'recent']]),
       machineOf: (id) => id === 'box' ? 'Build box' : null,
     })
     expect(input.threads).toEqual([
-      { id: 't1', title: 'Notes', updated_at: '2026-10-18T10:00:00Z', machine: 'Build box' },
+      { id: 't1', title: 'Notes', updated_at: '2026-10-18T12:00:00Z', machine: 'Build box' },
       { id: 'home', title: 'Runs', updated_at: '2026-10-18T09:00:00Z', machine: null },
       { id: 'g1', title: 'Launch room', updated_at: '', machine: null },
+      { id: 'c1', title: 'Inbox brief', updated_at: '2026-10-18T11:00:00Z', machine: null },
     ])
     expect(input.agents).toEqual([{ id: 'a1', name: 'Watch', project_id: 'p1', home_thread_id: 'home', paused_reason: null, routines: [{ enabled: true, proposed: false, trigger: { kind: 'webhook' } }] }])
     expect(input.projects).toEqual([{ id: 'p1', name: 'Homelab', owner: null }])
-    expect(input.agent_threads).toEqual({ home: 'a1' })
+    // A saved agent's creation chat sits with its agent.
+    expect(input.agent_threads).toEqual({ home: 'a1', c1: 'a1' })
     expect(input.pinned).toEqual(['t1'])
-    expect(input.held).toEqual({ t1: 'recent' })
+    expect(input).not.toHaveProperty('held')
+    expect(input).not.toHaveProperty('filter')
   })
 
-  it('holds rows where the answer placed them and orders the shortcuts once each', () => {
+  it('orders the shortcuts by the Projects list once each, a new thread after the pinned rows', () => {
     const row = (id) => ({ thread_id: id })
-    const sidebar = { needs_you: [row('n')], working: [row('w')], pinned: [row('p')], projects: [{ id: 'p1', threads: [row('r')] }], recent: [row('r')], settled: [row('s')], archived: [], results: [] }
-    expect([...holdRows(new Map(), sidebar)]).toEqual([['r', 'recent'], ['s', 'settled']])
-    expect(shownRows(sidebar, { expanded: new Set(['p1']), fresh: true }).map((entry) => entry.thread_id)).toEqual(['n', 'w', 'p', 'r', null])
-    expect(shownRows(sidebar, { workingOpen: false, settledOpen: true }).map((entry) => entry.thread_id)).toEqual(['n', 'p', 'r', 's'])
+    const sidebar = { projects: [
+      { id: 'pin', kind: 'thread', pinned: true, threads: [row('pin')] },
+      { id: 'p1', kind: 'project', pinned: false, threads: [row('a'), row('b')] },
+      { id: 'solo', kind: 'thread', pinned: false, threads: [row('solo')] },
+    ], archived: [row('gone')], results: [] }
+    expect(freshIndex(sidebar)).toBe(1)
+    expect(shownRows(sidebar, { expanded: new Set(['p1']), fresh: true }).map((entry) => entry.thread_id)).toEqual(['pin', null, 'a', 'b', 'solo'])
+    expect(shownRows(sidebar).map((entry) => entry.thread_id)).toEqual(['pin', 'solo'])
+    expect(listedRows(sidebar).map((entry) => entry.thread_id)).toEqual(['pin', 'a', 'b', 'solo'])
     expect(statusTone('needs_you')).toBe('warning')
     expect(statusTone('read')).toBe('neutral')
   })
