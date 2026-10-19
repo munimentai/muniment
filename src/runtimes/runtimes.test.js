@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   activeRuntime,
@@ -19,8 +21,12 @@ import {
   olderVersion,
   skipLabel,
   settingsMachine,
-  allMachinesNote,
+  scopeNote,
+  machineLocal,
 } from './runtimes.js'
+
+// Core's `settings.scope` answer.
+const settingsScope = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/response-settings-scope.json'), 'utf8')).body
 
 const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', active: true, local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
 const studio = { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.1.4', status: 'offline', active: false, local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
@@ -156,11 +162,29 @@ describe('the machine a Settings page applies to', () => {
     expect(settingsMachine(runtimeList([local, studio]), 'models')).toBeNull()
   })
 
-  it('names what stays on each machine while Settings changes all machines', () => {
-    expect(allMachinesNote('mcp')).toBe('What you add reaches every machine. On or off changes only this computer.')
-    expect(allMachinesNote('context', 'Build box')).toBe('This part changes only Build box. Each machine keeps its own.')
-    expect(allMachinesNote('storage', 'Build box')).toBe('This part changes only this computer. Each machine keeps its own.')
-    expect(allMachinesNote('retention')).toBe('')
+  it('names what stays on each machine from core while Settings changes all machines', () => {
+    const all = { all: true, machine: 'Build box' }
+    expect(scopeNote(settingsScope, 'mcp', all)).toBe('What you add reaches every machine. On or off changes only this computer.')
+    expect(scopeNote(settingsScope, 'models', all)).toBe('Sign-ins stay on the machine that holds them. Machines can share them with the others.')
+    expect(scopeNote(settingsScope, 'context', all)).toBe('This part changes only Build box. Each machine keeps its own.')
+    expect(scopeNote(settingsScope, 'storage', all)).toBe('This part changes only this computer. Each machine keeps its own.')
+    expect(scopeNote(settingsScope, 'retention', all)).toBe('')
+    expect(machineLocal(settingsScope, 'permissions').map((local) => local.field)).toEqual(['bypass_enabled'])
+  })
+
+  it('names what this computer keeps from core while one other machine is picked', () => {
+    const one = { machine: 'Build box' }
+    expect(scopeNote(settingsScope, 'storage', one)).toBe('These settings belong to this computer. Build box keeps its own.')
+    // On or off stays on this computer, and what is added reaches every machine.
+    expect(scopeNote(settingsScope, 'mcp', one)).toBe('What you add reaches every machine. On or off changes only this computer.')
+    // Retention reaches every machine, and the picked machine reads its own context.
+    expect(scopeNote(settingsScope, 'retention', one)).toBe('')
+    expect(scopeNote(settingsScope, 'context', one)).toBe('')
+  })
+
+  it('shows no line before core answers', () => {
+    expect(scopeNote(null, 'storage', { all: true })).toBe('')
+    expect(machineLocal(null, 'permissions')).toEqual([])
   })
 })
 

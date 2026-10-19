@@ -194,6 +194,7 @@ pub fn remote_rule(operation: Operation, body: &Value) -> RemoteRule {
         | Operation::AgentReplays
         | Operation::PermissionModes
         | Operation::PermissionSettings
+        | Operation::SettingsScope
         | Operation::ThreadPermissionMode
         | Operation::ThreadPlan
         | Operation::PreferencesGet

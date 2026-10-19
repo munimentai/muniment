@@ -181,6 +181,19 @@ fn the_polish_fixtures_are_core_shapes() {
 }
 
 #[test]
+fn the_settings_scope_fixture_is_the_cores_answer() {
+    // Clients read the fixture as core's description of each Settings part.
+    assert_eq!(
+        fixture("response-settings-scope.json")["body"],
+        muniment_core::settings_scope::view()
+    );
+    assert_eq!(
+        fixture("request-settings-scope.json")["operation"],
+        "settings.scope"
+    );
+}
+
+#[test]
 fn the_permission_fixtures_are_the_cores_own_shapes() {
     use muniment_core::permission_gate::settings::{self, PermissionSettings};
     // `permission.modes` with the default settings is exactly the fixture.
@@ -190,13 +203,7 @@ fn the_permission_fixtures_are_the_cores_own_shapes() {
         "response-permission-settings.json",
         "response-permission-settings-save.json",
     ] {
-        let mut body = fixture(name)["body"].clone();
-        // Each answer names the settings each machine keeps for itself.
-        assert_eq!(
-            body.as_object_mut().unwrap().remove("machine_local"),
-            Some(serde_json::json!(settings::MACHINE_LOCAL))
-        );
-        round_trip::<PermissionSettings>(&body);
+        round_trip::<PermissionSettings>(&fixture(name)["body"]);
     }
     // A plan approval carries the plan and the mode answers the gate offers.
     let plan = fixture("event-agent-approval-pending-plan.json")["body"].clone();

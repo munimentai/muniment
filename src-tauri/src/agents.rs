@@ -590,6 +590,7 @@ mod tests {
             ("agent.replay", Operation::AgentReplay),
             ("usage.summary", Operation::UsageSummary),
             ("notifications.list", Operation::NotificationsList),
+            ("settings.scope", Operation::SettingsScope),
         ] {
             assert_eq!(agent_operation(name), Some(operation));
         }

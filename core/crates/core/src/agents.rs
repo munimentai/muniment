@@ -1539,6 +1539,7 @@ pub fn operation(
         "permission.modes" | "permission.settings" | "permission.settings_save" => {
             crate::permission_gate::settings::operation(profile, operation, body)
         }
+        "settings.scope" => crate::settings_scope::operation(body),
         _ => Err("The agent operation is unknown.".into()),
     }
 }

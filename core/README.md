@@ -543,7 +543,8 @@ Operations: `permission.modes` (`{}` → `{"modes": [{"id", "title",
 "default_agent_mode"}`); `permission.settings` (`{}` →
 `{"default_thread_mode", "default_agent_mode", "bypass_enabled",
 "unattended_timeout_seconds", "deny", "ask_first", "always_allow"}`);
-`permission.settings_save` (any of those fields → the settings); and
+`permission.settings_save` (any of those fields, and `scope`: `machine` or
+`all` → the settings); and
 `thread.permission_mode` (`{"thread_id"}`) and `thread.permission_mode_set`
 (`{"thread_id", "mode"}`), which answer `{"thread_id", "mode", "title",
 "source": "thread"|"agent"|"default", "set_by"?, "agent_id"?}`. A plan gate
@@ -556,6 +557,18 @@ as `agent.approval_answer` does for an agent's thread. They are agent
 operations, so `DesktopClient::agent_request` sends them. Remotely the reads
 take `thread.read`, the thread changes take `run.write`, and
 `permission.settings_save` takes `runtime.admin`.
+
+`settings_scope` says where each Settings part keeps its values, and
+`settings.scope` (`{}` → `{"parts": [{"id", "page", "scope", "classes",
+"machine_local": [{"field", "scope", "note"}], "notes": {"all", "one"}}]}`)
+answers it. A part's `scope` is `fleet` exactly when a fleet sync record
+class in `classes` carries it, else `machine` or `this_computer`.
+`machine_local` names the settings of a shared part that stay on one
+machine. `notes.all` is the line a client shows while one save changes every
+machine, and `notes.one` while another machine is picked, with `{machine}`
+for the machine a change reaches. A save with `scope: "all"` that changes a
+`machine_local` setting is refused. A test holds the parts to the fleet sync
+classes and to the settings the permission adapter leaves out.
 
 ### Swarm
 
