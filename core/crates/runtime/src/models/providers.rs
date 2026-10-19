@@ -15,6 +15,7 @@ use muniment_core::engine::{
     PiModelRow, PiModelThinking, PiRpcEngine, MODEL_THINKING_LEVELS,
 };
 use muniment_core::model_router::config::ROUTER_PROVIDER;
+use muniment_core::models::claude_accounts;
 use muniment_core::models::pi_models::{
     self, decision_models, read_record as read_models_record, saved_endpoint_key, valid_identifier,
     write_record as write_models_record,
@@ -40,7 +41,6 @@ pub(super) struct ProviderStatus {
 const CLAUDE_BRIDGE_CONFIG_FILE: &str = "claude-bridge.json";
 /// How many candidates a connect probes before it settles.
 const PROBE_LIMIT: usize = 5;
-const CLAUDE_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -435,17 +435,6 @@ fn provider_display_name(
         .unwrap_or_else(|| provider.to_owned())
 }
 
-fn run_with_timeout(
-    mut command: std::process::Command,
-    timeout: Duration,
-) -> Option<std::process::Output> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(command.output());
-    });
-    receiver.recv_timeout(timeout).ok().and_then(Result::ok)
-}
-
 /// Refresh provider catalogs under the same locks used for settings. Network
 /// failures leave both the last catalog and explicit model overrides intact.
 fn refresh_provider_models(
@@ -692,15 +681,22 @@ fn provider_inventory(
             });
         }
     }
-    if record
+    // The bridge serves a Claude Code connection and every Anthropic account
+    // Claude Code signed in to. `claude-code` marks the connection, which
+    // Disconnect ends, and `account` the accounts alone.
+    let claude_code = record
         .get("claudeCode")
         .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
+        == Some(true);
+    if claude_code || !claude_accounts::load(agent).accounts.is_empty() {
         providers.push(InventoryProvider {
             id: CLAUDE_BRIDGE_PROVIDER.into(),
             name: provider_display_name(CLAUDE_BRIDGE_PROVIDER, &record),
-            source: "claude-code",
+            source: if claude_code {
+                "claude-code"
+            } else {
+                "account"
+            },
             base_url: None,
             models: Vec::new(),
             decision_models: Vec::new(),
@@ -1114,37 +1110,27 @@ pub(super) fn disconnect_provider(agent: &Path, provider: &str) -> Result<(), St
     Ok(())
 }
 
-fn claude_code_executable() -> Option<PathBuf> {
-    let home = muniment_core::state_root::home_directory_value().map(PathBuf::from);
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(paths) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&paths).map(|dir| dir.join("claude")));
-    }
-    if let Some(home) = &home {
-        candidates.push(home.join(".local").join("bin").join("claude"));
-        candidates.push(home.join(".claude").join("local").join("claude"));
-    }
-    candidates.push(PathBuf::from("/opt/homebrew/bin/claude"));
-    candidates.push(PathBuf::from("/usr/local/bin/claude"));
-    candidates.into_iter().find(|path| path.is_file())
+/// Whether Claude Code is on this machine and signed in to its default
+/// folder. The Models page reads the bundled build first.
+pub(super) fn claude_code_status(agent: &Path) -> ClaudeCodeStatus {
+    claude_code_status_of(super::claude::executable(agent))
 }
 
-pub(super) fn claude_code_status() -> ClaudeCodeStatus {
-    let Some(path) = claude_code_executable() else {
+/// [`claude_code_status`] for a Claude Code the user installed, which the
+/// provider scan names as a sign-in it can reuse.
+pub(super) fn user_claude_code_status() -> ClaudeCodeStatus {
+    claude_code_status_of(super::claude::user_installed())
+}
+
+fn claude_code_status_of(path: Option<PathBuf>) -> ClaudeCodeStatus {
+    let Some(path) = path else {
         return ClaudeCodeStatus {
             installed: false,
             logged_in: false,
             path: None,
         };
     };
-    let mut command = std::process::Command::new(&path);
-    command
-        .args(["auth", "status"])
-        .stdin(std::process::Stdio::null());
-    let logged_in = run_with_timeout(command, CLAUDE_STATUS_TIMEOUT)
-        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
-        .and_then(|status| status.get("loggedIn").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false);
+    let logged_in = super::claude::status(&path, None).is_some_and(|status| status.logged_in);
     ClaudeCodeStatus {
         installed: true,
         logged_in,

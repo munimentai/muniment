@@ -33,7 +33,10 @@
 //!
 //! `login_start` and `router_subscription_start` answer
 //! `{"callback": {"port", "path"}}` when the sign-in's browser redirect lands
-//! on a fixed loopback port of the runtime's computer, else null. A client on
+//! on a loopback port of the runtime's computer, else null: OpenAI's fixed
+//! port, or the port Claude Code's own login listens on for an Anthropic
+//! account. An Anthropic sign-in that waits for a pasted code sends a
+//! `prompt` step, which `login_answer` answers with the code. A client on
 //! another computer holds that port on its own loopback while the sign-in
 //! runs and sends each redirect it receives as `login_callback`, which takes
 //! `{"url"}` and answers null.

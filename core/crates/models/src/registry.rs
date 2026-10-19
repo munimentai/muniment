@@ -12,7 +12,7 @@ use crate::local_servers::{Kind, KINDS};
 pub const OLLAMA_PROVIDER: &str = "ollama";
 pub const OLLAMA_MODEL: &str = "llama3.2:latest";
 pub const LM_STUDIO_PROVIDER: &str = "lmstudio";
-/// The pi-claude-bridge provider: Anthropic through the Claude Code sign-in.
+/// The pi-claude-bridge provider: Anthropic through Claude Code.
 pub const CLAUDE_BRIDGE_PROVIDER: &str = "claude-bridge";
 /// A named OpenAI-compatible endpoint's provider id starts with this.
 pub const CUSTOM_PROVIDER_PREFIX: &str = "custom-";
@@ -89,15 +89,18 @@ const fn key(id: &'static str, name: &'static str) -> Provider {
 }
 
 /// Every provider, in the order the connector lists them. Anthropic's account
-/// is the Claude Code sign-in, so it carries no account here.
+/// sign-in runs Claude Code's own login, one config folder per account.
 pub const PROVIDERS: &[Provider] = &[
     Provider {
         id: "anthropic",
         name: "Anthropic",
         popular: true,
         key_provider: None,
-        methods: &[Method::ClaudeCode, Method::Key],
-        account: None,
+        methods: &[Method::Account, Method::Key],
+        account: Some(Account {
+            provider: "anthropic",
+            label: "Claude Pro or Max account",
+        }),
         base_url: None,
         key_name: None,
         key_settings: &[],
@@ -360,7 +363,7 @@ pub const SUBSCRIPTIONS: &[Subscription] = &[
     Subscription {
         id: "anthropic",
         name: "Claude",
-        plan: "Pro or Max, through Claude Code",
+        plan: "Pro or Max",
         logo: "anthropic",
         catalog: "anthropic",
     },
