@@ -330,32 +330,75 @@ pub fn probe_codex(
 
 /// Grok Build's credits endpoint, as used by its billing extension.
 pub const XAI_USAGE_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+/// Grok Build's settings, which name the plan.
+pub const XAI_SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 
+/// The window kind a Grok period names, or the one its length makes.
+fn xai_period_kind(
+    period: Option<&Value>,
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+) -> Option<WindowKind> {
+    match period.and_then(|p| p.get("type")).and_then(Value::as_str) {
+        Some("USAGE_PERIOD_TYPE_WEEKLY") => return Some(WindowKind::Weekly),
+        Some("USAGE_PERIOD_TYPE_MONTHLY") => return Some(WindowKind::Monthly),
+        _ => {}
+    }
+    let seconds = (end_ms? - start_ms?) / 1000;
+    // A period runs from a midnight to a midnight, so allow a day of drift.
+    if (ONE_WEEK - ONE_DAY..=ONE_WEEK + ONE_DAY).contains(&seconds) {
+        Some(WindowKind::Weekly)
+    } else if (MONTH_LOW..=MONTH_HIGH).contains(&seconds) {
+        Some(WindowKind::Monthly)
+    } else {
+        None
+    }
+}
+
+/// The quota in a Grok Build billing answer. The credits answer names the
+/// share used as `creditUsagePercent` and leaves it out while nothing is
+/// used, so a known period that holds now without a share reads as unused.
+/// The older answer carries the spend and the limit in cents.
 pub fn parse_xai(payload: &Value, now_ms: i64) -> Option<Quota> {
-    let config = payload.get("config")?;
-    let used = number(config.get("creditUsagePercent")).or_else(|| {
-        let limit = number(config.pointer("/monthlyLimit/val"))?;
-        (limit > 0.0).then(|| number(config.pointer("/used/val")).unwrap_or(0.0) / limit * 100.0)
-    })?;
+    let config = payload.get("config").unwrap_or(payload);
+    let cents = |path: &str| number(config.pointer(path)).or_else(|| number(payload.pointer(path)));
+    let ratio = |used: Option<f64>, limit: Option<f64>| {
+        let limit = limit?;
+        (limit > 0.0).then(|| used.unwrap_or(0.0) / limit * 100.0)
+    };
+    let period = config.get("currentPeriod");
+    let start_ms = rfc3339_ms(period.and_then(|p| p.get("start")))
+        .or_else(|| rfc3339_ms(config.get("billingPeriodStart")))
+        .or_else(|| rfc3339_ms(payload.pointer("/billingCycle/billingPeriodStart")));
+    let end_ms = rfc3339_ms(period.and_then(|p| p.get("end")))
+        .or_else(|| rfc3339_ms(config.get("billingPeriodEnd")))
+        .or_else(|| rfc3339_ms(payload.pointer("/billingCycle/billingPeriodEnd")));
+    let monthly_limit = cents("/monthlyLimit/val");
+    let kind = xai_period_kind(period, start_ms, end_ms)
+        .or_else(|| monthly_limit.is_some().then_some(WindowKind::Monthly));
+    let current = kind.is_some()
+        && start_ms.is_none_or(|start| start <= now_ms)
+        && end_ms.is_some_and(|end| end > now_ms);
+    let used = number(config.get("creditUsagePercent"))
+        .or_else(|| ratio(cents("/onDemandUsed/val"), cents("/onDemandCap/val")))
+        .or_else(|| {
+            ratio(
+                cents("/usage/totalUsed/val").or_else(|| cents("/used/val")),
+                monthly_limit,
+            )
+        })
+        .or_else(|| current.then_some(0.0))?;
     if !used.is_finite() {
         return None;
     }
-    let period = config.get("currentPeriod");
-    let kind = match period.and_then(|p| p.get("type")).and_then(Value::as_str) {
-        Some("USAGE_PERIOD_TYPE_WEEKLY") => WindowKind::Weekly,
-        Some("USAGE_PERIOD_TYPE_MONTHLY") => WindowKind::Monthly,
-        _ if config.get("monthlyLimit").is_some() => WindowKind::Monthly,
-        _ => WindowKind::Other,
-    };
     Some(Quota {
         plan: text(payload.get("subscription_tier")),
         email: None,
         windows: vec![Window {
-            kind,
+            kind: kind.unwrap_or(WindowKind::Other),
             scope: String::new(),
             used_percent: used.clamp(0.0, 100.0),
-            resets_at_ms: rfc3339_ms(period.and_then(|p| p.get("end")))
-                .or_else(|| rfc3339_ms(config.get("billingPeriodEnd"))),
+            resets_at_ms: end_ms,
             limit_reached: used >= 100.0,
         }],
         banked_resets: None,
@@ -373,11 +416,16 @@ pub fn probe_xai(
     let mut headers = vec![
         ("Authorization", bearer.as_str()),
         ("X-XAI-Token-Auth", "xai-grok-cli"),
+        ("Accept", "application/json"),
     ];
     if let Some(id) = account_id {
         headers.push(("x-userid", id));
     }
     let mut quota = parse_xai(&fetch(XAI_USAGE_URL, &headers, timeout)?, now_ms)?;
+    if quota.plan.is_none() {
+        quota.plan = fetch(XAI_SETTINGS_URL, &headers, timeout)
+            .and_then(|settings| text(settings.get("subscription_tier_display")));
+    }
     if let Some(user) = fetch("https://cli-chat-proxy.grok.com/v1/user", &headers, timeout) {
         quota.email = text(user.get("email"));
     }
@@ -864,8 +912,8 @@ pub fn probe_devin(session_token: &str, now_ms: i64, timeout: Duration) -> Optio
     parse_devin_status(&answer, now_ms)
 }
 
-/// Whether the router has a usage route for this sign-in provider. xAI has
-/// none, so its card says what the router cannot read.
+/// Whether the router has a usage route for this sign-in provider. A
+/// provider without one shows that its allowance is unavailable.
 pub fn has_reader(provider: &str) -> bool {
     matches!(
         provider,
@@ -1034,6 +1082,37 @@ mod tests {
         assert_eq!(quota.windows[0].kind, WindowKind::Monthly);
         assert_eq!(quota.windows[0].remaining_percent(), 0.0);
         assert!(quota.windows[0].limit_reached);
+    }
+
+    #[test]
+    fn a_new_grok_account_without_a_share_reads_as_unused() {
+        let now = 1_790_000_000_000;
+        // The credits answer leaves the share out while nothing is used.
+        let fresh = serde_json::json!({"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-09-20T00:00:00Z", "end": "2026-09-27T00:00:00Z"}}});
+        let quota = parse_xai(&fresh, now).unwrap();
+        assert_eq!(quota.windows[0].kind, WindowKind::Weekly);
+        assert_eq!(quota.windows[0].remaining_percent(), 100.0);
+        assert!(!quota.windows[0].limit_reached);
+        // A period without a type is known by its length.
+        let untyped = serde_json::json!({"config": {"currentPeriod": {"start": "2026-09-20T00:00:00Z", "end": "2026-09-27T00:00:00Z"}}});
+        assert_eq!(
+            parse_xai(&untyped, now).unwrap().windows[0].kind,
+            WindowKind::Weekly
+        );
+        // A period that has ended says nothing about now.
+        assert!(parse_xai(&fresh, now + 30 * 86_400_000).is_none());
+        // The on-demand spend stands in for the share.
+        let on_demand = serde_json::json!({"config": {"onDemandUsed": {"val": 250}, "onDemandCap": {"val": 1000}, "billingPeriodEnd": "2026-10-01T00:00:00Z"}});
+        assert_eq!(
+            parse_xai(&on_demand, now).unwrap().windows[0].used_percent,
+            25.0
+        );
+        // The older answer carries its spend and limit in cents at the top.
+        let legacy = serde_json::json!({"billingCycle": {"billingPeriodStart": "2026-09-01T00:00:00Z", "billingPeriodEnd": "2026-10-01T00:00:00Z"}, "monthlyLimit": {"val": 99900}, "usage": {"totalUsed": {"val": 9990}}});
+        let quota = parse_xai(&legacy, now).unwrap();
+        assert_eq!(quota.windows[0].kind, WindowKind::Monthly);
+        assert_eq!(quota.windows[0].remaining_percent(), 90.0);
+        assert!(quota.windows[0].resets_at_ms.is_some());
     }
 
     use serde_json::json;

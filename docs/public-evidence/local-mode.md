@@ -133,12 +133,11 @@ In a cloud-enabled build, **Cancel sign-in** or **Escape** restores local mode.
 
 Subscription accounts use the sign-in email when the provider supplies it.
 Account balancing has a visible switch beside its explanation.
-Account rows span the settings page. Details hold usage, weight and account controls.
-Allowance meters use full-strength green, yellow and red with the remaining percentage and reset time.
-Account cards show routing warnings. Usage and settings holds timestamps, usage totals and account controls.
+Account rows span the settings page with the plan, routing warnings and Disconnect.
+See usage opens the Usage page, which shows each account's windows with the remaining percentage and reset time.
 Hover over an account name and select the pencil to edit it inline.
 Enter saves the name. Escape cancels the edit. A failed save keeps the edit open.
-Grok subscriptions show their reported credits window, remaining percentage and reset time.
+Grok subscriptions show their reported credits window on the Usage page.
 
 Type `@` in the composer to find a file in the selected Files folder or current workspace. Select a result to attach it.
 URLs and file references use the theme reference color and show icon links.

@@ -58,19 +58,45 @@ function sum(rows) {
   return total
 }
 
-function limits(provider, now) {
-  const window = (provider, kind, remaining, resetsIn, elapsed, accounts, scope = '') => ({
-    provider, kind, scope, window_seconds: { five_hour: 18000, weekly: 604800 }[kind], remaining_percent: remaining,
+// One card per account and window, as core's `limits` answers, and each
+// provider's pool of a window, as core's `pools` answers for the composer.
+function windowCard(now, provider, kind, remaining, resetsIn, elapsed, account = null) {
+  return {
+    provider, ...(account ?? {}), kind, scope: '', window_seconds: { five_hour: 18000, daily: 86400, weekly: 604800 }[kind], remaining_percent: remaining,
     resets_at_ms: now + resetsIn, elapsed_percent: elapsed, pace: 100 - remaining > elapsed + 5 ? 'ahead' : 100 - remaining < elapsed - 5 ? 'under' : 'on',
-    status: remaining <= 0 ? 'limit' : remaining < 20 ? 'low' : 'ok', accounts,
-  })
-  const account = (id, label, plan, remaining, resetsIn) => ({ id, label, plan, remaining_percent: remaining, limit_reached: remaining <= 0, resets_at_ms: now + resetsIn })
+    status: remaining <= 0 ? 'limit' : remaining < 20 ? 'low' : 'ok',
+  }
+}
+
+function limits(provider, now) {
+  const account = (account_id, label, plan) => ({ account_id, label, plan })
+  const work = account('a-work', 'sam@northwind.example', 'max')
+  const home = account('a-home', 'sam.home@example.com', 'pro')
+  const codex = account('o-pro', 'sam@northwind.example', 'pro')
+  const codexHome = account('o-home', 'sam.home@example.com', 'plus')
+  const grok = account('x-1', 'sam@northwind.example', 'SuperGrok')
   return [
-    window('anthropic', 'five_hour', 62, 2 * HOUR + 14 * 60_000, 55, [account('a-work', 'sam@northwind.example', 'max', 70, 2 * HOUR + 14 * 60_000), account('a-home', 'sam.home@example.com', 'pro', 54, 3 * HOUR)]),
-    window('anthropic', 'weekly', 81, 4 * 24 * HOUR, 40, [account('a-work', 'sam@northwind.example', 'max', 84, 4 * 24 * HOUR), account('a-home', 'sam.home@example.com', 'pro', 78, 5 * 24 * HOUR)]),
-    window('openai', 'five_hour', 14, 47 * 60_000, 84, [account('o-pro', 'sam@northwind.example', 'pro', 14, 47 * 60_000)]),
-    window('openai', 'weekly', 0, 6 * 24 * HOUR + 20 * HOUR, 10, [account('o-pro', 'sam@northwind.example', 'pro', 0, 6 * 24 * HOUR + 20 * HOUR)]),
-    window('google', 'daily', 93, 9 * HOUR, 62, [account('g-1', 'sam@gmail.example', 'pro', 93, 9 * HOUR)]),
+    windowCard(now, 'anthropic', 'five_hour', 70, 2 * HOUR + 14 * 60_000, 55, work),
+    windowCard(now, 'anthropic', 'weekly', 84, 4 * 24 * HOUR, 40, work),
+    windowCard(now, 'anthropic', 'five_hour', 54, 3 * HOUR, 40, home),
+    windowCard(now, 'anthropic', 'weekly', 78, 5 * 24 * HOUR, 29, home),
+    windowCard(now, 'google', 'daily', 93, 9 * HOUR, 62, account('g-1', 'sam@gmail.example', 'pro')),
+    windowCard(now, 'openai', 'five_hour', 14, 47 * 60_000, 84, codex),
+    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR + 20 * HOUR, 10, codex),
+    windowCard(now, 'openai', 'five_hour', 100, 5 * HOUR, 0, codexHome),
+    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR, 14, codexHome),
+    { ...windowCard(now, 'xai', 'weekly', 100, 5 * 24 * HOUR, 29, grok), note: 'The plan reports no 5-hour window.' },
+  ].filter((limit) => !provider || limit.provider === provider)
+}
+
+function pools(provider, now) {
+  return [
+    windowCard(now, 'anthropic', 'five_hour', 62, 2 * HOUR + 14 * 60_000, 55),
+    windowCard(now, 'anthropic', 'weekly', 81, 4 * 24 * HOUR, 40),
+    windowCard(now, 'google', 'daily', 93, 9 * HOUR, 62),
+    windowCard(now, 'openai', 'five_hour', 57, 47 * 60_000, 84),
+    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR, 14),
+    windowCard(now, 'xai', 'weekly', 100, 5 * 24 * HOUR, 29),
   ].filter((limit) => !provider || limit.provider === provider)
 }
 
@@ -96,7 +122,8 @@ export function probeUsage({ machines = [], body = {} }, state) {
     },
     providers: ['anthropic', 'google', 'ollama', 'openai'],
     limits: limits(provider, now),
-    unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }, { provider: 'xai', label: 'xAI', reason: 'unread' }, { provider: 'openrouter', label: 'OpenRouter', reason: 'key' }].filter((entry) => !provider || entry.provider === provider),
+    pools: pools(provider, now),
+    unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }, { provider: 'kimi', label: 'Kimi', reason: 'pending' }, { provider: 'openrouter', label: 'OpenRouter', reason: 'key' }].filter((entry) => !provider || entry.provider === provider),
     windows: [],
     machines: machines.map((machine) => answering.includes(machine) ? { ...machine, state: 'ok' } : { ...machine, state: 'error', error: 'That machine is offline. Try again when it answers.' }),
     partial: answering.length < machines.length,

@@ -5,9 +5,9 @@
 //! where each receipt sums Pi's usage on every assistant message of its run,
 //! and the router's last quota probe of each account. It answers totals, a
 //! series of hourly or daily buckets by provider, a breakdown by model, agent
-//! and project, and one limit card per subscription window with its accounts
-//! pooled. [`merge`] joins the answers of several machines into one view and
-//! adds the machine breakdown. A cost is the model catalog's estimate, never
+//! and project, one limit card per account and window, and each provider's
+//! pool of a window, which the composer warns about. [`merge`] joins the
+//! answers of several machines into one view and adds the machine breakdown. A cost is the model catalog's estimate, never
 //! a bill. Runs that fail or stop keep no receipt, so their tokens are not
 //! counted.
 
@@ -205,29 +205,24 @@ pub struct AccountWindow {
     pub observed_at_ms: i64,
 }
 
-/// One account in a limit card.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LimitAccount {
-    pub id: String,
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<String>,
-    pub remaining_percent: f64,
-    pub limit_reached: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resets_at_ms: Option<i64>,
-}
-
-/// One subscription window with its accounts pooled.
+/// One subscription window of one account, or of a provider's pool.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Limit {
     pub provider: String,
+    /// The account the card reads. Empty for a pool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account_id: String,
+    /// The account's name. Empty for a pool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
     pub kind: quota::WindowKind,
     #[serde(default)]
     pub scope: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_seconds: Option<i64>,
-    /// The pool's share left: the mean of its accounts.
+    /// The share left: the account's, or the mean of a pool's accounts.
     pub remaining_percent: f64,
     /// The soonest reset among the accounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -238,10 +233,9 @@ pub struct Limit {
     /// `ahead` spends faster than the window passes, `under` slower.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pace: Option<String>,
-    /// `ok`, `low` under [`LOW_PERCENT`] left, or `limit` when the pool is
-    /// spent.
+    /// `ok`, `low` under [`LOW_PERCENT`] left, or `limit` when the account,
+    /// or every account of a pool, is spent.
     pub status: String,
-    pub accounts: Vec<LimitAccount>,
     /// What the card says beside the window, such as a weekly window whose
     /// upstream reports no 5-hour window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,7 +248,8 @@ pub struct Unmetered {
     pub provider: String,
     pub label: String,
     /// `local` for a server on this machine, `key` for an API key billed by
-    /// use, `unread` for a subscription whose upstream reports no quota.
+    /// use, `pending` for a subscription whose first probe has not answered,
+    /// `unread` for a subscription whose upstream reports no quota.
     pub reason: String,
 }
 
@@ -271,7 +266,12 @@ pub struct Summary {
     pub breakdown: Breakdown,
     /// Every provider with usage in the range, before the provider filter.
     pub providers: Vec<String>,
+    /// One card per account and window.
     pub limits: Vec<Limit>,
+    /// One card per provider and window with its accounts pooled. A pool is
+    /// spent only once every account in it is.
+    #[serde(default)]
+    pub pools: Vec<Limit>,
     pub unmetered: Vec<Unmetered>,
     /// Each account's reading, which [`merge`] pools across machines.
     pub windows: Vec<AccountWindow>,
@@ -549,6 +549,7 @@ pub fn summarize(
         },
         providers: providers.into_iter().collect(),
         limits: limits(&windows, now_ms),
+        pools: pools(&windows, now_ms),
         unmetered: unmetered
             .into_iter()
             .filter(|entry| wanted(&entry.provider))
@@ -589,21 +590,21 @@ fn kind_order(kind: quota::WindowKind) -> u8 {
     }
 }
 
-/// One card per provider, window kind and scope, with its accounts pooled.
-/// A window whose reset has passed reads as full until the next probe.
+/// One card per account, window kind and scope. A window whose reset has
+/// passed reads as full until the next probe.
 pub fn limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
-    let mut limits = pooled_limits(windows, now_ms);
+    let mut limits = grouped(windows, now_ms, true);
     // A weekly window with no 5-hour window beside it says so, so the card
     // never reads as a 5-hour window that is missing from the screen.
-    let five_hour: BTreeSet<String> = limits
+    let five_hour: BTreeSet<(String, String)> = limits
         .iter()
         .filter(|limit| limit.kind == quota::WindowKind::FiveHour && limit.scope.is_empty())
-        .map(|limit| limit.provider.clone())
+        .map(|limit| (limit.provider.clone(), limit.account_id.clone()))
         .collect();
     for limit in &mut limits {
         if limit.kind == quota::WindowKind::Weekly
             && limit.scope.is_empty()
-            && !five_hour.contains(&limit.provider)
+            && !five_hour.contains(&(limit.provider.clone(), limit.account_id.clone()))
         {
             limit.note = Some("The plan reports no 5-hour window.".into());
         }
@@ -611,49 +612,52 @@ pub fn limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
     limits
 }
 
-fn pooled_limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
-    let mut pools: BTreeMap<(String, u8, String), Vec<&AccountWindow>> = BTreeMap::new();
+/// One card per provider, window kind and scope, with its accounts pooled.
+pub fn pools(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
+    grouped(windows, now_ms, false)
+}
+
+/// What one account's window reads as of `now_ms`: its share left, whether
+/// it is spent, and its reset. A passed reset reads as a full window.
+fn reading(window: &AccountWindow, now_ms: i64) -> (f64, bool, Option<i64>) {
+    let reset = window.resets_at_ms.is_some_and(|at| at <= now_ms);
+    if reset {
+        (100.0, false, None)
+    } else {
+        (
+            window.remaining_percent.clamp(0.0, 100.0),
+            window.limit_reached,
+            window.resets_at_ms,
+        )
+    }
+}
+
+fn grouped(windows: &[AccountWindow], now_ms: i64, by_account: bool) -> Vec<Limit> {
+    let mut groups: BTreeMap<(String, String, u8, String), Vec<&AccountWindow>> = BTreeMap::new();
     for window in windows {
-        pools
+        groups
             .entry((
                 window.provider.clone(),
+                if by_account {
+                    window.account_id.clone()
+                } else {
+                    String::new()
+                },
                 kind_order(window.kind),
                 window.scope.clone(),
             ))
             .or_default()
             .push(window);
     }
-    pools
+    groups
         .into_values()
-        .map(|pool| {
-            let accounts: Vec<LimitAccount> = pool
-                .iter()
-                .map(|window| {
-                    let reset = window.resets_at_ms.is_some_and(|at| at <= now_ms);
-                    LimitAccount {
-                        id: window.account_id.clone(),
-                        label: window.label.clone(),
-                        plan: window.plan.clone(),
-                        remaining_percent: if reset {
-                            100.0
-                        } else {
-                            window.remaining_percent.clamp(0.0, 100.0)
-                        },
-                        limit_reached: window.limit_reached && !reset,
-                        resets_at_ms: window.resets_at_ms.filter(|_| !reset),
-                    }
-                })
-                .collect();
-            let first = pool[0];
-            let remaining = accounts
-                .iter()
-                .map(|account| account.remaining_percent)
-                .sum::<f64>()
-                / accounts.len() as f64;
-            let resets_at_ms = accounts
-                .iter()
-                .filter_map(|account| account.resets_at_ms)
-                .min();
+        .map(|group| {
+            let readings: Vec<(f64, bool, Option<i64>)> =
+                group.iter().map(|window| reading(window, now_ms)).collect();
+            let first = group[0];
+            let remaining =
+                readings.iter().map(|(left, _, _)| left).sum::<f64>() / readings.len() as f64;
+            let resets_at_ms = readings.iter().filter_map(|(_, _, at)| *at).min();
             let seconds = window_seconds(first.kind);
             let elapsed = seconds.zip(resets_at_ms).map(|(seconds, at)| {
                 let left = (at - now_ms) as f64 / (seconds as f64 * 1000.0) * 100.0;
@@ -670,9 +674,20 @@ fn pooled_limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
                 }
                 .to_owned()
             });
-            let spent = accounts.iter().all(|account| account.limit_reached) || remaining <= 0.0;
+            let spent = readings.iter().all(|(_, reached, _)| *reached) || remaining <= 0.0;
             Limit {
                 provider: first.provider.clone(),
+                account_id: if by_account {
+                    first.account_id.clone()
+                } else {
+                    String::new()
+                },
+                label: if by_account {
+                    first.label.clone()
+                } else {
+                    String::new()
+                },
+                plan: if by_account { first.plan.clone() } else { None },
                 kind: first.kind,
                 scope: first.scope.clone(),
                 window_seconds: seconds,
@@ -688,7 +703,6 @@ fn pooled_limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
                     "ok"
                 }
                 .into(),
-                accounts,
                 note: None,
             }
         })
@@ -716,15 +730,18 @@ pub fn account_windows(agent: &Path) -> (Vec<AccountWindow>, Vec<Unmetered>) {
                 });
                 continue;
             }
-            let Some(probe) = store
-                .accounts
-                .get(&account.id)
-                .filter(|probe| !probe.windows.is_empty())
-            else {
+            let probe = store.accounts.get(&account.id);
+            let Some(probe) = probe.filter(|probe| !probe.windows.is_empty()) else {
+                // A reader that has not answered yet is still on its way.
+                let pending = probe.is_none()
+                    && account
+                        .credential
+                        .pi_provider()
+                        .is_some_and(quota::has_reader);
                 unmetered.insert(Unmetered {
                     provider: family,
                     label: name,
-                    reason: "unread".into(),
+                    reason: if pending { "pending" } else { "unread" }.into(),
                 });
                 continue;
             };
@@ -968,6 +985,7 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
     };
     joined.providers = providers.into_iter().collect();
     joined.limits = limits(&windows, now_ms);
+    joined.pools = pools(&windows, now_ms);
     joined.unmetered = unmetered.into_iter().collect();
     joined.windows = windows;
     FleetSummary {
@@ -1126,14 +1144,24 @@ mod tests {
     }
 
     #[test]
-    fn accounts_of_one_window_pool_with_pace_and_status() {
-        let cards = limits(
-            &[window("one", 10.0, HOUR), window("two", 30.0, 2 * HOUR)],
-            NOW,
+    fn each_account_has_its_own_card_and_the_pool_pools_them() {
+        let both = [window("one", 10.0, HOUR), window("two", 30.0, 2 * HOUR)];
+        let cards = limits(&both, NOW);
+        assert_eq!(cards.len(), 2);
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| (card.account_id.as_str(), card.remaining_percent))
+                .collect::<Vec<_>>(),
+            vec![("one", 10.0), ("two", 30.0)]
         );
-        assert_eq!(cards.len(), 1);
-        let card = &cards[0];
-        assert_eq!(card.accounts.len(), 2);
+        assert_eq!(cards[0].label, "one");
+        assert_eq!(cards[0].plan.as_deref(), Some("pro"));
+        assert_eq!(cards[0].status, "low");
+        let pooled = pools(&both, NOW);
+        assert_eq!(pooled.len(), 1);
+        let card = &pooled[0];
+        assert!(card.account_id.is_empty() && card.label.is_empty());
         assert_eq!(card.remaining_percent, 20.0);
         assert_eq!(card.resets_at_ms, Some(NOW + HOUR));
         assert_eq!(card.elapsed_percent, Some(80.0));
@@ -1147,6 +1175,10 @@ mod tests {
         let passed = limits(&[window("one", 0.0, -HOUR)], NOW);
         assert_eq!(passed[0].remaining_percent, 100.0);
         assert_eq!(passed[0].status, "ok");
+        // One spent account spends its own card, not the pool.
+        let one_spent = [window("one", 0.0, HOUR), window("two", 80.0, HOUR)];
+        assert_eq!(limits(&one_spent, NOW)[0].status, "limit");
+        assert_eq!(pools(&one_spent, NOW)[0].status, "ok");
     }
 
     #[test]
@@ -1214,6 +1246,72 @@ mod tests {
         assert_eq!(joined.summary.limits[0].remaining_percent, 40.0);
         assert_eq!(joined.machines[2].state, "error");
         assert_eq!(joined.summary.series.len(), 7);
+    }
+
+    #[test]
+    fn each_signed_in_account_reads_its_own_windows_and_a_new_one_is_pending() {
+        use crate::model_router::config::{Account, Credential, RouterConfig};
+        let agent = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let subscription = |id: &str, family: &str, provider: &str| Account {
+            id: id.into(),
+            family: family.into(),
+            label: format!("{id}@example.test"),
+            credential: Credential::Subscription {
+                provider: provider.into(),
+                access: "token".into(),
+                refresh: None,
+                expires_ms: None,
+                account_id: Some(id.into()),
+                email: None,
+                plan: None,
+                renews_at_ms: None,
+            },
+            base_url: None,
+            models: Vec::new(),
+            enabled: true,
+            weight: 1,
+            overflow: false,
+        };
+        let config = RouterConfig {
+            accounts: vec![
+                subscription("first", "openai", "openai-codex"),
+                subscription("second", "openai", "openai-codex"),
+                subscription("grok", "xai", "xai"),
+            ],
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &config).unwrap();
+        let weekly = |used: f64| quota::Quota {
+            plan: Some("pro".into()),
+            windows: vec![quota::Window {
+                kind: quota::WindowKind::Weekly,
+                scope: String::new(),
+                used_percent: used,
+                resets_at_ms: Some(NOW + HOUR),
+                limit_reached: false,
+            }],
+            observed_at_ms: NOW,
+            ..quota::Quota::default()
+        };
+        let mut store = quota::QuotaStore::default();
+        store.accounts.insert("first".into(), weekly(10.0));
+        store.accounts.insert("second".into(), weekly(60.0));
+        quota::save(&agent, &store).unwrap();
+        let (windows, unmetered) = account_windows(&agent);
+        let cards = limits(&windows, NOW);
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| (card.label.as_str(), card.remaining_percent))
+                .collect::<Vec<_>>(),
+            vec![("first@example.test", 90.0), ("second@example.test", 40.0)]
+        );
+        assert_eq!(unmetered.len(), 1);
+        assert_eq!(
+            (unmetered[0].provider.as_str(), unmetered[0].reason.as_str()),
+            ("xai", "pending")
+        );
+        let _ = std::fs::remove_dir_all(&agent);
     }
 
     #[test]

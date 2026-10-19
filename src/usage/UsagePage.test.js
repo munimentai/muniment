@@ -3,13 +3,13 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
 import LimitBanner from './LimitBanner.svelte'
-import { composerLimit, compactTokens, dollars, initials, isUsageShortcut, machineRefs, providerLabel, resetsIn, rowLabel, totalTiles, windowLabel } from './usage.js'
+import { accountLine, composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, providerLabel, resetsIn, rowLabel, totalTiles, windowLabel } from './usage.js'
 
 afterEach(cleanup)
 
 const NOW = Date.UTC(2026, 9, 17, 12)
 const HOUR = 3_600_000
-const limit = (extra = {}) => ({ provider: 'anthropic', kind: 'five_hour', scope: '', remaining_percent: 62, resets_at_ms: NOW + 2 * HOUR + 14 * 60_000, elapsed_percent: 40, pace: 'ahead', status: 'ok', accounts: [{ id: 'a', label: 'sam@example.com', remaining_percent: 70 }, { id: 'b', label: 'Home', remaining_percent: 54 }], ...extra })
+const limit = (extra = {}) => ({ provider: 'anthropic', kind: 'five_hour', scope: '', remaining_percent: 62, resets_at_ms: NOW + 2 * HOUR + 14 * 60_000, elapsed_percent: 40, pace: 'ahead', status: 'ok', account_id: 'a', label: 'sam@example.com', plan: 'max', ...extra })
 const amount = (processed, cost) => ({ tokens: { input: 1, output: 1, cache_read: 1, cache_write: 0, reasoning: 0 }, processed, runs: 2, cost_usd: cost, unpriced_runs: 0 })
 const summary = (extra = {}) => ({
   range: '7d', bucket: 'day',
@@ -17,8 +17,8 @@ const summary = (extra = {}) => ({
   series: [{ start_ms: NOW - 24 * HOUR, providers: { anthropic: amount(900, 0.2) } }, { start_ms: NOW, providers: { anthropic: amount(300, 0.1), openai: amount(600, 0.3) } }],
   breakdown: { model: [{ key: 'anthropic/claude', label: 'claude', provider: 'anthropic', ...amount(1200, 0.3) }], agent: [{ key: '', label: '', ...amount(1200, 0.3) }], project: [], machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }] },
   providers: ['anthropic', 'openai'],
-  limits: [limit(), limit({ provider: 'openai', kind: 'weekly', remaining_percent: 0, status: 'limit', pace: null, elapsed_percent: null })],
-  unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }],
+  limits: [limit(), limit({ account_id: 'b', label: 'Home', plan: null, remaining_percent: 30 }), limit({ provider: 'openai', kind: 'weekly', remaining_percent: 0, status: 'limit', pace: null, elapsed_percent: null })],
+  unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }, { provider: 'xai', label: 'xAI', reason: 'pending' }],
   windows: [],
   machines: [{ id: 'local', name: 'This computer', state: 'ok' }, { id: 'box', name: 'Build box', state: 'error', error: 'offline' }],
   partial: true,
@@ -38,8 +38,9 @@ describe('usage words', () => {
     expect(compactTokens(3_100_000)).toBe('3.1M')
     expect(dollars(0.004)).toBe('<$0.01')
     expect(dollars(1234.5)).toBe('$1,234.50')
-    expect(initials('sam.home@example.com')).toBe('SH')
-    expect(rowLabel({ key: '' }, 'agent')).toBe('Chats')
+    expect(accountLine({ label: 'sam@example.com', plan: 'max' })).toBe('sam@example.com · max')
+    expect(accountLine({})).toBe('')
+    expect(rowLabel({ key: '' }, 'agent')).toBe('No agent')
     expect(rowLabel({ key: '' }, 'project')).toBe('No project')
     expect(providerLabel('anthropic')).toBe('Anthropic')
     expect(totalTiles(summary().totals, 'cost')[0]).toEqual({ label: 'API estimate', value: '$12.50' })
@@ -69,21 +70,25 @@ describe('usage words', () => {
 })
 
 describe('Usage page', () => {
-  it('shows a card per window with pooled accounts and a threshold mark', async () => {
+  it('shows a card per account and window with a threshold mark', async () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })
-    const card = await screen.findByRole('article', { name: 'Anthropic · 5-hour' })
+    const card = await screen.findByRole('article', { name: 'Anthropic · 5-hour, sam@example.com' })
     expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }) })
     expect(within(card).getByText('62% left')).toBeInTheDocument()
     expect(within(card).getByRole('meter')).toHaveAttribute('aria-valuenow', '62')
-    expect(within(card).getAllByRole('listitem')).toHaveLength(2)
-    expect(within(screen.getByRole('article', { name: 'OpenAI · Weekly' })).getByText('Limit reached')).toBeInTheDocument()
+    expect(within(card).getByText('sam@example.com · max')).toBeInTheDocument()
+    // A second account of one provider has its own card.
+    const second = screen.getByRole('article', { name: 'Anthropic · 5-hour, Home' })
+    expect(within(second).getByText('30% left')).toBeInTheDocument()
+    expect(within(screen.getByRole('article', { name: 'OpenAI · Weekly, sam@example.com' })).getByText('Limit reached')).toBeInTheDocument()
     expect(screen.getByText('No limit')).toBeInTheDocument()
+    expect(screen.getByText('Allowance pending')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
   })
 
   it('says when a weekly window has no 5-hour window beside it', async () => {
-    const weekly = limit({ provider: 'openai', kind: 'weekly', note: 'The plan reports no 5-hour window.' })
+    const weekly = limit({ provider: 'openai', kind: 'weekly', label: '', note: 'The plan reports no 5-hour window.' })
     render(UsagePage, { tauri: { invoke: vi.fn(async () => summary({ limits: [weekly] })) }, runtimeList })
     const card = await screen.findByRole('article', { name: 'OpenAI · Weekly' })
     expect(within(card).getByText('The plan reports no 5-hour window.')).toBeInTheDocument()
@@ -92,17 +97,28 @@ describe('Usage page', () => {
   it('shows tokens and cost with a breakdown, and asks again for a range or a machine', async () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })
-    await screen.findByRole('article', { name: 'Anthropic · 5-hour' })
+    await screen.findByRole('article', { name: 'Anthropic · 5-hour, sam@example.com' })
     await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
     expect(screen.getByText('15.3M')).toBeInTheDocument()
     expect(screen.getAllByRole('img').some((bar) => bar.getAttribute('aria-label')?.includes('OpenAI'))).toBe(true)
     expect(screen.getByRole('list', { name: 'Usage by model' })).toHaveTextContent('claude')
     await fireEvent.click(screen.getByRole('radio', { name: 'Agent' }))
-    expect(screen.getByRole('list', { name: 'Usage by agent' })).toHaveTextContent('Chats')
+    expect(screen.getByRole('list', { name: 'Usage by agent' })).toHaveTextContent('No agent')
     await fireEvent.click(screen.getByRole('radio', { name: 'Cost' }))
     expect(screen.getByText('API estimate', { selector: 'dt' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('radio', { name: '30d' }))
     await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ body: expect.objectContaining({ range: '30d' }) })))
+  })
+
+  it('asks each account again on Refresh, then reads usage', async () => {
+    const invoke = vi.fn(async (command) => command === 'usage_summary' ? summary() : { accounts: [{ id: 'a', allowance_readable: true }] })
+    render(UsagePage, { tauri: { invoke }, runtimeList })
+    await screen.findByRole('article', { name: 'Anthropic · 5-hour, sam@example.com' })
+    const reads = () => invoke.mock.calls.filter(([command]) => command === 'usage_summary').length
+    const before = reads()
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh usage' }))
+    await vi.waitFor(() => expect(reads()).toBe(before + 1))
+    expect(invoke).toHaveBeenCalledWith('model_router_refresh_quota', { id: null })
   })
 
   it('names the failure when no machine answers', async () => {

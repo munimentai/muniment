@@ -1,6 +1,7 @@
 // The Usage page's words and numbers. Core's `usage.summary` sums each
-// machine's runs and pools each subscription window, and core joins the
-// machines, so this module only asks, formats and names what core answers.
+// machine's runs, reads each account's subscription windows and pools them
+// by provider, and core joins the machines, so this module only asks,
+// formats and names what core answers.
 import { agentRuntimes } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 import { familyName, providerName } from '../lib/provider-catalog.js'
@@ -140,7 +141,7 @@ export function bucketLabel(startMs, bucket) {
 export function rowLabel(row, breakdown) {
   if (row?.label) return row.label
   if (row?.key) return row.key
-  return breakdown === 'agent' ? 'Chats' : breakdown === 'project' ? 'No project' : 'Unknown'
+  return breakdown === 'agent' ? 'No agent' : breakdown === 'project' ? 'No project' : 'Unknown'
 }
 
 // Every provider the page can filter by: those with usage and those with a window.
@@ -149,21 +150,19 @@ export function providerOptions(summary) {
   return [{ value: '', label: 'All providers' }, ...[...ids].sort().map((id) => ({ value: id, label: providerLabel(id), provider: id }))]
 }
 
-// Two letters for an account chip: the initials of its label or email.
-export function initials(label) {
-  const name = String(label ?? '').split('@')[0].replace(/[^a-z0-9 ._-]/gi, '')
-  const parts = name.split(/[ ._-]+/).filter(Boolean)
-  const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)
-  return letters.toUpperCase() || '?'
+// The account a card reads, with its plan.
+export function accountLine(limit) {
+  return [limit?.label, limit?.plan].filter(Boolean).join(' · ')
 }
 
-const UNMETERED = { local: 'No limit', key: 'Billed by use', unread: 'Allowance unavailable' }
+const UNMETERED = { local: 'No limit', key: 'Billed by use', pending: 'Allowance pending', unread: 'Allowance unavailable' }
 export function unmeteredLabel(entry) {
   return UNMETERED[entry?.reason] ?? 'No limit'
 }
 
-// The limit the composer warns about: a spent window first, else one under a
-// tenth left, for the provider in use when one is known.
+// The pool the composer warns about: a spent window first, else one under a
+// tenth left, for the provider in use when one is known. Core's `pools`
+// spend a provider's window only once every account in it is spent.
 export function composerLimit(limits, provider = null) {
   const pool = (limits ?? []).filter((limit) => !provider || limit.provider === provider)
   return pool.find((limit) => limit.status === 'limit')
@@ -175,6 +174,12 @@ export const PACE_LABELS = {
   ahead: 'Ahead of pace',
   on: 'On pace',
   under: 'Under pace',
+}
+
+// Settings opens the Usage page through the shell, which owns the pages.
+export const OPEN_USAGE_EVENT = 'muniment:open-usage'
+export function openUsagePage() {
+  try { window.dispatchEvent(new CustomEvent(OPEN_USAGE_EVENT)) } catch (_) {}
 }
 
 export function isUsageShortcut(event, platform = navigator.platform) {
