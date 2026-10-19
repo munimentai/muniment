@@ -612,7 +612,7 @@ async function main() {
     // thread's model with its source, and the project's and an agent's tools.
     const states = ['palette', 'palette-search', 'move', 'model', 'settings', 'agent-tools'].map((state) => `projects.html?state=${state}`)
     // Every state of the Machines fixture still renders.
-    const runtimeStates = ['local', 'paired', 'remote', 'switcher', 'pairing', 'failed', 'ssh', 'pairing-off', 'pairing-on', 'link', 'devices'].map((state) => `runtimes.html?state=${state}`)
+    const runtimeStates = ['local', 'paired', 'scope', 'remote', 'switcher', 'pairing', 'failed', 'ssh', 'pairing-off', 'pairing-on', 'link', 'devices'].map((state) => `runtimes.html?state=${state}`)
     // The gallery's gates as agent approvals.
     const approvalStates = ['approvals', 'tool-approvals'].map((state) => `agents.html?state=${state}`)
     for (const fixture of [...fixtures, ...states, ...runtimeStates, ...approvalStates]) {

@@ -1471,8 +1471,9 @@ describe('workspace composer entry', () => {
     // Wait for the lazy import before the DOM query starts its timeout.
     await vi.dynamicImportSettled()
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-    // The sidebar swaps its threads and footer, Settings control included, for the section list.
-    expect(settings).not.toBeInTheDocument()
+    // The sidebar swaps its threads for the section list, and the foot keeps Settings as the current page.
+    expect(settings).toHaveAttribute('aria-expanded', 'true')
+    expect(settings).toHaveAttribute('aria-current', 'page')
     // Settings takes the workspace, not a popup: no modal, no scrim, no blur.
     expect(dialog).not.toHaveAttribute('aria-modal')
     expect(screen.queryByTestId('settings-scrim')).not.toBeInTheDocument()
@@ -9241,11 +9242,16 @@ describe('runtimes', () => {
     expect(files).toHaveTextContent('Files stay on this computer. A paired runtime cannot read them.')
     await fireEvent.keyDown(window, { key: 'Escape' })
 
-    // Storage belongs to this computer, so its part says so under its head.
+    // On all machines, a part that stays on each machine says so under its head.
     const dialog = await openSettings('Data')
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toContain('Machines')
-    expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('This part changes only this computer. Each machine keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="context"]')).getByRole('note')).toHaveTextContent('This part changes only Build box. Each machine keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="retention"]')).queryByRole('note')).toBeNull()
+    // Storage belongs to this computer, so its part says so once Build box is picked.
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: buildBox.id } })
+    await waitFor(() => expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.'))
     expect(within(dialog.querySelector('[data-settings-part="context"]')).queryByRole('note')).toBeNull()
     // The cloud account belongs to this computer, so Account keeps only the profile of the selected machine.
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
