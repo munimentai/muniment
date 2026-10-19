@@ -38,7 +38,6 @@ const ALLOWED = {
   // The show switch reads as on or off by signal, not by a shade of gray.
 
   // The same switch turns an account in a pool on, and turns routing on.
-  'src/lib/AllowanceMeter.svelte': { '.window-bar[data-level="plenty"] span': 'Green marks plentiful remaining allowance.' },
   'src/runtimes/MachinePicker.svelte': { '.state.online': 'A green globe marks a machine that answers.' },
   'src/lib/AgentAvatar.svelte': { '.agent-avatar.agent-avatar[data-activity="running"]': 'A running agent outlines its avatar, a workflow-run indicator.' },
   'src/lib/MemorySection.svelte': {

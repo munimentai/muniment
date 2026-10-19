@@ -110,25 +110,14 @@ it('refreshes allowances on load and every two minutes, then stops when closed',
   expect(calls()).toBe(initial + 1)
 })
 
-it('keeps a space on both sides of the dot in an allowance line', () => {
-  render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'anthropic', settings: { ...routing(), accounts: [{ id: 'a', family: 'anthropic', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: 'Fable', remaining_percent: 99, resets_at_ms: Date.now() + 3_600_000, limit_reached: false }] }] } })
-  const window = screen.getByText('99%').closest('.window')
-  expect(window).toHaveTextContent('Weekly Fable')
-  expect(window).toHaveTextContent(/99% left · resets /)
-})
-
-it('shows allowances and manual refresh for routable subscriptions', async () => {
-  render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'openai', settings: { ...routing(), accounts: [{ id: 'a', family: 'openai', label: 'Test account', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: '', remaining_percent: 70, resets_at_ms: null, limit_reached: false }], requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }] } })
-  expect(screen.getByText('70%')).toBeInTheDocument()
-  expect(screen.queryByText('Available for routed turns.')).not.toBeInTheDocument()
-  // The card's foot holds the read time with its refresh on the left and Disconnect on the right, outside the details.
-  const foot = screen.getByRole('button', { name: 'Disconnect Test account' }).closest('footer')
-  expect(foot.closest('details')).toBeNull()
-  expect(foot).toHaveTextContent(/^Updated just now/)
-  expect(within(foot).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Refresh Test account allowance', 'Disconnect Test account'])
-  expect(within(foot).getByRole('button', { name: 'Disconnect Test account' }).querySelector('[data-icon="unplug"]')).not.toBeNull()
-  await fireEvent.click(screen.getByText('Usage and settings'))
-  for (const gone of ['Share', 'Refresh allowance', 'Remove']) expect(screen.queryByText(gone)).toBeNull()
+it('keeps usage off the account rows, which Usage shows', () => {
+  render(ModelAccounts, { tauri: { invoke: vi.fn() }, family: 'openai', settings: { ...routing(), accounts: [{ id: 'a', family: 'openai', label: 'Test account', plan: 'pro', source: 'account', servable: true, enabled: true, weight: 1, models: [], days: [['2026-10-18', 4]], allowance_readable: true, quota_observed_ms: Date.now(), windows: [{ label: 'Weekly', scope: '', remaining_percent: 70, resets_at_ms: null, limit_reached: false }], requests: 4, input_tokens: 10, output_tokens: 10, active: 0, errors: 0 }] } })
+  const row = screen.getByText('Test account').closest('li')
+  expect(row).toHaveClass('key-card')
+  expect(row).toHaveTextContent('pro')
+  for (const gone of ['70%', 'Usage and settings', 'Turns', 'Not read yet']) expect(screen.queryByText(gone)).toBeNull()
+  expect(screen.queryByRole('meter')).toBeNull()
+  expect(within(row).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Disconnect Test account'])
   expect(screen.queryByRole('switch')).toBeNull()
 })
 
@@ -151,6 +140,17 @@ it('shows runtime routing eligibility and fallback evidence without starting a c
   expect(tauri.invoke.mock.calls).toEqual([['model_router_test_route', { sample: 'Summarize my file' }]])
 })
 
+it('links Models to the Usage page once a subscription is connected', async () => {
+  const settings = { ...routing(), accounts: [{ id: 'sub', family: 'openai', label: 'Work account', source: 'account', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [] }] }
+  const tauri = { invoke: vi.fn(async (command) => command === 'local_mode_provider_inventory' ? inventory : settings) }
+  const opened = vi.fn()
+  window.addEventListener('muniment:open-usage', opened)
+  render(Settings, { tauri, inventory, section: 'models', onclose: vi.fn() })
+  await fireEvent.click(await screen.findByRole('button', { name: 'See usage' }))
+  window.removeEventListener('muniment:open-usage', opened)
+  expect(opened).toHaveBeenCalledOnce()
+})
+
 it('shows accounts without waiting for model discovery', async () => {
   const settings = { ...routing(), accounts: [{ id: 'fast', family: 'openai', label: 'Instant account', source: 'account', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [] }] }
   const tauri = { invoke: vi.fn(command => command === 'local_mode_provider_inventory' ? new Promise(() => {}) : Promise.resolve(settings)) }
@@ -158,13 +158,13 @@ it('shows accounts without waiting for model discovery', async () => {
   expect(await screen.findByText('Instant account')).toBeInTheDocument()
 })
 
-it('draws subscriptions as cards with no edit control and keys as one-line cards with edit and disconnect', async () => {
+it('draws subscriptions as one-line cards with no edit control and keys with edit and disconnect', async () => {
   const base = { family: 'anthropic', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [], allowance_readable: true, requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 }
   const settings = { ...routing(), families: [{ id: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com/v1' }], subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }], accounts: [{ ...base, id: 'sub', label: 'eng', source: 'subscription' }, { ...base, id: 'key', label: 'Work', source: 'key' }] }
   const tauri = { invoke: vi.fn(async () => settings) }
   render(ModelAccounts, { tauri, family: 'anthropic', settings })
   const card = screen.getByText('eng').closest('li')
-  expect(card).toHaveClass('card')
+  expect(card).toHaveClass('key-card')
   expect(within(card).queryByRole('button', { name: /Edit|Rename/ })).toBeNull()
   expect(within(card).getByRole('button', { name: 'Disconnect eng' })).toBeInTheDocument()
   const key = screen.getByText('Work').closest('li')

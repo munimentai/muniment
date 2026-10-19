@@ -79,7 +79,7 @@
   import UsagePage from './usage/UsagePage.svelte'
   import LimitBanner from './usage/LimitBanner.svelte'
   import SidebarActions from './lib/SidebarActions.svelte'
-  import { composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
+  import { OPEN_USAGE_EVENT, composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
   import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
@@ -240,7 +240,7 @@
   async function refreshComposerLimits() {
     if (!tauri || !(auth.name === 'local' || auth.name === 'signed-in')) { composerLimits = []; return }
     const machine = remoteRuntime ? { id: remoteRuntime.id, name: remoteRuntime.name } : { id: LOCAL_RUNTIME_ID, name: 'This computer' }
-    try { composerLimits = (await readUsage(tauri, [machine], { range: '24h' }))?.limits ?? [] } catch (_) { composerLimits = [] }
+    try { composerLimits = (await readUsage(tauri, [machine], { range: '24h' }))?.pools ?? [] } catch (_) { composerLimits = [] }
   }
   onMount(() => {
     const poll = () => { if (!document.hidden) void refreshComposerLimits() }
@@ -2817,6 +2817,12 @@
     fullPage = page
   }
   function showNotifications() { if (fullPage !== 'notifications') toggleFullPage('notifications') }
+  // Settings links to Usage, the one page that shows it.
+  onMount(() => {
+    const showUsage = () => { if (fullPage !== 'usage') toggleFullPage('usage') }
+    window.addEventListener(OPEN_USAGE_EVENT, showUsage)
+    return () => window.removeEventListener(OPEN_USAGE_EVENT, showUsage)
+  })
   // The Notifications badge counts what needs the user on every machine, from
   // core's page, and reads again shortly after each run or approval event.
   let needsYou = $state(0)

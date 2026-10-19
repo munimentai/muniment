@@ -1,8 +1,9 @@
 <script>
-  // Usage takes the main panel: what each subscription window has left, and
-  // what the runs on every machine used, by provider, model, agent, project
-  // and machine. Core sums and pools; the page asks again when a filter
-  // changes, every minute while it shows, and on Refresh.
+  // Usage takes the main panel: what each account's subscription windows
+  // have left, and what the runs on every machine used, by provider, model,
+  // agent, project and machine. Core sums and reads; the page asks again when
+  // a filter changes and every minute while it shows. Refresh asks each
+  // account's upstream first.
   import { onMount } from 'svelte'
   import PanelPage from '../lib/ui/PanelPage.svelte'
   import Group from '../lib/ui/Group.svelte'
@@ -15,6 +16,7 @@
   import LimitCard from './LimitCard.svelte'
   import UsageChart from './UsageChart.svelte'
   import UsageBreakdown from './UsageBreakdown.svelte'
+  import { accountCache } from '../lib/account-cache.js'
   import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerLabel, providerOptions, readUsage, totalTiles, unmeteredLabel } from './usage.js'
 
   let { tauri, runtimeList = null, onconnect = null } = $props()
@@ -51,6 +53,12 @@
     }
   }
 
+  async function refreshNow() {
+    loading = true
+    try { await accountCache(tauri).refresh() } catch (_) {}
+    await refresh()
+  }
+
   $effect(() => { void range; void provider; void asked.map((entry) => entry.id).join(); void refresh() })
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
@@ -73,7 +81,7 @@
       <div class="controls">
         <SegmentedField label="Usage view" hideLabel value={view} options={USAGE_VIEWS} onchange={(value) => { view = value }} />
         {#if view !== 'limits'}<SegmentedField label="Range" hideLabel value={range} options={USAGE_RANGES} onchange={(value) => { range = value }} />{/if}
-        <Button icon="refresh-cw" disabled={loading} onclick={refresh} aria-label="Refresh usage">Refresh</Button>
+        <Button icon="refresh-cw" disabled={loading} onclick={refreshNow} aria-label="Refresh usage">Refresh</Button>
       </div>
     </div>
 
@@ -84,7 +92,7 @@
       <p class="note" role="status">Reading usage…</p>
     {:else if summary && view === 'limits'}
       {#if summary.limits.length}
-        <div class="limits">{#each summary.limits as limit (`${limit.provider}:${limit.kind}:${limit.scope}`)}<LimitCard {limit} {now} />{/each}</div>
+        <div class="limits">{#each summary.limits as limit (`${limit.provider}:${limit.account_id ?? ''}:${limit.kind}:${limit.scope}`)}<LimitCard {limit} {now} />{/each}</div>
       {:else}
         <div class="empty"><p>No subscription reports a limit yet.</p>{#if onconnect}<Button icon="plus" onclick={onconnect}>Connect account</Button>{/if}</div>
       {/if}

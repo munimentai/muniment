@@ -36,7 +36,7 @@
         {
           "id": "accounts",
           "title": "Accounts",
-          "body": "The Accounts tab groups connections by provider. Connect a supported subscription or API key. Name accounts so you can tell work and personal usage apart. Expand Usage and settings for account controls. A chat subscription does not automatically include API credit."
+          "body": "The Accounts tab groups connections by provider. Connect a supported subscription or API key. Name accounts so you can tell work and personal usage apart. See usage opens the Usage page with what each account has left. A chat subscription does not automatically include API credit."
         },
         {
           "id": "models",

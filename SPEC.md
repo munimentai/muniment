@@ -175,8 +175,8 @@ Beside it, a thinking level control lists only the levels the chip's model suppo
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
 **Settings → Models is one page.** Roles leads it with routing, assistance and their decision models,
-then the routing statements once a decision model is connected, then Connections. Full-width account rows show allowance, with usage
-in account details. The chip's picker lists every connected provider's
+then the routing statements once a decision model is connected, then Connections. Full-width account rows show the plan,
+routing state and Disconnect, and See usage opens the Usage page, the one place usage shows. The chip's picker lists every connected provider's
 current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. A local or custom server shows every model it serves, since the user installed each one. A row shows the name core's catalog or the server gives, else a provider id formatted, or a server's id as served. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns
@@ -221,14 +221,14 @@ what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
 Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
 `api.kimi.com/coding/v1/usages`, Antigravity at
 `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, and Devin
-at its seat service's `GetUserStatus`. xAI has no such route, and its card
-says what the router cannot read. A window is known by its length in
+at its seat service's `GetUserStatus`, and xAI at Grok Build's
+`cli-chat-proxy.grok.com/v1/billing` credits window, which leaves the share
+out while nothing is used, so a current period without one reads as unused. A window is known by its length in
 seconds, never by its slot, because a Pro plan's primary window is the weekly
-one. A weekly window with no 5-hour window says the plan reports none. The card shows what is left, not what is used, with the reset, the plan,
-and Codex's banked resets. The store in `muniment-router-quota.json` carries
-no token and no prompt. Allowances refresh when the settings page opens and
-every two minutes while it is visible, without overlapping probes. The card's
-foot shows the read time with a refresh icon on the left and a red Disconnect on the right. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
+one. A weekly window with no 5-hour window says the plan reports none. The store in `muniment-router-quota.json` is keyed by account, so a
+second account of one provider keeps its own windows, and carries
+no token and no prompt. An account's windows are read as soon as it connects and
+every two minutes while the app runs, without overlapping probes. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
 and Kimi subscriptions use Messages. Native streams preserve tool calls and
 usage. Other subscriptions remain ineligible until their transport exists.
 
@@ -241,8 +241,7 @@ seconds doubling to fifteen minutes and the next account takes the turn, three
 accounts at most. Every other status is the request, and it comes straight back
 without spending a second account. The ledger in `muniment-router-usage.json`
 counts turns, tokens and failures per account for thirty days, names the last
-refusal, and carries no prompt and no reply. Settings shows a summary per
-provider, the turns each account has in flight, and that thirty-day bar. A key never balances with its family's subscriptions. With its overflow switch on, it takes a turn only once every subscription is cooling or at its limit. Usage, at the sidebar's foot, is a full page from core's `usage.summary` on each machine, joined by core with each account's newest reading counted once: header filters for machine and provider, Limits, Tokens or Cost, and 24h, 7d, 30d or 90d. Limits shows one card per provider window with its accounts pooled as chips, the share left, a bar with the even-pace line, the pace and the reset, and lists local servers as No limit, keys as Billed by use and unreadable subscriptions. Tokens and Cost show processed, cached and uncached input, output and the cache hit rate, or the API estimate, a stacked bar per hour or day by provider, and a breakdown by model, agent, project and machine. Core sums each finished run's receipt, which carries Pi's per-message usage and the catalog's `cost_usd`. A run that fails or stops keeps no receipt, so its tokens are not counted. A machine that does not answer is named and left out. The composer shows no usage control, and a banner over its band names a spent window, or one under a tenth left, of the chip's provider with its reset.
+refusal, and carries no prompt and no reply. A key never balances with its family's subscriptions. With its overflow switch on, it takes a turn only once every subscription is cooling or at its limit. Usage, at the sidebar's foot, is a full page from core's `usage.summary` on each machine, joined by core with each account's newest reading counted once: header filters for machine and provider, Limits, Tokens or Cost, and 24h, 7d, 30d or 90d. Limits shows one card per account and window, named by the account and its plan, with the share left, a bar with the even-pace line, the pace and the reset, and lists local servers as No limit, keys as Billed by use, a subscription whose first read has not answered as Allowance pending, and unreadable subscriptions. Tokens and Cost show processed, cached and uncached input, output and the cache hit rate, or the API estimate, a stacked bar per hour or day by provider, and a breakdown by model, agent, project and machine. Core sums each finished run's receipt, which carries Pi's per-message usage and the catalog's `cost_usd`. A run that fails or stops keeps no receipt, so its tokens are not counted. A machine that does not answer is named and left out. The composer shows no usage control, and a banner over its band names a spent window, or one under a tenth left, of the chip's provider pool with its reset. A pool is spent only once every account in it is.
 
 **Every active model is in the running.** The options the classifier chooses
 between are the pool itself: each model an enabled account serves, keyed
