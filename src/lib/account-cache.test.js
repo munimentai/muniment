@@ -55,3 +55,23 @@ it('rejects malformed account reads and refreshes without replacing the last sna
   expect(cache.current.settings).toBe(saved)
   expect(cache.current.refreshError).toBeTruthy()
 })
+
+it('empties the snapshot for another machine and drops a read the last machine started', async () => {
+  let finish
+  const bridge = { invoke: vi.fn(() => new Promise(resolve => { finish = resolve })) }
+  const cache = accountCache(bridge)
+  cache.machine('local')
+  cache.set({ accounts: [{ id: 'here' }] })
+  const pending = cache.read()
+  await Promise.resolve()
+  cache.machine('box')
+  expect(cache.current.settings).toBeNull()
+  finish({ accounts: [{ id: 'here' }] })
+  await pending
+  expect(cache.current.settings).toBeNull()
+  const fresh = cache.read()
+  await Promise.resolve()
+  finish({ accounts: [{ id: 'there' }] })
+  await fresh
+  expect(cache.current.settings.accounts[0].id).toBe('there')
+})

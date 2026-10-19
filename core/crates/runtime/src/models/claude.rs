@@ -11,7 +11,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use muniment_core::chrono;
@@ -32,6 +32,9 @@ const URL_TIMEOUT: Duration = Duration::from_secs(20);
 const BROWSER_WAIT: Duration = Duration::from_secs(3);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 const USAGE_TIMEOUT: Duration = Duration::from_secs(45);
+/// How long a forwarded redirect waits for Claude Code to finish and for
+/// `claude auth status` to name the account.
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(90);
 const START_ERROR: &str = "The sign-in could not start. Try again.";
 const MISSING: &str =
     "Claude Code is not on this machine yet. Start a chat once so Muniment installs it, then sign in.";
@@ -396,6 +399,31 @@ struct Active {
     /// The loopback port Claude Code's own callback listens on.
     port: Option<u16>,
     prompt: String,
+    outcome: Arc<Outcome>,
+}
+
+/// How one login ended: the account recorded, or the reason it was not.
+#[derive(Default)]
+struct Outcome {
+    result: Mutex<Option<Result<(), String>>>,
+    ready: Condvar,
+}
+
+impl Outcome {
+    fn set(&self, result: Result<(), String>) {
+        *self.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+        self.ready.notify_all();
+    }
+
+    /// The result once the login ends, or none after `timeout`.
+    fn wait(&self, timeout: Duration) -> Option<Result<(), String>> {
+        let held = self.result.lock().unwrap_or_else(|e| e.into_inner());
+        let (held, _) = self
+            .ready
+            .wait_timeout_while(held, timeout, |result| result.is_none())
+            .unwrap_or_else(|e| e.into_inner());
+        held.clone()
+    }
 }
 
 impl ClaudeSignIns {
@@ -450,21 +478,31 @@ impl ClaudeSignIns {
     }
 
     /// Hands a redirect a client received on its own computer to Claude
-    /// Code's own listener on this one.
+    /// Code's own listener on this one, and answers once the login ends. It
+    /// succeeds only when `claude auth status` on this computer names the
+    /// signed-in account, so the client's page never says connected first.
     pub(super) fn deliver(&self, url: &str) -> Result<(), String> {
-        let port = self
+        let (port, outcome) = self
             .0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .and_then(|active| active.port)
+            .and_then(|active| Some((active.port?, Arc::clone(&active.outcome))))
             .ok_or("No sign-in is waiting for a browser redirect.")?;
         let redirect = callback::forwarded_redirect_on(url, port, CALLBACK_PATH)
             .ok_or("The redirect is not a sign-in callback with a code.")?;
         let target = redirect
             .strip_prefix(&format!("http://localhost:{port}"))
             .ok_or("The redirect is not a sign-in callback with a code.")?;
-        hand_on(port, target)
+        hand_on(port, target)?;
+        match outcome.wait(CONFIRM_TIMEOUT) {
+            Some(Ok(())) => Ok(()),
+            Some(Err(message)) if !message.is_empty() => Err(message),
+            Some(Err(_)) => Err("The sign-in was cancelled.".into()),
+            None => {
+                Err("Claude Code did not confirm the sign-in in time. Return to the app.".into())
+            }
+        }
     }
 }
 
@@ -671,6 +709,7 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
     let prompt = uuid::Uuid::new_v4().to_string();
     let stop = Arc::new(AtomicBool::new(false));
     let stdin = Arc::new(Mutex::new(child.stdin.take()));
+    let outcome = Arc::new(Outcome::default());
     *service
         .claude_sign_ins
         .0
@@ -681,6 +720,7 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
         stdin: Arc::clone(&stdin),
         port,
         prompt: prompt.clone(),
+        outcome: Arc::clone(&outcome),
     });
     emit(service, json!({ "stage": "start" }));
     match (&opened, &printed) {
@@ -721,15 +761,16 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
             };
             stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
             let cancelled = stop.load(Ordering::SeqCst);
-            let outcome = match exit {
+            let result = match exit {
                 Some(exit) if exit.success() => finish(&app.agent, &executable, &id),
                 Some(_) => Err(failure(&lines.lock().unwrap_or_else(|e| e.into_inner()))),
                 None if cancelled => Err(String::new()),
                 None => Err("The sign-in timed out. Start it again.".into()),
             };
-            cleanup(outcome.is_ok());
+            cleanup(result.is_ok());
             app.claude_sign_ins.finish(&id);
-            match outcome {
+            outcome.set(result.clone());
+            match result {
                 Ok(()) => {
                     emit(
                         &app,
@@ -856,14 +897,20 @@ mod tests {
     /// A stand-in `claude` at the bundled path. `auth login` names its
     /// URLs, then signs in when it reads `good` or once `mark` exists, which
     /// the browser's forwarded redirect creates. `auth status` and the
-    /// control protocol answer from that sign-in.
+    /// control protocol answer from that sign-in. With `signs_in` false the
+    /// login exits as a success but leaves no account signed in.
     #[cfg(unix)]
-    fn fake_claude(agent: &Path, port: u16, mark: &Path) {
+    fn fake_claude(agent: &Path, port: u16, mark: &Path, signs_in: bool) {
         use std::os::unix::fs::PermissionsExt;
         let path = claude_accounts::bundled_paths(agent).remove(0);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let version = "0.0.0";
         let mark = mark.display();
+        let sign_in = if signs_in {
+            r#"touch "$CLAUDE_CONFIG_DIR/.signed-in";"#
+        } else {
+            ":;"
+        };
         let script = format!(
             r#"#!/bin/sh
 case "$1 $2" in
@@ -878,7 +925,7 @@ case "$1 $2" in
     else
       read code; [ "$code" = good ] || {{ echo "Login failed: bad code"; exit 1; }}
     fi
-    touch "$CLAUDE_CONFIG_DIR/.signed-in"; echo "Login successful." ;;
+    {sign_in} echo "Login successful." ;;
   "auth status")
     if [ -f "$CLAUDE_CONFIG_DIR/.signed-in" ]; then echo '{{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.test","orgId":"o1","orgName":"Org","subscriptionType":"pro"}}'; else echo '{{"loggedIn":false}}'; exit 1; fi ;;
   "auth logout") rm -f "$CLAUDE_CONFIG_DIR/.signed-in" ;;
@@ -928,7 +975,7 @@ esac
         let profile = std::env::temp_dir().join(format!("claude-paste-{}", uuid::Uuid::new_v4()));
         let service = service(&profile);
         let agent = service.agent.clone();
-        fake_claude(&agent, 0, &profile.join("unused"));
+        fake_claude(&agent, 0, &profile.join("unused"), true);
         // A Claude Code connection from before, which the account replaces.
         let record = agent.join(muniment_core::models::pi_models::RECORD_FILE);
         std::fs::write(&record, r#"{"claudeCode":true}"#).unwrap();
@@ -984,7 +1031,7 @@ esac
         let profile = std::env::temp_dir().join(format!("claude-wrong-{}", uuid::Uuid::new_v4()));
         let service = service(&profile);
         let agent = service.agent.clone();
-        fake_claude(&agent, 0, &profile.join("unused"));
+        fake_claude(&agent, 0, &profile.join("unused"), true);
         let events = service.subscribe();
         start(&service).unwrap();
         next(&events, "prompt");
@@ -1009,40 +1056,46 @@ esac
         let _ = std::fs::remove_dir_all(&profile);
     }
 
+    /// A listener that stands in for Claude Code's own callback. It
+    /// creates `mark` when the redirect arrives, so the stand-in login ends,
+    /// and answers the request line it read.
+    #[cfg(unix)]
+    fn stand_in_listener(mark: &Path) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mark = mark.to_path_buf();
+        let seen = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 512];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let line = String::from_utf8_lossy(&request)
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            std::fs::write(&mark, "").unwrap();
+            stream
+                .write_all(b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            line
+        });
+        (port, seen)
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_forwarded_redirect_reaches_claude_codes_own_listener() {
         let profile = std::env::temp_dir().join(format!("claude-forward-{}", uuid::Uuid::new_v4()));
         let service = service(&profile);
         let agent = service.agent.clone();
-        // This listener stands in for Claude Code's own callback.
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
         let mark = profile.join("redirected");
-        fake_claude(&agent, port, &mark);
-        let seen = std::thread::spawn({
-            let mark = mark.clone();
-            move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 512];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let read = stream.read(&mut buffer).unwrap();
-                    assert!(read > 0);
-                    request.extend_from_slice(&buffer[..read]);
-                }
-                let line = String::from_utf8_lossy(&request)
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .to_owned();
-                std::fs::write(&mark, "").unwrap();
-                stream
-                    .write_all(b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n")
-                    .unwrap();
-                line
-            }
-        });
+        let (port, seen) = stand_in_listener(&mark);
+        fake_claude(&agent, port, &mark, true);
         let events = service.subscribe();
         let started = start(&service).unwrap();
         assert_eq!(
@@ -1071,9 +1124,97 @@ esac
             seen.join().unwrap(),
             "GET /callback?code=abc&state=s HTTP/1.1"
         );
-        next(&events, "done");
+        // The redirect answered only after the account was recorded.
         assert_eq!(claude_accounts::load(&agent).accounts.len(), 1);
+        next(&events, "done");
         let _ = std::fs::remove_dir_all(&profile);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_login_that_leaves_no_signed_in_account_fails_and_the_redirect_says_so() {
+        let profile =
+            std::env::temp_dir().join(format!("claude-unsigned-{}", uuid::Uuid::new_v4()));
+        let service = service(&profile);
+        let agent = service.agent.clone();
+        let mark = profile.join("redirected");
+        let (port, seen) = stand_in_listener(&mark);
+        // Claude Code exits as a success, but `auth status` names no account.
+        fake_claude(&agent, port, &mark, false);
+        let events = service.subscribe();
+        start(&service).unwrap();
+        next(&events, "event");
+        let refused = service
+            .claude_sign_ins
+            .deliver(&format!(
+                "http://localhost:{port}/callback?code=abc&state=s"
+            ))
+            .unwrap_err();
+        seen.join().unwrap();
+        assert_eq!(
+            refused,
+            "Claude Code finished without a signed-in account. Try again."
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let failed = loop {
+            let event = events.recv_timeout(deadline - Instant::now()).unwrap();
+            assert_ne!(event["stage"], "done", "{event}");
+            if event["stage"] == "failed" {
+                break event;
+            }
+        };
+        assert_eq!(failed["message"], refused);
+        assert!(claude_accounts::load(&agent).accounts.is_empty());
+        wait_for("no folder", || {
+            std::fs::read_dir(agent.join(claude_accounts::FOLDERS))
+                .map(|entries| entries.count() == 0)
+                .unwrap_or(true)
+        });
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+
+    /// A paired machine's client holds the redirect on its own computer and
+    /// sends it through `models.request`. Only the machine whose Claude Code
+    /// waits takes it, and the account lands there alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_sign_in_lands_on_the_machine_that_started_it() {
+        use muniment_core::attach::{ModelAction, ModelRequest};
+        let request = |service: &Arc<ModelService>, action, data| {
+            service.request(ModelRequest { action, data }, None)
+        };
+        let root = std::env::temp_dir().join(format!("claude-route-{}", uuid::Uuid::new_v4()));
+        let here = service(&root.join("here"));
+        let there = service(&root.join("there"));
+        let mark = root.join("redirected");
+        std::fs::create_dir_all(&root).unwrap();
+        let (port, seen) = stand_in_listener(&mark);
+        fake_claude(&here.agent, port, &mark, true);
+        fake_claude(&there.agent, port, &mark, true);
+        let events = there.subscribe();
+        let started = request(
+            &there,
+            ModelAction::LoginStart,
+            json!({"provider": PROVIDER}),
+        )
+        .unwrap();
+        assert_eq!(started["callback"]["port"], port);
+        next(&events, "event");
+        let redirect = json!({"url": format!("http://localhost:{port}/callback?code=abc&state=s")});
+        // The machine that runs no login refuses the redirect and keeps nothing.
+        assert!(request(&here, ModelAction::LoginCallback, redirect.clone()).is_err());
+        request(&there, ModelAction::LoginCallback, redirect).unwrap();
+        seen.join().unwrap();
+        let done = next(&events, "done");
+        let held = claude_accounts::load(&there.agent);
+        assert_eq!(held.accounts.len(), 1);
+        assert_eq!(held.accounts[0].id, done["account"]);
+        assert!(claude_accounts::folder(&there.agent, &held.accounts[0].id)
+            .join(".signed-in")
+            .exists());
+        assert!(claude_accounts::load(&here.agent).accounts.is_empty());
+        assert!(!here.agent.join(claude_accounts::FOLDERS).exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

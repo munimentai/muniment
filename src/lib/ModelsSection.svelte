@@ -32,7 +32,9 @@
   // `connect` opens a connect view at once: a catalog id opens that provider's
   // sign-in, and an empty string opens the provider catalog.
   // `focus` names the part a link opens: `roles` or `connections`.
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, focus = null, connect = null } = $props()
+  // `runtime` names the machine the page shows, `local` for this computer.
+  // Its sign-ins start there, and its rows never show another machine's.
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, focus = null, connect = null, runtime = 'local' } = $props()
 
   // svelte-ignore state_referenced_locally
   let inventory = $state(initial)
@@ -45,6 +47,8 @@
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
   const accounts = accountCache(tauri)
+  // svelte-ignore state_referenced_locally
+  accounts.machine(runtime)
   let router = $state(accounts.current.settings)
   let routerError = $state('')
   // Where Back from a provider's view returns: the list or the connector.
@@ -67,6 +71,17 @@
   let unlisten = null
 
   const provider = $derived(catalogProvider(providerId))
+  // The subscriptions the provider's family already holds on this machine. Its
+  // connect page lists each with Disconnect, and its sign-in adds another.
+  const signedIn = $derived((router?.accounts ?? []).filter((account) => account.source !== 'key' && account.family === providerFamily(providerId)))
+  async function removeAccount(account) {
+    try {
+      onRouterSettings(await tauri.invoke('model_router_remove_account', { id: account.id }))
+      status = `${account.label} is disconnected.`
+    } catch (error) {
+      formError = String(error?.message ?? error)
+    }
+  }
   const catalog = $derived(searchProviders(providerQuery))
   const shownProviders = $derived.by(() => {
     if (!inventory) return []
@@ -94,7 +109,7 @@
   // Who holds each shared sign-in in the fleet, or null when core lists none.
   let fleet = $state(null)
   const elsewhere = $derived(otherSignIns(fleet))
-  async function loadFleet() { fleet = await readFleetAccounts(tauri) }
+  async function loadFleet() { fleet = await readFleetAccounts(tauri, runtime) }
   // A requested move lands once the holder hands the sign-in over.
   function onHeld(status) {
     void loadFleet()
@@ -324,7 +339,7 @@
     stopListening()
     unlisten = listen('local-mode-login', ({ payload }) => onLoginEvent(payload))
     try {
-      await tauri.invoke('local_mode_account_login_start', { provider: account.provider })
+      await tauri.invoke('local_mode_account_login_start', { provider: account.provider, runtime })
     } catch (error) {
       login = { ...login, stage: 'failed', message: String(error?.message ?? error) }
       stopListening()
@@ -410,6 +425,7 @@
     
     <Group heading="Connections" label="Connected providers" plain>
     {#snippet actions()}{#if router?.accounts?.some((account) => account.source !== 'key')}<Button icon="chart-column" onclick={openUsagePage}>See usage</Button>{/if}{/snippet}
+    {#if !inventory && !loadError}<p class="support empty" role="status">Reading connections…</p>{/if}
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if shownProviders.length || poolOnlyFamilies.length}
       <!-- Each provider is a heading over its own cards. A pooled subscription is a card and a pooled
@@ -431,7 +447,7 @@
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
                 <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
-                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
+                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
                 {#if entry.source === 'claude-code'}
                   <!-- A Claude Code connection from before signs in again as an account, whose row replaces it. -->
                   <button type="button" class="quiet sign-in-again" onclick={signInAgain}>Sign in again</button>
@@ -441,7 +457,7 @@
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
             {/if}
-            {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
+            {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
           </section>
         {/each}
         {#each poolOnlyFamilies as family (family)}
@@ -449,7 +465,7 @@
             <Row title={familyName(family)}>
               {#snippet icon()}<ProviderLogo color provider={familyProvider(family)} size={16} />{/snippet}
             </Row>
-            <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />
+            <ModelAccounts {tauri} {listen} {runtime} settings={router} {family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />
           </section>
         {/each}
     {/if}
@@ -546,8 +562,18 @@
       <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
     {:else if method === 'account'}
       <p class="support">Sign in with your {methodLabel(provider, 'account')}. {provider.id === 'anthropic' ? 'The browser opens, and Claude Code keeps the token.' : 'The browser opens, and the token stays on this device.'}</p>
+      {#if signedIn.length}
+        <Group label={`${provider.name} accounts`}>
+          {#each signedIn as account (account.id)}
+            <Row title={account.label} meta={account.plan || 'Subscription'}>
+              {#snippet icon()}<LucideIcon name="credit-card" size={16} />{/snippet}
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => removeAccount(account)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            </Row>
+          {/each}
+        </Group>
+      {/if}
       {#if !login}
-        <button type="button" data-variant="primary" disabled={pending} onclick={startLogin}>Sign in</button>
+        <button type="button" data-variant="primary" disabled={pending} onclick={startLogin}>{signedIn.length ? 'Add another account' : 'Sign in'}</button>
       {:else}
         <div class="login" aria-live="polite">
           {#if login.stage === 'failed'}<FailureNote failure={login.message} detail={login.detail} />{:else}<p class="support">{login.message}</p>{/if}

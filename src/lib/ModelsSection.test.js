@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import ModelsSection from './ModelsSection.svelte'
+import { accountCache } from './account-cache.js'
 afterEach(cleanup)
 
 const inventory = {
@@ -78,8 +79,64 @@ it('shows each Anthropic account Claude Code signed in to as its own card, and a
   expect(within(group).queryByTestId('provider-connection')).not.toBeInTheDocument()
   await fireEvent.click(within(group).getByRole('button', { name: 'Disconnect home@example.test' }))
   expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' })
-  await fireEvent.click(within(group).getByRole('button', { name: 'Subscription: Claude Pro or Max' }))
-  expect(tauri.invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'anthropic' })
+  await fireEvent.click(within(group).getByRole('button', { name: 'Add another Claude Pro or Max account' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'anthropic', runtime: 'local' })
+})
+
+const claudeAccount = (id, email) => ({ id, family: 'anthropic', label: email, email, source: 'account', pi_provider: 'claude-bridge', plan: 'max', enabled: true, servable: true, weight: 1, models: [], days: [], windows: [], allowance_readable: true, requests: 0, input_tokens: 0, output_tokens: 0, active: 0, errors: 0 })
+
+it('lists the Anthropic accounts on its connect page, each with Disconnect, and adds another on the machine the page shows', async () => {
+  const router = {
+    families: [{ id: 'anthropic', name: 'Anthropic' }],
+    subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }],
+    accounts: [claudeAccount('a1', 'work@example.test')],
+  }
+  const claude = { providers: [{ id: 'claude-bridge', name: 'Anthropic', source: 'account', base_url: null, models: [] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return claude
+    if (command === 'model_router_settings') return router
+    if (command === 'model_router_remove_account') return { ...router, accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: claude, connect: 'anthropic', runtime: 'box' } })
+  expect(await screen.findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
+  expect(await screen.findByText('work@example.test')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Add another account' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'box' })
+  await fireEvent.click(screen.getByRole('button', { name: 'Disconnect work@example.test' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a1' })
+  await waitFor(() => expect(screen.queryByText('work@example.test')).toBeNull())
+})
+
+it('shows no other machine\'s rows while the picked machine answers', async () => {
+  const tauri = { invoke: vi.fn((command) => command === 'local_mode_provider_inventory' || command === 'model_router_settings' ? new Promise(() => {}) : Promise.resolve(null)) }
+  // This computer's accounts are in the snapshot when another machine is picked.
+  const cache = accountCache(tauri)
+  cache.machine('local')
+  cache.set({ accounts: [claudeAccount('a1', 'here@example.test')], subscriptions: [], families: [] })
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: null, runtime: 'box' } })
+  expect(screen.getByText('Reading connections…')).toBeInTheDocument()
+  expect(screen.getByText('Reading routing settings…')).toBeInTheDocument()
+  expect(screen.queryByText('here@example.test')).toBeNull()
+})
+
+it('names a sign-in this computer shares as shared from this computer on another machine\'s page', async () => {
+  const MAC = '018f0000-0000-7000-8000-0000000000bb'
+  const shared = { id: `shared:swarm:${MAC}:work`, label: 'Work', family: 'openai', source: 'subscription', plan: 'Pro', enabled: true, servable: true, weight: 1, allowance_readable: true, windows: [], models: [], days: [], requests: 0, active: 0, errors: 0, input_tokens: 0, output_tokens: 0 }
+  const router = { accounts: [shared], subscriptions: [], families: [{ id: 'openai', name: 'OpenAI' }] }
+  const record = { name: 'router:work', kind: 'subscription', holder: MAC, holder_name: 'Laptop', shared: true, usable_here: true }
+  const tauri = { invoke: vi.fn(async (command, payload) => {
+    if (command === 'local_mode_provider_inventory') return { providers: [], hidden: [], shown: [] }
+    if (command === 'model_router_settings') return router
+    if (command === 'agent_request' && payload.operation === 'fleet.credentials') {
+      return { accounts: [{ ...record, this_machine: payload.runtime === 'local' }] }
+    }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: null, runtime: 'box' } })
+  expect(await screen.findByText('Shared from this computer')).toBeInTheDocument()
+  expect(screen.queryByText('Signed in here')).toBeNull()
+  expect(tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'fleet.credentials', body: {} })
 })
 
 it('shows a Claude Code connection from before as one row that signs in again as an account', async () => {
@@ -95,6 +152,6 @@ it('shows a Claude Code connection from before as one row that signs in again as
   expect(row).toHaveTextContent('Claude Code')
   expect(within(row).queryByRole('button', { name: 'Edit Anthropic' })).not.toBeInTheDocument()
   await fireEvent.click(within(row).getByRole('button', { name: 'Sign in again' }))
-  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic' })
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'local' })
   expect(await screen.findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
 })

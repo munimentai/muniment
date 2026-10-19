@@ -575,9 +575,13 @@ impl AttachCompanionState {
 
     /// Opens connections of their own to the active paired runtime.
     pub(crate) fn remote_connector(&self) -> Option<crate::runtimes::Connector> {
-        let id = self.remote_runtime_id()?;
+        self.paired_connector(&self.remote_runtime_id()?)
+    }
+
+    /// Opens connections of their own to the paired runtime `id`, active or not.
+    pub(crate) fn paired_connector(&self, id: &str) -> Option<crate::runtimes::Connector> {
         lock(&self.remotes)
-            .get(&id)
+            .get(id)
             .map(crate::runtimes::RemoteSupervisor::connector)
     }
 

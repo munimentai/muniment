@@ -39,7 +39,9 @@
 //! `prompt` step, which `login_answer` answers with the code. A client on
 //! another computer holds that port on its own loopback while the sign-in
 //! runs and sends each redirect it receives as `login_callback`, which takes
-//! `{"url"}` and answers null.
+//! `{"url"}` and answers null. For an Anthropic account it answers once
+//! Claude Code has finished and `claude auth status` on the runtime's computer
+//! names the signed-in account, and refuses with the reason otherwise.
 //!
 //! A `models.request` body is `{"action": <action>, "data": <object>}`. The
 //! runtime answers `{"result": <value>}`. An action that changes a setting, a
@@ -53,7 +55,8 @@ use serde_json::Value;
 /// How long a client waits for an action that answers from local files.
 pub const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a client waits for an action that lists models, probes a model,
-/// asks an upstream, scans local ports or installs Pi before it answers.
+/// asks an upstream, scans local ports, installs Pi or waits for a sign-in to
+/// finish before it answers.
 pub const MODELS_LONG_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// One operation of the runtime's model service.
@@ -219,7 +222,8 @@ impl ModelAction {
             | Self::RouterUpdateClassifier
             | Self::ProviderScan
             | Self::ConnectServer
-            | Self::LoginStart => MODELS_LONG_REQUEST_TIMEOUT,
+            | Self::LoginStart
+            | Self::LoginCallback => MODELS_LONG_REQUEST_TIMEOUT,
             _ => MODELS_REQUEST_TIMEOUT,
         }
     }

@@ -18,9 +18,21 @@ const CONNECT_WAIT: Duration = Duration::from_secs(3);
 /// The bound on connecting and on each frame of the handshake.
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Runs one model service action in the runtime and answers its result.
+/// Runs one model service action in the selected runtime and answers its result.
 pub(crate) async fn request<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
+    action: ModelAction,
+    data: Value,
+) -> Result<Value, String> {
+    let runtime = app.state::<AttachCompanionState>().remote_runtime_id();
+    request_on(app, runtime, action, data).await
+}
+
+/// Runs one model service action in the paired runtime `runtime`, or in this
+/// computer's runtime for `None`, whichever runtime is selected.
+pub(crate) async fn request_on<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    runtime: Option<String>,
     action: ModelAction,
     data: Value,
 ) -> Result<Value, String> {
@@ -37,7 +49,8 @@ pub(crate) async fn request<R: tauri::Runtime>(
     }
     let connect_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut client = connect_selected(&connect_app).map_err(auth::desktop_client_error)?;
+        let mut client = connect_to(&connect_app, runtime.as_deref())
+            .map_err(auth::desktop_client_error)?;
         client
             .models_request(action, data)
             .map_err(|error| auth::desktop_request_error(error, client.last_request_error()))
@@ -46,24 +59,20 @@ pub(crate) async fn request<R: tauri::Runtime>(
     .map_err(|_| auth::background_service_error())?
 }
 
-/// Whether the selected runtime is a paired one rather than this computer's.
-pub(crate) fn remote_selected<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
-    app.state::<AttachCompanionState>()
-        .remote_connector()
-        .is_some()
-}
-
-/// Opens a connection of its own to the selected runtime: the selected
-/// paired runtime, else this computer's runtime.
-fn connect_selected<R: tauri::Runtime>(
+/// Opens a connection of its own to the paired runtime `runtime`, else to
+/// this computer's runtime.
+fn connect_to<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
+    runtime: Option<&str>,
 ) -> Result<DesktopClient, ClientError> {
-    match app.state::<AttachCompanionState>().remote_connector() {
-        Some(remote) => remote
-            .connect()
-            .map_err(|_| ClientError::DesktopUnavailable),
-        None => connect(),
-    }
+    let Some(id) = runtime else {
+        return connect();
+    };
+    app.state::<AttachCompanionState>()
+        .paired_connector(id)
+        .ok_or(ClientError::DesktopUnavailable)?
+        .connect()
+        .map_err(|_| ClientError::DesktopUnavailable)
 }
 
 /// Opens a desktop client connection of its own to this computer's runtime.

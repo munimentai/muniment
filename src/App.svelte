@@ -165,12 +165,17 @@
 
   const tauri = window.__TAURI__?.core
   onMount(() => { void migrateRecall(tauri); return tauri ? accountCache(tauri).start() : undefined })
+  // The account snapshot follows the machine requests go to.
+  $effect(() => { if (tauri) accountCache(tauri).machine(remoteRuntime?.id ?? LOCAL_RUNTIME_ID) })
   onMount(() => startFleetPreferences(tauri, (...args) => window.__TAURI__?.event?.listen(...args)))
   let auth = $state(bootState)
   let localEntryError = $state('')
   let accountStatus = $state('')
   // The connected providers and their models, as Settings → Models and the picker read them.
   let inventory = $state(null)
+  // The machine the inventory was read from, so Settings never seeds one
+  // machine's page with another machine's rows.
+  let inventoryMachine = $state(null)
   // The router leaves the models the picker hides out of the running, so a
   // routed turn answers only from a model the picker offers.
   $effect(() => {
@@ -2792,9 +2797,11 @@
   // none for a moment, and Settings shows a real disconnect itself.
   async function refreshInventory({ keep = false } = {}) {
     const version = ++inventoryRequestVersion
+    const machine = remoteRuntime?.id ?? LOCAL_RUNTIME_ID
     try {
       await loadInventory((command) => tauri.invoke(command), (next, final) => {
         inventory = keptInventory(inventory, next, final, { keep })
+        inventoryMachine = machine
         if (accountStatus === inventoryError) accountStatus = ''
         inventoryError = ''
       }, { alive: () => version === inventoryRequestVersion && !inventoryClosed, awaiting: awaitingFrom(inventory) })
@@ -4203,7 +4210,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} {inventory} oninventory={(next) => { inventory = next; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} inventory={inventoryMachine === (remoteRuntime?.id ?? LOCAL_RUNTIME_ID) ? inventory : null} oninventory={(next) => { inventory = next; inventoryMachine = remoteRuntime?.id ?? LOCAL_RUNTIME_ID; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a

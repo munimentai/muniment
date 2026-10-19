@@ -2,23 +2,36 @@
 // that names the machine each sign-in is signed in on. Core lists each
 // account under the member that holds it, keyed `pi:<provider>` or
 // `router:<id>`, with `holder`, `holder_name`, `this_machine`, `usable_here`
-// and `shared`. A router account another member shares lands here as
+// and `shared`, where `this_machine` and `usable_here` speak for the machine
+// that answers. A router account another member shares lands here as
 // `shared:swarm:<holder>:<id>`.
 import { agentRequest } from '../agents/agent-runtime.js'
+import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
 const SIGN_IN_KINDS = new Set(['oauth', 'subscription'])
 const RECEIVED = /^shared:swarm:([^:]+):(.+)$/
 const HARNESS_SIGN_IN = /^pi:(.+)$/
 
-// Every account in the fleet, or null when this runtime lists none.
-export async function readFleetAccounts(tauri) {
+async function listAccounts(tauri, runtime) {
   try {
-    const answer = await agentRequest(tauri, 'local', 'fleet.credentials', {})
+    const answer = await agentRequest(tauri, runtime, 'fleet.credentials', {})
     // An older runtime lists no accounts and shows no holder.
     return Array.isArray(answer?.accounts) ? answer.accounts : null
   } catch (_) {
     return null
   }
+}
+
+// Every account in the fleet as the machine `runtime` sees it, or null when
+// it lists none. Another machine's list marks each account this computer
+// holds with `this_computer`, so its row never reads as that machine's own.
+export async function readFleetAccounts(tauri, runtime = LOCAL_RUNTIME_ID) {
+  const accounts = await listAccounts(tauri, runtime)
+  if (!accounts || runtime === LOCAL_RUNTIME_ID) return accounts
+  const here = new Set((await listAccounts(tauri, LOCAL_RUNTIME_ID) ?? [])
+    .filter((account) => account.this_machine)
+    .map((account) => account.holder))
+  return accounts.map((account) => here.has(account.holder) ? { ...account, this_computer: true } : account)
 }
 
 // A sign-in that matters to the fleet: one another member holds, or one
@@ -46,8 +59,10 @@ export function piHold(accounts, provider) {
   return signIn(accounts, named, (entry) => entry.this_machine) ?? signIn(accounts, named, (entry) => entry.usable_here)
 }
 
-// The one state line of a sign-in's holder.
+// The one state line of a sign-in's holder. One this computer holds, on
+// another machine's page, reads as this computer's.
 export function holdLine(account, requested = false) {
+  if (account.this_computer) return account.shared ? 'Shared from this computer' : 'Signed in on this computer'
   if (account.this_machine) return 'Signed in here'
   if (requested) return 'Moving the sign-in here.'
   return `Signed in on ${account.holder_name || 'another machine'}`
