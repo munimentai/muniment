@@ -204,6 +204,100 @@ pub struct AccountWindow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at_ms: Option<i64>,
     pub observed_at_ms: i64,
+    /// Who the account is upstream, the same on every machine that holds it:
+    /// the provider's account id, else the email. Empty when neither is
+    /// known, and the account's own id stands in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub identity: String,
+    /// Another machine shared the account here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
+}
+
+/// A window's provider, account identity, kind order and scope.
+type WindowKey = (String, String, u8, String);
+
+impl AccountWindow {
+    /// The key one account's window has on every machine.
+    fn key(&self) -> WindowKey {
+        let identity = if self.identity.is_empty() {
+            // A shared copy's id is the sender's id behind the shared prefix.
+            self.account_id
+                .strip_prefix(config::SHARED_ACCOUNT_PREFIX)
+                .and_then(|rest| rest.split_once(':'))
+                .map_or(self.account_id.as_str(), |(_, id)| id)
+                .to_owned()
+        } else {
+            self.identity.clone()
+        };
+        (
+            self.provider.clone(),
+            identity,
+            kind_order(self.kind),
+            self.scope.clone(),
+        )
+    }
+}
+
+/// One reading per account and window, however many machines or shared
+/// copies hold it: the freshest reading, under the name and id of a copy
+/// from the machine where the account signed in when one is present.
+pub fn distinct(windows: Vec<AccountWindow>) -> Vec<AccountWindow> {
+    let mut held: BTreeMap<WindowKey, (AccountWindow, Option<AccountWindow>)> = BTreeMap::new();
+    for window in windows {
+        let own = (!window.shared).then(|| window.clone());
+        match held.entry(window.key()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((window, own));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (freshest, signed_in) = entry.get_mut();
+                if window.observed_at_ms > freshest.observed_at_ms {
+                    *freshest = window;
+                }
+                if signed_in.is_none() {
+                    *signed_in = own;
+                }
+            }
+        }
+    }
+    held.into_values()
+        .map(|(mut reading, signed_in)| {
+            if let Some(signed_in) = signed_in {
+                reading.account_id = signed_in.account_id;
+                reading.label = signed_in.label;
+                reading.plan = reading.plan.or(signed_in.plan);
+                reading.shared = false;
+            }
+            reading
+        })
+        .collect()
+}
+
+/// The identity of a subscription sign-in, as
+/// [`config::Credential::same_subscription`] matches two of them.
+fn subscription_identity(credential: &config::Credential) -> String {
+    let config::Credential::Subscription {
+        provider,
+        account_id,
+        email,
+        ..
+    } = credential
+    else {
+        return String::new();
+    };
+    let nonempty = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    match (nonempty(account_id), nonempty(email)) {
+        (Some(id), _) => format!("{provider}:account:{id}"),
+        (None, Some(email)) => format!("{provider}:email:{}", email.to_lowercase()),
+        (None, None) => String::new(),
+    }
 }
 
 /// One subscription window of one account, or of a provider's pool.
@@ -526,10 +620,12 @@ pub fn summarize(
             .amount
             .record(run);
     }
-    let windows: Vec<AccountWindow> = windows
-        .into_iter()
-        .filter(|window| wanted(&window.provider))
-        .collect();
+    let windows = distinct(
+        windows
+            .into_iter()
+            .filter(|window| wanted(&window.provider))
+            .collect(),
+    );
     Summary {
         range: Some(request.range),
         start_ms,
@@ -758,6 +854,8 @@ pub fn account_windows(agent: &Path) -> (Vec<AccountWindow>, Vec<Unmetered>) {
                     limit_reached: window.limit_reached,
                     resets_at_ms: window.resets_at_ms,
                     observed_at_ms: probe.observed_at_ms,
+                    identity: subscription_identity(&account.credential),
+                    shared: account.id.starts_with(config::SHARED_ACCOUNT_PREFIX),
                 });
             }
         }
@@ -776,6 +874,19 @@ fn claude_windows(
 ) {
     for account in crate::models::claude_accounts::load(agent).accounts {
         let label = account.label();
+        // One Claude account is one email in one organization.
+        let identity = account
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|email| !email.is_empty())
+            .map_or_else(String::new, |email| {
+                format!(
+                    "anthropic:email:{}:{}",
+                    email.to_lowercase(),
+                    account.org_id.as_deref().unwrap_or_default()
+                )
+            });
         let Some(usage) = account
             .usage
             .as_ref()
@@ -805,13 +916,25 @@ fn claude_windows(
                 limit_reached: window.limit_reached,
                 resets_at_ms: window.resets_at_ms,
                 observed_at_ms: usage.observed_at_ms,
+                identity: identity.clone(),
+                shared: false,
             });
         }
     }
 }
 
-/// The providers in Pi's `models.json` served from this machine.
+/// The providers in Pi's `models.json` served from this machine, each under
+/// the name the Models page shows: the name the user gave it, else the
+/// registry's name, else its id.
 fn local_servers(agent: &Path) -> Vec<Unmetered> {
+    let record = crate::models::pi_models::read_record(agent).unwrap_or_default();
+    let given = |id: &str| {
+        record
+            .get("names")
+            .and_then(|names| names.get(id))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
     let Ok(bytes) = std::fs::read(agent.join("models.json")) else {
         return Vec::new();
     };
@@ -840,11 +963,15 @@ fn local_servers(agent: &Path) -> Vec<Unmetered> {
         })
         .map(|(id, provider)| Unmetered {
             provider: id.clone(),
-            label: provider
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or(id)
-                .to_owned(),
+            label: given(id)
+                .or_else(|| {
+                    provider
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .or_else(|| crate::models::registry::display_name(id).map(str::to_owned))
+                .unwrap_or_else(|| id.clone()),
             reason: "local".into(),
         })
         .collect()
@@ -946,7 +1073,7 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
     let mut machines_rows = Vec::new();
     let mut providers = BTreeSet::new();
     let mut unmetered = BTreeSet::new();
-    let mut windows: BTreeMap<(String, String, u8, String), AccountWindow> = BTreeMap::new();
+    let mut windows: Vec<AccountWindow> = Vec::new();
     let mut machines = Vec::new();
     for answer in answers {
         let summary = match answer.summary {
@@ -993,23 +1120,10 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
         add_rows(&mut projects, summary.breakdown.project);
         providers.extend(summary.providers);
         unmetered.extend(summary.unmetered);
-        for window in summary.windows {
-            let key = (
-                window.provider.clone(),
-                window.account_id.clone(),
-                kind_order(window.kind),
-                window.scope.clone(),
-            );
-            match windows.get(&key) {
-                Some(held) if held.observed_at_ms >= window.observed_at_ms => {}
-                _ => {
-                    windows.insert(key, window);
-                }
-            }
-        }
+        windows.extend(summary.windows);
     }
     let partial = machines.iter().any(|machine| machine.state != "ok");
-    let windows: Vec<AccountWindow> = windows.into_values().collect();
+    let windows = distinct(windows);
     joined.totals = Totals::of(&total);
     joined.series = series
         .into_iter()
@@ -1185,6 +1299,8 @@ mod tests {
             limit_reached: remaining <= 0.0,
             resets_at_ms: Some(NOW + resets_in),
             observed_at_ms: NOW - 1000,
+            identity: String::new(),
+            shared: false,
         }
     }
 
@@ -1294,6 +1410,112 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_copy_of_an_account_joins_its_own_card_on_every_machine() {
+        let copy =
+            |account: &str, identity: &str, kind, remaining: f64, observed: i64| AccountWindow {
+                kind,
+                label: format!("{identity}@example.test"),
+                identity: format!("openai-codex:account:{identity}"),
+                observed_at_ms: observed,
+                ..window(account, remaining, 6 * 24 * HOUR)
+            };
+        let shared = |window: AccountWindow| AccountWindow {
+            account_id: format!("shared:device-a:{}", window.account_id),
+            label: format!("{} from Laptop", window.label),
+            shared: true,
+            ..window
+        };
+        let week = quota::WindowKind::Weekly;
+        let five = quota::WindowKind::FiveHour;
+        // The machine where the account signed in, with a second account.
+        let signed_in = vec![
+            copy("acct-1", "user", week, 100.0, NOW - 5000),
+            copy("acct-1", "user", five, 90.0, NOW - 5000),
+            copy("acct-2", "other", week, 30.0, NOW - 5000),
+        ];
+        // The machine the account was shared to reads it later.
+        let shared_to = vec![
+            shared(copy("acct-1", "user", week, 70.0, NOW - 1000)),
+            shared(copy("acct-1", "user", five, 60.0, NOW - 1000)),
+        ];
+        let answer = |id: &str, windows: Vec<AccountWindow>| MachineAnswer {
+            id: id.into(),
+            name: id.into(),
+            summary: Ok(Summary {
+                windows,
+                ..Summary::default()
+            }),
+        };
+        let joined = merge(
+            vec![
+                answer("laptop", signed_in),
+                answer("box", shared_to.clone()),
+            ],
+            NOW,
+        );
+        let cards: Vec<(&str, &str, quota::WindowKind, f64)> = joined
+            .summary
+            .limits
+            .iter()
+            .map(|card| {
+                (
+                    card.account_id.as_str(),
+                    card.label.as_str(),
+                    card.kind,
+                    card.remaining_percent,
+                )
+            })
+            .collect();
+        // One card per account and window, named as where it signed in, with
+        // the freshest reading. The other account keeps its own card.
+        assert_eq!(
+            cards,
+            vec![
+                ("acct-1", "user@example.test", five, 60.0),
+                ("acct-1", "user@example.test", week, 70.0),
+                ("acct-2", "other@example.test", week, 30.0),
+            ]
+        );
+        assert_eq!(joined.summary.windows.len(), 3);
+        // One machine that holds both its own sign-in and a shared copy of
+        // the same account shows it once.
+        let mut both = shared_to;
+        both.push(copy("acct-1", "user", week, 100.0, NOW - 5000));
+        let one = summarize(
+            &[],
+            &Owners::default(),
+            both,
+            Vec::new(),
+            &request(Range::Week),
+            NOW,
+        );
+        let weekly: Vec<&Limit> = one.limits.iter().filter(|card| card.kind == week).collect();
+        assert_eq!(weekly.len(), 1);
+        assert_eq!(weekly[0].label, "user@example.test");
+        // A copy without an identity, from a machine that names none, joins
+        // by the sender's id behind the shared prefix.
+        let bare = |window: AccountWindow| AccountWindow {
+            identity: String::new(),
+            ..window
+        };
+        let joined = merge(
+            vec![
+                answer(
+                    "laptop",
+                    vec![bare(copy("acct-1", "user", week, 100.0, NOW - 5000))],
+                ),
+                answer(
+                    "box",
+                    vec![bare(shared(copy("acct-1", "user", week, 70.0, NOW)))],
+                ),
+            ],
+            NOW,
+        );
+        assert_eq!(joined.summary.limits.len(), 1);
+        assert_eq!(joined.summary.limits[0].account_id, "acct-1");
+    }
+
+    #[test]
     fn each_signed_in_account_reads_its_own_windows_and_a_new_one_is_pending() {
         use crate::model_router::config::{Account, Credential, RouterConfig};
         let agent = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
@@ -1343,6 +1565,8 @@ mod tests {
         store.accounts.insert("second".into(), weekly(60.0));
         quota::save(&agent, &store).unwrap();
         let (windows, unmetered) = account_windows(&agent);
+        assert_eq!(windows[0].identity, "openai-codex:account:first");
+        assert!(!windows[0].shared);
         let cards = limits(&windows, NOW);
         assert_eq!(
             cards
@@ -1355,6 +1579,35 @@ mod tests {
         assert_eq!(
             (unmetered[0].provider.as_str(), unmetered[0].reason.as_str()),
             ("xai", "pending")
+        );
+        let _ = std::fs::remove_dir_all(&agent);
+    }
+
+    #[test]
+    fn a_local_server_shows_the_name_the_models_page_shows() {
+        let agent = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-local-mlx":{"baseUrl":"http://127.0.0.1:8000/v1"},"ollama":{"baseUrl":"http://localhost:11434/v1"},"custom-unnamed":{"baseUrl":"http://localhost:9000/v1"},"custom-remote":{"baseUrl":"http://models.example.test/v1"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent.join(crate::models::pi_models::RECORD_FILE),
+            r#"{"names":{"custom-local-mlx":"Local MLX"}}"#,
+        )
+        .unwrap();
+        let (_, unmetered) = account_windows(&agent);
+        assert_eq!(
+            unmetered
+                .iter()
+                .map(|entry| (entry.provider.as_str(), entry.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("custom-local-mlx", "Local MLX"),
+                ("custom-unnamed", "custom-unnamed"),
+                ("ollama", "Ollama"),
+            ]
         );
         let _ = std::fs::remove_dir_all(&agent);
     }

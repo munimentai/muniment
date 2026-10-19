@@ -504,7 +504,10 @@ fn from_words(source: &Source, answers: &[QuestionAnswer], catalog: &Catalog, tz
 
 /// The routines a draft proposes: the model's schedule first, then any
 /// schedule in the user's own words or answers that names another time.
-/// Each comes from [`agent_extract::propose`] and starts enabled.
+/// In a creation chat the model's schedule stands alone: the model applies
+/// each later message, and a change the trigger reader cannot read, such as
+/// "make it 9:00", must replace the earlier time, not add to it. Each
+/// routine comes from [`agent_extract::propose`] and starts enabled.
 fn routines(
     scheduled: Option<&str>,
     source: &Source,
@@ -531,8 +534,9 @@ fn routines(
     }
     match source {
         Source::Description(text) => read(text),
-        // The newest message that names a time is the chat's schedule.
-        Source::Chat { messages, .. } => {
+        // Without the model's schedule, the newest message that names a
+        // time is the chat's schedule.
+        Source::Chat { messages, .. } if scheduled.is_none() => {
             if let Some(text) = messages
                 .iter()
                 .rev()
@@ -541,7 +545,7 @@ fn routines(
                 read(text);
             }
         }
-        Source::Thread(_) => {}
+        Source::Chat { .. } | Source::Thread(_) => {}
     }
     for answer in answers {
         read(&answer.answer);
@@ -1288,6 +1292,73 @@ mod tests {
         )
         .is_err());
         let _ = std::fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn a_refined_schedule_replaces_the_earlier_one_in_the_saved_agent() {
+        let drafts: &'static Drafts = Box::leak(Box::default());
+        let root =
+            std::env::temp_dir().join(format!("muniment-agent-chat-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        let chat = uuid::Uuid::new_v4().to_string();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        // The model applies the change; the trigger reader cannot read the
+        // change's words alone.
+        let model: Model = Arc::new(move |_: &str, _: &str| {
+            let time = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                "8am"
+            } else {
+                "9am"
+            };
+            Ok(Answer {
+                text: format!(
+                    r#"{{"name":"News brief","job_title":"Briefer","instructions":"Summarize the news.","schedule":"every day at {time}","routine_prompt":"Summarize the news.","question":null}}"#
+                ),
+                via: "router",
+            })
+        });
+        let send = |message: &str| {
+            let started = operation(
+                drafts,
+                json!({"chat_id": chat, "message": message}),
+                Some(profile.clone()),
+                no_thread,
+                catalog,
+                TZ.into(),
+                Some(model.clone()),
+            )
+            .unwrap();
+            finished(drafts, started)
+        };
+        let first = send("Every day at 08:00, summarize the news");
+        assert_eq!(first["draft"]["routines"].as_array().unwrap().len(), 1);
+        let refined = send("Make it 09:00 instead");
+        let draft = &refined["draft"];
+        let agent = crate::agents::save(
+            &profile,
+            crate::agents::Agent {
+                name: draft["name"].as_str().unwrap().into(),
+                instructions: draft["instructions"].as_str().unwrap().into(),
+                routines: serde_json::from_value(draft["routines"].clone()).unwrap(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let saved = crate::agents::get(&profile, &agent.id).unwrap();
+        let enabled: Vec<&Routine> = saved
+            .routines
+            .iter()
+            .filter(|routine| routine.enabled && !routine.proposed)
+            .collect();
+        assert_eq!(enabled.len(), 1, "{:?}", saved.routines);
+        let Trigger::Cron(cron) = &enabled[0].trigger else {
+            panic!("cron")
+        };
+        assert_eq!(cron.expr, "0 9 * * *");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

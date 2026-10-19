@@ -14,6 +14,11 @@ describe('the run line', () => {
     expect([sourced.model, sourced.mode]).toEqual(['Anthropic · Claude Sonnet 4.5 (from project Homelab)', 'Bypass permissions (default)'])
   })
 
+  it('names a subscription bridge run by the provider name its receipt carries', () => {
+    const parts = runLineParts({ receipt: { model: 'claude-bridge/claude-sonnet-5', provider_name: 'Anthropic', tokens: { total: 1200 } } })
+    expect([parts.model, parts.cost]).toEqual(['Anthropic · Claude Sonnet 5', null])
+  })
+
   it('leaves out what the run did not record, and a live run shows its elapsed time and the mode in force', () => {
     expect(runLineParts({ receipt: null }, { machine: 'This computer', elapsed: '3s', liveMode: 'Ask before changes' }))
       .toEqual({ machine: 'This computer', model: null, mode: 'Ask before changes', time: '3s', tokens: null, cost: null })

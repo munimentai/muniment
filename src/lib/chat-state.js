@@ -1,4 +1,4 @@
-import { modelLabel, modelReason } from './model-label.js'
+import { modelLabel, modelReason, receiptNames } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
 
@@ -52,7 +52,7 @@ export { modelLabel } from './model-label.js'
 // `names` maps provider ids to the names the user gave them.
 export function receiptSummary(receipt = {}, names = null) {
   const route = recorded(receipt?.route) ? receipt.route : null
-  const model = modelLabel(receipt?.model, names)
+  const model = modelLabel(receipt?.model, receiptNames(receipt, names))
   const time = recorded(receipt?.time) ? receiptTime(receipt.time) : null
   return { route, model, time }
 }
@@ -78,7 +78,7 @@ export function receiptLabel(receipt = {}, names = null) {
 
 export function receiptUsageColumns(receipt = {}, names = null) {
   if (!receipt?.classifiers?.length) return []
-  const columns = [{ model: modelLabel(receipt.model, names) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
+  const columns = [{ model: modelLabel(receipt.model, receiptNames(receipt, names)) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
   for (const classifier of receipt.classifiers) {
     columns.push({ model: modelLabel(classifier.model) ?? 'Classifier', cost: Number.isFinite(classifier.cost) ? `$${classifier.cost.toFixed(6)} est.` : 'Unavailable', tokens: classifier.tokens })
   }

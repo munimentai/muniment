@@ -82,6 +82,10 @@ pub struct Receipt {
     pub route: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The name the provider of `model` shows on the Models page, such as
+    /// `Anthropic` for the Claude subscription bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<String>,
     /// The catalog's estimate in US dollars that `cost` shows rounded.
@@ -371,17 +375,23 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
                         })
                         .flatten();
                     let tokens = usage.and_then(TokenUsage::from_frame);
+                    // Cached input uses the standard input rate.
+                    let estimate = |family: &str, model: &str| {
+                        let price = crate::model_router::model_catalog::entry(family, model)?;
+                        let tokens = tokens.as_ref()?;
+                        Some(((tokens.input as f64 + tokens.cache_read as f64
+                            + tokens.cache_write as f64) * price.price
+                            + tokens.output as f64 * price.output) / 1_000_000.0)
+                    };
                     // The router alias has no Pi catalog price. Estimate each turn
                     // against its selected model, never the alias or the final model
-                    // of a multi-model run. Cached input uses the standard input rate.
+                    // of a multi-model run.
                     let cost = if provider == crate::model_router::config::ROUTER_PROVIDER {
-                        routed.as_ref().and_then(|(family, model)| {
-                            let price = crate::model_router::model_catalog::entry(family, model)?;
-                            let tokens = tokens.as_ref()?;
-                            Some(((tokens.input as f64 + tokens.cache_read as f64
-                                + tokens.cache_write as f64) * price.price
-                                + tokens.output as f64 * price.output) / 1_000_000.0)
-                        })
+                        routed.as_ref().and_then(|(family, model)| estimate(family, model))
+                    } else if provider == crate::models::registry::CLAUDE_BRIDGE_PROVIDER {
+                        // The bridge prices nothing, so its zero is no estimate. A
+                        // subscription run shows its family's API price, or none.
+                        estimate(crate::models::registry::catalog_id(provider), model)
                     } else {
                         usage.and_then(|usage| usage.pointer("/cost/total"))
                             .and_then(Value::as_f64)
@@ -1722,6 +1732,22 @@ mod tests {
                 panic!("expected model usage");
             };
             assert_eq!(cost, expected);
+        }
+    }
+
+    #[test]
+    fn a_bridge_run_shows_the_api_price_estimate_not_its_zero() {
+        for (model, expected) in [("claude-sonnet-5", Some(0.018)), ("private-model", None)] {
+            let frame = json!({"type":"message_end","message":{
+                "role":"assistant","provider":"claude-bridge","model":model,
+                "usage":{"input":1000,"output":1000,"cost":{"total":0}}
+            }});
+            let PiChatEvent::ModelReported { provider, cost, .. } = parse_frame(&frame).unwrap()
+            else {
+                panic!("expected model usage");
+            };
+            assert_eq!(provider, "claude-bridge");
+            assert_eq!(cost, expected, "{model}");
         }
     }
 

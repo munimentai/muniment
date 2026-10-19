@@ -1,5 +1,5 @@
 import { actionDuration, actionGroups } from './action-feedback.js'
-import { modelLabel } from '../lib/model-label.js'
+import { modelLabel, receiptNames } from '../lib/model-label.js'
 import { receiptTime } from '../lib/execution-time.js'
 
 const recorded = (value) => value !== undefined && value !== null && value !== ''
@@ -45,7 +45,7 @@ export function runLineParts(run, { machine = null, modes = [], elapsed = null, 
   const sourced = (value, source) => value && source ? `${value} (${source})` : value
   return {
     machine,
-    model: sourced(recorded(receipt?.model) ? modelLabel(receipt.model) : null, sources.model),
+    model: sourced(recorded(receipt?.model) ? modelLabel(receipt.model, receiptNames(receipt)) : null, sources.model),
     mode: sourced(mode?.title ?? liveMode, sources.mode),
     time,
     tokens: tokens === null ? null : `${compactTokens(tokens)} tokens`,
