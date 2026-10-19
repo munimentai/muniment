@@ -156,6 +156,57 @@ fn permissions(member: &TestMember) -> Value {
     json!(crate::permission_gate::settings::load(&member.profile))
 }
 
+/// The settings scope keeps on each machine exactly the permission settings
+/// the sync adapter leaves out: a change to any other one moves its slots.
+#[test]
+fn the_settings_scope_names_each_permission_setting_sync_leaves_home() {
+    use crate::permission_gate::settings::{self, PermissionSettings};
+    let member = TestMember::new("Studio");
+    let records = member.records();
+    let context = Context {
+        profile: &member.profile,
+        records: &records,
+        origin: "studio".into(),
+        name: "Studio".into(),
+    };
+    // Defaults that name no bypass, so turning bypass off moves nothing else.
+    let base = json!(PermissionSettings {
+        default_thread_mode: crate::permission_gate::PermissionMode::Manual,
+        default_agent_mode: crate::permission_gate::PermissionMode::Manual,
+        ..PermissionSettings::default()
+    });
+    let store = |value: &Value| {
+        settings::save(
+            &member.profile,
+            serde_json::from_value(value.clone()).unwrap(),
+        )
+        .unwrap();
+    };
+    store(&base);
+    let before = permissions::Permissions.read(&context).unwrap();
+    let mut home = BTreeSet::new();
+    for (field, value) in base.as_object().unwrap() {
+        let changed = match value {
+            Value::Bool(on) => json!(!on),
+            Value::Number(number) => json!(number.as_u64().unwrap() + 60),
+            Value::String(_) => json!("plan"),
+            Value::Array(_) => json!([request("/scope")]),
+            other => panic!("classify the permission setting {field}: {other}"),
+        };
+        let mut settings = base.clone();
+        settings[field] = changed;
+        store(&settings);
+        if permissions::Permissions.read(&context).unwrap() == before {
+            home.insert(field.as_str());
+        }
+        store(&base);
+    }
+    let part = crate::settings_scope::part("permissions").unwrap();
+    assert_eq!(part.classes(), [permissions::CLASS]);
+    let named: BTreeSet<&str> = part.machine_local.iter().map(|local| local.field).collect();
+    assert_eq!(home, named);
+}
+
 #[test]
 fn permission_rules_keep_a_concurrent_add_and_bypass_stays_local() {
     let members = fleet();

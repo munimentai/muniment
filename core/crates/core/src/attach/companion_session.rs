@@ -468,6 +468,7 @@ fn companion_scope(operation: Operation) -> Option<Option<&'static str>> {
         | Operation::PermissionModes
         | Operation::PermissionSettings
         | Operation::PermissionSettingsSave
+        | Operation::SettingsScope
         | Operation::ThreadPermissionMode
         | Operation::ThreadPermissionModeSet
         | Operation::ThreadPlan

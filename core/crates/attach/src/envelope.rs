@@ -578,6 +578,10 @@ pub enum Operation {
     /// Changes the runtime's permission settings.
     #[serde(rename = "permission.settings_save")]
     PermissionSettingsSave,
+    /// Reads where each Settings part keeps its values: shared across the
+    /// fleet, on each machine or on this computer, with the lines it shows.
+    #[serde(rename = "settings.scope")]
+    SettingsScope,
     /// Reads the permission mode a thread runs in and where it comes from.
     #[serde(rename = "thread.permission_mode")]
     ThreadPermissionMode,
@@ -793,6 +797,7 @@ impl Operation {
             Self::PermissionModes => "permission.modes",
             Self::PermissionSettings => "permission.settings",
             Self::PermissionSettingsSave => "permission.settings_save",
+            Self::SettingsScope => "settings.scope",
             Self::ThreadPermissionMode => "thread.permission_mode",
             Self::ThreadPermissionModeSet => "thread.permission_mode_set",
             Self::ThreadPlan => "thread.plan",
@@ -877,6 +882,7 @@ impl Operation {
                 | Self::PermissionModes
                 | Self::PermissionSettings
                 | Self::PermissionSettingsSave
+                | Self::SettingsScope
                 | Self::ThreadPermissionMode
                 | Self::ThreadPermissionModeSet
                 | Self::ThreadPlan

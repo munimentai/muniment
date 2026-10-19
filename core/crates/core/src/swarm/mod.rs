@@ -166,6 +166,11 @@ pub trait SwarmHost: Send + Sync {
     fn settings_applied(&self, _class: &str) {}
 }
 
+/// The record classes that carry the extension inventory: MCP servers, and
+/// skills and plugins.
+#[cfg(test)]
+pub(crate) const EXTENSION_CLASSES: [&str; 2] = [extensions::MCP_CLASS, extensions::PACKAGE_CLASS];
+
 /// How long a member counts as online after its last heartbeat.
 pub const ONLINE_SECONDS: i64 = 60;
 /// How long notices and acknowledgements stay in the gossip.

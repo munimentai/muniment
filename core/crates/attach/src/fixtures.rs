@@ -728,6 +728,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("run-revert", Operation::RunRevert),
         ("thread-rewind-preview", Operation::ThreadRewindPreview),
         ("thread-rewind", Operation::ThreadRewind),
+        ("settings-scope", Operation::SettingsScope),
     ];
     let request_of = |wanted: &str| -> io::Result<Id> {
         let index = operations
@@ -1097,6 +1098,7 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
         ("usage-summary", fixture_usage()),
         ("notifications-list", fixture_notifications()),
         ("agent-draft", fixture_agent_draft()),
+        ("settings-scope", fixture_settings_scope()),
     ];
     for (name, body) in swarm_responses {
         insert(
@@ -1857,6 +1859,7 @@ fn request_body(operation: Operation) -> serde_json::Value {
             json!({"range": "7d", "provider": "anthropic", "utc_offset_minutes": -240})
         }
         Operation::NotificationsList => json!({"limit": 50}),
+        Operation::SettingsScope => json!({}),
         Operation::AgentApprovalAnswer => json!({
             "approval_id": FIXTURE_APPROVAL_ID,
             "answer": {"type": "confirm", "value": true}
@@ -2041,8 +2044,7 @@ fn fixture_permission_settings(timeout: u64) -> serde_json::Value {
             "type": "tool",
             "name": "mcp__leads__search_leads",
             "input": {"stage": "new"}
-        }}],
-        "machine_local": ["bypass_enabled"]
+        }}]
     })
 }
 
@@ -2156,6 +2158,75 @@ fn fixture_usage() -> serde_json::Value {
 }
 
 /// One machine's `notifications.list`: a run waiting for an answer.
+/// Core's `settings.scope`. Core's contract test holds it to core's answer.
+fn fixture_settings_scope() -> serde_json::Value {
+    let part = |id: &str,
+                page: &str,
+                scope: &str,
+                classes: serde_json::Value,
+                machine_local: serde_json::Value,
+                notes: [&str; 2]| {
+        json!({
+            "id": id,
+            "page": page,
+            "scope": scope,
+            "classes": classes,
+            "machine_local": machine_local,
+            "notes": {"all": notes[0], "one": notes[1]}
+        })
+    };
+    let local = |field: &str, scope: &str, note: &str| json!([{"field": field, "scope": scope, "note": note}]);
+    let tools = "What you add reaches every machine. On or off changes only this computer.";
+    let enabled = local("enabled", "this_computer", "");
+    let machine = "This part changes only {machine}. Each machine keeps its own.";
+    let this_computer = "This part changes only this computer. Each machine keeps its own.";
+    let belongs = "These settings belong to this computer. {machine} keeps its own.";
+    json!({"parts": [
+        part(
+            "models",
+            "models",
+            "fleet",
+            json!(["route", "decision-model"]),
+            local("sign_ins", "machine", ""),
+            [
+                "Sign-ins stay on the machine that holds them. Machines can share them with the others.",
+                "",
+            ],
+        ),
+        part("mcp", "tools", "fleet", json!(["mcp"]), enabled.clone(), [tools, tools]),
+        part("skill", "tools", "fleet", json!(["extension"]), enabled.clone(), [tools, tools]),
+        part("plugin", "tools", "fleet", json!(["extension"]), enabled, [tools, tools]),
+        part(
+            "search",
+            "tools",
+            "fleet",
+            json!(["search"]),
+            local("keys", "machine", ""),
+            ["", ""],
+        ),
+        part(
+            "permissions",
+            "permissions",
+            "fleet",
+            json!(["permission"]),
+            local(
+                "bypass_enabled",
+                "machine",
+                "Each machine keeps its own. Pick one machine to change it.",
+            ),
+            ["", ""],
+        ),
+        part("profile", "account", "fleet", json!(["memory"]), json!([]), ["", ""]),
+        part("memory", "data", "fleet", json!(["memory"]), json!([]), ["", ""]),
+        part("context", "data", "machine", json!([]), json!([]), [machine, ""]),
+        part("retention", "data", "fleet", json!(["retention"]), json!([]), ["", ""]),
+        part("storage", "data", "this_computer", json!([]), json!([]), [this_computer, belongs]),
+        part("companies", "data", "this_computer", json!([]), json!([]), [this_computer, belongs]),
+        part("appearance", "general", "fleet", json!(["preference"]), json!([]), ["", ""]),
+        part("notifications", "general", "fleet", json!(["preference"]), json!([]), ["", ""]),
+    ]})
+}
+
 fn fixture_notifications() -> serde_json::Value {
     json!({
         "runs": [{
@@ -3093,6 +3164,7 @@ mod tests {
             Operation::FleetOps,
             Operation::UsageSummary,
             Operation::NotificationsList,
+            Operation::SettingsScope,
         ];
         for operation in operations {
             let name = operation.as_str().replace(['.', '_'], "-");
@@ -3211,12 +3283,13 @@ mod tests {
             "response-fleet-op-cancel.json",
             "request-fleet-ops.json",
             "response-fleet-ops.json",
+            "response-settings-scope.json",
         ] {
             assert!(fixtures.contains_key(name));
         }
         assert_eq!(
             fixtures.len(),
-            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4 + 2 + 8,
+            157 + 14 + 14 + 3 + 1 + 4 + 8 + 16 + 4 + 4 + 7 + 7 + 4 + 4 + 6 + 4 + 2 + 8 + 2,
             "every canonical fixture must be inventoried"
         );
     }
