@@ -109,6 +109,7 @@
   <input
     bind:this={input}
     bind:value={text}
+    data-focus-frame
     aria-label="First message"
     aria-describedby={error ? 'launcher-error' : undefined}
     aria-invalid={!!error}

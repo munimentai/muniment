@@ -541,7 +541,8 @@
    them. Vibrant styles also color selection and the composer's focus edge
    with the accent. The defaults above are Moss vibrant, so a root without a
    theme, or with a vibrant one, keeps the accent, and every other set
-   returns selection to the hover fill and ink. */
+   returns selection to the hover fill and ink. The focus ring is the accent
+   in every set. */
 :root, [data-swatch] {
   --selected: var(--accent-soft);
   --on-selected: var(--accent);
@@ -555,7 +556,7 @@
   --on-selected: var(--ink);
   --selected-edge: var(--ink);
   --focus-edge: var(--muted);
-  --focus-ring: var(--ink);
+  --focus-ring: var(--accent);
 }
 
 /* Starter tints: each starter card on an empty screen draws its icon in one

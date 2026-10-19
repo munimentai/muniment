@@ -40,7 +40,7 @@ themselves still load whole: one `chat_thread_open` per 100 turns.
 and the sidebar head, then walks the window through hover, focus, a typed and a
 cleared draft, Settings, a streamed reply and its end. A control that moves by
 more than half a pixel fails the check. `test/probe/focus.mjs` tabs through the
-window in four themes and fails when a focused control shows no 2px ring.
+window in four themes and fails when a focused control shows no 1px ring.
 
 ## Nightly timing
 

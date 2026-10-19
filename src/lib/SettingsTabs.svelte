@@ -23,7 +23,7 @@
   button { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: var(--radius-pill); padding: 6px 12px; background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; min-height: 30px; }
   button[aria-selected=true] { background: var(--signal-soft); color: var(--signal); }
   button:hover { background: var(--faint); }
-  button:focus-visible { border-color: var(--ink); background: var(--faint); }
+  button:focus-visible { border-color: var(--focus-ring); background: var(--faint); }
   .tab-icon { display: inline-flex; flex: none; color: var(--muted); }
   span { font-size: var(--text-12); font-variant-numeric: tabular-nums; }
 </style>

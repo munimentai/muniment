@@ -3625,7 +3625,7 @@
             <!-- One search over every page and part. The platform's find shortcut focuses it. -->
             <div class="settings-search">
               <LucideIcon name="search" size={14} />
-              <input id="settings-search" type="search" placeholder="Search settings" aria-label="Search settings" aria-keyshortcuts={isMacPlatform ? 'Meta+F' : 'Control+F'} autocomplete="off" spellcheck="false" bind:value={settingsQuery}>
+              <input id="settings-search" type="search" data-focus-frame placeholder="Search settings" aria-label="Search settings" aria-keyshortcuts={isMacPlatform ? 'Meta+F' : 'Control+F'} autocomplete="off" spellcheck="false" bind:value={settingsQuery}>
             </div>
             <nav class="side-scroll" aria-label="Settings sections" use:panelScroll>
               {#each settingsNav(settingsQuery, { remote: !!remoteRuntime }) as [id, label, icon, parts] (id)}
