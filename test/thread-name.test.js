@@ -12,6 +12,8 @@ it('requests a short name separately and saves only the validated result', async
   await nameFirstThread({ model: { id: 'model' }, ui: { editor }, modelRegistry: { getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }) } }, complete)
   expect(complete.mock.calls[0][1].messages[0].content).toBe('Help me fix the report')
   expect(complete.mock.calls[0][2].maxTokens).toBe(256)
+  // A one-off request, so a session-bound provider answers it apart.
+  expect(complete.mock.calls[0][2].cacheRetention).toBe('none')
   expect(complete.mock.calls[0][2].headers).toBeUndefined()
   expect(JSON.parse(editor.mock.calls[1][1])).toEqual({ action: 'save', title: 'Report repair' })
 })
