@@ -427,6 +427,7 @@ impl ApplicationMemoryRuntime {
                         goal: plan.goal,
                         output: plan.output,
                         result_id,
+                        turns: Vec::new(),
                     },
                 )?;
                 Ok(serde_json::json!({"saved":true,"creation":plan}))
@@ -480,6 +481,7 @@ impl ApplicationMemoryRuntime {
                             goal: format!("Create {}", agent.name),
                             output: format!("Saved agent: {}", agent.name),
                             result_id: None,
+                            turns: Vec::new(),
                         },
                     );
                     if plan.kind == "agent" {

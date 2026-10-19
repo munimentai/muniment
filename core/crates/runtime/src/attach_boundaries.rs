@@ -2092,6 +2092,7 @@ impl RuntimeAttachBoundaries {
         muniment_core::agent_draft::operation(
             muniment_core::agent_draft::Drafts::shared(),
             body,
+            Some(profile.clone()),
             |thread_id| {
                 let mut storage = self
                     .storage

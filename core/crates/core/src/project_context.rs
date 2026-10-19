@@ -215,6 +215,7 @@ mod tests {
                 goal: "Build".into(),
                 output: "HTML".into(),
                 result_id: None,
+                turns: Vec::new(),
             },
         )
         .unwrap();
