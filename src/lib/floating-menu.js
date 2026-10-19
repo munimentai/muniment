@@ -2,10 +2,15 @@ import { Window, getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { listen } from '@tauri-apps/api/event'
 import { currentZoom } from './display-state.js'
+import { followPointer } from './menu-pointer.js'
+
+// Whether a pointer press opened the menu, so the popup marks focus as this window does.
+export const pointerLeads = () => document.documentElement.hasAttribute('data-pointer')
 
 // Keep action handlers in the main window; render their menu above native webviews.
 export function floatingMenu(node) {
-  if (!window.__TAURI_INTERNALS__) return {}
+  const pointer = followPointer(node)
+  if (!window.__TAURI_INTERNALS__) return pointer
   const id = crypto.randomUUID()
   let popup, disposed = false, floating = false
   const stops = []
@@ -37,7 +42,7 @@ export function floatingMenu(node) {
       node.dataset.floatingMenu = 'true'
       node.style.opacity = '0'
       node.style.pointerEvents = 'none'
-      await popup.emit('action-menu-open', { id, label: node.getAttribute('aria-label'), items })
+      await popup.emit('action-menu-open', { id, label: node.getAttribute('aria-label'), items, pointer: pointerLeads() })
     } catch { restore() }
   }
   function restore() { floating = false; delete node.dataset.floatingMenu; node.style.removeProperty('opacity'); node.style.removeProperty('pointer-events') }
@@ -54,5 +59,5 @@ export function floatingMenu(node) {
     retain(await listen('action-menu-closed', ({ payload }) => { if (payload === id && !disposed) { restore(); dismiss() } }))
     if (!disposed) await open()
   })().catch(() => restore())
-  return { destroy() { disposed = true; observer.disconnect(); stops.forEach(off => off()); if (floating) void popup?.hide(); restore() } }
+  return { destroy() { pointer.destroy(); disposed = true; observer.disconnect(); stops.forEach(off => off()); if (floating) void popup?.hide(); restore() } }
 }

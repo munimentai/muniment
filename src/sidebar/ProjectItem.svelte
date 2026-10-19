@@ -97,5 +97,5 @@
   .project-menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 160px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
   .project-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
   .project-menu button:disabled { opacity: .55; cursor: default; }
-  .project-menu button:hover:not(:disabled), .project-menu button:focus-visible { background: var(--faint); }
+  .project-menu button:hover:not(:disabled) { background: var(--faint); }
 </style>

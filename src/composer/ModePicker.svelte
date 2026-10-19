@@ -6,6 +6,7 @@
   import { onMount, tick } from 'svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { modeIcon } from '../agents/permission-modes.js'
+  import { followPointer } from '../lib/menu-pointer.js'
 
   // `source` names where the thread's mode comes from, such as `default`.
   let { modes, current, source = '', onchoose, onclose } = $props()
@@ -39,7 +40,7 @@
 
 <svelte:window onkeydown={windowKeydown} />
 
-<div data-panel="mode-picker" data-panel-variant="overlay" data-composer-panel class="mode-picker" role="menu" tabindex="-1" aria-labelledby="mode-picker-heading" bind:this={menu} onkeydown={menuKeydown}>
+<div data-panel="mode-picker" data-panel-variant="overlay" data-composer-panel class="mode-picker" role="menu" tabindex="-1" aria-labelledby="mode-picker-heading" bind:this={menu} use:followPointer onkeydown={menuKeydown}>
   <h3 id="mode-picker-heading" class="heading">Modes</h3>
   {#each modes as mode (mode.id)}
     {@const line = mode.available === false && mode.reason ? mode.reason : mode.description}
