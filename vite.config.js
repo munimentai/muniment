@@ -32,8 +32,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./test/isolated-home.setup.js', './test/model-registry.setup.js'],
-    // The core tree runs its own node:test suites.
-    exclude: [...configDefaults.exclude, 'core/**'],
+    // The core tree runs its own node:test suites, and vitest.browser.config.js
+    // runs the browser tests.
+    exclude: [...configDefaults.exclude, 'core/**', '**/*.browser.test.js'],
     // Lazy component compilation and process fixtures share the CI worker budget.
     testTimeout: 30_000,
   },
