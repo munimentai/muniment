@@ -810,8 +810,18 @@ fn claude_windows(
     }
 }
 
-/// The providers in Pi's `models.json` served from this machine.
+/// The providers in Pi's `models.json` served from this machine, each under
+/// the name the Models page shows: the name the user gave it, else the
+/// registry's name, else its id.
 fn local_servers(agent: &Path) -> Vec<Unmetered> {
+    let record = crate::models::pi_models::read_record(agent).unwrap_or_default();
+    let given = |id: &str| {
+        record
+            .get("names")
+            .and_then(|names| names.get(id))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
     let Ok(bytes) = std::fs::read(agent.join("models.json")) else {
         return Vec::new();
     };
@@ -840,11 +850,15 @@ fn local_servers(agent: &Path) -> Vec<Unmetered> {
         })
         .map(|(id, provider)| Unmetered {
             provider: id.clone(),
-            label: provider
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or(id)
-                .to_owned(),
+            label: given(id)
+                .or_else(|| {
+                    provider
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .or_else(|| crate::models::registry::display_name(id).map(str::to_owned))
+                .unwrap_or_else(|| id.clone()),
             reason: "local".into(),
         })
         .collect()
@@ -1355,6 +1369,35 @@ mod tests {
         assert_eq!(
             (unmetered[0].provider.as_str(), unmetered[0].reason.as_str()),
             ("xai", "pending")
+        );
+        let _ = std::fs::remove_dir_all(&agent);
+    }
+
+    #[test]
+    fn a_local_server_shows_the_name_the_models_page_shows() {
+        let agent = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-local-mlx":{"baseUrl":"http://127.0.0.1:8000/v1"},"ollama":{"baseUrl":"http://localhost:11434/v1"},"custom-unnamed":{"baseUrl":"http://localhost:9000/v1"},"custom-remote":{"baseUrl":"http://models.example.test/v1"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent.join(crate::models::pi_models::RECORD_FILE),
+            r#"{"names":{"custom-local-mlx":"Local MLX"}}"#,
+        )
+        .unwrap();
+        let (_, unmetered) = account_windows(&agent);
+        assert_eq!(
+            unmetered
+                .iter()
+                .map(|entry| (entry.provider.as_str(), entry.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("custom-local-mlx", "Local MLX"),
+                ("custom-unnamed", "custom-unnamed"),
+                ("ollama", "Ollama"),
+            ]
         );
         let _ = std::fs::remove_dir_all(&agent);
     }
