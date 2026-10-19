@@ -320,6 +320,8 @@ pub fn run() {
             home::home_status,
             home::home_confirm,
             home::home_folder_access,
+            home::home_folder_state,
+            home::home_folder_settings,
             home::home_confirm_import,
             onboarding_import::onboarding_import_preview,
             onboarding_import::onboarding_import_extract,

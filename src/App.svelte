@@ -63,6 +63,7 @@
   import AgentDraftChat from './agents/AgentDraftChat.svelte'
   import { requestDraft } from './agents/agent-draft.js'
   import AbsencePrompt from './agents/AbsencePrompt.svelte'
+  import FolderAccessPrompt from './lib/FolderAccessPrompt.svelte'
   import { exportAgent } from './agents/import.js'
   import ApprovalList from './agents/ApprovalList.svelte'
   import AgentStatus from './agents/AgentStatus.svelte'
@@ -108,6 +109,7 @@
   import RecordPanel from './record/RecordPanel.svelte'
   import { bootState, errorState, registrationRetryState, statusState, waitingState } from './lib/auth-state.js'
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
+  import { createFolderAccessWatch } from './lib/folder-access.js'
   import PocketFold from './lib/PocketFold.svelte'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureDetails, runFailureMessage, settledPhases } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
@@ -1852,6 +1854,25 @@
     invoke: (...args) => tauri.invoke(...args),
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     onChange: (notice) => { runtimeNotice = notice },
+  })
+
+  // Once Home is set, the window reads it beside the runtime's start, so a
+  // pending or refused macOS folder prompt names itself in the sidebar and
+  // on Usage instead of leaving this computer silent.
+  let folderAccess = $state(null)
+  let folderAccessWatch = null
+  const folderAccessHome = $derived(tauri && onboarding.name === 'complete' ? onboarding.homePath ?? '' : '')
+  $effect(() => {
+    const homePath = folderAccessHome
+    if (!homePath) return
+    const watch = createFolderAccessWatch({ invoke: (...args) => tauri.invoke(...args), homePath, onChange: (next) => { folderAccess = next } })
+    folderAccessWatch = watch
+    void watch.start()
+    return () => {
+      watch.stop()
+      if (folderAccessWatch === watch) folderAccessWatch = null
+      folderAccess = null
+    }
   })
 
   function applyDesktopClientStatus(status) {
@@ -3642,6 +3663,7 @@
               {:else}<div class="thread-search-field"><LucideIcon name="search" size={14} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search" bind:this={threadSearchInput} bind:value={threadSearch} oninput={filterThreads} />{#if !threadSearch}<button type="button" class="palette-open" aria-label="Open the command palette" aria-keyshortcuts={searchKeyShortcut} onclick={() => { paletteOpen = true }}><kbd>{shortcutDisplayLabel(searchKeyShortcut)}</kbd></button>{/if}</div>{/if}
             </div>
             <div class="side-scroll" use:panelScroll use:keepSidebarScroll>
+            {#if folderAccess}<FolderAccessPrompt access={folderAccess} onallow={() => folderAccessWatch?.allow()} />{/if}
             {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
             <SidebarSections sidebar={sidebarArrangement} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
               showFresh={showFreshThread} disabled={switchLocked} expanded={expandedProjects} bind:archivedOpen
@@ -4188,7 +4210,7 @@
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
-  {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} onconnect={() => openSettings('providers')} />{/if}
+  {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} {folderAccess} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
   {#if paletteOpen && tauri}<CommandPalette {tauri} input={paletteFor} onrun={runPaletteItem} onclose={() => { paletteOpen = false }} />{/if}

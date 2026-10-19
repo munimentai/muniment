@@ -17,9 +17,10 @@
   import UsageChart from './UsageChart.svelte'
   import UsageBreakdown from './UsageBreakdown.svelte'
   import { accountCache } from '../lib/account-cache.js'
+  import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
   import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerLabel, providerOptions, readUsage, totalTiles, unmeteredLabel } from './usage.js'
 
-  let { tauri, runtimeList = null, onconnect = null } = $props()
+  let { tauri, runtimeList = null, folderAccess = null, onconnect = null } = $props()
   let view = $state('limits')
   let range = $state('7d')
   let machine = $state('')
@@ -86,7 +87,7 @@
     </div>
 
     {#if error}<p class="note error" role="alert">{error}</p>{/if}
-    {#each failed as entry (entry.id)}<p class="note" role="status"><LucideIcon name="globe-off" size={14} />{entry.name} did not answer. The totals leave it out.</p>{/each}
+    {#each failed as entry (entry.id)}<p class="note" role="status"><LucideIcon name="globe-off" size={14} />{entry.id === LOCAL_RUNTIME_ID && folderAccess ? folderAccess.message : `${entry.name} did not answer. The totals leave it out.`}</p>{/each}
 
     {#if !summary && !error}
       <p class="note" role="status">Reading usage…</p>

@@ -4226,6 +4226,41 @@ describe('Home onboarding', () => {
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
 
+  it('names a pending Documents prompt at launch with one Allow action and clears it once Home opens', async () => {
+    const message = 'macOS is asking whether Muniment may open your Documents folder. Choose Allow in that prompt, then try again.'
+    const answer = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'home_folder_state') return payload.wait ? answer.promise : Promise.resolve({ state: 'waiting', folder: 'Documents', message })
+      return original(command, payload)
+    })
+    render(App)
+    const card = await screen.findByRole('region', { name: 'Folder access' })
+    expect(within(card).getByText('Waiting for Documents access')).toBeInTheDocument()
+    expect(within(card).getByText(message)).toBeInTheDocument()
+    expect(within(card).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Allow access'])
+    expect(invoke).toHaveBeenCalledWith('home_folder_state', { homePath: '/Documents/Muniment', wait: false })
+    expect(invoke).toHaveBeenCalledWith('home_folder_state', { homePath: '/Documents/Muniment', wait: true })
+    expect(invoke).not.toHaveBeenCalledWith('home_folder_access', expect.anything())
+    answer.resolve({ state: 'open', folder: 'Documents', message: null })
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Folder access' })).not.toBeInTheDocument())
+  })
+
+  it('opens Files & Folders from a refused Documents folder at launch', async () => {
+    const refusal = 'macOS does not let Muniment open your Documents folder. Turn on Muniment in System Settings > Privacy & Security > Files & Folders, then try again.'
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'home_folder_state') return Promise.resolve({ state: 'denied', folder: 'Documents', message: refusal })
+      return original(command, payload)
+    })
+    render(App)
+    const card = await screen.findByRole('region', { name: 'Folder access' })
+    expect(within(card).getByText('No access to Documents')).toBeInTheDocument()
+    expect(within(card).getByText(refusal)).toBeInTheDocument()
+    await fireEvent.click(within(card).getByRole('button', { name: 'Allow access' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('home_folder_settings'))
+  })
+
   it.each([
     ['the key in its settings file', async () => fireEvent.click(screen.getByRole('button', { name: /Use the key in/ })), { key: null, keyFromFile: true }],
     ['a pasted key', async () => {
