@@ -180,6 +180,22 @@ fn pi_settings_file(models_file: &Path) -> PathBuf {
 fn read_json_store(
     path: &Path,
 ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    read_json_file(path, true)
+}
+
+/// Reads a JSON store without its lock. Its writers replace the whole file,
+/// so a read sees one version or the other and never waits on a writer that
+/// holds the lock through a slow step.
+fn read_json_unlocked(
+    path: &Path,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    read_json_file(path, false)
+}
+
+fn read_json_file(
+    path: &Path,
+    locked: bool,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -190,7 +206,10 @@ fn read_json_store(
             Err(_) => return Err(READ_SETTINGS_ERROR.into()),
         }
     }
-    let _lock = lock_pi_auth_file(path).map_err(|_| READ_SETTINGS_ERROR.to_string())?;
+    let _lock = locked
+        .then(|| lock_pi_auth_file(path))
+        .transpose()
+        .map_err(|_| READ_SETTINGS_ERROR.to_string())?;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -573,14 +592,43 @@ fn refresh_provider_models(
     })
 }
 
+/// The models Pi listed on the last full inventory read, which a cached read
+/// reuses so it never starts Pi.
+#[derive(Default)]
+pub(super) struct ListedModels(std::sync::Mutex<Option<Listed>>);
+
+/// Pi's model rows and their thinking levels.
+type Listed = (Vec<PiModelRow>, Vec<PiModelThinking>);
+
+impl ListedModels {
+    fn held(&self) -> std::sync::MutexGuard<'_, Option<Listed>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The inventory from what the agent directory stores and what Pi listed
+/// last, with no discovery, no provider request and no Pi start, so a page
+/// draws its rows at once. A full read follows and fills what changed.
+pub(super) fn cached_inventory(
+    agent: &Path,
+    listed: &ListedModels,
+) -> Result<ProviderInventory, String> {
+    let (models, thinking) = listed.held().clone().unwrap_or_default();
+    provider_inventory_with(agent, &models, &thinking, read_json_unlocked)
+}
+
 /// Everything the picker and Settings read about providers: the endpoint
 /// discovery and Pi's model list run side by side, so the page waits for the
 /// slower one, not both. A changed endpoint list relists once, so the
-/// inventory reads what the server serves now.
+/// inventory reads what the server serves now. `listed` keeps Pi's answer
+/// for the next cached read.
 pub(super) fn inventory(
     agent: &Path,
     engine: &PiRpcEngine,
     force: bool,
+    listed: &ListedModels,
 ) -> Result<ProviderInventory, String> {
     // A saved default the router stopped offering moves before the picker reads it.
     super::router::settle_default(agent, None, false);
@@ -596,6 +644,7 @@ pub(super) fn inventory(
     super::router::settle_default(agent, None, false);
     let thinking = thinking.join().unwrap_or_default();
     let mut inventory = provider_inventory(agent, &models, &thinking)?;
+    *listed.held() = Some((models, thinking));
     adopt_shown_default(agent, &mut inventory);
     Ok(inventory)
 }
@@ -605,9 +654,23 @@ fn provider_inventory(
     models: &[PiModelRow],
     thinking: &[PiModelThinking],
 ) -> Result<ProviderInventory, String> {
-    let auth = read_json_store(&pi_auth_file(agent))?.unwrap_or_default();
-    let models_file = read_json_store(&pi_models_file(agent))?.unwrap_or_default();
-    let settings = read_json_store(&pi_settings_file(&pi_models_file(agent)))?.unwrap_or_default();
+    provider_inventory_with(agent, models, thinking, read_json_store)
+}
+
+/// Reads one JSON store, or `None` when it does not exist.
+type ReadStore = fn(&Path) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String>;
+
+/// The inventory from the stores `read` reads, with `models` and `thinking`
+/// as Pi listed them.
+fn provider_inventory_with(
+    agent: &Path,
+    models: &[PiModelRow],
+    thinking: &[PiModelThinking],
+    read: ReadStore,
+) -> Result<ProviderInventory, String> {
+    let auth = read(&pi_auth_file(agent))?.unwrap_or_default();
+    let models_file = read(&pi_models_file(agent))?.unwrap_or_default();
+    let settings = read(&pi_settings_file(&pi_models_file(agent)))?.unwrap_or_default();
     let record = read_models_record(agent)?;
     let mut providers: Vec<InventoryProvider> = Vec::new();
     for (provider, entry) in auth.iter().filter(|(_, entry)| entry.is_object()) {
@@ -1293,6 +1356,45 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
             .find(|model| model.id == "openai/gpt-6-astra")
             .unwrap();
         assert!(astra.unavailable.is_none());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_cached_inventory_answers_stored_rows_at_once_while_a_full_read_holds_the_locks() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("auth.json"),
+            r#"{"openai":{"type":"api_key","key":"k"}}"#,
+        )
+        .unwrap();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {"ollama": {"baseUrl": "http://localhost:11434/v1", "models": [{"id": "local-model"}]}}
+        }).to_string()).unwrap();
+        let listed = ListedModels::default();
+        // Before any full read, the rows come from the stores alone.
+        let first = cached_inventory(&agent, &listed).unwrap();
+        let ids: Vec<&str> = first
+            .providers
+            .iter()
+            .map(|group| group.id.as_str())
+            .collect();
+        assert_eq!(ids, ["openai", "ollama"]);
+        assert!(first.providers[0].models.is_empty());
+        assert_eq!(first.providers[1].models[0].id, "local-model");
+
+        // A full read keeps what Pi listed, and a cached read reuses it even
+        // while a slow step holds the store locks.
+        *listed.held() = Some((vec![row("openai", "gpt-test", "128K")], Vec::new()));
+        let _models = pi_models::lock(&pi_models_file(&agent)).unwrap();
+        let _auth = lock_pi_auth_file(&pi_auth_file(&agent)).unwrap();
+        let started = std::time::Instant::now();
+        let cached = cached_inventory(&agent, &listed).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(cached.providers[0].models[0].id, "gpt-test");
+        assert_eq!(cached.providers[1].models[0].id, "local-model");
+        // It never adopts a default from rows a full read has not confirmed.
+        assert_eq!(cached.default_provider, None);
+        drop((_models, _auth));
         fs::remove_dir_all(agent).unwrap();
     }
 

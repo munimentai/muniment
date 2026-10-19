@@ -15,7 +15,11 @@
 //!
 //! `provider_inventory` names each model's `thinking_levels`, the levels it
 //! thinks at, empty for a model without reasoning, and its
-//! `thinking_default`, the level a turn runs at when it names none.
+//! `thinking_default`, the level a turn runs at when it names none. It takes
+//! `{"force"?, "cached"?}`. `"cached": true` answers at once from the stored
+//! connections and the models Pi listed on the last full read, with no
+//! discovery, provider request or Pi start, so a page draws its rows before
+//! a full read fills them.
 //! `set_thinking_level` takes `{"provider", "model", "level"?}`, saves that
 //! level as the model's default and answers null. A missing level restores
 //! the engine's own default.
