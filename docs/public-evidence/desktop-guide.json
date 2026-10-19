@@ -55,8 +55,8 @@
         },
         {
           "id": "capacity",
-          "title": "Capacity",
-          "body": "Open Capacity beside the model picker to see each subscription account and its remaining allowance. Reset times appear when the provider supplies them. An unavailable allowance is unknown, not zero. API charges follow your provider account."
+          "title": "Usage",
+          "body": "Open Usage, the chart icon at the bottom of the sidebar, to see each subscription account and what its session and weekly windows have left. Each account, including a second account of the same provider, has its own card. Reset times appear when the provider supplies them. An unavailable allowance is unknown, not zero. API charges follow your provider account."
         },
         {
           "id": "machines",
