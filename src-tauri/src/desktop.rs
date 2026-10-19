@@ -206,8 +206,6 @@ pub fn run() {
             local_mode::thread_settings_set,
             local_mode::local_mode_disconnect_provider,
             local_mode::local_mode_store_endpoint,
-            local_mode::local_mode_claude_code_status,
-            local_mode::local_mode_connect_claude_code,
             local_mode::model_registry,
             model_router::model_router_settings,
             model_router::model_router_set_enabled,

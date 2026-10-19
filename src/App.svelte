@@ -3340,9 +3340,8 @@
     if (!workspaceMode() || desktopClientStatus?.connected !== true) {
       throw firstRunError(tauri, 'runtime')
     }
-    // SPEC.md: a found server connects in place. A signed-in Claude Code
-    // connects in place, a subscription with an account signs in from the
-    // first run, any other opens its sign-in in Models, More
+    // SPEC.md: a found server connects in place, a subscription with an
+    // account signs in from the first run, any other opens its sign-in in Models, More
     // providers opens the catalog, and explore opens the composer with no model.
     if (option?.kind === 'explore') {
       onboarding = { name: 'complete', homePath: onboarding.homePath }
@@ -3362,10 +3361,6 @@
       void tick().then(() => composer?.focus())
       return
     }
-    if (option?.kind === 'subscription' && option.hint?.reuse && await connectClaudeCodeInPlace()) {
-      await finishFirstRunConnect()
-      return
-    }
     const account = option?.kind === 'subscription' ? catalogProvider(option.catalog)?.account : null
     if (account) return { signIn: account }
     onboarding = { name: 'complete', homePath: onboarding.homePath }
@@ -3373,19 +3368,6 @@
     void refreshProjects()
     settingsConnectProvider = option?.catalog ?? ''
     openSettings('providers')
-  }
-
-  // Connects through the Claude Code sign-in the scan found. False sends the
-  // user to Models, which names the step Claude Code still needs.
-  async function connectClaudeCodeInPlace() {
-    try {
-      const claude = await tauri.invoke('local_mode_claude_code_status')
-      if (!claude?.logged_in || !claude.path) return false
-      await tauri.invoke('local_mode_connect_claude_code', { executable: claude.path })
-      return true
-    } catch (_) {
-      return false
-    }
   }
 
   // A first-run connection ends the first run on the composer with its models.

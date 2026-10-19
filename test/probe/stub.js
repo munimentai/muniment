@@ -332,9 +332,9 @@ const providerScanFixtures = {
   mac: {
     servers: [omlx],
     hints: [
-      { provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true },
-      { provider: 'openai', evidence: 'Codex CLI is signed in', reuse: false },
-      { provider: 'github-copilot', evidence: 'Copilot CLI is installed', reuse: false },
+      { provider: 'anthropic', evidence: 'Claude Code is signed in' },
+      { provider: 'openai', evidence: 'Codex CLI is signed in' },
+      { provider: 'github-copilot', evidence: 'Copilot CLI is installed' },
     ],
   },
   many: {
@@ -343,7 +343,7 @@ const providerScanFixtures = {
       omlx,
       { id: 'lmstudio', name: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', state: 'not-running', modelCount: 0 },
     ],
-    hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true }],
+    hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in' }],
   },
   none: { servers: [], hints: [] },
 }
@@ -587,10 +587,9 @@ export function buildProbeCommandTable(fixtureName) {
       default_model: new URLSearchParams(location.search).has('thinking') ? 'qwen3:8b' : 'llama3.2:3b',
       hidden: [],
     }
-    if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_set_thinking_level', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
+    if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_set_thinking_level', 'local_mode_disconnect_provider', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
     if (command === 'local_mode_store_endpoint') return 'custom-endpoint'
     if (command === 'model_registry') return (await fetch('./fixtures/model-registry.json')).json()
-    if (command === 'local_mode_claude_code_status') return { installed: true, logged_in: true, path: '/usr/local/bin/claude' }
     if (command === 'context_settings') return { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }
     if (command === 'context_settings_save') return payload
     if (command === 'chat_search_files') return [{ path: '/Documents/muniment/ISSUES.md', relativePath: 'ISSUES.md', displayName: 'ISSUES.md' }].filter((file) => file.relativePath.toLowerCase().includes(payload.query.toLowerCase()))

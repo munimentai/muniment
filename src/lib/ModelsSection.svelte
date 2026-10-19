@@ -349,6 +349,13 @@
     void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
   }
 
+  // Opens the Anthropic sign-in and starts it, as a Claude Code connection
+  // from before becomes an account.
+  function signInAgain() {
+    chooseProvider('anthropic')
+    void startLogin()
+  }
+
   async function answerPrompt(value) {
     const prompt = login?.prompt
     if (!prompt) return
@@ -425,7 +432,10 @@
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
                 <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
                 {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
-                {#if endpoint || catalogProvider(catalogId(entry.id))}
+                {#if entry.source === 'claude-code'}
+                  <!-- A Claude Code connection from before signs in again as an account, whose row replaces it. -->
+                  <button type="button" class="quiet sign-in-again" onclick={signInAgain}>Sign in again</button>
+                {:else if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
@@ -598,6 +608,7 @@
   .action-label { white-space: nowrap; }
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
   .icon-action.critical { color: var(--oxide); }
+  .sign-in-again { min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }

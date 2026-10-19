@@ -81,3 +81,20 @@ it('shows each Anthropic account Claude Code signed in to as its own card, and a
   await fireEvent.click(within(group).getByRole('button', { name: 'Subscription: Claude Pro or Max' }))
   expect(tauri.invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'anthropic' })
 })
+
+it('shows a Claude Code connection from before as one row that signs in again as an account', async () => {
+  const older = { providers: [{ id: 'claude-bridge', name: 'Anthropic', source: 'claude-code', base_url: null, models: [{ id: 'claude-opus-5' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return older
+    if (command === 'model_router_settings') return { accounts: [], subscriptions: [], families: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: older } })
+  const group = await screen.findByRole('region', { name: 'Anthropic' })
+  const row = within(group).getByTestId('provider-connection')
+  expect(row).toHaveTextContent('Claude Code')
+  expect(within(row).queryByRole('button', { name: 'Edit Anthropic' })).not.toBeInTheDocument()
+  await fireEvent.click(within(row).getByRole('button', { name: 'Sign in again' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic' })
+  expect(await screen.findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
+})

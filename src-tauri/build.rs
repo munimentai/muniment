@@ -63,8 +63,6 @@ const APP_COMMANDS: &[&str] = &[
     "thread_settings_set",
     "local_mode_disconnect_provider",
     "local_mode_store_endpoint",
-    "local_mode_claude_code_status",
-    "local_mode_connect_claude_code",
     "model_registry",
     "model_router_settings",
     "model_router_set_enabled",

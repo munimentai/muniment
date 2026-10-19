@@ -286,25 +286,6 @@ pub(crate) async fn local_mode_store_endpoint(
         .map_err(|_| "The background service returned an invalid response. Restart Muniment.".into())
 }
 
-#[tauri::command]
-pub(crate) async fn local_mode_claude_code_status(app: tauri::AppHandle) -> Result<Value, String> {
-    model_service::request(&app, ModelAction::ClaudeCodeStatus, json!({})).await
-}
-
-#[tauri::command]
-pub(crate) async fn local_mode_connect_claude_code(
-    app: tauri::AppHandle,
-    executable: String,
-) -> Result<(), String> {
-    model_service::request(
-        &app,
-        ModelAction::ConnectClaudeCode,
-        data([("executable", json!(executable))]),
-    )
-    .await
-    .map(drop)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
