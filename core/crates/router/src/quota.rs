@@ -4,9 +4,8 @@
 //! A subscription meters use by window, not by token. Codex answers
 //! `GET https://chatgpt.com/backend-api/wham/usage` with one or two windows,
 //! and a window is known by its length, never by its slot: a Pro plan's
-//! `primary_window` is the weekly one. Claude answers
-//! `GET https://api.anthropic.com/api/oauth/usage` with a five-hour and a
-//! seven-day window and a scoped weekly limit per model family.
+//! `primary_window` is the weekly one. Claude Code reads its own Anthropic
+//! accounts' windows, so the router asks Anthropic for none.
 //!
 //! The screen shows what is left, not what is used, because that is the number
 //! a subscriber watches. The store carries no token and no prompt.
@@ -25,11 +24,9 @@ use super::config::{Account, Credential};
 /// The quota store in the agent directory.
 pub const QUOTA_FILE: &str = "muniment-router-quota.json";
 pub const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-pub const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 /// The header set Codex's own client sends, which the usage route gates on.
 pub const CODEX_USER_AGENT: &str =
     "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)";
-pub const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 /// Kimi meters its coding plan by window and answers here with a bearer.
 pub const KIMI_USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
 /// Antigravity answers its buckets here, a fraction left per model family.
@@ -239,67 +236,6 @@ fn rfc3339_ms(value: Option<&Value>) -> Option<i64> {
         .map(|moment| moment.timestamp_millis())
 }
 
-/// The quota in an `api/oauth/usage` answer. The `limits` list is the clean
-/// source, one entry per window with its kind and scope. The named windows
-/// stand in when the list is absent.
-pub fn parse_claude(payload: &Value, now_ms: i64) -> Option<Quota> {
-    let mut windows = Vec::new();
-    if let Some(limits) = payload.get("limits").and_then(Value::as_array) {
-        for limit in limits {
-            let Some(used_percent) = number(limit.get("percent")) else {
-                continue;
-            };
-            let kind = match text(limit.get("group")).as_deref() {
-                Some("session") => WindowKind::FiveHour,
-                Some("weekly") => WindowKind::Weekly,
-                _ => WindowKind::Other,
-            };
-            let scope = limit
-                .get("scope")
-                .and_then(|scope| scope.get("model"))
-                .and_then(|model| text(model.get("display_name")))
-                .unwrap_or_default();
-            windows.push(Window {
-                kind,
-                scope,
-                used_percent: used_percent.clamp(0.0, 100.0),
-                resets_at_ms: rfc3339_ms(limit.get("resets_at")),
-                limit_reached: text(limit.get("severity")).as_deref() == Some("blocked"),
-            });
-        }
-    }
-    if windows.is_empty() {
-        for (name, kind) in [
-            ("five_hour", WindowKind::FiveHour),
-            ("seven_day", WindowKind::Weekly),
-        ] {
-            let Some(window) = payload.get(name).filter(|value| value.is_object()) else {
-                continue;
-            };
-            let Some(used_percent) = number(window.get("utilization")) else {
-                continue;
-            };
-            windows.push(Window {
-                kind,
-                scope: String::new(),
-                used_percent: used_percent.clamp(0.0, 100.0),
-                resets_at_ms: rfc3339_ms(window.get("resets_at")),
-                limit_reached: false,
-            });
-        }
-    }
-    if windows.is_empty() {
-        return None;
-    }
-    Some(Quota {
-        plan: None,
-        email: None,
-        windows,
-        banked_resets: None,
-        observed_at_ms: now_ms,
-    })
-}
-
 fn fetch(url: &str, headers: &[(&str, &str)], timeout: Duration) -> Option<Value> {
     let agent = crate::http::agent_builder().timeout(timeout).build();
     let mut request = agent.get(url);
@@ -430,60 +366,6 @@ pub fn probe_xai(
         quota.email = text(user.get("email"));
     }
     Some(quota)
-}
-
-/// Asks Anthropic what this account has left.
-/// Claude's OAuth token is opaque. Resolve its account and organization before
-/// pooling it so a repeated sign-in refreshes the same subscription.
-pub fn identify_claude(credential: &mut Credential, timeout: Duration) {
-    let Credential::Subscription {
-        provider,
-        access,
-        account_id,
-        email,
-        ..
-    } = credential
-    else {
-        return;
-    };
-    if provider != "anthropic" || account_id.is_some() {
-        return;
-    }
-    let bearer = format!("Bearer {access}");
-    let headers = [
-        ("Authorization", bearer.as_str()),
-        ("anthropic-beta", CLAUDE_OAUTH_BETA),
-    ];
-    let Some(profile) = fetch(
-        "https://api.anthropic.com/api/oauth/profile",
-        &headers,
-        timeout,
-    ) else {
-        return;
-    };
-    if let Some((identity, address)) = claude_identity(&profile) {
-        *account_id = Some(identity);
-        *email = address;
-    }
-}
-
-fn claude_identity(profile: &Value) -> Option<(String, Option<String>)> {
-    let account = text(profile.pointer("/account/uuid"))?;
-    let organization = text(profile.pointer("/organization/uuid"))?;
-    Some((
-        format!("{account}:{organization}"),
-        text(profile.pointer("/account/email")),
-    ))
-}
-
-pub fn probe_claude(access: &str, now_ms: i64, timeout: Duration) -> Option<Quota> {
-    let bearer = format!("Bearer {access}");
-    let headers = [
-        ("Authorization", bearer.as_str()),
-        ("Content-Type", "application/json"),
-        ("anthropic-beta", CLAUDE_OAUTH_BETA),
-    ];
-    parse_claude(&fetch(CLAUDE_USAGE_URL, &headers, timeout)?, now_ms)
 }
 
 fn post_json(url: &str, headers: &[(&str, &str)], body: Value, timeout: Duration) -> Option<Value> {
@@ -917,7 +799,7 @@ pub fn probe_devin(session_token: &str, now_ms: i64, timeout: Duration) -> Optio
 pub fn has_reader(provider: &str) -> bool {
     matches!(
         provider,
-        "openai-codex" | "anthropic" | "kimi" | "antigravity" | "devin" | "xai"
+        "openai-codex" | "kimi" | "antigravity" | "devin" | "xai"
     )
 }
 
@@ -933,7 +815,6 @@ pub fn probe(account: &Account, now_ms: i64, timeout: Duration) -> Option<Quota>
             ..
         } => match provider.as_str() {
             "openai-codex" => probe_codex(access, account_id.as_deref(), now_ms, timeout),
-            "anthropic" => probe_claude(access, now_ms, timeout),
             "xai" => probe_xai(access, account_id.as_deref(), now_ms, timeout),
             "kimi" => probe_kimi(
                 access,
@@ -1048,22 +929,6 @@ pub fn save(agent: &Path, store: &QuotaStore) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn claude_identity_keeps_organizations_separate_and_requires_both_ids() {
-        let first = serde_json::json!({"account":{"uuid":"user","email":"personal@example.test"},"organization":{"uuid":"personal"}});
-        assert_eq!(
-            claude_identity(&first),
-            Some(("user:personal".into(), Some("personal@example.test".into())))
-        );
-        let mut work = first.clone();
-        work["organization"]["uuid"] = "work".into();
-        assert_ne!(claude_identity(&first), claude_identity(&work));
-        assert!(
-            claude_identity(&serde_json::json!({"account":{"email":"personal@example.test"}}))
-                .is_none()
-        );
-    }
 
     #[test]
     fn grok_credits_parse_weekly_monthly_empty_and_exhausted() {
@@ -1198,45 +1063,6 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_answer_reads_its_limits_list_with_scope_and_kind() {
-        let payload = json!({
-            "five_hour": { "utilization": 15.0, "resets_at": "2026-09-18T06:39:59.949775+00:00" },
-            "seven_day": { "utilization": 41.0, "resets_at": "2026-09-20T21:59:58.949794+00:00" },
-            "limits": [
-                { "kind": "session", "group": "session", "percent": 15, "severity": "normal",
-                  "resets_at": "2026-09-18T06:39:59.949775+00:00", "scope": null, "is_active": false },
-                { "kind": "weekly_all", "group": "weekly", "percent": 41, "severity": "normal",
-                  "resets_at": "2026-09-20T21:59:58.949794+00:00", "scope": null, "is_active": false },
-                { "kind": "weekly_scoped", "group": "weekly", "percent": 73, "severity": "normal",
-                  "resets_at": "2026-09-20T21:59:58.949990+00:00",
-                  "scope": { "model": { "id": null, "display_name": "Fable" }, "surface": null }, "is_active": true }
-            ]
-        });
-        let quota = parse_claude(&payload, 1_000).unwrap();
-        assert_eq!(quota.windows.len(), 3);
-        assert_eq!(quota.windows[0].kind, WindowKind::FiveHour);
-        assert_eq!(quota.windows[0].remaining_percent(), 85.0);
-        assert_eq!(quota.windows[1].kind, WindowKind::Weekly);
-        assert_eq!(quota.windows[1].used_percent, 41.0);
-        assert_eq!(quota.windows[2].scope, "Fable");
-        assert_eq!(quota.windows[2].used_percent, 73.0);
-        assert!(quota.windows[0].resets_at_ms.unwrap() > 1_700_000_000_000);
-        assert_eq!(quota.headline().unwrap().used_percent, 41.0);
-    }
-
-    #[test]
-    fn a_claude_answer_without_the_list_falls_back_to_its_named_windows() {
-        let payload = json!({
-            "five_hour": { "utilization": 15.0, "resets_at": "2026-09-18T06:39:59+00:00" },
-            "seven_day": { "utilization": 41.0, "resets_at": null }
-        });
-        let quota = parse_claude(&payload, 1_000).unwrap();
-        assert_eq!(quota.windows.len(), 2);
-        assert_eq!(quota.windows[1].resets_at_ms, None);
-        assert!(parse_claude(&json!({ "limits": [] }), 0).is_none());
-    }
-
-    #[test]
     fn a_key_has_no_window_to_ask_about() {
         let account = Account {
             id: "a1".into(),
@@ -1266,7 +1092,7 @@ mod tests {
         };
         assert!(xai.credential.pi_provider().is_some());
         assert!(has_reader("xai"));
-        assert!(has_reader("anthropic") && has_reader("openai-codex"));
+        assert!(!has_reader("anthropic") && has_reader("openai-codex"));
     }
 
     #[test]

@@ -215,10 +215,10 @@ the family, named by its email. Kimi, Antigravity and Devin have no Pi
 sign-in, so the router runs its own: Kimi by device code at `auth.kimi.com`,
 Antigravity and Devin through the browser, each landing on a loopback page in
 muniment's mark. Antigravity is a Google account and pools into Google. A
-Kimi, Google, xAI, Codex or Claude token refreshes before it dies, ahead of the turn that
+Kimi, Google, xAI or Codex token refreshes before it dies, ahead of the turn that
 would find it dead. The router asks the upstream
 what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
-Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
+Kimi at
 `api.kimi.com/coding/v1/usages`, Antigravity at
 `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, and Devin
 at its seat service's `GetUserStatus`, and xAI at Grok Build's
@@ -228,8 +228,8 @@ seconds, never by its slot, because a Pro plan's primary window is the weekly
 one. A weekly window with no 5-hour window says the plan reports none. The store in `muniment-router-quota.json` is keyed by account, so a
 second account of one provider keeps its own windows, and carries
 no token and no prompt. An account's windows are read as soon as it connects and
-every two minutes while the app runs, without overlapping probes. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
-and Kimi subscriptions use Messages. Native streams preserve tool calls and
+every two minutes while the app runs, without overlapping probes. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Kimi
+subscriptions use Messages, and Anthropic accounts never join a pool. Native streams preserve tool calls and
 usage. Other subscriptions remain ineligible until their transport exists.
 
 **The router balances, and a refusal moves the turn.** Among the accounts of a

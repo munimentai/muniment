@@ -65,7 +65,6 @@ compatibility suite on the host platform:
   server (`scripts/pins/compat/`),
 - a load check for every pinned package and for the tools the system prompt names,
 - muniment-core's sidecar, launch and RPC frame tests against the real Pi,
-- the router against a fake Anthropic upstream with the pinned Claude Code identity,
 - one `pi-claude-bridge` turn through the pinned Claude Code CLI against a fake
   Anthropic endpoint.
 

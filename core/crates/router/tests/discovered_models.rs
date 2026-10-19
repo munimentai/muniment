@@ -17,8 +17,8 @@ fn a_new_subscription_model_reaches_the_router_without_a_catalog_edit() {
     };
     settings.accounts.push(
         serde_json::from_value(json!({
-            "id":"claude-account","family":"anthropic","label":"Claude",
-            "credential":{"type":"subscription","provider":"anthropic","access":"fixture"},
+            "id":"grok-account","family":"xai","label":"Grok",
+            "credential":{"type":"subscription","provider":"xai","access":"fixture"},
             "enabled":true,"weight":1,"models":[]
         }))
         .unwrap(),
@@ -26,7 +26,7 @@ fn a_new_subscription_model_reaches_the_router_without_a_catalog_edit() {
     config::save(&agent, &settings).unwrap();
     let mut cache = provider_models::Cache::new();
     cache.insert(
-        "account:claude-account".into(),
+        "account:grok-account".into(),
         provider_models::Catalog {
             checked_ms: 1,
             models,

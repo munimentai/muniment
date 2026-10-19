@@ -338,18 +338,6 @@ fn compat(options: &Options, http: &dyn Http) -> Result<ExitCode> {
             .env("MUNIMENT_PI_ARCHIVE", &archive)
             .env("MUNIMENT_PI_WIRE_EXECUTABLE", &pi);
         steps.push(step("muniment-core sidecar tests on the real Pi", command));
-        let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        command
-            .args([
-                "test",
-                "--locked",
-                "-p",
-                "muniment-router",
-                "--test",
-                "claude_code_identity",
-            ])
-            .current_dir(root);
-        steps.push(step("router Claude Code identity", command));
     }
 
     let passed = steps.iter().all(|step| step.passed);

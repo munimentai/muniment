@@ -12,13 +12,7 @@ use super::callback::{self, provider_display_name, CallbackServer, CALLBACK_PATH
 use super::{providers, router, ModelService};
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const ACCOUNT_PROVIDERS: [&str; 5] = [
-    "openai-codex",
-    "xai",
-    "openrouter",
-    "github-copilot",
-    "anthropic",
-];
+const ACCOUNT_PROVIDERS: [&str; 4] = ["openai-codex", "xai", "openrouter", "github-copilot"];
 pub(super) const START_ERROR: &str = "The sign-in could not start. Try again.";
 const TIMEOUT_MESSAGE: &str = "The sign-in timed out. Start it again.";
 const NO_REDIRECT_WAIT: &str = "No sign-in is waiting for a browser redirect.";

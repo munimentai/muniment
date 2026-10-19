@@ -73,13 +73,13 @@ pub const FAMILIES: [Family; 7] = [
 ];
 
 /// The subscription sign-ins and the family each one pools into. The first
-/// three are Pi's own sign-ins, under Pi's provider ids. Kimi, Antigravity
-/// and Devin have no Pi sign-in, so the router runs its own: Kimi by device
-/// code, Antigravity and Devin through the browser.
-pub const SUBSCRIPTION_PROVIDERS: [(&str, &str, &str); 7] = [
+/// two are Pi's own sign-ins, under Pi's provider ids. Kimi, Antigravity,
+/// Devin and Muse Code have no Pi sign-in, so the router runs its own: Kimi
+/// and Muse Code by device code, Antigravity and Devin through the browser.
+/// Anthropic accounts sign in through Claude Code and never join a pool.
+pub const SUBSCRIPTION_PROVIDERS: [(&str, &str, &str); 6] = [
     ("openai-codex", "openai", "ChatGPT Plus or Pro"),
     ("xai", "xai", "Grok Build"),
-    ("anthropic", "anthropic", "Claude Pro or Max"),
     ("kimi", "kimi", "Kimi Code"),
     (
         "antigravity",
@@ -116,11 +116,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subscription_catalog_contains_the_six_providers_and_muse() {
+    fn subscription_catalog_contains_the_five_providers_and_muse() {
         for provider in [
             "antigravity",
             "openai-codex",
-            "anthropic",
             "xai",
             "devin",
             "kimi",
@@ -136,6 +135,7 @@ mod tests {
             assert!(family_for_pi_provider(provider).is_some());
         }
         assert!(native_sign_in("meta"));
+        assert!(family_for_pi_provider("anthropic").is_none());
     }
 
     #[test]
