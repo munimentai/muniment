@@ -4,13 +4,14 @@ import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
 import LimitBanner from './LimitBanner.svelte'
 import { machineRows } from '../runtimes/machines.js'
-import { accountLine, composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, providerLabel, resetsIn, rowLabel, totalTiles, windowLabel } from './usage.js'
+import { composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, providerLabel, resetsIn, rowLabel, totalTiles, windowLabel } from './usage.js'
 
 afterEach(cleanup)
 
 const NOW = Date.UTC(2026, 9, 17, 12)
 const HOUR = 3_600_000
 const limit = (extra = {}) => ({ provider: 'anthropic', kind: 'five_hour', scope: '', remaining_percent: 62, resets_at_ms: NOW + 2 * HOUR + 14 * 60_000, elapsed_percent: 40, pace: 'ahead', status: 'ok', account_id: 'a', label: 'sam@example.com', plan: 'max', ...extra })
+const account = (windows, extra = {}) => ({ provider: windows[0].provider, identity: `${windows[0].provider}:${windows[0].account_id}`, account_id: windows[0].account_id, name: providerLabel(windows[0].provider), subtitle: 'sam@example.com · max', pace: 'ahead', windows, ...extra })
 const amount = (processed, cost) => ({ tokens: { input: 1, output: 1, cache_read: 1, cache_write: 0, reasoning: 0 }, processed, runs: 2, cost_usd: cost, unpriced_runs: 0 })
 const summary = (extra = {}) => ({
   range: '7d', bucket: 'day',
@@ -18,7 +19,11 @@ const summary = (extra = {}) => ({
   series: [{ start_ms: NOW - 24 * HOUR, providers: { anthropic: amount(900, 0.2) } }, { start_ms: NOW, providers: { anthropic: amount(300, 0.1), openai: amount(600, 0.3) } }],
   breakdown: { model: [{ key: 'anthropic/claude', label: 'claude', provider: 'anthropic', ...amount(1200, 0.3) }], agent: [{ key: '', label: '', ...amount(1200, 0.3) }], project: [], machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }] },
   providers: ['anthropic', 'openai'],
-  limits: [limit(), limit({ account_id: 'b', label: 'Home', plan: null, remaining_percent: 30 }), limit({ provider: 'openai', kind: 'weekly', remaining_percent: 0, status: 'limit', pace: null, elapsed_percent: null })],
+  accounts: [
+    account([limit(), limit({ kind: 'weekly', remaining_percent: 80, resets_at_ms: NOW + 50 * HOUR }), limit({ kind: 'weekly', scope: 'Fable', remaining_percent: 12, status: 'low' })]),
+    account([limit({ account_id: 'b', label: 'Home', plan: null, remaining_percent: 30 })], { subtitle: 'Home', pace: null }),
+    account([limit({ provider: 'openai', kind: 'weekly', remaining_percent: 0, status: 'limit', pace: null, elapsed_percent: null })], { pace: 'on' }),
+  ],
   unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }, { provider: 'xai', label: 'xAI', reason: 'pending' }],
   windows: [],
   machines: [{ id: 'local', name: 'This computer', state: 'ok' }, { id: 'box', name: 'Build box', state: 'error', error: 'offline' }],
@@ -39,8 +44,6 @@ describe('usage words', () => {
     expect(compactTokens(3_100_000)).toBe('3.1M')
     expect(dollars(0.004)).toBe('<$0.01')
     expect(dollars(1234.5)).toBe('$1,234.50')
-    expect(accountLine({ label: 'sam@example.com', plan: 'max' })).toBe('sam@example.com · max')
-    expect(accountLine({})).toBe('')
     expect(rowLabel({ key: '' }, 'agent')).toBe('No agent')
     expect(rowLabel({ key: '' }, 'project')).toBe('No project')
     expect(providerLabel('anthropic')).toBe('Anthropic')
@@ -78,34 +81,46 @@ describe('usage words', () => {
 })
 
 describe('Usage page', () => {
-  it('shows a card per account and window with a threshold mark', async () => {
+  it('shows one card per account with a row per window', async () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })
-    const card = await screen.findByRole('article', { name: 'Anthropic · 5-hour, sam@example.com' })
+    const card = await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
     expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }) })
-    expect(within(card).getByText('62% left')).toBeInTheDocument()
-    expect(within(card).getByRole('meter')).toHaveAttribute('aria-valuenow', '62')
-    expect(within(card).getByText('sam@example.com · max')).toBeInTheDocument()
+    expect(within(card).getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument()
+    expect(within(card).getAllByText('sam@example.com · max')).toHaveLength(1)
+    expect(within(card).getByRole('img', { name: 'Ahead of pace' })).toBeInTheDocument()
+    const rows = within(card).getAllByRole('listitem')
+    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual(['5-hour', 'Weekly', 'Weekly Fable'])
+    expect(within(rows[0]).getByText('62% left')).toBeInTheDocument()
+    expect(within(rows[0]).getByRole('meter')).toHaveAttribute('aria-valuenow', '62')
+    expect(within(rows[0]).getByText(/^Resets/)).toBeInTheDocument()
+    expect(within(rows[1]).getByText('80% left')).toBeInTheDocument()
+    expect(within(rows[2]).getByText('12% left')).toBeInTheDocument()
+    expect(rows[2]).toHaveAttribute('data-status', 'low')
     // A second account of one provider has its own card.
-    const second = screen.getByRole('article', { name: 'Anthropic · 5-hour, Home' })
+    const second = screen.getByRole('article', { name: 'Anthropic, Home' })
+    expect(within(second).getAllByRole('listitem')).toHaveLength(1)
     expect(within(second).getByText('30% left')).toBeInTheDocument()
-    expect(within(screen.getByRole('article', { name: 'OpenAI · Weekly, sam@example.com' })).getByText('Limit reached')).toBeInTheDocument()
+    expect(within(second).queryByRole('img', { name: /pace/ })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('article', { name: 'OpenAI, sam@example.com · max' })).getByText('Limit reached')).toBeInTheDocument()
+    expect(screen.getAllByRole('article')).toHaveLength(3)
     expect(screen.getByText('No limit')).toBeInTheDocument()
     expect(screen.getByText('Allowance pending')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
   })
 
-  it('says when a weekly window has no 5-hour window beside it', async () => {
-    const weekly = limit({ provider: 'openai', kind: 'weekly', label: '', note: 'The plan reports no 5-hour window.' })
-    render(UsagePage, { tauri: { invoke: vi.fn(async () => summary({ limits: [weekly] })) }, runtimeList })
-    const card = await screen.findByRole('article', { name: 'OpenAI · Weekly' })
+  it('says inside the card when a weekly window has no 5-hour window beside it', async () => {
+    const weekly = account([limit({ provider: 'openai', kind: 'weekly', label: '' })], { subtitle: '', note: 'The plan reports no 5-hour window.' })
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => summary({ accounts: [weekly] })) }, runtimeList })
+    const card = await screen.findByRole('article', { name: 'OpenAI' })
     expect(within(card).getByText('The plan reports no 5-hour window.')).toBeInTheDocument()
+    expect(within(card).getAllByRole('listitem')).toHaveLength(1)
   })
 
   it('shows tokens and cost with a breakdown, and asks again for a range or a machine', async () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })
-    await screen.findByRole('article', { name: 'Anthropic · 5-hour, sam@example.com' })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
     await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
     expect(screen.getByText('15.3M')).toBeInTheDocument()
     expect(screen.getAllByRole('img').some((bar) => bar.getAttribute('aria-label')?.includes('OpenAI'))).toBe(true)
@@ -121,7 +136,7 @@ describe('Usage page', () => {
   it('asks each account again on Refresh, then reads usage', async () => {
     const invoke = vi.fn(async (command) => command === 'usage_summary' ? summary() : { accounts: [{ id: 'a', allowance_readable: true }] })
     render(UsagePage, { tauri: { invoke }, runtimeList })
-    await screen.findByRole('article', { name: 'Anthropic · 5-hour, sam@example.com' })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
     const reads = () => invoke.mock.calls.filter(([command]) => command === 'usage_summary').length
     const before = reads()
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh usage' }))

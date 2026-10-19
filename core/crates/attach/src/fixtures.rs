@@ -2129,19 +2129,27 @@ fn fixture_usage() -> serde_json::Value {
         "series": [{"start_ms": 1767744000000_i64, "providers": {"anthropic": amount}}],
         "breakdown": {"model": [row], "agent": [], "project": []},
         "providers": ["anthropic"],
-        "limits": [{
+        "accounts": [{
+            "identity": "anthropic:email:work@example.com:",
             "provider": "anthropic",
             "account_id": "acct-1",
-            "label": "work@example.com",
-            "plan": "max",
-            "kind": "five_hour",
-            "scope": "",
-            "window_seconds": 18000,
-            "remaining_percent": 62.0,
-            "resets_at_ms": 1767830400000_i64,
-            "elapsed_percent": 40.0,
+            "name": "Anthropic",
+            "subtitle": "work@example.com · max",
             "pace": "on",
-            "status": "ok"
+            "windows": [{
+                "provider": "anthropic",
+                "account_id": "acct-1",
+                "label": "work@example.com",
+                "plan": "max",
+                "kind": "five_hour",
+                "scope": "",
+                "window_seconds": 18000,
+                "remaining_percent": 62.0,
+                "resets_at_ms": 1767830400000_i64,
+                "elapsed_percent": 40.0,
+                "pace": "on",
+                "status": "ok"
+            }]
         }],
         "pools": [{
             "provider": "anthropic",
@@ -2165,7 +2173,8 @@ fn fixture_usage() -> serde_json::Value {
             "remaining_percent": 62.0,
             "limit_reached": false,
             "resets_at_ms": 1767830400000_i64,
-            "observed_at_ms": 1767823200000_i64
+            "observed_at_ms": 1767823200000_i64,
+            "identity": "anthropic:email:work@example.com:"
         }]
     })
 }

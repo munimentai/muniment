@@ -14,10 +14,10 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-// A sidebar row as wide as the default sidebar.
-function row(props) {
+// A sidebar row as wide as the default sidebar, or `width` wide.
+function row(props, width = 184) {
   const target = document.createElement('div')
-  target.style.width = '184px'
+  target.style.width = `${width}px`
   document.body.append(target)
   component = mount(ProjectItem, { target, props: { expanded: false, ontoggle() {}, onnew() {}, ...props } })
   flushSync()
@@ -38,6 +38,38 @@ it('keeps a short name and its triggers whole', () => {
   const target = row({ name: 'News', kind: 'agent', triggers: 'every day 9:00' })
   expect(clipped(target.querySelector('.project-title > span'))).toBe(false)
   expect(clipped(target.querySelector('.triggers'))).toBe(false)
+})
+
+// Whether `element` shows on the first line of the triggers, not wrapped onto the hidden second one.
+const onFirstLine = (element) => element.getBoundingClientRect().top < element.parentElement.getBoundingClientRect().bottom
+
+// Hovers the row and waits for its controls to show.
+async function hovered(target) {
+  await userEvent.hover(target.querySelector('.project-title'))
+  const controls = target.querySelector('.project-controls')
+  await expect.poll(() => getComputedStyle(controls).opacity).toBe('1')
+  return controls.getBoundingClientRect().left
+}
+
+it('keeps the whole triggers clear of the controls on a wide hovered row', async () => {
+  const target = row({ name: 'Tauri Morning Briefing', kind: 'agent', triggers: 'weekdays 8:00 +1', onsettings() {} }, 260)
+  const controls = await hovered(target)
+  const triggers = target.querySelector('.triggers')
+  expect(clipped(triggers)).toBe(false)
+  expect(onFirstLine(target.querySelector('.trigger-more'))).toBe(true)
+  expect(clipped(target.querySelector('.project-title > span'))).toBe(true)
+  expect(triggers.getBoundingClientRect().right).toBeLessThanOrEqual(controls)
+})
+
+it('drops the extra trigger count before the time when the hovered row runs short', async () => {
+  const target = row({ name: 'Tauri Morning Briefing', kind: 'agent', triggers: 'weekdays 8:00 +1', onsettings() {} })
+  const controls = await hovered(target)
+  const words = target.querySelector('.trigger-words')
+  expect(words.textContent).toBe('weekdays 8:00')
+  expect(clipped(words)).toBe(false)
+  expect(onFirstLine(target.querySelector('.trigger-more'))).toBe(false)
+  expect(clipped(target.querySelector('.project-title > span'))).toBe(true)
+  expect(words.getBoundingClientRect().right).toBeLessThanOrEqual(controls)
 })
 
 // The menu items that show a fill, by name.

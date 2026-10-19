@@ -6,9 +6,9 @@
 //! the router's last quota probe of each account, and the plan limits Claude
 //! Code last reported for each Anthropic account. It answers totals, a
 //! series of hourly or daily buckets by provider, a breakdown by model, agent
-//! and project, one limit card per account and window, and each provider's
-//! pool of a window, which the composer warns about. [`merge`] joins the
-//! answers of several machines into one view and adds the machine breakdown. A cost is the model catalog's estimate, never
+//! and project, one limit card per account with a row per window, and each
+//! provider's pool of a window, which the composer warns about. [`merge`]
+//! joins the answers of several machines into one view and adds the machine breakdown. A cost is the model catalog's estimate, never
 //! a bill. Runs that fail or stop keep no receipt, so their tokens are not
 //! counted.
 
@@ -218,9 +218,10 @@ pub struct AccountWindow {
 type WindowKey = (String, String, u8, String);
 
 impl AccountWindow {
-    /// The key one account's window has on every machine.
-    fn key(&self) -> WindowKey {
-        let identity = if self.identity.is_empty() {
+    /// Who the account is on every machine: its identity, else the id of
+    /// the account a shared copy copies.
+    fn upstream(&self) -> String {
+        if self.identity.is_empty() {
             // A shared copy's id is the sender's id behind the shared prefix.
             self.account_id
                 .strip_prefix(config::SHARED_ACCOUNT_PREFIX)
@@ -229,10 +230,14 @@ impl AccountWindow {
                 .to_owned()
         } else {
             self.identity.clone()
-        };
+        }
+    }
+
+    /// The key one account's window has on every machine.
+    fn key(&self) -> WindowKey {
         (
             self.provider.clone(),
-            identity,
+            self.upstream(),
             kind_order(self.kind),
             self.scope.clone(),
         )
@@ -331,10 +336,30 @@ pub struct Limit {
     /// `ok`, `low` under [`LOW_PERCENT`] left, or `limit` when the account,
     /// or every account of a pool, is spent.
     pub status: String,
-    /// What the card says beside the window, such as a weekly window whose
+}
+
+/// One account's card: who it is and a row per window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccountLimits {
+    /// Who the account is on every machine, as [`distinct`] joins it.
+    pub identity: String,
+    pub provider: String,
+    /// The account's id where it signed in, when a machine holds that copy.
+    pub account_id: String,
+    /// The provider's name, which heads the card.
+    pub name: String,
+    /// The account's name and plan, such as `user@example.com · max`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subtitle: String,
+    /// The pace of the window furthest ahead: `ahead`, `on` or `under`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace: Option<String>,
+    /// What the card says under its rows, such as a weekly window whose
     /// upstream reports no 5-hour window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// One row per window kind and scope, the shortest window first.
+    pub windows: Vec<Limit>,
 }
 
 /// A provider no window meters, with the reason.
@@ -361,8 +386,9 @@ pub struct Summary {
     pub breakdown: Breakdown,
     /// Every provider with usage in the range, before the provider filter.
     pub providers: Vec<String>,
-    /// One card per account and window.
-    pub limits: Vec<Limit>,
+    /// One card per account, with a row per window.
+    #[serde(default)]
+    pub accounts: Vec<AccountLimits>,
     /// One card per provider and window with its accounts pooled. A pool is
     /// spent only once every account in it is.
     #[serde(default)]
@@ -645,7 +671,7 @@ pub fn summarize(
             machine: Vec::new(),
         },
         providers: providers.into_iter().collect(),
-        limits: limits(&windows, now_ms),
+        accounts: accounts(&windows, now_ms),
         pools: pools(&windows, now_ms),
         unmetered: unmetered
             .into_iter()
@@ -687,26 +713,78 @@ fn kind_order(kind: quota::WindowKind) -> u8 {
     }
 }
 
-/// One card per account, window kind and scope. A window whose reset has
-/// passed reads as full until the next probe.
-pub fn limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
-    let mut limits = grouped(windows, now_ms, true);
-    // A weekly window with no 5-hour window beside it says so, so the card
-    // never reads as a 5-hour window that is missing from the screen.
-    let five_hour: BTreeSet<(String, String)> = limits
-        .iter()
-        .filter(|limit| limit.kind == quota::WindowKind::FiveHour && limit.scope.is_empty())
-        .map(|limit| (limit.provider.clone(), limit.account_id.clone()))
-        .collect();
-    for limit in &mut limits {
-        if limit.kind == quota::WindowKind::Weekly
-            && limit.scope.is_empty()
-            && !five_hour.contains(&(limit.provider.clone(), limit.account_id.clone()))
-        {
-            limit.note = Some("The plan reports no 5-hour window.".into());
-        }
+/// One card per account, however many machines or shared copies hold it,
+/// with a row per window kind and scope. A window whose reset has passed
+/// reads as full until the next probe.
+pub fn accounts(windows: &[AccountWindow], now_ms: i64) -> Vec<AccountLimits> {
+    let mut held: BTreeMap<(String, String), Vec<&AccountWindow>> = BTreeMap::new();
+    for window in windows {
+        held.entry((window.provider.clone(), window.upstream()))
+            .or_default()
+            .push(window);
     }
-    limits
+    let mut cards: Vec<AccountLimits> = held
+        .into_iter()
+        .map(|((provider, identity), group)| {
+            // The copy from the machine where the account signed in names it.
+            let named = group
+                .iter()
+                .find(|window| !window.shared)
+                .unwrap_or(&group[0]);
+            let plan = named
+                .plan
+                .clone()
+                .or_else(|| group.iter().find_map(|window| window.plan.clone()));
+            let rows: Vec<AccountWindow> = group
+                .iter()
+                .map(|window| AccountWindow {
+                    account_id: named.account_id.clone(),
+                    label: named.label.clone(),
+                    plan: plan.clone(),
+                    ..(*window).clone()
+                })
+                .collect();
+            let windows = grouped(&rows, now_ms, true);
+            let pace = ["ahead", "on", "under"]
+                .into_iter()
+                .find(|pace| {
+                    windows
+                        .iter()
+                        .any(|limit| limit.pace.as_deref() == Some(*pace))
+                })
+                .map(str::to_owned);
+            let unscoped = |kind| {
+                windows
+                    .iter()
+                    .any(|limit| limit.kind == kind && limit.scope.is_empty())
+            };
+            // A weekly window with no 5-hour window beside it says so, so the
+            // card never reads as a 5-hour window missing from the screen.
+            let note = (unscoped(quota::WindowKind::Weekly)
+                && !unscoped(quota::WindowKind::FiveHour))
+            .then(|| "The plan reports no 5-hour window.".to_owned());
+            AccountLimits {
+                name: family::family(&provider)
+                    .map_or_else(|| provider.clone(), |family| family.name.to_owned()),
+                subtitle: [Some(named.label.trim()), plan.as_deref().map(str::trim)]
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                identity,
+                provider,
+                account_id: named.account_id.clone(),
+                pace,
+                note,
+                windows,
+            }
+        })
+        .collect();
+    cards.sort_by(|a, b| {
+        (&a.provider, &a.subtitle, &a.identity).cmp(&(&b.provider, &b.subtitle, &b.identity))
+    });
+    cards
 }
 
 /// One card per provider, window kind and scope, with its accounts pooled.
@@ -800,7 +878,6 @@ fn grouped(windows: &[AccountWindow], now_ms: i64, by_account: bool) -> Vec<Limi
                     "ok"
                 }
                 .into(),
-                note: None,
             }
         })
         .collect()
@@ -1143,7 +1220,7 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
         },
     };
     joined.providers = providers.into_iter().collect();
-    joined.limits = limits(&windows, now_ms);
+    joined.accounts = accounts(&windows, now_ms);
     joined.pools = pools(&windows, now_ms);
     joined.unmetered = unmetered.into_iter().collect();
     joined.windows = windows;
@@ -1304,6 +1381,101 @@ mod tests {
         }
     }
 
+    /// Every account card's rows, in card order.
+    fn limits(windows: &[AccountWindow], now_ms: i64) -> Vec<Limit> {
+        accounts(windows, now_ms)
+            .into_iter()
+            .flat_map(|card| card.windows)
+            .collect()
+    }
+
+    #[test]
+    fn one_account_has_one_card_with_a_row_per_window() {
+        // Each window is most of the way through, so each row spends under pace.
+        let kind = |kind, scope: &str, remaining: f64| AccountWindow {
+            kind,
+            scope: scope.into(),
+            label: "user@example.test".into(),
+            plan: Some("max".into()),
+            provider: "anthropic".into(),
+            identity: "anthropic:email:user@example.test:".into(),
+            ..window(
+                "acct-1",
+                remaining,
+                if kind == quota::WindowKind::FiveHour {
+                    HOUR
+                } else {
+                    3 * 24 * HOUR
+                },
+            )
+        };
+        let week = quota::WindowKind::Weekly;
+        let cards = accounts(
+            &[
+                kind(week, "Fable", 50.0),
+                kind(quota::WindowKind::FiveHour, "", 90.0),
+                kind(week, "", 70.0),
+            ],
+            NOW,
+        );
+        assert_eq!(cards.len(), 1);
+        let card = &cards[0];
+        assert_eq!(
+            (card.name.as_str(), card.subtitle.as_str()),
+            ("Anthropic", "user@example.test · max")
+        );
+        assert_eq!(card.identity, "anthropic:email:user@example.test:");
+        assert_eq!(card.account_id, "acct-1");
+        assert!(card.note.is_none());
+        assert_eq!(
+            card.windows
+                .iter()
+                .map(|row| (row.kind, row.scope.as_str(), row.remaining_percent))
+                .collect::<Vec<_>>(),
+            vec![
+                (quota::WindowKind::FiveHour, "", 90.0),
+                (week, "", 70.0),
+                (week, "Fable", 50.0),
+            ]
+        );
+        assert_eq!(card.pace.as_deref(), Some("under"));
+        // A 5-hour row that spends faster than its window passes leads the card.
+        let ahead = accounts(
+            &[
+                kind(week, "", 70.0),
+                AccountWindow {
+                    resets_at_ms: Some(NOW + 4 * HOUR),
+                    ..kind(quota::WindowKind::FiveHour, "", 10.0)
+                },
+            ],
+            NOW,
+        );
+        assert_eq!(ahead[0].pace.as_deref(), Some("ahead"));
+    }
+
+    #[test]
+    fn two_accounts_of_one_provider_have_two_cards() {
+        let cards = accounts(
+            &[
+                window("one", 10.0, HOUR),
+                AccountWindow {
+                    kind: quota::WindowKind::Weekly,
+                    ..window("two", 30.0, 2 * HOUR)
+                },
+                window("two", 60.0, HOUR),
+            ],
+            NOW,
+        );
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| (card.subtitle.as_str(), card.windows.len()))
+                .collect::<Vec<_>>(),
+            vec![("one · pro", 1), ("two · pro", 2)]
+        );
+        assert!(cards.iter().all(|card| card.name == "OpenAI"));
+    }
+
     #[test]
     fn each_account_has_its_own_card_and_the_pool_pools_them() {
         let both = [window("one", 10.0, HOUR), window("two", 30.0, 2 * HOUR)];
@@ -1348,16 +1520,17 @@ mod tests {
             kind: quota::WindowKind::Weekly,
             ..window(account, 80.0, 6 * 24 * HOUR)
         };
-        let alone = limits(&[weekly("pro")], NOW);
+        let alone = accounts(&[weekly("pro")], NOW);
         assert_eq!(alone.len(), 1);
         assert_eq!(
             alone[0].note.as_deref(),
             Some("The plan reports no 5-hour window.")
         );
-        // Beside a 5-hour window, both cards show and neither carries the note.
-        let both = limits(&[weekly("plus"), window("plus", 50.0, HOUR)], NOW);
-        assert_eq!(both.len(), 2);
-        assert!(both.iter().all(|limit| limit.note.is_none()));
+        // Beside a 5-hour window, both rows show and the card has no note.
+        let both = accounts(&[weekly("plus"), window("plus", 50.0, HOUR)], NOW);
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].windows.len(), 2);
+        assert!(both[0].note.is_none());
     }
 
     #[test]
@@ -1403,14 +1576,19 @@ mod tests {
         assert_eq!(joined.summary.breakdown.machine[0].key, "studio");
         assert_eq!(joined.summary.breakdown.model.len(), 1);
         assert_eq!(joined.summary.breakdown.model[0].amount.runs, 2);
-        assert_eq!(joined.summary.limits.len(), 1);
-        assert_eq!(joined.summary.limits[0].remaining_percent, 40.0);
+        assert_eq!(joined.summary.accounts.len(), 1);
+        assert_eq!(joined.summary.accounts[0].windows.len(), 1);
+        assert_eq!(
+            joined.summary.accounts[0].windows[0].remaining_percent,
+            40.0
+        );
         assert_eq!(joined.machines[2].state, "error");
         assert_eq!(joined.summary.series.len(), 7);
     }
 
     #[test]
     fn a_shared_copy_of_an_account_joins_its_own_card_on_every_machine() {
+        type Reading<'a> = (quota::WindowKind, &'a str, f64);
         let copy =
             |account: &str, identity: &str, kind, remaining: f64, observed: i64| AccountWindow {
                 kind,
@@ -1433,10 +1611,15 @@ mod tests {
             copy("acct-1", "user", five, 90.0, NOW - 5000),
             copy("acct-2", "other", week, 30.0, NOW - 5000),
         ];
-        // The machine the account was shared to reads it later.
+        // The machine the account was shared to reads it later, with a
+        // scoped window the first machine has not read yet.
         let shared_to = vec![
             shared(copy("acct-1", "user", week, 70.0, NOW - 1000)),
             shared(copy("acct-1", "user", five, 60.0, NOW - 1000)),
+            shared(AccountWindow {
+                scope: "Fable".into(),
+                ..copy("acct-1", "user", week, 50.0, NOW - 1000)
+            }),
         ];
         let answer = |id: &str, windows: Vec<AccountWindow>| MachineAnswer {
             id: id.into(),
@@ -1453,30 +1636,35 @@ mod tests {
             ],
             NOW,
         );
-        let cards: Vec<(&str, &str, quota::WindowKind, f64)> = joined
+        let cards: Vec<(&str, &str, Vec<Reading>)> = joined
             .summary
-            .limits
+            .accounts
             .iter()
             .map(|card| {
                 (
                     card.account_id.as_str(),
-                    card.label.as_str(),
-                    card.kind,
-                    card.remaining_percent,
+                    card.subtitle.as_str(),
+                    card.windows
+                        .iter()
+                        .map(|row| (row.kind, row.scope.as_str(), row.remaining_percent))
+                        .collect(),
                 )
             })
             .collect();
-        // One card per account and window, named as where it signed in, with
-        // the freshest reading. The other account keeps its own card.
+        // One card per account, named as where it signed in, with the
+        // freshest reading of each window. The other account keeps its own card.
         assert_eq!(
             cards,
             vec![
-                ("acct-1", "user@example.test", five, 60.0),
-                ("acct-1", "user@example.test", week, 70.0),
-                ("acct-2", "other@example.test", week, 30.0),
+                ("acct-2", "other@example.test · pro", vec![(week, "", 30.0)]),
+                (
+                    "acct-1",
+                    "user@example.test · pro",
+                    vec![(five, "", 60.0), (week, "", 70.0), (week, "Fable", 50.0)]
+                ),
             ]
         );
-        assert_eq!(joined.summary.windows.len(), 3);
+        assert_eq!(joined.summary.windows.len(), 4);
         // One machine that holds both its own sign-in and a shared copy of
         // the same account shows it once.
         let mut both = shared_to;
@@ -1489,7 +1677,13 @@ mod tests {
             &request(Range::Week),
             NOW,
         );
-        let weekly: Vec<&Limit> = one.limits.iter().filter(|card| card.kind == week).collect();
+        assert_eq!(one.accounts.len(), 1);
+        assert_eq!(one.accounts[0].subtitle, "user@example.test · pro");
+        let weekly: Vec<&Limit> = one.accounts[0]
+            .windows
+            .iter()
+            .filter(|row| row.kind == week && row.scope.is_empty())
+            .collect();
         assert_eq!(weekly.len(), 1);
         assert_eq!(weekly[0].label, "user@example.test");
         // A copy without an identity, from a machine that names none, joins
@@ -1511,8 +1705,8 @@ mod tests {
             ],
             NOW,
         );
-        assert_eq!(joined.summary.limits.len(), 1);
-        assert_eq!(joined.summary.limits[0].account_id, "acct-1");
+        assert_eq!(joined.summary.accounts.len(), 1);
+        assert_eq!(joined.summary.accounts[0].account_id, "acct-1");
     }
 
     #[test]
