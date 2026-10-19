@@ -141,11 +141,19 @@
   onDestroy(() => { stopListening() })
 
   let discovering = $state(false)
+  // A page with no rows yet draws the stored rows core answers at once, and
+  // the full read, which can wait on discovery and Pi, replaces them.
   async function load(force = false) {
     void loadRouter()
     discovering = true
+    const full = tauri.invoke('local_mode_provider_inventory', { force })
+    if (!inventory) {
+      Promise.resolve(tauri.invoke('local_mode_provider_inventory', { cached: true }))
+        .then((rows) => { if (!inventory && Array.isArray(rows?.providers)) inventory = rows })
+        .catch(() => {})
+    }
     try {
-      inventory = await tauri.invoke('local_mode_provider_inventory', { force })
+      inventory = await full
       loadError = ''
       oninventory?.(inventory)
       if (force) status = refreshResult(inventory)

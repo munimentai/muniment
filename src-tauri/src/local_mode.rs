@@ -108,15 +108,18 @@ pub(crate) async fn local_mode_store_local_provider(
     .map(drop)
 }
 
+/// The provider inventory. `cached` answers the stored rows at once, so a
+/// page draws them before the full read fills the rest.
 #[tauri::command]
 pub(crate) async fn local_mode_provider_inventory(
     app: tauri::AppHandle,
     force: Option<bool>,
+    cached: Option<bool>,
 ) -> Result<Value, String> {
     model_service::request(
         &app,
         ModelAction::ProviderInventory,
-        data([("force", json!(force))]),
+        data([("force", json!(force)), ("cached", json!(cached))]),
     )
     .await
 }

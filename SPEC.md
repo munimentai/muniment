@@ -175,7 +175,7 @@ Beside it, a thinking level control lists only the levels the chip's model suppo
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
 **Settings → Models is one page.** Roles leads it with routing, assistance and their decision models,
-then the routing statements once a decision model is connected, then Connections. Full-width account rows show the plan,
+then the routing statements once a decision model is connected, then Connections. Connections draw the stored rows core answers at once, and the full read with discovery replaces them. Full-width account rows show the plan,
 routing state and Disconnect, and See usage opens the Usage page, the one place usage shows. The chip's picker lists every connected provider's
 current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. A local or custom server shows every model it serves, since the user installed each one. A row shows the name core's catalog or the server gives, else a provider id formatted, or a server's id as served. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an

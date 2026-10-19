@@ -108,6 +108,24 @@ it('lists the Anthropic accounts on its connect page, each with Disconnect, and 
   await waitFor(() => expect(screen.queryByText('work@example.test')).toBeNull())
 })
 
+it('draws the stored rows core answers at once while the full read waits, then takes the full read', async () => {
+  let finish
+  const full = new Promise((resolve) => { finish = resolve })
+  const stored = { ...inventory, providers: [inventory.providers[0]] }
+  const tauri = { invoke: vi.fn((command, payload) => {
+    if (command === 'local_mode_provider_inventory') return payload?.cached ? Promise.resolve(stored) : full
+    if (command === 'model_router_settings') return Promise.resolve({ accounts: [], subscriptions: [], families: [] })
+    return Promise.resolve(null)
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: null } })
+  expect(await screen.findByRole('region', { name: 'oMLX' })).toBeInTheDocument()
+  expect(screen.queryByText('Reading connections…')).toBeNull()
+  expect(screen.queryByRole('region', { name: 'Spare box' })).toBeNull()
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { cached: true })
+  finish(inventory)
+  expect(await screen.findByRole('region', { name: 'Spare box' })).toBeInTheDocument()
+})
+
 it('shows no other machine\'s rows while the picked machine answers', async () => {
   const tauri = { invoke: vi.fn((command) => command === 'local_mode_provider_inventory' || command === 'model_router_settings' ? new Promise(() => {}) : Promise.resolve(null)) }
   // This computer's accounts are in the snapshot when another machine is picked.
