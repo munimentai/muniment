@@ -135,7 +135,7 @@
     {#if page === 'models'}
       <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, focus: part, connect: connectProvider}} />
     {:else if page === 'tools'}
-      <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, focus: part, localNote: localNote('mcp')}} />
+      <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, focus: part, localNote: localNote('mcp'), searchNote: localNote('search')}} />
     {:else if page === 'machines'}
       <SettingsSection load={RuntimesSection} properties={{tauri, listen, switchDisabled: runtimeSwitchDisabled, focus: part}} />
     {:else if page === 'permissions'}

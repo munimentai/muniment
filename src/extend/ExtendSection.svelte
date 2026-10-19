@@ -19,8 +19,9 @@
   // Settings → Tools: MCP servers, skills, plugins and web search in one page,
   // with a type filter and one Add. `focus` picks the type a link or a
   // search result names. `localNote` is core's line on where the extensions
-  // keep their settings when that differs from the machine Settings names.
-  let { tauri, oncreate, focus = null, localNote = '' } = $props()
+  // keep their settings when that differs from the machine Settings names,
+  // and `searchNote` its line on where search keeps its provider keys.
+  let { tauri, oncreate, focus = null, localNote = '', searchNote = '' } = $props()
   const TYPES = ['mcp', 'skill', 'plugin', 'search']
   // A card names its publisher only when the server's name does not already.
   const distinctPublisher = entry => {
@@ -109,7 +110,7 @@
     {#snippet actions()}{#if tab === 'skill' || tab === 'plugin'}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}<Button icon="plus" variant="primary" disabled={busy} onclick={addForType}>Add</Button>{/snippet}
   </PageHead>
   <SettingsTabs label="Tool types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin},{id:'search',label:'Search',icon:'search'}]} onchange={showTab} />
-  {#if localNote && tab !== 'search'}<p class="note" role="note">{localNote}</p>{/if}
+  {#if tab === 'search' ? searchNote : localNote}<p class="note" role="note">{tab === 'search' ? searchNote : localNote}</p>{/if}
   {#if tab === 'search'}
     <SearchSection {tauri} embedded />
   {:else}
