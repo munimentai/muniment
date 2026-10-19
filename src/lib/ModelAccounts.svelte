@@ -5,14 +5,16 @@
   // disconnect icons. What an account has left lives on the Usage page. The
   // sign-ins the pool takes and a key form follow. Every command answers with the whole
   // router settings, and the parent redraws from them. A shared sign-in
-  // names the fleet member that holds it, from `fleet`.
+  // names the fleet member that holds it, from `fleet`. `runtime` names the
+  // machine the page shows, where a sign-in starts. Once the family holds a
+  // subscription, its sign-in reads Add another account.
   import { onDestroy, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import Toggle from './Toggle.svelte'
   import HoldSignIn from './HoldSignIn.svelte'
   import { routerHold } from './fleet-accounts.js'
 
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings, fleet = null, onheld } = $props()
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings, fleet = null, onheld, runtime = 'local' } = $props()
 
   let editingId = $state(null)
   let nameDraft = $state('')
@@ -91,7 +93,7 @@
     stopListening()
     unlisten = listen('local-mode-login', ({ payload }) => onSignInEvent(payload))
     try {
-      await tauri.invoke('model_router_subscription_start', { provider: entry.provider })
+      await tauri.invoke('model_router_subscription_start', { provider: entry.provider, runtime })
     } catch (error) {
       signIn = { ...signIn, stage: 'failed', message: String(error?.message ?? error) }
       stopListening()
@@ -214,7 +216,7 @@
               <span class="record tier">{[account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</span>
             {/if}
             {@render routingNote(account)}
-            {#if routerHold(fleet, account.id)}<HoldSignIn {tauri} account={routerHold(fleet, account.id)} onmoved={onheld} />{/if}
+            {#if routerHold(fleet, account.id)}<HoldSignIn {tauri} {runtime} account={routerHold(fleet, account.id)} onmoved={onheld} />{/if}
           </span>
           <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={16} variant="action" /></button>
         </li>
@@ -293,7 +295,7 @@
   {:else}
     <div class="sign-ins">
       {#each signIns as entry (entry.provider)}
-        <button type="button" class="sign-in" disabled={pending} aria-label={`Subscription: ${entry.label}`} onclick={() => startSignIn(entry)}><LucideIcon name="credit-card" size={14} />{signIns.length === 1 ? 'Subscription' : entry.label}</button>
+        <button type="button" class="sign-in" disabled={pending} aria-label={subscriptions.length ? `Add another ${entry.label} account` : `Subscription: ${entry.label}`} onclick={() => startSignIn(entry)}><LucideIcon name={subscriptions.length ? 'plus' : 'credit-card'} size={14} />{signIns.length > 1 ? entry.label : subscriptions.length ? 'Add another account' : 'Subscription'}</button>
       {/each}
       {#if family !== 'devin'}
         <button type="button" class="sign-in" disabled={pending} onclick={() => { adding = true }}><LucideIcon name="key-round" size={14} />Add a key</button>

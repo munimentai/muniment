@@ -171,9 +171,10 @@ it('draws subscriptions as one-line cards with no edit control and keys with edi
   expect(key).toHaveClass('key-card')
   expect(within(key).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Edit Work', 'Disconnect Work'])
   expect(within(key).queryByText('Usage and settings')).toBeNull()
-  const subscription = screen.getByRole('button', { name: 'Subscription: Claude Pro or Max' })
-  expect(subscription).toHaveTextContent(/^Subscription$/)
-  expect(subscription.querySelector('[data-icon="credit-card"]')).not.toBeNull()
+  // The family holds a subscription, so its sign-in adds another.
+  const subscription = screen.getByRole('button', { name: 'Add another Claude Pro or Max account' })
+  expect(subscription).toHaveTextContent(/^Add another account$/)
+  expect(subscription.querySelector('[data-icon="plus"]')).not.toBeNull()
   const add = screen.getByRole('button', { name: 'Add a key' })
   expect(add.querySelector('[data-icon="key-round"]')).not.toBeNull()
   await fireEvent.click(add)

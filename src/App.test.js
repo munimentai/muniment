@@ -1679,7 +1679,7 @@ describe('workspace composer entry', () => {
       await fireEvent.input(within(dialog).getByRole('searchbox'), { target: { value: query } })
       await fireEvent.click(within(dialog).getByRole('button', { name: row }))
       await fireEvent.click(within(dialog).getByRole('button', { name: 'Sign in' }))
-      expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: signIn })
+      expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: signIn, runtime: 'local' })
       await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     }
   })

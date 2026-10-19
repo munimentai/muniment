@@ -1,13 +1,13 @@
 <script>
   // Who holds one shared sign-in, the machine that refreshes it, in one mono
-  // line. Hold sign-in here asks core's `fleet.hold_sign_in` to move the
-  // refresher to this machine, which answers `held` at once or `requested`
-  // while the holder hands it over.
+  // line. Hold sign-in here asks core's `fleet.hold_sign_in` on `runtime`,
+  // the machine the page shows, to move the refresher there, which answers
+  // `held` at once or `requested` while the holder hands it over.
   import Button from './ui/Button.svelte'
   import { agentRequest } from '../agents/agent-runtime.js'
   import { holdLine } from './fleet-accounts.js'
 
-  let { tauri, account, onmoved } = $props()
+  let { tauri, account, onmoved, runtime = 'local' } = $props()
   let requested = $state(false)
   let pending = $state(false)
   let error = $state('')
@@ -16,7 +16,7 @@
     pending = true
     error = ''
     try {
-      const answer = await agentRequest(tauri, 'local', 'fleet.hold_sign_in', { account: account.name })
+      const answer = await agentRequest(tauri, runtime, 'fleet.hold_sign_in', { account: account.name })
       requested = true
       onmoved?.(answer?.status)
     } catch (failure) {

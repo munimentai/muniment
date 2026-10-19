@@ -15,6 +15,17 @@ describe('fleet sign-in holders', () => {
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'fleet.credentials', body: {} })
   })
 
+  it('marks the accounts this computer holds on another machine\'s list', async () => {
+    const invoke = vi.fn(async (_, { runtime }) => ({ accounts: runtime === 'local'
+      ? [{ ...received, holder: 'mac', this_machine: true }]
+      : [{ ...received, holder: 'mac', this_machine: false }, received] }))
+    const listed = await readFleetAccounts({ invoke }, 'box')
+    expect(listed[0].this_computer).toBe(true)
+    expect(listed[1].this_computer).toBeUndefined()
+    expect(holdLine(listed[0])).toBe('Shared from this computer')
+    expect(holdLine({ ...listed[0], shared: false })).toBe('Signed in on this computer')
+  })
+
   it('answers null when core lists no accounts or refuses', async () => {
     expect(await readFleetAccounts({ invoke: async () => ({ share_models: true, secrets: [] }) })).toBeNull()
     expect(await readFleetAccounts({ invoke: async () => { throw new Error('offline') } })).toBeNull()

@@ -133,7 +133,7 @@
     <!-- A page reads its machines when it opens, so switching them opens it again. -->
     {#key `${allMachines ? ALL_MACHINES : remoteRuntime?.id ?? 'local'}:${page}`}
     {#if page === 'models'}
-      <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, focus: part, connect: connectProvider}} />
+      <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, focus: part, connect: connectProvider, runtime: remoteRuntime?.id ?? 'local'}} />
     {:else if page === 'tools'}
       <SettingsSection load={ExtendSection} properties={{tauri, oncreate: oncreateextension, focus: part, localNote: localNote('mcp'), searchNote: localNote('search')}} />
     {:else if page === 'machines'}
