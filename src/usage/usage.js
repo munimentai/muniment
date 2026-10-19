@@ -1,7 +1,8 @@
 // The Usage page's words and numbers. Core's `usage.summary` sums each
 // machine's runs, reads each account's subscription windows and pools them
 // by provider, and core joins the machines, so this module only asks,
-// formats and names what core answers.
+// formats and names what core answers. Core gives one card per account,
+// with a row per window.
 import { agentRuntimes } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { familyName, providerName } from '../lib/provider-catalog.js'
@@ -147,13 +148,8 @@ export function rowLabel(row, breakdown) {
 
 // Every provider the page can filter by: those with usage and those with a window.
 export function providerOptions(summary) {
-  const ids = new Set([...(summary?.providers ?? []), ...(summary?.limits ?? []).map((limit) => limit.provider)])
+  const ids = new Set([...(summary?.providers ?? []), ...(summary?.accounts ?? []).map((account) => account.provider)])
   return [{ value: '', label: 'All providers' }, ...[...ids].sort().map((id) => ({ value: id, label: providerLabel(id), provider: id }))]
-}
-
-// The account a card reads, with its plan.
-export function accountLine(limit) {
-  return [limit?.label, limit?.plan].filter(Boolean).join(' · ')
 }
 
 const UNMETERED = { local: 'No limit', key: 'Billed by use', pending: 'Allowance pending', unread: 'Allowance unavailable' }

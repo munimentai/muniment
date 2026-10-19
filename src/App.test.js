@@ -8697,9 +8697,9 @@ it('shows no thinking control for a model without reasoning', async () => {
 
 const spentAccount = { provider: 'openai', account_id: 'a', label: 'work', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000 }
 it.each([
-  ['no window is low', { limits: [], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 40, status: 'ok' }] }, null],
-  ['one account of a pool is spent', { limits: [spentAccount], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 50, status: 'ok' }] }, null],
-  ['a pool is spent', { limits: [spentAccount], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000 }] }, 'OpenAI weekly limit reached.'],
+  ['no window is low', { accounts: [], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 40, status: 'ok' }] }, null],
+  ['one account of a pool is spent', { accounts: [{ provider: 'openai', identity: 'a', account_id: 'a', name: 'OpenAI', subtitle: 'work', windows: [spentAccount] }], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 50, status: 'ok' }] }, null],
+  ['a pool is spent', { accounts: [{ provider: 'openai', identity: 'a', account_id: 'a', name: 'OpenAI', subtitle: 'work', windows: [spentAccount] }], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000 }] }, 'OpenAI weekly limit reached.'],
 ])('keeps usage out of the composer and warns only when %s', async (_, answer, line) => {
   localModeStatus = true
   const original = invoke.getMockImplementation()
