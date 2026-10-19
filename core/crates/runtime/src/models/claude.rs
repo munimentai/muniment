@@ -774,7 +774,8 @@ fn finish(agent: &Path, executable: &Path, id: &str) -> Result<(), String> {
     for old in replaced {
         forget_folder(agent, &old);
     }
-    Ok(())
+    // The account's row replaces a Claude Code connection from before.
+    super::providers::retire_claude_code(agent)
 }
 
 #[cfg(test)]
@@ -928,6 +929,9 @@ esac
         let service = service(&profile);
         let agent = service.agent.clone();
         fake_claude(&agent, 0, &profile.join("unused"));
+        // A Claude Code connection from before, which the account replaces.
+        let record = agent.join(muniment_core::models::pi_models::RECORD_FILE);
+        std::fs::write(&record, r#"{"claudeCode":true}"#).unwrap();
         let events = service.subscribe();
         assert_eq!(start(&service).unwrap(), Value::Null);
         let shown = next(&events, "event");
@@ -948,6 +952,8 @@ esac
         assert!(claude_accounts::folder(&agent, &account)
             .join(".signed-in")
             .exists());
+        let kept: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+        assert!(kept.get("claudeCode").is_none());
         // The scratch folder with the browser helper is gone.
         let left: Vec<_> = std::fs::read_dir(agent.join(claude_accounts::FOLDERS))
             .unwrap()

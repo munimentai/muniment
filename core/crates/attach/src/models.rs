@@ -69,8 +69,6 @@ pub enum ModelAction {
     SetThinkingLevel,
     DisconnectProvider,
     StoreEndpoint,
-    ClaudeCodeStatus,
-    ConnectClaudeCode,
     RouterSettings,
     RouterSetEnabled,
     RouterAddAccount,
@@ -117,7 +115,7 @@ pub enum ModelAction {
 
 impl ModelAction {
     /// Every action, in wire order.
-    pub const ALL: [ModelAction; 53] = [
+    pub const ALL: [ModelAction; 51] = [
         Self::ProviderStatus,
         Self::StoreProviderKey,
         Self::StoreLocalProvider,
@@ -127,8 +125,6 @@ impl ModelAction {
         Self::SetThinkingLevel,
         Self::DisconnectProvider,
         Self::StoreEndpoint,
-        Self::ClaudeCodeStatus,
-        Self::ConnectClaudeCode,
         Self::RouterSettings,
         Self::RouterSetEnabled,
         Self::RouterAddAccount,
@@ -180,7 +176,6 @@ impl ModelAction {
             self,
             Self::ProviderStatus
                 | Self::ProviderInventory
-                | Self::ClaudeCodeStatus
                 | Self::RouterSettings
                 | Self::RouterTestClassifier
                 | Self::RouterTestRoute
@@ -216,7 +211,6 @@ impl ModelAction {
             Self::StoreProviderKey
             | Self::ProviderInventory
             | Self::StoreEndpoint
-            | Self::ClaudeCodeStatus
             | Self::RouterTestClassifier
             | Self::RouterTestRoute
             | Self::RouterSubscriptionStart
@@ -241,8 +235,6 @@ impl ModelAction {
             Self::SetThinkingLevel => "set_thinking_level",
             Self::DisconnectProvider => "disconnect_provider",
             Self::StoreEndpoint => "store_endpoint",
-            Self::ClaudeCodeStatus => "claude_code_status",
-            Self::ConnectClaudeCode => "connect_claude_code",
             Self::RouterSettings => "router_settings",
             Self::RouterSetEnabled => "router_set_enabled",
             Self::RouterAddAccount => "router_add_account",

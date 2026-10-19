@@ -25,8 +25,6 @@ pub const STATUS_PROVIDERS: [&str; 4] = ["anthropic", "google", "openai", "ollam
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Method {
-    /// The Claude Code sign-in through the pi-claude-bridge package.
-    ClaudeCode,
     /// An account sign-in.
     Account,
     /// An API key in Pi's `auth.json`.
@@ -310,7 +308,6 @@ pub const PROVIDERS: &[Provider] = &[
 
 /// The label each method shows. An account shows its own label first.
 pub const METHOD_LABELS: &[(&str, &str)] = &[
-    ("claude-code", "Claude Code sign-in"),
     ("account", "Account"),
     ("key", "API key"),
     ("ollama", "Ollama server"),
@@ -909,7 +906,7 @@ mod tests {
                 "methods": ["account", "key"], "account": {"provider": "kimi", "label": "Kimi Code account"},
                 "keyName": "Kimi For Coding"})
         );
-        assert_eq!(value["methodLabels"]["claude-code"], "Claude Code sign-in");
+        assert!(value["methodLabels"].get("claude-code").is_none());
         assert_eq!(value["aliases"]["antigravity"], "google");
         assert_eq!(value["sourceTags"]["router"], "Router");
         assert_eq!(value["families"][5], json!({"id": "meta", "name": "Meta"}));
