@@ -71,6 +71,7 @@ pub const NOT_SETTINGS: [&str; 2] = ["project", "project-thread"];
 
 const TOOLS_NOTE: &str =
     "What you add reaches every machine. On or off changes only this computer.";
+const SEARCH_KEYS_NOTE: &str = "Keys stay on the machine where you add them.";
 const TOOLS_LOCAL: [Local; 1] = [Local {
     field: "enabled",
     label: "On or off",
@@ -126,9 +127,9 @@ pub const PARTS: [Part; 14] = [
             field: "keys",
             label: "Provider keys",
             scope: Scope::Machine,
-            note: "",
+            note: SEARCH_KEYS_NOTE,
         }],
-        note: "",
+        note: SEARCH_KEYS_NOTE,
         save: None,
     },
     Part {
@@ -397,6 +398,12 @@ mod tests {
         // On or off stays on this computer, so the line holds for one machine too.
         assert_eq!(find("mcp")["notes"]["one"], TOOLS_NOTE);
         assert_eq!(find("models")["notes"]["one"], "");
+        // Search keys stay on each machine, which the all machines line says.
+        assert_eq!(
+            find("search")["notes"],
+            json!({"all": SEARCH_KEYS_NOTE, "one": ""})
+        );
+        assert_eq!(find("search")["machine_local"][0]["note"], SEARCH_KEYS_NOTE);
         assert_eq!(find("retention")["notes"], json!({"all": "", "one": ""}));
         assert!(operation(json!({"x": 1})).is_err());
     }
