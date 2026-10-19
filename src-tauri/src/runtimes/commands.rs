@@ -757,6 +757,7 @@ mod tests {
                 install_kind: Some("container".into()),
                 form_factor: muniment_core::form_factor::detect()
                     .map(|shape| shape.as_str().to_owned()),
+                runtime_name: Some("Build box".into()),
             }
         );
         let paired = registry.list();

@@ -503,6 +503,30 @@ describe('Model sharing', () => {
     expect(screen.queryByText("Uses this computer's models")).toBeNull()
   })
 
+  it('never shows the switch off when core does not answer, and follows a share core turns on', async () => {
+    const state = { shareModels: true }
+    let answers = false
+    const handlers = []
+    const swarmListen = vi.fn(async (event, handle) => { if (event === 'swarm-changed') handlers.push(handle); return () => {} })
+    const bridge = tauri({ agent_request: (request) => { if (!answers) throw new Error('The request timed out.'); return fleet(state)(request) } })
+    render(RuntimesSection, { tauri: bridge, listen: swarmListen })
+    const toggle = await screen.findByRole('switch', { name: 'Share model connections' })
+    expect(await screen.findByText('This computer did not say whether it shares its model connections.')).toBeInTheDocument()
+    expect(toggle).toBeDisabled()
+    // Core shares, and the fleet's account records change: the switch reads core again.
+    answers = true
+    await waitFor(() => expect(handlers.length).toBe(1))
+    handlers[0]({ payload: { change: { kind: 'records' } } })
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
+    expect(toggle).toBeEnabled()
+    expect(screen.queryByText('This computer did not say whether it shares its model connections.')).toBeNull()
+    // A later failed read keeps core's last answer.
+    answers = false
+    handlers[0]({ payload: { change: { kind: 'records' } } })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+  })
+
   it('names the failure when core refuses the switch', async () => {
     const bridge = tauri({ agent_request: ({ body }) => { if (body.share_models !== undefined) throw new Error('This runtime is not in a fleet.'); return { share_models: false } } })
     render(RuntimesSection, { tauri: bridge, listen })

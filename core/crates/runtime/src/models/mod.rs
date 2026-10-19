@@ -50,6 +50,7 @@ pub struct ModelService {
     sign_ins: sign_in::SignInState,
     pool_sign_ins: pool_sign_in::PoolSignIns,
     claude_sign_ins: claude::ClaudeSignIns,
+    listed: providers::ListedModels,
     sign_in_page: Arc<SignInPage>,
     subscribers: Mutex<Vec<Sender<Value>>>,
     replays: Mutex<VecDeque<Replay>>,
@@ -90,6 +91,7 @@ impl ModelService {
             sign_ins: sign_in::SignInState::default(),
             pool_sign_ins: pool_sign_in::PoolSignIns::default(),
             claude_sign_ins: claude::ClaudeSignIns::default(),
+            listed: providers::ListedModels::default(),
             sign_in_page,
             subscribers: Mutex::new(Vec::new()),
             replays: Mutex::new(VecDeque::new()),
@@ -202,11 +204,17 @@ impl ModelService {
                 return Ok(replay.result.clone());
             }
         }
+        // A cached inventory only reads, so it never waits on the model file
+        // lock a full read holds.
+        let cached = request.action == ModelAction::ProviderInventory
+            && request.data.get("cached") == Some(&Value::Bool(true));
         let result = self
             .run(request.action, request.data)?
             .map_err(ProtocolError::invalid_request_with_reason)?;
         // A saved endpoint, a scan or a shared connection may have written a key.
-        self.seal_endpoint_keys();
+        if !cached {
+            self.seal_endpoint_keys();
+        }
         if let (Some(key), Some(digest)) = (key, digest) {
             let mut replays = self
                 .replays
@@ -258,11 +266,16 @@ impl ModelService {
             }
             ModelAction::ProviderInventory => {
                 let data: Inventory = parse(data)?;
-                answer(providers::inventory(
-                    agent,
-                    &self.engine,
-                    data.force.unwrap_or(false),
-                ))
+                if data.cached == Some(true) {
+                    answer(providers::cached_inventory(agent, &self.listed))
+                } else {
+                    answer(providers::inventory(
+                        agent,
+                        &self.engine,
+                        data.force.unwrap_or(false),
+                        &self.listed,
+                    ))
+                }
             }
             ModelAction::SetDefaultModel => {
                 let data: ProviderModel = parse(data)?;
@@ -611,6 +624,9 @@ struct LocalProvider {
 struct Inventory {
     #[serde(default)]
     force: Option<bool>,
+    /// Answers the stored rows at once, without discovery or a Pi start.
+    #[serde(default)]
+    cached: Option<bool>,
 }
 
 #[derive(Deserialize)]

@@ -902,8 +902,10 @@ pub fn thread_instructions(profile: &Path, thread: &str) -> Result<Option<String
         }))
         .transpose()
 }
-/// `agent.threads`: every thread of one agent that the journal holds, newest
-/// first, as `{thread_id, title, updated_at, primary}`.
+/// `agent.threads`: every thread of one agent that the journal holds and a
+/// thread list shows, newest first, as `{thread_id, title, updated_at,
+/// primary}`. A conversation opened with no run yet holds no message, so it
+/// lists once its first run starts, as the agent's runs do.
 pub fn threads(
     profile: &Path,
     journal: &mut crate::journal::RunJournal,
@@ -926,7 +928,15 @@ pub fn threads(
     let summaries = journal
         .summaries_of_threads(&ids)
         .map_err(|_| "The agent's threads could not be read.".to_string())?;
-    let threads: Vec<serde_json::Value> = summaries
+    let mut listed = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        if crate::owned_threads::listed(journal, &summary.thread_id)
+            .map_err(|_| "The agent's threads could not be read.".to_string())?
+        {
+            listed.push(summary);
+        }
+    }
+    let threads: Vec<serde_json::Value> = listed
         .into_iter()
         .map(|summary| {
             serde_json::json!({
@@ -2380,7 +2390,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_threads_lists_every_thread_of_the_agent_newest_first() {
+    fn agent_threads_lists_every_thread_of_the_agent_with_a_run_newest_first() {
         let (root_dir, profile) = profile();
         let agent = save(
             &profile,
@@ -2412,6 +2422,16 @@ mod tests {
         let older = create("2026-01-01T08:00:00Z");
         let deleted = create("2026-01-01T10:00:00Z");
         let other = create("2026-01-01T11:00:00Z");
+        // A conversation opened with no run holds no message and does not list.
+        let empty = create("2026-01-01T12:00:00Z");
+        let runs = rusqlite::Connection::open(root_dir.join("runs.sqlite3")).unwrap();
+        for (run, thread) in [("run-primary", &primary), ("run-older", &older)] {
+            runs.execute(
+                "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
+                [run, thread.as_str()],
+            )
+            .unwrap();
+        }
         let seq = journal.last_thread_seq(&older).unwrap();
         journal
             .append_thread_title_renamed(
@@ -2430,7 +2450,7 @@ mod tests {
             state
                 .primary_threads
                 .insert(agent.id.clone(), primary.clone());
-            for thread in [&primary, &older, &deleted] {
+            for thread in [&primary, &older, &deleted, &empty] {
                 state.threads.insert(thread.clone(), agent.id.clone());
             }
             state.threads.insert(other.clone(), "another-agent".into());

@@ -89,6 +89,8 @@ pub(crate) enum Observation {
         version: Option<String>,
         install_kind: Option<String>,
         form_factor: Option<String>,
+        /// The name the runtime gives itself.
+        runtime_name: Option<String>,
     },
     /// The update fields of the runtime's `runtime.info`.
     Update(UpdateInfo),
@@ -245,6 +247,7 @@ pub(crate) fn welcome(client: &DesktopClient) -> Observation {
         form_factor: info
             .and_then(|info| info.form_factor)
             .map(|shape| shape.as_str().to_owned()),
+        runtime_name: info.map(|info| info.runtime_name.clone()),
     }
 }
 

@@ -266,12 +266,24 @@ fn a_paired_device_lists_an_agents_threads_and_reads_why_a_save_was_refused() {
     let primary = client.create_thread().unwrap();
     let earlier = client.create_thread().unwrap();
     let unrelated = client.create_thread().unwrap();
+    let empty = client.create_thread().unwrap();
+    // A thread lists once a run holds a message.
+    let journal = rusqlite::Connection::open(temporary.profile.join("runs.sqlite3")).unwrap();
+    for (run, thread) in [("run-primary", &primary), ("run-earlier", &earlier)] {
+        journal
+            .execute(
+                "INSERT INTO run_threads(run_id,thread_id,thread_run_ordinal) VALUES(?1,?2,1)",
+                [run, thread.as_str()],
+            )
+            .unwrap();
+    }
     muniment_core::agents::with_state(&temporary.profile, |agent_state| {
         agent_state
             .primary_threads
             .insert(id.clone(), primary.clone());
         agent_state.threads.insert(primary.clone(), id.clone());
         agent_state.threads.insert(earlier.clone(), id.clone());
+        agent_state.threads.insert(empty.clone(), id.clone());
         Ok(())
     })
     .unwrap();
@@ -284,9 +296,9 @@ fn a_paired_device_lists_an_agents_threads_and_reads_why_a_save_was_refused() {
     assert!(threads
         .iter()
         .any(|thread| thread["thread_id"] == earlier.as_str() && thread["primary"] == false));
-    assert!(!threads
-        .iter()
-        .any(|thread| thread["thread_id"] == unrelated.as_str()));
+    assert!(!threads.iter().any(|thread| {
+        thread["thread_id"] == unrelated.as_str() || thread["thread_id"] == empty.as_str()
+    }));
     assert!(threads
         .iter()
         .all(|thread| thread["title"].is_string() && thread["updated_at"].is_string()));

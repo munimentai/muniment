@@ -252,6 +252,7 @@ impl Runtimes {
                 version,
                 install_kind,
                 form_factor,
+                runtime_name,
             } => {
                 let changed = entry.version != version
                     || entry.install_kind != install_kind
@@ -261,12 +262,15 @@ impl Runtimes {
                 entry.install_kind = install_kind.clone();
                 entry.form_factor = form_factor.clone();
                 drop(observed);
-                if changed {
-                    if let Some(registry) = &self.registry {
-                        let _ = registry.observe(id, version, install_kind, form_factor);
-                    }
-                }
-                changed
+                // The runtime's own name can change while the rest stays, so
+                // the registry hears each welcome that names one.
+                let renamed = (changed || runtime_name.is_some())
+                    && self.registry.as_ref().is_some_and(|registry| {
+                        registry
+                            .observe(id, version, install_kind, form_factor, runtime_name)
+                            .unwrap_or(false)
+                    });
+                changed || renamed
             }
         }
     }
@@ -757,6 +761,7 @@ mod tests {
             id: "018f0000-0000-7000-8000-000000000042".into(),
             entry: RuntimeEntry {
                 name: "Build box".into(),
+                user_named: None,
                 ssh: None,
                 version: version.map(str::to_owned),
                 install_kind: Some("server".into()),
@@ -823,6 +828,7 @@ mod tests {
             version: Some("1.0.0".into()),
             install_kind: Some("desktop".into()),
             form_factor: Some("laptop".into()),
+            runtime_name: None,
         };
         assert!(runtimes.record(id, welcome.clone()));
         assert!(!runtimes.record(id, welcome));
@@ -857,6 +863,7 @@ mod tests {
             version: Some(version.into()),
             install_kind: Some("server".into()),
             form_factor: None,
+            runtime_name: None,
         };
         runtimes.record(older, welcome("1.14.0"));
         assert_eq!(
@@ -906,6 +913,7 @@ mod tests {
                 version: Some(newer.clone()),
                 install_kind: Some("desktop".into()),
                 form_factor: None,
+                runtime_name: None,
             },
         );
         fresh.record(
@@ -914,6 +922,7 @@ mod tests {
                 version: Some("999.0.0".into()),
                 install_kind: Some("container".into()),
                 form_factor: None,
+                runtime_name: None,
             },
         );
         assert_eq!(fresh.newest_desktop_peer(), Some(newer));

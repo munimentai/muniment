@@ -2,7 +2,8 @@
   // Account → MuniCloud: one switch keeps the model connections this
   // computer shares in MuniCloud, which holds them encrypted and renews
   // sign-ins while this computer is off. It needs Share model connections on
-  // Machines, which core answers through `fleet.credentials`.
+  // Machines, which core answers through `fleet.credentials`. A read that
+  // fails leaves the sharing state unknown, never off.
   import { onMount } from 'svelte'
   import Group from '../lib/ui/Group.svelte'
   import Row from '../lib/ui/Row.svelte'
@@ -20,7 +21,7 @@
     let alive = true
     let stop
     Promise.resolve(tauri.invoke('runtime_list')).then((next) => { if (alive) list = next }).catch(() => {})
-    Promise.resolve(agentRequest(tauri, 'local', 'fleet.credentials', {})).then((answer) => { if (alive) shareModels = !!answer?.share_models }).catch(() => { shareModels = false })
+    Promise.resolve(agentRequest(tauri, 'local', 'fleet.credentials', {})).then((answer) => { if (alive) shareModels = !!answer?.share_models }).catch(() => {})
     Promise.resolve(listen?.('runtimes-changed', ({ payload }) => { if (payload?.runtimes) list = payload }))
       .then((unlisten) => { if (alive) stop = unlisten; else unlisten?.() })
       .catch(() => {})
