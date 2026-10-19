@@ -80,3 +80,15 @@ it('names the refusal core gives', async () => {
   await fireEvent.click(screen.getByRole('button', { name: 'Save wait' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Choose an unattended wait between one minute and seven days.')
 })
+
+it('saves for every machine and keeps Allow bypass for one machine', async () => {
+  const machine = runtime()
+  render(PermissionSettings, { tauri: machine.tauri, machineName: 'every machine', all: true })
+  await screen.findByText('Default modes')
+  expect(screen.getByText('How agents and threads on every machine ask before they act.')).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).toBeDisabled()
+  expect(screen.getByText('Each machine keeps its own. Pick one machine to change it.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: /^Default thread mode:/ }))
+  await fireEvent.click(within(screen.getByRole('menu', { name: 'Default thread mode' })).getByRole('menuitemradio', { name: 'Plan first' }))
+  await waitFor(() => expect(machine.saves()).toEqual([{ default_thread_mode: 'plan', scope: 'all' }]))
+})

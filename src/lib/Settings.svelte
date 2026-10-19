@@ -27,7 +27,7 @@
   const VoiceSection = () => import('./VoiceSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
   const ThreadRetention = () => import('./ThreadRetention.svelte')
-  import { LOCAL_PARTS, settingsMachine } from '../runtimes/runtimes.js'
+  import { ALL_MACHINES, LOCAL_PARTS, allMachinesNote, settingsMachine } from '../runtimes/runtimes.js'
   import MachineScope from '../runtimes/MachineScope.svelte'
 
   let {
@@ -71,11 +71,22 @@
   const part = $derived(page === target[0] ? target[1] : null)
   let panel = $state()
   const machine = $derived(settingsMachine(runtimeList, page))
+  // Settings opens on All machines. Picking one machine selects it, and
+  // picking All machines again keeps the selected machine for the composer.
+  let scope = $state(ALL_MACHINES)
+  const allMachines = $derived(!!machine && scope === ALL_MACHINES)
+  const machineLabel = $derived(remoteRuntime?.name ?? 'this computer')
+  function pickScope(choice) {
+    scope = choice === ALL_MACHINES ? ALL_MACHINES : choice.id
+    if (choice !== ALL_MACHINES && choice.id !== machine?.selected.id) onselectruntime(choice)
+  }
   const sectionLabel = $derived(sections.find(([id]) => id === page)?.[1] ?? 'Settings')
   // Each page's PageHead shows the sidebar label as its title.
   setContext('page-title', () => sectionLabel)
-  // A part that keeps this computer's settings says so while another machine is selected.
-  const localNote = (id) => remoteRuntime && LOCAL_PARTS.includes(id) ? `These settings belong to this computer. ${remoteRuntime.name} keeps its own.` : ''
+  // A part that keeps this computer's settings says so while another machine
+  // is selected, and a part that stays on each machine says so while
+  // Settings changes all machines.
+  const localNote = (id) => allMachines ? allMachinesNote(id, machineLabel) : remoteRuntime && LOCAL_PARTS.includes(id) ? `These settings belong to this computer. ${remoteRuntime.name} keeps its own.` : ''
 
   onMount(() => {
     const onKeydown = (event) => {
@@ -114,9 +125,9 @@
 
 <div data-panel="settings" class="settings-layout" role="dialog" aria-label="Settings" bind:this={panel}>
   <PanelPage>
-    {#if machine}<MachineScope scope={machine} disabled={runtimeSwitchDisabled} onselect={onselectruntime} />{/if}
-    <!-- A page reads its machine when it opens, so switching machines opens it again. -->
-    {#key `${remoteRuntime?.id ?? 'local'}:${page}`}
+    {#if machine}<MachineScope scope={machine} all={allMachines} note={allMachines ? allMachinesNote(page) : ''} disabled={runtimeSwitchDisabled} onselect={pickScope} />{/if}
+    <!-- A page reads its machines when it opens, so switching them opens it again. -->
+    {#key `${allMachines ? ALL_MACHINES : remoteRuntime?.id ?? 'local'}:${page}`}
     {#if page === 'models'}
       <SettingsSection load={ModelsSection} properties={{tauri, listen, oninventory, inventory, focus: part, connect: connectProvider}} />
     {:else if page === 'tools'}
@@ -124,7 +135,7 @@
     {:else if page === 'machines'}
       <SettingsSection load={RuntimesSection} properties={{tauri, listen, switchDisabled: runtimeSwitchDisabled, focus: part}} />
     {:else if page === 'permissions'}
-      <SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: remoteRuntime?.name ?? 'this computer', onsaved: onpermissions}} />
+      <SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: allMachines ? 'every machine' : machineLabel, all: allMachines, onsaved: onpermissions}} />
     {:else if page === 'account'}
       <PageHead intro="Your profile, and the MuniCloud account that holds your plan." />
       <SettingsPart id="profile" title="Profile" focus={part === 'profile'}>
@@ -136,7 +147,7 @@
             <PageHead intro="Local mode runs on this device with your own providers. A free account adds the mobile relay." />
             <Group label="Account">
               <Row title="Sign in" description="Pair your phone and devices on one account.">
-                <Button disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</Button>
+                <Button variant="primary" disabled={signInDisabled} onclick={onsignin}>Sign in for cloud features</Button>
               </Row>
               {#if accountStatus}<FailureNote failure={accountStatus} />{/if}
             </Group>
@@ -153,7 +164,7 @@
       <SettingsPart id="memory" title="Memory" focus={part === 'memory'}>
         <SettingsSection load={MemorySection} properties={{tauri, part: 'memory'}} />
       </SettingsPart>
-      <SettingsPart id="context" title="Context" focus={part === 'context'}>
+      <SettingsPart id="context" title="Context" note={localNote('context')} focus={part === 'context'}>
         <SettingsSection load={ContextSettings} properties={{tauri}} />
       </SettingsPart>
       <SettingsPart id="retention" title="Retention" note={localNote('retention')} focus={part === 'retention'}>

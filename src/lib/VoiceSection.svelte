@@ -145,7 +145,7 @@
       {#if install?.state === 'installing'}
         <Button onclick={cancelInstall}>Cancel install</Button>
       {:else if install?.state !== 'installed'}
-        <Button onclick={startInstall}>Install</Button>
+        <Button variant="primary" onclick={startInstall}>Install</Button>
       {/if}
     </Row>
     {#if installError}<p role="alert">{installError}</p>{/if}

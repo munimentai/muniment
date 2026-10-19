@@ -136,17 +136,20 @@ describe('§1.2 signal allowlist', () => {
 })
 
 describe('one focus ring', () => {
-  it('is one global :focus-visible rule that draws a 2px ring in --focus-ring', () => {
+  it('is one global :focus-visible rule that draws a 1px ring in --focus-ring', () => {
     // The leading anchor keeps this to the bare `:focus-visible` selector, not
     // a component-qualified one.
     const source = read('src/styles/base.css').replace(/\/\*[\s\S]*?\*\//g, '')
     const rules = [...source.matchAll(/(?:^|[};])\s*:focus-visible\s*\{([^}]*)\}/g)]
     expect(rules).toHaveLength(1)
-    expect(rules[0][1]).toMatch(/outline:\s*2px solid var\(--focus-ring\) !important\s*;/)
-    // The one exception is a text field whose frame draws the ring, which the composer alone uses.
+    expect(rules[0][1]).toMatch(/outline:\s*1px solid var\(--focus-ring\) !important\s*;/)
+    // A text field whose frame shows focus leaves the ring to it: the composer,
+    // the Settings search, the command palette and the launcher.
     expect(source).toMatch(/\[data-focus-frame\]:focus-visible\s*\{\s*outline:\s*0 !important;\s*\}/)
     const framed = COMPONENTS.filter((file) => /data-focus-frame/.test(markup(read(file))))
-    expect(framed).toEqual(['src/App.svelte'])
+    expect(framed).toEqual(['src/App.svelte', 'src/Launcher.svelte', 'src/sidebar/CommandPalette.svelte'])
+    // Menu items and options, and every control while the pointer leads, draw no ring.
+    expect(source).toMatch(/:root\[data-pointer\] :focus-visible:not\(input, textarea, select, \[contenteditable\]\)\s*\{\s*outline:\s*0 !important;\s*\}/)
     expect(read('src/composer/ChatComposer.svelte')).toMatch(/\.composer:focus-within\s*\{[^}]*outline:\s*1px solid var\(--focus-edge\)/)
   })
 

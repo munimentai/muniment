@@ -22,6 +22,9 @@ const MIN_UNATTENDED_TIMEOUT_SECONDS: u64 = 60;
 const MAX_UNATTENDED_TIMEOUT_SECONDS: u64 = 7 * 24 * 60 * 60;
 /// The most requests in each global rule list.
 pub const MAX_GLOBAL_RULES: usize = 64;
+/// The settings each machine keeps for itself. Fleet sync carries every
+/// other setting to each member.
+pub const MACHINE_LOCAL: [&str; 1] = ["bypass_enabled"];
 
 static WRITE: Mutex<()> = Mutex::new(());
 
@@ -252,6 +255,25 @@ pub fn thread_permissions(profile: &Path) -> RunPermissions {
     }
 }
 
+/// The machines one `permission.settings_save` changes. `machine` changes
+/// the runtime that answers, and fleet sync carries the shared settings on.
+/// `all` changes only the shared settings, so the change reaches every
+/// member, and refuses a change to a [`MACHINE_LOCAL`] setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Scope {
+    #[default]
+    Machine,
+    All,
+}
+
+/// The settings as an answer, with the ones each machine keeps for itself.
+fn answer(settings: PermissionSettings) -> Value {
+    let mut answer = json!(settings);
+    answer["machine_local"] = json!(MACHINE_LOCAL);
+    answer
+}
+
 /// Answers `permission.modes`, `permission.settings` and
 /// `permission.settings_save`.
 pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, String> {
@@ -261,6 +283,8 @@ pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Save {
+        #[serde(default)]
+        scope: Scope,
         default_thread_mode: Option<PermissionMode>,
         default_agent_mode: Option<PermissionMode>,
         bypass_enabled: Option<bool>,
@@ -277,10 +301,15 @@ pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, 
         }
         "permission.settings" => {
             serde_json::from_value::<Empty>(body).map_err(invalid)?;
-            Ok(json!(load(profile)))
+            Ok(answer(load(profile)))
         }
         "permission.settings_save" => {
             let change: Save = serde_json::from_value(body).map_err(invalid)?;
+            if change.scope == Scope::All && change.bypass_enabled.is_some() {
+                return Err(
+                    "Allow bypass stays on each machine. Pick one machine to change it.".into(),
+                );
+            }
             let mut settings = load(profile);
             if let Some(mode) = change.default_thread_mode {
                 settings.default_thread_mode = mode;
@@ -317,7 +346,9 @@ pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, 
             if let Some(rules) = change.always_allow {
                 settings.always_allow = rules;
             }
-            Ok(json!(save(profile, settings)?))
+            let saved = save(profile, settings)?;
+            crate::fleet_sync::changed(profile, crate::fleet_sync::PERMISSIONS_CLASS);
+            Ok(answer(saved))
         }
         _ => Err("The permission operation is unknown.".into()),
     }
@@ -499,6 +530,38 @@ mod tests {
         // An unknown field still makes the file unreadable.
         std::fs::write(profile.join(SETTINGS_FILE), r#"{"x": 1}"#).unwrap();
         assert_eq!(load(&profile), PermissionSettings::default());
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn the_all_scope_changes_shared_settings_and_refuses_a_machine_local_one() {
+        let profile = profile();
+        let read = operation(&profile, "permission.settings", json!({})).unwrap();
+        assert_eq!(read["machine_local"], json!(["bypass_enabled"]));
+        let saved = operation(
+            &profile,
+            "permission.settings_save",
+            json!({"scope": "all", "default_agent_mode": "plan"}),
+        )
+        .unwrap();
+        assert_eq!(saved["default_agent_mode"], "plan");
+        assert_eq!(saved["machine_local"], json!(["bypass_enabled"]));
+        let refused = operation(
+            &profile,
+            "permission.settings_save",
+            json!({"scope": "all", "bypass_enabled": false}),
+        )
+        .unwrap_err();
+        assert!(refused.contains("each machine"));
+        assert!(load(&profile).bypass_enabled);
+        // One machine takes the change.
+        let saved = operation(
+            &profile,
+            "permission.settings_save",
+            json!({"scope": "machine", "bypass_enabled": false}),
+        )
+        .unwrap();
+        assert_eq!(saved["bypass_enabled"], false);
         std::fs::remove_dir_all(profile).unwrap();
     }
 }

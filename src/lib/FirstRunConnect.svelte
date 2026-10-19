@@ -51,18 +51,18 @@
         <div class="step" aria-live="polite">
           {#if signIn.stage === 'failed'}<FailureNote failure={signIn.message} detail={signIn.detail} />{:else}<p>{signIn.message}</p>{/if}
           {#if signIn.code}<p class="code">{signIn.code}</p>{/if}
-          {#if signIn.url}<button type="button" onclick={() => onsigninopen?.(signIn.url)}>Open the sign-in page</button>{/if}
+          {#if signIn.url}<button type="button" data-variant={signIn.prompt?.kind === 'input' ? undefined : 'primary'} onclick={() => onsigninopen?.(signIn.url)}>Open the sign-in page</button>{/if}
           {#if signIn.prompt?.kind === 'select'}
             <p>{signIn.prompt.title}</p>
             <div class="choices">{#each signIn.prompt.options as choice}<button type="button" onclick={() => onsigninanswer?.(choice)}>{choice}</button>{/each}</div>
           {:else if signIn.prompt?.kind === 'input'}
             <form onsubmit={(event) => { event.preventDefault(); if (answer.trim()) { onsigninanswer?.(answer.trim()); answer = '' } }}>
               <input type="text" bind:value={answer} placeholder={signIn.prompt.placeholder ?? ''} aria-label={signIn.prompt.title} autocomplete="off" />
-              <button type="submit" disabled={!answer.trim()}>Continue</button>
+              <button type="submit" data-variant="primary" disabled={!answer.trim()}>Continue</button>
             </form>
           {/if}
           {#if signIn.stage === 'failed' || signIn.stage === 'cancelled'}
-            <button type="button" onclick={() => onconnect?.(option)}>Try again</button>
+            <button type="button" data-variant="primary" onclick={() => onconnect?.(option)}>Try again</button>
           {:else}
             <button type="button" onclick={() => onsignincancel?.()}>Cancel</button>
           {/if}
@@ -83,7 +83,7 @@
       {:else if open === option.id && server?.state === 'not-running'}
         <div class="step">
           <p>Open {server.name} and start its local server.</p>
-          <button type="button" onclick={onrescan}>Scan again</button>
+          <button type="button" data-variant="primary" onclick={onrescan}>Scan again</button>
         </div>
       {/if}
     </li>

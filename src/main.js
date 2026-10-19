@@ -10,6 +10,7 @@ import { applyType, readStoredType } from './lib/type-state.js'
 import { applyFrame, readStoredFrame } from './lib/frame-state.js'
 import { applyDisplay, followSystemMotion, readStoredDisplay } from './lib/display-state.js'
 import { loadModelRegistry } from './lib/model-registry.js'
+import { trackFocusSource } from './lib/focus-source.js'
 
 applyTheme(document.documentElement, readStoredTheme())
 // In System a palette other than the default shows its light or dark version, so an OS switch reapplies it.
@@ -18,6 +19,7 @@ applyType(document.documentElement, readStoredType())
 applyFrame(document.documentElement, readStoredFrame())
 applyDisplay(document.documentElement, readStoredDisplay())
 followSystemMotion(document.documentElement)
+trackFocusSource(document.documentElement)
 const query = new URLSearchParams(location.search)
 if (query.has('workspace-menu')) document.documentElement.classList.add('workspace-popup-window')
 // The installed probe loads after the page. Reuse the terminal workspace's VT parser on demand.

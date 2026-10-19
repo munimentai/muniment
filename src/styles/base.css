@@ -52,17 +52,28 @@ a:hover {
   border-color: var(--muted);
 }
 
-/* Every control shows a 2px ring on keyboard focus, in --focus-ring, inside
-   its own box so a scroller never clips it. It outranks a component's own
-   outline, so no component can drop it. A text field marked data-focus-frame
-   leaves the ring to its frame, which draws the same 2px edge: the composer.
+/* Every control shows a 1px ring on keyboard focus, in --focus-ring, the
+   theme's accent, inside its own box so a scroller never clips it. It
+   outranks a component's own outline, so no component can drop it. A text
+   field marked data-focus-frame leaves the ring to its frame, which shows
+   focus itself: the composer and the command palette. Menu items and options
+   mark keyboard focus with the hover fill. While the pointer leads, as
+   data-pointer on the root says, a control draws no ring, since the pointer
+   shows where it is. A text field keeps its ring.
    Declared once here because Svelte <style> blocks are component-scoped. */
 :focus-visible {
-  outline: 2px solid var(--focus-ring) !important;
-  outline-offset: -2px !important;
+  outline: 1px solid var(--focus-ring) !important;
+  outline-offset: -1px !important;
 }
 [data-focus-frame]:focus-visible {
   outline: 0 !important;
+}
+:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible,
+:root[data-pointer] :focus-visible:not(input, textarea, select, [contenteditable]) {
+  outline: 0 !important;
+}
+:root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible:not([aria-checked="true"], [aria-selected="true"]) {
+  background-color: var(--faint);
 }
 
 

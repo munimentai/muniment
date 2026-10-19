@@ -61,7 +61,7 @@
   <div data-panel="palette" data-panel-variant="overlay" class="palette" role="dialog" aria-modal="true" aria-label="Search">
     <div class="palette-field">
       <LucideIcon name="search" size={16} />
-      <input bind:this={field} bind:value={query} type="text" role="combobox" aria-label="Search threads, pages and actions" aria-expanded={items.length > 0} aria-controls="palette-results" aria-activedescendant={items.length ? optionId(active) : undefined} aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search threads, pages and actions" onkeydown={keydown} />
+      <input bind:this={field} bind:value={query} type="text" data-focus-frame role="combobox" aria-label="Search threads, pages and actions" aria-expanded={items.length > 0} aria-controls="palette-results" aria-activedescendant={items.length ? optionId(active) : undefined} aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search threads, pages and actions" onkeydown={keydown} />
     </div>
     <div class="palette-results" id="palette-results" role="listbox" aria-label="Results" bind:this={list}>
       {#each groups as group, groupIndex (group.title)}
