@@ -9,13 +9,63 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use muniment_attach::{is_valid_display_name, CertificateFingerprint, Id};
+use muniment_attach::{is_valid_display_name, CertificateFingerprint, Id, InstallKind};
 
 const IDENTITY_FILE: &str = "identity.json";
 const CERTIFICATE_FILE: &str = "identity-certificate.der";
 const KEY_FILE: &str = "identity-key.der";
-/// The display name a runtime takes when its host names none.
+/// The generic display name of a runtime that announces no name of its own.
+/// A stored identity with this name takes the host's descriptive default.
 pub const DEFAULT_RUNTIME_NAME: &str = "Muniment runtime";
+
+/// The display name a runtime takes when its host names none: the kind of
+/// container it runs in, `<hostname> (server)` on any other headless host,
+/// and the hostname on a desktop.
+pub fn default_runtime_name(install_kind: InstallKind) -> String {
+    default_runtime_name_in(install_kind, Path::new("/"), host_name().as_deref())
+}
+
+/// The default name with the container markers read under `root`.
+fn default_runtime_name_in(install_kind: InstallKind, root: &Path, host: Option<&str>) -> String {
+    // Podman writes /run/.containerenv and Docker writes /.dockerenv. A
+    // container's hostname is its generated id, so the kind names it.
+    if root.join("run/.containerenv").exists() {
+        return "Podman container".to_owned();
+    }
+    if install_kind == InstallKind::Container || root.join(".dockerenv").exists() {
+        return "Docker container".to_owned();
+    }
+    let host = host
+        .map(|host| host.trim().trim_end_matches(".local").trim())
+        .filter(|host| !host.is_empty());
+    let name = match (install_kind, host) {
+        (_, None) => return DEFAULT_RUNTIME_NAME.to_owned(),
+        (InstallKind::Desktop, Some(host)) => host.to_owned(),
+        (_, Some(host)) => format!("{host} (server)"),
+    };
+    if is_valid_display_name(&name) {
+        name
+    } else {
+        DEFAULT_RUNTIME_NAME.to_owned()
+    }
+}
+
+#[cfg(unix)]
+fn host_name() -> Option<String> {
+    let mut buffer = [0_u8; 256];
+    // SAFETY: the buffer outlives the call and its length is passed with it.
+    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+    if result != 0 {
+        return None;
+    }
+    let end = buffer.iter().position(|byte| *byte == 0)?;
+    String::from_utf8(buffer[..end].to_vec()).ok()
+}
+
+#[cfg(not(unix))]
+fn host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,8 +85,13 @@ pub(super) struct RemoteIdentity {
 
 impl RemoteIdentity {
     /// Loads the identity under `directory`, or creates it on first use. A
-    /// valid `name` replaces the stored display name.
-    pub(super) fn load_or_create(directory: &Path, name: Option<&str>) -> io::Result<Self> {
+    /// valid `name` replaces the stored display name. Without one, a new
+    /// identity or one that stores the generic name takes `default_name`.
+    pub(super) fn load_or_create(
+        directory: &Path,
+        name: Option<&str>,
+        default_name: &str,
+    ) -> io::Result<Self> {
         let record_path = directory.join(IDENTITY_FILE);
         let identity = match read_private(&record_path)? {
             Some(bytes) => {
@@ -60,14 +115,18 @@ impl RemoteIdentity {
                     key,
                 }
             }
-            None => Self::create(directory)?,
+            None => Self::create(directory, default_name)?,
         };
         let mut identity = identity;
         // The configuration check proves the key signs for the certificate.
         identity
             .server_config()
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-        if let Some(name) = name.filter(|name| is_valid_display_name(name)) {
+        let name = name.filter(|name| is_valid_display_name(name)).or_else(|| {
+            (identity.runtime_name == DEFAULT_RUNTIME_NAME && is_valid_display_name(default_name))
+                .then_some(default_name)
+        });
+        if let Some(name) = name {
             if name != identity.runtime_name {
                 identity.runtime_name = name.to_owned();
                 identity.write_record(directory)?;
@@ -76,7 +135,7 @@ impl RemoteIdentity {
         Ok(identity)
     }
 
-    fn create(directory: &Path) -> io::Result<Self> {
+    fn create(directory: &Path, default_name: &str) -> io::Result<Self> {
         let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
             .map_err(io::Error::other)?;
         let mut params =
@@ -87,7 +146,11 @@ impl RemoteIdentity {
         let certificate = params.self_signed(&key).map_err(io::Error::other)?;
         let identity = Self {
             runtime_id: uuid::Uuid::new_v4().to_string(),
-            runtime_name: DEFAULT_RUNTIME_NAME.to_owned(),
+            runtime_name: if is_valid_display_name(default_name) {
+                default_name.to_owned()
+            } else {
+                DEFAULT_RUNTIME_NAME.to_owned()
+            },
             fingerprint: CertificateFingerprint::of_certificate(certificate.der()),
             certificate: certificate.der().to_vec(),
             key: key.serialize_der(),
@@ -295,14 +358,16 @@ mod tests {
     #[test]
     fn the_identity_is_created_once_and_reloaded_unchanged() {
         let directory = directory("reload");
-        let created = RemoteIdentity::load_or_create(&directory, None).unwrap();
+        let created = RemoteIdentity::load_or_create(&directory, None, "Docker container").unwrap();
         assert!(Id::new(created.runtime_id.as_str()).is_ok());
-        assert_eq!(created.runtime_name, DEFAULT_RUNTIME_NAME);
+        assert_eq!(created.runtime_name, "Docker container");
         assert_eq!(
             created.fingerprint,
             CertificateFingerprint::of_certificate(&created.certificate)
         );
-        let reloaded = RemoteIdentity::load_or_create(&directory, Some("Build box")).unwrap();
+        let reloaded =
+            RemoteIdentity::load_or_create(&directory, Some("Build box"), "Docker container")
+                .unwrap();
         assert_eq!(reloaded.runtime_id, created.runtime_id);
         assert_eq!(reloaded.fingerprint, created.fingerprint);
         assert_eq!(reloaded.runtime_name, "Build box");
@@ -322,9 +387,60 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_generic_name_takes_the_default_and_a_set_name_stays() {
+        let directory = directory("default-name");
+        RemoteIdentity::load_or_create(&directory, None, DEFAULT_RUNTIME_NAME).unwrap();
+        let named = RemoteIdentity::load_or_create(&directory, None, "Docker container").unwrap();
+        assert_eq!(named.runtime_name, "Docker container");
+        RemoteIdentity::load_or_create(&directory, Some("Build box"), "Docker container").unwrap();
+        let kept = RemoteIdentity::load_or_create(&directory, None, "Docker container").unwrap();
+        assert_eq!(kept.runtime_name, "Build box");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_default_name_says_what_kind_of_host_runs_the_runtime() {
+        let root = directory("markers");
+        let host = Some("build-01");
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Server, &root, host),
+            "build-01 (server)"
+        );
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Desktop, &root, Some("studio.local")),
+            "studio"
+        );
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Container, &root, host),
+            "Docker container"
+        );
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Server, &root, None),
+            DEFAULT_RUNTIME_NAME
+        );
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Server, &root, Some(&"x".repeat(200))),
+            DEFAULT_RUNTIME_NAME
+        );
+        std::fs::write(root.join(".dockerenv"), b"").unwrap();
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Server, &root, host),
+            "Docker container"
+        );
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        std::fs::write(root.join("run/.containerenv"), b"").unwrap();
+        assert_eq!(
+            default_runtime_name_in(InstallKind::Server, &root, host),
+            "Podman container"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn the_signer_signs_with_the_certificate_key() {
         let directory = directory("signer");
-        let identity = RemoteIdentity::load_or_create(&directory, None).unwrap();
+        let identity =
+            RemoteIdentity::load_or_create(&directory, None, DEFAULT_RUNTIME_NAME).unwrap();
         let signer = identity.signer().unwrap();
         assert_eq!(signer.certificate_sha256(), identity.fingerprint.to_hex());
         let signature = signer.sign(b"statement").unwrap();
@@ -350,9 +466,9 @@ mod tests {
     #[test]
     fn a_missing_key_fails_closed_instead_of_changing_the_fingerprint() {
         let directory = directory("missing-key");
-        RemoteIdentity::load_or_create(&directory, None).unwrap();
+        RemoteIdentity::load_or_create(&directory, None, DEFAULT_RUNTIME_NAME).unwrap();
         std::fs::remove_file(directory.join(KEY_FILE)).unwrap();
-        assert!(RemoteIdentity::load_or_create(&directory, None).is_err());
+        assert!(RemoteIdentity::load_or_create(&directory, None, DEFAULT_RUNTIME_NAME).is_err());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -361,14 +477,14 @@ mod tests {
     fn a_key_others_can_read_is_refused() {
         use std::os::unix::fs::PermissionsExt;
         let directory = directory("mode");
-        RemoteIdentity::load_or_create(&directory, None).unwrap();
+        RemoteIdentity::load_or_create(&directory, None, DEFAULT_RUNTIME_NAME).unwrap();
         std::fs::set_permissions(
             directory.join(KEY_FILE),
             std::fs::Permissions::from_mode(0o644),
         )
         .unwrap();
         assert_eq!(
-            RemoteIdentity::load_or_create(&directory, None)
+            RemoteIdentity::load_or_create(&directory, None, DEFAULT_RUNTIME_NAME)
                 .err()
                 .unwrap()
                 .kind(),
