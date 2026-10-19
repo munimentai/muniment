@@ -2,7 +2,8 @@
   import { CONNECTION_METHODS, LOCAL_SETUP } from './classifier-connections.js'
   // `ollama` is the connected Ollama server, when there is one: its decision
   // models answer under its own System One route, with the key it already holds.
-  let { entry, tauri, onconnected, ollama = null } = $props()
+  // `onconnectollama` opens the Ollama server's own connect page.
+  let { entry, tauri, onconnected, ollama = null, onconnectollama = () => {} } = $props()
   let method = $state('')
   // A family of sizes, such as Clef Flash and Clef, picks one before connecting.
   let variant = $state('')
@@ -57,7 +58,8 @@
   <p class="support">{entry.repo}</p>
   <button type="button" data-variant="primary" onclick={() => choose('server')}>Connect the running server</button>
 {:else if CONNECTION_METHODS[method]?.ollama && !ollama?.base_url}
-  <p class="support">Connect your Ollama server under Accounts first. Its decision models then connect here with the key it already holds.</p>
+  <p class="support">Connect your Ollama server first. Its decision models then connect here with the key it already holds.</p>
+  <button type="button" data-variant="primary" onclick={onconnectollama}>Connect Ollama server</button>
 {:else}
   {#if CONNECTION_METHODS[method]?.ollama}<p class="support">Ollama answers decision models on its own System One route. Muniment sends the key saved with the server.</p>{/if}
   {#if method === 'server'}<p class="support">Enter the full System One URL for a local or hosted server. Chat completion endpoints do not work here.</p>{/if}

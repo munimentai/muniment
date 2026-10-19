@@ -66,6 +66,26 @@ it('connects Clef Flash or Clef by the id each way to connect uses', async () =>
   await fireEvent.click(screen.getByRole('button', { name: 'Test and connect' }))
   expect(tauri.invoke).toHaveBeenCalledWith('model_router_connect_classifier', { catalogId: 'clef', name: 'Clef Flash · Ollama server', model: 'clef-flash', baseUrl: 'https://ollama.example/v1/systemone', apiKey: null, keyProvider: 'ollama' })
 })
+it('opens each decision model on one primary action, even before an Ollama server connects', () => {
+  for (const entry of CLASSIFIERS) {
+    render(ClassifierConnection, { entry, tauri: { invoke: vi.fn() }, onconnected: vi.fn() })
+    const primary = screen.getAllByRole('button').filter(button => button.getAttribute('data-variant') === 'primary')
+    expect(primary, entry.name).toHaveLength(1)
+    cleanup()
+  }
+})
+it('sends Nimble to the Ollama server connect page while no Ollama server is connected', async () => {
+  const tauri = { invoke: vi.fn(async command => command === 'model_router_settings' ? settings : inventory) }
+  render(ModelsSection, { tauri, inventory })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }))
+  await fireEvent.click(screen.getByRole('button', { name: /^Nimble/ }))
+  const connect = screen.getByRole('button', { name: 'Connect Ollama server' })
+  expect(connect).toHaveAttribute('data-variant', 'primary')
+  await fireEvent.click(connect)
+  expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
+  await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+  expect(screen.getByRole('heading', { name: 'Connect Nimble' })).toBeVisible()
+})
 it('combines Kimi methods and keeps classifier connections outside the chat catalog', () => {
   expect(catalogProvider('kimi')).toMatchObject({ keyProvider: 'kimi-coding', methods: ['account', 'key'] })
   expect(catalogProvider('kimi-coding')).toBeNull()
