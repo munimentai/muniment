@@ -9282,7 +9282,7 @@ describe('runtimes', () => {
     })
   })
 
-  it('names the machine Model providers applies to and switches it from Settings', async () => {
+  it('opens Model providers on all machines and switches to one machine from Settings', async () => {
     const fallback = invoke.getMockImplementation()
     let list = listFor(buildBox.id)
     invoke.mockImplementation(async (command, payload) => {
@@ -9297,9 +9297,13 @@ describe('runtimes', () => {
     await findWorkspaceComposer()
     await openSettings('Models')
     const machine = await screen.findByRole('combobox', { name: 'Settings for' })
-    expect(machine).toHaveValue(buildBox.id)
-    expect([...machine.options].map((option) => option.textContent)).toEqual(['This computer', 'Build box'])
-    await fireEvent.change(machine, { target: { value: 'local' } })
+    // Settings opens on every machine at once.
+    expect(machine).toHaveValue('all')
+    expect([...machine.options].map((option) => option.textContent)).toEqual(['All machines', 'This computer', 'Build box'])
+    await fireEvent.change(machine, { target: { value: buildBox.id } })
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue(buildBox.id))
+    expect(invoke).not.toHaveBeenCalledWith('runtime_select', expect.anything())
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: 'local' } })
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('runtime_select', { id: 'local' }))
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue('local'))
     // Appearance belongs to this window, so it names no machine.

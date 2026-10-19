@@ -174,17 +174,31 @@ export function skipLabel(skip) {
 export const LOCAL_PARTS = ['mcp', 'skill', 'plugin', 'retention', 'storage', 'companies']
 
 // Settings pages that read and change the selected machine, in whole or in
-// part. Once a machine is paired, each names that machine at its top and can
-// switch it.
+// part. Once another machine answers, each names its scope at its top:
+// All machines, or one machine.
 export const MACHINE_PAGES = ['account', 'models', 'tools', 'permissions', 'data']
 
+// The scope that changes every machine at once. Fleet sync carries each
+// shared setting from the machine that saves it to every other one.
+export const ALL_MACHINES = 'all'
+
 // The machine scope a Settings page shows: the selected machine and the
-// machines it can switch to, or null for a page or a list without a choice.
+// machines it can switch to, or null for a page without a choice or while
+// no other machine answers.
 export function settingsMachine(list, page) {
-  if (!MACHINE_PAGES.includes(page) || !pairedRuntimes(list).length) return null
+  if (!MACHINE_PAGES.includes(page)) return null
   const selected = activeRuntime(list)
   const choices = (list?.runtimes ?? []).filter((runtime) => runtime.local || runtime.status === 'online' || runtime.id === selected?.id)
-  return selected ? { selected, choices } : null
+  return selected && choices.some((runtime) => !runtime.local) ? { selected, choices } : null
+}
+
+// The line a part shows while Settings changes all machines and the part
+// stays on each machine. `machine` names the machine the change reaches.
+export function allMachinesNote(part, machine = 'this computer') {
+  if (['mcp', 'skill', 'plugin'].includes(part)) return 'What you add reaches every machine. On or off changes only this computer.'
+  if (part === 'models') return 'Sign-ins stay on the machine that holds them. Machines can share them with the others.'
+  if (['context', 'storage', 'companies'].includes(part)) return `This part changes only ${['storage', 'companies'].includes(part) ? 'this computer' : machine}. Each machine keeps its own.`
+  return ''
 }
 
 // One sentence from a command failure, ending in a period.
