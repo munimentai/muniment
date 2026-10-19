@@ -200,7 +200,9 @@ fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: Subs
         crate::runtimes::update_requested(app, request);
     } else if let SubscriptionEvent::RuntimeUpdateStatus(status) = event {
         crate::runtimes::local_update_status(app, status);
-    } else if let Some(event) = deliver_agent_event(app, "local", event) {
+    } else if let Some(event) = deliver_agent_event(app, "local", event)
+        .and_then(|event| crate::account_login::route_step(app, None, event))
+    {
         if !app.state::<AttachCompanionState>().remote_active() {
             deliver_subscription_event(app, event);
         }

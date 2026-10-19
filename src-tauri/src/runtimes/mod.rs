@@ -592,6 +592,9 @@ fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
         move |event| {
             let Some(event) =
                 crate::attach_service::deliver_agent_event(&event_app, &event_runtime, event)
+                    .and_then(|event| {
+                        crate::account_login::route_step(&event_app, Some(&event_runtime), event)
+                    })
             else {
                 return;
             };
