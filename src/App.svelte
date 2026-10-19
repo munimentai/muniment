@@ -3667,7 +3667,8 @@
             </SidebarSections>
             </div>
           {/if}
-          {#if !sidebarCollapsed && !settingsOpen}
+          <!-- The foot stays on both sides: Settings shows as the current page there, and a second press goes back. -->
+          {#if !sidebarCollapsed}
           <div class="side-foot">
             <SyncStatus status={fleet.state.status} ops={fleet.state.ops} credentials={fleet.state.credentials} {swarm} />
             <div class="settings-block">

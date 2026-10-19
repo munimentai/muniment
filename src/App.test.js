@@ -9166,6 +9166,28 @@ it('names the Usage or Notifications page in the title bar and clears the thread
   await waitFor(() => expect(document.querySelector('.active-thread')).toHaveTextContent('Until Midnight'))
 })
 
+it('keeps the foot row on the Settings side, where Settings is the current page', async () => {
+  const fallback = invoke.getMockImplementation()
+  const page = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+  invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(page) : fallback(command, args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  const foot = () => screen.getByRole('toolbar', { name: 'Settings, usage and notifications' })
+  expect(within(foot()).getByRole('button', { name: 'Settings' })).not.toHaveAttribute('aria-current')
+  await openSettings()
+  expect(within(foot()).getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
+  // A second press goes back to the app.
+  await fireEvent.click(within(foot()).getByRole('button', { name: 'Settings' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+  // Usage and Notifications open their full pages from the Settings side.
+  for (const name of ['Usage', 'Notifications']) {
+    await openSettings()
+    await fireEvent.click(within(foot()).getByRole('button', { name }))
+    await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent(name))
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+  }
+})
+
 describe('runtimes', () => {
   const thisComputer = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const buildBox = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
