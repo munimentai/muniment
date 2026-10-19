@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use muniment_core::attach::{is_valid_display_name, RemoteRuntimeRecord};
+use muniment_core::attach::{is_valid_display_name, RemoteRuntimeRecord, DEFAULT_RUNTIME_NAME};
 use serde::{Deserialize, Serialize};
 
 /// The id the app gives its own runtime.
@@ -27,6 +27,12 @@ pub(crate) struct SshTarget {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RuntimeEntry {
     pub(crate) name: String,
+    /// Whether the user named the runtime. A name the user did not set
+    /// follows the name the runtime gives itself. An entry without the field
+    /// counts as user-named unless its name is the generic runtime name or
+    /// the name the runtime gave when it paired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) user_named: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) ssh: Option<SshTarget>,
     /// The version and install kind from the runtime's last welcome.
@@ -65,6 +71,14 @@ pub(crate) struct RuntimeIndex {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// Whether the user named `entry`, where `announced` is the name the runtime
+/// gave when it paired.
+fn user_named(entry: &RuntimeEntry, announced: Option<&str>) -> bool {
+    entry.user_named.unwrap_or_else(|| {
+        entry.name != DEFAULT_RUNTIME_NAME && announced != Some(entry.name.as_str())
+    })
 }
 
 /// One paired runtime as the registry lists it.
@@ -160,10 +174,10 @@ impl Registry {
     }
 
     /// Saves a newly paired runtime. Pairing a runtime again replaces its
-    /// record and keeps the name the user gave it. A record that names a
-    /// paired runtime's id with another certificate is refused with
-    /// `AlreadyExists`: a runtime keeps its certificate, so the link points
-    /// somewhere else.
+    /// record and keeps the name the user gave it, else takes the name the
+    /// runtime gives itself. A record that names a paired runtime's id with
+    /// another certificate is refused with `AlreadyExists`: a runtime keeps
+    /// its certificate, so the link points somewhere else.
     pub(crate) fn add(
         &self,
         record: &RemoteRuntimeRecord,
@@ -174,19 +188,31 @@ impl Registry {
         let id = canonical_id(record.runtime_id.as_str())
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         let path = self.record_path(&id)?;
-        if path.exists() && RemoteRuntimeRecord::load(&path)?.fingerprint != record.fingerprint {
+        let previous = if path.exists() {
+            Some(RemoteRuntimeRecord::load(&path)?)
+        } else {
+            None
+        };
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous.fingerprint != record.fingerprint)
+        {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
         record.save(&path)?;
         self.update(|index| {
+            let announced = previous.as_ref().map(|previous| previous.runtime_name.as_str());
             let name = index
                 .runtimes
                 .get(&id)
-                .map_or_else(|| record.runtime_name.clone(), |entry| entry.name.clone());
+                .filter(|entry| user_named(entry, announced))
+                .map(|entry| entry.name.clone());
+            let user_named = name.is_some();
             index.runtimes.insert(
                 id.clone(),
                 RuntimeEntry {
-                    name,
+                    name: name.unwrap_or_else(|| record.runtime_name.clone()),
+                    user_named: Some(user_named),
                     ssh,
                     version,
                     install_kind,
@@ -209,39 +235,56 @@ impl Registry {
                 .get_mut(&id)
                 .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
             entry.name = name.to_owned();
+            entry.user_named = Some(true);
             Ok(())
         })
     }
 
-    /// Records what the runtime's welcome said about itself.
+    /// Records what the runtime's welcome said about itself, and takes the
+    /// name it gives itself unless the user named it. Answers whether the
+    /// index changed.
     pub(crate) fn observe(
         &self,
         id: &str,
         version: Option<String>,
         install_kind: Option<String>,
         form_factor: Option<String>,
-    ) -> io::Result<()> {
+        name: Option<String>,
+    ) -> io::Result<bool> {
         let Some(id) = canonical_id(id) else {
-            return Ok(());
+            return Ok(false);
         };
         let index = self.index();
         let Some(entry) = index.runtimes.get(&id) else {
-            return Ok(());
+            return Ok(false);
         };
+        let user_named = entry.user_named.unwrap_or_else(|| {
+            let announced = self.record(&id).ok().map(|record| record.runtime_name);
+            user_named(entry, announced.as_deref())
+        });
+        let name = name
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !user_named && is_valid_display_name(name))
+            .unwrap_or_else(|| entry.name.clone());
         if entry.version == version
             && entry.install_kind == install_kind
             && entry.form_factor == form_factor
+            && entry.name == name
+            && entry.user_named == Some(user_named)
         {
-            return Ok(());
+            return Ok(false);
         }
         self.update(|index| {
             if let Some(entry) = index.runtimes.get_mut(&id) {
                 entry.version = version;
                 entry.install_kind = install_kind;
                 entry.form_factor = form_factor;
+                entry.name = name;
+                entry.user_named = Some(user_named);
             }
             Ok(())
-        })
+        })?;
+        Ok(true)
     }
 
     /// Whether a saved sharing switch waits to move to `fleet.credentials`.
@@ -477,6 +520,84 @@ mod tests {
     }
 
     #[test]
+    fn a_name_the_user_never_set_follows_the_runtime_and_a_user_name_wins() {
+        let (registry, directory) = registry();
+        registry
+            .add(&record(RUNTIME_ID, DEFAULT_RUNTIME_NAME), None, None, None)
+            .unwrap();
+        let welcome = |name: &str| {
+            registry.observe(
+                RUNTIME_ID,
+                Some("1.0.0".into()),
+                Some("container".into()),
+                None,
+                Some(name.into()),
+            )
+        };
+        // The runtime names itself after it paired with the generic name.
+        assert!(welcome("Docker container").unwrap());
+        assert_eq!(registry.entry(RUNTIME_ID).unwrap().name, "Docker container");
+        assert!(!welcome("Docker container").unwrap());
+        assert!(!welcome(" ").unwrap());
+        assert_eq!(registry.entry(RUNTIME_ID).unwrap().name, "Docker container");
+        // Pairing again takes the name the runtime gives now.
+        registry
+            .add(&record(RUNTIME_ID, "Build box"), None, None, None)
+            .unwrap();
+        assert_eq!(registry.entry(RUNTIME_ID).unwrap().name, "Build box");
+
+        registry.rename(RUNTIME_ID, "Studio").unwrap();
+        welcome("Docker container").unwrap();
+        assert_eq!(registry.entry(RUNTIME_ID).unwrap().name, "Studio");
+        registry
+            .add(&record(RUNTIME_ID, "Docker container"), None, None, None)
+            .unwrap();
+        assert_eq!(registry.entry(RUNTIME_ID).unwrap().name, "Studio");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_stored_entry_without_the_name_flag_migrates_on_the_next_welcome() {
+        let (registry, directory) = registry();
+        let generic = "018f0000-0000-7000-8000-000000000061";
+        let announced = "018f0000-0000-7000-8000-000000000062";
+        let renamed = "018f0000-0000-7000-8000-000000000063";
+        for (id, paired_as) in [
+            (generic, DEFAULT_RUNTIME_NAME),
+            (announced, "Build box"),
+            (renamed, "Build box"),
+        ] {
+            record(id, paired_as)
+                .save(&registry.record_path(id).unwrap())
+                .unwrap();
+        }
+        // An index an older app wrote names no flag.
+        let stored = serde_json::json!({"runtimes": {
+            generic: {"name": DEFAULT_RUNTIME_NAME, "version": "0.4.0", "install_kind": "container"},
+            announced: {"name": "Build box"},
+            renamed: {"name": "Studio"},
+        }});
+        std::fs::write(
+            directory.join(INDEX_FILE),
+            serde_json::to_vec(&stored).unwrap(),
+        )
+        .unwrap();
+        for id in [generic, announced, renamed] {
+            registry
+                .observe(id, None, None, None, Some("Docker container".into()))
+                .unwrap();
+        }
+        let entry = registry.entry(generic).unwrap();
+        assert_eq!(entry.name, "Docker container");
+        assert_eq!(entry.user_named, Some(false));
+        assert_eq!(registry.entry(announced).unwrap().name, "Docker container");
+        let entry = registry.entry(renamed).unwrap();
+        assert_eq!(entry.name, "Studio");
+        assert_eq!(entry.user_named, Some(true));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn a_known_runtime_id_with_another_certificate_is_refused() {
         let (registry, directory) = registry();
         let id = "018f0000-0000-7000-8000-000000000051";
@@ -560,7 +681,13 @@ mod tests {
             }
         }
         registry
-            .observe(RUNTIME_ID, Some("2.0.0".into()), Some("container".into()), None)
+            .observe(
+                RUNTIME_ID,
+                Some("2.0.0".into()),
+                Some("container".into()),
+                None,
+                None,
+            )
             .unwrap();
         let entry = registry.entry(RUNTIME_ID).unwrap();
         assert_eq!(entry.version.as_deref(), Some("2.0.0"));
