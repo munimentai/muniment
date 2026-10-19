@@ -53,6 +53,7 @@
   let localVersion = $state(null)
   let shareModels = $state(null)
   let shareFailure = $state('')
+  let shareReadFailure = $state('')
   // svelte-ignore state_referenced_locally
   let adding = $state(focus === 'add')
   // svelte-ignore state_referenced_locally
@@ -71,7 +72,12 @@
     Promise.resolve(tauri.invoke('app_update_prepare')).then((version) => { if (alive && version) localVersion = version }).catch(() => {})
     for (const [event, handle] of [
       ['runtimes-changed', (payload) => { if (payload?.runtimes) { list = payload; void readSwarm() } }],
-      ['swarm-changed', (payload) => { if (payload?.change?.kind === 'members') void readSwarm() }],
+      ['swarm-changed', (payload) => {
+        if (payload?.change?.kind === 'members') void readSwarm()
+        // A share core turned on, as a sign-in moved here does, rewrites
+        // the fleet's account records, so the switch reads core again.
+        if (['members', 'records'].includes(payload?.change?.kind)) void readSharing()
+      }],
       ['app-update-ready', (payload) => { if (typeof payload === 'string') localVersion = payload }],
     ]) {
       Promise.resolve(listen?.(event, ({ payload }) => handle(payload)))
@@ -126,11 +132,16 @@
   }
 
   // Core keeps the sharing switch: `fleet.credentials` answers it and sets it.
+  // A read that fails never shows the switch off, since core may be sharing:
+  // the switch keeps the last answer, or stays unknown with the reason.
   async function readSharing() {
     try {
-      shareModels = !!(await agentRequest(tauri, 'local', 'fleet.credentials', {}))?.share_models
-    } catch (_) {
-      shareModels = false
+      const answer = await agentRequest(tauri, 'local', 'fleet.credentials', {})
+      if (busy === 'share') return
+      shareModels = !!answer?.share_models
+      shareReadFailure = ''
+    } catch (failure) {
+      if (shareModels === null) shareReadFailure = errorText(failure)
     }
   }
 
@@ -147,6 +158,7 @@
     try {
       const answer = await agentRequest(tauri, 'local', 'fleet.credentials', { share_models: next })
       shareModels = !!answer?.share_models
+      shareReadFailure = ''
     } catch (failure) {
       shareModels = before
       shareFailure = errorText(failure)
@@ -341,6 +353,7 @@
     </Row>
   </Group>
   {#if shareFailure}<FailureNote failure={shareFailure} />{/if}
+  {#if shareReadFailure && shareModels === null}<FailureNote failure="This computer did not say whether it shares its model connections." detail={shareReadFailure} role="none" />{/if}
   {#if list?.shareError}<FailureNote failure={list.shareError} />{/if}
 
   {#if localUpdate}
