@@ -2214,8 +2214,8 @@ fn fixture_settings_scope() -> serde_json::Value {
             "tools",
             "fleet",
             json!(["search"]),
-            local("keys", "machine", ""),
-            ["", ""],
+            local("keys", "machine", "Keys stay on the machine where you add them."),
+            ["Keys stay on the machine where you add them.", ""],
         ),
         part(
             "permissions",

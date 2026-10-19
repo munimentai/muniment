@@ -1,5 +1,6 @@
 //! The runtime's model service: provider keys, accounts and endpoints, the
-//! default and hidden models, the inventory, Claude Code, the model router
+//! default and hidden models, the inventory, the Anthropic accounts Claude
+//! Code signs in to, the model router
 //! with its accounts, routes and classifier, the local server scan and
 //! provider sign-in. It writes Pi's files and the router config under their
 //! locks, and it runs the router listener. It also holds the web search
@@ -315,14 +316,6 @@ impl ModelService {
                     &data.key,
                     &data.models,
                 ))
-            }
-            ModelAction::ClaudeCodeStatus => {
-                parse::<Empty>(data)?;
-                answer(Ok::<_, String>(providers::claude_code_status(agent)))
-            }
-            ModelAction::ConnectClaudeCode => {
-                let data: ClaudeCode = parse(data)?;
-                answer(providers::connect_claude_code(agent, &data.executable))
             }
             ModelAction::RouterSettings => {
                 parse::<Empty>(data)?;
@@ -658,12 +651,6 @@ struct Endpoint {
     base_url: String,
     key: String,
     models: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ClaudeCode {
-    executable: String,
 }
 
 #[derive(Deserialize)]

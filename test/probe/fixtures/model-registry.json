@@ -393,7 +393,6 @@
     }
   ],
   "methodLabels": {
-    "claude-code": "Claude Code sign-in",
     "account": "Account",
     "key": "API key",
     "ollama": "Ollama server",

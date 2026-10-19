@@ -4274,34 +4274,21 @@ describe('Home onboarding', () => {
     expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
   })
 
-  it('connects a signed-in Claude Code in one step', async () => {
-    firstRun()
-    providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is signed in', reuse: true }] }
-    const original = invoke.getMockImplementation()
-    invoke.mockImplementation((command, payload) => command === 'local_mode_claude_code_status' ? Promise.resolve({ installed: true, logged_in: true, path: '/usr/local/bin/claude' })
-      : command === 'local_mode_connect_claude_code' ? Promise.resolve(null) : original(command, payload))
-    render(App)
-    await more()
-    await waitFor(() => expect(option('Claude')).toHaveTextContent('Connect'))
-    await fireEvent.click(option('Claude'))
-    await waitFor(() => expect(firstRunScreen()).not.toBeInTheDocument())
-    expect(invoke).toHaveBeenCalledWith('home_confirm', { homePath: '/Documents/Muniment' })
-    expect(invoke).toHaveBeenCalledWith('local_mode_connect_claude_code', { executable: '/usr/local/bin/claude' })
-    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
-    expect(invoke).not.toHaveBeenCalledWith('onboarding_connect_server', expect.anything())
-  })
-
-  it('signs in to a Claude account from the first run when Claude Code holds no sign-in to reuse', async () => {
-    firstRun()
-    providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence: 'Claude Code is installed', reuse: false }] }
-    render(App)
-    await more()
-    await waitFor(() => expect(option('Claude')).toHaveTextContent('Sign in'))
-    await fireEvent.click(option('Claude'))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic' }))
-    expect(firstRunScreen()).toBeInTheDocument()
-    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
-    expect(invoke).not.toHaveBeenCalledWith('local_mode_connect_claude_code', expect.anything())
+  it('signs in to a Claude account from the first run, even where Claude Code is signed in', async () => {
+    for (const evidence of ['Claude Code is signed in', 'Claude Code is installed']) {
+      firstRun()
+      providerScan = { servers: [], hints: [{ provider: 'anthropic', evidence }] }
+      const view = render(App)
+      await more()
+      await waitFor(() => expect(option('Claude')).toHaveTextContent('Sign in'))
+      await fireEvent.click(option('Claude'))
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic' }))
+      expect(firstRunScreen()).toBeInTheDocument()
+      expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+      expect(invoke).not.toHaveBeenCalledWith('local_mode_connect_claude_code', expect.anything())
+      view.unmount()
+      invoke.mockClear()
+    }
   })
 
   it('signs in to a subscription from the first run and opens the browser at once', async () => {

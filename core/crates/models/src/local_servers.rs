@@ -81,10 +81,6 @@ pub struct Server {
 pub struct Hint {
     provider: &'static str,
     evidence: &'static str,
-    /// Muniment connects through the tool's own sign-in, so connecting asks
-    /// for no new sign-in. Only a signed-in Claude Code does: every other
-    /// provider signs in again.
-    reuse: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -826,20 +822,10 @@ fn copilot_installed(context: &Context) -> bool {
 /// The tools that hold a provider sign-in, in the order the first run lists them.
 pub fn hints(context: &Context, claude_code: ClaudeCode) -> Vec<Hint> {
     let mut hints = Vec::new();
+    let mut add = |provider, evidence| hints.push(Hint { provider, evidence });
     if claude_code == ClaudeCode::SignedIn {
-        hints.push(Hint {
-            provider: "anthropic",
-            evidence: "Claude Code is signed in",
-            reuse: true,
-        });
+        add("anthropic", "Claude Code is signed in");
     }
-    let mut add = |provider, evidence| {
-        hints.push(Hint {
-            provider,
-            evidence,
-            reuse: false,
-        })
-    };
     let tool_dir = |variable: &str, folder: &str| {
         context
             .dir_var(variable)
@@ -1283,7 +1269,6 @@ mod tests {
             hints: vec![Hint {
                 provider: "anthropic",
                 evidence: "Claude Code is signed in",
-                reuse: true,
             }],
         };
         assert_eq!(
@@ -1297,7 +1282,7 @@ mod tests {
                     "modelCount": 1,
                     "defaultModel": "ai/smollm2"
                 }],
-                "hints": [{ "provider": "anthropic", "evidence": "Claude Code is signed in", "reuse": true }]
+                "hints": [{ "provider": "anthropic", "evidence": "Claude Code is signed in" }]
             })
         );
         assert_eq!(
@@ -1617,15 +1602,6 @@ mod tests {
         let environment = Environment::new();
         let context = context(&home, &environment, Platform::MacOs);
         let found = hints(&context, ClaudeCode::SignedIn);
-        // Only Claude Code's own sign-in connects without a new sign-in.
-        assert_eq!(
-            found
-                .iter()
-                .filter(|hint| hint.reuse)
-                .map(|hint| hint.provider)
-                .collect::<Vec<_>>(),
-            ["anthropic"]
-        );
         let evidence: Vec<(&str, &str)> = found
             .iter()
             .map(|hint| (hint.provider, hint.evidence))

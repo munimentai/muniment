@@ -84,8 +84,6 @@
     "allow-thread-settings-set",
     "allow-local-mode-disconnect-provider",
     "allow-local-mode-store-endpoint",
-    "allow-local-mode-claude-code-status",
-    "allow-local-mode-connect-claude-code",
     "allow-model-registry",
     "allow-model-router-settings",
     "allow-model-router-set-enabled",

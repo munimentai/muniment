@@ -7,8 +7,7 @@
   // The first run's one question. Every option is a one-line button, found
   // ones first. More providers and Explore without connecting end the list. A
   // server that needs a step opens that step in place, and a subscription's
-  // sign-in runs in place under its card. Connect means Muniment reuses a
-  // sign-in this computer already holds, and Sign in means a new one.
+  // sign-in runs in place under its card.
   let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, folderAsking = false, busy = false, signIn = null, onconnect, onmore, onexplore, onrescan, onsigninanswer, onsignincancel, onsigninopen } = $props()
   let answer = $state('')
   let open = $state(null)
@@ -45,7 +44,7 @@
       <button type="button" class="option" disabled={busy} aria-expanded={server && server.state !== 'ready' ? open === option.id : undefined} onclick={() => choose(option)}>
         <ProviderLogo color provider={option.logo} size={20} />
         <strong>{option.name}</strong>
-        <span class="action" data-tone={state?.tone}>{state ? state.action : option.hint?.reuse ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
+        <span class="action" data-tone={state?.tone}>{state ? state.action : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
       </button>
       {#if signIn?.option === option.id}
         <div class="step" aria-live="polite">

@@ -154,11 +154,11 @@ pub(super) struct RouterModel {
     unavailable: Option<String>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+/// What the provider scan learns about a Claude Code the user installed.
+#[derive(Debug, PartialEq)]
 pub(super) struct ClaudeCodeStatus {
     pub(super) installed: bool,
     pub(super) logged_in: bool,
-    path: Option<String>,
 }
 
 pub(super) fn lock_pi_auth_file(auth_file: &Path) -> Result<PiAuthLock, String> {
@@ -1110,52 +1110,31 @@ pub(super) fn disconnect_provider(agent: &Path, provider: &str) -> Result<(), St
     Ok(())
 }
 
-/// Whether Claude Code is on this machine and signed in to its default
-/// folder. The Models page reads the bundled build first.
-pub(super) fn claude_code_status(agent: &Path) -> ClaudeCodeStatus {
-    claude_code_status_of(super::claude::executable(agent))
-}
-
-/// [`claude_code_status`] for a Claude Code the user installed, which the
-/// provider scan names as a sign-in it can reuse.
+/// Whether a Claude Code the user installed is on this machine and signed
+/// in to its default folder, which the provider scan names as a hint.
 pub(super) fn user_claude_code_status() -> ClaudeCodeStatus {
-    claude_code_status_of(super::claude::user_installed())
-}
-
-fn claude_code_status_of(path: Option<PathBuf>) -> ClaudeCodeStatus {
-    let Some(path) = path else {
+    let Some(path) = super::claude::user_installed() else {
         return ClaudeCodeStatus {
             installed: false,
             logged_in: false,
-            path: None,
         };
     };
-    let logged_in = super::claude::status(&path, None).is_some_and(|status| status.logged_in);
     ClaudeCodeStatus {
         installed: true,
-        logged_in,
-        path: Some(path.to_string_lossy().into_owned()),
+        logged_in: super::claude::status(&path, None).is_some_and(|status| status.logged_in),
     }
 }
 
-/// Connects Anthropic through Claude Code: the bridge reads its executable
-/// path, and the inventory lists the provider.
-pub(super) fn connect_claude_code(agent: &Path, executable: &str) -> Result<(), String> {
-    if !valid_identifier(executable, 4096) || !Path::new(executable).is_file() {
-        return Err("Install Claude Code and sign in, then retry.".into());
-    }
-    fs::create_dir_all(agent).map_err(|_| SAVE_SETTINGS_ERROR.to_string())?;
-    let mut config = read_json_for_update(&claude_bridge_config_file(agent))?;
-    let provider = config
-        .entry("provider")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or_else(|| SAVE_SETTINGS_ERROR.to_string())?;
-    provider.insert("pathToClaudeCodeExecutable".into(), executable.into());
-    write_json_for_update(&claude_bridge_config_file(agent), &config)?;
+/// Retires the Claude Code connection once an Anthropic account signs in,
+/// so the account's row replaces it and the bridge runs its own Claude Code.
+pub(super) fn retire_claude_code(agent: &Path) -> Result<(), String> {
     let mut record = read_models_record(agent)?;
-    record.insert("claudeCode".into(), true.into());
-    write_models_record(agent, &record)
+    if record.remove("claudeCode").is_some() {
+        write_models_record(agent, &record)?;
+    }
+    match fs::remove_file(claude_bridge_config_file(agent)) {
+        Ok(()) | Err(_) => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -1762,18 +1741,22 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         )
         .is_err());
 
-        let executable = agent.join("claude");
-        fs::write(&executable, "#!/bin/sh\n").unwrap();
-        connect_claude_code(&agent, executable.to_str().unwrap()).unwrap();
-        let config: serde_json::Value =
-            serde_json::from_slice(&fs::read(agent.join(CLAUDE_BRIDGE_CONFIG_FILE)).unwrap())
-                .unwrap();
-        assert_eq!(
-            config["provider"]["pathToClaudeCodeExecutable"],
-            executable.to_str().unwrap()
-        );
-        assert_eq!(read_models_record(&agent).unwrap()["claudeCode"], true);
-        assert!(connect_claude_code(&agent, "/nowhere/claude").is_err());
+        // A Claude Code connection from before stays readable until an
+        // account signs in, which retires it, or Disconnect ends it.
+        let claude_code = |agent: &Path| {
+            let mut record = read_models_record(agent).unwrap();
+            record.insert("claudeCode".into(), true.into());
+            write_models_record(agent, &record).unwrap();
+            fs::write(agent.join(CLAUDE_BRIDGE_CONFIG_FILE), "{}").unwrap();
+        };
+        claude_code(&agent);
+        retire_claude_code(&agent).unwrap();
+        assert!(read_models_record(&agent)
+            .unwrap()
+            .get("claudeCode")
+            .is_none());
+        assert!(!agent.join(CLAUDE_BRIDGE_CONFIG_FILE).exists());
+        claude_code(&agent);
         disconnect_provider(&agent, CLAUDE_BRIDGE_PROVIDER).unwrap();
         assert_eq!(read_models_record(&agent).unwrap()["claudeCode"], false);
         assert!(!agent.join(CLAUDE_BRIDGE_CONFIG_FILE).exists());

@@ -166,3 +166,11 @@ it('filters Tools by type, with web search as one of them and one Add for each',
   await fireEvent.click(screen.getByRole('button', { name: 'Create one in a chat' }))
   expect(oncreate).toHaveBeenCalledWith('skill')
 })
+
+it('shows core\'s line on search keys on the Search tab', async () => {
+  const invoke = vi.fn(async (command) => command === 'web_search_settings' ? { order: [], engines: {} } : { items: [], threads: {} })
+  const view = render(ExtendSection, { tauri: { invoke }, focus: 'search', localNote: 'What you add reaches every machine.', searchNote: 'Keys stay on the machine where you add them.' })
+  expect(screen.getByRole('note')).toHaveTextContent('Keys stay on the machine where you add them.')
+  await view.rerender({ focus: 'mcp' })
+  expect(screen.getByRole('note')).toHaveTextContent('What you add reaches every machine.')
+})
