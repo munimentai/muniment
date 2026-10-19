@@ -14,7 +14,7 @@ const MAX_THREADS: usize = 5000;
 /// The project defaults a thread started with.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seed {
-    /// A catalog project id or `chats`.
+    /// A catalog project id.
     pub project_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<DefaultModel>,
@@ -43,7 +43,20 @@ pub struct ThreadSettings {
 fn load(profile: &Path) -> Result<BTreeMap<String, ThreadSettings>, String> {
     match fs::read(profile.join(FILE)) {
         Ok(bytes) => {
-            serde_json::from_slice(&bytes).map_err(|_| "Thread settings cannot be read.".into())
+            let mut all: BTreeMap<String, ThreadSettings> = serde_json::from_slice(&bytes)
+                .map_err(|_| "Thread settings cannot be read.".to_string())?;
+            // A thread seeded by the retired Chats project keeps its model as
+            // its own: it belongs to no project.
+            for settings in all.values_mut() {
+                if settings
+                    .seed
+                    .as_ref()
+                    .is_some_and(|seed| seed.project_id == crate::projects::RETIRED_CHATS)
+                {
+                    settings.seed = None;
+                }
+            }
+            Ok(all)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
         Err(_) => Err("Thread settings cannot be read.".into()),
@@ -274,6 +287,28 @@ mod tests {
         );
         assert_eq!(set_model(&profile, "t-2", None).unwrap().model, None);
         assert!(set_model(&profile, "../t", None).is_err());
+        let _ = fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn a_seed_from_the_retired_chats_project_leaves_the_model_as_the_threads_own() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-thread-chats-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&profile).unwrap();
+        seed(
+            &profile,
+            "t-1",
+            Seed {
+                project_id: crate::projects::RETIRED_CHATS.into(),
+                model: Some(model("gpt-6-astra")),
+                permission_mode: None,
+                machine: None,
+            },
+        )
+        .unwrap();
+        let settings = read(&profile, "t-1").unwrap();
+        assert_eq!(settings.seed, None);
+        assert_eq!(settings.model, Some(model("gpt-6-astra")));
         let _ = fs::remove_dir_all(profile);
     }
 

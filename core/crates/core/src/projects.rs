@@ -18,8 +18,7 @@ pub struct Catalog {
     /// owner.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub remote: BTreeMap<String, RemoteProject>,
-    /// Each project's defaults for its new threads, by id. The built-in
-    /// Chats project keeps its own under `chats`.
+    /// Each project's defaults for its new threads, by id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub settings: BTreeMap<String, Defaults>,
 }
@@ -71,8 +70,7 @@ pub struct DefaultModel {
 }
 
 /// A project's settings: its defaults and the instructions every run in its
-/// folder reads from the folder's `AGENTS.md`. Chats has no folder, so it
-/// has no instructions.
+/// folder reads from the folder's `AGENTS.md`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -93,10 +91,22 @@ pub struct RemoteProject {
     pub path: String,
 }
 
+/// The id the retired built-in Chats project used. A thread assigned to it,
+/// or a seed from it, belongs to no project.
+pub const RETIRED_CHATS: &str = "chats";
+
 fn read(profile: &Path) -> Result<Catalog, String> {
     match fs::read(profile.join("projects.json")) {
         Ok(bytes) => {
-            serde_json::from_slice(&bytes).map_err(|_| "The project catalog cannot be read.".into())
+            let mut catalog: Catalog = serde_json::from_slice(&bytes)
+                .map_err(|_| "The project catalog cannot be read.".to_string())?;
+            if !catalog.projects.contains_key(RETIRED_CHATS) {
+                catalog
+                    .threads
+                    .retain(|_, project| project != RETIRED_CHATS);
+                catalog.settings.remove(RETIRED_CHATS);
+            }
+            Ok(catalog)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Catalog::default()),
         Err(_) => Err("The project catalog cannot be read.".into()),
@@ -288,46 +298,46 @@ pub fn unassign(profile: &Path, thread: &str) -> Result<(), String> {
     catalog.threads.remove(thread);
     save(profile, &catalog)
 }
-/// Moves a thread into `project`, a catalog project or `chats`. Its
-/// conversation keeps its id, so its history and session go with it, and its
-/// next run works in the new project's folder. Files it wrote stay where it
-/// wrote them. An agent's thread stays in its agent's project.
-pub fn move_thread(profile: &Path, thread: &str, project: &str) -> Result<(), String> {
+/// Moves a thread into a catalog project, or out of every project with
+/// None, which makes it a project of its own. Its conversation keeps its id,
+/// so its history and session go with it, and its next run works in the new
+/// project's folder. Files it wrote stay where it wrote them. An agent's
+/// thread stays in its agent's project.
+pub fn move_thread(profile: &Path, thread: &str, project: Option<&str>) -> Result<(), String> {
     if crate::agents::state(profile)?.threads.contains_key(thread) {
         return Err("An agent's thread stays in its agent's project.".into());
     }
-    if project == crate::sidebar::CHATS {
+    let Some(project) = project else {
         return unassign(profile, thread);
-    }
+    };
     if saved(profile)?.remote.contains_key(project) {
         return Err("Move threads into that project on the machine that holds it.".into());
     }
     assign(profile, thread, project)
 }
-/// The project a thread belongs to: its agent's project, its catalog
-/// project, or `chats`.
-pub fn thread_project(profile: &Path, thread: &str) -> Result<String, String> {
+/// The project a thread belongs to: its agent's project or its catalog
+/// project. None for a thread in no project.
+pub fn thread_project(profile: &Path, thread: &str) -> Result<Option<String>, String> {
     if let Some(agent) = crate::agents::thread_agent(profile, thread)? {
-        return Ok(agent
-            .project_id
-            .unwrap_or_else(|| format!("{}{}", crate::sidebar::AGENT_PROJECT_PREFIX, agent.id)));
+        return Ok(Some(agent.project_id.unwrap_or_else(|| {
+            format!("{}{}", crate::sidebar::AGENT_PROJECT_PREFIX, agent.id)
+        })));
     }
-    Ok(read(profile)?
-        .threads
-        .get(thread)
-        .cloned()
-        .unwrap_or_else(|| crate::sidebar::CHATS.into()))
+    Ok(read(profile)?.threads.get(thread).cloned())
 }
 /// The tools a thread's runs leave out: its project's policy, with its
 /// agent's own choices over it.
 pub fn thread_tools(profile: &Path, thread: &str) -> Result<ToolPolicy, String> {
     let agent = crate::agents::thread_agent(profile, thread)?;
     let project = thread_project(profile, thread)?;
-    let policy = read(profile)?
-        .settings
-        .get(&project)
-        .and_then(|defaults| defaults.tools.clone())
-        .unwrap_or_default();
+    let policy = match project {
+        Some(project) => read(profile)?
+            .settings
+            .get(&project)
+            .and_then(|defaults| defaults.tools.clone())
+            .unwrap_or_default(),
+        None => ToolPolicy::default(),
+    };
     Ok(crate::inherit::tool_policy(
         &policy,
         agent.as_ref().and_then(|agent| agent.tools.as_ref()),
@@ -346,15 +356,9 @@ pub fn thread_folder(profile: &Path, thread: &str) -> Result<Option<PathBuf>, St
 const INSTRUCTIONS: &str = "AGENTS.md";
 const MAX_INSTRUCTIONS: usize = 64 * 1024;
 
-/// A project's settings. `id` is a catalog project or `chats`.
+/// A catalog project's settings.
 pub fn settings(profile: &Path, id: &str) -> Result<Settings, String> {
     let defaults = read(profile)?.settings.get(id).cloned().unwrap_or_default();
-    if id == crate::sidebar::CHATS {
-        return Ok(Settings {
-            defaults,
-            instructions: None,
-        });
-    }
     let file = folder(profile, id)?.join(INSTRUCTIONS);
     let instructions = match fs::read_to_string(&file) {
         Ok(text) => text,
@@ -370,12 +374,8 @@ pub fn settings(profile: &Path, id: &str) -> Result<Settings, String> {
 /// Saves a project's settings. Empty instructions remove the folder's
 /// `AGENTS.md`, and None leaves the file as it is.
 pub fn save_settings(profile: &Path, id: &str, settings: &Settings) -> Result<(), String> {
-    let folder = if id == crate::sidebar::CHATS {
-        None
-    } else {
-        Some(folder(profile, id)?)
-    };
-    if let (Some(folder), Some(text)) = (&folder, &settings.instructions) {
+    let folder = folder(profile, id)?;
+    if let Some(text) = &settings.instructions {
         if text.len() > MAX_INSTRUCTIONS {
             return Err("Project instructions must be under 64 KB.".into());
         }
@@ -708,22 +708,10 @@ mod tests {
         assert!(!folder(&profile, &id).unwrap().join("AGENTS.md").exists());
         assert!(read(&profile).unwrap().settings.is_empty());
 
-        let chats = crate::sidebar::CHATS;
-        save_settings(
-            &profile,
-            chats,
-            &Settings {
-                defaults: Defaults {
-                    permission_mode: Some("ask".into()),
-                    ..Defaults::default()
-                },
-                instructions: Some("ignored".into()),
-            },
-        )
-        .unwrap();
-        let read_back = settings(&profile, chats).unwrap();
-        assert_eq!(read_back.instructions, None);
-        assert_eq!(read_back.defaults.permission_mode.as_deref(), Some("ask"));
+        assert!(
+            settings(&profile, RETIRED_CHATS).is_err(),
+            "no built-in project keeps settings"
+        );
         assert!(settings(&profile, "missing").is_err());
     }
     #[test]
@@ -731,10 +719,12 @@ mod tests {
         let fixture = Fixture::new();
         let profile = fixture.profile();
         let homelab = create(&profile, "Homelab").unwrap();
-        let chats = crate::sidebar::CHATS;
-        assert_eq!(thread_project(&profile, "t-1").unwrap(), chats);
-        move_thread(&profile, "t-1", &homelab).unwrap();
-        assert_eq!(thread_project(&profile, "t-1").unwrap(), homelab);
+        assert_eq!(thread_project(&profile, "t-1").unwrap(), None);
+        move_thread(&profile, "t-1", Some(&homelab)).unwrap();
+        assert_eq!(
+            thread_project(&profile, "t-1").unwrap(),
+            Some(homelab.clone())
+        );
         assert_eq!(
             workspace(&profile, "t-1").unwrap(),
             folder(&profile, &homelab).unwrap()
@@ -756,10 +746,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(thread_tools(&profile, "t-1").unwrap(), policy);
-        move_thread(&profile, "t-1", chats).unwrap();
-        assert_eq!(thread_project(&profile, "t-1").unwrap(), chats);
+        move_thread(&profile, "t-1", None).unwrap();
+        assert_eq!(thread_project(&profile, "t-1").unwrap(), None);
         assert!(thread_tools(&profile, "t-1").unwrap().is_empty());
-        assert!(move_thread(&profile, "t-1", "missing").is_err());
+        assert!(move_thread(&profile, "t-1", Some("missing")).is_err());
 
         let agent = crate::agents::save(
             &profile,
@@ -778,7 +768,7 @@ mod tests {
         let mut state = crate::agents::state(&profile).unwrap();
         state.threads.insert("t-agent".into(), agent.id.clone());
         crate::agents::persist_state(&profile, &state).unwrap();
-        assert_eq!(thread_project(&profile, "t-agent").unwrap(), homelab);
+        assert_eq!(thread_project(&profile, "t-agent").unwrap(), Some(homelab));
         assert_eq!(
             thread_tools(&profile, "t-agent").unwrap(),
             ToolPolicy {
@@ -786,9 +776,27 @@ mod tests {
                 disabled_extensions: vec!["mcp-crm".into()],
             }
         );
-        assert!(move_thread(&profile, "t-agent", chats)
+        assert!(move_thread(&profile, "t-agent", None)
             .unwrap_err()
             .contains("agent"));
+    }
+    #[test]
+    fn threads_of_the_retired_chats_project_belong_to_no_project() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let homelab = create(&profile, "Homelab").unwrap();
+        let mut catalog = read(&profile).unwrap();
+        catalog.threads.insert("t-old".into(), RETIRED_CHATS.into());
+        catalog.threads.insert("t-lab".into(), homelab.clone());
+        catalog
+            .settings
+            .insert(RETIRED_CHATS.into(), Defaults::default());
+        save(&profile, &catalog).unwrap();
+        assert_eq!(thread_project(&profile, "t-old").unwrap(), None);
+        assert_eq!(thread_project(&profile, "t-lab").unwrap(), Some(homelab));
+        let catalog = read(&profile).unwrap();
+        assert!(!catalog.settings.contains_key(RETIRED_CHATS));
+        assert!(!catalog.threads.contains_key("t-old"));
     }
     #[test]
     fn discovers_existing_folders_and_rejects_collisions_and_escapes() {
