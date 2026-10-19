@@ -55,6 +55,8 @@ pub struct RuntimeAttachState {
     pi_artifact: Mutex<Option<muniment_core::sidecar::pi_install::PiArtifactDescriptor>>,
     /// Set while an MCP poll pass runs.
     mcp_polling: Arc<AtomicBool>,
+    /// The pass that names session folders from older versions.
+    session_names: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl RuntimeAttachState {
@@ -64,17 +66,40 @@ impl RuntimeAttachState {
         profile_directory: impl AsRef<Path>,
         config_directory: impl AsRef<Path>,
     ) -> Result<Self, ProtocolError> {
+        Self::open_with_session_names(
+            host,
+            profile_directory,
+            config_directory,
+            muniment_core::projects::migrate_session_names,
+        )
+    }
+
+    /// Opens the state like [`Self::open`] with the pass that names legacy
+    /// session folders, which a test replaces with one that waits.
+    #[doc(hidden)]
+    pub fn open_with_session_names(
+        host: RuntimeHost,
+        profile_directory: impl AsRef<Path>,
+        config_directory: impl AsRef<Path>,
+        name_sessions: impl FnOnce(&Path) -> Result<(), String> + Send + 'static,
+    ) -> Result<Self, ProtocolError> {
         let profile_directory = profile_directory.as_ref().to_path_buf();
         let config_directory = config_directory.as_ref().to_path_buf();
         let storage = open_profile_storage_as(&profile_directory, host.runtime_version)
             .map_err(|_| ProtocolError::persistence_failed())?;
         // Session folders from older versions take their thread titles here,
-        // so the runtime stays the only process that opens the journal.
-        if let Err(error) = muniment_core::projects::migrate_session_names(&profile_directory) {
-            muniment_core::runtime_eprintln!(
-                "muniment-runtime: session_names outcome=failed error={error}"
-            );
-        }
+        // so the runtime stays the only process that opens the journal. Home
+        // can sit in a folder macOS guards, such as Documents, where a read
+        // waits until the user answers the consent prompt, so the pass runs
+        // on its own thread and the attach socket serves without it.
+        let session_profile = profile_directory.clone();
+        let session_names = std::thread::spawn(move || {
+            if let Err(error) = name_sessions(&session_profile) {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: session_names outcome=failed error={error}"
+                );
+            }
+        });
         let companion_registry = open_companion_registry(&profile_directory)?;
         let drain_state = DrainState::new();
         let runtime_activity = RuntimeActivityRegistry::with_drain_state(&drain_state);
@@ -139,7 +164,21 @@ impl RuntimeAttachState {
             schedule_pass: Mutex::new(()),
             pi_artifact: Mutex::new(None),
             mcp_polling: Arc::new(AtomicBool::new(false)),
+            session_names: Mutex::new(Some(session_names)),
         })
+    }
+
+    /// Waits until the pass that names legacy session folders finishes.
+    #[doc(hidden)]
+    pub fn wait_for_session_names(&self) {
+        let pass = self
+            .session_names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(pass) = pass {
+            let _ = pass.join();
+        }
     }
 
     /// The swarm this runtime belongs to.
