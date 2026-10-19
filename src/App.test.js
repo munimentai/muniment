@@ -8705,19 +8705,34 @@ it('shows no thinking control for a model without reasoning', async () => {
   expect(screen.queryByRole('button', { name: /^Thinking level/ })).not.toBeInTheDocument()
 })
 
+const spentAccount = { provider: 'openai', account_id: 'a', label: 'work', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000 }
 it.each([
-  ['no window is low', [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 40, status: 'ok', accounts: [] }], null],
-  ['a window is spent', [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000, accounts: [] }], 'OpenAI weekly limit reached.'],
-])('keeps usage out of the composer and warns only when %s', async (_, limits, line) => {
+  ['no window is low', { limits: [], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 40, status: 'ok' }] }, null],
+  ['one account of a pool is spent', { limits: [spentAccount], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 50, status: 'ok' }] }, null],
+  ['a pool is spent', { limits: [spentAccount], pools: [{ provider: 'openai', kind: 'weekly', scope: '', remaining_percent: 0, status: 'limit', resets_at_ms: Date.now() + 3_600_000 }] }, 'OpenAI weekly limit reached.'],
+])('keeps usage out of the composer and warns only when %s', async (_, answer, line) => {
   localModeStatus = true
   const original = invoke.getMockImplementation()
-  invoke.mockImplementation((command,args) => command === 'usage_summary' ? Promise.resolve({ limits }) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
+  invoke.mockImplementation((command,args) => command === 'usage_summary' ? Promise.resolve(answer) : command === 'auth_status' ? Promise.resolve({signed_in:false,subject:null}) : command === 'local_mode_provider_inventory' ? Promise.resolve(ollamaInventory) : original(command,args))
   render(App)
   await findWorkspaceComposer()
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }], body: expect.objectContaining({ range: '24h' }) }))
   expect(document.querySelector('.composer-row [data-menu="usage"]')).toBeNull()
   if (line) expect(await screen.findByRole('region', { name: 'Usage limit' })).toHaveTextContent(line)
   else expect(screen.queryByRole('region', { name: 'Usage limit' })).not.toBeInTheDocument()
+})
+
+it('opens the Usage page when Settings asks for it', async () => {
+  localModeStatus = true
+  render(App)
+  await findWorkspaceComposer()
+  const { openUsagePage } = await import('./usage/usage.js')
+  openUsagePage()
+  expect(await screen.findByRole('region', { name: 'Usage' })).toBeInTheDocument()
+  // A second ask keeps the page open.
+  openUsagePage()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.getByRole('region', { name: 'Usage' })).toBeInTheDocument()
 })
 
 it('renames, archives, restores and deletes a pending artifact through its catalog menu',async()=>{

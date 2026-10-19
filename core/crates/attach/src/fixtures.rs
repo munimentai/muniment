@@ -2131,6 +2131,9 @@ fn fixture_usage() -> serde_json::Value {
         "providers": ["anthropic"],
         "limits": [{
             "provider": "anthropic",
+            "account_id": "acct-1",
+            "label": "work@example.com",
+            "plan": "max",
             "kind": "five_hour",
             "scope": "",
             "window_seconds": 18000,
@@ -2138,8 +2141,18 @@ fn fixture_usage() -> serde_json::Value {
             "resets_at_ms": 1767830400000_i64,
             "elapsed_percent": 40.0,
             "pace": "on",
-            "status": "ok",
-            "accounts": [{"id": "acct-1", "label": "work@example.com", "plan": "max", "remaining_percent": 62.0, "limit_reached": false, "resets_at_ms": 1767830400000_i64}]
+            "status": "ok"
+        }],
+        "pools": [{
+            "provider": "anthropic",
+            "kind": "five_hour",
+            "scope": "",
+            "window_seconds": 18000,
+            "remaining_percent": 62.0,
+            "resets_at_ms": 1767830400000_i64,
+            "elapsed_percent": 40.0,
+            "pace": "on",
+            "status": "ok"
         }],
         "unmetered": [{"provider": "ollama", "label": "Ollama", "reason": "local"}],
         "windows": [{

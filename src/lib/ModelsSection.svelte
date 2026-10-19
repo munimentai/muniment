@@ -9,9 +9,9 @@
   import Row from './ui/Row.svelte'
   // Settings → Models, one screen: the Roles that route and assist at the top,
   // then every connection as a named account under its provider, key or
-  // subscription, with its allowance and usage on the card, the provider's
-  // models once, and the connector that adds a provider. The composer's model
-  // picker shows and hides models.
+  // subscription, the provider's models once, and the connector that adds a
+  // provider. What each account has left lives on the Usage page, which See
+  // usage opens. The composer's model picker shows and hides models.
   import { onDestroy, onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
@@ -24,6 +24,7 @@
   import ProviderLogo from './ProviderLogo.svelte'
   import { loginEvent, loginStart } from './account-login.js'
   import { foundServers, foundServerAction } from './first-run-providers.js'
+  import { openUsagePage } from '../usage/usage.js'
   import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, modelCountLabel, providerFamily, providerName, refreshResult, searchProviders } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
@@ -102,12 +103,10 @@
     if (status === 'requested') setTimeout(() => { void loadFleet(); void loadRouter() }, 5000)
   }
 
-  let refreshError = $state('')
   onMount(() => {
     const unsubscribe = accounts.subscribe(value => {
       router = value.settings
       routerError = value.error
-      refreshError = value.refreshError
     })
     const stop = accounts.start()
     void load()
@@ -427,8 +426,8 @@
 
     <section class="accounts-section" aria-label="Connections" bind:this={connectionsPart}>
     
-    {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
     <Group heading="Connections" label="Connected providers" plain>
+    {#snippet actions()}{#if router?.accounts?.some((account) => account.source !== 'key')}<Button icon="chart-column" onclick={openUsagePage}>See usage</Button>{/if}{/snippet}
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if shownProviders.length || poolOnlyFamilies.length}
       <!-- Each provider is a heading over its own cards. A pooled subscription is a card and a pooled
