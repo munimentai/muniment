@@ -73,6 +73,7 @@ pub mod run_start;
 pub mod runtime_diagnostics;
 pub mod search_settings;
 pub mod session_thread;
+pub mod settings_scope;
 pub mod shared_models;
 pub mod sidecar;
 pub mod state_root;

@@ -57,6 +57,8 @@ const openDeleteMenu = async (title) => {
   await fireEvent.click(screen.getByRole('menuitem', { name: `Delete ${title}` }))
 }
 const modifiedCodeDiff = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/code-diff/1/modified.json'), 'utf8'))
+// Core's `settings.scope`: where each Settings part keeps its values.
+const settingsScope = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/response-settings-scope.json'), 'utf8')).body
 
 import App from './App.svelte'
 import { arrangeStandIn } from '../test/sidebar-standin.js'
@@ -359,6 +361,7 @@ beforeEach(() => {
     if (command === 'reader_connect') return readerConnectResult
     if (command === 'reader_run') return readerRunResults.length > 1 ? readerRunResults.shift() : readerRunResults[0]
     if (command === 'chat_select_thread') return undefined
+    if (command === 'agent_request' && payload?.operation === 'settings.scope') return structuredClone(settingsScope)
     throw new Error(`unexpected command: ${command}`)
   })
 })
@@ -9264,13 +9267,17 @@ describe('runtimes', () => {
     const dialog = await openSettings('Data')
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toContain('Machines')
-    expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('This part changes only this computer. Each machine keeps its own.')
+    // The lines come from core's `settings.scope`, which this computer answers.
+    expect(await within(dialog.querySelector('[data-settings-part="storage"]')).findByRole('note')).toHaveTextContent('This part changes only this computer. Each machine keeps its own.')
+    expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'settings.scope', body: {} })
     expect(within(dialog.querySelector('[data-settings-part="context"]')).getByRole('note')).toHaveTextContent('This part changes only Build box. Each machine keeps its own.')
     expect(within(dialog.querySelector('[data-settings-part="retention"]')).queryByRole('note')).toBeNull()
     // Storage belongs to this computer, so its part says so once Build box is picked.
     await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: buildBox.id } })
     await waitFor(() => expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.'))
     expect(within(dialog.querySelector('[data-settings-part="context"]')).queryByRole('note')).toBeNull()
+    // Retention reaches every machine, so it names no machine.
+    expect(within(dialog.querySelector('[data-settings-part="retention"]')).queryByRole('note')).toBeNull()
     // The cloud account belongs to this computer, so Account keeps only the profile of the selected machine.
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
     await vi.dynamicImportSettled()

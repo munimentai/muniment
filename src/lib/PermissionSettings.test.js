@@ -83,7 +83,9 @@ it('names the refusal core gives', async () => {
 
 it('saves for every machine and keeps Allow bypass for one machine', async () => {
   const machine = runtime()
-  render(PermissionSettings, { tauri: machine.tauri, machineName: 'every machine', all: true })
+  // Core's `settings.scope` names the permission settings that stay on one machine.
+  const local = fixture('response-settings-scope.json').parts.find((part) => part.id === 'permissions').machine_local
+  render(PermissionSettings, { tauri: machine.tauri, machineName: 'every machine', all: true, local })
   await screen.findByText('Default modes')
   expect(screen.getByText('How agents and threads on every machine ask before they act.')).toBeInTheDocument()
   expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).toBeDisabled()

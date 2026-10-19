@@ -1865,6 +1865,10 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             )
             .map_err(ProtocolError::invalid_request_with_reason);
         }
+        if operation == muniment_core::attach::Operation::SettingsScope {
+            return muniment_core::settings_scope::operation(body)
+                .map_err(ProtocolError::invalid_request_with_reason);
+        }
         if operation == muniment_core::attach::Operation::NotificationsList {
             return muniment_core::notifications::operation(
                 &self.profile_directory,

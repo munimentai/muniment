@@ -27,8 +27,9 @@
   const VoiceSection = () => import('./VoiceSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
   const ThreadRetention = () => import('./ThreadRetention.svelte')
-  import { ALL_MACHINES, LOCAL_PARTS, allMachinesNote, settingsMachine } from '../runtimes/runtimes.js'
+  import { ALL_MACHINES, machineLocal, scopeNote, settingsMachine } from '../runtimes/runtimes.js'
   import MachineScope from '../runtimes/MachineScope.svelte'
+  import { agentRequest } from '../agents/agent-runtime.js'
 
   let {
     tauri,
@@ -83,12 +84,15 @@
   const sectionLabel = $derived(sections.find(([id]) => id === page)?.[1] ?? 'Settings')
   // Each page's PageHead shows the sidebar label as its title.
   setContext('page-title', () => sectionLabel)
-  // A part that keeps this computer's settings says so while another machine
-  // is selected, and a part that stays on each machine says so while
-  // Settings changes all machines.
-  const localNote = (id) => allMachines ? allMachinesNote(id, machineLabel) : remoteRuntime && LOCAL_PARTS.includes(id) ? `These settings belong to this computer. ${remoteRuntime.name} keeps its own.` : ''
+  // Where each part keeps its values comes from core's `settings.scope` on
+  // this computer. A part that stays on each machine says so while Settings
+  // changes all machines, and a part this computer keeps says so while
+  // another machine is selected.
+  let settingsScope = $state(null)
+  const localNote = (id) => allMachines ? scopeNote(settingsScope, id, { all: true, machine: machineLabel }) : remoteRuntime ? scopeNote(settingsScope, id, { machine: remoteRuntime.name }) : ''
 
   onMount(() => {
+    Promise.resolve().then(() => agentRequest(tauri, null, 'settings.scope')).then((answer) => { settingsScope = answer ?? null }, () => {})
     const onKeydown = (event) => {
       // Native child dialogs own focus and Escape until they close.
       if (event.target?.closest?.('dialog[open]')) return
@@ -125,7 +129,7 @@
 
 <div data-panel="settings" class="settings-layout" role="dialog" aria-label="Settings" bind:this={panel}>
   <PanelPage>
-    {#if machine}<MachineScope scope={machine} all={allMachines} note={allMachines ? allMachinesNote(page) : ''} disabled={runtimeSwitchDisabled} onselect={pickScope} />{/if}
+    {#if machine}<MachineScope scope={machine} all={allMachines} note={allMachines ? localNote(page) : ''} disabled={runtimeSwitchDisabled} onselect={pickScope} />{/if}
     <!-- A page reads its machines when it opens, so switching them opens it again. -->
     {#key `${allMachines ? ALL_MACHINES : remoteRuntime?.id ?? 'local'}:${page}`}
     {#if page === 'models'}
@@ -135,7 +139,7 @@
     {:else if page === 'machines'}
       <SettingsSection load={RuntimesSection} properties={{tauri, listen, switchDisabled: runtimeSwitchDisabled, focus: part}} />
     {:else if page === 'permissions'}
-      <SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: allMachines ? 'every machine' : machineLabel, all: allMachines, onsaved: onpermissions}} />
+      <SettingsSection load={PermissionSettings} properties={{tauri, runtime: remoteRuntime?.id ?? null, machineName: allMachines ? 'every machine' : machineLabel, all: allMachines, local: machineLocal(settingsScope, 'permissions'), onsaved: onpermissions}} />
     {:else if page === 'account'}
       <PageHead intro="Your profile, and the MuniCloud account that holds your plan." />
       <SettingsPart id="profile" title="Profile" focus={part === 'profile'}>

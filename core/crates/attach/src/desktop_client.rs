@@ -1352,6 +1352,7 @@ impl DesktopClient {
                 "bypass_enabled",
                 "unattended_timeout_seconds",
             ],
+            Operation::SettingsScope => &["parts"],
             Operation::ThreadPermissionMode | Operation::ThreadPermissionModeSet => {
                 &["thread_id", "mode", "source"]
             }

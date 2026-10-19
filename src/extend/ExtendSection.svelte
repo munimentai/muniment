@@ -18,8 +18,8 @@
   import SearchSection from '../lib/SearchSection.svelte'
   // Settings → Tools: MCP servers, skills, plugins and web search in one page,
   // with a type filter and one Add. `focus` picks the type a link or a
-  // search result names. `localNote` says that the extensions belong to this
-  // computer while another machine is selected.
+  // search result names. `localNote` is core's line on where the extensions
+  // keep their settings when that differs from the machine Settings names.
   let { tauri, oncreate, focus = null, localNote = '' } = $props()
   const TYPES = ['mcp', 'skill', 'plugin', 'search']
   // A card names its publisher only when the server's name does not already.

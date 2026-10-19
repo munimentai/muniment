@@ -3,8 +3,9 @@
   // `permission.settings`, saved one change at a time through
   // `permission.settings_save`. Core validates each change and refuses with
   // its reason. A paired machine keeps its own settings. While Settings
-  // changes all machines, each save names that scope, and a setting core
-  // keeps on each machine waits for one machine to be picked.
+  // changes all machines, each save names that scope, and a setting core's
+  // `settings.scope` keeps on one machine, `local`, waits for one machine
+  // to be picked and shows core's line.
   import { onMount } from 'svelte'
   import Toggle from './Toggle.svelte'
   import PageHead from './ui/PageHead.svelte'
@@ -17,7 +18,7 @@
   import { agentRequest } from '../agents/agent-runtime.js'
   import { loadModes } from '../agents/permission-modes.js'
 
-  let { tauri, runtime = null, machineName = 'This computer', all = false, onsaved = () => {} } = $props()
+  let { tauri, runtime = null, machineName = 'This computer', all = false, local = [], onsaved = () => {} } = $props()
   let settings = $state(null)
   let modes = $state(null)
   let minutes = $state(240)
@@ -49,8 +50,8 @@
       busy = false
     }
   }
-  // A setting each machine keeps for itself, while every machine is in scope.
-  const perMachine = (field) => all && (settings?.machine_local ?? []).includes(field)
+  // A setting that stays on one machine, while every machine is in scope.
+  const kept = (field) => all ? local.find((entry) => entry.field === field) : undefined
   const choices = $derived((modes?.modes ?? []).filter((mode) => mode.available !== false).map((mode) => ({ value: mode.id, label: mode.title })))
 </script>
 
@@ -66,11 +67,11 @@
       </Row>
     </Group>
     <Group heading="Bypass permissions">
-      <Row title="Allow bypass" description={perMachine('bypass_enabled') ? 'Each machine keeps its own. Pick one machine to change it.' : ''} info="Off, new threads and agents start in Ask before changes, and a default set to Bypass permissions moves to Ask before changes.">
+      <Row title="Allow bypass" description={kept('bypass_enabled')?.note ?? ''} info="Off, new threads and agents start in Ask before changes, and a default set to Bypass permissions moves to Ask before changes.">
         {#snippet detail()}
           <p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Everything runs except deny and ask-first rules, protected paths and critical commands.</p>
         {/snippet}
-        <Toggle checked={settings.bypass_enabled} label="Allow bypass permissions" disabled={busy || perMachine('bypass_enabled')} onchange={(enabled) => save({ bypass_enabled: enabled })} />
+        <Toggle checked={settings.bypass_enabled} label="Allow bypass permissions" disabled={busy || !!kept('bypass_enabled')} onchange={(enabled) => save({ bypass_enabled: enabled })} />
       </Row>
     </Group>
     <Group heading="Unattended runs">
