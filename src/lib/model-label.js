@@ -21,6 +21,16 @@ export function modelLabel(value, names = null) {
   ).join(' · ')
 }
 
+// `names` with the provider name a run's receipt carries for its own model,
+// such as Anthropic for the Claude subscription bridge. A name the user gave
+// the provider wins.
+export function receiptNames(receipt, names = null) {
+  const model = String(receipt?.model ?? '')
+  const slash = model.indexOf('/')
+  const name = typeof receipt?.provider_name === 'string' ? receipt.provider_name.trim() : ''
+  return slash > 0 && name ? { [model.slice(0, slash)]: name, ...names } : names
+}
+
 // A picker row's name: the display name the registry or the server gives,
 // else the model id itself without its folder and Ollama's `:latest` tag.
 // An id keeps its own case, since title case mangles names such as
