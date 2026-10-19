@@ -1,7 +1,8 @@
-// One-sentence agent creation. Core's `agent.draft` turns a description, or a
-// thread's text, into a filled agent form with one model call on its own
-// thread: the first request answers a draft id at once, and each later
-// request with that id answers until the draft is done. This module asks,
+// Agent creation in a chat. Core's `agent.draft` turns the messages of an
+// agent's creation chat into a filled agent form with one model call on its
+// own thread: the first request answers a draft id at once, and each later
+// request with that id answers until the draft is done. Core keeps each
+// message and its draft in the chat's creation record. This module asks,
 // shapes the form and builds the `agent.save` body. Core owns the draft, the
 // trigger reading and every check on save.
 import { agentRequest } from './agent-runtime.js'
@@ -12,22 +13,26 @@ export const DRAFT_TIMEOUT_MS = 90_000
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// The draft for `source`, `{ description }` or `{ threadId }`, with any
-// answers to its earlier question. Answers `{ draft, question, via }`.
+// The draft for `source`: `{ chatId, message }` for the next message of a
+// creation chat, with `threadId` on a first message that starts from a
+// thread, or `{ description }` or `{ threadId }` alone. Answers `{ draft,
+// question, via, creation }`, where `creation` is a chat's record.
 export async function requestDraft(tauri, runtime, source, { answers = [], wait = pause, now = Date.now, cancelled = () => false } = {}) {
-  const body = source?.threadId ? { thread_id: source.threadId } : { description: String(source?.description ?? '') }
+  const body = source?.chatId
+    ? { chat_id: source.chatId, message: String(source.message ?? ''), ...(source.threadId ? { thread_id: source.threadId } : {}) }
+    : source?.threadId ? { thread_id: source.threadId } : { description: String(source?.description ?? '') }
   if (answers.length) body.answers = answers
   let answer = await agentRequest(tauri, runtime, 'agent.draft', body)
   const started = now()
   while (answer?.status === 'drafting') {
     if (cancelled()) return null
-    if (now() - started > DRAFT_TIMEOUT_MS) throw new Error('The draft took too long. Try again, or refine it in chat.')
+    if (now() - started > DRAFT_TIMEOUT_MS) throw new Error('The draft took too long. Send the message again.')
     await wait(DRAFT_POLL_MS)
     if (cancelled()) return null
     answer = await agentRequest(tauri, runtime, 'agent.draft', { draft_id: answer.draft_id })
   }
   if (!answer?.draft) throw new Error('The machine answered no draft. Try again.')
-  return { draft: answer.draft, question: answer.question ?? null, via: answer.via ?? '' }
+  return { draft: answer.draft, question: answer.question ?? null, via: answer.via ?? '', creation: answer.creation ?? null }
 }
 
 // The editable form for a draft. Each routine keeps its trigger and starts on.
@@ -67,11 +72,6 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
   }
   if (form.mode) agent.permissions = { always_allow: [], ask_first: [], ...(saved?.permissions ?? {}), mode: form.mode }
   return agent
-}
-
-// The answer an option or typed text gives to a draft's question.
-export function questionAnswer(question, answer) {
-  return { question: question.text, answer: String(answer ?? '').trim() }
 }
 
 // The line a test run shows while it runs and after: `{ text, done, failed }`.

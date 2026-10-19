@@ -61,13 +61,10 @@ const thread = (row, positions) => ({
 // Core's input from the sidebar's arrangement. `positions` maps a thread id
 // to its row shortcut number, one to nine. Archived threads stay out.
 export function paletteInput({ query = '', sidebar, positions = new Map(), pages = [], thread: open = null, machines = 1, modes = false }) {
-  const rows = [
-    ...sidebar.working, ...sidebar.pinned, ...sidebar.recent, ...sidebar.settled,
-    ...sidebar.projects.flatMap((project) => project.threads),
-  ]
+  const rows = sidebar.projects.flatMap((project) => project.threads)
   return {
     query,
-    needs_you: sidebar.needs_you.map((row) => thread(row, positions)),
+    needs_you: rows.filter((row) => row.status === 'needs_you').map((row) => thread(row, positions)),
     threads: rows.map((row) => thread(row, positions)),
     pages,
     thread: open,

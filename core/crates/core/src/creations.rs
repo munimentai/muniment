@@ -15,6 +15,25 @@ pub struct Creation {
     pub output: String,
     #[serde(default)]
     pub result_id: Option<String>,
+    /// An agent's creation chat: each message and the draft core answered
+    /// it with, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<DraftTurn>,
+}
+/// One message of an agent's creation chat and the draft `agent.draft`
+/// answered it with.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftTurn {
+    pub message: String,
+    /// The thread the agent takes over, on the turn that started from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_thread: Option<String>,
+    /// RFC 3339.
+    pub at: String,
+    /// `{draft, question, via}` as `agent.draft` answered it.
+    #[serde(default)]
+    pub reply: serde_json::Value,
 }
 fn record_path(profile: &Path, thread: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(thread).map_err(|_| "Invalid thread.")?;
@@ -45,6 +64,12 @@ pub fn save(profile: &Path, mut item: Creation) -> Result<Creation, String> {
     }
     item.goal = item.goal.trim().into();
     item.output = item.output.trim().into();
+    // A save that carries no turns keeps the chat's turns.
+    if item.turns.is_empty() {
+        if let Some(saved) = read(profile, &item.thread_id)? {
+            item.turns = saved.turns;
+        }
+    }
     let path = record_path(profile, &item.thread_id)?;
     fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     write_json(&path, &item)?;
@@ -172,6 +197,7 @@ pub fn publish(
         goal: format!("Create {}", item.name),
         output: "An interactive HTML artifact".into(),
         result_id: None,
+        turns: Vec::new(),
     });
     if plan.kind == "artifact" {
         plan.result_id = Some(item.id.clone());

@@ -29,8 +29,9 @@ export function creationName(kind, plan) {
 }
 // The starters an empty catalog shows, and the row above a full one. An
 // artifact starter opens a creation chat with its goal and output filled in.
-// An agent starter opens the agent builder with its `description`, which
-// drafts at once. `tint` names the starter tint its icon takes.
+// An agent starter opens a new agent chat with its `description` as the
+// first message, which drafts at once. `tint` names the starter tint its icon
+// takes.
 export const creationStarters = {
   artifact: [
     {id:'report',tint:'blue',icon:'file-text',name:'Report',sentence:'Explains a topic with sections, sources and charts.',goal:'Explain a topic with an interactive report',output:'A self-contained HTML report with clear sources and useful controls'},

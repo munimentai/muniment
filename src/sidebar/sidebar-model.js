@@ -1,9 +1,9 @@
 // What the sidebar hands core and keeps on this device. Core's
-// `sidebar::arrange` places every thread in one project and in one section,
-// with its status in words. This module gathers what the window knows for it,
-// keeps when the user last read each thread, and names the tone of a status.
+// `sidebar::arrange` places every thread once in the Projects list, in its
+// project or as a row of its own, with its status in words. This module
+// gathers what the window knows for it, keeps when the user last read each
+// thread, and names the tone of a status.
 
-export const CHATS_PROJECT = 'chats'
 export const READ_KEY = 'muniment.thread-read'
 export const READ_BASELINE_KEY = 'muniment.thread-read-baseline'
 
@@ -63,8 +63,10 @@ export function attention(needsYou = []) {
   }))
 }
 
-// Core's input from the window's state.
-export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], needsYou = [], held = new Map(), current = null, filter = 'all', query = '', machineOf = () => null }) {
+// Core's input from the window's state. `agentChats` are agent creation chats as
+// { threadId, title, updatedAt, agentId }: a chat shows once it holds a
+// message, and a saved agent's chat sits with the agent.
+export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], agentChats = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], needsYou = [], current = null, query = '', machineOf = () => null }) {
   const threads = summaries.map((summary) => ({ id: summary.threadId, title: summary.title || '', updated_at: summary.updatedAt || '', machine: machineOf(summary.runtimeId) }))
   const known = new Set(threads.map((thread) => thread.id))
   for (const list of Object.values(agentListing?.threads ?? {})) {
@@ -80,6 +82,15 @@ export function sidebarInput({ summaries = [], agentListing = null, agents = [],
     if (thread) thread.title = group.name || thread.title
     else threads.push({ id: group.thread_id, title: group.name || '', updated_at: group.updated_at || '', machine: null })
   }
+  for (const chat of agentChats) {
+    if (!chat?.threadId) continue
+    const thread = threads.find((entry) => entry.id === chat.threadId)
+    if (!thread) threads.push({ id: chat.threadId, title: chat.title || '', updated_at: chat.updatedAt || '', machine: null })
+    else {
+      if (chat.title) thread.title = chat.title
+      if (Date.parse(chat.updatedAt ?? '') > (Date.parse(thread.updated_at) || 0)) thread.updated_at = chat.updatedAt
+    }
+  }
   const projects = [
     ...Object.entries(catalog.projects ?? {}).map(([id, name]) => ({ id, name, owner: null })),
     ...remote.map(([id, name, owner]) => ({ id, name, owner: owner?.name ?? null })),
@@ -87,6 +98,7 @@ export function sidebarInput({ summaries = [], agentListing = null, agents = [],
   const agentThreads = {}
   for (const [agentId, list] of Object.entries(agentListing?.threads ?? {})) for (const thread of list) if (thread?.thread_id) agentThreads[thread.thread_id] = agentId
   for (const run of Object.values(agentListing?.latestRuns ?? {})) if (run?.thread_id && !agentThreads[run.thread_id]) agentThreads[run.thread_id] = run.agent_id
+  for (const chat of agentChats) if (chat?.threadId && chat.agentId && !agentThreads[chat.threadId]) agentThreads[chat.threadId] = chat.agentId
   const pinned = [], archived = []
   for (const [id, state] of Object.entries(organization)) {
     if (state?.pinned) pinned.push(id)
@@ -105,9 +117,7 @@ export function sidebarInput({ summaries = [], agentListing = null, agents = [],
     working: [...working],
     failed: [...failed],
     needs_you: attention(needsYou),
-    held: Object.fromEntries(held),
     current,
-    filter,
     query,
   }
 }
@@ -116,15 +126,20 @@ export function arrangeSidebar(tauri, input) {
   return tauri.invoke('sidebar_arrange', { input })
 }
 
-// Where each thread shows after an answer, so a read thread stays in place.
-export function holdRows(held, sidebar) {
-  for (const row of sidebar.recent) held.set(row.thread_id, 'recent')
-  for (const row of sidebar.settled) held.set(row.thread_id, 'settled')
-  return held
+export function emptySidebar() {
+  return { projects: [], archived: [], results: [] }
 }
 
-export function emptySidebar() {
-  return { needs_you: [], working: [], pinned: [], projects: [], recent: [], settled: [], archived: [], results: [] }
+// Where a new thread's row sits in the Projects list: after the pinned rows,
+// as the newest activity.
+export function freshIndex(sidebar) {
+  const index = sidebar.projects.findIndex((project) => !project.pinned)
+  return index < 0 ? sidebar.projects.length : index
+}
+
+// Every thread the sidebar arranged outside the archive, once each.
+export function listedRows(sidebar) {
+  return sidebar.projects.flatMap((project) => project.threads)
 }
 
 // The tone of a row's status: needs you warns, working is active, a failure
@@ -134,16 +149,12 @@ export function statusTone(status) {
   return TONES[status] ?? 'neutral'
 }
 
-// Every row the sidebar shows, in its order and once each, for the row shortcuts.
-export function shownRows(sidebar, { workingOpen = true, expanded = new Set(), settledOpen = false, fresh = false } = {}) {
+// Every row the sidebar shows, in its order and once each, for the row
+// shortcuts: a thread's own row, and the threads of each expanded project.
+// A new thread's row has no id yet.
+export function shownRows(sidebar, { expanded = new Set(), fresh = false } = {}) {
   const seen = new Set()
-  return [
-    ...sidebar.needs_you,
-    ...(workingOpen ? sidebar.working : []),
-    ...sidebar.pinned,
-    ...sidebar.projects.filter((project) => expanded.has(project.id)).flatMap((project) => project.threads),
-    ...(fresh ? [{ thread_id: null }] : []),
-    ...sidebar.recent,
-    ...(settledOpen ? sidebar.settled : []),
-  ].filter((row) => !seen.has(row.thread_id) && seen.add(row.thread_id))
+  const rows = sidebar.projects.map((project) => project.kind === 'thread' ? project.threads : expanded.has(project.id) ? project.threads : [])
+  if (fresh) rows.splice(freshIndex(sidebar), 0, [{ thread_id: null }])
+  return rows.flat().filter((row) => !seen.has(row.thread_id) && seen.add(row.thread_id))
 }

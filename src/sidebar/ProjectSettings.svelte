@@ -32,7 +32,6 @@
   let saving = $state(false)
   let saved = $state('')
   let adding = $state(false)
-  const chats = $derived(project.kind === 'chats')
   const plain = $derived(project.kind === 'project')
   const remote = $derived(!!project.owner)
 
@@ -129,7 +128,7 @@
 
 <section data-panel="projects" class="panel" aria-label="Project settings">
   <PanelPage>
-    <PageHead title={project.name} level={2} intro={chats ? 'Chats holds quick chats that belong to no other project.' : 'A project shares its instructions, memory and tools with every thread in it.'}>
+    <PageHead title={project.name} level={2} intro="A project shares its instructions, memory and tools with every thread in it.">
       {#snippet lead()}<button type="button" class="back" aria-label="Back to the thread" onclick={onback}><LucideIcon name="arrow-left" /></button>{/snippet}
       {#snippet actions()}
         {#if saved}<span class="saved" role="status">{saved}</span>{/if}
@@ -184,19 +183,17 @@
         {/if}
       {/if}
     {/if}
-    {#if !chats}
-      <Group heading="Triggers" info="A schedule, a webhook or a tool check starts a run. Runs post to the project's home thread.">
-        {#snippet actions()}{#if plain && !remote}<Button icon="plus" disabled={busy || adding} onclick={addTrigger}>Add a trigger</Button>{/if}{/snippet}
-        {#if !agents.length}<Row title="No triggers" description="Threads here start only when you write." />{/if}
-      </Group>
-      {#if agents.length}
-        <div class="cards" aria-label="Project agents">
-          {#each agents as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
-            <AgentCard {agent} {tauri} {inventory} projectTools={settings?.tools ?? null} projectName={project.name} modes={agent.replica || agent.online === false ? null : agentModes[agent.runtimeId ?? 'local']} machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} latestRun={latestRuns[agent.id] ?? null}
-              {onchat} {onprofile} {onrun} {onmanagemodels} {onchange} onaction={(action, name) => onaction(agent, action, name)} />
-          {/each}
-        </div>
-      {/if}
+    <Group heading="Triggers" info="A schedule, a webhook or a tool check starts a run. Runs post to the project's home thread.">
+      {#snippet actions()}{#if plain && !remote}<Button icon="plus" disabled={busy || adding} onclick={addTrigger}>Add a trigger</Button>{/if}{/snippet}
+      {#if !agents.length}<Row title="No triggers" description="Threads here start only when you write." />{/if}
+    </Group>
+    {#if agents.length}
+      <div class="cards" aria-label="Project agents">
+        {#each agents as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
+          <AgentCard {agent} {tauri} {inventory} projectTools={settings?.tools ?? null} projectName={project.name} modes={agent.replica || agent.online === false ? null : agentModes[agent.runtimeId ?? 'local']} machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} latestRun={latestRuns[agent.id] ?? null}
+            {onchat} {onprofile} {onrun} {onmanagemodels} {onchange} onaction={(action, name) => onaction(agent, action, name)} />
+        {/each}
+      </div>
     {/if}
   </PanelPage>
 </section>

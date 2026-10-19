@@ -993,11 +993,11 @@ pub fn with_state<T>(
 pub fn queue_run(profile: &Path, id: &str) -> Result<(), String> {
     run_now(profile, id, None, Some("desktop")).map(drop)
 }
-/// The trigger source of a test run that the agent builder starts.
+/// The trigger source of a test run that an agent chat starts.
 pub const TEST_RUN_SOURCE: &str = "test";
 
 /// The title of the thread an agent run opens: `<name> · test run` for a
-/// test run from the agent builder, and `<name> · <date and time>` in the
+/// test run from an agent chat, and `<name> · <date and time>` in the
 /// time zone `tz` for any other run, so the thread names the agent and the
 /// run rather than the run's standing prompt.
 pub fn run_thread_title(
@@ -1336,7 +1336,7 @@ pub fn operation(
         id: String,
         #[serde(default)]
         prompt: Option<String>,
-        /// A test run from the agent builder, which titles its thread so.
+        /// A test run from an agent chat, which titles its thread so.
         #[serde(default)]
         test: bool,
     }

@@ -229,9 +229,12 @@ export function probeAgentStores(seed, state = null) {
 }
 
 // Core's `agent.draft`: a start answers an id at once, and the next ask
-// answers the draft one model call made. A description with no job gets one
-// question beside its draft. `store.draftStarts` keeps each start, which is
-// one model round trip in core.
+// answers the draft one model call made. A chat message drafts from every
+// message its chat holds, and the answer carries the chat's creation record,
+// which `probeCreations` keeps for `creation_list`. A first message with no
+// job gets one question beside its draft. `store.draftStarts` keeps each
+// start, which is one model round trip in core.
+export const probeCreations = []
 function probeDraft(store, body) {
   store.drafts ??= {}
   store.draftStarts ??= []
@@ -244,19 +247,29 @@ function probeDraft(store, body) {
   const started = store.drafts[body.draft_id]
   if (!started) throw 'The agent draft was not found. Draft it again.'
   delete store.drafts[body.draft_id]
-  const words = started.description ?? ''
-  const vague = /^make me an agent\.?$/i.test(words.trim()) && !started.answers?.length
+  const record = started.chat_id ? probeCreations.find((item) => item.threadId === started.chat_id) : null
+  const turns = record?.turns ?? []
+  const fromThread = started.thread_id ?? turns[0]?.fromThread ?? null
+  const words = started.chat_id ? (turns.length ? '' : started.message) : started.description ?? ''
+  const vague = /^make me an agent\.?$/i.test(String(words).trim()) && !started.answers?.length
   const draft = {
-    name: started.thread_id ? 'Release notes' : vague ? 'Helper' : 'Inbox brief',
-    label: started.thread_id ? 'Release writer' : vague ? '' : 'Morning briefer',
-    instructions: started.thread_id ? 'Write the release notes from the merged changes and list what still needs review.' : vague ? 'Help me with my work.' : 'Summarize the new email in my inbox and list what needs a reply. Group messages by sender and keep each summary to one line.',
+    name: fromThread ? 'Release notes' : vague ? 'Helper' : 'Inbox brief',
+    label: fromThread ? 'Release writer' : vague ? '' : 'Morning briefer',
+    instructions: fromThread ? 'Write the release notes from the merged changes and list what still needs review.' : vague ? 'Help me with my work.' : 'Summarize the new email in my inbox and list what needs a reply. Group messages by sender and keep each summary to one line.',
     skills: [],
     tools_off: [],
-    permission_mode: vague || started.thread_id ? null : 'manual',
-    routines: vague || started.thread_id ? [] : [{ id: 'extract-5d41402abc4b2a76', name: 'Summarize the new email in my inbox', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' }, prompt: 'Summarize the new email in my inbox.', created_from: 'instructions', last_fired_at: null, last_result: null }],
+    permission_mode: vague || fromThread ? null : 'manual',
+    routines: vague || fromThread ? [] : [{ id: 'extract-5d41402abc4b2a76', name: 'Summarize the new email in my inbox', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' }, prompt: 'Summarize the new email in my inbox.', created_from: 'instructions', last_fired_at: null, last_result: null }],
   }
   const question = vague ? { text: 'What should the agent do?', options: ['Research topics', 'Edit my writing', 'Track a project'] } : null
-  return { draft_id: body.draft_id, status: 'done', draft, question, via: 'router' }
+  const answer = { draft_id: body.draft_id, status: 'done', draft, question, via: 'router' }
+  if (!started.chat_id) return answer
+  const creation = {
+    threadId: started.chat_id, kind: 'agent', goal: record?.goal ?? started.message, output: 'A saved agent with a clear task, instructions, and expected output', resultId: record?.resultId ?? null,
+    turns: [...turns, { message: started.message, ...(started.thread_id ? { fromThread: started.thread_id } : {}), at: new Date().toISOString(), reply: { draft, question, via: 'router' } }],
+  }
+  probeCreations.splice(0, probeCreations.length, ...probeCreations.filter((item) => item.threadId !== creation.threadId), creation)
+  return { ...answer, creation: clone(creation) }
 }
 
 // The preview `agent.import` answers for the probe's share link.
