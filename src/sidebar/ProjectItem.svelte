@@ -34,6 +34,8 @@
   let trigger = $state()
   let menu = $state()
   const icon = $derived(kind === 'agent' ? 'bot' : expanded ? 'folder-open' : 'folder')
+  // Core words more than one trigger as the first one and `+N`, which the row drops first when it runs short.
+  const triggerParts = $derived(/^(.*\S) (\+\d+)$/.exec(triggers)?.slice(1) ?? [triggers, ''])
   const actions = $derived([
     onsettings && { id: 'settings', label: 'Settings', icon: 'settings', run: onsettings },
     onrename && { id: 'rename', label: 'Rename', icon: 'pencil', run: onrename },
@@ -64,9 +66,9 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="project-row" class:dropping bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
-  <button class="project-title" aria-label={[`Project ${name}`, statusLabel, triggers].filter(Boolean).join(', ')} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if statusLabel}<StatusChip tone={statusTone(status)}>{statusLabel}</StatusChip>{/if}{#if triggers}<em class="triggers">{triggers}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix={kind === 'agent' ? 'on' : 'files on'} compact />{/if}</button>
-  <!-- The controls sit over the row's right end and show on hover or focus, so the triggers keep the row's width at rest. -->
+<div class="project-row" class:dropping style:--controls-width={`${(actions.length ? 2 : 1) * 24}px`} bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
+  <button class="project-title" aria-label={[`Project ${name}`, statusLabel, triggers].filter(Boolean).join(', ')} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if statusLabel}<StatusChip tone={statusTone(status)}>{statusLabel}</StatusChip>{/if}{#if triggers}<em class="triggers"><span class="trigger-words">{triggerParts[0]}</span>{#if triggerParts[1]}<span class="trigger-more">{triggerParts[1]}</span>{/if}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix={kind === 'agent' ? 'on' : 'files on'} compact />{/if}</button>
+  <!-- The controls sit over the row's right end and show on hover or focus. The title then leaves their width free, so they never cover the triggers. -->
   <span class="project-controls" class:visible={open}>
     <button class="project-control" aria-label={`New thread in ${name}`} {disabled} onclick={onnew}><LucideIcon name="square-pen" size={14} /></button>
     {#if actions.length}<button class="project-control" aria-label={`${name} actions`} aria-haspopup="menu" aria-expanded={open} bind:this={trigger} onclick={toggleMenu}><LucideIcon name="ellipsis-vertical" size={14} /></button>{/if}
@@ -82,15 +84,19 @@
 <style>
   .project-row { display: flex; align-items: center; position: relative; border-radius: var(--radius-control); }
   .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: var(--row-height); padding: var(--row-pad) 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
-  .project-title span { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
+  /* The name takes only the width the chips leave, so it clips before any of them. */
+  .project-title > span { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
   .project-title :global(span[data-overflow="true"]) { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .project-title :global(.lucide) { flex: none; width: 16px; height: 16px; color: var(--muted); }
-  /* The name gives up its width before the triggers, which show in full up to most of the row. */
-  .triggers { flex: none; max-width: 70%; margin-left: auto; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
+  /* The triggers show in full up to most of the row. Short of room, `+N` wraps onto the hidden second line before the words clip. */
+  .triggers { display: flex; flex-wrap: wrap; column-gap: .25em; flex: 0 1 auto; min-width: 0; max-width: 70%; height: 1lh; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); font-style: normal; white-space: nowrap; }
+  .trigger-words { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .trigger-more { flex: none; }
   .project-title:hover { background: var(--faint); }
   .dropping .project-title { background: var(--selected); color: var(--on-selected); }
   .project-controls { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; border-radius: var(--radius-control); background: var(--faint); opacity: 0; pointer-events: none; }
   .project-row:hover .project-controls, .project-row:focus-within .project-controls, .project-controls.visible { opacity: 1; pointer-events: auto; }
+  @media (hover: hover) { .project-row:hover .project-title, .project-row:focus-within .project-title, .project-row:has(.project-controls.visible) .project-title { padding-right: calc(8px + var(--controls-width)); } }
   .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: var(--row-height); padding: 4px; border-radius: var(--radius-control); border: 0; background: transparent; color: var(--muted); }
   .project-control:hover:not(:disabled), .project-control:focus-visible { background: color-mix(in srgb, var(--ink) 8%, var(--faint)); color: var(--ink); }
   @media (hover: none) { .project-controls { position: static; opacity: 1; pointer-events: auto; background: transparent; } }
