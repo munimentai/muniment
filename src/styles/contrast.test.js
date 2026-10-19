@@ -181,12 +181,12 @@ it('keeps secondary text at 4.5:1 on the selection fill and on both sidebar fram
   }
 })
 
-// The focus ring is the accent in a vibrant set and ink in the others. As a
-// part of a control it clears 3:1 on every surface it can sit on.
+// The focus ring is the accent in every set. As a part of a control it
+// clears 3:1 on every surface it can sit on.
 it('keeps the focus ring at 3:1 on every surface', () => {
   for (const name of themes) {
     const palette = palettes[name]
-    const ring = name.includes('-vibrant-') ? palette.accent : palette.ink
+    const ring = palette.accent
     for (const background of [palette.paper, palette.surface, palette.faint]) {
       expect(contrastRatio(ring, background), `${name} focus ring on ${background}`).toBeGreaterThanOrEqual(3)
     }

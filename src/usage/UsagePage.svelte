@@ -94,7 +94,7 @@
       {#if summary.limits.length}
         <div class="limits">{#each summary.limits as limit (`${limit.provider}:${limit.account_id ?? ''}:${limit.kind}:${limit.scope}`)}<LimitCard {limit} {now} />{/each}</div>
       {:else}
-        <div class="empty"><p>No subscription reports a limit yet.</p>{#if onconnect}<Button icon="plus" onclick={onconnect}>Connect account</Button>{/if}</div>
+        <div class="empty"><p>No subscription reports a limit yet.</p>{#if onconnect}<Button icon="plus" variant="primary" onclick={onconnect}>Connect account</Button>{/if}</div>
       {/if}
       {#if summary.unmetered.length}
         <Group heading="Without a window">

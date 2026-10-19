@@ -1899,6 +1899,7 @@ fn request_body(operation: Operation) -> serde_json::Value {
         Operation::AgentReplay => json!({"id": FIXTURE_AGENT_ID, "replay_id": FIXTURE_REPLAY_ID}),
         Operation::PermissionModes | Operation::PermissionSettings => json!({}),
         Operation::PermissionSettingsSave => json!({
+            "scope": "all",
             "default_agent_mode": "edit_auto",
             "unattended_timeout_seconds": 7200
         }),
@@ -2040,7 +2041,8 @@ fn fixture_permission_settings(timeout: u64) -> serde_json::Value {
             "type": "tool",
             "name": "mcp__leads__search_leads",
             "input": {"stage": "new"}
-        }}]
+        }}],
+        "machine_local": ["bypass_enabled"]
     })
 }
 

@@ -43,7 +43,7 @@
     {/if}
     <small>Rules match exactly. Deny wins over Ask first, and Ask first over Always allow.</small>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <div class="actions"><button disabled={busy}>Add rule</button><button type="button" onclick={() => { form = null; error = '' }}>Cancel</button></div>
+    <div class="actions"><button type="submit" data-variant="primary" disabled={busy}>Add rule</button><button type="button" onclick={() => { form = null; error = '' }}>Cancel</button></div>
   </form>
 {:else}<div class="actions"><button disabled={busy} onclick={() => { form = { ...emptyRuleForm(), list: 'always_allow' } }}>Add rule</button></div>{/if}
 

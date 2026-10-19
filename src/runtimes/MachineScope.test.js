@@ -10,20 +10,31 @@ const container = { id: 'c1', name: 'Muniment runtime', kind: 'container', local
 
 const shown = () => screen.getByRole('combobox', { name: 'Settings for' }).selectedOptions[0]?.textContent
 
+it('changes all machines unless one machine is picked', async () => {
+  const onselect = vi.fn()
+  render(MachineScope, { scope: { selected: local, choices: [local, container] }, onselect })
+  expect(shown()).toBe('All machines')
+  await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: 'local' } })
+  expect(onselect).toHaveBeenCalledWith(local)
+  expect(shown()).toBe('All machines')
+})
+
 it('names the selected machine when the machine list and the selection change together', async () => {
-  const { rerender } = render(MachineScope, { scope: { selected: local, choices: [local] } })
+  const { rerender } = render(MachineScope, { all: false, scope: { selected: local, choices: [local] } })
   expect(shown()).toBe('This computer')
-  await rerender({ scope: { selected: container, choices: [local, container] } })
+  await rerender({ all: false, scope: { selected: container, choices: [local, container] } })
   expect(shown()).toBe('Container')
   // A fresh list from the runtime arrives with new objects for the same machines.
-  await rerender({ scope: { selected: { ...container }, choices: [{ ...local }, { ...container }] } })
+  await rerender({ all: false, scope: { selected: { ...container }, choices: [{ ...local }, { ...container }] } })
   expect(shown()).toBe('Container')
 })
 
 it('keeps naming the page machine until the switch moves the selection', async () => {
   const onselect = vi.fn()
-  render(MachineScope, { scope: { selected: local, choices: [local, container] }, onselect })
+  render(MachineScope, { all: false, scope: { selected: local, choices: [local, container] }, onselect })
   await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: 'c1' } })
   expect(onselect).toHaveBeenCalledWith(container)
   expect(shown()).toBe('This computer')
+  await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: 'all' } })
+  expect(onselect).toHaveBeenCalledWith('all')
 })

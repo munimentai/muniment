@@ -254,7 +254,7 @@
     <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
       {#snippet actions()}
         <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
-        <Button disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
+        <Button variant="primary" disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
       {/snippet}
     </PageHead>
     <Group heading="About you" info="Saved in memory/profile.md.">
@@ -446,9 +446,8 @@
   .search { flex: 1 1 200px; min-width: 0; }
   textarea { resize: vertical; line-height: 1.5; }
   .import { position: relative; overflow: hidden; display: inline-flex; align-items: center; min-height: 32px; box-sizing: border-box; padding: 6px 10px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
-  .import:hover { background: var(--border); }
+  .import:hover, .import:has(input:focus-visible) { background: var(--border); }
   .import input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-  .import:focus-within { outline: 2px solid var(--ink); }
   .disclosure { min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; }
   .disclosure:hover { background: var(--faint); color: var(--ink); }
   .disclosure { white-space: nowrap; }

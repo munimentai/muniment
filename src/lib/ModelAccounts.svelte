@@ -230,7 +230,7 @@
           {#if editingId === account.id}
             <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
               <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
-              <button disabled={pending || !nameDraft.trim()}>Save</button>
+              <button type="submit" data-variant="primary" disabled={pending || !nameDraft.trim()}>Save</button>
               <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
             </form>
           {:else}

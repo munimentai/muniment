@@ -1,1 +1,1 @@
-{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000cf","operation":"permission.settings_save","capability":"fixture-capability","body":{"default_agent_mode":"edit_auto","unattended_timeout_seconds":7200}}
+{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000cf","operation":"permission.settings_save","capability":"fixture-capability","body":{"default_agent_mode":"edit_auto","scope":"all","unattended_timeout_seconds":7200}}

@@ -19,6 +19,7 @@ import {
   olderVersion,
   skipLabel,
   settingsMachine,
+  allMachinesNote,
 } from './runtimes.js'
 
 const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', active: true, local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
@@ -150,8 +151,16 @@ describe('the machine a Settings page applies to', () => {
     expect(settingsMachine(list, 'machines')).toBeNull()
   })
 
-  it('shows no machine while this computer is the only one', () => {
+  it('shows no machine while this computer is the only one that answers', () => {
     expect(settingsMachine(runtimeList([local]), 'models')).toBeNull()
+    expect(settingsMachine(runtimeList([local, studio]), 'models')).toBeNull()
+  })
+
+  it('names what stays on each machine while Settings changes all machines', () => {
+    expect(allMachinesNote('mcp')).toBe('What you add reaches every machine. On or off changes only this computer.')
+    expect(allMachinesNote('context', 'Build box')).toBe('This part changes only Build box. Each machine keeps its own.')
+    expect(allMachinesNote('storage', 'Build box')).toBe('This part changes only this computer. Each machine keeps its own.')
+    expect(allMachinesNote('retention')).toBe('')
   })
 })
 

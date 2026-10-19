@@ -1471,8 +1471,9 @@ describe('workspace composer entry', () => {
     // Wait for the lazy import before the DOM query starts its timeout.
     await vi.dynamicImportSettled()
     const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-    // The sidebar swaps its threads and footer, Settings control included, for the section list.
-    expect(settings).not.toBeInTheDocument()
+    // The sidebar swaps its threads for the section list, and the foot keeps Settings as the current page.
+    expect(settings).toHaveAttribute('aria-expanded', 'true')
+    expect(settings).toHaveAttribute('aria-current', 'page')
     // Settings takes the workspace, not a popup: no modal, no scrim, no blur.
     expect(dialog).not.toHaveAttribute('aria-modal')
     expect(screen.queryByTestId('settings-scrim')).not.toBeInTheDocument()
@@ -1632,6 +1633,8 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: /^Ollama/ }))
     expect(within(dialog).getByLabelText('Ollama server URL')).toHaveValue('http://localhost:11434/v1')
     expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeEnabled()
+    // Each connect view draws its main action in the primary style.
+    expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toHaveAttribute('data-variant', 'primary')
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }))
     await fireEvent.click(within(dialog).getByRole('button', { name: /^OpenAI/ }))
@@ -1641,6 +1644,7 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Use an API key instead' }))
     expect(within(dialog).getByLabelText('OpenAI API key')).toBeVisible()
     expect(within(dialog).getByRole('button', { name: 'Save key' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: 'Save key' })).toHaveAttribute('data-variant', 'primary')
     expect(within(dialog).queryByLabelText('Ollama server URL')).not.toBeInTheDocument()
     await fireEvent.click(within(dialog).getByRole('button', { name: /Sign in with your ChatGPT Plus or Pro account instead/ }))
     expect(within(dialog).getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
@@ -9181,6 +9185,28 @@ it('names the Usage or Notifications page in the title bar and clears the thread
   await waitFor(() => expect(document.querySelector('.active-thread')).toHaveTextContent('Until Midnight'))
 })
 
+it('keeps the foot row on the Settings side, where Settings is the current page', async () => {
+  const fallback = invoke.getMockImplementation()
+  const page = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+  invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(page) : fallback(command, args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  const foot = () => screen.getByRole('toolbar', { name: 'Settings, usage and notifications' })
+  expect(within(foot()).getByRole('button', { name: 'Settings' })).not.toHaveAttribute('aria-current')
+  await openSettings()
+  expect(within(foot()).getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
+  // A second press goes back to the app.
+  await fireEvent.click(within(foot()).getByRole('button', { name: 'Settings' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+  // Usage and Notifications open their full pages from the Settings side.
+  for (const name of ['Usage', 'Notifications']) {
+    await openSettings()
+    await fireEvent.click(within(foot()).getByRole('button', { name }))
+    await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent(name))
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+  }
+})
+
 describe('runtimes', () => {
   const thisComputer = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const buildBox = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
@@ -9231,11 +9257,16 @@ describe('runtimes', () => {
     expect(files).toHaveTextContent('Files stay on this computer. A paired runtime cannot read them.')
     await fireEvent.keyDown(window, { key: 'Escape' })
 
-    // Storage belongs to this computer, so its part says so under its head.
+    // On all machines, a part that stays on each machine says so under its head.
     const dialog = await openSettings('Data')
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toContain('Machines')
-    expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('This part changes only this computer. Each machine keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="context"]')).getByRole('note')).toHaveTextContent('This part changes only Build box. Each machine keeps its own.')
+    expect(within(dialog.querySelector('[data-settings-part="retention"]')).queryByRole('note')).toBeNull()
+    // Storage belongs to this computer, so its part says so once Build box is picked.
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: buildBox.id } })
+    await waitFor(() => expect(within(dialog.querySelector('[data-settings-part="storage"]')).getByRole('note')).toHaveTextContent('These settings belong to this computer. Build box keeps its own.'))
     expect(within(dialog.querySelector('[data-settings-part="context"]')).queryByRole('note')).toBeNull()
     // The cloud account belongs to this computer, so Account keeps only the profile of the selected machine.
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
@@ -9297,7 +9328,7 @@ describe('runtimes', () => {
     })
   })
 
-  it('names the machine Model providers applies to and switches it from Settings', async () => {
+  it('opens Model providers on all machines and switches to one machine from Settings', async () => {
     const fallback = invoke.getMockImplementation()
     let list = listFor(buildBox.id)
     invoke.mockImplementation(async (command, payload) => {
@@ -9312,9 +9343,13 @@ describe('runtimes', () => {
     await findWorkspaceComposer()
     await openSettings('Models')
     const machine = await screen.findByRole('combobox', { name: 'Settings for' })
-    expect(machine).toHaveValue(buildBox.id)
-    expect([...machine.options].map((option) => option.textContent)).toEqual(['This computer', 'Build box'])
-    await fireEvent.change(machine, { target: { value: 'local' } })
+    // Settings opens on every machine at once.
+    expect(machine).toHaveValue('all')
+    expect([...machine.options].map((option) => option.textContent)).toEqual(['All machines', 'This computer', 'Build box'])
+    await fireEvent.change(machine, { target: { value: buildBox.id } })
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue(buildBox.id))
+    expect(invoke).not.toHaveBeenCalledWith('runtime_select', expect.anything())
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Settings for' }), { target: { value: 'local' } })
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('runtime_select', { id: 'local' }))
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings for' })).toHaveValue('local'))
     // Appearance belongs to this window, so it names no machine.

@@ -55,7 +55,7 @@
   <div class="methods"><button type="button" onclick={() => open(`${entry.repo}/archive/HEAD.zip`)}>Download source package</button><button type="button" onclick={() => open(entry.repo)}>Open setup guide</button></div>
   <p class="support">The source package does not include model weights. Follow the setup guide to download the weights and start the server.</p>
   <p class="support">{entry.repo}</p>
-  <button type="button" onclick={() => choose('server')}>Connect the running server</button>
+  <button type="button" data-variant="primary" onclick={() => choose('server')}>Connect the running server</button>
 {:else if CONNECTION_METHODS[method]?.ollama && !ollama?.base_url}
   <p class="support">Connect your Ollama server under Accounts first. Its decision models then connect here with the key it already holds.</p>
 {:else}
@@ -74,7 +74,7 @@
     </div>
     {#if !CONNECTION_METHODS[method]?.ollama}<div class="field wide"><label for="classifier-key">API key{CONNECTION_METHODS[method]?.key ? '' : ' (optional)'}</label><input id="classifier-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>{/if}
   </div>
-  <button type="button" disabled={pending || !name.trim() || !model.trim() || (method === 'cloudflare' ? !/^[a-f0-9]{32}$/i.test(accountId.trim()) : !url.trim()) || (CONNECTION_METHODS[method]?.key && !key.trim())} onclick={connect}>{pending ? 'Testing connection…' : 'Test and connect'}</button>
+  <button type="button" data-variant="primary" disabled={pending || !name.trim() || !model.trim() || (method === 'cloudflare' ? !/^[a-f0-9]{32}$/i.test(accountId.trim()) : !url.trim()) || (CONNECTION_METHODS[method]?.key && !key.trim())} onclick={connect}>{pending ? 'Testing connection…' : 'Test and connect'}</button>
 {/if}
 {#if error}<p role="alert">{error}</p>{/if}
 </div>

@@ -1054,6 +1054,14 @@ function runtimesRendered() {
     const menu = document.querySelector('.machine-menu')
     return !!menu?.textContent.includes('Build box') && !!document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label')?.includes('This computer')
   }
+  // Settings opens on all machines, with the foot row on its side and
+  // Settings marked as the current page there.
+  if (runtimesState === 'scope') {
+    return document.querySelector('#settings-machine')?.value === 'all'
+      && !!document.querySelector('.machine-scope .scope-note')
+      && !!document.querySelector('#sidebar nav[aria-label="Settings sections"]')
+      && !!document.querySelector('#sidebar .sidebar-actions button[aria-label="Settings"][aria-current="page"]')
+  }
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
   const accept = page.querySelector('[role="switch"][aria-label="Accept connections"]')
@@ -1462,6 +1470,8 @@ function advanceRuntimesFixture() {
     document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
+  // The scope state stays on Models, the page Settings opens on.
+  if (runtimesState === 'scope') return
   const runtimes = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
     .find((button) => button.textContent.trim() === 'Machines')
   if (runtimes && runtimes.getAttribute('aria-current') !== 'true') return runtimes.click()
