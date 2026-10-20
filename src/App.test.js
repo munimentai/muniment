@@ -6021,8 +6021,13 @@ describe('local file selection', () => {
     await screen.findByRole('option', { name: 'ISSUES.md' })
     await fireEvent.keyDown(composer, { key: 'Enter' })
     await waitFor(() => expect(composer).toHaveValue('Read @ISSUES.md '))
-    expect(screen.getByRole('button', { name: 'Remove ISSUES.md' })).toBeInTheDocument()
+    expect(document.querySelector('.reference-overlay .mark .file-icon')).not.toBeNull()
+    expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
     expect(invoke.mock.calls.some(([command]) => command === 'chat_submit')).toBe(false)
+    await fireEvent.input(composer, { target: { value: 'Read @ISSUES.m' } })
+    await fireEvent.input(composer, { target: { value: 'Read @ISSUES.md ' } })
+    await tick()
+    expect(document.querySelector('.reference-overlay .mark .file-icon')).toBeNull()
     await fireEvent.input(composer, { target: { value: '@iss', selectionStart: 4 } })
     await screen.findByRole('option', { name: 'ISSUES.md' })
     await fireEvent.keyDown(composer, { key: 'Escape' })
@@ -9064,6 +9069,26 @@ it('attaches multiple files and folders directly with compact removable names', 
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', {
     prompt: expect.stringContaining('"/tmp/Research"\n"/tmp/Assets"'), files: [{ path: '/tmp/brief.md' }],
   }))
+})
+
+it('shows a link in the draft once, inline, and opens it on a modifier click', async () => {
+  const opened = []
+  const internal = window.__TAURI_INTERNALS__.invoke
+  window.__TAURI_INTERNALS__.invoke = (command, args) => command === 'plugin:opener|open_url' ? (opened.push(args.url), Promise.resolve()) : internal(command, args)
+  onTestFinished(() => { window.__TAURI_INTERNALS__.invoke = internal })
+  render(App)
+  const composer = await findWorkspaceComposer()
+  await fireEvent.input(composer, { target: { value: 'Compare https://ollama.com/pricing' } })
+  const link = await waitFor(() => { const node = document.querySelector('.reference-overlay [data-url]'); expect(node).not.toBeNull(); return node })
+  expect(link).toHaveAttribute('data-url', 'https://ollama.com/pricing')
+  expect(link.querySelector('[data-icon="globe"]')).not.toBeNull()
+  expect(screen.queryByLabelText('Links in message')).not.toBeInTheDocument()
+  link.getClientRects = () => [{ left: 60, right: 260, top: 0, bottom: 20 }]
+  expect(await fireEvent.mouseDown(composer, { button: 0, clientX: 100, clientY: 10 })).toBe(true)
+  expect(await fireEvent.mouseDown(composer, { button: 0, ctrlKey: true, clientX: 20, clientY: 10 })).toBe(true)
+  expect(opened).toEqual([])
+  expect(await fireEvent.mouseDown(composer, { button: 0, ctrlKey: true, clientX: 100, clientY: 10 })).toBe(false)
+  await waitFor(() => expect(opened).toEqual(['https://ollama.com/pricing']))
 })
 
 describe('the open thread under a catalog', () => {
