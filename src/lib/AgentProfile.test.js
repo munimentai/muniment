@@ -191,6 +191,54 @@ it('runs the agent on its own machine, opens a run from its history and deletes 
   expect(requests.at(-1)).toEqual({ runtime: 'box', operation: 'agent.delete', body: { id: 'scout', remove_memory: true } })
 })
 
+it('adds a memory in the same dialog, with the agent as its source, and goes back to the list', async () => {
+  const facts = [{ id: 'fact', title: 'Source preference', content: 'Use primary sources.', source: 'Chat', trust: 'user' }]
+  const invoke = vi.fn(async (command, args) => {
+    if (command !== 'agent_memory') return null
+    if (args.action === 'memory_fact_save') { facts.push({ ...args.fact, id: 'new', trust: 'user' }); return { id: 'new' } }
+    return args.action === 'memory_facts' ? structuredClone(facts) : []
+  })
+  render(AgentProfile, { agent, tauri: { invoke } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'Memory' })).getByRole('button', { name: 'Open memory' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Agent memory' })
+  await within(dialog).findByText('Source preference')
+  const add = within(dialog).getByRole('button', { name: 'Add memory' })
+  await waitFor(() => expect(add).not.toBeDisabled())
+
+  // The form takes the list's place in one dialog, with a back arrow.
+  await fireEvent.click(add)
+  expect(screen.getAllByRole('dialog')).toHaveLength(1)
+  expect(dialog).toHaveAccessibleName('Add memory')
+  expect(within(dialog).queryByText('Source preference')).not.toBeInTheDocument()
+  await waitFor(() => expect(within(dialog).getByRole('textbox', { name: 'Title' })).toHaveFocus())
+  expect(within(dialog).getByRole('textbox', { name: 'Source' })).toHaveValue('Added by Scout agent')
+  expect(within(dialog).getByRole('textbox', { name: 'Source' }).parentElement.querySelector('.agent-avatar')).not.toBeNull()
+
+  // Escape on the form goes back to the list and Add memory.
+  await fireEvent.keyDown(window, { key: 'Escape' })
+  expect(dialog).toHaveAccessibleName('Agent memory')
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Add memory' })).toHaveFocus())
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Add memory' }))
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Back to memories' }))
+  expect(within(dialog).getByText('Source preference')).toBeInTheDocument()
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Add memory' }))
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  expect(within(dialog).queryByRole('textbox', { name: 'Title' })).not.toBeInTheDocument()
+
+  // Save memory saves and returns to the list.
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Add memory' }))
+  await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Tone' } })
+  await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Fact' }), { target: { value: 'Use short answers.' } })
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Save memory' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save', fact: expect.objectContaining({ title: 'Tone', source: 'Added by Scout agent' }) })))
+  expect(await within(dialog).findByText('Tone')).toBeInTheDocument()
+  expect(dialog).toHaveAccessibleName('Agent memory')
+
+  // Escape on the list closes the dialog.
+  await fireEvent.keyDown(window, { key: 'Escape' })
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
 it('opens scoped memory only on request', async () => {
   const invoke = vi.fn(async (command) => command === 'agent_memory' ? [{ id: 'fact', title: 'Source preference', content: 'Use primary sources.', source: 'Chat' }] : null)
   render(AgentProfile, { agent, tauri: { invoke } })
@@ -324,14 +372,42 @@ it('shows a synced copy\'s profile with its machine and move, and no settings', 
   expect(screen.queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument()
 })
 
-it('exports through core for Muniment and for Grok Bot', async () => {
+it('exports through core from one Export agent menu for Muniment and for Grok Bot', async () => {
   const { invoke, requests } = machine()
   render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn() })
-  await fireEvent.click(screen.getByRole('button', { name: 'Export for Grok Bot' }))
+  expect(screen.queryByRole('button', { name: 'Export for Muniment' })).not.toBeInTheDocument()
+  const exportButton = screen.getByRole('button', { name: 'Export agent' })
+  expect(exportButton).toHaveAttribute('data-tooltip', 'Export agent')
+  await fireEvent.click(exportButton)
+  const menu = screen.getByRole('menu', { name: 'Export agent' })
+  expect(within(menu).getAllByRole('menuitemradio').map((item) => item.textContent.trim())).toEqual(['Muniment agent file', 'Grok Bot notes'])
+  await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Grok Bot notes' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_export_template', { content: '# Export', fileName: 'Scout.grok_bot.md' }))
   expect(requests.at(-1)).toEqual({ runtime: 'local', operation: 'agent.export', body: { id: 'scout', format: 'grok_bot' } })
-  await fireEvent.click(screen.getByRole('button', { name: 'Export for Muniment' }))
+  expect(screen.queryByRole('menu', { name: 'Export agent' })).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Export agent' }))
+  await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Muniment agent file' }))
   await waitFor(() => expect(requests.at(-1)).toEqual({ runtime: 'local', operation: 'agent.export', body: { id: 'scout', format: 'muniment' } }))
+})
+
+it('opens its folder in the app when the app offers it, else in the system file manager', async () => {
+  const { invoke } = machine()
+  const onopenfolder = vi.fn()
+  const view = render(AgentProfile, { agent, tauri: { invoke }, onopenfolder })
+  const folder = screen.getByRole('button', { name: 'Open folder' })
+  expect(folder).toHaveAttribute('data-tooltip', 'Open folder')
+  await fireEvent.click(folder)
+  await waitFor(() => expect(onopenfolder).toHaveBeenCalledWith(agent))
+  expect(invoke).not.toHaveBeenCalledWith('agent_open', expect.anything())
+  await view.rerender({ onopenfolder: null })
+  await fireEvent.click(screen.getByRole('button', { name: 'Open folder' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_open', { id: 'scout' }))
+})
+
+it('hides messages to other agents while it is the only agent', () => {
+  render(AgentProfile, { agent, tauri: { invoke: vi.fn(async () => ({})) }, agents: [agent] })
+  expect(screen.queryByRole('region', { name: 'Messaging' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Messages to other agents')).not.toBeInTheDocument()
 })
 
 it('creates a webhook routine and shows its secret once, then rotates it', async () => {

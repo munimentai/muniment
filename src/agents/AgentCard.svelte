@@ -2,44 +2,41 @@
   // One agent on the Agents page, laid out like the composer's model picker:
   // the avatar and the name across the top, a rail of panel icons down the
   // left, and the picked panel on the right. Each panel holds the settings
-  // that edit in one step; the rest stay in the profile. Every change is an
-  // agent operation on the agent's own machine, and core validates it.
-  // A synced copy, or an agent whose machine does not answer, is read only.
-  import { machineName as machineLabel } from '../runtimes/runtimes.js'
+  // that edit in one step, drawn as the profile draws them; the rest stay in
+  // the profile. Every change is an agent operation on the agent's own
+  // machine, and core validates it. A synced copy, or an agent whose machine
+  // does not answer, is read only.
+  import { kindIcon, machineName as machineLabel } from '../runtimes/runtimes.js'
   import { tick, untrack } from 'svelte'
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import { agentColor } from '../lib/agent-avatar.js'
-  import StatusChip from '../lib/ui/StatusChip.svelte'
-  import { runStatusTone } from '../lib/status-tone.js'
   import CatalogActions from '../lib/CatalogActions.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import ProviderLogo from '../lib/ProviderLogo.svelte'
-  import Toggle from '../lib/Toggle.svelte'
+  import ModelPicker from '../lib/ModelPicker.svelte'
   import Button from '../lib/ui/Button.svelte'
+  import ComposerMenuButton from '../composer/ComposerMenuButton.svelte'
+  import ModePicker from '../composer/ModePicker.svelte'
   import { panelScroll } from '../lib/panel-scroll.js'
-  import { pickerGroups, providerName } from '../lib/provider-catalog.js'
-  import { classifierProvider } from '../lib/classifier-catalog.js'
-  import { runActive, runDuration, runStatusLabel, triggerLabel, whenLabel } from '../lib/agent-labels.js'
+  import { runActive, runLight, runStatusLabel, whenLabel } from '../lib/agent-labels.js'
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
-  import { TOOL_KINDS, agentToolChoice, projectTools as resolveTools } from './agent-tools.js'
   import InlineEdit from './InlineEdit.svelte'
-  import MachineMark from './MachineMark.svelte'
+  import RoutineRow from './RoutineRow.svelte'
+  import RunHistory, { runIcon } from './RunHistory.svelte'
   import { agentMode, modeIcon, modePermissions } from './permission-modes.js'
-  import { isProposal, nextRunLabel, triggerSummary } from './routine-labels.js'
+  import { isProposal, nextRunLabel } from './routine-labels.js'
 
   // `modes` is core's `permission.modes` from the agent's machine: undefined
-  // while it loads, null when the machine lists none. `projectTools` is the
-  // tools of the agent's project, which the agent's choices sit over.
-  let { agent, tauri, machine, inventory = null, latestRun = null, modes = undefined, archived = false, projectTools = null, projectName = '',
-    onchat = () => {}, onprofile = () => {}, onaction = async () => {}, onchange = async () => {}, onrun = () => {}, onmanagemodels = () => {} } = $props()
+  // while it loads, null when the machine lists none. `onopenrun` opens a
+  // run's conversation, and `onvisibility` moves a model between the picker's lists.
+  let { agent, tauri, machine, inventory = null, latestRun = null, modes = undefined, archived = false,
+    onchat = () => {}, onprofile = () => {}, onaction = async () => {}, onchange = async () => {}, onrun = () => {}, onopenrun = null, onvisibility = null, onmanagemodels = () => {} } = $props()
 
   const PANELS = [
     { id: 'overview', label: 'Overview', icon: 'layout-dashboard' },
     { id: 'model', label: 'Model', icon: 'cpu' },
     { id: 'permissions', label: 'Permissions', icon: 'shield-check' },
-    { id: 'tools', label: 'Tools', icon: 'wrench' },
     { id: 'routines', label: 'Routines', icon: 'clock' },
-    { id: 'activity', label: 'Activity', icon: 'activity' },
+    { id: 'history', label: 'History', icon: 'history' },
   ]
   let panel = $state('overview')
   let tip = $state(null)
@@ -47,25 +44,17 @@
   let error = $state('')
   let runs = $state({ list: [], loading: false, error: '' })
   let nameField = $state()
+  let modeOpen = $state(false)
+  let modeButton = $state()
 
   const key = $derived(`${agent.runtimeId ?? 'local'}-${agent.id}`)
   const readOnly = $derived(!!agent.replica || agent.online === false)
   const machineName = $derived(machine ? machineLabel(machine) : 'its machine')
   const readOnlyNote = $derived(agent.online === false ? `Read only while ${machineName} is offline.` : `Synced copy. Edit it on ${machineName}.`)
+  const machineState = $derived(agent.online === false ? 'Offline' : 'Online')
   const currentMode = $derived(agentMode(agent, modes))
-  const routines = $derived(agent.routines ?? [])
-  const inUse = (model) => agent.model?.provider === model.provider && agent.model?.id === model.choice
-  // The picker's groups and names: each provider's current models, and the
-  // agent's model even when it sits under Legacy models.
-  const groups = $derived(pickerGroups(inventory, '', { all: true }).map((group) => {
-    const providerId = group.classifier ? classifierProvider(group.classifier) : group.id.replace(/^router:/, '')
-    return {
-      ...group,
-      providerId,
-      label: group.classifier ? 'Model router' : (providerName(providerId) === providerId ? group.name : providerName(providerId)),
-      models: group.models.filter((model) => model.shown || inUse(model)),
-    }
-  }).filter((group) => group.models.length))
+  const routines = $derived((agent.routines ?? []).filter((routine) => !isProposal(routine)))
+  const proposed = $derived((agent.routines ?? []).filter(isProposal).length)
 
   export function editName() { return nameField?.open() }
 
@@ -81,12 +70,19 @@
     await saveAgentPatch(tauri, agent, patch)
     await onchange()
   }
-  function chooseModel(model) {
-    if (model ? inUse(model) : !agent.model) return
-    void change({ model: model ? { provider: model.provider, id: model.choice, ...(agent.model?.thinking ? { thinking: agent.model.thinking } : {}) } : null })
+  function chooseModel(provider, choice) {
+    if (agent.model?.provider === provider && agent.model?.id === choice) return
+    void change({ model: { provider, id: choice, ...(agent.model?.thinking ? { thinking: agent.model.thinking } : {}) } })
   }
-  function chooseMode(mode) {
-    if (mode.id === currentMode?.id || mode.available === false) return
+  async function closeMode() {
+    modeOpen = false
+    await tick()
+    modeButton?.focus()
+  }
+  function chooseMode(id) {
+    void closeMode()
+    const mode = modes?.modes?.find((entry) => entry.id === id)
+    if (!mode || (id === currentMode?.id && currentMode.chosen) || mode.available === false) return
     void change({ permissions: modePermissions(agent, mode) })
   }
   async function toggleRoutine(routine, enabled) {
@@ -107,52 +103,48 @@
     finally { busy = false }
   }
 
-  // Tools reads the agent's machine's catalog while it shows, and core's
-  // `project_tools` says whether the agent may use each tool and which
-  // layer decides: the agent's own choice, its project, or the default.
-  let tools = $state({ rows: [], loading: false, error: '' })
-  let toolCatalog = $state(null)
-  $effect(() => {
-    if (panel !== 'tools' || readOnly) return
-    let alive = true
-    tools = { ...untrack(() => tools), loading: true, error: '' }
-    agentRequest(tauri, agent.runtimeId, 'agent.tool_catalog', {})
-      .then((answer) => { if (alive) toolCatalog = answer ?? {} })
-      .catch((failure) => { if (alive) tools = { rows: [], loading: false, error: String(failure?.message ?? failure) } })
-    return () => { alive = false }
-  })
-  $effect(() => {
-    const catalog = toolCatalog
-    const choices = agent.tools ?? {}
-    const policy = projectTools
-    if (!catalog) return
-    let alive = true
-    Promise.resolve(resolveTools(tauri, catalog, policy, choices))
-      .then((rows) => { if (alive) tools = { rows: rows ?? [], loading: false, error: '' } })
-      .catch((failure) => { if (alive) tools = { rows: [], loading: false, error: String(failure?.message ?? failure) } })
-    return () => { alive = false }
-  })
-  const toolSource = (row) => row.layer === 'agent' ? 'this agent' : row.layer === 'project' ? (projectName ? `off in project ${projectName}` : 'off in its project') : 'default'
-  function chooseTool(row, enabled) {
-    void change({ tools: agentToolChoice(agent, projectTools, row, enabled) })
-  }
-
-  // Activity reads the newest runs from the agent's machine while it shows,
+  // History reads the newest runs from the agent's machine while it shows,
   // and again when the latest run changes.
   $effect(() => {
-    if (panel !== 'activity' || readOnly) return
+    if (panel !== 'history' || readOnly) return
     latestRun?.id; latestRun?.status
     let alive = true
     runs = { list: untrack(() => runs.list), loading: true, error: '' }
-    agentRequest(tauri, agent.runtimeId, 'agent.runs', { agent_id: agent.id, limit: 5 })
-      .then((answer) => { if (alive) runs = { list: answer?.runs ?? [], loading: false, error: '' } })
+    agentRequest(tauri, agent.runtimeId, 'agent.runs', { agent_id: agent.id, limit: 20 })
+      .then((answer) => { if (alive) runs = { list: (answer?.runs ?? []).map((run) => ({ ...run, runtimeId: agent.runtimeId ?? 'local' })), loading: false, error: '' } })
       .catch((failure) => { if (alive) runs = { list: [], loading: false, error: String(failure?.message ?? failure) } })
     return () => { alive = false }
   })
 
+  // A press outside the open mode menu and its button closes it, and so does
+  // a scroll or a resize, since the menu sits on the page under its button.
+  $effect(() => {
+    if (!modeOpen) return
+    const outside = (event) => { if (!event.target?.closest?.(`[data-card-menu="${key}"]`)) modeOpen = false }
+    const moved = (event) => { if (!event.target?.closest?.(`.card-menu[data-card-menu="${key}"]`)) modeOpen = false }
+    window.addEventListener('pointerdown', outside, true)
+    window.addEventListener('scroll', moved, true)
+    window.addEventListener('resize', moved)
+    return () => { window.removeEventListener('pointerdown', outside, true); window.removeEventListener('scroll', moved, true); window.removeEventListener('resize', moved) }
+  })
+  // The mode menu opens on the page, under its button or above it when the
+  // window has more room there, since the card clips what overflows it.
+  function underButton(node) {
+    document.body.append(node)
+    const anchor = modeButton.getBoundingClientRect()
+    const below = window.innerHeight - anchor.bottom - 12
+    const above = anchor.top - 12
+    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - Math.min(360, window.innerWidth - 16) - 8))
+    Object.assign(node.style, below >= Math.min(node.offsetHeight, 320) || below >= above
+      ? { top: `${anchor.bottom + 4}px`, left: `${left}px`, maxHeight: `${below}px` }
+      : { bottom: `${window.innerHeight - anchor.top + 4}px`, left: `${left}px`, maxHeight: `${above}px` })
+    return { destroy() { node.remove() } }
+  }
+
   function pick(id) {
     panel = id
     error = ''
+    modeOpen = false
   }
   // Up and down arrows, Home and End move between the panels, like the picker's provider marks.
   function railKeydown(event) {
@@ -200,105 +192,53 @@
       {/each}
     </div>
     {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage style:top="{tip.top}px" style:right="{tip.right}px">{tip.label}</span>{/if}
-    <div class="panel-list" id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
+    <div class="panel-list" class:fill={panel === 'model'} id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
       {#if readOnly}<p class="note" role="note"><LucideIcon name={agent.online === false ? 'globe-off' : 'refresh-cw'} variant="action" size={12} />{readOnlyNote}</p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       {#if panel === 'overview'}
         <h4>Overview</h4>
+        <!-- Each state reads in words at the left and shows its stoplight signal at the row's end. -->
         <dl class="facts">
           <div class="fact"><dt>Job title</dt><dd><InlineEdit value={agent.label ?? ''} label="Job title" placeholder="Add a job title" disabled={readOnly} onsave={(label) => saveField({ label })} /></dd></div>
-          <div class="fact"><dt>Machine</dt><dd class="machine"><MachineMark {machine} />{#if agent.online === false}<StatusChip tone="neutral">Offline</StatusChip>{:else}<StatusChip tone="success">Online</StatusChip>{/if}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</dd></div>
+          <div class="fact"><dt>Machine</dt><dd class="record signaled"><span class="words">{machine ? machineName : ''}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</span><span class="signal" data-light={agent.online === false ? 'red' : 'green'} role="img" aria-label={machineState} data-tooltip={machineState}><LucideIcon name={kindIcon(machine)} variant="action" size={14} /></span></dd></div>
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
-          <div class="fact"><dt>Last run</dt><dd class="record">{#if latestRun}<StatusChip tone={runStatusTone(latestRun.status)}>{runStatusLabel(latestRun.status)}</StatusChip><span class="when">{whenLabel(latestRun.updated_at)}</span>{:else}Never{/if}</dd></div>
+          <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at)}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
         </dl>
         <div class="actions">
           <Button icon="play" variant="primary" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
           <Button icon="messages-square" onclick={() => onchat(agent)}>Open chat</Button>
         </div>
       {:else if panel === 'model'}
-        <div class="choices" role="radiogroup" aria-label="Model">
-          <h4>Model</h4>
-          <button type="button" role="radio" class="row" aria-checked={!agent.model} disabled={readOnly || busy} onclick={() => chooseModel(null)}>
-            <span class="row-label">Default model</span>{#if !agent.model}<LucideIcon name="check" variant="action" size={14} />{/if}
-          </button>
-          {#each groups as group (group.id)}
-            <h4 class="provider">{#if group.classifier}<LucideIcon name="route" variant="action" size={12} />{:else}<ProviderLogo color provider={group.providerId} size={12} />{/if}{group.label}</h4>
-            {#each group.models as model (`${group.id}:${model.id}`)}
-              {@const used = inUse(model)}
-              <button type="button" role="radio" class="row" aria-checked={used} data-provider={model.provider} data-model={model.choice} disabled={readOnly || busy} onclick={() => chooseModel(model)}>
-                <span class="row-label model-id">{model.label ?? model.id}</span>{#if used}<LucideIcon name="check" variant="action" size={14} />{/if}
-              </button>
-            {/each}
-          {:else}
-            <p class="empty">{inventory?.providers?.length ? 'No model is shown.' : 'No provider is connected.'}</p>
-          {/each}
-        </div>
-        <button type="button" class="foot" onclick={onmanagemodels}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
+        <ModelPicker embedded {inventory} current={agent.model ? { provider: agent.model.provider, model: agent.model.id } : null} source="this agent" actions={agent.model ? [{ id: 'default', label: 'Use the default model' }] : []} disabled={readOnly || busy}
+          onaction={() => change({ model: null })} onchoose={chooseModel} {onvisibility} onmanage={onmanagemodels} onrouting={onmanagemodels} />
       {:else if panel === 'permissions'}
-        <div class="choices" role="radiogroup" aria-label="Permission mode">
-          <h4>Permissions</h4>
-          {#if modes === undefined && !readOnly}<p class="empty" role="status">Loading modes…</p>
-          {:else if !modes}<p class="empty">{readOnly ? `Modes show once ${machineName} answers.` : `Update ${machineName} to choose a mode.`}</p>{/if}
-          {#each modes?.modes ?? [] as mode (mode.id)}
-            {@const chosen = mode.id === currentMode?.id}
-            {@const line = mode.available === false && mode.reason ? mode.reason : mode.description}
-            <!-- One line per mode keeps all six in the card. The chosen mode shows its description. -->
-            <button type="button" role="radio" class="row mode" aria-checked={chosen} aria-label={mode.title} aria-describedby={`agent-${key}-mode-${mode.id}`} disabled={readOnly || busy || mode.available === false} onclick={() => chooseMode(mode)}>
-              <LucideIcon name={modeIcon(mode)} variant="action" size={16} />
-              <span class="mode-text"><span class="mode-title">{mode.title}{#if chosen && !currentMode.chosen}<span class="default">Default</span>{/if}</span><span class="mode-line" class:visually-hidden={!chosen} id={`agent-${key}-mode-${mode.id}`}>{line}</span></span>
-              {#if chosen}<LucideIcon name="check" variant="action" size={14} />{/if}
-            </button>
-          {/each}
-        </div>
-        <button type="button" class="foot" onclick={() => onprofile(agent)}><LucideIcon name="list-checks" variant="action" size={14} />Rules in the profile</button>
-      {:else if panel === 'tools'}
-        <h4>Tools</h4>
-        {#if readOnly}<p class="empty">Tools show once {machineName} answers.</p>
-        {:else if tools.loading && !tools.rows.length}<p class="empty" role="status">Loading tools…</p>
-        {:else if tools.error}<p class="error" role="alert">{tools.error}</p>
+        <h4>Permissions</h4>
+        {#if modes === undefined && !readOnly}<p class="empty" role="status">Loading modes…</p>
+        {:else if !modes}<p class="empty">{readOnly ? `Modes show once ${machineName} answers.` : `Update ${machineName} to choose a mode.`}</p>
         {:else}
-          <ul class="tools" aria-label="Tools">
-            {#each tools.rows as row (`${row.kind}:${row.id}`)}
-              <li class="tool">
-                <span class="tool-text"><span class="tool-name">{row.label}</span><span class="record">{TOOL_KINDS[row.kind] ?? row.kind} · {toolSource(row)}</span></span>
-                <Toggle checked={row.allowed} label={`${row.label} on`} disabled={busy} onchange={(enabled) => chooseTool(row, enabled)} />
-              </li>
-            {:else}
-              <li class="empty">No tools.</li>
-            {/each}
-          </ul>
+          <div class="menu-row" data-card-menu={key}>
+            <ComposerMenuButton menu="agent-mode" bind:element={modeButton} open={modeOpen} chevrons label={`Permissions: ${currentMode?.title ?? 'Choose'}`} text={currentMode?.title ?? 'Choose'} disabled={readOnly || busy} onclick={() => { modeOpen = !modeOpen }}>{#snippet icon()}<LucideIcon name={modeIcon(currentMode)} size={14} />{/snippet}</ComposerMenuButton>
+          </div>
+          {#if modeOpen}<div class="card-menu" data-card-menu={key} use:underButton><ModePicker modes={modes.modes} current={currentMode?.id} source={currentMode?.chosen ? '' : 'default'} hint={false} onchoose={chooseMode} onclose={closeMode} /></div>{/if}
         {/if}
       {:else if panel === 'routines'}
         <h4>Routines</h4>
-        <ul class="routines" aria-label="Routines">
+        <div class="routines" aria-label="Routines" role="group">
           {#each routines as routine (routine.id)}
-            <li class="routine">
-              <button type="button" class="routine-text" aria-label={`Edit ${routine.name} in the profile`} onclick={() => onprofile(agent)}>
-                <span class="routine-name">{routine.name}</span>
-                <span class="record">{isProposal(routine) ? 'Proposed · ' : ''}{triggerSummary(routine.trigger)}</span>
-              </button>
-              {#if !isProposal(routine)}<Toggle checked={routine.enabled} label={`${routine.name} on`} disabled={readOnly || busy} onchange={(enabled) => toggleRoutine(routine, enabled)} />{/if}
-            </li>
+            <RoutineRow {routine} disabled={readOnly || busy} editLabel={`Edit ${routine.name} in the profile`} onedit={() => onprofile(agent)} ontoggle={toggleRoutine} />
           {:else}
-            <li class="empty">No routines.</li>
+            <p class="empty">No routines. It runs only when you ask.</p>
           {/each}
-        </ul>
+        </div>
+        {#if proposed}<p class="empty">{proposed === 1 ? 'One proposed routine waits in the profile.' : `${proposed} proposed routines wait in the profile.`}</p>{/if}
         {#if agent.paused_reason}<p class="empty">Routines are paused.</p>{/if}
         <button type="button" class="foot" onclick={() => onprofile(agent)}><LucideIcon name="plus" variant="action" size={14} />Add or edit in the profile</button>
       {:else}
-        <h4>Activity</h4>
+        <h4>History</h4>
         {#if readOnly}<p class="empty">Runs show once {machineName} answers.</p>
         {:else if runs.loading && !runs.list.length}<p class="empty" role="status">Loading runs…</p>
         {:else if runs.error}<p class="error" role="alert">{runs.error}</p>
-        {:else}
-          <ul class="runs" aria-label="Recent runs">
-            {#each runs.list.slice(0, 5) as run (run.id)}
-              <li class="run"><span class="dot" data-tone={runStatusTone(run.status)} aria-hidden="true"></span><span class="run-state">{runStatusLabel(run.status)}</span><span class="record">{triggerLabel(run.trigger?.kind)}{runDuration(run) ? ` · ${runDuration(run)}` : ''}</span><time class="record" datetime={run.updated_at}>{whenLabel(run.updated_at)}</time></li>
-            {:else}
-              <li class="empty">No runs yet.</li>
-            {/each}
-          </ul>
-        {/if}
+        {:else}<RunHistory embedded {tauri} {agent} runs={runs.list} disabled={busy} {onrun} onopen={onopenrun} />{/if}
       {/if}
     </div>
   </div>
@@ -320,48 +260,33 @@
   .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
   .rail-tip { position: fixed; z-index: 30; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .panel-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
+  /* The model picker fills the panel and scrolls its own list. */
+  .panel-list.fill { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  .fill > :global(.model-picker) { flex: 1; height: auto; min-height: 0; }
+  .fill > .note { margin: 6px 6px 0; }
+  .fill > .error { margin: 6px 8px 0; }
   h4 { display: flex; align-items: center; gap: 6px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
-  h4.provider { margin-top: 10px; }
   .facts { display: grid; margin: 0; }
   .fact { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 8px; min-height: 30px; padding: 0 0 0 8px; }
   dt { color: var(--muted); font-size: var(--text-12); }
   dd { min-width: 0; margin: 0; }
-  dd.record, .fact .machine { padding: 0 6px; }
-  .machine { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-  .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-human); }
+  dd.record { padding: 0 6px; }
+  .synced { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; color: var(--muted); font: var(--text-12) var(--font-human); }
   .record { min-width: 0; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); text-overflow: ellipsis; white-space: nowrap; }
-  dd.record:has(.when) { display: flex; align-items: center; gap: 8px; }
+  /* A state row: its words at the left, its signal in one column at the row's end, in the history's stoplight colors. */
+  .signaled { display: flex; align-items: center; gap: 8px; }
+  .words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .signal { position: relative; flex: none; display: inline-flex; color: var(--warning); }
+  .signal::after { content: attr(data-tooltip); position: absolute; z-index: 2; right: -4px; bottom: calc(100% + 6px); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .signal:hover::after { opacity: 1; transition-delay: 350ms; }
+  .signal[data-light="green"] { color: var(--success); }
+  .signal[data-light="red"] { color: var(--danger); }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 8px 4px; }
-  .choices { display: grid; }
-  .row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 8px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
-  .row:hover:not(:disabled) { background: var(--faint); }
-  .row[aria-checked="true"] { background: var(--selected); color: var(--on-selected); }
-  .row:disabled { cursor: default; }
-  .row:disabled:not([aria-checked="true"]) { color: var(--muted); }
-  .row-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .model-id { font: var(--text-13) var(--font-human); }
-  .mode { justify-content: flex-start; align-items: flex-start; }
-  .mode > :global(svg:first-child) { flex: none; margin-top: 2px; }
-  .mode > :global(svg:last-child:not(:first-child)) { flex: none; margin: 2px 0 0 auto; }
-  .mode-text { display: grid; gap: 2px; min-width: 0; }
-  .mode-title { display: flex; align-items: baseline; gap: 6px; font-size: var(--text-13); }
-  .default { color: var(--muted); font: var(--text-12) var(--font-human); }
-  .mode-line { color: var(--muted); font-size: var(--text-12); line-height: 1.4; }
-  .routines, .runs, .tools { display: grid; margin: 0; padding: 0; list-style: none; }
-  .tool { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 2px 4px 2px 8px; }
-  .tool-text { display: grid; gap: 1px; min-width: 0; }
-  .tool-name { overflow: hidden; font-size: var(--text-13); text-overflow: ellipsis; white-space: nowrap; }
-  .routine { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 2px 4px 2px 0; }
-  .routine-text { display: grid; gap: 2px; min-width: 0; padding: 4px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-  .routine-text:hover { background: var(--faint); }
-  .routine-name { overflow: hidden; font-size: var(--text-13); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .run { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; }
-  .run-state { font-size: var(--text-13); }
-  .dot { width: 6px; height: 6px; border-radius: var(--radius-chip); background: var(--muted); }
-  .dot[data-tone="success"] { background: var(--success); }
-  .dot[data-tone="active"] { background: var(--active); }
-  .dot[data-tone="danger"] { background: var(--danger); }
-  .dot[data-tone="warning"] { background: var(--warning); }
+  .menu-row { padding: 2px 4px; }
+  /* The mode menu sits on the page under its button, as the profile's menu opens under its row. */
+  .card-menu { position: fixed; z-index: 30; display: flex; width: min(360px, calc(100vw - 16px)); }
+  .card-menu > :global([data-panel-variant="overlay"]) { position: static; flex: 1; max-height: inherit; }
+  .routines { display: grid; gap: 6px; padding: 4px 8px; }
   .empty { margin: 0; padding: 6px 8px; color: var(--muted); font-size: var(--text-12); }
   .note { display: flex; align-items: flex-start; gap: 6px; margin: 2px 2px 6px; padding: 6px 8px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font-size: var(--text-12); line-height: 1.4; }
   .note > :global(svg) { flex: none; margin-top: 2px; color: var(--ochre); }

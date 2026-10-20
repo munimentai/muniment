@@ -16,8 +16,8 @@
   import { machineName } from '../runtimes/runtimes.js'
   import { exportAgent } from '../agents/import.js'
   import { loadModes } from '../agents/permission-modes.js'
-  // `onselect` opens the agent's chat and `onprofile` its profile alone.
-  let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onmanagemodels=()=>{}}=$props()
+  // `onselect` opens the agent's chat, `onprofile` its profile alone and `onopenrun` a run's conversation.
+  let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onopenrun=null, onvisibility=null, onmanagemodels=()=>{}}=$props()
   let archived = $state(false)
   let importOpen = $state(false)
   // The machines an import can land on: this computer and each that answers.
@@ -71,7 +71,7 @@
     <CardGrid min={340} rows={300}>
       {#each (agents ?? listing.agents).filter(agent=>isArchived('agent',agent)===archived) as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
         <AgentCard {agent} {tauri} {inventory} {archived} modes={agent.replica || agent.online === false ? null : modes[agent.runtimeId ?? 'local']} machine={machineOf(agent)} latestRun={(latestRuns ?? listing.latestRuns)[agent.id] ?? null}
-          onchat={onselect} {onprofile} {onrun} {onmanagemodels} onchange={refresh} onaction={(action,name)=>cardAction(agent,action,name)} />
+          onchat={onselect} {onprofile} {onrun} {onopenrun} {onvisibility} {onmanagemodels} onchange={refresh} onaction={(action,name)=>cardAction(agent,action,name)} />
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}
         <CatalogCard onclick={()=>onopen(plan)}>

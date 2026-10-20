@@ -573,7 +573,8 @@ export function buildProbeCommandTable(fixtureName) {
       }
       return null
     }
-    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage', 'projects'].includes(fixtureName)
+    // `?models` starts in local mode, which loads the providers below into the model pickers.
+    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage', 'projects'].includes(fixtureName) || new URLSearchParams(location.search).has('models')
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
     if (command === 'local_mode_provider_inventory') return {
@@ -1154,7 +1155,7 @@ const BUILDER_WORDS = { builder: 'Every weekday at 9am, summarize my inbox and l
 const probeBuildersTyped = new WeakSet()
 let probeBuilderOpened = 0
 
-// `&panel=overview|model|permissions|routines|activity` opens that panel on
+// `&panel=overview|model|permissions|routines|history` opens that panel on
 // every card, and `&edit=name` opens the first card's name field.
 const cardOptions = new URLSearchParams(location.search)
 const CARD_PANEL = cardOptions.get('panel')
@@ -1164,7 +1165,7 @@ function cardsRendered(count) {
   const cards = Array.from(document.querySelectorAll('[data-panel="agents"] .agent-card'))
   if (cards.length !== count) return false
   if (CARD_PANEL && !cards.every((card) => card.querySelector(`[role="tabpanel"][data-panel-id="${CARD_PANEL}"]`))) return false
-  if (CARD_PANEL === 'activity' && cards.some((card) => card.textContent.includes('Loading runs'))) return false
+  if (CARD_PANEL === 'history' && cards.some((card) => card.textContent.includes('Loading runs'))) return false
   if (CARD_EDIT && !cards[0].querySelector('input[aria-label="Agent name"]')) return false
   return cards.every((card) => card.querySelector('.agent-avatar svg'))
 }
@@ -1178,7 +1179,7 @@ function agentsRendered() {
   if (!profile?.textContent.includes(AGENT_STATES[agentsState].agent) || !profile.querySelector('[aria-label="Permissions"]')) return false
   if (agentsState === 'proposals') return profile.querySelectorAll('.proposal').length === 2
   const routine = AGENT_STATES[agentsState].routine
-  if (!routine) return !!profile.querySelector('.runs .run')
+  if (!routine) return !!profile.querySelector('[aria-label="History"] .run')
   const editor = document.querySelector('[data-panel="routine"]')
   if (!editor?.querySelector('input')?.value.includes(routine)) return false
   if (agentsState === 'mcp') return editor.querySelectorAll('[aria-label^="Check"]').length >= 2

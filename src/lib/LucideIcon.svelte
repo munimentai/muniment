@@ -7,6 +7,8 @@
 <svg class="lucide" class:side-icon={variant === 'side'} class:action-icon={variant === 'action'} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" data-icon={name}>
   {#if name === 'activity'}
     <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+  {:else if name === 'history'}
+    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" />
   {:else if name === 'bell'}
     <path d="M10.268 21a2 2 0 0 0 3.464 0" /><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
   {:else if name === 'chart-column'}

@@ -1,17 +1,16 @@
 <script>
   // An agent's routines: proposals from its instructions or an imported
   // template to accept or dismiss, then each routine with its trigger's icon,
-  // its name, when it runs, a failed tool check and a small switch. The
-  // history lists each run. Every change is a routine operation
-  // on the agent's machine. Core reads proposals again after each save, in
+  // its name, when it runs, a failed tool check and a small switch, as
+  // RoutineRow draws it. The history lists each run. Every change is a
+  // routine operation on the agent's machine. Core reads proposals again after each save, in
   // the background, so the cards reload when the agent changes.
-  import Toggle from '../lib/Toggle.svelte'
-  import LucideIcon from '../lib/LucideIcon.svelte'
   import Button from '../lib/ui/Button.svelte'
   import RoutineEditor from './RoutineEditor.svelte'
+  import RoutineRow from './RoutineRow.svelte'
   import { agentRequest } from './agent-runtime.js'
   import { conditionLabel } from './condition.js'
-  import { isProposal, pollLabel, routineIcon, routineWhen } from './routine-labels.js'
+  import { isProposal, routineWhen } from './routine-labels.js'
 
   let { agent, tauri, catalog = null, webhooks = true, disabled = false, onchange = async () => {} } = $props()
   let editing = $state(null)
@@ -79,15 +78,7 @@
     </article>
   {/each}
   {#each routines as routine (routine.id)}
-    <div class="routine" role="group" aria-label={routine.name}>
-      <span class="icon"><LucideIcon name={routineIcon(routine.trigger)} variant="action" size={14} /></span>
-      <div class="text">
-        <button type="button" class="name" disabled={disabled || busy} onclick={() => { editing = { routine } }}>{routine.name}</button>
-        <span class="when">{routineWhen(routine)}</span>
-        {#if routine.last_poll?.error}<span class="poll-error">{pollLabel(routine)}</span>{/if}
-      </div>
-      <Toggle size="small" checked={routine.enabled} label={`${routine.name} on`} disabled={disabled || busy} onchange={(checked) => work(() => save({ ...routine, enabled: checked }))} />
-    </div>
+    <RoutineRow {routine} disabled={disabled || busy} onedit={() => { editing = { routine } }} ontoggle={(_, checked) => work(() => save({ ...routine, enabled: checked }))} />
   {:else}
     {#if !proposals.length}<p class="empty">No routines. It runs only when you ask.</p>{/if}
   {/each}
@@ -108,14 +99,7 @@
   .kicker { margin: 0; color: var(--muted); font-size: var(--text-12); }
   .prompt { margin: 0; font-size: var(--text-12); line-height: 1.5; overflow-wrap: anywhere; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-  .routine { display: flex; align-items: flex-start; gap: 8px; }
-  .icon { flex: none; display: inline-flex; padding-top: 4px; color: var(--muted); }
-  .text { display: grid; flex: 1; gap: 1px; min-width: 0; }
-  .routine > :global([role="switch"]) { margin-top: 4px; }
-  .name { justify-self: start; max-width: 100%; min-height: 22px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--text-13); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .when { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
-  .poll-error { color: var(--oxide); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
-  .name:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 2px; }
   .record { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .empty, .note { margin: 0; color: var(--muted); font-size: var(--text-12); }
   [role="alert"] { margin: 0; color: var(--oxide); font-size: var(--text-12); }

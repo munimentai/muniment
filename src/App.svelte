@@ -979,7 +979,11 @@
   let projectCatalog = $state({ projects: {}, threads: {} })
   let selectedProject = $state(null)
   let catalogProject = $state(null)
-  const fileContext = $derived(agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:currentThreadTitle})
+  // The agent whose folder the profile's Open folder showed in Files, until the view moves on.
+  let folderAgent = $state(null)
+  $effect(() => { currentThreadId; selectedAgent; agentsOpen; projectsOpen; artifactsOpen; folderAgent = null })
+  function openAgentFolder(agent) { folderAgent = agent.id; showBrowser('files') }
+  const fileContext = $derived(folderAgent ? {agentId:folderAgent} : agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:currentThreadTitle})
   let expandedProjects = $state(new Set())
   let projectForm = $state(null)
   let projectName = $state('')
@@ -4250,7 +4254,7 @@
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
         ondelete={() => { agentProfileOpen = false; selectedAgent = null; profileOnlyAgent = null; void refreshAgents() }}
-        onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} />{/key}
+        onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
@@ -4262,7 +4266,7 @@
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentChat(chosen?.description ? { description: chosen.description } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
-      {inventory} latestRuns={agentListing.latestRuns} onprofile={openAgentProfile} onmanagemodels={openModelSettings} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
+      {inventory} latestRuns={agentListing.latestRuns} onprofile={openAgentProfile} onmanagemodels={openModelSettings} onvisibility={setModelShown} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {/key}{/if}
   {#if projectsOpen && settingsProject && sidebarProjectById[settingsProject]}
     <ProjectSettings {tauri} project={sidebarProjectById[settingsProject]} agents={roster.filter(agent => sidebarProjectById[settingsProject].agent_ids.includes(agent.id))} {inventory} modes={modeListing?.listing ?? null} {runtimeList} latestRuns={agentListing.latestRuns} busy={switchLocked || projectBusy}

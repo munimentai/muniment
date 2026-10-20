@@ -137,3 +137,21 @@ it('shows a model every plan refused as unavailable with the reason and leads wi
   expect(screen.getByRole('button', { name: 'GPT-6 Astra' })).toBeEnabled()
   expect(currentModel(inventory)).toMatchObject({ provider: 'muniment-router', model: 'openai/gpt-6-astra' })
 })
+
+it('draws open inside another panel with no popup frame, close control or visibility control', async () => {
+  const inventory = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', models: [{ id: 'qwen3:8b' }, { id: 'llama4' }] }] }
+  const onclose = vi.fn()
+  const onchoose = vi.fn()
+  render(ModelPicker, { inventory, current: { provider: 'ollama', model: 'qwen3:8b' }, embedded: true, onchoose, onmanage: vi.fn(), onclose })
+  const picker = screen.getByRole('group', { name: 'Model' })
+  expect(picker).toHaveAttribute('data-panel-variant', 'embedded')
+  expect(picker).not.toHaveAttribute('data-composer-panel')
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Close model selector' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /^Hide / })).not.toBeInTheDocument()
+  expect(screen.getByRole('searchbox', { name: 'Search models' })).not.toHaveFocus()
+  await fireEvent.keyDown(window, { key: 'Escape' })
+  expect(onclose).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'llama4' }))
+  expect(onchoose).toHaveBeenCalledWith('ollama', 'llama4')
+})

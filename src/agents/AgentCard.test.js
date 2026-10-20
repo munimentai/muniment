@@ -75,10 +75,11 @@ it('saves the name on blur and shows core\'s refusal, keeping the field to fix',
   expect(screen.getByRole('button', { name: 'Edit agent name: Scout' })).toBeInTheDocument()
 })
 
-it('switches panels from the rail by click and by arrow keys', async () => {
+it('switches panels from the rail by click and by arrow keys, with no Tools panel', async () => {
   show({ tauri: core().tauri })
   const rail = screen.getByRole('tablist', { name: 'Scout panels' })
   const tab = (name) => within(rail).getByRole('tab', { name })
+  expect(within(rail).getAllByRole('tab').map((entry) => entry.getAttribute('aria-label'))).toEqual(['Overview', 'Model', 'Permissions', 'Routines', 'History'])
   expect(tab('Overview')).toHaveAttribute('aria-selected', 'true')
   expect(tab('Overview')).toHaveAttribute('tabindex', '0')
   expect(tab('Model')).toHaveAttribute('tabindex', '-1')
@@ -89,32 +90,74 @@ it('switches panels from the rail by click and by arrow keys', async () => {
   expect(screen.getByRole('tabpanel')).toHaveTextContent('Daily brief')
 
   await fireEvent.keyDown(tab('Routines'), { key: 'ArrowDown' })
-  expect(tab('Activity')).toHaveAttribute('aria-selected', 'true')
-  await waitFor(() => expect(tab('Activity')).toHaveFocus())
-  await fireEvent.keyDown(tab('Activity'), { key: 'ArrowDown' })
+  expect(tab('History')).toHaveAttribute('aria-selected', 'true')
+  await waitFor(() => expect(tab('History')).toHaveFocus())
+  await fireEvent.keyDown(tab('History'), { key: 'ArrowDown' })
   expect(tab('Overview')).toHaveAttribute('aria-selected', 'true')
   await fireEvent.keyDown(tab('Overview'), { key: 'ArrowUp' })
-  expect(tab('Activity')).toHaveAttribute('aria-selected', 'true')
-  await fireEvent.keyDown(tab('Activity'), { key: 'Home' })
+  expect(tab('History')).toHaveAttribute('aria-selected', 'true')
+  await fireEvent.keyDown(tab('History'), { key: 'Home' })
   expect(tab('Overview')).toHaveAttribute('aria-selected', 'true')
   await fireEvent.keyDown(tab('Overview'), { key: 'End' })
-  expect(tab('Activity')).toHaveAttribute('aria-selected', 'true')
-  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab('Activity').id)
+  expect(tab('History')).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab('History').id)
+  expect(within(screen.getByRole('tabpanel')).getByRole('heading', { name: 'History' })).toBeInTheDocument()
   expect(await screen.findByText('No runs yet.')).toBeInTheDocument()
 })
 
-it('sets the model reference through agent.save, or clears it for the default', async () => {
+it('shows each state in words with its stoplight signal at the row end', () => {
+  const view = show({ tauri: core().tauri, latestRun: { id: 'r1', status: 'completed', updated_at: new Date(Date.now() - 10 * 3600_000).toISOString() } })
+  const fact = (name) => screen.getByText(name, { selector: 'dt' }).nextElementSibling
+  const machineRow = fact('Machine')
+  expect(machineRow).toHaveTextContent('Build box')
+  expect(machineRow).not.toHaveTextContent('Online')
+  const machineSignal = within(machineRow).getByRole('img', { name: 'Online' })
+  expect(machineSignal).toHaveAttribute('data-light', 'green')
+  expect(machineSignal).toHaveAttribute('data-tooltip', 'Online')
+  expect(machineSignal.querySelector('svg')).toHaveAttribute('data-icon', 'container')
+  expect(machineRow.lastElementChild).toBe(machineSignal)
+
+  const lastRow = fact('Last run')
+  expect(lastRow).toHaveTextContent('10h ago')
+  expect(lastRow).not.toHaveTextContent('Completed')
+  const runSignal = within(lastRow).getByRole('img', { name: 'Completed' })
+  expect(runSignal).toHaveAttribute('data-light', 'green')
+  expect(runSignal.querySelector('svg')).toHaveAttribute('data-icon', 'circle-check')
+  expect(lastRow.lastElementChild).toBe(runSignal)
+
+  view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r2', status: 'failed', updated_at: new Date().toISOString() } })
+  return Promise.resolve().then(() => {
+    expect(within(fact('Machine')).getByRole('img', { name: 'Offline' })).toHaveAttribute('data-light', 'red')
+    const failed = within(fact('Last run')).getByRole('img', { name: 'Failed' })
+    expect(failed).toHaveAttribute('data-light', 'red')
+    expect(failed.querySelector('svg')).toHaveAttribute('data-icon', 'circle-x')
+  })
+})
+
+it('shows a running last run with the yellow signal', () => {
+  show({ tauri: core().tauri, latestRun: { id: 'r1', status: 'running', updated_at: new Date().toISOString() } })
+  const signal = within(screen.getByText('Last run', { selector: 'dt' }).nextElementSibling).getByRole('img', { name: 'Running' })
+  expect(signal).toHaveAttribute('data-light', 'yellow')
+})
+
+it('picks the model from the composer picker open in the panel, or the default from its foot', async () => {
   const machineCore = core()
   show({ tauri: machineCore.tauri, onchange: vi.fn() })
   await fireEvent.click(screen.getByRole('tab', { name: 'Model' }))
-  const models = screen.getByRole('radiogroup', { name: 'Model' })
-  expect(within(models).getByRole('radio', { name: 'qwen3:8b' })).toHaveAttribute('aria-checked', 'true')
-  await fireEvent.click(within(models).getByRole('radio', { name: 'Gemini 3 Pro' }))
+  const picker = within(screen.getByRole('tabpanel')).getByRole('group', { name: 'Model' })
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(within(picker).queryByRole('button', { name: 'Close model selector' })).not.toBeInTheDocument()
+  expect(within(picker).getByRole('searchbox', { name: 'Search models' })).not.toHaveFocus()
+  // The provider rail filters the list to the picked provider.
+  expect(within(picker).getByRole('button', { name: 'qwen3:8b' })).toHaveAttribute('aria-pressed', 'true')
+  expect(within(picker).queryByRole('button', { name: 'Gemini 3 Pro' })).not.toBeInTheDocument()
+  await fireEvent.click(within(picker).getByRole('button', { name: 'Google' }))
+  await fireEvent.click(within(picker).getByRole('button', { name: 'Gemini 3 Pro' }))
   await waitFor(() => expect(machineCore.saved()).toBeDefined())
   expect(machineCore.saved()).toEqual({ runtime: 'box', operation: 'agent.save', body: { agent: { ...machineCore.stored, model: { provider: 'google', id: 'gemini-3-pro', thinking: 'medium' }, schedule: null } } })
 
-  await waitFor(() => expect(within(models).getByRole('radio', { name: 'Default model' })).not.toBeDisabled())
-  await fireEvent.click(within(models).getByRole('radio', { name: 'Default model' }))
+  await waitFor(() => expect(within(picker).getByRole('button', { name: 'Use the default model' })).not.toBeDisabled())
+  await fireEvent.click(within(picker).getByRole('button', { name: 'Use the default model' }))
   await waitFor(() => expect(machineCore.saved().body.agent.model).toBeNull())
 })
 
@@ -132,62 +175,83 @@ const modes = {
   default_agent_mode: 'auto',
 }
 
-it('sets a permission mode from core through agent.save and keeps the rules', async () => {
+it('picks a permission mode from the composer mode menu through agent.save, with no rules link', async () => {
   const machineCore = core()
   show({ tauri: machineCore.tauri, modes })
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  const group = screen.getByRole('radiogroup', { name: 'Permission mode' })
-  expect(within(group).getByRole('radio', { name: 'Ask before changes' })).toHaveAttribute('aria-checked', 'true')
-  expect(within(group).getAllByRole('radio').map((radio) => radio.getAttribute('aria-label'))).toEqual(modes.modes.map((mode) => mode.title))
-  const bypass = within(group).getByRole('radio', { name: 'Bypass permissions' })
-  expect(bypass).toBeDisabled()
-  expect(bypass).toHaveAccessibleDescription('Bypass is off.')
-
-  await fireEvent.click(within(group).getByRole('radio', { name: "Don't ask" }))
+  const panel = screen.getByRole('tabpanel')
+  expect(panel).not.toHaveTextContent('Rules')
+  const button = within(panel).getByRole('button', { name: 'Permissions: Ask before changes' })
+  await fireEvent.click(button)
+  const menu = screen.getByRole('menu', { name: 'Modes' })
+  expect(within(menu).getAllByRole('menuitemradio').map((item) => item.getAttribute('aria-label'))).toEqual(modes.modes.map((mode) => mode.title))
+  expect(within(menu).getByRole('menuitemradio', { name: 'Ask before changes' })).toHaveAttribute('aria-checked', 'true')
+  expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeDisabled()
+  expect(menu).not.toHaveTextContent('Shift+Tab')
+  await fireEvent.click(within(menu).getByRole('menuitemradio', { name: "Don't ask" }))
   await waitFor(() => expect(machineCore.saved()).toBeDefined())
   expect(machineCore.saved().body.agent.permissions).toEqual({ ...agent.permissions, mode: 'dont_ask' })
-  await waitFor(() => expect(within(group).getByRole('radio', { name: 'Plan first' })).not.toBeDisabled())
-  await fireEvent.click(within(group).getByRole('radio', { name: 'Plan first' }))
-  await waitFor(() => expect(machineCore.saved().body.agent.permissions.mode).toBe('plan'))
+  expect(screen.queryByRole('menu', { name: 'Modes' })).not.toBeInTheDocument()
+
+  // Escape closes the menu without a change and returns to its button.
+  await waitFor(() => expect(button).not.toBeDisabled())
+  const saves = machineCore.requests.length
+  await fireEvent.click(button)
+  await fireEvent.keyDown(window, { key: 'Escape' })
+  expect(screen.queryByRole('menu', { name: 'Modes' })).not.toBeInTheDocument()
+  await waitFor(() => expect(button).toHaveFocus())
+  expect(machineCore.requests).toHaveLength(saves)
 })
 
 it('marks the default mode of an agent that chose none, and names a refused change', async () => {
   const machineCore = core({ refuse: 'The agent settings are invalid.' })
   show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: {} } })
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  const chosen = screen.getByRole('radio', { name: 'Auto review' })
-  expect(chosen).toHaveAttribute('aria-checked', 'true')
-  expect(chosen).toHaveTextContent('Default')
-  await fireEvent.click(screen.getByRole('radio', { name: 'Plan first' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Permissions: Auto review' }))
+  const menu = screen.getByRole('menu', { name: 'Modes' })
+  expect(menu).toHaveTextContent('Auto review · default')
+  await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Plan first' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('The agent settings are invalid.')
-})
-
-it('fits every mode on one line each and shows the chosen mode\'s description', async () => {
-  show({ tauri: core().tauri, modes, agent: { ...agent, permissions: { ...agent.permissions, mode: 'dont_ask' } } })
-  await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  const group = screen.getByRole('radiogroup', { name: 'Permission mode' })
-  const lines = within(group).getAllByRole('radio').map((radio) => [radio.getAttribute('aria-label'), !radio.querySelector('.mode-line').classList.contains('visually-hidden')])
-  expect(lines.filter(([, visible]) => visible)).toEqual([["Don't ask", true]])
-  expect(within(group).getByRole('radio', { name: 'Plan first' })).toHaveAccessibleDescription(modes.modes.find((mode) => mode.id === 'plan').description)
 })
 
 it('says so when the machine lists no modes', async () => {
   show({ tauri: core().tauri, modes: null })
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  expect(screen.queryAllByRole('radio')).toEqual([])
+  expect(screen.queryByRole('button', { name: /^Permissions:/ })).not.toBeInTheDocument()
   expect(screen.getByText('Update Build box to choose a mode.')).toBeInTheDocument()
 })
 
-it('turns a routine on and off through routine.save and opens the profile to edit it', async () => {
+it('lists routines as the profile does and turns one on and off through routine.save', async () => {
   const machineCore = core()
   const onprofile = vi.fn()
   show({ tauri: machineCore.tauri, onprofile })
   await fireEvent.click(screen.getByRole('tab', { name: 'Routines' }))
-  expect(screen.getByText('Every day at 09:00 · UTC')).toBeInTheDocument()
-  await fireEvent.click(screen.getByRole('switch', { name: 'Daily brief on' }))
+  const row = screen.getByRole('group', { name: 'Daily brief' })
+  // A schedule reads in local time and names no time zone.
+  expect(within(row).getByText('Every day at 09:00')).toBeInTheDocument()
+  expect(row).not.toHaveTextContent('UTC')
+  expect(row.querySelector('svg[data-icon="clock"]')).not.toBeNull()
+  const toggle = within(row).getByRole('switch', { name: 'Daily brief on' })
+  await fireEvent.click(toggle)
   await waitFor(() => expect(machineCore.requests.at(-1)).toEqual({ runtime: 'box', operation: 'routine.save', body: { agent_id: 'scout', routine: { ...agent.routines[0], enabled: false } } }))
-  await fireEvent.click(screen.getByRole('button', { name: 'Edit Daily brief in the profile' }))
+  await fireEvent.click(within(row).getByRole('button', { name: 'Edit Daily brief in the profile' }))
   expect(onprofile).toHaveBeenCalledWith(agent)
+})
+
+it('lists runs in its History as the profile does and opens a run\'s conversation', async () => {
+  const machineCore = core()
+  const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  const invoke = machineCore.tauri.invoke
+  machineCore.tauri.invoke = vi.fn(async (command, args) => command === 'agent_request' && args.operation === 'agent.runs' ? { runs: [run], next_cursor: null } : invoke(command, args))
+  const onopenrun = vi.fn()
+  show({ tauri: machineCore.tauri, onopenrun })
+  await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  const history = await screen.findByRole('region', { name: 'History' })
+  const row = await within(history).findByRole('button', { name: /^Daily brief, Today at / })
+  expect(row.closest('li')).toHaveAttribute('data-light', 'red')
+  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20 } })
+  await fireEvent.click(row)
+  expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', thread_id: 't1', runtimeId: 'box' }))
 })
 
 it('shows an agent whose machine is offline read only, with a note', async () => {
@@ -197,35 +261,7 @@ it('shows an agent whose machine is offline read only, with a note', async () =>
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Open chat' })).not.toBeDisabled()
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
-  expect(screen.getAllByRole('radio')).toHaveLength(6)
-  expect(screen.getAllByRole('radio').every((radio) => radio.disabled)).toBe(true)
-})
-
-it('lists its machine tools with the layer that decides each and saves a choice over its project', async () => {
-  const machineCore = core()
-  const invoke = machineCore.tauri.invoke
-  const catalog = { builtin: [{ id: 'bash', label: 'Shell commands' }, { id: 'read', label: 'Read files' }], mcp: [{ id: 'crm-server', server: 'crm', tools: [] }], plugins: [], skills: [] }
-  machineCore.tauri.invoke = vi.fn(async (command, args) => {
-    if (command === 'agent_request' && args.operation === 'agent.tool_catalog') return catalog
-    if (command === 'project_tools') {
-      const { policy, agent: tools } = args.input
-      return [
-        { id: 'bash', kind: 'builtin', label: 'Shell commands', allowed: !!tools?.allowed?.includes('bash'), layer: tools?.allowed?.includes('bash') ? 'agent' : policy.disabledTools?.includes('bash') ? 'project' : 'default' },
-        { id: 'read', kind: 'builtin', label: 'Read files', allowed: true, layer: 'default' },
-        { id: 'crm-server', kind: 'mcp', label: 'crm', allowed: true, layer: 'default' },
-      ]
-    }
-    return invoke(command, args)
-  })
-  show({ tauri: machineCore.tauri, projectTools: { disabledTools: ['bash'] }, projectName: 'Homelab' })
-  await fireEvent.click(screen.getByRole('tab', { name: 'Tools' }))
-  const list = await screen.findByRole('list', { name: 'Tools' })
-  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.tool_catalog', body: {} })
-  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('project_tools', { input: { catalog, policy: { disabledTools: ['bash'] }, agent: {} } })
-  expect(list).toHaveTextContent('Built-in tool · off in project Homelab')
-  expect(list).toHaveTextContent('MCP server · default')
-  const shell = within(list).getByRole('switch', { name: 'Shell commands on' })
-  expect(shell).toHaveAttribute('aria-checked', 'false')
-  await fireEvent.click(shell)
-  await waitFor(() => expect(machineCore.saved()?.body.agent.tools).toEqual({ disabled: [], disabled_extensions: [], allowed: ['bash'] }))
+  expect(screen.getByRole('button', { name: 'Permissions: Ask before changes' })).toBeDisabled()
+  await fireEvent.click(screen.getByRole('tab', { name: 'Model' }))
+  expect(screen.getByRole('button', { name: 'qwen3:8b' })).toBeDisabled()
 })
