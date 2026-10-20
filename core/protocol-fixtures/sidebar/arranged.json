@@ -80,7 +80,11 @@
           "updated_at": "2026-10-18T08:15:00Z",
           "status": "read",
           "status_label": "",
-          "agent_id": "deploy-bot",
+          "agent": {
+            "id": "deploy-bot",
+            "name": "Deploy bot",
+            "color": "#E0A458"
+          },
           "home": true,
           "pinned": false
         },
@@ -157,13 +161,11 @@
       ]
     },
     {
-      "id": "agent:pricing-watch",
+      "id": "t-price",
       "name": "Pricing watch",
-      "kind": "agent",
-      "triggers": "every day 9:00",
-      "agent_ids": [
-        "pricing-watch"
-      ],
+      "kind": "thread",
+      "triggers": "",
+      "agent_ids": [],
       "updated_at": "2026-10-18T09:02:00Z",
       "status": "failed",
       "status_label": "Failed",
@@ -172,12 +174,16 @@
         {
           "thread_id": "t-price",
           "title": "Pricing watch",
-          "project_id": "agent:pricing-watch",
-          "project_name": "Pricing watch",
+          "project_id": "",
+          "project_name": "",
           "updated_at": "2026-10-18T09:02:00Z",
           "status": "failed",
           "status_label": "Failed",
-          "agent_id": "pricing-watch",
+          "agent": {
+            "id": "pricing-watch",
+            "name": "Pricing watch",
+            "color": "#5FB98A"
+          },
           "home": true,
           "pinned": false
         }

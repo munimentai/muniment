@@ -2,10 +2,11 @@
 //!
 //! A project is a group of things: threads and agents. A thread in no
 //! project is a project of its own, one row in the Projects list. A catalog
-//! project groups its threads and the agents that work in it, and an agent
-//! without a catalog project reads as a project with triggers. [`arrange`]
-//! places each thread once: in its project, as its own row, or among the
-//! archived threads. Each row states its status in words, and the list runs
+//! project groups its threads and the agents that work in it, with their
+//! triggers. An agent without a catalog project has no group: each of its
+//! threads is a row of its own that names the agent. [`arrange`] places each
+//! thread once: in its project, as its own row, or among the archived
+//! threads. Each row states its status in words, and the list runs
 //! newest activity first with pinned rows on top. A finished thread settles
 //! once it is read and keeps its place, showing only its time.
 
@@ -15,7 +16,8 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The id prefix of a project that stands for an agent without a project.
+/// The id prefix of the project settings of an agent without a catalog
+/// project.
 pub const AGENT_PROJECT_PREFIX: &str = "agent:";
 
 /// One thread the client knows.
@@ -58,6 +60,8 @@ pub struct Agent {
     pub home_thread_id: Option<String>,
     pub paused_reason: Option<String>,
     pub routines: Vec<Routine>,
+    /// The agent's color, as the client draws it, such as `#5FB98A`.
+    pub color: Option<String>,
 }
 
 /// Something that needs the user, from the notifications page.
@@ -109,6 +113,15 @@ pub enum Status {
     Read,
 }
 
+/// The agent a thread row belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AgentRef {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
 /// One thread row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Row {
@@ -125,8 +138,9 @@ pub struct Row {
     /// The status in words, such as `Approve`, `Working` or `Done`. Empty
     /// for a read thread.
     pub status_label: String,
+    /// The agent whose thread or run this is.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
+    pub agent: Option<AgentRef>,
     /// The thread is its agent's home thread, where its runs post.
     pub home: bool,
     pub pinned: bool,
@@ -139,8 +153,6 @@ pub enum Kind {
     /// A thread in no project, which is its own project.
     Thread,
     Project,
-    /// An agent without a catalog project.
-    Agent,
 }
 
 /// One Projects row.
@@ -327,13 +339,15 @@ pub fn arrange(input: &Input) -> Sidebar {
             agent_threads.insert(home.clone(), agent.id.clone());
         }
     }
-    let agent_project = |agent: &Agent| match &agent.project_id {
-        Some(project) if catalog.contains_key(project.as_str()) => project.clone(),
-        _ => format!("{AGENT_PROJECT_PREFIX}{}", agent.id),
+    let agent_project = |agent: &Agent| {
+        agent
+            .project_id
+            .clone()
+            .filter(|project| catalog.contains_key(project.as_str()))
     };
 
-    // Every catalog project and every agent without a catalog project, with
-    // the triggers of the agents in each. Threads in no project join later.
+    // Every catalog project, with the triggers of the agents in each. Threads
+    // in no project, an agent's among them, join later as rows of their own.
     let mut projects: BTreeMap<String, ProjectRow> = BTreeMap::new();
     let row = |id: &str, name: &str, kind, owner: Option<String>| ProjectRow {
         id: id.into(),
@@ -360,10 +374,9 @@ pub fn arrange(input: &Input) -> Sidebar {
         );
     }
     for agent in &input.agents {
-        let id = agent_project(agent);
-        let entry = projects
-            .entry(id.clone())
-            .or_insert_with(|| row(&id, &agent.name, Kind::Agent, None));
+        let Some(entry) = agent_project(agent).and_then(|id| projects.get_mut(&id)) else {
+            continue;
+        };
         entry.agent_ids.push(agent.id.clone());
         let words = agent_triggers(agent);
         if !words.is_empty() {
@@ -391,8 +404,8 @@ pub fn arrange(input: &Input) -> Sidebar {
     let mut alone: Vec<ProjectRow> = Vec::new();
     let query = input.query.trim().to_lowercase();
     let mut seen = BTreeSet::new();
-    // An agent's home thread the client has not listed yet still shows
-    // under its project, named for the agent.
+    // An agent's home thread the client has not listed yet still shows,
+    // named for the agent.
     let homes: Vec<Thread> = input
         .agents
         .iter()
@@ -412,7 +425,7 @@ pub fn arrange(input: &Input) -> Sidebar {
             .get(&thread.id)
             .and_then(|id| agents.get(id.as_str()));
         let project_id = match agent {
-            Some(agent) => Some(agent_project(agent)),
+            Some(agent) => agent_project(agent),
             None => input
                 .assignments
                 .get(&thread.id)
@@ -459,13 +472,21 @@ pub fn arrange(input: &Input) -> Sidebar {
             updated_at: thread.updated_at.clone(),
             status,
             status_label: label.into(),
-            agent_id: agent.map(|agent| agent.id.clone()),
+            agent: agent.map(|agent| AgentRef {
+                id: agent.id.clone(),
+                name: agent.name.clone(),
+                color: agent.color.clone(),
+            }),
             home: agent.is_some_and(|agent| agent.home_thread_id.as_ref() == Some(&thread.id)),
             pinned: input.pinned.contains(&thread.id),
         };
         if !query.is_empty()
             && (entry.title.to_lowercase().contains(&query)
-                || entry.project_name.to_lowercase().contains(&query))
+                || entry.project_name.to_lowercase().contains(&query)
+                || entry
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.name.to_lowercase().contains(&query)))
         {
             sidebar.results.push(entry.clone());
         }
@@ -601,11 +622,19 @@ mod tests {
             "a thread assigned to a missing project is in no project"
         );
         assert_eq!(ids(&project(&sidebar, "p1").threads), vec!["b"]);
-        let agent = project(&sidebar, "agent:watch");
-        assert_eq!(agent.kind, Kind::Agent);
+        let agent = project(&sidebar, "c");
+        assert_eq!(agent.kind, Kind::Thread, "an agent's thread is its own row");
         assert_eq!(ids(&agent.threads), vec!["c"]);
-        assert_eq!(agent.triggers, "every day 9:00");
+        assert_eq!(agent.triggers, "", "the sidebar shows no agent schedule");
         assert_eq!(agent.threads[0].title, "Pricing watch");
+        assert_eq!(agent.threads[0].project_name, "");
+        assert_eq!(
+            agent.threads[0]
+                .agent
+                .as_ref()
+                .map(|agent| agent.name.as_str()),
+            Some("Pricing watch")
+        );
         assert!(agent.threads[0].home);
         assert_eq!(
             project(&sidebar, "p1").triggers,
@@ -615,7 +644,7 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_home_thread_the_client_has_not_listed_shows_under_its_project() {
+    fn an_agent_home_thread_the_client_has_not_listed_shows_as_its_own_row() {
         let input = Input {
             agents: vec![Agent {
                 id: "scout".into(),
@@ -628,6 +657,7 @@ mod tests {
         let sidebar = arrange(&input);
         assert_eq!(sidebar.projects.len(), 1);
         let project = &sidebar.projects[0];
+        assert_eq!(project.kind, Kind::Thread);
         assert_eq!(ids(&project.threads), vec!["home"]);
         assert_eq!(project.threads[0].title, "Scout");
         assert_eq!(project.status, Status::Read);
@@ -667,6 +697,76 @@ mod tests {
         assert_eq!(sidebar.projects[0].triggers, "webhook");
         assert_eq!(sidebar.projects[0].agent_ids, vec!["deploy"]);
         assert_eq!(sidebar.projects[0].threads[0].project_name, "Homelab");
+        assert_eq!(
+            sidebar.projects[0].threads[0]
+                .agent
+                .as_ref()
+                .map(|agent| agent.id.as_str()),
+            Some("deploy"),
+            "a row in a project still names its agent"
+        );
+    }
+
+    #[test]
+    fn each_thread_and_run_of_an_agent_is_a_row_that_names_the_agent() {
+        let input = Input {
+            threads: vec![
+                thread("home", "Morning brief", "2026-10-18T08:00:00Z"),
+                thread(
+                    "run",
+                    "Morning brief · Oct 18, 08:50",
+                    "2026-10-18T08:50:00Z",
+                ),
+                thread("chat", "Notes", "2026-10-18T09:00:00Z"),
+            ],
+            agents: vec![Agent {
+                id: "brief".into(),
+                name: "Morning".into(),
+                home_thread_id: Some("home".into()),
+                routines: vec![cron("0 8 * * 1-5"), cron("0 * * * *")],
+                color: Some("#5FB98A".into()),
+                ..Agent::default()
+            }],
+            agent_threads: BTreeMap::from([("run".into(), "brief".into())]),
+            working: BTreeSet::from(["run".into()]),
+            read_baseline: Some("2026-10-19T00:00:00Z".into()),
+            query: "morning".into(),
+            ..Input::default()
+        };
+        let sidebar = arrange(&input);
+        assert_eq!(
+            sidebar
+                .projects
+                .iter()
+                .map(|project| (project.id.as_str(), project.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                ("chat", Kind::Thread),
+                ("run", Kind::Thread),
+                ("home", Kind::Thread)
+            ],
+            "no agent group: each thread is a row, newest activity first"
+        );
+        let run = &project(&sidebar, "run").threads[0];
+        assert_eq!(
+            run.agent,
+            Some(AgentRef {
+                id: "brief".into(),
+                name: "Morning".into(),
+                color: Some("#5FB98A".into()),
+            })
+        );
+        assert_eq!(run.status_label, "Working");
+        assert!(sidebar
+            .projects
+            .iter()
+            .all(|project| project.triggers.is_empty()));
+        assert_eq!(project(&sidebar, "chat").threads[0].agent, None);
+        assert_eq!(
+            ids(&sidebar.results),
+            vec!["run", "home"],
+            "search finds an agent's rows by its name"
+        );
     }
 
     #[test]
@@ -709,7 +809,7 @@ mod tests {
                 .iter()
                 .map(|project| project.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["pin", "bad", "new", "run", "agent:bot", "old"],
+            vec!["pin", "bad", "new", "run", "ask", "old"],
             "pinned rows first, then newest activity first"
         );
         let shown: Vec<&str> = sidebar
@@ -719,8 +819,8 @@ mod tests {
             .collect();
         assert_eq!(shown.len(), 6, "each thread shows once: {shown:?}");
         let label = |id: &str| project(&sidebar, id).status_label.as_str();
-        assert_eq!(label("agent:bot"), "Approve");
-        assert_eq!(project(&sidebar, "agent:bot").status, Status::NeedsYou);
+        assert_eq!(label("ask"), "Approve");
+        assert_eq!(project(&sidebar, "ask").status, Status::NeedsYou);
         assert_eq!(label("run"), "Working");
         assert_eq!(label("bad"), "Failed");
         assert_eq!(label("new"), "Done");
