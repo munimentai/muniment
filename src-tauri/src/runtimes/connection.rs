@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use muniment_core::attach::{
     connect_remote_runtime, serve_desktop_client_with, ClientError, DesktopClient,
@@ -26,6 +26,11 @@ pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const OFFLINE_BACKOFF: Duration = Duration::from_secs(5);
 const REFUSED_BACKOFF: Duration = Duration::from_secs(30);
+/// A connection that ends sooner than this after it opened counts as a
+/// failed one, so the next connection waits longer.
+const STABLE_CONNECTION: Duration = Duration::from_secs(10);
+const BRIEF_BACKOFF: Duration = Duration::from_secs(1);
+const MAX_BRIEF_BACKOFF: Duration = Duration::from_secs(60);
 
 /// How a runtime answered the last connection attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -78,6 +83,41 @@ pub(crate) fn client_options(device_name: Option<String>) -> RemoteClientOptions
         device_name,
         scopes: None,
         io_timeout: IO_TIMEOUT,
+    }
+}
+
+/// The wait before one supervised connection opens again. A connection
+/// that ends soon after it opened, as one the app drops after a request it
+/// cannot read does, makes the next one wait twice as long as the last, up
+/// to a minute. A connection that lasted resets the wait.
+#[derive(Debug, Default)]
+pub(crate) struct Reconnect {
+    brief: u32,
+    opened: Option<Instant>,
+}
+
+impl Reconnect {
+    /// Records that a connection opened at `now`.
+    pub(crate) fn opened(&mut self, now: Instant) {
+        self.opened = Some(now);
+    }
+
+    /// The wait before the next connection, which the caller asks for at
+    /// `now`, once the last one ended.
+    pub(crate) fn wait(&mut self, now: Instant) -> Duration {
+        match self.opened.take() {
+            Some(opened) if now.saturating_duration_since(opened) < STABLE_CONNECTION => {
+                self.brief = self.brief.saturating_add(1);
+            }
+            Some(_) => self.brief = 0,
+            None => {}
+        }
+        match self.brief {
+            0 => Duration::ZERO,
+            brief => BRIEF_BACKOFF
+                .saturating_mul(1u32 << (brief - 1).min(16))
+                .min(MAX_BRIEF_BACKOFF),
+        }
     }
 }
 
@@ -213,14 +253,17 @@ impl Connector {
             .map_err(|error| RuntimeStatus::of_error(&error))
     }
 
-    /// One supervised attempt: it reports what the runtime answered and,
-    /// after a failure, waits out the backoff before the next attempt.
-    fn attempt(&self) -> Option<DesktopClient> {
-        if self.control.stopped() {
+    /// One supervised attempt: it waits out `reconnect`, reports what the
+    /// runtime answered and, after a failure, waits out the backoff before
+    /// the next attempt.
+    fn attempt(&self, reconnect: &mut Reconnect) -> Option<DesktopClient> {
+        let wait = reconnect.wait(Instant::now());
+        if self.control.stopped() || (!wait.is_zero() && !self.control.wait(wait)) {
             return None;
         }
         match self.connect() {
             Ok(client) => {
+                reconnect.opened(Instant::now());
                 (self.observe)(&self.runtime_id, welcome(&client));
                 Some(client)
             }
@@ -253,7 +296,6 @@ pub(crate) fn welcome(client: &DesktopClient) -> Observation {
 
 /// The supervised connections to the selected paired runtime.
 pub(crate) struct RemoteSupervisor {
-    pub(crate) runtime_id: String,
     pub(crate) holder: DesktopClientHolder,
     connector: Connector,
     connected: Arc<AtomicBool>,
@@ -285,8 +327,9 @@ impl RemoteSupervisor {
         let client_connected = Arc::clone(&connected);
         let worker = std::thread::spawn(move || {
             let observer = client_connector.clone();
+            let mut reconnect = Reconnect::default();
             serve_desktop_client_with(
-                || client_connector.attempt(),
+                || client_connector.attempt(&mut reconnect),
                 client_stop,
                 client_holder,
                 RETRY_INTERVAL,
@@ -316,7 +359,6 @@ impl RemoteSupervisor {
         std::thread::spawn(move || serve_chat_events(&connector, deliver));
 
         Self {
-            runtime_id,
             holder,
             connector: kept,
             connected,
@@ -373,8 +415,9 @@ pub(crate) fn observe_update_info(connector: &Connector, client: &mut DesktopCli
 fn serve_chat_events(connector: &Connector, deliver: impl Fn(SubscriptionEvent)) {
     // Each reconnect resumes after the newest chat event already delivered.
     let mut cursor = None;
+    let mut reconnect = Reconnect::default();
     while !connector.control.stopped() {
-        if let Some(mut client) = connector.attempt() {
+        if let Some(mut client) = connector.attempt(&mut reconnect) {
             observe_update_info(connector, &mut client);
             // An older runtime refuses the update status, the agent runs,
             // the swarm, its live events or forwarded actions, and the
@@ -459,18 +502,95 @@ mod tests {
     }
 
     #[test]
+    fn a_connection_that_ends_soon_after_it_opens_makes_the_next_one_wait_longer() {
+        let mut reconnect = Reconnect::default();
+        let start = Instant::now();
+        // The first connection opens at once.
+        assert_eq!(reconnect.wait(start), Duration::ZERO);
+        let mut now = start;
+        let mut waits = Vec::new();
+        for _ in 0..8 {
+            reconnect.opened(now);
+            now += Duration::from_millis(20);
+            let wait = reconnect.wait(now);
+            waits.push(wait);
+            now += wait;
+        }
+        assert_eq!(waits[0], BRIEF_BACKOFF);
+        assert_eq!(waits[1], BRIEF_BACKOFF * 2);
+        assert_eq!(waits[2], BRIEF_BACKOFF * 4);
+        assert!(waits.windows(2).all(|pair| pair[1] >= pair[0]));
+        assert_eq!(*waits.last().unwrap(), MAX_BRIEF_BACKOFF);
+        // A failed attempt keeps the wait, and a connection that lasted
+        // resets it.
+        assert_eq!(reconnect.wait(now), MAX_BRIEF_BACKOFF);
+        reconnect.opened(now);
+        assert_eq!(reconnect.wait(now + STABLE_CONNECTION), Duration::ZERO);
+    }
+
+    fn unpaired_connector(directory: &std::path::Path, observe: Observer) -> Connector {
+        Connector {
+            runtime_id: "018f0000-0000-7000-8000-000000000042".into(),
+            registry: Registry::new(directory.to_path_buf()),
+            ssh: None,
+            control: Arc::new(RemoteControl::default()),
+            observe,
+        }
+    }
+
+    #[test]
+    fn callers_that_race_to_connect_one_runtime_start_one_set_of_connections() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-remote-{}", uuid::Uuid::now_v7()));
+        let attach = Arc::new(crate::attach_service::AttachCompanionState::default());
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let id = "018f0000-0000-7000-8000-000000000042";
+        let callers: Vec<_> = (0..4)
+            .map(|_| {
+                let (attach, starts, barrier, directory) = (
+                    Arc::clone(&attach),
+                    Arc::clone(&starts),
+                    Arc::clone(&barrier),
+                    directory.clone(),
+                );
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    attach.insert_remote_once(id, || {
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(50));
+                        RemoteSupervisor::start(
+                            unpaired_connector(&directory, Arc::new(|_, _| {})),
+                            |_| {},
+                            |_| {},
+                        )
+                    })
+                })
+            })
+            .collect();
+        let started: Vec<bool> = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect();
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(started.iter().filter(|started| **started).count(), 1);
+        assert!(attach.has_remote(id));
+        for remote in attach.take_remotes() {
+            remote.stop();
+        }
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn a_runtime_that_is_not_paired_reports_offline_and_stops_cleanly() {
         let directory =
             std::env::temp_dir().join(format!("muniment-remote-{}", uuid::Uuid::now_v7()));
         let observed = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&observed);
-        let connector = Connector {
-            runtime_id: "018f0000-0000-7000-8000-000000000042".into(),
-            registry: Registry::new(directory.clone()),
-            ssh: None,
-            control: Arc::new(RemoteControl::default()),
-            observe: Arc::new(move |_, observation| seen.lock().unwrap().push(observation)),
-        };
+        let connector = unpaired_connector(
+            &directory,
+            Arc::new(move |_, observation| seen.lock().unwrap().push(observation)),
+        );
         let supervisor = RemoteSupervisor::start(connector, |_| {}, |_| {});
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !observed

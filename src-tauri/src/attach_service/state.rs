@@ -595,12 +595,20 @@ impl AttachCompanionState {
         lock(&self.remotes).keys().cloned().collect()
     }
 
-    /// Keeps `next` connected and answers the connections it replaces.
-    pub(crate) fn insert_remote(
+    /// Keeps the connections `start` opens to the paired runtime `id` unless
+    /// it has some, and answers whether `start` ran. Callers that race for
+    /// one runtime start one set of connections between them.
+    pub(crate) fn insert_remote_once(
         &self,
-        next: crate::runtimes::RemoteSupervisor,
-    ) -> Option<crate::runtimes::RemoteSupervisor> {
-        lock(&self.remotes).insert(next.runtime_id.clone(), next)
+        id: &str,
+        start: impl FnOnce() -> crate::runtimes::RemoteSupervisor,
+    ) -> bool {
+        let mut remotes = lock(&self.remotes);
+        if remotes.contains_key(id) {
+            return false;
+        }
+        remotes.insert(id.to_owned(), start());
+        true
     }
 
     /// Takes the connections of the paired runtime `id`. An active runtime
