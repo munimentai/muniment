@@ -327,6 +327,34 @@ JSON answer whose routines pass the same checks. Proposals are saved
 disabled with `"proposed": true` and `"created_from": "instructions"`; a
 dismissed one is not proposed again.
 
+### Memory origin
+
+Each fact records who wrote it on an `Origin:` line in its file, beside its
+free-text `Source:` and its `Trust:`. `muniment_core::memory_origin` holds the
+shape, `{"kind": "user"|"chat"|"agent"|"unknown", "surface"?:
+"settings"|"agent_profile"|"agent_import", "agent_id"?, "thread_id"?,
+"run_id"?}`. A fact the user saves is `user` with the `settings` surface, or
+`agent_profile` with the agent's id when the save names an agent. An agent
+import is `user` with `agent_import`. A memory-save call and the after-run
+pass record the run's thread and run id, and `agent` with the agent's id when
+the agent run store holds the run or the agent threads map the thread, which
+covers routines, Run now, the agent's own chat, and messages and handoffs
+from other agents. Any other run is `chat`. A proposed change carries the
+origin the fact it writes will record.
+
+Memory responses (`memory_facts`, `memory_deleted_facts`, `memory_fact_save`,
+`memory_pending`, `memory_pending_apply`) answer each fact or change with its
+`origin` and an `origin_label`: "Added in Settings", "Added in a chat",
+"Added by <name> agent" with the agent's current name for an agent or agent
+profile origin, or "Added by an agent" once the agent is deleted. A fact file
+without an `Origin:` line keeps loading. Its response infers the origin from
+the source text: "Added in settings" is a user fact from Settings or, in an
+agent's memory, from that agent's profile; `extracted thread:<id> run:<id>`
+and `thread:<id> run:<id>` are agent facts when that run or thread belongs to
+an agent, or the fact sits in an agent's memory, and chat facts otherwise.
+Any other text is `unknown`, labeled with that text. Reading never rewrites
+the file. The next save writes the line.
+
 ### Templates
 
 `muniment_core::agent_templates` reads public Grok Bot share links (the

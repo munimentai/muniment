@@ -581,6 +581,7 @@ fn memory_files_converge_and_removals_reach_every_member() {
             content: "Takes it black.".into(),
             source: "Settings".into(),
             trust: Trust::User,
+            origin: None,
         },
     )
     .unwrap();
@@ -650,6 +651,7 @@ fn concurrent_memory_edits_keep_both_as_a_conflict_copy() {
             content: "Green tea.".into(),
             source: "Settings".into(),
             trust: Trust::User,
+            origin: None,
         },
     )
     .unwrap();

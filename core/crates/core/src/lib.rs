@@ -45,6 +45,7 @@ pub mod memory_extract;
 pub mod memory_failure;
 pub mod memory_files;
 pub mod memory_index;
+pub mod memory_origin;
 pub mod memory_runtime;
 pub mod memory_secret;
 pub mod model_acquisition_transport;

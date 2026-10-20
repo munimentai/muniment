@@ -93,11 +93,13 @@ impl ApplicationMemoryRuntime {
         } else {
             private.join("memory-index.sqlite3")
         };
+        let origin = crate::memory_origin::Origin::of_run(&self.config, &thread, session);
         self.extractor.submit(
             self.extraction_model.clone(),
             crate::memory_extract::Job {
                 run: session.to_owned(),
                 thread,
+                origin,
                 messages,
                 home: memory_home,
                 private,
@@ -664,6 +666,11 @@ impl ApplicationMemoryRuntime {
                 content: capture.content,
                 source: format!("thread:{thread} run:{session}"),
                 trust,
+                origin: Some(crate::memory_origin::Origin::of_run(
+                    &self.config,
+                    &thread,
+                    session,
+                )),
             },
         )?;
         self.saved
@@ -922,6 +929,87 @@ mod tests {
         );
         crate::memory_files::fact_restore_in(&private, &home, &fact.id).unwrap();
         assert_eq!(crate::memory_files::facts_in(&home).unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saved_and_extracted_facts_record_the_agent_or_chat_that_wrote_them() {
+        use crate::memory_origin::{describe_facts, OriginKind};
+        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("private");
+        crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
+        let agent = crate::agents::save(
+            &config,
+            crate::agents::Agent {
+                name: "Tauri Morning".into(),
+                instructions: "Summarize the morning.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        crate::agents::assign(&config, "agent-chat", &agent.id).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(config.clone(), config.join("memory"))
+            .with_extraction_model(Arc::new(|_, _| {
+                Ok(crate::memory_extract::Answer {
+                    text: r#"{"actions":[{"op":"add","title":"Shifts","content":"Works night shifts."}]}"#.into(),
+                    via: "router",
+                })
+            }));
+        let (agent_home, _) = crate::agents::memory_paths(&config, &agent.id).unwrap();
+        let home = crate::memory_files::home(&config).unwrap();
+        let wait = || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !runtime.extraction_idle() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        let message = "I am a pediatric nurse and I work night shifts.".to_owned();
+        for (session, thread) in [("agent-save", "agent-chat"), ("chat-save", "plain-chat")] {
+            runtime.open_session(session, thread, capability()).unwrap();
+            runtime
+                .capture_fact(
+                    session,
+                    &serde_json::json!({"title": format!("Tone {session}"), "content": format!("Short answers for {session}.")}).to_string(),
+                    crate::memory_files::Trust::Conversation,
+                )
+                .unwrap();
+            runtime.close_session(session);
+        }
+        for (session, thread) in [("agent-pass", "agent-chat"), ("chat-pass", "plain-chat")] {
+            runtime.open_session(session, thread, capability()).unwrap();
+            runtime.extract_after_run(session, vec![message.clone()]);
+            wait();
+            runtime.close_session(session);
+        }
+
+        let agent_facts = describe_facts(
+            &config,
+            Some(&agent.id),
+            crate::memory_files::facts_in(&agent_home).unwrap(),
+        );
+        assert_eq!(agent_facts.len(), 2);
+        for (fact, run) in [("Tone agent-save", "agent-save"), ("Shifts", "agent-pass")] {
+            let fact = agent_facts.iter().find(|f| f.fact.title == fact).unwrap();
+            let origin = fact.fact.origin.as_ref().unwrap();
+            assert_eq!(origin.kind, OriginKind::Agent);
+            assert_eq!(origin.agent_id.as_deref(), Some(agent.id.as_str()));
+            assert_eq!(origin.thread_id.as_deref(), Some("agent-chat"));
+            assert_eq!(origin.run_id.as_deref(), Some(run));
+            assert_eq!(fact.origin_label, "Added by Tauri Morning agent");
+        }
+        let chat_facts =
+            describe_facts(&config, None, crate::memory_files::facts_in(&home).unwrap());
+        assert_eq!(chat_facts.len(), 2);
+        for (fact, run) in [("Tone chat-save", "chat-save"), ("Shifts", "chat-pass")] {
+            let fact = chat_facts.iter().find(|f| f.fact.title == fact).unwrap();
+            let origin = fact.fact.origin.as_ref().unwrap();
+            assert_eq!(origin.kind, OriginKind::Chat);
+            assert_eq!(origin.agent_id, None);
+            assert_eq!(origin.thread_id.as_deref(), Some("plain-chat"));
+            assert_eq!(origin.run_id.as_deref(), Some(run));
+            assert_eq!(fact.origin_label, "Added in a chat");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1484,6 +1572,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
                     content: content.into(),
                     source: "thread:abc run:one".into(),
                     trust: crate::memory_files::Trust::Conversation,
+                    origin: None,
                 },
             )
             .unwrap();

@@ -76,6 +76,8 @@ pub struct Answer {
 pub struct Job {
     pub run: String,
     pub thread: String,
+    /// The origin the facts the pass writes record.
+    pub origin: crate::memory_origin::Origin,
     pub messages: Vec<String>,
     pub home: PathBuf,
     pub private: PathBuf,
@@ -489,6 +491,7 @@ pub fn run(job: &Job, model: Option<&Model>) {
             fact_id: action.fact_id,
             after: action.after,
             source: source.clone(),
+            origin: Some(job.origin.clone()),
             created: created.clone(),
         };
         if job.ask {
@@ -865,6 +868,7 @@ mod tests {
             content: content.into(),
             source: "Added in settings".into(),
             trust: Trust::User,
+            origin: None,
         }
     }
 
@@ -1022,6 +1026,7 @@ mod tests {
             Job {
                 run: "run-1".into(),
                 thread: "thread-1".into(),
+                origin: crate::memory_origin::Origin::of_run(&self.root, "thread-1", "run-1"),
                 messages: vec![
                     "I switched from Helix to Zed for editing, and I no longer live in Lisbon."
                         .into(),
@@ -1216,6 +1221,7 @@ mod tests {
                 content: format!("Detail {n}."),
             }),
             source: "extracted thread:t run:r".into(),
+            origin: None,
             created: "2026-01-01T00:00:00.000Z".into(),
         };
         memory_files::pending_stage(&fixture.private, (0..60).map(change).collect()).unwrap();

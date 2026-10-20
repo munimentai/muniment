@@ -798,6 +798,7 @@ pub fn commit(
                 content: memory.content.clone(),
                 source: "Imported agent template".into(),
                 trust: crate::memory_files::Trust::External,
+                origin: Some(crate::memory_origin::Origin::imported(&agent.id)),
             },
         )?;
     }
@@ -1258,6 +1259,7 @@ mod tests {
                 content: "Deals close on Fridays.".into(),
                 source: "test".into(),
                 trust: crate::memory_files::Trust::User,
+                origin: None,
             },
         )
         .unwrap();

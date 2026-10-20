@@ -1,13 +1,16 @@
 //! Memory: the profile, the facts of the user or of one agent, deleted facts,
 //! the recall settings and the changes the after-run pass keeps for review.
 //! Settings edits are the user's own, so a fact saved here is a user fact
-//! whatever trust the client sent.
+//! whatever trust and origin the client sent: one from Settings, or from the
+//! agent's profile when the action names an agent. Each fact and change
+//! answers its origin and an `origin_label` that names it.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use muniment_core::memory_files::{self, Fact, PendingChange, RecallSettings, Trust};
+use muniment_core::memory_files::{self, Fact, RecallSettings, Trust};
+use muniment_core::memory_origin::{self, DescribedChange, DescribedFact, Origin};
 use muniment_core::serde_json::{self, Value};
 
 /// The facts an action reads or changes: the user's, or one agent's.
@@ -27,18 +30,38 @@ fn roots(profile: &Path, scope: &Scope) -> Result<(PathBuf, PathBuf), String> {
     }
 }
 
-pub(super) fn facts(profile: &Path, scope: Scope) -> Result<Vec<Fact>, String> {
-    memory_files::facts_in(&roots(profile, &scope)?.0)
+pub(super) fn facts(profile: &Path, scope: Scope) -> Result<Vec<DescribedFact>, String> {
+    let facts = memory_files::facts_in(&roots(profile, &scope)?.0)?;
+    Ok(memory_origin::describe_facts(
+        profile,
+        scope.agent.as_deref(),
+        facts,
+    ))
 }
 
-pub(super) fn deleted_facts(profile: &Path, scope: Scope) -> Result<Vec<Fact>, String> {
-    memory_files::deleted_facts(&roots(profile, &scope)?.1)
+pub(super) fn deleted_facts(profile: &Path, scope: Scope) -> Result<Vec<DescribedFact>, String> {
+    let facts = memory_files::deleted_facts(&roots(profile, &scope)?.1)?;
+    Ok(memory_origin::describe_facts(
+        profile,
+        scope.agent.as_deref(),
+        facts,
+    ))
 }
 
-pub(super) fn fact_save(profile: &Path, scope: Scope, mut fact: Fact) -> Result<Fact, String> {
+pub(super) fn fact_save(
+    profile: &Path,
+    scope: Scope,
+    mut fact: Fact,
+) -> Result<DescribedFact, String> {
     let (home, private) = roots(profile, &scope)?;
     fact.trust = Trust::User;
-    memory_files::fact_save_in(&private, &home, fact)
+    fact.origin = Some(Origin::user(scope.agent.as_deref()));
+    let fact = memory_files::fact_save_in(&private, &home, fact)?;
+    Ok(memory_origin::describe_fact(
+        profile,
+        scope.agent.as_deref(),
+        fact,
+    ))
 }
 
 pub(super) fn fact_delete(profile: &Path, scope: Scope, id: &str) -> Result<Value, String> {
@@ -65,15 +88,23 @@ pub(super) fn recall_settings_save(
 }
 
 /// The changes the after-run memory pass keeps for review, newest first.
-pub(super) fn pending(profile: &Path, scope: Scope) -> Result<Vec<PendingChange>, String> {
-    memory_files::pending_changes(&roots(profile, &scope)?.1)
+pub(super) fn pending(profile: &Path, scope: Scope) -> Result<Vec<DescribedChange>, String> {
+    let changes = memory_files::pending_changes(&roots(profile, &scope)?.1)?;
+    Ok(memory_origin::describe_changes(
+        profile,
+        scope.agent.as_deref(),
+        changes,
+    ))
 }
 
 /// Applies a kept change: the fact an add or update wrote, or null for a delete.
 pub(super) fn pending_apply(profile: &Path, scope: Scope, id: &str) -> Result<Value, String> {
     let (home, private) = roots(profile, &scope)?;
-    memory_files::pending_apply(&private, &home, id)
-        .map(|fact| serde_json::to_value(fact).unwrap_or(Value::Null))
+    memory_files::pending_apply(&private, &home, id).map(|fact| {
+        fact.map(|fact| memory_origin::describe_fact(profile, scope.agent.as_deref(), fact))
+            .and_then(|fact| serde_json::to_value(fact).ok())
+            .unwrap_or(Value::Null)
+    })
 }
 
 pub(super) fn pending_dismiss(profile: &Path, scope: Scope, id: &str) -> Result<Value, String> {
