@@ -9,7 +9,7 @@
   import OwnerChip from './runtimes/OwnerChip.svelte'
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
-  import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, threadOwner } from './runtimes/fleet.js'
+  import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, runMachineName, threadOwner } from './runtimes/fleet.js'
   import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, machineName, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
   import { machineStatusTone } from './lib/status-tone.js'
   import StatusChip from './lib/ui/StatusChip.svelte'
@@ -1398,7 +1398,7 @@
   // Each user message's turn: its run, or the run that answers it.
   const userTurnRuns = $derived(new Map(messages.flatMap((message, index) => message.role === 'user' ? [[message, message.id ?? messages[index + 1]?.run?.id ?? null]] : [])))
   const rewindBlocked = $derived(rewindUnavailable({ owner: currentOwner, replica: !!currentSummary?.replica, group: !!threadGroup, running: !!active }))
-  const runMachine = $derived(machineName(runtimeList?.runtimes?.find((runtime) => runtime.id === (threadMachine ?? LOCAL_RUNTIME_ID)) ?? { id: threadMachine ?? LOCAL_RUNTIME_ID }))
+  const runMachine = $derived(runMachineName(currentOwner, runtimeList, threadMachine))
   // The settled turns Review changes reads, newest first.
   const reviewTurns = $derived(messages.flatMap((message, index) => message.role === 'assistant' && message.run?.id && settledPhases.has(message.run.phase)
     ? [{ runId: message.run.id, prompt: promptFolders(message.run.prompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].text : '')).text }] : []).reverse().slice(0, 20))

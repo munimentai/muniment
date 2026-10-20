@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyOp, auditRow, dedupeThreads, bootstrapRows, clockTime, credentialRows, historyLine, listsArrived, offloadTargets, offlineScope, projectOwner, queuedFor, queuedLine, threadOwner } from './fleet.js'
+import { applyOp, auditRow, dedupeThreads, bootstrapRows, clockTime, credentialRows, historyLine, listsArrived, offloadTargets, offlineScope, projectOwner, queuedFor, queuedLine, runMachineName, threadOwner } from './fleet.js'
 
 const LAPTOP = 'core-laptop'
 const STUDIO = 'core-studio'
@@ -47,6 +47,16 @@ describe('owners', () => {
     expect(threadOwner({ threadId: 't3', runtimeId: 'box', owner_runtime: BOX }, swarm)).toBeNull()
     expect(threadOwner({ threadId: 't4', runtimeId: 'local' }, swarm)).toBeNull()
     expect(threadOwner({ threadId: 't5', runtimeId: 'local', owner_runtime: POD }, swarm)).toMatchObject({ name: 'Pod', kind: 'container' })
+  })
+
+  it('names the machine that ran a reply on its run line', () => {
+    const list = { runtimes: [{ id: 'local', local: true, name: 'This computer' }, { id: 'pod', kind: 'container', name: 'Pod' }] }
+    // A synced copy here names the member that owns and runs the thread.
+    const owner = threadOwner({ threadId: 't1', runtimeId: 'local', owner_runtime: POD, replica: true }, swarm, list)
+    expect(runMachineName(owner, list, 'local')).toBe('Pod')
+    expect(runMachineName(null, list, 'local')).toBe('This computer')
+    expect(runMachineName(null, list, 'pod')).toBe('Pod')
+    expect(runMachineName(null, list, null)).toBe('This computer')
   })
 
   it('lists a thread once, from the machine that owns it', () => {
