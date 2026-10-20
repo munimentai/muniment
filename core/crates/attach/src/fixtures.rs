@@ -1989,7 +1989,6 @@ fn fixture_agent_draft() -> serde_json::Value {
             "label": "Morning briefer",
             "instructions": "Summarize the new email in my inbox and list what needs a reply.",
             "skills": [],
-            "tools_off": [],
             "permission_mode": "manual",
             "routines": [{
                 "id": FIXTURE_PROPOSAL_ID,
@@ -2737,7 +2736,6 @@ fn fixture_agent() -> serde_json::Value {
         "projectId": null,
         "schedule": {"enabled": true, "cadence": "weekdays", "time": "09:00", "weekday": 0},
         "model": {"provider": "local", "id": "example-model", "thinking": "medium"},
-        "tools": {"disabled": ["powershell"]},
         "skills": ["review"],
         "permissions": {"mode": "manual"},
         "primary_runtime": null,

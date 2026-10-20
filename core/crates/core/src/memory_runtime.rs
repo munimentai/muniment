@@ -771,7 +771,6 @@ const AGENT_TOOLS: &str = r#"  const idSchema = {type:'object',properties:{id:{t
       type:'object', properties: {
         id:{type:'string'}, name:{type:'string',description:'A concise name in one to three words. Keep the task and instructions out of the name.'}, label:{type:'string',description:'Short job title'}, avatar:{type:['object','null'],properties:{style:{type:'string',enum:['muniment','muniment-v1','muniment-v2']},seed:{type:'string'}}}, template:{type:['object','null'],description:'Preserve reviewed imported template context when editing'}, instructions:{type:'string',description:'Persistent description and instructions'}, projectId:{type:['string','null']},
         model:{type:['object','null'],description:'The model the agent runs on. Null uses the default.',properties:{provider:{type:'string'},id:{type:'string'},thinking:{type:'string',enum:['off','minimal','low','medium','high','xhigh','max']}},required:['provider','id'],additionalProperties:false},
-        tools:{type:['object','null'],properties:{disabled:{type:'array',items:{type:'string'},description:'Tool names this agent may not use'}},additionalProperties:false},
         skills:{type:['array','null'],items:{type:'string'},description:'Installed skill ids the agent loads'},
         permissions:{type:['object','null'],properties:{mode:{type:'string',enum:['manual','edit_auto','plan','auto','dont_ask'],description:'The permission mode its threads run in. Omit for the default.'}},additionalProperties:false}
       },required:['name','instructions'],additionalProperties:false

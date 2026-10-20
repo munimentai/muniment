@@ -667,16 +667,6 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         }
     }
 
-    fn tool_policy(&self) -> muniment_core::projects::ToolPolicy {
-        let Ok(profile) = self.profile_directory() else {
-            return Default::default();
-        };
-        muniment_core::projects::thread_tools(&profile, &self.thread_id).unwrap_or_else(|error| {
-            eprintln!("muniment-runtime: project tools unreadable error={error}");
-            Default::default()
-        })
-    }
-
     fn checkpoint_store(
         &self,
     ) -> Option<std::sync::Arc<muniment_core::checkpoint::CheckpointStore>> {

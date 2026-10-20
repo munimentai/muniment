@@ -1211,7 +1211,7 @@ impl PiLaunchBoundaries for AgentBoundaries {
 }
 
 #[test]
-fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
+fn an_agent_launch_runs_with_every_tool_behind_its_gate() {
     use muniment_core::permission_gate::{PermissionMode, RunPermissions};
     use muniment_core::pi_launch::{AGENT_PERMISSIONS_EXTENSION, AGENT_PERMISSIONS_EXTENSION_FILE};
     let root = temporary_directory();
@@ -1220,7 +1220,6 @@ fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
         launch: muniment_core::agents::AgentLaunch {
             agent_id: "agent-1".into(),
             model: None,
-            disabled_tools: vec!["bash".into(), "mcp__crm__delete".into()],
             skills: Vec::new(),
             permissions: Some(RunPermissions {
                 mode: PermissionMode::Manual,
@@ -1239,10 +1238,7 @@ fn an_agent_launch_runs_without_its_disabled_tools_behind_its_gate() {
     let local =
         pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)
             .unwrap();
-    assert_eq!(
-        pair(&local, "--exclude-tools"),
-        [format!("{EXCLUDED_TOOLS},bash,mcp__crm__delete")]
-    );
+    assert_eq!(pair(&local, "--exclude-tools"), [EXCLUDED_TOOLS]);
     let gate = root.join(AGENT_PERMISSIONS_EXTENSION_FILE);
     assert!(pair(&local, "--extension").contains(&gate.to_string_lossy().into_owned()));
     assert_eq!(

@@ -23,7 +23,9 @@ pub struct Catalog {
     pub settings: BTreeMap<String, Defaults>,
 }
 
-/// What a new thread in a project starts with.
+/// What a new thread in a project starts with. Every run gets every tool its
+/// machine offers; the `tools` list an older catalog holds is ignored, and a
+/// save drops it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Defaults {
@@ -35,31 +37,6 @@ pub struct Defaults {
     /// The runtime id of the machine a new thread runs on. None is this computer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
-    /// The tools every run in the project may use. None allows every tool.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<ToolPolicy>,
-}
-
-/// The tools a project leaves out of its runs. Every tool it does not name
-/// stays allowed, so a tool installed later is allowed until the user turns
-/// it off.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolPolicy {
-    /// Built-in tool ids, such as `bash`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub disabled_tools: Vec<String>,
-    /// Extension ids: an MCP server's or a plugin's item id, a plugin's
-    /// server as `<item>:<server>`, or a skill as `<item>:<path>`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub disabled_extensions: Vec<String>,
-}
-
-impl ToolPolicy {
-    /// Whether the policy allows every tool.
-    pub fn is_empty(&self) -> bool {
-        self.disabled_tools.is_empty() && self.disabled_extensions.is_empty()
-    }
 }
 
 /// A provider and model id.
@@ -324,24 +301,6 @@ pub fn thread_project(profile: &Path, thread: &str) -> Result<Option<String>, St
         })));
     }
     Ok(read(profile)?.threads.get(thread).cloned())
-}
-/// The tools a thread's runs leave out: its project's policy, with its
-/// agent's own choices over it.
-pub fn thread_tools(profile: &Path, thread: &str) -> Result<ToolPolicy, String> {
-    let agent = crate::agents::thread_agent(profile, thread)?;
-    let project = thread_project(profile, thread)?;
-    let policy = match project {
-        Some(project) => read(profile)?
-            .settings
-            .get(&project)
-            .and_then(|defaults| defaults.tools.clone())
-            .unwrap_or_default(),
-        None => ToolPolicy::default(),
-    };
-    Ok(crate::inherit::tool_policy(
-        &policy,
-        agent.as_ref().and_then(|agent| agent.tools.as_ref()),
-    ))
 }
 pub fn thread_folder(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
     let catalog = read(profile)?;
@@ -683,10 +642,6 @@ mod tests {
                 }),
                 permission_mode: Some("plan".into()),
                 machine: Some("studio".into()),
-                tools: Some(ToolPolicy {
-                    disabled_tools: vec!["bash".into()],
-                    disabled_extensions: vec!["mcp-crm".into()],
-                }),
             },
             instructions: Some("Answer in short lines.".into()),
         };
@@ -713,9 +668,19 @@ mod tests {
             "no built-in project keeps settings"
         );
         assert!(settings(&profile, "missing").is_err());
+        // The tool list of an older catalog loads and a save drops it.
+        let older: Defaults = serde_json::from_value(serde_json::json!({
+            "permissionMode": "plan",
+            "tools": {"disabledTools": ["bash"], "disabledExtensions": ["mcp-crm"]}
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&older).unwrap(),
+            serde_json::json!({"permissionMode": "plan"})
+        );
     }
     #[test]
-    fn a_thread_moves_between_projects_and_runs_with_its_tools() {
+    fn a_thread_moves_between_projects() {
         let fixture = Fixture::new();
         let profile = fixture.profile();
         let homelab = create(&profile, "Homelab").unwrap();
@@ -729,26 +694,8 @@ mod tests {
             workspace(&profile, "t-1").unwrap(),
             folder(&profile, &homelab).unwrap()
         );
-        let policy = ToolPolicy {
-            disabled_tools: vec!["bash".into()],
-            disabled_extensions: vec!["mcp-crm".into()],
-        };
-        save_settings(
-            &profile,
-            &homelab,
-            &Settings {
-                defaults: Defaults {
-                    tools: Some(policy.clone()),
-                    ..Defaults::default()
-                },
-                instructions: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(thread_tools(&profile, "t-1").unwrap(), policy);
         move_thread(&profile, "t-1", None).unwrap();
         assert_eq!(thread_project(&profile, "t-1").unwrap(), None);
-        assert!(thread_tools(&profile, "t-1").unwrap().is_empty());
         assert!(move_thread(&profile, "t-1", Some("missing")).is_err());
 
         let agent = crate::agents::save(
@@ -757,10 +704,6 @@ mod tests {
                 name: "Deploy bot".into(),
                 instructions: "Deploy the stack.".into(),
                 project_id: Some(homelab.clone()),
-                tools: Some(crate::agents::AgentTools {
-                    allowed: vec!["bash".into()],
-                    ..crate::agents::AgentTools::default()
-                }),
                 ..crate::agents::Agent::default()
             },
         )
@@ -769,13 +712,6 @@ mod tests {
         state.threads.insert("t-agent".into(), agent.id.clone());
         crate::agents::persist_state(&profile, &state).unwrap();
         assert_eq!(thread_project(&profile, "t-agent").unwrap(), Some(homelab));
-        assert_eq!(
-            thread_tools(&profile, "t-agent").unwrap(),
-            ToolPolicy {
-                disabled_tools: vec![],
-                disabled_extensions: vec!["mcp-crm".into()],
-            }
-        );
         assert!(move_thread(&profile, "t-agent", None)
             .unwrap_err()
             .contains("agent"));
