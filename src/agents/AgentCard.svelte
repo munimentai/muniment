@@ -164,14 +164,24 @@
     const rail = event.currentTarget
     void tick().then(() => rail?.querySelector('[aria-selected="true"]')?.focus())
   }
+  // A rail mark's name shows outside the card, left of its rail, so it never
+  // covers a panel's labels. The tip sits on the page, since the card clips
+  // what overflows it.
+  let card = $state()
   function showTip(event, entry) {
-    const mark = event.currentTarget
-    tip = { label: entry.label, top: mark.offsetTop - mark.parentElement.scrollTop + mark.offsetHeight / 2 }
+    const mark = event.currentTarget.getBoundingClientRect()
+    tip = { label: entry.label, top: mark.top + mark.height / 2, right: window.innerWidth - card.getBoundingClientRect().left + 6 }
+  }
+  // A card at the window's left edge shows the tip beside its right edge.
+  function onPage(node) {
+    document.body.append(node)
+    if (node.getBoundingClientRect().left < 4) Object.assign(node.style, { right: 'auto', left: `${card.getBoundingClientRect().right + 6}px` })
+    return { destroy() { node.remove() } }
   }
   const kebabActions = $derived([{ id: 'profile', label: 'Open profile', icon: 'user' }, ...(agent.replica ? [] : [{ id: 'export', label: 'Export', icon: 'download' }])])
 </script>
 
-<article class="agent-card" data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
+<article class="agent-card" bind:this={card} data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
   <header class="card-head">
     <span class="head-avatar"><AgentAvatar {agent} activity={agent.activity} size={28} /></span>
     <div class="head-name">
@@ -189,7 +199,7 @@
         </button>
       {/each}
     </div>
-    {#if tip}<span class="rail-tip" aria-hidden="true" style:top="{tip.top}px">{tip.label}</span>{/if}
+    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage style:top="{tip.top}px" style:right="{tip.right}px">{tip.label}</span>{/if}
     <div class="panel-list" id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
       {#if readOnly}<p class="note" role="note"><LucideIcon name={agent.online === false ? 'globe-off' : 'refresh-cw'} variant="action" size={12} />{readOnlyNote}</p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -308,7 +318,7 @@
   .rail-mark:hover { background: var(--faint); color: var(--ink); }
   .rail-mark[aria-selected="true"] { background: var(--selected); color: var(--on-selected); }
   .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
-  .rail-tip { position: absolute; z-index: 2; left: 52px; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
+  .rail-tip { position: fixed; z-index: 30; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .panel-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   h4 { display: flex; align-items: center; gap: 6px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   h4.provider { margin-top: 10px; }

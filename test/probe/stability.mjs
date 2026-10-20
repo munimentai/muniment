@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 const TRACKED = {
   'composer box': '.composer',
   'composer plus': '.composer-meta > :first-child',
-  'composer machine': '.composer-meta .machine-chip',
+  'composer machine': '.composer-meta [data-menu="machine"]',
   'composer model': '.composer-meta [data-menu="model"]',
   'composer mode': '.composer-meta [data-menu="mode"]',
   'composer voice': '.composer-actions button[aria-label="Voice"]',

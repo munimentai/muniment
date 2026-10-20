@@ -39,7 +39,6 @@
     const id = project.id
     untrack(() => {
       settings = null; error = ''; saved = ''
-      if (project.kind === 'agent') return
       tauri.invoke('project_settings', { projectId: id })
         .then((value) => { if (project.id === id) { settings = value ?? {}; instructions = value?.instructions ?? '' } })
         .catch((reason) => { if (project.id === id) error = String(reason?.message ?? reason) })
@@ -71,7 +70,7 @@
   let toolRows = $state([])
   $effect(() => {
     void project.id
-    if (project.kind === 'agent' || remote) return
+    if (remote) return
     let alive = true
     agentRequest(tauri, 'local', 'agent.tool_catalog', {})
       .then((answer) => { if (alive) toolCatalog = answer ?? {} })
@@ -136,51 +135,49 @@
       {/snippet}
     </PageHead>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
-    {#if project.kind !== 'agent'}
-      {#if !settings && !error}<p class="note" role="status">Loading settings…</p>{/if}
-      {#if settings}
-        <Group heading="New threads" info="A new thread in this project starts with this model, permission mode and machine.">
-          <Row title="Model" description={modelSource}>
-            <select aria-label="Default model" disabled={saving} value={modelValue} onchange={(event) => chooseModel(event.currentTarget.value)}>
-              <option value="">Default model</option>
-              {#each modelGroups as group (group.id)}<optgroup label={group.name}>{#each group.models as model (`${model.provider}:${model.choice}`)}<option value={`${model.provider}${SEP}${model.choice}`}>{model.label}</option>{/each}</optgroup>{/each}
+    {#if !settings && !error}<p class="note" role="status">Loading settings…</p>{/if}
+    {#if settings}
+      <Group heading="New threads" info="A new thread in this project starts with this model, permission mode and machine.">
+        <Row title="Model" description={modelSource}>
+          <select aria-label="Default model" disabled={saving} value={modelValue} onchange={(event) => chooseModel(event.currentTarget.value)}>
+            <option value="">Default model</option>
+            {#each modelGroups as group (group.id)}<optgroup label={group.name}>{#each group.models as model (`${model.provider}:${model.choice}`)}<option value={`${model.provider}${SEP}${model.choice}`}>{model.label}</option>{/each}</optgroup>{/each}
+          </select>
+        </Row>
+        <Row title="Permission mode" description={modeSource}>
+          <select aria-label="Default permission mode" disabled={saving || !modes} value={settings.permissionMode ?? ''} onchange={(event) => save({ permissionMode: event.currentTarget.value || null })}>
+            <option value="">The default mode</option>
+            {#each modes?.modes ?? [] as mode (mode.id)}<option value={mode.id} disabled={mode.available === false}>{mode.title ?? mode.label ?? mode.id}</option>{/each}
+          </select>
+        </Row>
+        {#if machines.length}
+          <Row title="Machine" description={machineSource}>
+            <select aria-label="Default machine" disabled={saving} value={settings.machine ?? ''} onchange={(event) => save({ machine: event.currentTarget.value || null })}>
+              <option value="">This computer</option>
+              {#each machines as machine (machine.id)}<option value={machine.id}>{machineName(machine)}</option>{/each}
             </select>
           </Row>
-          <Row title="Permission mode" description={modeSource}>
-            <select aria-label="Default permission mode" disabled={saving || !modes} value={settings.permissionMode ?? ''} onchange={(event) => save({ permissionMode: event.currentTarget.value || null })}>
-              <option value="">The default mode</option>
-              {#each modes?.modes ?? [] as mode (mode.id)}<option value={mode.id} disabled={mode.available === false}>{mode.title ?? mode.label ?? mode.id}</option>{/each}
-            </select>
+        {/if}
+      </Group>
+      {#if plain && !remote}
+        <Group heading="Instructions" info="Every run in this project reads them from AGENTS.md in its folder.">
+          <Row stacked title="" label="Project instructions">
+            <textarea aria-label="Project instructions" rows="6" placeholder="How replies in this project should work" disabled={saving} bind:value={instructions}></textarea>
+            <div class="actions"><Button variant="primary" disabled={saving || instructions === (settings.instructions ?? '')} onclick={() => save({ instructions })}>Save instructions</Button></div>
           </Row>
-          {#if machines.length}
-            <Row title="Machine" description={machineSource}>
-              <select aria-label="Default machine" disabled={saving} value={settings.machine ?? ''} onchange={(event) => save({ machine: event.currentTarget.value || null })}>
-                <option value="">This computer</option>
-                {#each machines as machine (machine.id)}<option value={machine.id}>{machineName(machine)}</option>{/each}
-              </select>
-            </Row>
-          {/if}
         </Group>
-        {#if plain && !remote}
-          <Group heading="Instructions" info="Every run in this project reads them from AGENTS.md in its folder.">
-            <Row stacked title="" label="Project instructions">
-              <textarea aria-label="Project instructions" rows="6" placeholder="How replies in this project should work" disabled={saving} bind:value={instructions}></textarea>
-              <div class="actions"><Button variant="primary" disabled={saving || instructions === (settings.instructions ?? '')} onclick={() => save({ instructions })}>Save instructions</Button></div>
-            </Row>
-          </Group>
-        {/if}
-        {#if !remote && toolRows.length}
-          <Group heading="Tools" info="Every run in this project, and each of its agents unless it chooses otherwise, may use the tools that are on.">
-            <ul class="tool-grid" aria-label="Project tools">
-              {#each toolRows as row (`${row.kind}:${row.id}`)}
-                <li class="tool">
-                  <span class="tool-text"><span class="tool-name">{row.label}</span><span class="tool-source">{TOOL_KINDS[row.kind] ?? row.kind} · {row.layer === 'project' ? 'off in this project' : 'default'}</span></span>
-                  <Toggle checked={row.allowed} disabled={saving} aria-label={`Allow ${row.label} in this project`} onchange={(checked) => toggleTool(row, checked)} />
-                </li>
-              {/each}
-            </ul>
-          </Group>
-        {/if}
+      {/if}
+      {#if !remote && toolRows.length}
+        <Group heading="Tools" info="Every run in this project, and each of its agents unless it chooses otherwise, may use the tools that are on.">
+          <ul class="tool-grid" aria-label="Project tools">
+            {#each toolRows as row (`${row.kind}:${row.id}`)}
+              <li class="tool">
+                <span class="tool-text"><span class="tool-name">{row.label}</span><span class="tool-source">{TOOL_KINDS[row.kind] ?? row.kind} · {row.layer === 'project' ? 'off in this project' : 'default'}</span></span>
+                <Toggle checked={row.allowed} disabled={saving} aria-label={`Allow ${row.label} in this project`} onchange={(checked) => toggleTool(row, checked)} />
+              </li>
+            {/each}
+          </ul>
+        </Group>
       {/if}
     {/if}
     <Group heading="Triggers" info="A schedule, a webhook or a tool check starts a run. Runs post to the project's home thread.">

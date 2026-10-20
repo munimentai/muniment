@@ -199,13 +199,14 @@ export function advanceFleetSync() {
     document.querySelector('#sidebar [aria-label="Search results"] button[aria-label="Projects"]')?.click()
     return
   }
-  if (state === 'offline-settings' || state === 'log') {
+  if (state === 'offline-settings' || state === 'log' || state === 'bootstrap') {
     if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     const machines = [...document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')].find((button) => button.textContent.trim() === 'Machines')
     if (machines && machines.getAttribute('aria-current') !== 'true') return machines.click()
-    const details = document.querySelector('.settings-runtimes [aria-label="Settings for This computer"][aria-expanded="false"]')
+    const details = state !== 'bootstrap' && document.querySelector('.settings-runtimes [aria-label="Settings for This computer"][aria-expanded="false"]')
     if (details) return details.click()
-    const target = state === 'log' ? document.querySelector('[aria-label="Machine log"]') : [...document.querySelectorAll('.settings-heading')].find((heading) => heading.textContent.startsWith('Available offline'))
+    const heading = state === 'bootstrap' ? 'Sync' : 'Available offline'
+    const target = state === 'log' ? document.querySelector('[aria-label="Machine log"]') : [...document.querySelectorAll('.settings-heading')].find((entry) => entry.textContent.startsWith(heading))
     target?.closest('section')?.scrollIntoView({ block: 'start' })
   }
 }
@@ -213,12 +214,10 @@ export function advanceFleetSync() {
 // Whether the state's screen is ready for a capture.
 export function fleetSyncRendered() {
   const state = fleetSyncState
-  const line = document.querySelector('.sync-line')?.textContent ?? ''
-  if (state === 'synced') return line.includes('Synced')
-  if (state === 'syncing') return line.includes('Syncing 2')
-  if (state === 'offline') return line.includes('Offline · synced 14:05')
-  if (state === 'bootstrap') return !!document.querySelector('[aria-label="Sync progress"]') && document.body.textContent.includes('arriving from Pod')
-  if (state === 'owners') return document.querySelectorAll('#sidebar .owner-chip').length >= 3 && !!document.querySelector('.project-threads') && document.body.textContent.includes('Release editor')
+  // The sidebar names no sync state: its foot holds only its icon row.
+  if (['synced', 'syncing', 'offline'].includes(state)) return !!document.querySelector('#sidebar .side-foot .sidebar-actions') && !!document.querySelector('#sidebar .thread-row')
+  if (state === 'bootstrap') return !!document.querySelector('.settings-runtimes [aria-label="Sync progress"]') && document.body.textContent.includes('arriving from Pod')
+  if (state === 'owners') return document.querySelectorAll('#sidebar .owner-chip').length >= 3 && !!document.querySelector('.project-threads') && document.body.textContent.includes('Draft board memo')
   if (state === 'queued') return document.body.textContent.includes("Queued. Studio is offline. Sends when it's back.") && document.body.textContent.includes('Move here')
   if (state === 'replica') return document.body.textContent.includes('History arriving from Pod: 12 of 48 events.')
   if (state === 'offload') return offloadStep === 3 && !!document.querySelector('.machine-menu [role="menuitemradio"][aria-checked="true"]')?.textContent.includes('Pod')

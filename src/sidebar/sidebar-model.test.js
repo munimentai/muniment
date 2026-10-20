@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { agentColor } from '../lib/agent-avatar.js'
 import { attention, freshIndex, listedRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
 
 function memoryStorage(values = {}) {
@@ -17,14 +18,15 @@ describe('sidebar model', () => {
   })
 
   it('reads working and failed threads from the newest run of each', () => {
-    const { working, failed } = runStates([
-      { thread_id: 'a', status: 'running' },
+    const { working, failed, since } = runStates([
+      { thread_id: 'a', status: 'running', created_at: '2026-10-18T10:00:00Z' },
       { thread_id: 'b', status: 'failed' },
       { thread_id: 'b', status: 'running' },
       { thread_id: 'c', status: 'completed' },
     ])
     expect([...working]).toEqual(['a'])
     expect([...failed]).toEqual(['b'])
+    expect([...since]).toEqual([['a', '2026-10-18T10:00:00Z']])
   })
 
   it('points each needs-you item at its thread or agent and leaves out offline machines', () => {
@@ -55,7 +57,7 @@ describe('sidebar model', () => {
       { id: 'g1', title: 'Launch room', updated_at: '', machine: null },
       { id: 'c1', title: 'Inbox brief', updated_at: '2026-10-18T11:00:00Z', machine: null },
     ])
-    expect(input.agents).toEqual([{ id: 'a1', name: 'Watch', project_id: 'p1', home_thread_id: 'home', paused_reason: null, routines: [{ enabled: true, proposed: false, trigger: { kind: 'webhook' } }] }])
+    expect(input.agents).toEqual([{ id: 'a1', name: 'Watch', project_id: 'p1', home_thread_id: 'home', paused_reason: null, routines: [{ enabled: true, proposed: false, trigger: { kind: 'webhook' } }], color: agentColor({ id: 'a1', name: 'Watch' }) }])
     expect(input.projects).toEqual([{ id: 'p1', name: 'Homelab', owner: null }])
     // A saved agent's creation chat sits with its agent.
     expect(input.agent_threads).toEqual({ home: 'a1', c1: 'a1' })

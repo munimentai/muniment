@@ -444,8 +444,8 @@ export function buildProbeCommandTable(fixtureName) {
   // synced copy from a fourth. `cards` opens the catalog's action cards, and
   // `cards-offline` the same with the Studio machine offline.
   // `fleet-sync.html?state=` shows a fleet this laptop reaches only through
-  // the swarm: the sync line, owners, a queued post, a replica's history, a
-  // new thread on a container, the offline scope, the bootstrap and the log.
+  // the swarm: owners, a queued post, a replica's history, a new thread on a
+  // container, the offline scope, the bootstrap on Machines and the log.
   const fleetSyncFixture = fixtureName === 'fleet-sync'
   if (fleetSyncFixture && fleetSyncThread()) history.push(...fleetSyncHistory())
   const agentsFixture = fixtureName === 'agents'
@@ -1055,7 +1055,7 @@ function runtimesRendered() {
     if (!machines.includes('Build box')) return false
     if (runtimesState === 'remote') return !!document.querySelector('.thread-title-heading')?.textContent.includes('Nightly test triage') && !!document.querySelector('header .machine-badge')?.textContent.includes('Build box')
     const menu = document.querySelector('.machine-menu')
-    return !!menu?.textContent.includes('Build box') && !!document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label')?.includes('This computer')
+    return !!menu?.textContent.includes('Build box') && document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label') === 'Machine: This computer. Choose a machine'
   }
   // Settings opens on all machines, with the foot row on its side and
   // Settings marked as the current page there.
@@ -1120,7 +1120,7 @@ const AGENT_STATES = {
 }
 
 const AGENT_SCREENS = {
-  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .project-title[aria-label^="Project "]').length >= 5 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
+  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .thread-row .row-agent').length >= 4 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
   notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
   approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
   'tool-approvals': () => document.querySelectorAll('[data-panel="notifications"] .approval .tool-call-card').length === 4,
@@ -1459,10 +1459,10 @@ function typeInto(input, value) {
 // state pastes a link and presses Pair.
 function advanceRuntimesFixture() {
   if (!runtimesFixture || fixtureRendered()) return
-  // An open thread keeps its machine, so the picker opens on a new thread,
-  // and the remote state opens the thread that lives on Build box.
+  // An open thread keeps its machine, so the switcher opens a new thread's
+  // menu, and the remote state opens the thread that lives on Build box.
   if (runtimesState === 'switcher') {
-    if (document.querySelector('span.machine-chip')) return document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
+    if (document.querySelector('button[data-menu="machine"][aria-label$="This thread stays on it"]')) return document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
     return document.querySelector('button[data-menu="machine"][aria-expanded="false"]')?.click()
   }
   if (runtimesState === 'remote') {

@@ -52,7 +52,7 @@ export function settingsPages(options) {
 const thread = (row, positions) => ({
   thread_id: row.thread_id,
   title: row.title,
-  project_name: row.project_name,
+  project_name: row.project_name || row.agent?.name || '',
   status_label: row.status_label,
   updated_at: row.updated_at,
   ...(positions.get(row.thread_id) ? { shortcut: `mod+${positions.get(row.thread_id)}` } : {}),

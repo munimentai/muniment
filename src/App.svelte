@@ -6,7 +6,6 @@
   import { featureFlags } from './feature-flags.js'
   import { settingsNav, settingsPage } from './lib/settings-sections.js'
   import MachinePicker from './runtimes/MachinePicker.svelte'
-  import SyncStatus from './runtimes/SyncStatus.svelte'
   import OwnerChip from './runtimes/OwnerChip.svelte'
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
@@ -1037,12 +1036,8 @@
     if (threadId) untrack(() => { if (!(Date.parse(readState.read[threadId] ?? '') >= updatedAt)) readState = markRead(readState, threadId) })
   })
   const sidebarProjectById = $derived(Object.fromEntries(sidebarArrangement.projects.map(project => [project.id, project])))
-  // The machine that holds each project: another member's project names its
-  // owner, and an agent's own project names the agent's machine when it is not this computer.
-  const projectOwners = $derived(Object.fromEntries([
-    ...roster.filter(agent => agent.replica || (agent.runtimeId ?? LOCAL_RUNTIME_ID) !== LOCAL_RUNTIME_ID).map(agent => [`agent:${agent.id}`, agent.primaryMachine ?? agentMachine(runtimeList, agent)]).filter(([, machine]) => machine),
-    ...remoteProjectRows.map(([id, , owner]) => [id, owner]),
-  ]))
+  // The machine that holds each project another member shares.
+  const projectOwners = $derived(Object.fromEntries(remoteProjectRows.map(([id, , owner]) => [id, owner])))
   const shortcutThreads = $derived(shownRows(sidebarArrangement, { expanded: expandedProjects, fresh: showFreshThread }).map(row => ({ threadId: row.thread_id })))
   const freshThreadPosition = $derived(shortcutThreads.findIndex(thread => thread.threadId === null))
   let moreThreads = $state(false)
@@ -1725,16 +1720,9 @@
     })
   })
 
-  // A new thread in a project. An agent's own project starts a new
-  // conversation with the agent.
+  // A new thread in a project.
   async function newProjectThread(projectId) {
     if (switchLocked || projectBusy) return
-    const project = sidebarProjectById[projectId]
-    const agent = project?.kind === 'agent' ? roster.find(entry => entry.id === project.agent_ids[0]) : null
-    if (agent) {
-      projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
-      return startAgentThread(agent).catch(error => { submitError = String(error) })
-    }
     await newSidebarThread(projectId)
   }
 
@@ -1979,7 +1967,7 @@
       if (group) { clearThreadSelection(); void openGroup(group).catch(error => { submitError = String(error) }); return }
       // A row that needs the user opens the thread that waits on them.
       if (row.status === 'needs_you' && row.thread_id) { clearThreadSelection(); void showThread(row.thread_id).catch(error => { submitError = String(error) }); return }
-      const agent = row.agent_id && !threadSummaries.some((entry) => entry.threadId === row.thread_id) && !agentChatRows.some((chat) => chat.threadId === row.thread_id) ? roster.find((entry) => entry.id === row.agent_id) : null
+      const agent = row.agent && !threadSummaries.some((entry) => entry.threadId === row.thread_id) && !agentChatRows.some((chat) => chat.threadId === row.thread_id) ? roster.find((entry) => entry.id === row.agent.id) : null
       if (agent) { clearThreadSelection(); void openAgent(agent).catch(error => { submitError = String(error) }); return }
     }
     threadRowClick(event, summary.threadId)
@@ -3490,7 +3478,7 @@
 {#snippet freshRow()}
   {#if showFreshThread}
     {@const projectName = selectedProject ? sidebarProjectById[selectedProject]?.name : ''}
-    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined}><span></span><div class="thread-row-body"><div class="thread-row-title">{currentThreadTitle}</div><span class="thread-row-meta"><StatusChip tone="neutral">New</StatusChip>{#if projectName}<span class="row-project">{projectName}</span>{/if}</span></div></li>
+    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined} data-accent-edge><div class="thread-row-body"><div class="thread-row-title">{currentThreadTitle}</div><span class="thread-row-meta"><StatusChip tone="neutral">New</StatusChip>{#if projectName}<span class="row-project">{projectName}</span>{/if}</span></div></li>
   {/if}
 {/snippet}
 
@@ -3504,19 +3492,24 @@
   {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machineName(machine)}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
-<!-- A row's meta line: its status in words and its project, once a machine
-     is paired the machine the thread lives on, by its shape and name, then how
-     long ago the thread last changed. A settled thread shows only its time. -->
+<!-- A row's meta line: its status in words and its project, then for an
+     agent's thread the Agents icon and the agent's name, or once a machine is
+     paired the machine the thread lives on, by its shape and name, then how
+     long its run has been working or how long ago the thread last changed. A
+     settled thread shows only its time. -->
 {#snippet rowMeta(summary, id = undefined)}
-  {@const owner = threadOwner(summary, swarm, runtimeList)}
-  {@const machine = !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if owner}<OwnerChip machine={owner} />{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if summary.updatedAt}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={summary.updatedAt}>{relativeTime(summary.updatedAt)}</time></span>
+  {@const agent = summary.row?.agent}
+  {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
+  {@const machine = !agent && !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
+  {@const at = (summary.row?.status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
+  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}<LucideIcon name="bot" size={12} /><span class="row-agent">{agent.name}</span>{#if at}<span aria-hidden="true">·</span>{/if}{:else if owner}<OwnerChip machine={owner} />{#if at}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if at}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
 
-{#snippet rowMark(selected, running = false)}
-  {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} variant="action" /></span>{:else}<span class:run-mark={running} aria-hidden={running ? 'true' : undefined}></span>{/if}
+<!-- While rows are selected, each row leads with its check box. Otherwise a row leads with its text. -->
+{#snippet rowMark(selected)}
+  {#if selectedThreadIds.size}<span class="select-mark" aria-hidden="true"><LucideIcon name={selected ? 'square-check' : 'square'} size={14} variant="action" /></span>{/if}
 {/snippet}
 
 {#snippet sidebarThread(summary)}
@@ -3537,10 +3530,10 @@
                     </form>
                   {:else if current && !catalogTitle}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} aria-current="true" aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
+                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} data-accent-edge style:--edge-color={summary.row?.agent?.color} aria-current="true" aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
                   {:else}
                     {@const running = summary.threadId === backgroundRun?.threadId}
-                    <button class="thread-row" class:selected aria-labelledby={`${rowId}-title`} aria-describedby={`${rowId}-meta`} data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => sidebarRowClick(event, summary)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected, running)}<div class="thread-row-body"><div class="thread-row-title" id={`${rowId}-title`}>{rowTitle}</div>{@render rowMeta(summary, `${rowId}-meta`)}</div>{#if running}<span class="visually-hidden">Running</span>{/if}</button>
+                    <button class="thread-row" class:selected aria-labelledby={`${rowId}-title`} aria-describedby={`${rowId}-meta`} data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => sidebarRowClick(event, summary)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title" id={`${rowId}-title`}>{rowTitle}</div>{@render rowMeta(summary, `${rowId}-meta`)}</div>{#if running}<span class="visually-hidden">Running</span>{/if}</button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -3601,12 +3594,12 @@
           <div class="titlebar-thread" data-tauri-drag-region>
             {#if catalogTitle}<span class="catalog-title" data-tauri-drag-region>{catalogTitle}</span>
             {:else}
-            {#if threadAgent}<button class="quiet agent-chat-title" style:--agent-color={agentColor(threadAgent)} aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
+            {#if threadAgent}<button class="quiet agent-chat-title" data-accent-edge style:--agent-color={agentColor(threadAgent)} style:--edge-color={agentColor(threadAgent)} aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
             {#if !threadAgent}
             {#if editingThreadTitle}
               <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
-              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" aria-label="Rename thread" disabled={!currentThreadId || freshThread || !!active || !!agentChat} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
+              <h1 class="thread-title-heading" aria-label={currentThreadTitle} data-tauri-drag-region><RowControl kind="thread-title" data-accent-edge aria-label="Rename thread" disabled={!currentThreadId || freshThread || !!active || !!agentChat} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{currentThreadTitle}</RowControl></h1>
               {#if threadMachine && threadMachine !== LOCAL_RUNTIME_ID}{@render machineBadge({ runtimeId: threadMachine })}{/if}
             {/if}
             <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!currentThreadId || freshThread || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -3689,7 +3682,6 @@
           <!-- The foot stays on both sides: Settings shows as the current page there, and a second press goes back. -->
           {#if !sidebarCollapsed}
           <div class="side-foot">
-            <SyncStatus status={fleet.state.status} ops={fleet.state.ops} credentials={fleet.state.credentials} {swarm} />
             <div class="settings-block">
               <SidebarActions bind:settingsButton {settingsOpen} usageOpen={fullPage === 'usage'} notificationsOpen={fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={switchLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
             </div>
@@ -4395,7 +4387,8 @@
   .creation-goal { padding:12px 0; font-size:var(--text-13); color:var(--muted); } .creation-goal p { margin:4px 0 0; } .creation-goal summary, .creation-request summary { cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .creation-goal strong, .creation-request strong { color:var(--ink); font-weight:600; } .creation-request p { margin:6px 0 0; color:var(--muted); font-size:var(--text-13); } .creation-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; min-height:28px; margin:0 0 6px; padding:0 4px 0 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--faint); color:var(--ink); font-size:var(--text-13); } .creation-chip-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .creation-chip { position:relative; } .creation-chip::after { content:attr(data-tooltip); position:absolute; left:0; bottom:calc(100% + 6px); z-index:6; width:max-content; max-width:min(420px, 80vw); padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); color:var(--ink); font-size:var(--text-12); white-space:normal; pointer-events:none; opacity:0; transition:opacity 80ms ease; } .creation-chip:hover::after { opacity:1; transition-delay:200ms; } .creation-suggestions { display:flex; flex-wrap:wrap; gap:8px; } .creation-suggestions button[aria-pressed="true"] { border-color:var(--ink); }
   .workspace.artifact-resizing, .workspace.sidebar-resizing { transition: none; }
   /* The sidebar yields frame space at the window minimum while the thread keeps 320px. */
-  .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding-left: 4px; border-bottom: 2px solid var(--agent-color); background: color-mix(in srgb, var(--agent-color) 20%, transparent); }
+  /* The agent's title pill: a wash of the agent's color with the accent edge in it. */
+  .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding-left: 6px; background: color-mix(in srgb, var(--agent-color) 20%, transparent); }
   .titlebar .quiet.agent-chat-title:hover:not(:disabled) { background: color-mix(in srgb, var(--agent-color) 32%, transparent); }
   .agent-chat-title span { overflow: hidden; white-space: nowrap; }
   .agent-chat-title span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
@@ -4526,11 +4519,10 @@
   .thread-row-body { flex: 1 1 auto; display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; }
   .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
-  .thread-row-meta .row-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .thread-row-meta .row-project, .thread-row-meta .row-agent { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* The owner chip keeps its machine name whole while the project name clips first. */
   .thread-row-meta :global(.owner-chip) { flex: none; max-width: 60%; }
   .thread-row time { flex: none; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
-  .thread-row > span { flex: 0 0 5px; }
   /* The badge keeps its machine name whole while the thread title beside it clips first. */
   .machine-badge { flex: none; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -4569,11 +4561,8 @@
   /* Collapsed means gone: the column is zero wide, the empty panel drops its hairline and padding for the slide, and the thread panel takes the gap. */
   .workspace.sidebar-collapsed .sidebar { padding: 0; border-width: 0; overflow: hidden; }
   .workspace.sidebar-collapsed .thread-panel { margin-left: calc(-1 * var(--frame-width)); }
+  /* The open thread's row carries the accent edge: its agent's color, or the theme accent. */
   .active-thread { background: var(--selected); }
-  /* The open thread's dot takes the selection edge: ink, or the accent in a vibrant scheme. */
-  .active-thread > span:not(.select-mark):not(.machine-badge) { width: 5px; height: 5px; border-radius: 50%; background: var(--selected-edge); }
-  /* A thread whose reply still runs in the background: a quiet muted ring in the dot's place. */
-  .thread-row > span.run-mark { width: 5px; height: 5px; border: 1px solid var(--muted); border-radius: var(--radius-chip); }
   .quiet { background: transparent; border-color: transparent; }
   /* Each divider covers its panel gap with a few pixels of grab on either side. A three-dot grip marks the gap. On hover, focus or drag, the gap fills with the hairline border color, which fades out at both ends. */
   .agent-divider { grid-area: rail; }

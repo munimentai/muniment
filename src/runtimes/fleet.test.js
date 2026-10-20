@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyOp, auditRow, dedupeThreads, bootstrapRows, clockTime, credentialRows, historyLine, listsArrived, offloadTargets, offlineScope, openOps, projectOwner, queuedFor, queuedLine, syncLine, threadOwner } from './fleet.js'
+import { applyOp, auditRow, dedupeThreads, bootstrapRows, clockTime, credentialRows, historyLine, listsArrived, offloadTargets, offlineScope, projectOwner, queuedFor, queuedLine, threadOwner } from './fleet.js'
 
 const LAPTOP = 'core-laptop'
 const STUDIO = 'core-studio'
@@ -13,20 +13,9 @@ const swarm = {
 }
 const op = (op_id, state, extra = {}) => ({ op_id, state, operation: 'thread.post', item: { kind: 'thread', id: 't1' }, owner_runtime: STUDIO, owner_name: 'Studio', created_at: `2026-01-01T14:0${op_id.at(-1)}:00Z`, ...extra })
 
-describe('the sync line', () => {
-  it('hides while the machine is alone', () => {
-    expect(syncLine({ state: 'alone' })).toBeNull()
-    expect(syncLine(null)).toBeNull()
-  })
-
-  it('reads Synced, Syncing N with open actions and bootstrap classes, and Offline with the last sync time', () => {
-    expect(syncLine({ state: 'synced', classes: [] }, [op('o1', 'applied')]).text).toBe('Synced')
-    expect(syncLine({ state: 'synced', classes: [] }, [op('o1', 'queued'), op('o2', 'sent'), op('o3', 'failed')]).text).toBe('Syncing 2')
-    const bootstrapping = { state: 'bootstrapping', classes: [{ class: 'thread', percent: 100 }, { class: 'history', percent: 30 }, { class: 'artifact', percent: 0 }] }
-    expect(syncLine(bootstrapping).text).toBe('Syncing 2')
-    const at = new Date(2026, 0, 1, 9, 5).toISOString()
-    expect(syncLine({ state: 'offline', last_sync_at: at }).text).toBe('Offline · synced 09:05')
-    expect(syncLine({ state: 'offline', last_sync_at: null }).text).toBe('Offline')
+describe('the clock time', () => {
+  it('reads HH:MM and nothing for a time it cannot read', () => {
+    expect(clockTime(new Date(2026, 0, 1, 9, 5).toISOString())).toBe('09:05')
     expect(clockTime('nonsense')).toBe('')
   })
 })
@@ -37,7 +26,6 @@ describe('forwarded actions', () => {
     ops = applyOp(ops, { op: op('o2', 'queued') })
     ops = applyOp(ops, { op: op('o1', 'cancelled') })
     expect(ops.map((entry) => `${entry.op_id}:${entry.state}`)).toEqual(['o2:queued', 'o1:cancelled'])
-    expect(openOps(ops).map((entry) => entry.op_id)).toEqual(['o2'])
     expect(applyOp(ops, { op: null })).toBe(ops)
   })
 

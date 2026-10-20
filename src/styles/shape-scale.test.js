@@ -13,7 +13,6 @@ const RADIUS_EXCEPTIONS = {
     'span': ['50%', 'A switch knob is round.'],
   },
   'src/App.svelte': {
-    '.active-thread > span:not(.select-mark):not(.machine-badge)': ['50%', '§1.5 circular current-thread status dot'],
     '.artifact-divider': ['0', '§4 square divider reset'],
     '.sidebar-divider': ['0', '§4 square divider reset'],
   },

@@ -129,3 +129,12 @@ pre {
 .panel-page .settings-intro { color: var(--muted); font: var(--text-15) / var(--leading-body) var(--font-human); }
 .panel-page .settings-heading { color: var(--ink); font: var(--weight-semibold) var(--text-15) / var(--leading-heading) var(--font-heading); letter-spacing: 0; text-transform: none; }
 .panel-page .settings-subheading { color: var(--ink); font: var(--weight-semibold) var(--text-13) / var(--leading-heading) var(--font-human); letter-spacing: 0; text-transform: none; }
+
+/* The accent edge marks what is open: the open sidebar row, the title pill
+   and the agent profile's header. It is a 2px line down the left edge in
+   --edge-color, an agent's color or the theme accent by default, that fades
+   out toward the top and the bottom. It runs straight inside the box, so it
+   never follows a rounded corner. --edge-inset moves it in from the left
+   edge, for a box whose panel clips that edge. */
+[data-accent-edge] { position: relative; }
+[data-accent-edge]::before { content: ''; position: absolute; top: 0; bottom: 0; left: var(--edge-inset, 0px); width: 2px; background: linear-gradient(transparent, var(--edge-color, var(--accent)) 30%, var(--edge-color, var(--accent)) 70%, transparent); pointer-events: none; }
