@@ -1,6 +1,6 @@
 <script>
-  // One tool call as core presents it. `line` is its row in the transcript
-  // and the run line: icon, headline or the words while it runs, how it ran
+  // One tool call as core presents it. `line` is its row in the transcript:
+  // icon, headline or the words while it runs, how it ran
   // when a script made it, and how it ended. `card` leads an approval with the headline, the reason and the
   // details. `detail` is an open row's body: the details and its state. The
   // raw input and output stay behind Show details in both.

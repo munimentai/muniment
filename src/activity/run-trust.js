@@ -1,86 +1,16 @@
-import { actionDuration, actionGroups } from './action-feedback.js'
-import { modelLabel, receiptNames } from '../lib/model-label.js'
-import { receiptTime } from '../lib/execution-time.js'
-
-const recorded = (value) => value !== undefined && value !== null && value !== ''
 const noun = (count, one, many = `${one}s`) => `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`
 
-// 18,240 reads 18.2k; a million and more read with an M.
-export function compactTokens(count) {
-  const value = Number(count)
-  if (!Number.isFinite(value) || value < 0) return null
-  if (value < 1000) return String(Math.round(value))
-  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0).replace(/\.0$/, '')}k`
-  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-}
-
-// The tokens a turn used: the total Pi reports, else input and output.
-export function turnTokens(tokens) {
-  if (!tokens) return null
-  if (Number.isFinite(tokens.total) && tokens.total > 0) return tokens.total
-  const sum = [tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite].filter(Number.isFinite).reduce((total, value) => total + value, 0)
-  return sum > 0 ? sum : null
-}
-
-// A catalog estimate in dollars, never a bill: cents for a cent or more, else
-// a tenth of a cent, else under a tenth of a cent.
-export function estimateCost(usd) {
-  const value = Number(usd)
-  if (!recorded(usd) || !Number.isFinite(value) || value < 0) return null
-  if (value === 0) return '$0.00'
-  if (value >= 0.01) return `$${value.toFixed(2)}`
-  if (value >= 0.001) return `$${value.toFixed(3)}`
-  return '<$0.001'
-}
-
-// One turn's run line: machine, model, permission mode, elapsed time, tokens
-// and the estimated cost, each only when the run recorded it. `sources`
-// names where the model and the mode come from, for the newest turn while
-// the thread still runs on them, such as `from project Homelab`.
-export function runLineParts(run, { machine = null, modes = [], elapsed = null, liveMode = null, sources = {} } = {}) {
-  const receipt = run?.receipt ?? null
-  const mode = modes.find((candidate) => candidate.id === receipt?.permission_mode) ?? null
-  const tokens = turnTokens(receipt?.tokens)
-  const time = recorded(receipt?.time) ? receiptTime(receipt.time) : elapsed
-  const sourced = (value, source) => value && source ? `${value} (${source})` : value
-  return {
-    machine,
-    model: sourced(recorded(receipt?.model) ? modelLabel(receipt.model, receiptNames(receipt)) : null, sources.model),
-    mode: sourced(mode?.title ?? liveMode, sources.mode),
-    time,
-    tokens: tokens === null ? null : `${compactTokens(tokens)} tokens`,
-    cost: estimateCost(receipt?.cost_usd),
-  }
-}
-
-// What a screen reader hears for the line, in words.
-export function runLineLabel(parts) {
+// The receipt rows for where a turn ran: its machine, its permission mode
+// and where the model and the mode come from. `sources` names those layers
+// for the newest turn while the thread still runs on them, such as
+// `from project Homelab`.
+export function runContextRows(run, { machine = null, modes = [], sources = {} } = {}) {
+  const mode = modes.find((candidate) => candidate.id === run?.receipt?.permission_mode)?.title ?? null
   return [
-    parts.machine && `On ${parts.machine}`,
-    parts.model && `model ${parts.model}`,
-    parts.mode && `mode ${parts.mode}`,
-    parts.time && `took ${parts.time}`,
-    parts.tokens,
-    parts.cost && `${parts.cost} API estimate`,
-  ].filter(Boolean).join(', ')
-}
-
-// Every tool call of a turn in order, with its state and duration. A
-// script comes first and its calls follow with their `via` note.
-export function runTimeline(toolActivity = [], live = false) {
-  const calls = (action) => [action, ...(action.children ?? []).flatMap(calls)]
-  return actionGroups(toolActivity, live).flatMap((group) => group.actions.flatMap(calls).map((action) => ({
-    id: action.effectId,
-    presentation: action.presentation,
-    icon: action.icon,
-    label: action.label,
-    result: action.result,
-    failed: action.failed,
-    running: action.running,
-    state: action.state,
-    duration: action.startedAt && action.finishedAt ? actionDuration(action.startedAt, action.finishedAt) : '',
-    ...(action.parentEffectId && action.presentation?.via ? { via: action.presentation.via } : {}),
-  })))
+    machine && { label: 'Machine', value: machine },
+    mode && { label: 'Mode', value: sources.mode ? `${mode} (${sources.mode})` : mode },
+    sources.model && { label: 'Model source', value: sources.model },
+  ].filter(Boolean).map((row) => ({ ...row, route: false }))
 }
 
 const EFFECT_WORDS = {

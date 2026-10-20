@@ -98,10 +98,9 @@
   let codeDiffModule
   const loadCodeDiff = () => codeDiffModule ??= import('./lib/CodeDiff.svelte')
   import FileChanges from './files/FileChanges.svelte'
-  import RunLine from './activity/RunLine.svelte'
-  import { rewindOutcome, rewindUnavailable } from './activity/run-trust.js'
+  import { rewindOutcome, rewindUnavailable, runContextRows } from './activity/run-trust.js'
   import RoutingDetails from './lib/RoutingDetails.svelte'
-  import { appliedDiffLabel, createChangedFiles, fileName } from './files/file-changes.js'
+  import { appliedDiffLabel, changedFiles, createChangedFiles, fileName, ranCommands } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { commitType, readStoredType, stepType, typeSizeShortcutStep } from './lib/type-state.js'
@@ -851,7 +850,7 @@
     return actions
   })
 
-  // The newest turn's run line names where its model and mode come from
+  // The newest turn's receipt names where its model and mode come from
   // while the thread still runs on them.
   const newestRunId = $derived(messages.findLast((message) => message.run && settledPhases.has(message.run.phase))?.run.id ?? null)
   function runSources(run) {
@@ -1403,7 +1402,21 @@
   const runMachine = $derived(runMachineName(currentOwner, runtimeList, threadMachine))
   // The settled turns Review changes reads, newest first.
   const reviewTurns = $derived(messages.flatMap((message, index) => message.role === 'assistant' && message.run?.id && settledPhases.has(message.run.phase)
-    ? [{ runId: message.run.id, prompt: promptFolders(message.run.prompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].text : '')).text }] : []).reverse().slice(0, 20))
+    ? [{ runId: message.run.id, run: message.run, prompt: promptFolders(message.run.prompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].text : '')).text }] : []).reverse().slice(0, 20))
+  // A turn offers Review changes when its record counts a changed file, or
+  // when its commands changed files by the turn's checkpoint in core.
+  const reviewable = $derived(!threadGroup && !currentSummary?.replica)
+  let commandChanges = $state({})
+  const turnChanged = (run) => reviewable && reviewTurns.some((turn) => turn.runId === run.id) && (changedFiles([{ run }]).length > 0 || commandChanges[run.id] > 0)
+  $effect(() => {
+    const threadId = currentThreadId
+    if (!threadId || !reviewable) return
+    for (const { runId, run } of reviewTurns) {
+      if (run.phase !== 'complete' || untrack(() => runId in commandChanges) || changedFiles([{ run }]).length || !ranCommands(run)) continue
+      commandChanges[runId] = 0
+      agentRequest(tauri, composerRuntime, 'run.changes', { thread_id: threadId, run_id: runId }).then((value) => { commandChanges[runId] = value?.files?.length ?? 0 }, () => {})
+    }
+  })
   $effect(() => { void currentThreadId; untrack(() => { rewindNotice = null; reviewing = null; rewinding = null }) })
   async function finishRewind(result) {
     const turn = rewinding
@@ -3831,7 +3844,6 @@
             {:else}
             {@const parts = responseParts(message.run)}
             <div class="response">
-              {#if settledPhases.has(message.run.phase)}<RunLine run={message.run} machine={runMachine} modes={modeListing?.listing?.modes ?? []} sources={message.run.id === newestRunId ? runSources(message.run) : {}} onreview={message.run.phase === 'complete' && !threadGroup && !currentSummary?.replica ? () => { reviewing = { runId: message.run.id } } : null} />{/if}
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
                   <summary>Prompt text stays in runtime memory for this run.</summary>
@@ -3945,11 +3957,13 @@
               {#if message.run.phase === 'complete'}
                 {@const summary = receiptSummary(message.run.receipt, providerNames)}
                 {@const provider = receiptProvider(message.run.receipt)}
-                {@const rows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
+                {@const ownRows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
+                {@const rows = [...ownRows, ...runContextRows(message.run, { machine: runMachine, modes: modeListing?.listing?.modes ?? [], sources: message.run.id === newestRunId ? runSources(message.run) : {} })]}
                 {@const routing = routedTurns(message.run.receipt)}
                 {@const columns = receiptUsageColumns(message.run.receipt, providerNames)}
                 {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
-                {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || hasDetails}
+                <!-- Where the turn ran adds rows to a recorded receipt, and makes none on its own. -->
+                {@const recorded = summary.route !== null || summary.model !== null || summary.time !== null || ownRows.length > 0 || columns.length > 0 || routing.length > 0}
                 {@const expanded = hasDetails && expandedReceipts.has(message.run.id)}
                 {@const failure = copyFailure(copy, message.run.id, modifierLabel)}
                 <!-- One line: the receipt, then §3.2's action row at its right, copy only in this slice. -->
@@ -3965,6 +3979,7 @@
                     <p class="provenance">Receipt unavailable</p>
                   {/if}
                   <div class="response-meta">
+                    {#if turnChanged(message.run)}<button type="button" class="review-turn" onclick={() => { reviewing = { runId: message.run.id } }}>Review changes</button>{/if}
                     {#if summary.time !== null}<span class="receipt-time message-time"><LucideIcon name="clock" variant="action" size={12} />{summary.time}</span>{/if}
                   <div class="message-actions">
                     <button type="button" aria-label={copyLabel(copy, message.run.id)} data-tooltip={copyConfirmed(copy, message.run.id) ? 'Copied' : 'Copy message'} onclick={() => copyResponse(message.run)}>{#if copyConfirmed(copy, message.run.id)}<LucideIcon name="check" variant="action" size={14} />{:else}<LucideIcon name="copy" variant="action" size={14} />{/if}</button>
@@ -4716,6 +4731,8 @@
   .receipt-usage th[scope="row"], .receipt-usage thead td { min-width: 100px; box-sizing: border-box; }
   .receipt-usage th[scope="col"] { white-space: nowrap; }
   .receipt-usage td { min-width: 180px; }
+  .review-turn { min-height: 24px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-12) var(--font-human); cursor: pointer; }
+  .review-turn:hover { background: var(--faint); }
   .receipt-record { display: grid; row-gap: 6px; box-sizing: border-box; width: min(100%, 560px); margin: 8px 0 0; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .receipt-record div { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr); gap: 12px; }
   .receipt-record dt { overflow-wrap: anywhere; }

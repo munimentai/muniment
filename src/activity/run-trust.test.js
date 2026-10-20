@@ -1,53 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { compactTokens, estimateCost, irreversibleLines, rewindFiles, rewindOutcome, rewindUnavailable, runLineLabel, runLineParts, runTimeline, turnTokens } from './run-trust.js'
+import { irreversibleLines, rewindFiles, rewindOutcome, rewindUnavailable, runContextRows } from './run-trust.js'
 
 const modes = [{ id: 'bypass', title: 'Bypass permissions' }, { id: 'manual', title: 'Ask before changes' }]
 
-describe('the run line', () => {
-  it('names the machine, model, mode, time, tokens and the API estimate', () => {
-    const run = { receipt: { model: 'anthropic/claude-sonnet-4.5', time: '42.0s', tokens: { input: 15200, output: 3040, total: 18240 }, cost_usd: 0.0912, permission_mode: 'bypass' } }
-    const parts = runLineParts(run, { machine: 'Studio', modes })
-    expect(parts).toEqual({ machine: 'Studio', model: 'Anthropic · Claude Sonnet 4.5', mode: 'Bypass permissions', time: '42s', tokens: '18k tokens', cost: '$0.09' })
-    expect(runLineLabel(parts)).toBe('On Studio, model Anthropic · Claude Sonnet 4.5, mode Bypass permissions, took 42s, 18k tokens, $0.09 API estimate')
-    // The newest turn names where its model and mode come from.
-    const sourced = runLineParts(run, { machine: 'Studio', modes, sources: { model: 'from project Homelab', mode: 'default' } })
-    expect([sourced.model, sourced.mode]).toEqual(['Anthropic · Claude Sonnet 4.5 (from project Homelab)', 'Bypass permissions (default)'])
-  })
-
-  it('names a subscription bridge run by the provider name its receipt carries', () => {
-    const parts = runLineParts({ receipt: { model: 'claude-bridge/claude-sonnet-5', provider_name: 'Anthropic', tokens: { total: 1200 } } })
-    expect([parts.model, parts.cost]).toEqual(['Anthropic · Claude Sonnet 5', null])
-  })
-
-  it('leaves out what the run did not record, and a live run shows its elapsed time and the mode in force', () => {
-    expect(runLineParts({ receipt: null }, { machine: 'This computer', elapsed: '3s', liveMode: 'Ask before changes' }))
-      .toEqual({ machine: 'This computer', model: null, mode: 'Ask before changes', time: '3s', tokens: null, cost: null })
-  })
-
-  it('formats tokens and costs compactly and never shows a partial sum as a bill', () => {
-    expect([compactTokens(812), compactTokens(1250), compactTokens(18240), compactTokens(2_400_000)]).toEqual(['812', '1.3k', '18k', '2.4M'])
-    expect(turnTokens({ input: 10, output: 5 })).toBe(15)
-    expect(turnTokens({ input: 0, output: 0 })).toBe(null)
-    expect([estimateCost(0.0912), estimateCost(0.0042), estimateCost(0.00001), estimateCost(0), estimateCost(undefined)]).toEqual(['$0.09', '$0.004', '<$0.001', '$0.00', null])
-  })
-
-  it('lists a script and then its calls with their via note', () => {
-    const script = { effectId: 's1', displayName: 'codemode', status: 'completed', uncounted: true, presentation: { category: 'code', kind: 'web', icon: 'file-code', headline: 'Run a script that uses 2 tools', result: 'Script completed' } }
-    const made = (effectId, headline) => ({ effectId, parentEffectId: 's1', status: 'completed', presentation: { kind: 'web', icon: 'globe', headline, result: 'Found 1 result', via: 'via script' } })
-    expect(runTimeline([script, made('s1/1', 'Search A'), made('s1/2', 'Search B')]).map((entry) => [entry.label, entry.via])).toEqual([['Run a script that uses 2 tools', undefined], ['Search A', 'via script'], ['Search B', 'via script']])
-  })
-
-  it('lists every tool call in order with its state and duration', () => {
-    const test = { kind: 'command', icon: 'square-terminal', headline: 'Run `npm test`', progress: 'Running npm test', result: 'Exit 0 in 26 s' }
-    const edit = { kind: 'edit', icon: 'square-pen', headline: 'Edit a.js', progress: 'Editing a.js', result: 'Failed: no match', path: 'src/a.js' }
-    const timeline = runTimeline([
-      { effectId: 'a', displayName: 'bash', status: 'completed', input: '{"command":"npm test"}', startedAt: '2026-10-18T12:00:00Z', finishedAt: '2026-10-18T12:00:26Z', presentation: test },
-      { effectId: 'b', displayName: 'edit', status: 'failed', input: '{"path":"src/a.js"}', presentation: edit },
+describe('the receipt rows for where a turn ran', () => {
+  it('names the machine and the mode, and where the newest turn takes its model and mode from', () => {
+    const run = { receipt: { model: 'anthropic/claude-sonnet-4.5', permission_mode: 'bypass' } }
+    expect(runContextRows(run, { machine: 'Studio', modes })).toEqual([
+      { label: 'Machine', value: 'Studio', route: false },
+      { label: 'Mode', value: 'Bypass permissions', route: false },
     ])
-    expect(timeline).toEqual([
-      { id: 'a', presentation: test, icon: 'square-terminal', label: 'Run `npm test`', result: 'Exit 0 in 26 s', failed: false, running: false, state: 'Completed', duration: '26s' },
-      { id: 'b', presentation: edit, icon: 'square-pen', label: 'Edit a.js', result: 'Failed: no match', failed: true, running: false, state: 'Failed', duration: '' },
+    expect(runContextRows(run, { machine: 'Studio', modes, sources: { model: 'from project Homelab', mode: 'this thread' } }).map((row) => [row.label, row.value])).toEqual([
+      ['Machine', 'Studio'], ['Mode', 'Bypass permissions (this thread)'], ['Model source', 'from project Homelab'],
     ])
+  })
+
+  it('leaves out what the run did not record', () => {
+    expect(runContextRows({ receipt: { permission_mode: 'unknown' } }, { modes })).toEqual([])
+    expect(runContextRows({ receipt: null }, { machine: 'This computer' }).map((row) => row.label)).toEqual(['Machine'])
   })
 })
 

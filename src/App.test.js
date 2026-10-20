@@ -7429,7 +7429,8 @@ describe('tool activity', () => {
     expect(screen.queryByRole('group', { name: /tool activity/i })).not.toBeInTheDocument()
     expect(document.querySelector('.tool-row, .tool-dot')).toBeNull()
 
-    expect(screen.queryByRole('button', { name: /^Expand receipt:/ })).not.toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: /^Expand receipt:/ }))
+    expect(document.querySelector('.receipt-record').textContent).toBe('MachineThis computer')
   })
 })
 
@@ -7661,27 +7662,22 @@ describe('provenance line', () => {
     expect(line.querySelector('.route-segment')).toBeNull()
   })
 
-  it('renders elapsed time alone for a local receipt as a plain line with a clock and no expand control', async () => {
+  it('renders elapsed time alone for a local receipt with a clock, and it opens to the machine', async () => {
     restore({ time: '6.2s' })
 
-    const line = await screen.findByLabelText('Receipt: 6s', { selector: 'p.provenance' })
+    const line = await screen.findByRole('button', { name: 'Expand receipt: 6s' })
     expect(line.closest('.receipt-line').querySelector('.response-meta')).toHaveTextContent('6s')
     expect(line.closest('.receipt-line').querySelector('.response-meta [data-icon="clock"]')).toBeInTheDocument()
-    expect(line.querySelector('.receipt-marker')).toBeNull()
     expect(line.querySelector('.route-segment')).toBeNull()
-    expect(screen.queryByRole('button', { name: /receipt/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Receipt unavailable')).not.toBeInTheDocument()
+    await fireEvent.click(line)
+    expect(document.querySelector('.receipt-record').textContent).toBe('MachineThis computer')
   })
 
   it('renders a route-only receipt without a dangling arrow', async () => {
     restore({ route: 'analysis/high' })
 
-    const line = await waitFor(() => {
-      const plain = document.querySelector('p.provenance')
-      expect(plain).not.toBeNull()
-      return plain
-    })
-    expect(line).toHaveAttribute('aria-label', 'Receipt: Routed via analysis/high')
+    const line = await screen.findByRole('button', { name: 'Expand receipt: Routed via analysis/high' })
     expect(line.querySelector('.route-segment')).toHaveTextContent('analysis/high')
     // No time, so no clock: the clock belongs to the time segment alone.
     expect(line.querySelector('[data-icon="clock"]')).toBeNull()
@@ -7699,7 +7695,7 @@ describe('provenance line', () => {
 
     const record = document.querySelector('.receipt-record')
     // The rows carry what the line does not: nothing appears twice.
-    expect(record.textContent).toBe('Cost$0.0089Capabilitysearch@2')
+    expect(record.textContent).toBe('Cost$0.0089Capabilitysearch@2MachineThis computer')
     expect(record.querySelectorAll('.route-value')).toHaveLength(0)
     expect(await screen.findByRole('button', { name: 'Collapse receipt: Routed via analysis/high to model GLM 5.2, 6s' })).toBe(line)
     expect(marker).toHaveClass('expanded')
@@ -7717,7 +7713,7 @@ describe('provenance line', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
 
-    expect(document.querySelector('.receipt-record').textContent).toBe('Cost$0.0089')
+    expect(document.querySelector('.receipt-record').textContent).toBe('Cost$0.0089MachineThis computer')
   })
 
   it('renders a provenance line when a reply has an empty receipt', async () => {
@@ -7727,6 +7723,39 @@ describe('provenance line', () => {
     const line = screen.getByText('Receipt unavailable')
     expect(line).toHaveClass('provenance')
     expect(line.querySelector('.receipt-marker')).toBeNull()
+  })
+
+  it('offers Review changes on a turn only when it changed files', async () => {
+    const asked = []
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-edit', phase: 'complete', text: 'Edited the notes.', prompt: 'Edit', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'e1', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: 'notes.md', oldText: 'a', newText: 'b' }) }] },
+        { runId: 'run-read', phase: 'complete', text: 'Read the notes.', prompt: 'Read', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'r1', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'notes.md' }) }] },
+        { runId: 'run-bash', phase: 'complete', text: 'Ran the build.', prompt: 'Build', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'b1', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'npm run build' }) }] },
+        { runId: 'run-push', phase: 'complete', text: 'Pushed.', prompt: 'Push', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'p1', displayName: 'bash', status: 'failed', input: JSON.stringify({ command: 'git push' }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') {
+        asked.push(args.body.run_id)
+        return { run_id: args.body.run_id, available: true, files: args.body.run_id === 'run-bash' ? [{ path: 'dist/app.js', status: 'modified', additions: 1, deletions: 0 }] : [] }
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Pushed.')).toBeInTheDocument()
+    const offers = (text) => !!screen.getByText(text).closest('.response').querySelector('.receipt-line .review-turn')
+    await waitFor(() => expect(offers('Ran the build.')).toBe(true))
+    expect([offers('Edited the notes.'), offers('Read the notes.'), offers('Pushed.')]).toEqual([true, false, false])
+    // Only a turn that ran a command and counts no edit asks core for its checkpoint.
+    expect(asked.sort()).toEqual(['run-bash', 'run-push'])
   })
 
   it('renders a provenance line when a reply has no receipt', async () => {

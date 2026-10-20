@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { changedFiles, createChangedFiles } from './file-changes.js'
+import { changedFiles, createChangedFiles, ranCommands } from './file-changes.js'
 import { HIGHLIGHT_LIMIT_BYTES, highlightFile } from './file-highlight.js'
 it('counts applied diff summaries once and omits failed tool edits', () => {
   const applied = { effectId: 'one', summary: { files: [{ newPath: 'src/a.js', status: 'modified', binary: false, additions: 1, deletions: 1 }], truncated: false } }
@@ -46,4 +46,11 @@ it('shows a file above the highlight limit as escaped plain text', () => {
   expect(result.startsWith('const a = "&lt;b&gt;"')).toBe(true)
   expect(highlightFile('a.js', `const a = "${'é'.repeat(HIGHLIGHT_LIMIT_BYTES / 2)}"`)).not.toContain('hljs-')
   expect(highlightFile('a.js', `const a = "${'é'.repeat(HIGHLIGHT_LIMIT_BYTES / 4)}"`)).toContain('hljs-keyword')
+})
+
+it('knows a turn ran a command, whose changes only its checkpoint holds', () => {
+  expect(ranCommands({ toolActivity: [{ displayName: 'bash' }] })).toBe(true)
+  expect(ranCommands({ toolActivity: [{ displayName: 'shell', presentation: { kind: 'command' } }] })).toBe(true)
+  expect(ranCommands({ toolActivity: [{ displayName: 'read' }, { displayName: 'web_search' }] })).toBe(false)
+  expect(ranCommands({})).toBe(false)
 })
