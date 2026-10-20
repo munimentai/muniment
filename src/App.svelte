@@ -3598,7 +3598,7 @@
 {/snippet}
 
 <!-- A row's meta line: its status in words and its project, then for an
-     agent's thread the Agents icon and the agent's name, or once a machine is
+     agent's thread the agent's avatar and its name in its color, or once a machine is
      paired the machine the thread lives on, by its shape and name. At the
      right end, how long its run has been working or how long ago the thread
      last changed. A settled thread shows only its time. -->
@@ -3607,7 +3607,7 @@
   {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
   {@const machine = !agent && !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
   {@const at = (summary.row?.status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
-  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}<LucideIcon name="bot" size={12} /><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner} />{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
+  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}{@const known = roster.find((entry) => entry.id === agent.id) ?? agent}<AgentAvatar agent={known} size={14} tooltip={false} /><span class="row-agent" style:color={agentColor(known)}>{agent.name}</span>{:else if owner}<OwnerChip machine={owner} />{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -4600,10 +4600,10 @@
   button.thread-row:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--faint) 55%, transparent); }
   /* A selected row reads darker than the open thread's faint row, so a selection and the open thread never look alike. */
   .thread-row.selected { background: color-mix(in srgb, var(--selected-edge) 18%, var(--surface)); }
-  /* The row's actions control shows at its right end while the pointer or focus rests on the row. */
-  .thread-actions { position: absolute; top: 50%; right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; transform: translateY(-50%); color: var(--muted); opacity: 0; pointer-events: none; }
+  /* The row's actions control shows at the right end of the title line while the pointer or focus rests on the row, so the time above it stays put. */
+  .thread-actions { position: absolute; bottom: var(--row-pad); right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; color: var(--muted); opacity: 0; pointer-events: none; }
   .thread-record:hover .thread-actions, .thread-record:focus-within .thread-actions { opacity: 1; pointer-events: auto; }
-  .thread-record:hover .thread-row-body, .thread-record:focus-within .thread-row-body { padding-right: 22px; }
+  .thread-record:hover .thread-row-title, .thread-record:focus-within .thread-row-title { padding-right: 22px; }
   .thread-actions:hover:not(:disabled) { color: var(--ink); background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   /* Inbox rows: a small muted meta line over the title, which fades at its end. The title leads in reading order, so a row's name starts with it. */

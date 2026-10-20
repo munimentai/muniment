@@ -3853,7 +3853,7 @@ describe('sidebar collapse', () => {
     // the agent and carries the accent edge in the agent's color.
     await waitFor(() => expect(document.querySelector('.thread-row.active-thread .row-agent')).toHaveTextContent('Scout'))
     const open = document.querySelector('.thread-row.active-thread')
-    expect(open.querySelector('.thread-row-meta [data-icon="bot"]')).not.toBeNull()
+    expect(open.querySelector('.thread-row-meta .agent-avatar')).not.toBeNull()
     expect(open).toHaveAttribute('data-accent-edge')
     expect(open.style.getPropertyValue('--edge-color')).toMatch(/^#/)
     expect(screen.queryByRole('button', { name: 'Rename thread' })).not.toBeInTheDocument()
@@ -9209,7 +9209,7 @@ describe('a run on another thread', () => {
     const projects = screen.getByRole('list', { name: 'Projects list' })
     const agentRow = await within(projects).findByRole('button', { name: 'Blue Sky Explanation' })
     await waitFor(() => expect(agentRow).toHaveAccessibleDescription(/Working.*Morning Brief/))
-    expect(agentRow.querySelector('.thread-row-meta [data-icon="bot"]')).not.toBeNull()
+    expect(agentRow.querySelector('.thread-row-meta .agent-avatar')).not.toBeNull()
     expect(agentRow.querySelector('.thread-row-meta').textContent.match(/Working/g)).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /^Project Morning Brief/ })).toBeNull()
   })
