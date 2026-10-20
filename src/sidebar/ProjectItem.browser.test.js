@@ -26,8 +26,8 @@ function row(props, width = 184) {
 
 const clipped = (element) => element.scrollWidth - element.clientWidth > 1
 
-it('shows the triggers in full and clips the agent name first', () => {
-  const target = row({ name: 'Tauri Morning Briefing', kind: 'agent', triggers: 'weekdays 8:00 +1' })
+it('shows the triggers in full and clips the project name first', () => {
+  const target = row({ name: 'Tauri Morning Briefing', triggers: 'weekdays 8:00 +1' })
   const name = target.querySelector('.project-title > span')
   const triggers = target.querySelector('.triggers')
   expect(clipped(triggers)).toBe(false)
@@ -35,7 +35,7 @@ it('shows the triggers in full and clips the agent name first', () => {
 })
 
 it('keeps a short name and its triggers whole', () => {
-  const target = row({ name: 'News', kind: 'agent', triggers: 'every day 9:00' })
+  const target = row({ name: 'News', triggers: 'every day 9:00' })
   expect(clipped(target.querySelector('.project-title > span'))).toBe(false)
   expect(clipped(target.querySelector('.triggers'))).toBe(false)
 })
@@ -52,7 +52,7 @@ async function hovered(target) {
 }
 
 it('keeps the whole triggers clear of the controls on a wide hovered row', async () => {
-  const target = row({ name: 'Tauri Morning Briefing', kind: 'agent', triggers: 'weekdays 8:00 +1', onsettings() {} }, 260)
+  const target = row({ name: 'Tauri Morning Briefing', triggers: 'weekdays 8:00 +1', onsettings() {} }, 260)
   const controls = await hovered(target)
   const triggers = target.querySelector('.triggers')
   expect(clipped(triggers)).toBe(false)
@@ -62,7 +62,7 @@ it('keeps the whole triggers clear of the controls on a wide hovered row', async
 })
 
 it('drops the extra trigger count before the time when the hovered row runs short', async () => {
-  const target = row({ name: 'Tauri Morning Briefing', kind: 'agent', triggers: 'weekdays 8:00 +1', onsettings() {} })
+  const target = row({ name: 'Tauri Morning Briefing', triggers: 'weekdays 8:00 +1', onsettings() {} })
   const controls = await hovered(target)
   const words = target.querySelector('.trigger-words')
   expect(words.textContent).toBe('weekdays 8:00')

@@ -8,7 +8,7 @@
   import ModelPicker from './ModelPicker.svelte'
   import Button from './ui/Button.svelte'
   import DisclosureSummary from './ui/DisclosureSummary.svelte'
-  import { newAvatar } from './agent-avatar.js'
+  import { agentColor, newAvatar } from './agent-avatar.js'
   import { runActive, runStatusLabel, templateNote, whenLabel } from './agent-labels.js'
   import { thinkingLabel } from './thinking-level.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
@@ -128,7 +128,8 @@
   }
 </script>
 <aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
-  <header data-panel-header><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
+  <!-- The header carries the accent edge in the agent's color, as the title pill does. -->
+  <header data-panel-header data-accent-edge style:--edge-color={agentColor(agent)}><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
   <div class="body" use:panelScroll>
     {#if agent.replica}
       <div class="avatar"><AgentAvatar {agent} {activity} size={92} /></div>

@@ -19,11 +19,12 @@ it('uses the project name to toggle its threads and the pencil to start one', as
   expect(title.querySelector('[data-icon="folder-open"]')).not.toBeNull()
 })
 
-it('states the triggers in words and names them with the project', () => {
-  render(ProjectItem, { name: 'Pricing watch', kind: 'agent', triggers: 'every day 9:00', expanded: false, ontoggle: vi.fn(), onnew: vi.fn() })
-  const title = screen.getByRole('button', { name: 'Project Pricing watch, every day 9:00' })
+it('states the triggers of its agents in words and names them with the project', () => {
+  render(ProjectItem, { name: 'Homelab', triggers: 'every day 9:00', expanded: false, ontoggle: vi.fn(), onnew: vi.fn() })
+  const title = screen.getByRole('button', { name: 'Project Homelab, every day 9:00' })
   expect(title).toHaveTextContent('every day 9:00')
-  expect(title.querySelector('[data-icon="bot"]')).not.toBeNull()
+  expect(title.querySelector('[data-icon="folder"]')).not.toBeNull()
+  expect(title.querySelector('[data-icon="bot"]')).toBeNull()
 })
 
 it('offers only the actions the project has in its menu', async () => {

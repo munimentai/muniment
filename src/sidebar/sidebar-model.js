@@ -1,8 +1,11 @@
 // What the sidebar hands core and keeps on this device. Core's
 // `sidebar::arrange` places every thread once in the Projects list, in its
-// project or as a row of its own, with its status in words. This module
+// project or as a row of its own, with its status in words and, for an
+// agent's thread, the agent's id, name and color. This module
 // gathers what the window knows for it, keeps when the user last read each
 // thread, and names the tone of a status.
+
+import { agentColor } from '../lib/agent-avatar.js'
 
 export const READ_KEY = 'muniment.thread-read'
 export const READ_BASELINE_KEY = 'muniment.thread-read-baseline'
@@ -39,19 +42,23 @@ export function markRead(marks, threadId, at = new Date(), storage = localStorag
 const RUNNING = new Set(['queued', 'leased', 'running'])
 const FAILED = new Set(['failed', 'interrupted'])
 
-// The threads with a run in flight and the threads whose newest run failed,
-// from the agent runs the window holds, newest first.
+// The threads with a run in flight, with when that run started, and the
+// threads whose newest run failed, from the agent runs the window holds,
+// newest first.
 export function runStates(runs = []) {
   const working = new Set()
   const failed = new Set()
+  const since = new Map()
   const seen = new Set()
   for (const run of runs) {
     if (!run?.thread_id || seen.has(run.thread_id)) continue
     seen.add(run.thread_id)
-    if (RUNNING.has(run.status)) working.add(run.thread_id)
-    else if (FAILED.has(run.status)) failed.add(run.thread_id)
+    if (RUNNING.has(run.status)) {
+      working.add(run.thread_id)
+      if (run.created_at) since.set(run.thread_id, run.created_at)
+    } else if (FAILED.has(run.status)) failed.add(run.thread_id)
   }
-  return { working, failed }
+  return { working, failed, since }
 }
 
 // The items of the notifications page that point at a thread or an agent.
@@ -63,7 +70,8 @@ export function attention(needsYou = []) {
   }))
 }
 
-// Core's input from the window's state. `agentChats` are agent creation chats as
+// Core's input from the window's state. Each agent carries its color, which
+// its rows show. `agentChats` are agent creation chats as
 // { threadId, title, updatedAt, agentId }: a chat shows once it holds a
 // message, and a saved agent's chat sits with the agent.
 export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], agentChats = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], needsYou = [], current = null, query = '', machineOf = () => null }) {
@@ -108,7 +116,7 @@ export function sidebarInput({ summaries = [], agentListing = null, agents = [],
     threads,
     projects,
     assignments: { ...(catalog.threads ?? {}) },
-    agents: agents.map((agent) => ({ id: agent.id, name: agent.name, project_id: agent.projectId ?? agent.project_id ?? null, home_thread_id: agentListing?.primaryThreads?.[agent.id] ?? null, paused_reason: agent.paused_reason ?? null, routines: (agent.routines ?? []).map((routine) => ({ enabled: routine.enabled !== false, proposed: routine.proposed === true, trigger: routine.trigger ?? null })) })),
+    agents: agents.map((agent) => ({ id: agent.id, name: agent.name, project_id: agent.projectId ?? agent.project_id ?? null, home_thread_id: agentListing?.primaryThreads?.[agent.id] ?? null, paused_reason: agent.paused_reason ?? null, routines: (agent.routines ?? []).map((routine) => ({ enabled: routine.enabled !== false, proposed: routine.proposed === true, trigger: routine.trigger ?? null })), color: agentColor(agent) })),
     agent_threads: agentThreads,
     pinned,
     archived,

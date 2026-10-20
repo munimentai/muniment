@@ -3530,8 +3530,16 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row time')).toMatch(/flex:\s*none/)
   })
 
-  it('reserves the current-thread dot width in every row', () => {
-    expect(appRules.get('.thread-row > span')).toMatch(/flex:\s*0 0 5px/)
+  it('marks the open row with the accent edge in place of a dot, so its text takes the width', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
+    render(App)
+    const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
+    expect(row).toHaveAttribute('aria-current', 'true')
+    expect(row).toHaveAttribute('data-accent-edge')
+    // A normal thread takes the theme accent: no agent color is set.
+    expect(row.style.getPropertyValue('--edge-color')).toBe('')
+    expect(row.firstElementChild).toHaveClass('thread-row-body')
+    expect(appRules.get('.thread-row > span')).toBeUndefined()
   })
 
   it('puts the time on a meta line over the title and names no machine while this computer is the only one', async () => {
@@ -3733,7 +3741,7 @@ describe('sidebar collapse', () => {
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_folders',{agentId:'agent-1'}))
   })
 
-  it('lists a saved agent as a project of its own', async () => {
+  it('lists no row for a saved agent that has no thread yet', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
       ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }])
@@ -3746,8 +3754,7 @@ describe('sidebar collapse', () => {
     await fireEvent.click(document.querySelector('.thread-row[aria-current="true"]'))
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull())
     const projects = screen.getByRole('region', { name: 'Projects' })
-    const scout = await within(projects).findByRole('button', { name: 'Project Scout' })
-    expect(scout.closest('.thread-record')).toBeNull()
+    expect(within(projects).queryByRole('button', { name: /Scout/ })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Expand Agents' })).toBeNull()
     expect(within(projects).queryByRole('button', { name: 'Projects with triggers' })).toBeNull()
   })
@@ -3780,11 +3787,20 @@ describe('sidebar collapse', () => {
     const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
     await fireEvent.click(within(await within(catalog).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
-    // The agent's home thread is a row of the agent's project, open and current.
-    await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveTextContent('Scout'))
+    // The agent's home thread is a row of its own, open and current, that names
+    // the agent and carries the accent edge in the agent's color.
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .row-agent')).toHaveTextContent('Scout'))
+    const open = document.querySelector('.thread-row.active-thread')
+    expect(open.querySelector('.thread-row-meta [data-icon="bot"]')).not.toBeNull()
+    expect(open).toHaveAttribute('data-accent-edge')
+    expect(open.style.getPropertyValue('--edge-color')).toMatch(/^#/)
     expect(screen.queryByRole('button', { name: 'Rename thread' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Thread actions' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Project Scout' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Project Scout/ })).not.toBeInTheDocument()
+    // The title pill carries the same edge in the agent's color.
+    const pill = screen.getByRole('button', { name: 'Open profile for Scout' })
+    expect(pill).toHaveAttribute('data-accent-edge')
+    expect(pill.style.getPropertyValue('--edge-color')).toBe(open.style.getPropertyValue('--edge-color'))
     expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
     expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 })
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
@@ -8357,9 +8373,10 @@ describe('agent chat', () => {
     // The chat stays the agent's creation chat.
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('creation_save', { creation: expect.objectContaining({ threadId: CHAT, resultId: 'agent-1' }) }))
     expect(await screen.findByRole('heading', { level: 1, name: 'Weekly recap' })).toBeInTheDocument()
-    // A saved agent's chat sits with its agent, once.
-    expect(await within(await screen.findByRole('list', { name: 'Weekly recap threads' })).findByText('Weekly recap', { selector: '.thread-row-title' })).toBeInTheDocument()
+    // A saved agent's chat stays one row of its own, which now names its agent.
+    await waitFor(() => expect(within(list).getByText('Weekly recap', { selector: '.thread-row-title' }).closest('.thread-row').querySelector('.row-agent')).toHaveTextContent('Weekly recap'))
     expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1)
+    expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
   })
 
   it('revises the draft with the next message in the same chat', async () => {
@@ -9063,7 +9080,7 @@ describe('a run on another thread', () => {
     await screen.findByText('Earlier answer')
   }
 
-  it('marks a running agent chat on its agent project and on its row', async () => {
+  it('marks a running agent chat on its own row, which names the agent and says Working once', async () => {
     const fallback = invoke.getMockImplementation()
     invoke.mockImplementation((command, payload) => isAgentList(command, payload)
       ? agentListAnswer([{ id: 'agent-1', name: 'Morning Brief', instructions: 'Brief.', projectId: null, schedule: null }], { 'agent-1': 'thread-1' })
@@ -9071,13 +9088,13 @@ describe('a run on another thread', () => {
     await renderRunning()
     await leaveForOtherThread()
     expect(screen.queryByText(/still running/)).not.toBeInTheDocument()
-    // The agent's project says it works, and its thread row, named for the project, carries the running mark.
-    const project = await screen.findByRole('button', { name: 'Project Morning Brief, Working' })
-    await fireEvent.click(project)
-    const threads = await screen.findByRole('list', { name: 'Morning Brief threads' })
-    const agentRow = await within(threads).findByRole('button', { name: 'Blue Sky Explanation' })
-    expect(agentRow).toHaveAccessibleDescription(/Working.*Morning Brief/)
-    expect(agentRow.querySelector('.run-mark')).not.toBeNull()
+    // No agent group: the agent's thread is a row of the list, its meta line the status, the Agents icon and the agent's name.
+    const projects = screen.getByRole('list', { name: 'Projects list' })
+    const agentRow = await within(projects).findByRole('button', { name: 'Blue Sky Explanation' })
+    await waitFor(() => expect(agentRow).toHaveAccessibleDescription(/Working.*Morning Brief/))
+    expect(agentRow.querySelector('.thread-row-meta [data-icon="bot"]')).not.toBeNull()
+    expect(agentRow.querySelector('.thread-row-meta').textContent.match(/Working/g)).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /^Project Morning Brief/ })).toBeNull()
   })
 
   it('opens another thread mid-run and marks the running row, which stays clickable', async () => {
@@ -9094,11 +9111,11 @@ describe('a run on another thread', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
     const runningRow = screen.getByRole('button', { name: /^Blue Sky Explanation/ })
     expect(runningRow).toHaveAttribute('data-running', 'true')
+    // Working on its meta line marks it, once, with no second mark.
     await waitFor(() => expect(runningRow).toHaveAccessibleDescription(/Working/))
-    expect(runningRow.querySelector('.run-mark')).toBeInTheDocument()
+    expect(runningRow.querySelector('.thread-row-meta').textContent.match(/Working/g)).toHaveLength(1)
+    expect(runningRow.querySelector('.run-mark')).toBeNull()
     expect(runningRow).not.toHaveAttribute('aria-disabled')
-    expect(appRules.get('.thread-row > span.run-mark')).toMatch(/var\(--muted\)/)
-    expect(appRules.get('.thread-row > span.run-mark')).not.toMatch(/signal|animation/)
     expect(row('Other thread')).not.toHaveAttribute('data-running')
   })
 
@@ -9402,11 +9419,10 @@ describe('runtimes', () => {
     })
     render(App)
     await findWorkspaceComposer()
-    // Each agent is a project, and one on another machine names that machine.
+    // An agent has no row of its own in Projects: only its threads show there.
     const projects = screen.getByRole('region', { name: 'Projects' })
-    const boxAgent = await within(projects).findByRole('button', { name: 'Project Test triage' })
-    expect(boxAgent).toHaveTextContent('on Build box')
-    expect(within(projects).getByRole('button', { name: 'Project Scout' })).not.toHaveTextContent('Build box')
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: buildBox.id, operation: 'agent.list', body: {} }))
+    expect(within(projects).queryByRole('button', { name: /^Project (Test triage|Scout)/ })).toBeNull()
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: buildBox.id, operation: 'agent.list', body: {} })
     expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.list', body: {} })
     // Opening Agents keeps the paired machine selected.

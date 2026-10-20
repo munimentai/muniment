@@ -2,8 +2,9 @@
   // The sidebar under the window's New and Search: the Agents and Artifacts
   // rows, then Projects as core arranges them, pinned rows first and then
   // newest activity first, with archived threads folded at the end, or the
-  // search's pages and threads. A thread in no project is its own row. A
-  // project row groups its threads and agents and opens to show them. Each
+  // search's pages and threads. A thread in no project is its own row, an
+  // agent's thread among them. A project row groups its threads and agents
+  // and opens to show them. Each
   // thread shows once, and each row states its status in words. A thread row
   // dragged onto a project moves the thread there. The window renders each
   // thread row with its `row` snippet, so a row's menu, rename and selection
@@ -56,7 +57,7 @@
             {@render row(project.threads[0])}
           {:else}
             <li class="project-entry">
-              <ProjectItem name={project.name} triggers={project.triggers} kind={project.kind} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
+              <ProjectItem name={project.name} triggers={project.triggers} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
                 ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
                 onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
                 onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
