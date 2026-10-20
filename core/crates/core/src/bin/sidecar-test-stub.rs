@@ -570,42 +570,21 @@ fn pi_resume(args: Vec<String>) {
                         continue;
                     }
                 }
-                // The agent permission extension's later steps: the gate
-                // the check asks for, then the save its answer names.
-                if let Ok(call) = std::env::var("PI_RESUME_STUB_AGENT_GATE") {
-                    let next = match request["id"].as_str() {
-                        Some("gate-check") => {
-                            let verdict: serde_json::Value =
-                                serde_json::from_str(request["value"].as_str().unwrap_or("{}"))
-                                    .unwrap_or_default();
-                            (verdict["decision"] == "ask").then(|| {
-                                serde_json::json!({
-                                    "type":"extension_ui_request", "id":"gate-select",
-                                    "method":"select", "title":verdict["title"],
-                                    "options":verdict["options"]
-                                })
-                            })
-                        }
-                        Some("gate-select") => match request["value"].as_str() {
-                            Some("Always allow for this agent") => Some(serde_json::json!({
-                                "type":"extension_ui_request", "id":"gate-save",
-                                "method":"editor", "title":"muniment:permission-always",
-                                "prefill":call
-                            })),
-                            Some("Always allow") => Some(serde_json::json!({
-                                "type":"extension_ui_request", "id":"gate-save",
-                                "method":"editor", "title":"muniment:permission-always-global",
-                                "prefill":call
-                            })),
-                            Some("Allow for this thread") => Some(serde_json::json!({
-                                "type":"extension_ui_request", "id":"gate-save",
-                                "method":"editor", "title":"muniment:permission-allow",
-                                "prefill":call
-                            })),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
+                // The agent permission extension's later step: the gate the
+                // check asks for.
+                if std::env::var("PI_RESUME_STUB_AGENT_GATE").is_ok()
+                    && request["id"].as_str() == Some("gate-check")
+                {
+                    let verdict: serde_json::Value =
+                        serde_json::from_str(request["value"].as_str().unwrap_or("{}"))
+                            .unwrap_or_default();
+                    let next = (verdict["decision"] == "ask").then(|| {
+                        serde_json::json!({
+                            "type":"extension_ui_request", "id":"gate-select",
+                            "method":"select", "title":verdict["title"],
+                            "options":verdict["options"]
+                        })
+                    });
                     if let Some(next) = next {
                         println!("{next}");
                         continue;

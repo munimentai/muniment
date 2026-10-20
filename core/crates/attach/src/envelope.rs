@@ -571,8 +571,8 @@ pub enum Operation {
     /// Lists the permission modes, with which can be chosen now.
     #[serde(rename = "permission.modes")]
     PermissionModes,
-    /// Reads the runtime's permission settings: default modes, bypass,
-    /// the unattended wait and the global rules.
+    /// Reads the runtime's permission settings: default modes, bypass and
+    /// the unattended wait.
     #[serde(rename = "permission.settings")]
     PermissionSettings,
     /// Changes the runtime's permission settings.

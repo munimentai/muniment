@@ -249,33 +249,18 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   one. A cloud grant names its own model.
 - `tools`: `{"disabled": [tool names]}`, the Pi tool names, MCP tools
   included, that the agent's runs exclude. It is an advanced, deprecated
-  control kept for compatibility; permission modes and rules are the main
-  control.
+  control kept for compatibility; the permission mode is the main control.
 - `skills`: installed skill and plugin ids from the extension inventory,
   picked on every turn of the agent's thread as an automatic pick is.
-- `permissions`: `{"mode"?, "always_allow": [request], "ask_first":
-  [request], "deny"?: [request]}`. `mode` is a permission mode (see
+- `permissions`: `{"mode"?}`. `mode` is a permission mode (see
   [Permission modes](#permission-modes)); a new agent saved without one is
   saved in the runtime's `default_agent_mode`, and an older agent without
   one runs in it. The old ids read as the new ones: `ask` is
   `manual`, `auto` is `auto` and `strict` is `dont_ask`, and the next save
-  writes the new id. A request is a thread permission policy's
-  `{"request_kind", "resource"}`: an exact absolute path and operation, an
-  exact command and working directory, or an exact tool name and input. The
-  lists hold in every thread of the agent as preset deny, ask and allow
-  policies beside the global rules and the thread's own journaled policies.
+  writes the new id. The `always_allow`, `ask_first` and `deny` lists an
+  older agent holds load, decide nothing, and the next save drops them.
   The gate shows the call's exact request and a summary and offers "Allow
-  once", "Allow for this thread", "Always allow for this agent" and "Deny".
-  A run of no agent offers "Always allow" in place of the agent answer.
-  "Allow for this thread" journals an allow policy in the thread. "Always
-  allow for this agent" also appends the request to `always_allow` through
-  the agent save path, and "Always allow" to the global `always_allow` in
-  `permission-settings.json`, which every later run reads at launch and fleet
-  sync carries to every member. The thread policy is journaled first, so a
-  refused save still covers the thread, and the answer then names the
-  reason. A call an ask policy covers never offers either, a protected path
-  or critical command offers neither, and the save refuses a request
-  `ask_first` names.
+  once" and "Deny".
 - `primary_runtime`, the runtime id that runs the agent's routines;
   `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
   `paused_reason`, which stops the routines while set.
@@ -472,17 +457,17 @@ swarm operation answers `invalid_request` with the reason in the error's
 ### Permission modes
 
 One permission gate decides every tool call of every run, composer threads
-and agent threads alike. `muniment_core::permission_gate` holds it, on the
-journal's thread permission policies. A run loads the gate extension, which
-asks the runtime before each call. The rules apply in this order:
+and agent threads alike. `muniment_core::permission_gate` holds it. A run
+loads the gate extension, which asks the runtime before each call. The mode
+decides each call in this order:
 
-1. Deny rules: global, then the agent's, then the thread's. They refuse.
-2. Ask-first rules, in the same order. They ask; `dont_ask` denies instead.
-3. Protected paths and critical commands. They ask in every mode but
+1. Protected paths and critical commands. They ask in every mode but
    `dont_ask`, which denies, `plan`, which refuses a change, and `bypass`,
    which runs a protected path that is not critical.
-4. Always-allow rules, which `plan` ignores for changes.
-5. The mode's baseline.
+2. The mode's baseline.
+
+A call that asks waits at the gate, which offers "Allow once" and "Deny".
+No answer saves a rule: the next call of the same kind asks again.
 
 | Mode | `title` | Baseline |
 | --- | --- | --- |
@@ -490,8 +475,8 @@ asks the runtime before each call. The rules apply in this order:
 | `edit_auto` | Edit automatically | Also file edits and `mkdir`, `touch`, `mv`, `cp` and `rm` inside the working folders run. |
 | `plan` | Plan first | Reads only; changes are refused. The agent submits a plan with `plan_submit`, and the approval picks the mode the thread continues in. |
 | `auto` | Auto review | A cheap model reviews each action that is not a read and allows it or pauses it with its reason. |
-| `dont_ask` | Don't ask | Reads and always-allowed actions run; the rest is denied without asking, and the denial is the tool's result. |
-| `bypass` | Bypass permissions | Everything runs past the first three steps. It is the default while `bypass_enabled` is on, and refused while it is off. |
+| `dont_ask` | Don't ask | Reads run; everything else is denied without asking, and the denial is the tool's result. |
+| `bypass` | Bypass permissions | Everything runs except critical commands, which ask. It is the default while `bypass_enabled` is on, and refused while it is off. |
 
 - **Reads.** File reads, Muniment's memory and plan tools, and shell commands
   the reader proves read-only: the read-only command core (`cat`, `grep`,
@@ -535,13 +520,14 @@ live in `<profile>/permission-settings.json`. Bypass is on and both default
 modes are `bypass` until the owner saves other settings. A field the file
 leaves out takes that default, or `manual` for a mode while bypass is off.
 Turning bypass off moves a default that names it, and that the same save
-does not set, to `manual`.
+does not set, to `manual`. The `deny`, `ask_first` and `always_allow` lists
+an older file holds load, decide nothing, and the next save drops them.
 
 Operations: `permission.modes` (`{}` → `{"modes": [{"id", "title",
 "description", "available", "reason"?}], "default_thread_mode",
 "default_agent_mode"}`); `permission.settings` (`{}` →
 `{"default_thread_mode", "default_agent_mode", "bypass_enabled",
-"unattended_timeout_seconds", "deny", "ask_first", "always_allow"}`);
+"unattended_timeout_seconds"}`);
 `permission.settings_save` (any of those fields, and `scope`: `machine` or
 `all` → the settings); and
 `thread.permission_mode` (`{"thread_id"}`) and `thread.permission_mode_set`
@@ -706,10 +692,10 @@ steering, gate answers and run starts through `SwarmHost`.
   (`{"approval_id", "answer"}` → `{"status": "answered"|"already_answered"|"sent",
   "approval"}`) answers one; the member that runs the gate applies the first
   answer. `agent.approval_resolved` follows. An agent gate's approval carries
-  `rule`, the exact `{"request_kind", "resource"}` an `always_allow` entry
-  takes, `summary`, `reason`, why the gate asks, and `answers`, the answer
-  ids it offers: `allow_once`, `allow_thread`, `always_allow_agent` and
-  `deny`. A plan gate's approval carries `plan` and no `rule`, and offers
+  `rule`, the exact `{"request_kind", "resource"}` the call makes,
+  `summary`, `reason`, why the gate asks, and `answers`, the answer ids it
+  offers: `allow_once` and `deny`. A plan gate's approval carries `plan` and
+  no `rule`, and offers
   `plan_manual`, `plan_edit_auto`, `plan_auto` and `plan_keep`. `answer` is
   one of those ids or a gate answer such as `{"type": "confirm", "value":
   true}`.
@@ -875,8 +861,7 @@ steering, gate answers and run starts through `SwarmHost`.
 - **Settings, projects and memory.** `fleet_sync` keeps nine classes on
   records, each through an adapter that maps its own storage both ways:
   `preference` (one record per fleet-wide key), `permission` (default modes
-  and the unattended wait per field, deny and ask-first rules as sets keyed
-  by the request hash, always-allow rules one field per hash), `retention`,
+  and the unattended wait per field), `retention`,
   `route` (one record per route name), `decision-model` (a connection's
   fields without its key), `search` (the provider order and engines),
   `project` (`{"name", "owner_runtime", "path"}`), `project-thread` (each

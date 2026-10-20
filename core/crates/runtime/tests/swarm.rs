@@ -1557,7 +1557,7 @@ fn an_approval_reaches_every_member_and_the_first_answer_wins() {
 }
 
 #[test]
-fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent() {
+fn an_agent_gate_approval_names_its_request_and_allow_once_lets_the_run_go_on() {
     let _environment = environment();
     let a = Member::new("gate-a");
     let b = Member::new("gate-b");
@@ -1607,10 +1607,7 @@ fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent(
         .unwrap()
         .starts_with("Run `git push origin main` in "));
     assert_eq!(pending["presentation"]["category"], "shell");
-    assert_eq!(
-        pending["answers"],
-        json!(["allow_once", "allow_thread", "always_allow_agent", "deny"])
-    );
+    assert_eq!(pending["answers"], json!(["allow_once", "deny"]));
 
     // B's client sees the agent on A wait, with the approval as its action.
     let waiting = loop {
@@ -1632,8 +1629,8 @@ fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent(
         .unwrap()
         .starts_with(action.trim_end_matches('…')));
 
-    // An answer the gate does not offer is refused; the agent-wide one saves
-    // the exact rule to the agent on A through its save path.
+    // An answer the gate does not offer is refused; allow once lets the run
+    // on A carry on.
     let approval_id = pending["approval_id"].as_str().unwrap().to_owned();
     assert!(b
         .op(
@@ -1644,7 +1641,7 @@ fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent(
     let answered = b
         .op(
             Operation::AgentApprovalAnswer,
-            json!({"approval_id": approval_id, "answer": "always_allow_agent"}),
+            json!({"approval_id": approval_id, "answer": "allow_once"}),
         )
         .unwrap();
     assert_eq!(answered["status"], "answered", "{answered}");
@@ -1652,18 +1649,6 @@ fn an_agent_gate_approval_names_its_rule_and_always_allow_saves_it_to_the_agent(
         a.tick();
         a.store().get(&run.id).unwrap().unwrap().status == RunStatus::Completed
     }));
-    let always = agents::get(a.profile(), &releaser.id)
-        .unwrap()
-        .permissions
-        .unwrap()
-        .always_allow;
-    assert_eq!(
-        always
-            .iter()
-            .map(|rule| muniment_core::serde_json::to_value(rule).unwrap())
-            .collect::<Vec<_>>(),
-        vec![pending["rule"].clone()]
-    );
     // Once the run ends, B's client sees the agent go idle.
     assert!(wait(|| matches!(
         received.try_recv(),

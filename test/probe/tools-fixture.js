@@ -54,7 +54,7 @@ export function toolsHistory() {
       text: '',
       receipt: null,
       toolActivity: [],
-      pendingPermission: { gateId: 'tools-gate', kind: 'select', title: `${web.summary}? ${web.reason}`, options: ['Allow once', 'Allow for this thread', 'Always allow', 'Deny'], presentation: web.presentation, rule: web.rule, reason: web.reason },
+      pendingPermission: { gateId: 'tools-gate', kind: 'select', title: `${web.summary}? ${web.reason}`, options: ['Allow once', 'Deny'], presentation: web.presentation, rule: web.rule, reason: web.reason },
       resumable: false,
     },
   ]
@@ -69,13 +69,13 @@ export function toolApprovalItems(template) {
       run_id: `tools-run-${index}`,
       gate_id: gate.id,
       agent_name: gate.agent_name,
-      request: { gate_id: gate.id, kind: 'select', title: `${gate.summary}? ${gate.reason}`, options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] },
+      request: { gate_id: gate.id, kind: 'select', title: `${gate.summary}? ${gate.reason}`, options: ['Allow once', 'Deny'] },
       rule: gate.rule,
       summary: gate.summary,
       presentation: gate.presentation,
       reason: gate.reason,
       plan: undefined,
-      answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'],
+      answers: ['allow_once', 'deny'],
       created_at: at(index * 60),
     }
     return { kind: 'approval', id: approval.approval_id, machine: { id: 'local', name: 'This computer' }, agent_id: approval.agent_id, agent_name: approval.agent_name, approval, detail: approval.summary, at: approval.created_at }

@@ -43,7 +43,8 @@ it('reads the runtime settings and saves each change on its own', async () => {
   expect(screen.getByRole('button', { name: /^Default thread mode:/ })).toHaveTextContent('Bypass permissions')
   expect(screen.getByRole('button', { name: /^Default agent mode:/ })).toHaveTextContent('Bypass permissions')
   expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).toBeChecked()
-  expect(screen.getByText(/Everything runs except deny and ask-first rules/)).toBeInTheDocument()
+  expect(screen.getByText(/Everything runs except critical commands/)).toBeInTheDocument()
+  expect(screen.queryByText('Rules for every thread')).not.toBeInTheDocument()
   expect(screen.getByText(/Off, new threads and agents start in Ask before changes/)).toBeInTheDocument()
 
   await fireEvent.click(screen.getByRole('button', { name: /^Default thread mode:/ }))
@@ -62,14 +63,6 @@ it('reads the runtime settings and saves each change on its own', async () => {
   await fireEvent.input(wait, { target: { value: '30' } })
   await fireEvent.click(screen.getByRole('button', { name: 'Save wait' }))
   await waitFor(() => expect(machine.saves().at(-1)).toEqual({ unattended_timeout_seconds: 1800 }))
-
-  await fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
-  const form = screen.getByRole('form', { name: 'New permission rule' })
-  await fireEvent.change(within(form).getByRole('combobox', { name: 'List' }), { target: { value: 'deny' } })
-  await fireEvent.input(within(form).getByRole('textbox', { name: 'Command' }), { target: { value: 'rm -rf /' } })
-  await fireEvent.input(within(form).getByRole('textbox', { name: 'Folder' }), { target: { value: '/work' } })
-  await fireEvent.click(within(form).getByRole('button', { name: 'Add rule' }))
-  await waitFor(() => expect(machine.saves().at(-1).deny.at(-1)).toEqual({ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'rm -rf /'], working_directory: '/work' } }))
 })
 
 it('names the refusal core gives', async () => {

@@ -6,9 +6,6 @@
 
 export const ANSWER_LABELS = {
   allow_once: 'Allow once',
-  allow_thread: 'Allow for this thread',
-  always_allow_agent: 'Always allow for this agent',
-  always_allow: 'Always allow',
   deny: 'Deny',
   // A plan approval's answers: approve it into a mode, or keep planning.
   plan_manual: 'Approve, then ask before changes',
@@ -19,13 +16,11 @@ export const ANSWER_LABELS = {
 const ORDER = Object.keys(ANSWER_LABELS)
 
 const ALLOW_ONCE = 'Allow once'
-const ALLOW_THREAD = 'Allow for this thread'
 const DENY = 'Deny'
 
 // `[{ label, answer, tone }]` for one approval. Only the answers core lists
-// appear, in a fixed order, so an agent whose ask-first rule matches offers
-// no "Always allow for this agent". A request that asks for text or a file
-// review opens its conversation instead.
+// appear, in a fixed order. A request that asks for text or a file review
+// opens its conversation instead.
 export function approvalChoices(approval) {
   if (Array.isArray(approval?.answers) && approval.answers.length) {
     return ORDER.filter((id) => approval.answers.includes(id))
@@ -43,7 +38,6 @@ export function approvalChoices(approval) {
     if (options.includes(ALLOW_ONCE) && options.includes(DENY)) {
       return [
         { label: ALLOW_ONCE, answer: { type: 'select', value: ALLOW_ONCE } },
-        ...(options.includes(ALLOW_THREAD) ? [{ label: ALLOW_THREAD, answer: { type: 'select', value: ALLOW_THREAD } }] : []),
         { label: DENY, answer: { type: 'select', value: DENY }, tone: 'deny' },
       ]
     }
@@ -110,10 +104,9 @@ export function isPlanGate(gate) {
 }
 
 // The answers a composer thread's select gate shows beside its Deny control.
-// A thread without an agent never offers "Always allow for this agent", and
-// a gate whose options name Deny answers Deny with that option.
-export function composerGateOptions(gate, hasAgent = false) {
-  const options = (gate?.options ?? []).filter((option) => hasAgent || option !== ANSWER_LABELS.always_allow_agent)
+// A gate whose options name Deny answers Deny with that option.
+export function composerGateOptions(gate) {
+  const options = gate?.options ?? []
   const deny = options.includes(DENY) ? { type: 'select', value: DENY } : { type: 'cancelled' }
   return { options: options.filter((option) => option !== DENY), deny }
 }

@@ -7,7 +7,7 @@ afterEach(cleanup)
 const agent = {
   id: 'scout', name: 'Scout', label: 'Researcher', instructions: 'Find sources.', runtimeId: 'box', projectId: null, schedule: null,
   model: { provider: 'ollama', id: 'qwen3:8b', thinking: 'medium' },
-  permissions: { mode: 'manual', always_allow: [{ request_kind: 'tool', resource: { type: 'tool', name: 'read', input: {} } }], ask_first: [] },
+  permissions: { mode: 'manual' },
   routines: [{ id: 'daily', name: 'Daily brief', enabled: true, prompt: '', trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' } }],
 }
 const machine = { id: 'box', name: 'Build box', kind: 'container' }
@@ -153,7 +153,7 @@ it('sets a permission mode from core through agent.save and keeps the rules', as
 
 it('marks the default mode of an agent that chose none, and names a refused change', async () => {
   const machineCore = core({ refuse: 'The agent settings are invalid.' })
-  show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: { always_allow: [], ask_first: [] } } })
+  show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: {} } })
   await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
   const chosen = screen.getByRole('radio', { name: 'Auto review' })
   expect(chosen).toHaveAttribute('aria-checked', 'true')

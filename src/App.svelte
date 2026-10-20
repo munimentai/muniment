@@ -3882,7 +3882,7 @@
                 {:else if gate.kind === 'editor' && gate.title === 'muniment:browser'}
                   <p class="run-status" role="status">Using the browser…</p>
                 {:else}
-                {@const choices = composerGateOptions(gate, !!threadAgent)}
+                {@const choices = composerGateOptions(gate)}
                 <div class="permission-card tool-card">
                   {#if gate.presentation && !isPlanGate(gate)}<ToolCall variant="card" presentation={gate.presentation} reason={gate.reason ?? ''} input={ruleInput(gate.rule)} />
                   {:else}<strong>{gate.kind === 'code_diff' ? 'Proposed file changes' : gate.title}</strong>{/if}

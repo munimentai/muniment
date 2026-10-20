@@ -1328,14 +1328,14 @@ fn polish_events_and_approvals_have_canonical_fixtures() {
         panic!("expected request fixture");
     };
     assert_eq!(subscribe.body["swarm_live"], true);
-    let Envelope::Request(always) = serde_json::from_value(canonical_fixture(
-        "request-agent-approval-answer-always.json",
-    ))
-    .unwrap() else {
+    let Envelope::Request(once) =
+        serde_json::from_value(canonical_fixture("request-agent-approval-answer-once.json"))
+            .unwrap()
+    else {
         panic!("expected request fixture");
     };
-    assert_eq!(always.operation, Operation::AgentApprovalAnswer);
-    assert_eq!(always.body["answer"], "always_allow_agent");
+    assert_eq!(once.operation, Operation::AgentApprovalAnswer);
+    assert_eq!(once.body["answer"], "allow_once");
     let Envelope::Event(pending) =
         serde_json::from_value(canonical_fixture("event-agent-approval-pending.json")).unwrap()
     else {
@@ -1347,7 +1347,7 @@ fn polish_events_and_approvals_have_canonical_fixtures() {
         pending.body["request"]["policy"]["resource"]
     );
     assert!(pending.body["summary"].is_string());
-    assert_eq!(pending.body["answers"][2], "always_allow_agent");
+    assert_eq!(pending.body["answers"], json!(["allow_once", "deny"]));
 }
 
 #[test]

@@ -148,7 +148,7 @@ export const historyFixtures = {
         gateId: 'probe-mode-gate',
         kind: 'select',
         title: 'Allow bash `rm exports/2025-*.csv` in /Users/alice/Documents/muniment? This thread asks before it changes anything.',
-        options: ['Allow once', 'Allow for this thread', 'Deny'],
+        options: ['Allow once', 'Deny'],
       },
       resumable: false,
     },

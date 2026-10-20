@@ -1,44 +1,18 @@
 //! Permission settings: the default modes and the unattended wait are last
-//! writer wins. The deny and ask-first rules are sets keyed by the request's
-//! hash, so a rule one member adds while another removes it stays. The
-//! always-allow rules are one field per request hash, so the later of an
-//! add and a removal wins. Whether bypass may be chosen stays on each
-//! machine.
+//! writer wins. Whether bypass may be chosen stays on each machine. A slot
+//! this adapter does not name, such as a rule list an older member sends,
+//! changes nothing.
 
 use serde_json::{json, Value};
 
-use super::{hash, Adapter, Change, Context, Local, Slot};
-use crate::permission_gate::settings::{self, PermissionSettings, MAX_GLOBAL_RULES};
-use crate::permission_gate::{PermissionMode, PolicyRequest};
+use super::{Adapter, Change, Context, Local, Slot};
+use crate::permission_gate::settings::{self, PermissionSettings};
+use crate::permission_gate::PermissionMode;
 
 pub const CLASS: &str = "permission";
 const SETTINGS: &str = "settings";
-const RULES: &str = "rules";
-const ALLOW: &str = "allow";
-const DENY: &str = "deny";
-const ASK_FIRST: &str = "ask_first";
 
 pub(super) struct Permissions;
-
-fn request_slots(local: &mut Local, requests: &[PolicyRequest], slot: impl Fn(String) -> Slot) {
-    for request in requests {
-        let value = json!(request);
-        local.insert(slot(hash(&value)), value);
-    }
-}
-
-fn apply_rule(list: &mut Vec<PolicyRequest>, element: &str, value: Option<&Value>) {
-    let held = |request: &PolicyRequest| hash(&json!(request)) == element;
-    match value.and_then(|value| serde_json::from_value::<PolicyRequest>(value.clone()).ok()) {
-        Some(request) => {
-            if !list.iter().any(held) && list.len() < MAX_GLOBAL_RULES {
-                list.push(request);
-            }
-        }
-        None if value.is_none() => list.retain(|request| !held(request)),
-        None => {}
-    }
-}
 
 impl Adapter for Permissions {
     fn class(&self) -> &'static str {
@@ -68,15 +42,6 @@ impl Adapter for Permissions {
             Slot::field(SETTINGS, "unattended_timeout_seconds"),
             json!(current.unattended_timeout_seconds),
         );
-        request_slots(&mut local, &current.deny, |element| {
-            Slot::element(RULES, DENY, element)
-        });
-        request_slots(&mut local, &current.ask_first, |element| {
-            Slot::element(RULES, ASK_FIRST, element)
-        });
-        request_slots(&mut local, &current.always_allow, |element| {
-            Slot::field(ALLOW, element)
-        });
         Ok(local)
     }
 
@@ -107,11 +72,6 @@ impl Adapter for Permissions {
                         current.unattended_timeout_seconds = seconds;
                     }
                 }
-                (RULES, DENY, Some(element)) => apply_rule(&mut current.deny, element, value),
-                (RULES, ASK_FIRST, Some(element)) => {
-                    apply_rule(&mut current.ask_first, element, value)
-                }
-                (ALLOW, element, None) => apply_rule(&mut current.always_allow, element, value),
                 _ => {}
             }
         }

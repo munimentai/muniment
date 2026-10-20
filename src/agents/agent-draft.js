@@ -70,7 +70,7 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
     tools: { disabled: [...form.toolsOff] },
     routines: form.routines.map((routine) => ({ ...routine, enabled: test ? false : routine.enabled, proposed: false })),
   }
-  if (form.mode) agent.permissions = { always_allow: [], ask_first: [], ...(saved?.permissions ?? {}), mode: form.mode }
+  if (form.mode) agent.permissions = { mode: form.mode }
   return agent
 }
 

@@ -14,7 +14,6 @@
   import ChoiceField from './ui/ChoiceField.svelte'
   import Button from './ui/Button.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  import PermissionRules from '../agents/PermissionRules.svelte'
   import { agentRequest } from '../agents/agent-runtime.js'
   import { loadModes } from '../agents/permission-modes.js'
 
@@ -69,7 +68,7 @@
     <Group heading="Bypass permissions">
       <Row title="Allow bypass" description={kept('bypass_enabled')?.note ?? ''} info="Off, new threads and agents start in Ask before changes, and a default set to Bypass permissions moves to Ask before changes.">
         {#snippet detail()}
-          <p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Everything runs except deny and ask-first rules, protected paths and critical commands.</p>
+          <p class="warning"><LucideIcon name="triangle-alert" variant="action" size={14} />Everything runs except critical commands, which ask first.</p>
         {/snippet}
         <Toggle checked={settings.bypass_enabled} label="Allow bypass permissions" disabled={busy || !!kept('bypass_enabled')} onchange={(enabled) => save({ bypass_enabled: enabled })} />
       </Row>
@@ -82,11 +81,6 @@
           <Button type="submit" disabled={busy || Math.round(minutes * 60) === settings.unattended_timeout_seconds}>Save wait</Button>
         </form>
       </Row>
-    </Group>
-    <Group heading="Rules for every thread" info={`Exact requests every thread and agent on ${machineName} denies, asks first or runs.`}>
-      <div class="rules">
-        <PermissionRules rules={settings} {busy} onsave={(list, requests) => save({ [list]: requests })} />
-      </div>
     </Group>
   {:else if !error}
     <p role="status">Loading permission settings…</p>
@@ -104,6 +98,5 @@
   .unit { color: var(--muted); font: var(--text-12) var(--font-mono); }
   input[type="number"] { width: 96px; height: 32px; box-sizing: border-box; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-13) var(--font-mono); }
   input:focus { outline: none; border-color: var(--muted); }
-  .rules { display: grid; gap: 6px; padding: 12px 0; }
   .error { color: var(--oxide); }
 </style>

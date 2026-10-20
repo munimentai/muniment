@@ -20,17 +20,17 @@ it('shows the exact operation, its inputs and every answer core accepts', async 
   expect(card.querySelector('.tool-details')).toHaveTextContent('Folder/work/agents/Lead-scout')
   expect(card.querySelector('.tool-raw')).not.toHaveAttribute('open')
   expect(card.querySelector('.tool-raw')).toHaveTextContent('"command": "git push origin main"')
-  expect(buttons()).toEqual(['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'])
+  expect(buttons()).toEqual(['Allow once', 'Deny'])
   expect(card.querySelector('.agent-avatar')).toHaveAttribute('data-activity', 'waiting')
-  await fireEvent.click(screen.getByRole('button', { name: 'Allow for this thread' }))
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.approval_answer', body: { approval_id: pending.approval_id, answer: 'allow_thread' } }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.approval_answer', body: { approval_id: pending.approval_id, answer: 'allow_once' } }))
   expect(onanswered).toHaveBeenCalledWith(pending, { status: 'answered', approval: { ...pending, state: 'answered' } }, '')
 })
 
-it('leaves out Always allow when an ask-first rule matches, and settles when another device answered', async () => {
+it('settles when another device answered', async () => {
   const invoke = vi.fn(async () => ({ status: 'already_answered', approval: null }))
-  render(ApprovalCard, { tauri: { invoke }, approval: { ...pending, answers: ['allow_once', 'allow_thread', 'deny'] } })
-  expect(buttons()).toEqual(['Allow once', 'Allow for this thread', 'Deny'])
+  render(ApprovalCard, { tauri: { invoke }, approval: pending })
+  expect(buttons()).toEqual(['Allow once', 'Deny'])
   await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
   expect(await screen.findByRole('status')).toHaveTextContent('Another device answered this first. Its answer stands.')
   expect(screen.queryAllByRole('button')).toEqual([])

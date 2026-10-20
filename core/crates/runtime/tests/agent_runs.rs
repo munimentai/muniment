@@ -499,10 +499,7 @@ fn an_agent_runs_on_its_model_and_thinking_without_disabled_tools_behind_its_gat
         "instructions": "Work carefully.",
         "model": {"provider": "stub", "id": "stub-model", "thinking": "high"},
         "tools": {"disabled": ["powershell"]},
-        "permissions": {"mode": "ask", "always_allow": [{
-            "request_kind": "tool",
-            "resource": {"type": "tool", "name": "mcp__crm__list", "input": {"stage": "new"}}
-        }]}
+        "permissions": {"mode": "ask"}
     }))
     .unwrap();
     let agent = agents::save(setup.profile(), agent).unwrap();
@@ -537,12 +534,12 @@ fn an_agent_runs_on_its_model_and_thinking_without_disabled_tools_behind_its_gat
     let verdict: Value = serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
     assert_eq!(verdict["decision"], "ask");
 
-    // A call the profile's pre-decided policy allows runs without a question.
+    // A read runs without a question.
     std::env::set_var(
         "PI_RESUME_STUB_EDITOR_REQUEST",
         json!({
             "title": "muniment:permission-check",
-            "prefill": {"tool": "mcp__crm__list", "input": {"stage": "new"}}
+            "prefill": {"tool": "read", "input": {"path": "notes.md"}}
         })
         .to_string(),
     );
@@ -666,70 +663,6 @@ fn a_thread_the_queue_creates_belongs_to_the_signed_in_owner() {
     assert!(title.starts_with("Owned · "), "{title}");
 }
 
-#[test]
-fn allow_for_this_thread_journals_a_thread_policy_the_next_check_reads() {
-    let _environment = ENVIRONMENT
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let setup = Setup::new("agent-runs-thread-policy", true, RuntimeHost::default());
-    let root = setup.temporary.root.clone();
-    std::env::set_var("PI_RESUME_STUB_EDITOR_CAPTURE", root.join("editor.jsonl"));
-    let call = json!({"tool": "mcp__crm__archive", "input": {"id": "lead-9"}});
-    std::env::set_var(
-        "PI_RESUME_STUB_EDITOR_REQUEST",
-        json!({"title": "muniment:permission-allow", "prefill": call}).to_string(),
-    );
-    let agent: Agent = serde_json::from_value(json!({
-        "name": "Strict",
-        "instructions": "Ask first.",
-        "permissions": {"mode": "strict"}
-    }))
-    .unwrap();
-    let agent = agents::save(setup.profile(), agent).unwrap();
-    agents::queue_run(setup.profile(), &agent.id).unwrap();
-    setup.tick();
-    assert!(wait(|| setup.live() == 0));
-    setup.tick();
-    let run = setup.store().latest(&agent.id).unwrap().unwrap();
-    let thread = run.thread_id.unwrap();
-    let storage = open_profile_storage(setup.profile()).unwrap();
-    let policies = storage
-        .lock()
-        .unwrap()
-        .journal
-        .active_thread_permission_policies(&thread)
-        .unwrap();
-    assert_eq!(policies.len(), 1);
-    assert_eq!(
-        policies[0].resource,
-        muniment_core::journal::ThreadPermissionResource::Tool {
-            name: "mcp__crm__archive".into(),
-            input: json!({"id": "lead-9"}),
-        }
-    );
-    drop(storage);
-
-    // The next run in the thread finds the thread's policy.
-    std::fs::remove_file(root.join("editor.jsonl")).unwrap();
-    std::env::set_var(
-        "PI_RESUME_STUB_EDITOR_REQUEST",
-        json!({"title": "muniment:permission-check", "prefill": call}).to_string(),
-    );
-    agents::queue_run(setup.profile(), &agent.id).unwrap();
-    setup.tick();
-    assert!(wait(|| setup.live() == 0));
-    let answer: Value = serde_json::from_str(
-        std::fs::read_to_string(root.join("editor.jsonl"))
-            .unwrap()
-            .lines()
-            .next()
-            .unwrap(),
-    )
-    .unwrap();
-    let verdict: Value = serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
-    assert_eq!(verdict["decision"], "allow");
-}
-
 /// Runs one agent run whose stub sends `title` with `call` to the agent
 /// permission bridge, and answers the runtime's reply.
 fn bridge_answer(setup: &Setup, agent: &str, title: &str, call: &Value) -> Value {
@@ -756,29 +689,43 @@ fn bridge_answer(setup: &Setup, agent: &str, title: &str, call: &Value) -> Value
 }
 
 #[test]
-fn always_allow_for_this_agent_saves_the_exact_rule_unless_ask_first_covers_it() {
+fn the_gate_check_names_the_exact_request_and_offers_allow_once_or_deny() {
     let _environment = ENVIRONMENT
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let setup = Setup::new("agent-runs-always-allow", true, RuntimeHost::default());
-    let delete = json!({"tool": "mcp__crm__delete", "input": {"id": "lead-1"}});
+    let setup = Setup::new("agent-runs-gate-check", true, RuntimeHost::default());
+    let push = json!({"tool": "bash", "input": {"command": "git push origin main"}});
+    let rule = |call: &Value| {
+        let resource = if call["tool"] == "bash" {
+            json!({"type": "command", "arguments": ["bash", "git push origin main"],
+                "working_directory": "/"})
+        } else {
+            json!({"type": "tool", "name": call["tool"], "input": call["input"]})
+        };
+        json!({"request_kind": resource["type"], "resource": resource})
+    };
+    let archive = json!({"tool": "mcp__crm__archive", "input": {"id": "lead-9"}});
+    // The rule lists of an older profile and settings file load and decide
+    // nothing.
+    std::fs::write(
+        setup
+            .profile()
+            .join(muniment_core::permission_gate::settings::SETTINGS_FILE),
+        json!({"always_allow": [rule(&archive)]}).to_string(),
+    )
+    .unwrap();
     let agent: Agent = serde_json::from_value(json!({
         "name": "Releaser",
         "instructions": "Release carefully.",
-        "permissions": {"mode": "ask", "ask_first": [{
-            "request_kind": "tool",
-            "resource": {"type": "tool", "name": "mcp__crm__delete", "input": {"id": "lead-1"}}
-        }]}
+        "permissions": {"mode": "ask", "always_allow": [rule(&push)], "ask_first": [rule(&archive)]}
     }))
     .unwrap();
     let agent = agents::save(setup.profile(), agent).unwrap();
-    let push = json!({"tool": "bash", "input": {"command": "git push origin main"}});
 
     // The check names the exact request, a summary, and the gate's options.
     let verdict = bridge_answer(&setup, &agent.id, "muniment:permission-check", &push);
     assert_eq!(verdict["decision"], "ask");
-    let push_request = verdict["request"].clone();
-    assert_eq!(push_request["request_kind"], "command");
+    assert_eq!(verdict["request"]["request_kind"], "command");
     assert_eq!(
         verdict["request"]["resource"]["arguments"],
         json!(["bash", "git push origin main"])
@@ -791,126 +738,21 @@ fn always_allow_for_this_agent_saves_the_exact_rule_unless_ask_first_covers_it()
         .as_str()
         .unwrap()
         .starts_with("Run `git push origin main` in "));
-    assert_eq!(
-        verdict["options"],
-        json!([
-            "Allow once",
-            "Allow for this thread",
-            "Always allow for this agent",
-            "Deny"
-        ])
-    );
-    // An ask-first request never offers the agent-wide answer.
-    let verdict = bridge_answer(&setup, &agent.id, "muniment:permission-check", &delete);
+    assert_eq!(verdict["options"], json!(["Allow once", "Deny"]));
+    let verdict = bridge_answer(&setup, &agent.id, "muniment:permission-check", &archive);
     assert_eq!(verdict["decision"], "ask");
-    assert_eq!(
-        verdict["options"],
-        json!(["Allow once", "Allow for this thread", "Deny"])
-    );
+    assert_eq!(verdict["options"], json!(["Allow once", "Deny"]));
 
-    // "Always allow for this agent" appends the exact rule to the profile
-    // and journals it in the thread for the run that asked.
-    let saved = bridge_answer(&setup, &agent.id, "muniment:permission-always", &push);
-    assert_eq!(saved["saved"], true, "{saved}");
-    let always = agents::get(setup.profile(), &agent.id)
-        .unwrap()
-        .permissions
-        .unwrap()
-        .always_allow;
-    assert_eq!(always.len(), 1);
-    assert_eq!(serde_json::to_value(&always[0]).unwrap(), push_request);
-    let thread = setup
-        .store()
-        .latest(&agent.id)
-        .unwrap()
-        .unwrap()
-        .thread_id
-        .unwrap();
-    let storage = open_profile_storage(setup.profile()).unwrap();
-    assert!(!storage
-        .lock()
-        .unwrap()
-        .journal
-        .active_thread_permission_policies(&thread)
-        .unwrap()
-        .is_empty());
-    drop(storage);
-    // Ask-first outranks it: the save is refused and the profile keeps one rule.
-    let refused = bridge_answer(&setup, &agent.id, "muniment:permission-always", &delete);
-    assert_eq!(refused["saved"], false, "{refused}");
-    assert!(refused["reason"].as_str().unwrap().contains("ask-first"));
-    assert_eq!(
-        agents::get(setup.profile(), &agent.id)
-            .unwrap()
-            .permissions
-            .unwrap()
-            .always_allow
-            .len(),
-        1
-    );
-}
-
-#[test]
-fn always_allow_saves_a_global_rule_that_later_runs_in_other_threads_read() {
-    let _environment = ENVIRONMENT
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let setup = Setup::new("agent-runs-always-global", true, RuntimeHost::default());
-    let ask = |name: &str| -> Agent {
-        let agent: Agent = serde_json::from_value(json!({
-            "name": name,
-            "instructions": "Release carefully.",
-            "permissions": {"mode": "ask"}
-        }))
-        .unwrap();
-        agents::save(setup.profile(), agent).unwrap()
-    };
-    let first = ask("Releaser");
-    let second = ask("Reviewer");
-    // A tool call's rule names the tool and its input, not the agent's folder.
-    let push = json!({"tool": "mcp__crm__archive", "input": {"id": "lead-9"}});
-    assert_eq!(
-        bridge_answer(&setup, &second.id, "muniment:permission-check", &push)["decision"],
-        "ask"
-    );
-
-    // "Always allow" saves the exact request to the global rules on disk,
-    // which every later run reads at launch and fleet sync carries.
-    let saved = bridge_answer(
-        &setup,
-        &first.id,
-        "muniment:permission-always-global",
-        &push,
-    );
-    assert_eq!(saved["saved"], true, "{saved}");
-    let settings = muniment_core::permission_gate::settings::load(setup.profile());
-    assert_eq!(settings.always_allow.len(), 1);
-    assert!(agents::get(setup.profile(), &first.id)
-        .unwrap()
-        .permissions
-        .unwrap()
-        .always_allow
-        .is_empty());
-
-    // Another agent's thread, in a run that starts after the save, runs it.
-    assert_eq!(
-        bridge_answer(&setup, &second.id, "muniment:permission-check", &push)["decision"],
-        "allow"
-    );
-    // A second answer for the same request keeps one rule.
-    let again = bridge_answer(
-        &setup,
-        &first.id,
-        "muniment:permission-always-global",
-        &push,
-    );
-    assert_eq!(again["saved"], true, "{again}");
-    assert_eq!(
-        muniment_core::permission_gate::settings::load(setup.profile())
-            .always_allow
-            .len(),
-        1
-    );
+    // Don't ask denies everything but reads without asking.
+    let strict: Agent = serde_json::from_value(json!({
+        "name": "Strict",
+        "instructions": "Ask nothing.",
+        "permissions": {"mode": "strict"}
+    }))
+    .unwrap();
+    let strict = agents::save(setup.profile(), strict).unwrap();
+    let verdict = bridge_answer(&setup, &strict.id, "muniment:permission-check", &archive);
+    assert_eq!(verdict["decision"], "deny", "{verdict}");
 }
 
 #[test]
@@ -1244,7 +1086,7 @@ fn a_plan_waits_as_an_approval_and_its_answer_switches_the_thread_mode() {
     assert!(permission_operation(
         &setup,
         "thread.plan_answer",
-        json!({"thread_id": thread, "answer": "always_allow_agent"})
+        json!({"thread_id": thread, "answer": "allow_once"})
     )
     .is_err());
     let answered = permission_operation(

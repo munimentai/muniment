@@ -47,9 +47,8 @@ const SCOUT_PLAN = [
 ].join('\n')
 
 // The approvals waiting on the swarm, as core's `agent.approvals` lists them:
-// every answer, an ask-first rule that leaves out "Always allow for this
-// agent", a long tool input that folds, an auto review's reason, a plan
-// waiting for approval, and one from an older runtime.
+// allow once or deny, a long tool input that folds, an auto review's reason,
+// a plan waiting for approval, and one from an older runtime.
 export function probeApprovals() {
   return probeApprovalList().map(presentApproval)
 }
@@ -60,14 +59,14 @@ function probeApprovalList() {
   const issue = { title: 'Nightly: proxy test times out on Windows', labels: ['flaky', 'windows', 'ci'], body: 'The proxy test timed out in 3 of the last 5 nightly runs on the Windows runner. Every failure waits on the same socket read.\n\nLast failure: run 4512, job windows-x64, step test:proxy.\n\nSuspect the loopback proxy starts after the test opens its socket.', assignee: null, milestone: 'v0.4' }
   return [
     { approval_id: 'run-30:gate-1', agent_id: TRIAGE, agent_name: 'Nightly test triage', runtime_id: BOX, run_id: 'run-30', gate_id: 'gate-1', thread_id: 'thread-a4', state: 'pending', created_at: at(9), answered_at: null, answered_by: null,
-      request: { gate_id: 'gate-1', kind: 'select', title: 'Allow mcp__tracker__create_issue? This agent asks before it changes anything.', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] },
-      rule: { request_kind: 'tool', resource: { type: 'tool', name: 'mcp__tracker__create_issue', input: issue } }, summary: 'mcp__tracker__create_issue', answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'] },
+      request: { gate_id: 'gate-1', kind: 'select', title: 'Allow mcp__tracker__create_issue? This agent asks before it changes anything.', options: ['Allow once', 'Deny'] },
+      rule: { request_kind: 'tool', resource: { type: 'tool', name: 'mcp__tracker__create_issue', input: issue } }, summary: 'mcp__tracker__create_issue', answers: ['allow_once', 'deny'] },
     { approval_id: 'run-21:gate-2', agent_id: EDITOR, agent_name: 'Release editor', runtime_id: STUDIO, run_id: 'run-21', gate_id: 'gate-2', thread_id: 'thread-a3', state: 'pending', created_at: at(4), answered_at: null, answered_by: null,
-      request: { gate_id: 'gate-2', kind: 'select', title: 'Allow bash `git tag v0.4.0` in /Users/sam/release? An ask-first rule names this.', options: ['Allow once', 'Allow for this thread', 'Deny'] },
-      rule: command(['bash', 'git tag v0.4.0'], '/Users/sam/release'), summary: 'bash `git tag v0.4.0` in /Users/sam/release', answers: ['allow_once', 'allow_thread', 'deny'] },
+      request: { gate_id: 'gate-2', kind: 'select', title: 'Allow bash `git tag v0.4.0` in /Users/sam/release? This agent asks before it changes anything.', options: ['Allow once', 'Deny'] },
+      rule: command(['bash', 'git tag v0.4.0'], '/Users/sam/release'), summary: 'bash `git tag v0.4.0` in /Users/sam/release', answers: ['allow_once', 'deny'] },
     { approval_id: 'h-4:gate-3', agent_id: INBOX, agent_name: 'Inbox triage', runtime_id: LAPTOP, run_id: 'h-4', gate_id: 'gate-3', thread_id: 'thread-a2', state: 'pending', created_at: at(2), answered_at: null, answered_by: null,
-      request: { gate_id: 'gate-3', kind: 'select', title: `Allow bash \`git push origin main\` in ${INBOX_PATH}? This agent asks before it changes anything.`, options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'], policy: { ...pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}` } },
-      rule: pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}`, answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'],
+      request: { gate_id: 'gate-3', kind: 'select', title: `Allow bash \`git push origin main\` in ${INBOX_PATH}? This agent asks before it changes anything.`, options: ['Allow once', 'Deny'], policy: { ...pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}` } },
+      rule: pushRule, summary: `bash \`git push origin main\` in ${INBOX_PATH}`, answers: ['allow_once', 'deny'],
       reason: 'Auto review paused this: it pushes to the main branch, which the instructions never ask for.' },
     { approval_id: 'run-2:gate-5', agent_id: SCOUT, agent_name: 'Lead scout', runtime_id: LAPTOP, run_id: 'run-2', gate_id: 'gate-5', thread_id: 'thread-a1', state: 'pending', created_at: at(1), answered_at: null, answered_by: null,
       request: { gate_id: 'gate-5', kind: 'select', title: 'Approve this plan?', options: ['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'], policy: { request_kind: 'tool', resource: { type: 'tool', name: 'plan_submit', input: {} }, summary: '1. Search the CRM for leads created this week.', plan: SCOUT_PLAN } },
@@ -95,11 +94,7 @@ function seeded() {
     id: SCOUT, name: 'Lead scout', label: 'Researcher', instructions: 'Find new leads in the CRM each weekday morning, check them against the target list and summarize the promising ones in leads.md.',
     avatar: { seed: 'scout', style: 'muniment-v2' }, template: null, projectId: null, schedule: { cadence: 'weekdays', enabled: true, time: '09:00', weekday: 0 },
     model: { provider: 'ollama', id: 'qwen3:8b', thinking: 'medium' }, tools: { disabled: ['powershell'] }, skills: ['review'],
-    permissions: {
-      mode: 'manual',
-      always_allow: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git status'], working_directory: '/Users/alice/Documents/muniment/agents/Lead-scout' } }],
-      ask_first: [{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__crm__delete_lead', input: { id: 'lead-1' } } }],
-    },
+    permissions: { mode: 'manual' },
     primary_runtime: null, messaging: { allow: [INBOX] }, paused_reason: null,
     activity: ACTIVITY[SCOUT],
     routines: [
@@ -324,13 +319,10 @@ const newestFirst = (a, b) => b.updated_at.localeCompare(a.updated_at)
 
 // Core's permission modes and each runtime's permission settings. Bypass is
 // on and is the default mode, as core starts every runtime.
-const MODES = [{"available": true, "description": "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.", "id": "manual", "title": "Ask before changes"}, {"available": true, "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "id": "edit_auto", "title": "Edit automatically"}, {"available": true, "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "id": "plan", "title": "Plan first"}, {"available": true, "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "id": "auto", "title": "Auto review"}, {"available": true, "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "id": "dont_ask", "title": "Don't ask"}, {"available": true, "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.", "id": "bypass", "title": "Bypass permissions"}]
+const MODES = [{"available": true, "description": "Reads and read-only commands run. Edits, other commands, web and MCP calls ask first.", "id": "manual", "title": "Ask before changes"}, {"available": true, "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "id": "edit_auto", "title": "Edit automatically"}, {"available": true, "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "id": "plan", "title": "Plan first"}, {"available": true, "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "id": "auto", "title": "Auto review"}, {"available": true, "description": "Reads run. Everything else is denied without asking.", "id": "dont_ask", "title": "Don't ask"}, {"available": true, "description": "Everything runs except critical commands, which ask first.", "id": "bypass", "title": "Bypass permissions"}]
 function permissionSettings(store, runtime) {
   store.permissions ??= {
     default_thread_mode: 'bypass', default_agent_mode: 'bypass', bypass_enabled: true, unattended_timeout_seconds: 14400,
-    deny: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push --force'], working_directory: '/Users/alice/Documents/muniment' } }],
-    ask_first: [{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__mail__send', input: {} } }],
-    always_allow: [{ request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git status'], working_directory: '/Users/alice/Documents/muniment' } }],
   }
   return store.permissions
 }
@@ -390,7 +382,7 @@ export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
     // A new agent is saved in the default agent mode.
     if (!body.agent.id && !agent.permissions?.mode) {
       const settings = permissionSettings(store, runtime)
-      agent.permissions = { always_allow: [], ask_first: [], ...agent.permissions, mode: settings.bypass_enabled || settings.default_agent_mode !== 'bypass' ? settings.default_agent_mode : 'manual' }
+      agent.permissions = { ...agent.permissions, mode: settings.bypass_enabled || settings.default_agent_mode !== 'bypass' ? settings.default_agent_mode : 'manual' }
     }
     store.agents = [...store.agents.filter((entry) => entry.id !== agent.id), agent]
     return { agent: clone(agent) }

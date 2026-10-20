@@ -111,7 +111,7 @@ fn gate_facts(gate: &Value) -> GateFacts {
             answers,
         };
     };
-    // A plan gate names no request a rule could allow.
+    // A plan gate names no tool call request.
     let rule = if policy.plan.is_none() {
         Some(crate::permission_gate::PolicyRequest {
             request_kind: policy.request_kind,
@@ -133,7 +133,7 @@ fn gate_facts(gate: &Value) -> GateFacts {
 }
 
 /// The gate answer a client's answer names: an answer id the approval
-/// offers, such as `always_allow_agent`, or a gate answer itself.
+/// offers, such as `allow_once`, or a gate answer itself.
 fn resolve_answer(approval: &Approval, answer: &Value) -> Result<ChatPermissionAnswer, String> {
     if let Some(id) = answer.as_str() {
         if !approval.answers.iter().any(|offered| offered == id) {
