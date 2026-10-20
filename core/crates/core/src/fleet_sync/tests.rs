@@ -143,10 +143,6 @@ fn a_joining_member_takes_the_fleets_preferences_and_adds_its_own() {
     }
 }
 
-fn request(path: &str) -> Value {
-    json!({"request_kind": "path", "resource": {"type": "path", "path": path, "operation": "read"}})
-}
-
 fn save_permissions(member: &TestMember, body: Value) {
     crate::permission_gate::settings::operation(&member.profile, "permission.settings_save", body)
         .unwrap();
@@ -190,7 +186,6 @@ fn the_settings_scope_names_each_permission_setting_sync_leaves_home() {
             Value::Bool(on) => json!(!on),
             Value::Number(number) => json!(number.as_u64().unwrap() + 60),
             Value::String(_) => json!("plan"),
-            Value::Array(_) => json!([request("/scope")]),
             other => panic!("classify the permission setting {field}: {other}"),
         };
         let mut settings = base.clone();
@@ -208,7 +203,7 @@ fn the_settings_scope_names_each_permission_setting_sync_leaves_home() {
 }
 
 #[test]
-fn permission_rules_keep_a_concurrent_add_and_bypass_stays_local() {
+fn permission_settings_reach_every_member_and_bypass_stays_local() {
     let members = fleet();
     let [a, b, c] = &members;
     save_permissions(
@@ -216,10 +211,7 @@ fn permission_rules_keep_a_concurrent_add_and_bypass_stays_local() {
         json!({
             "bypass_enabled": false,
             "default_thread_mode": "edit_auto",
-            "unattended_timeout_seconds": 7200,
-            "deny": [request("/secret")],
-            "ask_first": [request("/ask")],
-            "always_allow": [request("/notes")]
+            "unattended_timeout_seconds": 7200
         }),
     );
     settle(&members);
@@ -227,38 +219,12 @@ fn permission_rules_keep_a_concurrent_add_and_bypass_stays_local() {
         let settings = permissions(member);
         assert_eq!(settings["default_thread_mode"], "edit_auto");
         assert_eq!(settings["unattended_timeout_seconds"], 7200);
-        assert_eq!(settings["deny"], json!([request("/secret")]));
-        assert_eq!(settings["ask_first"], json!([request("/ask")]));
-        assert_eq!(settings["always_allow"], json!([request("/notes")]));
         // Bypass stays as each machine set it.
         assert_eq!(settings["bypass_enabled"], true);
     }
     assert_eq!(permissions(a)["bypass_enabled"], false);
     for member in &members {
         assert!(!record_text(member, permissions::CLASS).contains("bypass"));
-    }
-
-    // A and B add the same deny rule before they hear from each other, then
-    // A removes it: B's add keeps it.
-    save_permissions(a, json!({"deny": [request("/secret"), request("/keys")]}));
-    sync_all(&a.records());
-    save_permissions(b, json!({"deny": [request("/secret"), request("/keys")]}));
-    sync_all(&b.records());
-    save_permissions(a, json!({"deny": [request("/secret")]}));
-    settle(&members);
-    for member in &members {
-        assert_eq!(
-            permissions(member)["deny"],
-            json!([request("/secret"), request("/keys")])
-        );
-    }
-
-    // Removals of an ask-first and an always-allow rule reach every member.
-    save_permissions(c, json!({"ask_first": [], "always_allow": []}));
-    settle(&members);
-    for member in &members {
-        assert_eq!(permissions(member)["ask_first"], json!([]));
-        assert_eq!(permissions(member)["always_allow"], json!([]));
     }
     assert_quiet(&members);
 }

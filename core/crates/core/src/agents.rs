@@ -98,42 +98,13 @@ impl<'de> Deserialize<'de> for MessagingAllow {
         }
     }
 }
-/// An agent's permission profile, in the thread permission policy's own
-/// terms: a global permission mode and exact policy requests that hold in
-/// every thread the agent owns. A `deny` request refuses, and an
-/// `ask_first` request asks even when an `always_allow` request, or a
-/// thread's own answer, allows it. Without a mode the agent runs in the
-/// runtime's default agent mode.
+/// An agent's permission profile: the permission mode every thread the
+/// agent owns runs in. Without a mode the agent runs in the runtime's
+/// default agent mode. The rule lists an older profile holds are ignored.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentPermissions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<PermissionMode>,
-    #[serde(default)]
-    pub always_allow: Vec<PolicyRequest>,
-    #[serde(default)]
-    pub ask_first: Vec<PolicyRequest>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deny: Vec<PolicyRequest>,
-}
-/// The most requests in each permission list.
-pub const MAX_PERMISSION_RULES: usize = 64;
-impl AgentPermissions {
-    /// The profile as pre-decided thread policies.
-    pub fn policies(&self, agent_id: &str) -> Vec<crate::journal::ThreadPermissionPolicyDecided> {
-        crate::permission_gate::rule_policies(
-            &format!("agent:{agent_id}"),
-            &self.deny,
-            &self.ask_first,
-            &self.always_allow,
-        )
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        for requests in [&self.always_allow, &self.ask_first, &self.deny] {
-            crate::permission_gate::validate_rules(requests, MAX_PERMISSION_RULES)?;
-        }
-        Ok(())
-    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentMessaging {
@@ -595,9 +566,6 @@ fn validate_v2(agent: &Agent) -> Result<(), String> {
             return Err(format!("Select at most {MAX_SKILLS} installed skills."));
         }
     }
-    if let Some(permissions) = &agent.permissions {
-        permissions.validate()?;
-    }
     if let Some(runtime) = &agent.primary_runtime {
         if runtime.is_empty()
             || runtime.len() > 64
@@ -825,23 +793,6 @@ pub(crate) fn save_definition(
     persist_state(profile, &state)?;
     apply_routine_state(&mut agent, &state);
     Ok(agent)
-}
-/// Appends one exact request to an agent's `always_allow` through the agent
-/// save path. A request the agent's `ask_first` names is refused, since
-/// ask-first outranks every allow; one already listed changes nothing.
-pub fn always_allow(profile: &Path, id: &str, request: PolicyRequest) -> Result<Agent, String> {
-    let mut agent = get(profile, id)?;
-    let permissions = agent
-        .permissions
-        .get_or_insert_with(AgentPermissions::default);
-    if permissions.ask_first.contains(&request) {
-        return Err("An ask-first rule covers this action, so it still asks.".into());
-    }
-    if permissions.always_allow.contains(&request) {
-        return read(profile, id);
-    }
-    permissions.always_allow.push(request);
-    save(profile, agent)
 }
 /// The earliest next fire of an agent's enabled cron routines.
 pub fn next_routine_fire(agent: &Agent, after: chrono::DateTime<chrono::Utc>) -> Option<i64> {
@@ -1198,12 +1149,9 @@ pub fn thread_launch(
     };
     let rules = agent.permissions.clone().unwrap_or_default();
     let settings = crate::permission_gate::settings::load(profile);
-    let mut policies = settings.policies();
-    policies.extend(rules.policies(&agent.id));
     let permissions = crate::permission_gate::RunPermissions {
         mode: settings.effective(rules.mode.unwrap_or(settings.default_agent_mode)),
         event_triggered: trigger.is_some_and(TriggerKind::event_triggered),
-        policies,
         bypass_enabled: settings.bypass_enabled,
         ..Default::default()
     };
@@ -2047,22 +1995,12 @@ mod tests {
             "018f0000-0000-7000-8000-000000000095"
         );
         assert_eq!(value["paused_reason"], "absence");
+        // The rule lists of an older profile load and a save drops them.
         assert_eq!(
-            value["permissions"]["always_allow"][0]["resource"]["operation"],
-            "read"
+            value["permissions"],
+            serde_json::json!({"mode": "dont_ask"})
         );
-        // The profile becomes pre-decided thread policies: allow, then ask.
-        let policies = read.permissions.as_ref().unwrap().policies(&read.id);
-        assert_eq!(policies.len(), 2);
-        assert_eq!(
-            policies[0].decision,
-            crate::journal::ThreadPermissionDecision::Allow
-        );
-        assert_eq!(
-            policies[1].decision,
-            crate::journal::ThreadPermissionDecision::Ask
-        );
-        assert_eq!(policies[1].actor, format!("agent:{}", read.id));
+        assert!(!file.contains("always_allow") && !file.contains("ask_first"));
         let any: AgentMessaging =
             serde_json::from_value(serde_json::json!({"allow": "any"})).unwrap();
         assert_eq!(any.allow, MessagingAllow::Any);
@@ -2083,16 +2021,6 @@ mod tests {
                 .contains("tools")
         );
         assert!(invalid(&|a| a.skills = Some(vec!["x".into(); 33])).contains("skills"));
-        assert!(invalid(&|a| {
-            a.permissions.as_mut().unwrap().ask_first = vec![PolicyRequest {
-                request_kind: crate::journal::ThreadPermissionRequestKind::Path,
-                resource: crate::journal::ThreadPermissionResource::Path {
-                    path: "relative/../notes.md".into(),
-                    operation: "write".into(),
-                },
-            }]
-        })
-        .contains("exact absolute path"));
         assert!(invalid(&|a| a.primary_runtime = Some("../etc".into())).contains("runtime id"));
         // A new choice of bypass is refused while bypass is off.
         crate::permission_gate::settings::operation(

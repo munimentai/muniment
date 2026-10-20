@@ -1333,14 +1333,14 @@ fn fixture_bytes() -> io::Result<BTreeMap<String, Vec<u8>>> {
     )?;
     insert(
         &mut fixtures,
-        "request-agent-approval-answer-always.json",
+        "request-agent-approval-answer-once.json",
         &Request {
             protocol: Protocol,
             request_id: id(311)?,
             operation: Operation::AgentApprovalAnswer,
             capability: "fixture-capability".into(),
             idempotency_key: None,
-            body: json!({"approval_id": FIXTURE_APPROVAL_ID, "answer": "always_allow_agent"}),
+            body: json!({"approval_id": FIXTURE_APPROVAL_ID, "answer": "allow_once"}),
         },
     )?;
     insert(
@@ -2019,32 +2019,21 @@ fn fixture_permission_modes() -> serde_json::Value {
             {"id": "edit_auto", "title": "Edit automatically", "description": "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.", "available": true},
             {"id": "plan", "title": "Plan first", "description": "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.", "available": true},
             {"id": "auto", "title": "Auto review", "description": "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.", "available": true},
-            {"id": "dont_ask", "title": "Don't ask", "description": "Only reads and always-allowed actions run. Everything else is denied without asking.", "available": true},
-            {"id": "bypass", "title": "Bypass permissions", "description": "Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.", "available": true}
+            {"id": "dont_ask", "title": "Don't ask", "description": "Reads run. Everything else is denied without asking.", "available": true},
+            {"id": "bypass", "title": "Bypass permissions", "description": "Everything runs except critical commands, which ask first.", "available": true}
         ],
         "default_thread_mode": "bypass",
         "default_agent_mode": "bypass"
     })
 }
 
-/// The runtime's permission settings, with one global rule of each kind.
+/// The runtime's permission settings.
 fn fixture_permission_settings(timeout: u64) -> serde_json::Value {
     json!({
         "default_thread_mode": "bypass",
         "default_agent_mode": if timeout == PERMISSION_DEFAULT_TIMEOUT { "bypass" } else { "edit_auto" },
         "bypass_enabled": true,
-        "unattended_timeout_seconds": timeout,
-        "deny": [{"request_kind": "command", "resource": {
-            "type": "command",
-            "arguments": ["bash", "git push --force"],
-            "working_directory": "/work/agents/Lead-scout"
-        }}],
-        "ask_first": [{"request_kind": "command", "resource": fixture_push_resource()}],
-        "always_allow": [{"request_kind": "tool", "resource": {
-            "type": "tool",
-            "name": "mcp__leads__search_leads",
-            "input": {"stage": "new"}
-        }}]
+        "unattended_timeout_seconds": timeout
     })
 }
 
@@ -2408,7 +2397,7 @@ fn fixture_approval(state: &str) -> serde_json::Value {
             "gate_id": "019965a0-0000-7000-8000-0000000000b4",
             "kind": "select",
             "title": "Run `git push origin main` in Lead-scout? Auto review paused this: The request does not ask to publish the branch.",
-            "options": ["Allow once", "Allow for this thread", "Always allow for this agent", "Deny"],
+            "options": ["Allow once", "Deny"],
             "policy": {
                 "request_kind": "command",
                 "resource": fixture_push_resource(),
@@ -2427,7 +2416,7 @@ fn fixture_approval(state: &str) -> serde_json::Value {
             "details": [{"label": "Folder", "value": "/work/agents/Lead-scout", "mono": true}]
         },
         "reason": "Auto review paused this: The request does not ask to publish the branch.",
-        "answers": ["allow_once", "allow_thread", "always_allow_agent", "deny"],
+        "answers": ["allow_once", "deny"],
         "state": state,
         "created_at": "2026-01-01T14:01:00Z",
         "answered_at": if state == "pending" { serde_json::Value::Null } else { json!("2026-01-01T14:01:30Z") },
@@ -2750,17 +2739,7 @@ fn fixture_agent() -> serde_json::Value {
         "model": {"provider": "local", "id": "example-model", "thinking": "medium"},
         "tools": {"disabled": ["powershell"]},
         "skills": ["review"],
-        "permissions": {
-            "mode": "manual",
-            "always_allow": [{
-                "request_kind": "command",
-                "resource": {"type": "command", "arguments": ["bash", "git status"], "working_directory": "/work/agents/Lead-scout"}
-            }],
-            "ask_first": [{
-                "request_kind": "tool",
-                "resource": {"type": "tool", "name": "mcp__crm__delete_lead", "input": {"id": "lead-1"}}
-            }]
-        },
+        "permissions": {"mode": "manual"},
         "primary_runtime": null,
         "messaging": {"allow": "any"},
         "routines": [{
@@ -3274,7 +3253,7 @@ mod tests {
             "response-fleet-sync-status.json",
             "response-thread-history-fetch.json",
             "request-run-chat-events-swarm-live.json",
-            "request-agent-approval-answer-always.json",
+            "request-agent-approval-answer-once.json",
             "response-permission-modes.json",
             "response-permission-settings.json",
             "response-permission-settings-save.json",

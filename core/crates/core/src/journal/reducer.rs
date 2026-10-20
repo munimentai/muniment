@@ -486,15 +486,13 @@ pub struct PermissionGate {
     pub gate_id: String,
     #[serde(flatten)]
     pub request: PermissionRequest,
-    /// The exact policy request an agent permission gate asks about, which
-    /// an allow answer journals or appends to the agent's profile.
+    /// The exact policy request an agent permission gate asks about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<Box<GatePolicy>>,
 }
 
-/// The exact `{request_kind, resource}` one agent tool call makes, as the
-/// thread permission policy and the agent's `always_allow` rules name it,
-/// and a short human summary of the operation and its inputs.
+/// The exact `{request_kind, resource}` one agent tool call makes, and a
+/// short human summary of the operation and its inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatePolicy {
     pub request_kind: super::ThreadPermissionRequestKind,

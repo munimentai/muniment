@@ -1,7 +1,6 @@
 //! The runtime's permission settings: the default modes of new threads and
-//! agents, whether `bypass` may be chosen, how long an unattended run waits
-//! for an answer, and the global rules that hold in every thread. They live
-//! in `<profile>/permission-settings.json`.
+//! agents, whether `bypass` may be chosen, and how long an unattended run
+//! waits for an answer. They live in `<profile>/permission-settings.json`.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -9,10 +8,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{PermissionMode, PolicyRequest, RunPermissions};
-use crate::journal::{
-    ThreadPermissionAnswerSource, ThreadPermissionDecision, ThreadPermissionPolicyDecided,
-};
+use super::{PermissionMode, RunPermissions};
 
 pub const SETTINGS_FILE: &str = "permission-settings.json";
 /// How long an unattended run waits for an answer before its action is
@@ -20,8 +16,6 @@ pub const SETTINGS_FILE: &str = "permission-settings.json";
 pub const DEFAULT_UNATTENDED_TIMEOUT_SECONDS: u64 = 4 * 60 * 60;
 const MIN_UNATTENDED_TIMEOUT_SECONDS: u64 = 60;
 const MAX_UNATTENDED_TIMEOUT_SECONDS: u64 = 7 * 24 * 60 * 60;
-/// The most requests in each global rule list.
-pub const MAX_GLOBAL_RULES: usize = 64;
 
 static WRITE: Mutex<()> = Mutex::new(());
 
@@ -37,17 +31,11 @@ pub struct PermissionSettings {
     /// Whether `bypass` may be chosen. On unless the owner turns it off.
     pub bypass_enabled: bool,
     pub unattended_timeout_seconds: u64,
-    /// Exact requests every thread refuses.
-    pub deny: Vec<PolicyRequest>,
-    /// Exact requests every thread asks before.
-    pub ask_first: Vec<PolicyRequest>,
-    /// Exact requests every thread runs without asking.
-    pub always_allow: Vec<PolicyRequest>,
 }
 
 /// The settings file as written. A field it leaves out takes its default:
 /// bypass on, and each default mode `bypass` while bypass is on, else
-/// `manual`.
+/// `manual`. The rule lists an older file holds are read and dropped.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredSettings {
@@ -56,12 +44,12 @@ struct StoredSettings {
     bypass_enabled: Option<bool>,
     #[serde(default = "default_timeout")]
     unattended_timeout_seconds: u64,
-    #[serde(default)]
-    deny: Vec<PolicyRequest>,
-    #[serde(default)]
-    ask_first: Vec<PolicyRequest>,
-    #[serde(default)]
-    always_allow: Vec<PolicyRequest>,
+    #[serde(default, rename = "deny")]
+    _deny: serde::de::IgnoredAny,
+    #[serde(default, rename = "ask_first")]
+    _ask_first: serde::de::IgnoredAny,
+    #[serde(default, rename = "always_allow")]
+    _always_allow: serde::de::IgnoredAny,
 }
 
 impl From<StoredSettings> for PermissionSettings {
@@ -73,9 +61,6 @@ impl From<StoredSettings> for PermissionSettings {
             default_agent_mode: stored.default_agent_mode.unwrap_or(fallback),
             bypass_enabled,
             unattended_timeout_seconds: stored.unattended_timeout_seconds,
-            deny: stored.deny,
-            ask_first: stored.ask_first,
-            always_allow: stored.always_allow,
         }
     }
 }
@@ -96,9 +81,6 @@ impl Default for PermissionSettings {
             default_agent_mode: PermissionMode::Bypass,
             bypass_enabled: true,
             unattended_timeout_seconds: DEFAULT_UNATTENDED_TIMEOUT_SECONDS,
-            deny: Vec::new(),
-            ask_first: Vec::new(),
-            always_allow: Vec::new(),
         }
     }
 }
@@ -120,11 +102,6 @@ impl PermissionSettings {
         }
     }
 
-    /// The global rules as pre-decided thread policies.
-    pub fn policies(&self) -> Vec<ThreadPermissionPolicyDecided> {
-        super::rule_policies("global", &self.deny, &self.ask_first, &self.always_allow)
-    }
-
     fn validate(&self) -> Result<(), String> {
         for mode in [self.default_thread_mode, self.default_agent_mode] {
             if let Some(reason) = self.unavailable(mode) {
@@ -135,9 +112,6 @@ impl PermissionSettings {
             .contains(&self.unattended_timeout_seconds)
         {
             return Err("Choose an unattended wait between one minute and seven days.".into());
-        }
-        for requests in [&self.deny, &self.ask_first, &self.always_allow] {
-            super::validate_rules(requests, MAX_GLOBAL_RULES)?;
         }
         Ok(())
     }
@@ -181,29 +155,6 @@ pub fn save(profile: &Path, settings: PermissionSettings) -> Result<PermissionSe
     Ok(settings)
 }
 
-/// Appends one exact request to the global `always_allow`, so every thread,
-/// agent and fleet member runs it without asking. A request the global
-/// `ask_first` names is refused, since ask-first outranks every allow; one
-/// already listed changes nothing.
-pub fn always_allow(profile: &Path, request: PolicyRequest) -> Result<PermissionSettings, String> {
-    let mut settings = load(profile);
-    if settings.ask_first.contains(&request) {
-        return Err("An ask-first rule covers this action, so it still asks.".into());
-    }
-    if settings.always_allow.contains(&request) {
-        return Ok(settings);
-    }
-    if settings.always_allow.len() >= MAX_GLOBAL_RULES {
-        return Err(format!(
-            "Always allow holds {MAX_GLOBAL_RULES} rules. Remove one in Permissions, then try again."
-        ));
-    }
-    settings.always_allow.push(request);
-    let saved = save(profile, settings)?;
-    crate::fleet_sync::changed(profile, crate::fleet_sync::PERMISSIONS_CLASS);
-    Ok(saved)
-}
-
 /// The modes for a picker, in menu order, with whether each can be chosen.
 pub fn modes(settings: &PermissionSettings) -> Value {
     let modes: Vec<Value> = PermissionMode::ALL
@@ -240,13 +191,11 @@ pub fn new_agent_mode(profile: &Path) -> PermissionMode {
     settings.effective(settings.default_agent_mode)
 }
 
-/// The gate of a thread that belongs to no agent: the default thread mode
-/// and the global rules.
+/// The gate of a thread that belongs to no agent: the default thread mode.
 pub fn thread_permissions(profile: &Path) -> RunPermissions {
     let settings = load(profile);
     RunPermissions {
         mode: settings.effective(settings.default_thread_mode),
-        policies: settings.policies(),
         bypass_enabled: settings.bypass_enabled,
         ..RunPermissions::default()
     }
@@ -280,9 +229,6 @@ pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, 
         default_agent_mode: Option<PermissionMode>,
         bypass_enabled: Option<bool>,
         unattended_timeout_seconds: Option<u64>,
-        deny: Option<Vec<PolicyRequest>>,
-        ask_first: Option<Vec<PolicyRequest>>,
-        always_allow: Option<Vec<PolicyRequest>>,
     }
     let invalid = |_| "The request is invalid.".to_string();
     match operation {
@@ -326,37 +272,11 @@ pub fn operation(profile: &Path, operation: &str, body: Value) -> Result<Value, 
             if let Some(seconds) = change.unattended_timeout_seconds {
                 settings.unattended_timeout_seconds = seconds;
             }
-            if let Some(rules) = change.deny {
-                settings.deny = rules;
-            }
-            if let Some(rules) = change.ask_first {
-                settings.ask_first = rules;
-            }
-            if let Some(rules) = change.always_allow {
-                settings.always_allow = rules;
-            }
             let saved = save(profile, settings)?;
             crate::fleet_sync::changed(profile, crate::fleet_sync::PERMISSIONS_CLASS);
             Ok(json!(saved))
         }
         _ => Err("The permission operation is unknown.".into()),
-    }
-}
-
-/// Builds the pre-decided policies of one rule set, actor `actor`.
-pub(super) fn decided(
-    actor: &str,
-    request: &PolicyRequest,
-    decision: ThreadPermissionDecision,
-) -> ThreadPermissionPolicyDecided {
-    ThreadPermissionPolicyDecided {
-        policy_id: uuid::Uuid::now_v7().to_string(),
-        decision,
-        request_kind: request.request_kind.clone(),
-        resource: request.resource.clone(),
-        actor: actor.to_owned(),
-        answer_source: ThreadPermissionAnswerSource::Native,
-        gate_id: None,
     }
 }
 
@@ -371,30 +291,32 @@ mod tests {
     }
 
     #[test]
-    fn always_allow_adds_one_global_rule_that_new_threads_read_and_ask_first_refuses() {
+    fn an_older_file_with_rule_lists_loads_and_a_save_drops_them() {
         let profile = profile();
-        let push = super::super::tool_request(
-            "bash",
-            &json!({"command": "git push origin main"}),
-            Path::new("/work"),
-        );
-        always_allow(&profile, push.clone()).unwrap();
-        always_allow(&profile, push.clone()).unwrap();
-        assert_eq!(load(&profile).always_allow, vec![push.clone()]);
-        // A thread that starts later, as after a restart, carries the rule.
-        let permissions = thread_permissions(&profile);
-        assert!(permissions.policies.iter().any(|policy| {
-            policy.decision == ThreadPermissionDecision::Allow && policy.resource == push.resource
-        }));
-
-        let delete =
-            super::super::tool_request("mcp__crm__delete", &json!({"id": 1}), Path::new("/work"));
-        let mut settings = load(&profile);
-        settings.ask_first.push(delete.clone());
+        let push = json!({"request_kind": "command", "resource": {"type": "command",
+            "arguments": ["bash", "git push"], "working_directory": "/work"}});
+        std::fs::write(
+            profile.join(SETTINGS_FILE),
+            json!({"default_thread_mode": "auto", "deny": [push], "ask_first": [push],
+                "always_allow": [push]})
+            .to_string(),
+        )
+        .unwrap();
+        let settings = load(&profile);
+        assert_eq!(settings.default_thread_mode, PermissionMode::Auto);
         save(&profile, settings).unwrap();
-        assert!(always_allow(&profile, delete)
-            .unwrap_err()
-            .contains("ask-first"));
+        let written: Value =
+            serde_json::from_slice(&std::fs::read(profile.join(SETTINGS_FILE)).unwrap()).unwrap();
+        for field in ["deny", "ask_first", "always_allow"] {
+            assert!(written.get(field).is_none(), "{field}");
+        }
+        // A save that still names a rule list is refused.
+        assert!(operation(
+            &profile,
+            "permission.settings_save",
+            json!({"always_allow": [push]})
+        )
+        .is_err());
         std::fs::remove_dir_all(profile).unwrap();
     }
 

@@ -345,8 +345,7 @@ pub struct Approval {
     #[serde(default)]
     pub thread_id: Option<String>,
     pub request: Value,
-    /// The exact `{request_kind, resource}` an agent gate asks about, as
-    /// the agent profile's `always_allow` rules name it.
+    /// The exact `{request_kind, resource}` an agent gate asks about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<crate::permission_gate::PolicyRequest>,
     /// A short human summary of the operation and its inputs.
@@ -362,7 +361,7 @@ pub struct Approval {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     /// The answer ids `agent.approval_answer` takes for this gate, such as
-    /// `allow_once` and `always_allow_agent`, or `plan_edit_auto` for a plan.
+    /// `allow_once` and `deny`, or `plan_edit_auto` for a plan.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<String>,
     /// `pending`, `answered` or `closed`.

@@ -1,9 +1,9 @@
 //! Permission gate coordination for a chat run, and the permission modes
-//! and rules that decide each tool call.
+//! that decide each tool call.
 //!
 //! A Pi extension-UI request opens a gate. The gate stays open until an answer
 //! arrives for its id and matches its dialog shape. This state is
-//! runtime-service state, so the rules live here rather than in the desktop
+//! runtime-service state, so the gate lives here rather than in the desktop
 //! shell.
 
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,7 @@ pub mod threads;
 pub use classifier::AutoReview;
 
 use crate::journal::pi_translation::permission_journal_payload;
-use crate::journal::{
-    ThreadPermissionDecision, ThreadPermissionPolicyDecided, ThreadPermissionRequestKind,
-    ThreadPermissionResource,
-};
+use crate::journal::{ThreadPermissionRequestKind, ThreadPermissionResource};
 use crate::sidecar::pi_chat::{
     ExtensionUiAnswer, ExtensionUiRequest, ExtensionUiResponse, PiChatEvent,
 };
@@ -173,9 +170,8 @@ pub fn coordinate_permission_answer(
 }
 
 /// A global permission mode. Threads and agents both run in one, and the
-/// same rules decide each tool call in every mode: deny rules, then
-/// ask-first rules, then protected paths and critical commands, then
-/// always-allow rules, then the mode's baseline.
+/// same order decides each tool call in every mode: critical commands, then
+/// protected paths, then the mode's baseline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
@@ -191,12 +187,11 @@ pub enum PermissionMode {
     Plan,
     /// A cheap model reviews each action that is not a read.
     Auto,
-    /// Only reads and always-allowed actions run; the rest is denied
-    /// without asking. An agent profile's old `strict` reads as this mode.
+    /// Only reads run; the rest is denied without asking. An agent
+    /// profile's old `strict` reads as this mode.
     #[serde(alias = "strict")]
     DontAsk,
-    /// Everything runs except what deny and ask-first rules, protected
-    /// paths and critical commands stop.
+    /// Everything runs except critical commands, which ask first.
     Bypass,
 }
 
@@ -239,14 +234,14 @@ impl PermissionMode {
             Self::EditAuto => "Also edits files and runs mkdir, touch, mv, cp and rm inside the working folders without asking. Everything else asks.",
             Self::Plan => "Reads and read-only commands only. The agent writes a plan, and approving it switches to the mode you pick.",
             Self::Auto => "A fast model reviews each action and runs it or pauses it for you. After 3 blocks in a row or 20 in a run, it asks instead.",
-            Self::DontAsk => "Only reads and always-allowed actions run. Everything else is denied without asking.",
-            Self::Bypass => "Everything runs except deny and ask-first rules, protected paths and critical commands. Nothing else asks first.",
+            Self::DontAsk => "Reads run. Everything else is denied without asking.",
+            Self::Bypass => "Everything runs except critical commands, which ask first.",
         }
     }
 }
 
-/// One pre-decided thread policy, without the identity a journaled
-/// decision carries: the exact request a policy matches.
+/// The exact request one tool call makes, as the gate assesses it and an
+/// approval shows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyRequest {
@@ -254,50 +249,13 @@ pub struct PolicyRequest {
     pub resource: ThreadPermissionResource,
 }
 
-/// Checks one rule list: at most `max` exact requests.
-pub fn validate_rules(requests: &[PolicyRequest], max: usize) -> Result<(), String> {
-    if requests.len() > max {
-        return Err(format!("Keep each permission list under {max} entries."));
-    }
-    if !requests.iter().all(|request| {
-        crate::journal::thread_permission_policy::valid_policy_resource(
-            &request.request_kind,
-            &request.resource,
-        )
-    }) {
-        return Err("A permission entry names an exact absolute path, command or tool.".into());
-    }
-    Ok(())
-}
-
-/// The pre-decided policies of one rule set, as `actor` decided them.
-pub fn rule_policies(
-    actor: &str,
-    deny: &[PolicyRequest],
-    ask_first: &[PolicyRequest],
-    always_allow: &[PolicyRequest],
-) -> Vec<ThreadPermissionPolicyDecided> {
-    let with = |requests: &[PolicyRequest], decision: ThreadPermissionDecision| {
-        requests
-            .iter()
-            .map(|request| settings::decided(actor, request, decision.clone()))
-            .collect::<Vec<_>>()
-    };
-    let mut policies = with(always_allow, ThreadPermissionDecision::Allow);
-    policies.extend(with(ask_first, ThreadPermissionDecision::Ask));
-    policies.extend(with(deny, ThreadPermissionDecision::Deny));
-    policies
-}
-
 /// The gate one run applies: the mode it launched in, whether an outside
-/// event started it, the global and agent rules, and the folders it works
-/// in. The thread's own journaled policies and mode join these at each call.
+/// event started it, and the folders it works in. The thread's own
+/// journaled mode joins these at each call.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RunPermissions {
     pub mode: PermissionMode,
     pub event_triggered: bool,
-    /// Global rules first, then the agent's.
-    pub policies: Vec<ThreadPermissionPolicyDecided>,
     /// The folders `edit_auto` edits without asking.
     pub working_directories: Vec<PathBuf>,
     /// Folders no action reads or writes without a person's answer, such as
@@ -672,13 +630,7 @@ impl RunPermissions {
 
 /// The agent gate's answers, as the gate offers them and as
 /// `agent.approval_answer` names them.
-pub const GATE_ANSWERS: [(&str, &str); 5] = [
-    ("allow_once", "Allow once"),
-    ("allow_thread", "Allow for this thread"),
-    ("always_allow_agent", "Always allow for this agent"),
-    ("always_allow", "Always allow"),
-    ("deny", "Deny"),
-];
+pub const GATE_ANSWERS: [(&str, &str); 2] = [("allow_once", "Allow once"), ("deny", "Deny")];
 
 /// The plan gate's answers: each approval and the mode the thread then
 /// runs in, and keep planning.
@@ -749,40 +701,12 @@ pub fn gate_answer(option: &str) -> Option<&'static str> {
         })
 }
 
-/// The options the gate offers for one call. "Allow for this thread" is
-/// left out when no rule can allow the call, such as a protected path. A
-/// run of an agent offers "Always allow for this agent" and any other run
-/// "Always allow", which saves a global rule; both are left out also when an
-/// ask policy covers the call, since ask-first outranks every allow.
-pub fn gate_options(thread_rule: bool, always_rule: bool, agent: bool) -> Vec<String> {
+/// The options the gate offers for one call: allow it once or deny it.
+pub fn gate_options() -> Vec<String> {
     GATE_ANSWERS
         .iter()
-        .filter(|(id, _)| match *id {
-            "allow_thread" => thread_rule,
-            "always_allow_agent" => thread_rule && always_rule && agent,
-            "always_allow" => thread_rule && always_rule && !agent,
-            _ => true,
-        })
         .map(|(_, option)| (*option).to_owned())
         .collect()
-}
-
-/// Whether an ask policy, a global, agent or thread one, matches the
-/// request exactly.
-pub fn asks_first(
-    permissions: &RunPermissions,
-    thread_policies: &[ThreadPermissionPolicyDecided],
-    request: &PolicyRequest,
-) -> bool {
-    permissions
-        .policies
-        .iter()
-        .chain(thread_policies)
-        .any(|policy| {
-            policy.decision == ThreadPermissionDecision::Ask
-                && policy.request_kind == request.request_kind
-                && policy.resource == request.resource
-        })
 }
 
 /// The most characters of a call summary.
@@ -830,13 +754,10 @@ pub fn summary(request: &PolicyRequest) -> String {
 pub const PLAN_REFUSAL: &str =
     "Plan mode refuses changes while planning. Read what you need, then submit your plan with plan_submit.";
 
-/// Decides one tool call in `mode`: deny rules (global, agent, thread),
-/// then ask-first rules, then protected paths and critical commands, then
-/// always-allow rules, then the mode's baseline. Rules match the request
-/// exactly. `review` answers for `auto`.
+/// Decides one tool call in `mode`: critical commands, then protected
+/// paths, then the mode's baseline. `review` answers for `auto`.
 pub fn decide_tool_call(
     permissions: &RunPermissions,
-    thread_policies: &[ThreadPermissionPolicyDecided],
     mode: PermissionMode,
     request: &PolicyRequest,
     tool: &str,
@@ -844,33 +765,12 @@ pub fn decide_tool_call(
     review: &mut AutoReview,
 ) -> GateDecision {
     let mode = permissions.mode_for(Some(mode));
-    let matching = |decision: ThreadPermissionDecision| {
-        permissions
-            .policies
-            .iter()
-            .chain(thread_policies)
-            .any(|policy| {
-                policy.decision == decision
-                    && policy.request_kind == request.request_kind
-                    && policy.resource == request.resource
-            })
-    };
     let ask = |reason: &str| GateDecision::Ask {
         reason: reason.into(),
     };
     let deny = |reason: &str| GateDecision::Deny {
         reason: reason.into(),
     };
-    if matching(ThreadPermissionDecision::Deny) {
-        return deny("A deny rule refuses this action.");
-    }
-    if matching(ThreadPermissionDecision::Ask) {
-        return if mode == PermissionMode::DontAsk {
-            deny("An ask-first rule covers this action, and Don't ask mode denies instead of asking.")
-        } else {
-            ask("An ask-first rule covers this action.")
-        };
-    }
     let assessment = permissions.assess(request, tool, read_only_hint);
     let changes = matches!(
         assessment.class,
@@ -894,13 +794,10 @@ pub fn decide_tool_call(
     if mode == PermissionMode::Plan && changes {
         return deny(PLAN_REFUSAL);
     }
-    if matching(ThreadPermissionDecision::Allow) {
-        return GateDecision::Allow;
-    }
     match (mode, assessment.class) {
         (_, ActionClass::Read) | (PermissionMode::Bypass, _) => GateDecision::Allow,
         (PermissionMode::EditAuto, ActionClass::Edit { inside: true }) => GateDecision::Allow,
-        (PermissionMode::DontAsk, _) => deny("Don't ask mode denies actions that no rule allows."),
+        (PermissionMode::DontAsk, _) => deny("Don't ask mode denies everything but reads."),
         (PermissionMode::Auto, _) => match review.review(tool, &exact_summary(request)) {
             classifier::Review::Allow => GateDecision::Allow,
             classifier::Review::Pause(reason) => GateDecision::Ask { reason },
@@ -946,13 +843,6 @@ pub fn set_thread_mode(
             provenance,
         )
         .map_err(|error| error.to_string())
-}
-
-/// Whether a thread or agent rule could allow the call: protected paths
-/// and critical commands never take an allow rule.
-pub fn rules_can_allow(permissions: &RunPermissions, request: &PolicyRequest, tool: &str) -> bool {
-    let assessment = permissions.assess(request, tool, false);
-    !assessment.protected && !assessment.critical
 }
 
 #[cfg(test)]
@@ -1037,13 +927,6 @@ mod tests {
             pending.as_ref().map(|request| request.id.as_str()),
             Some("gate-2")
         );
-    }
-
-    fn policy(
-        decision: ThreadPermissionDecision,
-        request: &PolicyRequest,
-    ) -> ThreadPermissionPolicyDecided {
-        settings::decided("owner", request, decision)
     }
 
     #[test]
@@ -1209,7 +1092,6 @@ mod tests {
                 .map(|mode| {
                     letter(&decide_tool_call(
                         &folders.permissions(*mode),
-                        &[],
                         *mode,
                         request,
                         tool,
@@ -1230,7 +1112,6 @@ mod tests {
             let (request, tool) = folders.call(tool, input);
             decide_tool_call(
                 &permissions,
-                &[],
                 PermissionMode::EditAuto,
                 &request,
                 &tool,
@@ -1281,85 +1162,6 @@ mod tests {
             decide("bash", json!({"command": "echo x >> notes.md"})),
             GateDecision::Allow
         );
-        // A protected path never takes an allow rule.
-        let (request, tool) = folders.call("write", json!({"path": ".git/config"}));
-        assert!(!rules_can_allow(&permissions, &request, &tool));
-        let allowed = [policy(ThreadPermissionDecision::Allow, &request)];
-        assert!(matches!(
-            decide_tool_call(
-                &permissions,
-                &allowed,
-                PermissionMode::Manual,
-                &request,
-                &tool,
-                false,
-                &mut allow_review()
-            ),
-            GateDecision::Ask { .. }
-        ));
-    }
-
-    #[test]
-    fn rules_apply_in_order_deny_then_ask_then_allow_then_the_mode() {
-        let folders = Folders::new();
-        let (push, bash) = folders.call("bash", json!({"command": "git push"}));
-        let decide = |permissions: &RunPermissions, thread: &[ThreadPermissionPolicyDecided]| {
-            decide_tool_call(
-                permissions,
-                thread,
-                permissions.mode,
-                &push,
-                &bash,
-                false,
-                &mut AutoReview::new(None, "", false),
-            )
-        };
-        let mut permissions = folders.permissions(PermissionMode::Manual);
-        assert!(matches!(
-            decide(&permissions, &[]),
-            GateDecision::Ask { .. }
-        ));
-        // A thread allow runs it.
-        let thread_allow = [policy(ThreadPermissionDecision::Allow, &push)];
-        assert_eq!(decide(&permissions, &thread_allow), GateDecision::Allow);
-        // An agent ask-first outranks the thread allow.
-        permissions.policies = rule_policies("agent:a", &[], std::slice::from_ref(&push), &[]);
-        assert!(matches!(
-            decide(&permissions, &thread_allow),
-            GateDecision::Ask { .. }
-        ));
-        // A global deny outranks everything, bypass included.
-        let mut global = settings::PermissionSettings {
-            deny: vec![push.clone()],
-            ..Default::default()
-        }
-        .policies();
-        global.extend(permissions.policies.clone());
-        permissions.policies = global;
-        permissions.mode = PermissionMode::Bypass;
-        assert!(matches!(
-            decide(&permissions, &thread_allow),
-            GateDecision::Deny { .. }
-        ));
-        // Don't ask turns an ask-first rule into a denial.
-        let ask_only = RunPermissions {
-            mode: PermissionMode::DontAsk,
-            policies: rule_policies("global", &[], std::slice::from_ref(&push), &[]),
-            ..folders.permissions(PermissionMode::DontAsk)
-        };
-        assert!(matches!(decide(&ask_only, &[]), GateDecision::Deny { .. }));
-        // Don't ask runs what an always-allow rule names.
-        let allowed = RunPermissions {
-            policies: rule_policies("agent:a", &[], &[], std::slice::from_ref(&push)),
-            ..folders.permissions(PermissionMode::DontAsk)
-        };
-        assert_eq!(decide(&allowed, &[]), GateDecision::Allow);
-        // Plan refuses a change even when a rule allows it.
-        let planning = RunPermissions {
-            policies: rule_policies("agent:a", &[], &[], std::slice::from_ref(&push)),
-            ..folders.permissions(PermissionMode::Plan)
-        };
-        assert!(matches!(decide(&planning, &[]), GateDecision::Deny { .. }));
     }
 
     #[test]
@@ -1374,7 +1176,6 @@ mod tests {
         assert!(matches!(
             decide_tool_call(
                 &permissions,
-                &[],
                 PermissionMode::Bypass,
                 &push,
                 &bash,
@@ -1396,7 +1197,6 @@ mod tests {
         let (push, bash) = folders.call("bash", json!({"command": "git push"}));
         let decided = decide_tool_call(
             &folders.permissions(PermissionMode::Auto),
-            &[],
             PermissionMode::Auto,
             &push,
             &bash,
@@ -1424,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_names_each_call_and_offers_only_the_rules_that_can_apply() {
+    fn the_gate_names_each_call_and_offers_allow_once_or_deny() {
         let directory = std::path::Path::new("/work");
         let push = tool_request("bash", &json!({"command": "git push"}), directory);
         assert_eq!(summary(&push), "Run `git push` in work");
@@ -1444,29 +1244,7 @@ mod tests {
         assert!(!summary(&long).contains('{'));
         assert_eq!(exact_summary(&long).chars().count(), 240);
         assert!(exact_summary(&long).ends_with('…'));
-        assert_eq!(
-            gate_options(true, true, true),
-            [
-                "Allow once",
-                "Allow for this thread",
-                "Always allow for this agent",
-                "Deny"
-            ]
-        );
-        assert_eq!(
-            gate_options(true, true, false),
-            [
-                "Allow once",
-                "Allow for this thread",
-                "Always allow",
-                "Deny"
-            ]
-        );
-        assert_eq!(
-            gate_options(true, false, true),
-            ["Allow once", "Allow for this thread", "Deny"]
-        );
-        assert_eq!(gate_options(false, true, false), ["Allow once", "Deny"]);
+        assert_eq!(gate_options(), ["Allow once", "Deny"]);
         for (id, option) in GATE_ANSWERS {
             assert_eq!(gate_option(id), Some(option));
             assert_eq!(gate_answer(option), Some(id));
@@ -1477,13 +1255,5 @@ mod tests {
             assert_eq!(plan_choice(option), mode);
         }
         assert_eq!(gate_option("allow_forever"), None);
-        let ask_first = RunPermissions {
-            policies: vec![policy(ThreadPermissionDecision::Ask, &push)],
-            ..RunPermissions::default()
-        };
-        assert!(asks_first(&ask_first, &[], &push));
-        assert!(!asks_first(&ask_first, &[], &write));
-        let thread_ask = [policy(ThreadPermissionDecision::Ask, &write)];
-        assert!(asks_first(&RunPermissions::default(), &thread_ask, &write));
     }
 }

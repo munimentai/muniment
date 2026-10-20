@@ -1,6 +1,6 @@
-// Asks the runtime before each tool call whether the global, agent and
-// thread rules and the thread's permission mode allow it. A call they do not
-// settle waits for the user's answer at the run's permission gate, with the
+// Asks the runtime before each tool call whether the thread's permission
+// mode allows it. A call the mode does not settle waits for the user's
+// answer, allow once or deny, at the run's permission gate, with the
 // title and options the runtime gives. In plan mode the agent submits its
 // plan with plan_submit, and the approval picks the mode the thread
 // continues in. The runtime decides; this extension only carries the
@@ -8,11 +8,6 @@
 export default function (pi) {
   const readOnly = (name) =>
     pi.getAllTools?.().find((tool) => tool.name === name)?.annotations?.readOnlyHint === true;
-  const saves = {
-    "Allow for this thread": "muniment:permission-allow",
-    "Always allow for this agent": "muniment:permission-always",
-    "Always allow": "muniment:permission-always-global",
-  };
   // A gate nobody answered in time closes without a choice. That is not a
   // refusal, so the agent may try another way.
   const unanswered =
@@ -106,19 +101,10 @@ export default function (pi) {
     }
     const choice = await ctx.ui.select(
       verdict.title ?? `Allow ${event.toolName}? ${verdict.reason ?? ""}`.trim(),
-      Array.isArray(verdict.options) ? verdict.options : ["Allow once", "Allow for this thread", "Deny"],
+      Array.isArray(verdict.options) ? verdict.options : ["Allow once", "Deny"],
     );
     if (choice === undefined || choice === null) return { block: true, reason: unanswered };
     if (choice === "Allow once") return undefined;
-    if (saves[choice]) {
-      try {
-        const saved = JSON.parse(await ctx.ui.editor(saves[choice], JSON.stringify(call)));
-        if (saved?.saved === false) ctx.ui.notify?.(`This action ran, but the rule was not saved. ${saved.reason ?? ""}`.trim(), "warning");
-      } catch {
-        // The answer still allows this call when the policy cannot be saved.
-      }
-      return undefined;
-    }
     return { block: true, reason: "The user did not allow this action." };
   });
 }

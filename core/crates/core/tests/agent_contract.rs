@@ -107,23 +107,11 @@ fn the_run_fixtures_are_runs() {
 #[test]
 fn the_polish_fixtures_are_core_shapes() {
     use muniment_core::swarm::{Approval, DirectoryEntry};
-    // An approval carries the exact rule an agent's `always_allow` takes.
+    // An approval carries the exact request its gate asks about, and is
+    // allowed once or denied.
     let pending: Approval = round_trip(&fixture("event-agent-approval-pending.json")["body"]);
     let rule = pending.rule.clone().unwrap();
-    let agent: Agent =
-        serde_json::from_value(fixture("response-agent-read.json")["body"]["agent"].clone())
-            .unwrap();
-    let mut permissions = agent.permissions.unwrap();
-    permissions.always_allow.push(rule.clone());
-    let permissions = serde_json::to_value(&permissions).unwrap();
-    assert_eq!(
-        permissions["always_allow"][1],
-        fixture("event-agent-approval-pending.json")["body"]["rule"]
-    );
-    assert!(pending
-        .answers
-        .iter()
-        .any(|answer| answer == "always_allow_agent"));
+    assert_eq!(pending.answers, ["allow_once", "deny"]);
     let gate: muniment_core::journal::reducer::PermissionGate =
         serde_json::from_value(pending.request.clone()).unwrap();
     assert_eq!(
@@ -140,8 +128,8 @@ fn the_polish_fixtures_are_core_shapes() {
         pending.presentation.map(|shown| shown.headline)
     );
     assert_eq!(
-        fixture("request-agent-approval-answer-always.json")["body"]["answer"],
-        "always_allow_agent"
+        fixture("request-agent-approval-answer-once.json")["body"]["answer"],
+        "allow_once"
     );
     // The directory and the activity event carry the same activity.
     let entry: DirectoryEntry =
