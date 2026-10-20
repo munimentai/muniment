@@ -424,14 +424,18 @@ pub fn arrange(input: &Input) -> Sidebar {
         let agent = agent_threads
             .get(&thread.id)
             .and_then(|id| agents.get(id.as_str()));
-        let project_id = match agent {
-            Some(agent) => agent_project(agent),
-            None => input
+        // An agent's thread sits in its agent's project, or else in the
+        // catalog project it was assigned to.
+        let assigned = || {
+            input
                 .assignments
                 .get(&thread.id)
                 .filter(|project| catalog.contains_key(project.as_str()))
-                .cloned(),
+                .cloned()
         };
+        let project_id = agent
+            .and_then(|agent| agent_project(agent))
+            .or_else(assigned);
         let current = input.current.as_deref() == Some(thread.id.as_str());
         let updated = millis(&thread.updated_at);
         let read_at = input
@@ -718,6 +722,7 @@ mod tests {
                     "2026-10-18T08:50:00Z",
                 ),
                 thread("chat", "Notes", "2026-10-18T09:00:00Z"),
+                thread("filed", "Filed brief", "2026-10-18T07:00:00Z"),
             ],
             agents: vec![Agent {
                 id: "brief".into(),
@@ -727,7 +732,16 @@ mod tests {
                 color: Some("#5FB98A".into()),
                 ..Agent::default()
             }],
-            agent_threads: BTreeMap::from([("run".into(), "brief".into())]),
+            agent_threads: BTreeMap::from([
+                ("run".into(), "brief".into()),
+                ("filed".into(), "brief".into()),
+            ]),
+            projects: vec![Project {
+                id: "p".into(),
+                name: "Drive".into(),
+                owner: None,
+            }],
+            assignments: BTreeMap::from([("filed".into(), "p".into())]),
             working: BTreeSet::from(["run".into()]),
             read_baseline: Some("2026-10-19T00:00:00Z".into()),
             query: "morning".into(),
@@ -743,9 +757,19 @@ mod tests {
             vec![
                 ("chat", Kind::Thread),
                 ("run", Kind::Thread),
-                ("home", Kind::Thread)
+                ("home", Kind::Thread),
+                ("p", Kind::Project)
             ],
             "no agent group: each thread is a row, newest activity first"
+        );
+        let filed = &project(&sidebar, "p").threads[0];
+        assert_eq!(
+            filed.thread_id, "filed",
+            "a thread filed in a project stays there"
+        );
+        assert_eq!(
+            filed.agent.as_ref().map(|agent| agent.id.as_str()),
+            Some("brief")
         );
         let run = &project(&sidebar, "run").threads[0];
         assert_eq!(
@@ -764,7 +788,7 @@ mod tests {
         assert_eq!(project(&sidebar, "chat").threads[0].agent, None);
         assert_eq!(
             ids(&sidebar.results),
-            vec!["run", "home"],
+            vec!["run", "home", "filed"],
             "search finds an agent's rows by its name"
         );
     }
