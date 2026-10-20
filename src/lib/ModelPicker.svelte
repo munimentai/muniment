@@ -4,8 +4,8 @@
   // The composer's model picker: a column of provider marks, every connected
   // provider's current models under its name with its older ones folded under
   // Legacy models, the model in use marked, a search over every model, and
-  // Manage models at its foot. A mark scrolls to its provider. Each model
-  // row moves the model between the two lists.
+  // Manage models at its foot. A mark filters the list to its provider. Each
+  // model row moves the model between the two lists.
   import { onMount, tick } from 'svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import LucideIcon from './LucideIcon.svelte'
@@ -30,8 +30,8 @@
     }
   }))
   const inUse = (model) => current?.provider === model.provider && current?.model === model.choice
-  // The picker opens scrolled to the provider of the model in use. The saved
-  // model always stays in its provider's current list.
+  // The picker opens on the provider of the model in use. The saved model
+  // always stays in its provider's current list.
   let picked = $state(null)
   let legacyOpen = $state(new Set())
   let list = $state()
@@ -39,15 +39,8 @@
   let tip = $state(null)
 
   onMount(() => {
-    void tick().then(() => {
-      search?.focus()
-      if (selected && selected !== groups[0]) reveal(selected)
-    })
+    void tick().then(() => search?.focus())
   })
-
-  function reveal(group) {
-    list?.querySelector(`[data-group="${CSS.escape(group.id)}"]`)?.scrollIntoView?.({ block: 'start' })
-  }
 
   function toggleLegacy(group) {
     const next = new Set(legacyOpen)
@@ -66,7 +59,7 @@
     picked = group.id
     query = ''
     await tick()
-    reveal(group)
+    list?.scrollTo?.({ top: 0 })
   }
 
   // Up and down arrows move between the provider marks.
@@ -119,22 +112,21 @@
             <ul>{#each [...group.shown, ...group.legacy] as model (model.id)}{@render row(group, model)}{/each}</ul>
           </section>
         {/each}
-      {:else}
-        {#each groups as group (group.id)}
-          {@const open = legacyOpen.has(group.id)}
-          <section class="picker-group" aria-label={group.label} data-group={group.id}>
-            {#if group.manage}<button type="button" class="quiet group-manage" aria-label="Manage model routing" onclick={onrouting}>Manage</button>{/if}
-            <h4>{@render mark(group)}{group.label}</h4>
-            <ul>{#each group.shown as model (model.id)}{@render row(group, model)}{/each}</ul>
-            {#if group.legacy.length}
-              <button type="button" class="quiet legacy-toggle" aria-expanded={open} onclick={() => toggleLegacy(group)}>
-                <span class="legacy-text"><span>Legacy models</span><span class="legacy-count">{group.legacy.length} {group.legacy.length === 1 ? 'model' : 'models'}</span></span>
-                <LucideIcon name={open ? 'chevron-down' : 'chevron-right'} variant="action" size={14} />
-              </button>
-              {#if open}<ul aria-label="Legacy models">{#each group.legacy as model (model.id)}{@render row(group, model)}{/each}</ul>{/if}
-            {/if}
-          </section>
-        {/each}
+      {:else if selected}
+        {@const group = selected}
+        {@const open = legacyOpen.has(group.id)}
+        <section class="picker-group" aria-label={group.label} data-group={group.id}>
+          {#if group.manage}<button type="button" class="quiet group-manage" aria-label="Manage model routing" onclick={onrouting}>Manage</button>{/if}
+          <h4>{@render mark(group)}{group.label}</h4>
+          <ul>{#each group.shown as model (model.id)}{@render row(group, model)}{/each}</ul>
+          {#if group.legacy.length}
+            <button type="button" class="quiet legacy-toggle" aria-expanded={open} onclick={() => toggleLegacy(group)}>
+              <span class="legacy-text"><span>Legacy models</span><span class="legacy-count">{group.legacy.length} {group.legacy.length === 1 ? 'model' : 'models'}</span></span>
+              <LucideIcon name={open ? 'chevron-down' : 'chevron-right'} variant="action" size={14} />
+            </button>
+            {#if open}<ul aria-label="Legacy models">{#each group.legacy as model (model.id)}{@render row(group, model)}{/each}</ul>{/if}
+          {/if}
+        </section>
       {/if}
     </div>
   </div>

@@ -24,7 +24,7 @@ it('shows a column of full-color provider marks named on hover without connectio
   await fireEvent.pointerLeave(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }))
   expect(container.querySelector('.rail-tip')).toBeNull()
 
-  // The first provider leads, every provider's models follow, and a mark scrolls to its own.
+  // The first provider leads, and a mark filters the list to its own models.
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Model router' })).toHaveAttribute('aria-current', 'true')
   expect(screen.getByRole('button', { name: 'Jev Latest picks' }).querySelector('.logo svg')).not.toBeNull()
   await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'OpenAI' }))
@@ -106,19 +106,23 @@ it('links the Model router heading to Decision models while routing is off', asy
   expect(onrouting).toHaveBeenCalledTimes(1)
 })
 
-it('lists every connected provider\'s models without a search', () => {
+it('lists only the picked provider\'s models without a search', async () => {
   const inventory = { providers: [
     { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'Qwen3.8-27B-4bit' }] },
     { id: 'muniment-router', name: 'Router', source: 'router', models: [] },
   ], hidden: [], shown: [], default_provider: 'custom-omlx', default_model: 'Qwen3.8-27B-4bit',
   router_models: ['gpt-6-astra', 'gpt-6-luna'].map((model) => ({ id: `openai/${model}`, family: 'openai', model, name: model === 'gpt-6-astra' ? 'GPT-6 Astra' : null, accounts: 1 })) }
   const { container } = render(ModelPicker, props(inventory, { current: { provider: 'custom-omlx', model: 'Qwen3.8-27B-4bit' } }))
+  const rows = () => [...container.querySelectorAll('.picker-row')].map((row) => row.dataset.model)
   expect(screen.getByRole('region', { name: 'Models' })).toBeInTheDocument()
-  expect([...container.querySelectorAll('.picker-row')].map((row) => row.dataset.model)).toEqual(expect.arrayContaining(['Qwen3.8-27B-4bit', 'openai/gpt-6-astra', 'openai/gpt-6-luna']))
+  expect(rows()).toEqual(['Qwen3.8-27B-4bit'])
+  await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'OpenAI' }))
+  expect(rows().sort()).toEqual(['openai/gpt-6-astra', 'openai/gpt-6-luna'])
   expect(within(screen.getByRole('region', { name: 'OpenAI' })).getByRole('button', { name: 'GPT-6 Astra' })).toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: 'oMLX' })).toBeNull()
 })
 
-it('shows a model every plan refused as unavailable with the reason and leads with one the plan offers', () => {
+it('shows a model every plan refused as unavailable with the reason and leads with one the plan offers', async () => {
   const reason = 'The plan of pat@example.com from Laptop does not offer this model.'
   const inventory = { providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], hidden: [], shown: [],
     router_models: [
@@ -126,6 +130,7 @@ it('shows a model every plan refused as unavailable with the reason and leads wi
       { id: 'openai/gpt-6-astra', family: 'openai', model: 'gpt-6-astra', name: 'GPT-6 Astra', accounts: 1 },
     ] }
   render(ModelPicker, props(inventory))
+  await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'OpenAI' }))
   const refused = screen.getByText(`Unavailable. ${reason}`).closest('button')
   expect(refused).toBeDisabled()
   expect(refused).toHaveAccessibleDescription(`Unavailable. ${reason}`)
