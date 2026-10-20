@@ -1325,51 +1325,7 @@ impl DesktopClient {
         if !operation.is_agent_operation() || !body.is_object() {
             return Err(ClientError::UnexpectedMessage);
         }
-        let expected: &[&str] = match operation {
-            Operation::AgentList => &["agents"],
-            Operation::AgentRead | Operation::AgentSave => &["agent"],
-            Operation::AgentRunNow => &["run"],
-            Operation::AgentRuns => &["runs"],
-            Operation::RoutineList => &["routines"],
-            Operation::RoutineSave | Operation::AgentRoutineProposalAccept => &["routine"],
-            Operation::AgentRoutineProposals => &["proposals"],
-            Operation::AgentImport => &["agent", "memories", "skills", "tools"],
-            Operation::AgentImportCommit => &["agent"],
-            Operation::AgentExport => &["format", "file_name", "content"],
-            Operation::RoutineWebhookCreate | Operation::RoutineWebhookRotate => {
-                &["routine", "secret", "hook"]
-            }
-            Operation::RoutineWebhookInfo => &["hook"],
-            Operation::AgentThreads => &["threads"],
-            Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
-            Operation::AgentDraft => &["draft_id", "status"],
-            Operation::AgentReplays => &["replays"],
-            Operation::AgentReplay => &["run", "replay"],
-            Operation::PermissionModes => &["modes", "default_thread_mode", "default_agent_mode"],
-            Operation::PermissionSettings | Operation::PermissionSettingsSave => &[
-                "default_thread_mode",
-                "default_agent_mode",
-                "bypass_enabled",
-                "unattended_timeout_seconds",
-            ],
-            Operation::SettingsScope => &["parts"],
-            Operation::ThreadPermissionMode | Operation::ThreadPermissionModeSet => {
-                &["thread_id", "mode", "source"]
-            }
-            Operation::ThreadPlan => &["plan"],
-            Operation::ThreadPlanAnswer => &["status"],
-            Operation::PreferencesGet | Operation::PreferencesSet => {
-                &["values", "fleet_keys", "local_keys"]
-            }
-            Operation::PreferencesImport => &["values", "imported", "skipped"],
-            Operation::UsageSummary => &["totals", "series", "breakdown", "limits"],
-            Operation::NotificationsList => &["runs", "upcoming", "approvals"],
-            Operation::RunChanges => &["run_id", "available", "files"],
-            Operation::RunRevert => &["outcome", "changes"],
-            Operation::ThreadRewindPreview => &["thread_id", "run_id", "available"],
-            Operation::ThreadRewind => &["thread_id", "run_id", "status"],
-            _ => &[],
-        };
+        let expected = agent_answer_keys(operation);
         self.request_body(operation, None, body, expected)
     }
 
@@ -1545,6 +1501,57 @@ impl DesktopClient {
             return Err(ClientError::UnexpectedMessage);
         }
         Ok(body)
+    }
+}
+
+/// The fields an answer to the agent operation `operation` must hold. A
+/// field that one runtime version names and another does not stays out, so
+/// the client reads the answers of every version it speaks to.
+pub fn agent_answer_keys(operation: Operation) -> &'static [&'static str] {
+    match operation {
+        Operation::AgentList => &["agents"],
+        Operation::AgentRead | Operation::AgentSave => &["agent"],
+        Operation::AgentRunNow => &["run"],
+        Operation::AgentRuns => &["runs"],
+        Operation::RoutineList => &["routines"],
+        Operation::RoutineSave | Operation::AgentRoutineProposalAccept => &["routine"],
+        Operation::AgentRoutineProposals => &["proposals"],
+        Operation::AgentImport => &["agent", "memories", "skills", "tools"],
+        Operation::AgentImportCommit => &["agent"],
+        Operation::AgentExport => &["format", "file_name", "content"],
+        Operation::RoutineWebhookCreate | Operation::RoutineWebhookRotate => {
+            &["routine", "secret", "hook"]
+        }
+        Operation::RoutineWebhookInfo => &["hook"],
+        Operation::AgentThreads => &["threads"],
+        Operation::AgentToolCatalog => &["builtin", "mcp", "skills"],
+        Operation::AgentDraft => &["draft_id", "status"],
+        Operation::AgentReplays => &["replays"],
+        Operation::AgentReplay => &["run", "replay"],
+        Operation::PermissionModes => &["modes", "default_thread_mode", "default_agent_mode"],
+        Operation::PermissionSettings | Operation::PermissionSettingsSave => &[
+            "default_thread_mode",
+            "default_agent_mode",
+            "bypass_enabled",
+            "unattended_timeout_seconds",
+        ],
+        Operation::SettingsScope => &["parts"],
+        Operation::ThreadPermissionMode | Operation::ThreadPermissionModeSet => {
+            &["thread_id", "mode", "source"]
+        }
+        Operation::ThreadPlan => &["plan"],
+        Operation::ThreadPlanAnswer => &["status"],
+        Operation::PreferencesGet | Operation::PreferencesSet => {
+            &["values", "fleet_keys", "local_keys"]
+        }
+        Operation::PreferencesImport => &["values", "imported", "skipped"],
+        Operation::UsageSummary => &["totals", "series", "breakdown"],
+        Operation::NotificationsList => &["runs", "upcoming", "approvals"],
+        Operation::RunChanges => &["run_id", "available", "files"],
+        Operation::RunRevert => &["outcome", "changes"],
+        Operation::ThreadRewindPreview => &["thread_id", "run_id", "available"],
+        Operation::ThreadRewind => &["thread_id", "run_id", "status"],
+        _ => &[],
     }
 }
 

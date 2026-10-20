@@ -74,7 +74,9 @@ pub use client::*;
 #[cfg(feature = "client")]
 pub use client_stream::ClientStream;
 #[cfg(feature = "client")]
-pub use desktop_client::{handshake_desktop_client, DesktopClient, SubscriptionEvent};
+pub use desktop_client::{
+    agent_answer_keys, handshake_desktop_client, DesktopClient, SubscriptionEvent,
+};
 #[cfg(feature = "client")]
 pub use desktop_client_holder::DesktopClientHolder;
 #[cfg(feature = "client")]

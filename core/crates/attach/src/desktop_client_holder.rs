@@ -514,6 +514,55 @@ mod tests {
     }
 
     #[test]
+    fn a_usage_summary_of_either_shape_answers_and_keeps_the_connection() {
+        use std::io::{Read, Write};
+
+        let holder = DesktopClientHolder::new();
+        let (stream, mut server) = UnixStream::pair().unwrap();
+        server.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+        *holder.inner.0.lock().unwrap() = Some(desktop_client_for_test(
+            Box::new(stream),
+            "1.0.0".into(),
+            IO_TIMEOUT,
+        ));
+        // A runtime names its windows `accounts` and `pools`, and an older
+        // one names them `limits`.
+        let answers = [
+            serde_json::json!({"totals": {}, "series": [], "breakdown": {}, "accounts": [], "pools": []}),
+            serde_json::json!({"totals": {}, "series": [], "breakdown": {}, "limits": []}),
+        ];
+        let served = answers.clone();
+        let worker = std::thread::spawn(move || {
+            for body in served {
+                let mut prefix = [0; 4];
+                server.read_exact(&mut prefix).unwrap();
+                let mut frame = vec![0; u32::from_be_bytes(prefix) as usize];
+                server.read_exact(&mut frame).unwrap();
+                let request: crate::Request = serde_json::from_slice(&frame).unwrap();
+                assert_eq!(request.operation, Operation::UsageSummary);
+                let response = serde_json::json!({
+                    "protocol": "muniment.attach/1", "request_id": request.request_id,
+                    "ok": true, "body": body,
+                });
+                server
+                    .write_all(&crate::encode_frame(&response).unwrap())
+                    .unwrap();
+            }
+        });
+
+        for answer in answers {
+            assert_eq!(
+                holder
+                    .agent_request(Operation::UsageSummary, serde_json::json!({"range": "24h"}))
+                    .map_err(|(error, _)| error),
+                Ok(answer)
+            );
+            assert!(holder.inner.0.lock().unwrap().is_some());
+        }
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn unauthorized_request_keeps_the_connection_for_an_explicit_retry() {
         use std::io::{Read, Write};
 
