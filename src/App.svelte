@@ -3549,15 +3549,15 @@
 
 <!-- A row's meta line: its status in words and its project, then for an
      agent's thread the Agents icon and the agent's name, or once a machine is
-     paired the machine the thread lives on, by its shape and name, then how
-     long its run has been working or how long ago the thread last changed. A
-     settled thread shows only its time. -->
+     paired the machine the thread lives on, by its shape and name. At the
+     right end, how long its run has been working or how long ago the thread
+     last changed. A settled thread shows only its time. -->
 {#snippet rowMeta(summary, id = undefined)}
   {@const agent = summary.row?.agent}
   {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
   {@const machine = !agent && !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
   {@const at = (summary.row?.status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
-  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}<LucideIcon name="bot" size={12} /><span class="row-agent">{agent.name}</span>{#if at}<span aria-hidden="true">·</span>{/if}{:else if owner}<OwnerChip machine={owner} />{#if at}<span aria-hidden="true">·</span>{/if}{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{#if at}<span aria-hidden="true">·</span>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
+  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}<LucideIcon name="bot" size={12} /><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner} />{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -4563,6 +4563,8 @@
   /* The owner chip keeps its machine name whole while the project name clips first. */
   .thread-row-meta :global(.owner-chip) { flex: none; max-width: 60%; }
   .thread-row time { flex: none; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
+  /* The time rests at the right end of the meta line, clear of the actions control. */
+  .thread-row-meta time { margin-left: auto; padding-left: 8px; }
   /* The badge keeps its machine name whole while the thread title beside it clips first. */
   .machine-badge { flex: none; display: inline-flex; align-items: center; gap: 4px; min-width: 18px; max-width: 45%; margin-left: auto; padding: 0 5px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
