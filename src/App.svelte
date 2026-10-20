@@ -2636,7 +2636,39 @@
   let composerScrollTop = $state(0)
   let composerScrollLeft = $state(0)
   let composerTextWidth = $state(0)
-  const draftLinks = $derived([...new Set(composerParts(draft).filter((part) => part.type === 'link').map((part) => part.text))])
+  let composerSelection = $state(null)
+  let composerReferences = $state()
+  // The overlay shows a part's hidden characters while the selection touches that part.
+  function trackComposerSelection() {
+    const next = composer && document.activeElement === composer ? { start: composer.selectionStart, end: composer.selectionEnd } : null
+    if (next?.start !== composerSelection?.start || next?.end !== composerSelection?.end) composerSelection = next
+  }
+  $effect(() => {
+    document.addEventListener('selectionchange', trackComposerSelection)
+    return () => document.removeEventListener('selectionchange', trackComposerSelection)
+  })
+  // A file chosen with @ is shown by its @name in the draft alone, so deleting the name removes the file.
+  // Files added from the picker or by a drop have no name in the draft and keep their chip.
+  const chipFiles = $derived(selectedFiles.filter((file) => !file.referenceName))
+  $effect(() => {
+    const text = draft
+    untrack(() => {
+      const named = new Set(composerParts(text, selectedFiles.map((file) => file.referenceName)).filter((part) => part.type === 'file').map((part) => part.text.slice(1)))
+      if (selectedFiles.some((file) => file.referenceName && !named.has(file.referenceName))) selectedFiles = selectedFiles.filter((file) => !file.referenceName || named.has(file.referenceName))
+    })
+  })
+  // ⌘-click (Ctrl-click off macOS) on a link in the draft opens it. A plain click places the caret.
+  const linkModifier = (event) => isMacPlatform ? event.metaKey : event.ctrlKey
+  function openComposerLink(event) {
+    if (event.button !== 0 || !linkModifier(event)) return
+    const url = composerReferences?.linkAt(event.clientX, event.clientY)
+    if (!url) return
+    event.preventDefault()
+    void openUrl(url).catch(() => { submitError = 'This link could not be opened.' })
+  }
+  function composerPointer(event) {
+    composer.style.cursor = linkModifier(event) && composerReferences?.linkAt(event.clientX, event.clientY) ? 'pointer' : ''
+  }
   function closeMentions() {
     clearTimeout(mentionTimer); mentionVersion += 1; mention = null; mentionFiles = []; mentionAgents = []; mentionLoading = false
   }
@@ -2690,6 +2722,7 @@
   function composerInput(event) {
     composerInputDraft = event.currentTarget.value
     updateMention()
+    trackComposerSelection()
   }
 
   function focusComposerOnMount(node) {
@@ -4094,9 +4127,9 @@
               <PopupClose label="Cancel creation" onclick={cancelCreation} />
             </div>
           {/if}
-          {#if selectedFiles.length}
+          {#if chipFiles.length}
             <ul class="attachments" aria-label="Selected files">
-              {#each selectedFiles as file}
+              {#each chipFiles as file}
                 <li>
                   <LucideIcon name={file.isDirectory ? 'folder' : 'file-text'} size={14} />
                   {#if file.isDirectory}<span class="attachment-name">{file.displayName}</span>
@@ -4108,11 +4141,10 @@
           {/if}
           <div class="composer-input">
             {#if mention && threadGroup}<AgentMentions agents={mentionAgents} selected={mentionSelected} onchoose={chooseAgentMention} />{:else if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
-            <ComposerReferences commands={extensionCommandNames} text={draft} references={selectedFiles.map((file) => file.referenceName)} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
+            <ComposerReferences bind:this={composerReferences} commands={extensionCommandNames} text={draft} files={selectedFiles} agents={threadGroup ? threadGroupMembers : []} selection={composerSelection} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onmousedown={openComposerLink} onmousemove={composerPointer} onclick={() => { updateMention(); trackComposerSelection() }} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention(); trackComposerSelection() }} onselect={trackComposerSelection} onselectionchange={trackComposerSelection} onfocus={trackComposerSelection} onblur={() => { closeMentions(); composerSelection = null }} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
           </div>
-          {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
@@ -4753,10 +4785,8 @@
   .attachments li { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(260px, 100%); height: 28px; padding: 0 0 0 6px; border: 0; border-radius: var(--radius-control); background: var(--faint); color: var(--muted); font: var(--text-12) var(--font-mono); }
   .attachments .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .attachments button.attachment-name { border: 0; background: transparent; color: var(--ink); font: inherit; padding: 0; cursor: pointer; }
-  .composer-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .composer-links button { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; color: var(--reference); border: 0; background: transparent; padding: 2px 0; font: inherit; cursor: pointer; }
-  .composer-links button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  textarea.reference-input { position: relative; color: transparent; caret-color: var(--ink); }
+  /* The reference overlay draws this text, so both lay it out without kerning or ligatures. */
+  textarea.reference-input { position: relative; color: transparent; caret-color: var(--ink); font-kerning: none; font-variant-ligatures: none; }
   textarea.reference-input::placeholder { color: var(--muted); }
   @media (forced-colors: active) { textarea.reference-input { caret-color: CanvasText; } }
   .composer-input { position: relative; }

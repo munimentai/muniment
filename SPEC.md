@@ -392,8 +392,8 @@ file list. Unknown counts stay unnumbered. Only actions with details expand. Bef
 Subscription names default to the supplied sign-in email and remain editable
 through a hover pencil and inline form. Grok allowance uses its credits window.
 
-The composer highlights URLs and attached file references. Typing `@` searches
-file names under the selected Files folder or the active workspace; selecting a result attaches it. Search excludes hidden
+The composer highlights URLs, file references, group `@` mentions and `/` commands in place, with a globe over a link's scheme and a file icon or the agent's avatar over the `@`, which show again while the caret is in that part. ⌘-click, or Ctrl-click off macOS, opens a link. Typing `@` searches
+file names under the selected Files folder or the active workspace; selecting a result attaches it, and deleting its name detaches it. Files added from the menu or by a drop show as chips. Search excludes hidden
 files, generated folders and symbolic links. The composer's context meter opens Compact now, `/compact` runs it with an optional summary focus, and Settings → Data → Context controls automatic
 compaction and its token limits. Compaction preserves the conversation, runs in the runtime,
 and reports start, completion with token counts, cancellation or failure in the action feed.
