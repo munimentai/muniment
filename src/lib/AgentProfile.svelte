@@ -129,7 +129,7 @@
 </script>
 <aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
   <!-- The header carries the accent edge in the agent's color, as the title pill does. -->
-  <header data-panel-header data-accent-edge style:--edge-color={agentColor(agent)}><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
+  <header data-panel-header data-accent-edge="top" style:--edge-color={agentColor(agent)}><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
   <div class="body" use:panelScroll>
     {#if agent.replica}
       <div class="avatar"><AgentAvatar {agent} {activity} size={92} /></div>
