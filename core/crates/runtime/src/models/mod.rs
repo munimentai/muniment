@@ -1041,6 +1041,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(saved["trust"], "user");
+        assert_eq!(
+            saved["origin"],
+            serde_json::json!({"kind": "user", "surface": "settings"})
+        );
+        assert_eq!(saved["origin_label"], "Added in Settings");
         let id = saved["id"].as_str().unwrap().to_owned();
         assert_eq!(
             run(ModelAction::MemoryFacts, serde_json::json!({}), false).unwrap()[0]["id"],
@@ -1094,6 +1099,45 @@ mod tests {
     }
 
     #[test]
+    fn a_fact_added_in_an_agent_profile_names_that_agent() {
+        let (service, profile) = service();
+        muniment_core::home::confirm_home(&profile, &profile.join("Home")).unwrap();
+        let agent = muniment_core::agents::save(
+            &profile,
+            muniment_core::agents::Agent {
+                name: "Tauri Morning".into(),
+                instructions: "Summarize the morning.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let run = |action, data: Value| {
+            let key = Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+            service.request(request(action, data), Some(&key))
+        };
+        let saved = run(
+            ModelAction::MemoryFactSave,
+            serde_json::json!({"agent": agent.id, "fact": {"id": "", "title": "Tone", "content": "Use short answers.", "source": "Added in settings", "trust": "external", "origin": {"kind": "agent"}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            saved["origin"],
+            serde_json::json!({"kind": "user", "surface": "agent_profile", "agent_id": agent.id})
+        );
+        assert_eq!(saved["origin_label"], "Added by Tauri Morning agent");
+        let listed = run(
+            ModelAction::MemoryFacts,
+            serde_json::json!({"agent": agent.id}),
+        )
+        .unwrap();
+        assert_eq!(listed[0]["origin"], saved["origin"]);
+        assert_eq!(listed[0]["origin_label"], "Added by Tauri Morning agent");
+        let settings = run(ModelAction::MemoryFacts, serde_json::json!({})).unwrap();
+        assert_eq!(settings, serde_json::json!([]));
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
     fn pending_memory_actions_list_apply_and_dismiss_proposed_changes() {
         use muniment_core::memory_files::{
             self, ChangeOp, Fact, PendingChange, ProposedFact, Trust,
@@ -1114,6 +1158,7 @@ mod tests {
                 content: "Uses Helix.".into(),
                 source: "Added in settings".into(),
                 trust: Trust::User,
+                origin: None,
             },
         )
         .unwrap();
@@ -1127,6 +1172,7 @@ mod tests {
                 content: content.into(),
             }),
             source: "extracted thread:t run:r".into(),
+            origin: None,
             created: "2026-01-01T00:00:00.000Z".into(),
         };
         memory_files::pending_stage(
@@ -1157,8 +1203,23 @@ mod tests {
         let fields: Vec<&String> = listed[0].as_object().unwrap().keys().collect();
         assert_eq!(
             fields,
-            ["after", "before", "created", "fact_id", "id", "op", "source"]
+            [
+                "after",
+                "before",
+                "created",
+                "fact_id",
+                "id",
+                "op",
+                "origin",
+                "origin_label",
+                "source"
+            ]
         );
+        assert_eq!(
+            listed[2]["origin"],
+            serde_json::json!({"kind": "chat", "thread_id": "t", "run_id": "r"})
+        );
+        assert_eq!(listed[2]["origin_label"], "Added in a chat");
         // A retried apply answers the first result and writes nothing more.
         let apply_key = key();
         let added = service

@@ -979,6 +979,7 @@ fn the_launch_prompt_opens_with_trusted_facts_most_recalled_first() {
                 content: content.into(),
                 source: "thread:a run:b".into(),
                 trust,
+                origin: None,
             },
         )
         .unwrap()

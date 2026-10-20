@@ -42,7 +42,7 @@ const MAX_PAGE: usize = 100;
 /// How long a webhook delivery id is remembered, so a replay is refused.
 pub const DELIVERY_MEMORY_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_SUMMARY_CHARS: usize = 500;
-const STORE_FILE: &str = "agent-runs.sqlite3";
+pub(crate) const STORE_FILE: &str = "agent-runs.sqlite3";
 
 /// The concurrent runs this process allows: `MUNIMENT_MAX_PARALLEL_RUNS`,
 /// between 1 and 16, else 3.

@@ -11,14 +11,18 @@ static WRITE: Mutex<()> = Mutex::new(());
 const MAX_TEXT: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Fact {
     pub id: String,
     pub title: String,
     pub content: String,
+    /// Free text that names where the fact came from.
     pub source: String,
     #[serde(default)]
     pub trust: Trust,
+    /// Who wrote the fact and in which run. A fact file written without one
+    /// has none here, and memory responses infer one from `source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::memory_origin::Origin>,
 }
 
 /// Where a fact came from when it was written. Only user and conversation
@@ -255,22 +259,35 @@ fn parse_fact(id: &str, text: &str) -> Result<Fact, String> {
     let (header, content) = body
         .split_once("\n\n")
         .ok_or("The memory format is invalid.")?;
-    let (source, trust) = match header.split_once('\n') {
-        Some((source, trust)) => (
-            source,
-            trust
-                .strip_prefix("Trust: ")
-                .and_then(Trust::parse)
-                .ok_or("The memory format is invalid.")?,
-        ),
-        None => (header, Trust::External),
-    };
+    let mut lines = header.split('\n');
+    let source = lines.next().unwrap_or_default();
+    // A file without a trust line was saved before trust was recorded.
+    let (mut trust, mut origin) = (None, None);
+    for line in lines {
+        let invalid = || "The memory format is invalid.".to_owned();
+        if let Some(text) = line.strip_prefix("Trust: ") {
+            if trust
+                .replace(Trust::parse(text).ok_or_else(invalid)?)
+                .is_some()
+            {
+                return Err(invalid());
+            }
+        } else if let Some(text) = line.strip_prefix("Origin: ") {
+            let parsed = crate::memory_origin::Origin::from_line(text).ok_or_else(invalid)?;
+            if origin.replace(parsed).is_some() {
+                return Err(invalid());
+            }
+        } else {
+            return Err(invalid());
+        }
+    }
     Ok(Fact {
         id: id.into(),
         title: heading.strip_prefix("# ").unwrap_or(heading).into(),
         source: source.strip_prefix("Source: ").unwrap_or(source).into(),
         content: content.trim_end().into(),
-        trust,
+        trust: trust.unwrap_or(Trust::External),
+        origin,
     })
 }
 /// The active fact with this id, or none.
@@ -284,6 +301,7 @@ fn fact_at(home: &Path, id: &str) -> Result<Option<Fact>, String> {
 /// Saves a fact the user wrote or edited in Settings.
 pub fn fact_save(profile: &Path, mut fact: Fact) -> Result<Fact, String> {
     fact.trust = Trust::User;
+    fact.origin = Some(crate::memory_origin::Origin::user(None));
     fact_save_in(profile, &home(profile)?, fact)
 }
 pub fn facts_in(home: &Path) -> Result<Vec<Fact>, String> {
@@ -305,6 +323,10 @@ fn save_unlocked(home: &Path, mut fact: Fact) -> Result<Fact, String> {
         || fact.source.is_empty()
         || fact.source.contains(['\r', '\n'])
         || fact.source.len() > 2000
+        || fact
+            .origin
+            .as_ref()
+            .is_some_and(|origin| !origin.is_valid())
     {
         return Err("Give the memory a title, fact and source.".into());
     }
@@ -318,11 +340,16 @@ fn save_unlocked(home: &Path, mut fact: Fact) -> Result<Fact, String> {
         }
         fact.id = uuid::Uuid::new_v4().to_string();
     }
+    let origin = fact
+        .origin
+        .as_ref()
+        .map(|origin| format!("Origin: {}\n", origin.to_line()))
+        .unwrap_or_default();
     write(
         home,
         &fact_path(&fact.id)?,
         &format!(
-            "# {}\n\nSource: {}\nTrust: {}\n\n{}\n",
+            "# {}\n\nSource: {}\nTrust: {}\n{origin}\n{}\n",
             fact.title,
             fact.source,
             fact.trust.as_str(),
@@ -511,6 +538,10 @@ pub struct PendingChange {
     pub before: Option<Fact>,
     pub after: Option<ProposedFact>,
     pub source: String,
+    /// The origin the fact an add or update writes records. A change kept
+    /// before origins were recorded has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::memory_origin::Origin>,
     /// RFC 3339.
     pub created: String,
 }
@@ -654,6 +685,7 @@ fn apply_unlocked(
                     content: after.content,
                     source: change.source.clone(),
                     trust: Trust::Conversation,
+                    origin: change.origin.clone(),
                 },
             )
             .map(Some)
@@ -678,6 +710,7 @@ fn apply_unlocked(
                     content: after.content,
                     source: change.source.clone(),
                     trust: Trust::Conversation,
+                    origin: change.origin.clone(),
                 },
             )
             .map(Some)
@@ -954,6 +987,7 @@ mod tests {
             content: "Use English.".into(),
             source: "thread:abc".into(),
             trust: Trust::External,
+            origin: None,
         };
         let saved = fact_save(&profile, input.clone()).unwrap();
         assert_eq!(saved.id, fact_save(&profile, input).unwrap().id);
@@ -981,6 +1015,7 @@ mod tests {
             content: content.into(),
             source: "thread:abc run:one".into(),
             trust,
+            origin: None,
         };
         let saved = fact_save_in(
             &profile,
@@ -1054,6 +1089,7 @@ mod tests {
                     content: content.into(),
                     source: "thread:abc run:one".into(),
                     trust: Trust::Conversation,
+                    origin: None,
                 },
             )
             .unwrap();

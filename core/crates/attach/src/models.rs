@@ -3,11 +3,26 @@
 //! and the profile, facts and recall settings of memory, under the `memory_`
 //! actions.
 //!
+//! A fact answers `{"id", "title", "content", "source", "trust", "origin",
+//! "origin_label"}`. `origin` is `{"kind": "user"|"chat"|"agent"|"unknown",
+//! "surface"?: "settings"|"agent_profile"|"agent_import", "agent_id"?,
+//! "thread_id"?, "run_id"?}`: the user in Settings or in the profile of
+//! `agent_id`, a run of an ordinary chat, or a run of agent `agent_id`. A
+//! fact saved before origins were recorded answers one inferred from its
+//! `source`, and `unknown` when the source names none. `origin_label` names
+//! the origin for display: "Added in Settings", "Added in a chat", "Added by
+//! <name> agent" with the agent's current name for an agent or agent
+//! profile origin, "Added by an agent" once that agent is deleted, and the
+//! `source` text for `unknown`. `memory_fact_save` records the user origin
+//! itself, from Settings or, with `agent`, from that agent's profile.
+//!
 //! The pass that learns facts after each finished run can keep changes for
 //! the user to review. `memory_pending` takes `{"agent"?}` and answers
 //! `[{"id", "op": "add"|"update"|"delete", "fact_id", "before", "after":
-//! {"title", "content"}|null, "source", "created"}]`, newest first, where
-//! `before` is the target fact as it was. `memory_pending_apply` takes
+//! {"title", "content"}|null, "source", "origin", "origin_label",
+//! "created"}]`, newest first, where `before` is the target fact as it was
+//! and `origin` is the origin the fact an add or update writes records.
+//! `memory_pending_apply` takes
 //! `{"agent"?, "id"}` and answers the fact an add or update wrote, or null
 //! for a delete. It refuses, and removes the proposal, when the target fact
 //! changed since. `memory_pending_dismiss` takes `{"agent"?, "id"}` and
