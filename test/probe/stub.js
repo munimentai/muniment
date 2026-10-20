@@ -444,8 +444,8 @@ export function buildProbeCommandTable(fixtureName) {
   // synced copy from a fourth. `cards` opens the catalog's action cards, and
   // `cards-offline` the same with the Studio machine offline.
   // `fleet-sync.html?state=` shows a fleet this laptop reaches only through
-  // the swarm: the sync line, owners, a queued post, a replica's history, a
-  // new thread on a container, the offline scope, the bootstrap and the log.
+  // the swarm: owners, a queued post, a replica's history, a new thread on a
+  // container, the offline scope, the bootstrap on Machines and the log.
   const fleetSyncFixture = fixtureName === 'fleet-sync'
   if (fleetSyncFixture && fleetSyncThread()) history.push(...fleetSyncHistory())
   const agentsFixture = fixtureName === 'agents'

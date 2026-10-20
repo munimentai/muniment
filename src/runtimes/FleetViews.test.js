@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
-import SyncStatus from './SyncStatus.svelte'
+import SyncProgress from './SyncProgress.svelte'
 import QueuedNotice from './QueuedNotice.svelte'
 import OfflineSettings from './OfflineSettings.svelte'
 import AuditLog from './AuditLog.svelte'
@@ -23,27 +23,24 @@ function agentBridge(answers) {
   return { invoke }
 }
 
-describe('the sync line', () => {
-  it('shows Syncing N, opens the bootstrap panel on its own and names where each sign-in comes from', async () => {
+describe('sync on the Machines page', () => {
+  it('shows each class while a bootstrap runs and names where each sign-in comes from', () => {
     const status = { state: 'bootstrapping', classes: [{ class: 'agent', held: 6, total: 6, percent: 100 }, { class: 'history', held: 37, total: 120, percent: 30 }] }
     const credentials = { accounts: [{ name: 'router:work', label: 'Work', holder: 'core-laptop', holder_name: 'Laptop', this_machine: false, usable_here: false }, { name: 'pi:anthropic', holder: 'core-studio', holder_name: 'Studio', this_machine: false, usable_here: false }] }
-    render(SyncStatus, { status, ops: [], credentials, swarm })
-    const line = screen.getByRole('button', { name: /Syncing 1/ })
-    expect(line).toHaveAttribute('aria-expanded', 'true')
-    const panel = screen.getByRole('region', { name: 'Sync progress' })
-    expect(within(panel).getByRole('progressbar', { name: 'History' })).toHaveAttribute('aria-valuenow', '30')
-    expect(within(panel).getByText('arriving from Laptop')).toBeInTheDocument()
-    expect(within(panel).getByText('waiting for a holder')).toBeInTheDocument()
-    await fireEvent.click(line)
-    expect(screen.queryByRole('region', { name: 'Sync progress' })).toBeNull()
+    render(SyncProgress, { status, credentials, swarm })
+    const group = screen.getByRole('region', { name: 'Sync' })
+    expect(within(group).getByText('Lists arrived. History keeps filling.')).toBeInTheDocument()
+    expect(within(group).getByRole('progressbar', { name: 'History' })).toHaveAttribute('aria-valuenow', '30')
+    expect(within(group).getByText('arriving from Laptop')).toBeInTheDocument()
+    expect(within(group).getByText('waiting for a holder')).toBeInTheDocument()
   })
 
-  it('shows nothing for a machine alone and Synced once caught up', () => {
-    const { container } = render(SyncStatus, { status: { state: 'alone' } })
+  it('shows nothing once this computer holds everything', () => {
+    const { container } = render(SyncProgress, { status: { state: 'alone' } })
     expect(container.textContent.trim()).toBe('')
     cleanup()
-    render(SyncStatus, { status: { state: 'synced', classes: [] }, ops: [] })
-    expect(screen.getByRole('button', { name: /^Synced/ })).toHaveAttribute('aria-expanded', 'false')
+    const caught = render(SyncProgress, { status: { state: 'offline', classes: [{ class: 'agent', held: 6, total: 6, percent: 100 }] }, credentials: { accounts: [] }, swarm })
+    expect(caught.container.textContent.trim()).toBe('')
   })
 })
 

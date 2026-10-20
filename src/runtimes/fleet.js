@@ -1,49 +1,15 @@
-// The fleet as this window shows it: the sync state in the sidebar footer,
-// the machine that owns each thread, agent and project, actions queued for
+// The fleet as this window shows it: the machine that owns each thread, agent and project, actions queued for
 // an offline owner, the offline scope, the bootstrap progress and the audit
 // log. Core owns sync, ownership, queues and the log. This module only
 // shapes their answers for the window.
 import { LOCAL_RUNTIME_ID } from './runtimes.js'
 import { memberMachine } from '../agents/swarm.js'
 
-// `fleet.sync_status` while no swarm is set up.
-export function emptySyncStatus() {
-  return { state: 'alone', classes: [], last_sync_at: null, offline: null }
-}
-
 // HH:MM in the viewer's clock.
 export function clockTime(value) {
   const date = value ? new Date(value) : null
   if (!date || Number.isNaN(date.getTime())) return ''
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-// The classes a bootstrap still fills.
-export function pendingClasses(status) {
-  if (status?.state !== 'bootstrapping') return []
-  return (status.classes ?? []).filter((entry) => Number(entry.percent ?? 100) < 100)
-}
-
-// The sidebar footer line: Synced, Syncing N, or Offline with the time of the
-// last sync. N counts the actions waiting for their owner and the classes a
-// bootstrap still fills. No line shows while this machine is alone.
-export function syncLine(status, ops = []) {
-  const state = status?.state ?? 'alone'
-  if (state === 'alone') return null
-  const waiting = openOps(ops).length
-  if (state === 'offline') {
-    const time = clockTime(status.last_sync_at)
-    return { state: 'offline', text: time ? `Offline · synced ${time}` : 'Offline', icon: 'globe-off' }
-  }
-  const pending = waiting + pendingClasses(status).length
-  if (pending) return { state: 'syncing', text: `Syncing ${pending}`, icon: 'refresh-cw' }
-  return { state: 'synced', text: 'Synced', icon: 'check' }
-}
-
-const OPEN = new Set(['queued', 'sent'])
-
-export function openOps(ops = []) {
-  return ops.filter((op) => OPEN.has(op?.state))
 }
 
 // The forwarded actions after one `fleet-op-updated` event, newest first.

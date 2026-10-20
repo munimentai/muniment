@@ -1,20 +1,17 @@
-// This computer's fleet state for the whole window: core's sync status, the
-// actions it forwarded and its model accounts. It reads them once, then
-// follows `fleet-sync-changed` and `fleet-op-updated`. A runtime without a
-// swarm refuses the reads, and the state stays alone.
+// This computer's fleet state for the whole window: the actions core
+// forwarded to their owners. It reads them once, then follows
+// `fleet-op-updated`. A runtime without a swarm refuses the read, and the
+// list stays empty.
 import { agentRequest } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from './runtimes.js'
-import { applyOp, emptySyncStatus } from './fleet.js'
+import { applyOp } from './fleet.js'
 
 export function createFleet(tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args)) {
-  const fleet = $state({ status: emptySyncStatus(), ops: [], credentials: null, error: '' })
+  const fleet = $state({ ops: [], error: '' })
   const ask = (operation, body = {}) => agentRequest(tauri, LOCAL_RUNTIME_ID, operation, body)
 
   async function refresh() {
-    const [status, ops, credentials] = await Promise.allSettled([ask('fleet.sync_status'), ask('fleet.ops', { state: 'open' }), ask('fleet.credentials')])
-    if (status.status === 'fulfilled' && status.value?.state) fleet.status = status.value
-    if (ops.status === 'fulfilled') fleet.ops = ops.value?.ops ?? []
-    if (credentials.status === 'fulfilled') fleet.credentials = credentials.value ?? null
+    try { fleet.ops = (await ask('fleet.ops', { state: 'open' }))?.ops ?? [] } catch (_) {}
   }
 
   // Cancels an action that waits for its owner. Core refuses one that
@@ -44,7 +41,6 @@ export function createFleet(tauri, listen = (...args) => window.__TAURI__?.event
     const stops = []
     void refresh()
     for (const [event, handle] of [
-      ['fleet-sync-changed', (payload) => { if (payload?.status?.state) fleet.status = payload.status }],
       ['fleet-op-updated', (payload) => { fleet.ops = applyOp(fleet.ops, payload) }],
       // A member that joins or leaves changes what the fleet holds.
       ['swarm-changed', () => { void refresh() }],

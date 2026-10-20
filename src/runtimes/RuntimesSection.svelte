@@ -10,7 +10,8 @@
   // answers, names the ones it skips, and updates this computer last. Under
   // the list, one switch has core share this computer's model connections
   // through `fleet.credentials`. This computer's row opens its network,
-  // offline and log settings. With MuniCloud on, the account's devices and
+  // offline and log settings. Sync lists what this computer still takes from
+  // the others while a bootstrap runs or a sign-in waits. With MuniCloud on, the account's devices and
   // the phone paired through the relay are rows as well, and Add machine
   // pairs a phone.
   import { onMount } from 'svelte'
@@ -23,6 +24,7 @@
   import MachineRow from './MachineRow.svelte'
   import AddMachine from './AddMachine.svelte'
   import ThisComputer from './ThisComputer.svelte'
+  import SyncProgress from './SyncProgress.svelte'
   import { errorText, skipLabel, updatableRuntimes } from './runtimes.js'
   import FailureNote from '../lib/FailureNote.svelte'
   import { linkHolders, machineRows, removable } from './machines.js'
@@ -52,6 +54,8 @@
   let localUpdate = $state(null)
   let localVersion = $state(null)
   let shareModels = $state(null)
+  let credentials = $state(null)
+  let syncStatus = $state(null)
   let shareFailure = $state('')
   let shareReadFailure = $state('')
   // svelte-ignore state_referenced_locally
@@ -66,6 +70,7 @@
     const stops = []
     void load().then(refresh)
     void readSharing()
+    void readSync()
     void readDevices()
     void readCloudDevices()
     // Update all shows once this computer has a verified update waiting.
@@ -79,6 +84,7 @@
         if (['members', 'records'].includes(payload?.change?.kind)) void readSharing()
       }],
       ['app-update-ready', (payload) => { if (typeof payload === 'string') localVersion = payload }],
+      ['fleet-sync-changed', (payload) => { if (payload?.status?.state) syncStatus = payload.status }],
     ]) {
       Promise.resolve(listen?.(event, ({ payload }) => handle(payload)))
         .then((unlisten) => { if (alive) stops.push(unlisten); else unlisten?.() })
@@ -137,12 +143,18 @@
   async function readSharing() {
     try {
       const answer = await agentRequest(tauri, 'local', 'fleet.credentials', {})
+      credentials = answer ?? null
       if (busy === 'share') return
       shareModels = !!answer?.share_models
       shareReadFailure = ''
     } catch (failure) {
       if (shareModels === null) shareReadFailure = errorText(failure)
     }
+  }
+
+  // A machine without a fleet refuses, and Sync stays hidden.
+  async function readSync() {
+    try { syncStatus = await agentRequest(tauri, 'local', 'fleet.sync_status', {}) } catch (_) { syncStatus = null }
   }
 
   // Turning sharing off takes the connections back from MuniCloud too. The
@@ -355,6 +367,8 @@
   {#if shareFailure}<FailureNote failure={shareFailure} />{/if}
   {#if shareReadFailure && shareModels === null}<FailureNote failure="This computer did not say whether it shares its model connections." detail={shareReadFailure} role="none" />{/if}
   {#if list?.shareError}<FailureNote failure={list.shareError} />{/if}
+
+  <SyncProgress status={syncStatus} {credentials} {swarm} />
 
   {#if localUpdate}
     <ConfirmDialog title="Install update {localUpdate.version}?" cancelLabel="Not now" confirmLabel="Install and restart" onDecision={async (approve) => { localUpdate = null; if (approve) await installThisComputer() }}>

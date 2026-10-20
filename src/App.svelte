@@ -6,7 +6,6 @@
   import { featureFlags } from './feature-flags.js'
   import { settingsNav, settingsPage } from './lib/settings-sections.js'
   import MachinePicker from './runtimes/MachinePicker.svelte'
-  import SyncStatus from './runtimes/SyncStatus.svelte'
   import OwnerChip from './runtimes/OwnerChip.svelte'
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
@@ -3687,7 +3686,6 @@
           <!-- The foot stays on both sides: Settings shows as the current page there, and a second press goes back. -->
           {#if !sidebarCollapsed}
           <div class="side-foot">
-            <SyncStatus status={fleet.state.status} ops={fleet.state.ops} credentials={fleet.state.credentials} {swarm} />
             <div class="settings-block">
               <SidebarActions bind:settingsButton {settingsOpen} usageOpen={fullPage === 'usage'} notificationsOpen={fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={switchLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
             </div>
