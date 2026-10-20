@@ -82,6 +82,7 @@
   import SidebarActions from './lib/SidebarActions.svelte'
   import { OPEN_USAGE_EVENT, composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
   import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
+  import ComposerNotice from './composer/ComposerNotice.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
@@ -119,6 +120,7 @@
   import { createDictationController } from './lib/dictation-controller.js'
   import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createEntitlementToast } from './lib/entitlement-toast.js'
+  import { createComposerNotices } from './lib/composer-notices.js'
   import { createChatTranscriptController, transcriptKeys } from './lib/chat-transcript-controller.js'
   import { createTranscriptWindow, tailWindow, windowItems } from './lib/transcript-window.js'
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
@@ -1439,7 +1441,6 @@
     if (ended && recordPanelOpen) recordRefresh = untrack(() => recordRefresh) + 1
   })
   let workspace = $state()
-  let entitlementToastVisible = $state(false)
   let pairingRequests = $state([])
   const pairingTimers = new Map()
   let desktopClientStatus = $state(null)
@@ -1448,6 +1449,24 @@
   let backgroundServiceNoticeVisible = $derived(runtimeNotice?.visible === true)
   let foregroundOnlyDismissed = $state(false)
   let foregroundOnlyNotice = $derived(foregroundOnlyDismissed ? null : runtimeNotice?.foregroundOnly ?? null)
+  // Each time the runtime falls back to running as the app's child is a new
+  // cause. The close control keeps it away for the rest of the launch.
+  let foregroundOnlyCause = 0
+  let foregroundOnlyWas = false
+  $effect(() => {
+    const on = !!runtimeNotice?.foregroundOnly
+    const notice = foregroundOnlyNotice
+    untrack(() => {
+      if (on && !foregroundOnlyWas) foregroundOnlyCause += 1
+      foregroundOnlyWas = on
+      if (!notice) { composerNotices.withdraw('background-service'); return }
+      composerNotices.show({
+        id: 'background-service', cause: foregroundOnlyCause, text: notice.text, label: 'Background service', testid: 'foreground-only-notice',
+        action: { label: notice.control, run: () => backgroundServiceNotice.openLoginItems() },
+        dismissLabel: 'Dismiss background service notice', ondismiss: () => { foregroundOnlyDismissed = true },
+      })
+    })
+  })
   let authRequestVersion = 0
   let signInCancelControl = $state()
   let signInPending = null
@@ -1835,9 +1854,30 @@
     }
   }
 
+  // Short notices over the composer, one at a time. Each shows once per
+  // launch for each cause, so a state read again does not bring it back.
+  const composerNotices = createComposerNotices()
+  $effect(() => {
+    const text = speechInstallNotice
+    untrack(() => {
+      if (text) composerNotices.show({ id: 'speech-install', cause: text, text, dismissLabel: 'Dismiss voice notice' })
+      else composerNotices.withdraw('speech-install')
+    })
+  })
+  // A shortcut that fails again after it worked is a new cause.
+  let voiceShortcutFailures = 0
+  $effect(() => {
+    const failed = globalVoiceError
+    untrack(() => {
+      if (!failed) { composerNotices.withdraw('voice-shortcut'); return }
+      voiceShortcutFailures += 1
+      composerNotices.show({ id: 'voice-shortcut', cause: voiceShortcutFailures, text: 'The system-wide voice shortcut is unavailable. Voice remains available from the button.', dismissLabel: 'Dismiss voice shortcut notice' })
+    })
+  })
+
   const entitlementToast = createEntitlementToast({
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
-    onVisible: (visible) => { entitlementToastVisible = visible },
+    notices: composerNotices,
   })
 
   const backgroundServiceNotice = createBackgroundServiceNotice({
@@ -2068,7 +2108,8 @@
       await refreshProjects(threadId)
       moveTarget = null
       const name = projectCatalog.projects[projectId] ?? 'the project'
-      moveNote = { threadId, seen: threadId === currentThreadId, text: projectId ? `Now uses ${name} instructions and tools.` : 'Moved out of its project.' }
+      moveCount += 1
+      moveNote = { threadId, move: moveCount, seen: threadId === currentThreadId, text: projectId ? `Now uses ${name} instructions and tools.` : 'Moved out of its project.' }
       return true
     } catch (error) {
       moveError = String(error?.message ?? error)
@@ -2090,6 +2131,14 @@
       if (!moveNote) return
       if (moveNote.threadId === threadId) moveNote.seen = true
       else if (moveNote.seen) moveNote = null
+    })
+  })
+  let moveCount = 0
+  $effect(() => {
+    const note = moveNote && moveNote.threadId === currentThreadId ? moveNote : null
+    untrack(() => {
+      if (note) composerNotices.show({ id: 'thread-move', cause: note.move, text: note.text, dismissLabel: 'Dismiss move note' })
+      else composerNotices.withdraw('thread-move')
     })
   })
 
@@ -3276,6 +3325,7 @@
       chatController.cleanup()
       entitlementToast.cleanup()
       backgroundServiceNotice.cleanup()
+      composerNotices.cleanup()
       pairingUnlisten?.()
       for (const timer of pairingTimers.values()) clearTimeout(timer)
       pairingTimers.clear()
@@ -4026,6 +4076,7 @@
               {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={jumpToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
             </div>
           {/if}
+          <ComposerNotice notices={composerNotices} />
           {#if pendingCreation}
             <div class="creation-chip" role="group" aria-label="Template" data-tooltip={`Goal: ${pendingCreation.goal}`}>
               <LucideIcon name={pendingCreation.kind === 'agent' ? 'bot' : 'file-code'} size={14} />
@@ -4053,7 +4104,6 @@
             <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onclick={updateMention} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention() }} onblur={() => closeMentions()} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
           </div>
           {#if draftLinks.length}<div class="composer-links" aria-label="Links in message">{#each draftLinks as url (url)}<button type="button" onclick={() => openUrl(url).catch(() => { submitError = 'This link could not be opened.' })}><LucideIcon name="globe" /><span>{url}</span></button>{/each}</div>{/if}
-          {#if moveNote && moveNote.threadId === currentThreadId}<p class="move-note" role="status">{moveNote.text}</p>{/if}
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
           {#if queueError}<p class="cancel-error" role="alert">{queueError}</p>{/if}
@@ -4113,21 +4163,9 @@
               {:else}<span class="composer-action-slot" aria-hidden="true"></span>{/if}
             </div>
           </div>
-          {#if speechInstallNotice}<p class="speech-install-notice" role="status">{speechInstallNotice}</p>
-          {:else if dictationError && dictation.state !== 'modelNotInstalled'}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
-          {#if globalVoiceError}<div class="dictation-error" role="alert">The system-wide voice shortcut is unavailable. Voice remains available from the button.</div>{/if}
+          {#if dictationError && dictation.state !== 'modelNotInstalled' && !speechInstallNotice}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
         </ChatComposer>
         </div>
-        {#if featureFlags.cloud && entitlementToastVisible}
-          <div class="entitlement-toast" role="status">Your access changed. Some models or connections may differ.</div>
-        {/if}
-        {#if foregroundOnlyNotice}
-          <section class="foreground-only-notice" aria-label="Background service" role="status" data-testid="foreground-only-notice">
-            <p class="record">{foregroundOnlyNotice.text}</p>
-            <button type="button" onclick={() => backgroundServiceNotice.openLoginItems()}>{foregroundOnlyNotice.control}</button>
-            <PopupClose label="Dismiss background service notice" onclick={() => { foregroundOnlyDismissed = true }} />
-          </section>
-        {/if}
         {#if artifactRailOpen}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div
@@ -4406,9 +4444,6 @@
   .agent-add { position: absolute; right: 8px; opacity: 0; padding: 4px; line-height: 0; }
   .agents-side-row:hover .agent-add, .agents-side-row:focus-within .agent-add { opacity: 1; }
   @media (hover: none) { .agent-add { opacity: 1; } }
-  .foreground-only-notice { position: fixed; z-index: 4; left: 50%; bottom: 24px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 48px); padding: 6px 6px 6px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
-  .foreground-only-notice p { margin: 0; overflow-wrap: anywhere; }
-  .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* The row ends where its 24px controls end, so the paper under them is the rest of the band. */
@@ -4695,7 +4730,7 @@
   .copy-failure { margin-top: 4px; }
   .run-error { color: var(--muted); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
   .run-status { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
-  .cancel-error, .history-error, .move-note { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .cancel-error, .history-error { margin: 0 0 8px; color: var(--muted); font: var(--text-12) var(--font-human); }
   .history-error { overflow-wrap: anywhere; }
   /* The notice keeps the background service register at the composer 12px scale.
      A 15px support line would compete with the draft text. */
@@ -4755,9 +4790,7 @@
   .speech-install-popover button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-popover .speech-install-error { color: var(--oxide); }
   .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .speech-install-notice { margin: 9px 0 0; padding: 0 12px; color: var(--muted); font: var(--text-12) var(--font-human); }
   @keyframes capture { to { transform: scaleY(.55); } }
-  @keyframes toast-enter { from { opacity: 0; transform: translate(-50%, 2px); } }
   /* Unlike the blanket duration rule, removing this animation keeps the meter
      at its full-height resting state instead of the keyframe's 55% endpoint. */
   :global(:root[data-motion="reduce"]) .capture-meter i { animation: none; }

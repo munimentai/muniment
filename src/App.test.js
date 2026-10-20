@@ -412,7 +412,8 @@ describe('entitlement change toast', () => {
     expect(screen.queryByText(copy)).not.toBeInTheDocument()
     entitlementListener({ payload: { snapshot_version: 3 } })
 
-    expect(await screen.findByText(copy)).toHaveAttribute('role', 'status')
+    const notice = (await screen.findByText(copy)).closest('[role="status"]')
+    expect(notice).toHaveAttribute('data-composer-notice')
     expect(screen.getByTestId('run-announcement')).not.toHaveTextContent(copy)
   })
 
@@ -688,6 +689,39 @@ describe('workspace composer entry', () => {
       await fireEvent.click(button)
       expect(invoke).toHaveBeenCalledWith('open_login_items')
     }
+  })
+
+  it('shows the foreground-only notice over the composer once per launch after it times out', async () => {
+    runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(App)
+      const composer = await findWorkspaceComposer()
+      const notice = await screen.findByTestId('foreground-only-notice')
+      expect(notice.parentElement).toBe(composer.closest('.composer'))
+      expect(notice).toHaveAttribute('data-composer-panel')
+      expect(within(notice).getByText('Scheduled agents run only while Muniment is open.')).not.toHaveClass('record')
+      await vi.advanceTimersByTimeAsync(6000)
+      await waitFor(() => expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument())
+      runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument()
+      runtimeListener({ payload: { revision: 3, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false } })
+      await vi.advanceTimersByTimeAsync(10)
+      runtimeListener({ payload: { revision: 4, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
+      expect(await screen.findByTestId('foreground-only-notice')).toBeInTheDocument()
+    } finally { vi.useRealTimers() }
   })
 
   it('says once over the workspace that scheduled agents run only while the app is open', async () => {
@@ -5567,7 +5601,7 @@ describe('voice dictation', () => {
     expect(progress).toHaveAttribute('max', '672384307')
     expect(card).toHaveTextContent('128 MB / 641 MB')
     // The card leaves once the model is on disk, and the hint carries the next step.
-    expect(await screen.findByText('Installed. Press Voice again to dictate.')).toHaveAttribute('role', 'status')
+    expect((await screen.findByText('Installed. Press Voice again to dictate.')).closest('[role="status"]')).toHaveAttribute('data-composer-notice')
     expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true })
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
@@ -9884,7 +9918,7 @@ describe('command palette', () => {
     expect(within(picker).getByRole('button', { name: 'No project' })).toHaveAttribute('aria-current', 'true')
     await fireEvent.click(within(picker).getByRole('button', { name: 'Homelab' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('project_move_thread', { threadId: 'thread-1', projectId: 'p-homelab' }))
-    expect(await screen.findByText('Now uses Homelab instructions and tools.')).toHaveAttribute('role', 'status')
+    expect((await screen.findByText('Now uses Homelab instructions and tools.')).closest('[role="status"]')).toHaveAttribute('data-composer-notice')
     expect(screen.queryByRole('dialog', { name: 'Move to project' })).toBeNull()
   })
 

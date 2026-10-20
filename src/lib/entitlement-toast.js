@@ -1,29 +1,20 @@
-const dismissAfter = 5000
+// Each entitlement change is a new cause, so it shows the composer notice
+// again, or restarts its clock while it shows.
+export const ENTITLEMENT_NOTICE = 'Your access changed. Some models or connections may differ.'
 
-export function createEntitlementToast({
-  listen,
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-  onVisible,
-}) {
-  let timer
+export function createEntitlementToast({ listen, notices }) {
   let unlisten
   let destroyed = false
+  let changes = 0
 
   function clear() {
-    clearTimer(timer)
-    timer = undefined
-    if (!destroyed) onVisible(false)
+    notices.withdraw('entitlement')
   }
 
   function show() {
     if (destroyed) return
-    clearTimer(timer)
-    onVisible(true)
-    timer = setTimer(() => {
-      timer = undefined
-      if (!destroyed) onVisible(false)
-    }, dismissAfter)
+    changes += 1
+    notices.show({ id: 'entitlement', cause: changes, text: ENTITLEMENT_NOTICE, dismissLabel: 'Dismiss access notice' })
   }
 
   async function start() {
