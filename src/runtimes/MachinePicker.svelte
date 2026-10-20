@@ -7,7 +7,9 @@
   // members this app does not reach itself, containers included: a new
   // thread can start on any that answers, and core forwards it there. An
   // open thread another member owns names that owner. An open thread's menu
-  // checks its machine and offers no other choice. The chip shows only once
+  // checks its machine and offers no other choice. A narrow composer keeps
+  // the chip to the picked machine's icon, as the model and mode chips keep
+  // theirs, with the machine in its name and hover label. The chip shows only once
   // a machine is paired or a fleet has other members. The menu is a composer
   // panel, so opening it closes any other.
   import { onMount, tick } from 'svelte'
@@ -95,7 +97,6 @@
   <span class="machine-picker" bind:this={root}>
     <ComposerMenuButton menu="machine" {open} chevrons label={kept ? `Machine: ${owner ? `on ${shownName}` : shownName}${owner?.online === false ? ', offline' : ''}. This thread stays on it` : `Machine: ${shownName}. Choose a machine`} text={owner ? `on ${shownName}` : shownName} bind:element={toggle} onclick={() => openComposerPanel(open ? null : 'machine')}>
       {#snippet icon()}<LucideIcon name={kindIcon(shown)} size={14} />{#if owner?.online === false}<span class="away" aria-hidden="true"><LucideIcon name="globe-off" variant="action" size={14} /></span>{/if}{/snippet}
-      {#snippet compact()}<LucideIcon name="network" size={14} />{/snippet}
     </ComposerMenuButton>
     {#if open}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

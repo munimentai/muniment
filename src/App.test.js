@@ -8672,8 +8672,9 @@ it('draws the machine, model, thinking level and permission mode menus with one 
   }
   await fireEvent.click(buttons.machine)
   expect(buttons.machine.querySelector('[data-icon=chevrons-down-up]')).not.toBeNull()
-  // A narrow composer keeps the network mark for the machine, the provider mark for the model and the gauge for usage.
-  expect(buttons.machine.querySelector('.narrow [data-icon=network]')).not.toBeNull()
+  // A narrow composer keeps the picked machine's shape for the machine and the provider mark for the model.
+  expect(buttons.machine.querySelector('.narrow')).toBeNull()
+  expect(buttons.machine.querySelector('.icon [data-icon=monitor]')).not.toBeNull()
   expect(buttons.model.querySelector('.icon .logo')).not.toBeNull()
   expect(buttons.machine).toHaveAttribute('data-tooltip', 'Machine: This computer. Choose a machine')
 })
