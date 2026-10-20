@@ -1131,7 +1131,7 @@ const AGENT_SCREENS = {
   'usage-partial': () => document.querySelector('[data-panel="usage"]')?.textContent.includes('Build box did not answer') && document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7,
   'composer-limit': () => !!document.querySelector('.limit-banner') && document.querySelector('.titlebar')?.textContent.includes('Lead scout'),
   'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
-  replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="Failed runs"] .replay').length === 2,
+  replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="History"] .retry').length === 2,
   preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
   empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .agent-card'),
   cards: () => cardsRendered(5),
@@ -1333,12 +1333,17 @@ function advanceAgentsFixture() {
   }
   if (agentsState === 'move') {
     const dialog = document.querySelector('[data-panel="move"]')
-    if (!dialog) return buttonNamed(profile.querySelector('[aria-label="Primary machine"]'), 'Move')?.click()
+    if (!dialog) {
+      const row = profile.querySelector('[aria-label="Primary machine"]')
+      const menu = row?.querySelector('[role="menu"]')
+      if (!menu) return row?.querySelector('[data-menu="agent-machine"]')?.click()
+      return Array.from(menu.querySelectorAll('[role="menuitemradio"]')).find((item) => item.getAttribute('aria-checked') !== 'true')?.click()
+    }
     const force = Array.from(dialog.querySelectorAll('label')).find((label) => label.textContent.trim() === 'Force the move')?.querySelector('input')
     if (force && !force.checked) force.click()
     return
   }
-  if (agentsState === 'replays') return profile.querySelector('[aria-label="Failed runs"]')?.scrollIntoView({ block: 'start' })
+  if (agentsState === 'replays') return profile.querySelector('[aria-label="History"]')?.scrollIntoView({ block: 'start' })
   const editor = document.querySelector('[data-panel="routine"]')
   if (target.routine && !editor) {
     Array.from(profile.querySelectorAll('.routine button')).find((button) => button.textContent.trim() === target.routine)?.click()

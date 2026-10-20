@@ -52,3 +52,31 @@ it('notes what an imported template brought', async () => {
   expect(templateNote({ coverage: 'public-profile' })).toBe('Imported from a public share page, which holds the profile only.')
   expect(templateNote({ coverage: 'provided', skills: [{ name: 'Tone' }], plugins: ['Gmail', 'Drive'] })).toBe('Imported from a template. 1 skill stays as reference text. 2 tools need setup in Tools.')
 })
+
+it('names when a run started in local time with no time zone', async () => {
+  const { runTimeLabel } = await import('./agent-labels.js')
+  const now = new Date(2026, 9, 20, 15, 0).getTime()
+  const time = (date) => date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const today = new Date(2026, 9, 20, 8, 56)
+  const yesterday = new Date(2026, 9, 19, 9, 3)
+  const earlier = new Date(2026, 9, 12, 9, 8)
+  const lastYear = new Date(2025, 11, 30, 9, 8)
+  expect(runTimeLabel(today.toISOString(), now)).toBe(`Today at ${time(today)}`)
+  expect(runTimeLabel(yesterday.toISOString(), now)).toBe(`Yesterday at ${time(yesterday)}`)
+  expect(runTimeLabel(earlier.toISOString(), now)).toBe(`${earlier.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${time(earlier)}`)
+  expect(runTimeLabel(lastYear.toISOString(), now)).toContain('2025')
+  expect(runTimeLabel(today.toISOString(), now)).not.toMatch(/UTC|GMT|[A-Z]{3,4}T\b/)
+  expect(runTimeLabel('not a time', now)).toBe('')
+})
+
+it('titles a run by its routine, else by what started it, and picks its stoplight', async () => {
+  const { runLight, runOutcome, runTitle } = await import('./agent-labels.js')
+  const routines = [{ id: 'daily', name: 'Morning digest' }]
+  expect(runTitle({ trigger: { kind: 'cron', routine_id: 'daily' } }, routines)).toBe('Morning digest')
+  expect(runTitle({ trigger: { kind: 'manual', source: 'desktop' } }, routines)).toBe('Run now')
+  expect(runTitle({ trigger: { kind: 'manual', source: 'test' } }, routines)).toBe('Test run')
+  expect(runTitle({ trigger: { kind: 'webhook', source: 'replay' } }, routines)).toBe('Retry')
+  expect(runTitle({ trigger: { kind: 'agent_message' } }, routines)).toBe('Agent message')
+  expect([{ status: 'completed' }, { status: 'completed', silent: true }, { status: 'waiting_input' }, { status: 'running' }, { status: 'failed' }].map(runLight)).toEqual(['green', 'yellow', 'yellow', 'yellow', 'red'])
+  expect([{ status: 'completed' }, { status: 'completed', silent: true }, { status: 'failed' }].map(runOutcome)).toEqual(['', 'No reply needed', 'Failed'])
+})

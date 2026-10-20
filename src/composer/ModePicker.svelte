@@ -9,7 +9,8 @@
   import { followPointer } from '../lib/menu-pointer.js'
 
   // `source` names where the thread's mode comes from, such as `default`.
-  let { modes, current, source = '', onchoose, onclose } = $props()
+  // `hint` shows the Shift+Tab line, which only the composer answers.
+  let { modes, current, source = '', hint = true, onchoose, onclose } = $props()
   let menu = $state()
 
   const items = () => [...(menu?.querySelectorAll('[role="menuitemradio"]:not(:disabled)') ?? [])]
@@ -51,7 +52,7 @@
     </button>
   {/each}
   {#if source}{@const mode = modes.find((entry) => entry.id === current)}<p class="source">{mode ? `${mode.title} · ${source}` : source}</p>{/if}
-  <p class="hint"><kbd>Shift+Tab</kbd>cycles modes</p>
+  {#if hint}<p class="hint"><kbd>Shift+Tab</kbd>cycles modes</p>{/if}
 </div>
 
 <style>

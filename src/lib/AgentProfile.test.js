@@ -82,36 +82,72 @@ it('keeps a failed edit for retry and names the failure', async () => {
   await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Job title' })).not.toBeInTheDocument())
 })
 
-it('turns skills on and off, sets the mode from core, edits permission rules and the messaging list', async () => {
+it('turns skills on and off, picks a core mode from the composer menu and limits messages to chosen agents', async () => {
   const { invoke, saved } = machine()
-  const others = [{ id: 'editor', name: 'Editor', runtimeId: 'box' }]
-  render(AgentProfile, { agent, tauri: { invoke }, agents: [agent, ...others], catalog, onchange: vi.fn() })
-  // The tool switches are gone. The deprecated list waits under Advanced.
+  const others = [{ id: 'editor', name: 'Editor', runtimeId: 'box' }, { id: 'triage', name: 'Triage', runtimeId: 'box' }]
+  const view = render(AgentProfile, { agent, tauri: { invoke }, agents: [agent, ...others], catalog, onchange: vi.fn() })
+  // The tool switches, the rule lists and the disabled tools stay out of the profile.
   expect(screen.queryByRole('switch', { name: 'Shell commands on' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Add rule' })).not.toBeInTheDocument()
+  expect(screen.queryByText(/Disabled tools/)).not.toBeInTheDocument()
   await fireEvent.click(screen.getByRole('checkbox', { name: /^Code review/ }))
   await waitFor(() => expect(saved().skills).toEqual(['review']))
 
-  const mode = await screen.findByRole('combobox', { name: 'Permission mode' })
-  expect([...mode.options].map((option) => option.textContent)).toEqual(['Default (Plan first)', 'Ask before changes', 'Plan first', "Don't ask", 'Bypass permissions'])
-  expect(mode.options[4]).toBeDisabled()
-  await fireEvent.change(mode, { target: { value: 'dont_ask' } })
+  const permissions = screen.getByRole('region', { name: 'Permissions' })
+  await fireEvent.click(await within(permissions).findByRole('button', { name: 'Permissions: Ask before changes' }))
+  const menu = within(permissions).getByRole('menu', { name: 'Modes' })
+  expect(within(menu).getAllByRole('menuitemradio').map((item) => item.getAttribute('aria-label'))).toEqual(['Ask before changes', 'Plan first', "Don't ask", 'Bypass permissions'])
+  expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeDisabled()
+  expect(menu).not.toHaveTextContent('Shift+Tab')
+  await fireEvent.click(within(menu).getByRole('menuitemradio', { name: "Don't ask" }))
   await waitFor(() => expect(saved().permissions.mode).toBe('dont_ask'))
-  // The default sends no mode, so the agent follows the machine's default.
-  await fireEvent.change(mode, { target: { value: '' } })
-  await waitFor(() => expect(saved().permissions).toEqual({ always_allow: [], ask_first: [] }))
+  expect(within(permissions).queryByRole('menu')).not.toBeInTheDocument()
 
-  await fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
-  const form = screen.getByRole('form', { name: 'New permission rule' })
-  expect([...within(form).getByRole('combobox', { name: 'List' }).options].map((option) => option.textContent)).toEqual(['Deny', 'Ask first', 'Always allow'])
-  await fireEvent.change(within(form).getByRole('combobox', { name: 'List' }), { target: { value: 'deny' } })
-  await fireEvent.change(within(form).getByRole('combobox', { name: 'Kind' }), { target: { value: 'tool' } })
-  await fireEvent.input(within(form).getByRole('textbox', { name: 'Tool' }), { target: { value: 'mcp__crm__delete_lead' } })
-  await fireEvent.input(within(form).getByRole('textbox', { name: 'Input' }), { target: { value: '{"id":"lead-1"}' } })
-  await fireEvent.click(within(form).getByRole('button', { name: 'Add rule' }))
-  await waitFor(() => expect(saved().permissions.deny).toEqual([{ request_kind: 'tool', resource: { type: 'tool', name: 'mcp__crm__delete_lead', input: { id: 'lead-1' } } }]))
-
-  await fireEvent.click(screen.getByRole('radio', { name: 'Only these agents' }))
+  const messaging = screen.getByRole('region', { name: 'Messaging' })
+  expect(within(messaging).getByRole('radio', { name: 'Any' })).toHaveAttribute('aria-checked', 'true')
+  await fireEvent.click(within(messaging).getByRole('radio', { name: 'Only these' }))
   await waitFor(() => expect(saved().messaging).toEqual({ allow: [] }))
+  await view.rerender({ agent: { ...agent, messaging: { allow: ['editor'] } } })
+  expect(within(messaging).getByText('Editor')).toBeInTheDocument()
+  expect(within(messaging).queryByRole('checkbox')).not.toBeInTheDocument()
+  await fireEvent.click(within(messaging).getByRole('button', { name: 'Choose agents' }))
+  const list = within(messaging).getByRole('menu', { name: 'Agents' })
+  expect(within(list).getByRole('menuitemcheckbox', { name: 'Editor' })).toHaveAttribute('aria-checked', 'true')
+  await fireEvent.click(within(list).getByRole('menuitemcheckbox', { name: 'Triage' }))
+  await waitFor(() => expect(saved().messaging).toEqual({ allow: ['editor', 'triage'] }))
+  await fireEvent.click(within(messaging).getByRole('radio', { name: 'Any' }))
+  await waitFor(() => expect(saved().messaging).toEqual({ allow: 'any' }))
+})
+
+it('saves the project on a pick and picks the model and thinking level from the composer popups', async () => {
+  const { invoke, saved } = machine()
+  const inventory = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', models: [{ id: 'qwen3:8b', thinking_levels: ['low', 'high'], thinking_default: 'low' }, { id: 'llama4' }] }] }
+  const onvisibility = vi.fn()
+  const view = render(AgentProfile, { agent, tauri: { invoke }, projects: [['p', 'Research'], ['q', 'Sales']], inventory, onvisibility, onchange: vi.fn() })
+  const project = screen.getByRole('region', { name: 'Project' })
+  expect(screen.queryByRole('button', { name: 'Edit project' })).not.toBeInTheDocument()
+  await fireEvent.click(within(project).getByRole('button', { name: 'Project: Research' }))
+  await fireEvent.click(within(within(project).getByRole('menu', { name: 'Project' })).getByRole('menuitemradio', { name: 'Sales' }))
+  await waitFor(() => expect(saved().projectId).toBe('q'))
+
+  const model = screen.getByRole('region', { name: 'Model' })
+  expect(within(model).queryByRole('combobox')).not.toBeInTheDocument()
+  await fireEvent.click(within(model).getByRole('button', { name: 'Model: Default model' }))
+  const picker = within(model).getByRole('dialog', { name: 'Model' })
+  await fireEvent.click(within(picker).getByRole('button', { name: 'Hide llama4' }))
+  expect(onvisibility).toHaveBeenCalledWith(expect.objectContaining({ choice: 'llama4' }), false)
+  await fireEvent.click(within(picker).getByRole('button', { name: 'qwen3:8b' }))
+  await waitFor(() => expect(saved().model).toEqual({ provider: 'ollama', id: 'qwen3:8b' }))
+
+  await view.rerender({ agent: { ...agent, model: { provider: 'ollama', id: 'qwen3:8b' } } })
+  await fireEvent.click(within(model).getByRole('button', { name: 'Thinking level: Low' }))
+  await fireEvent.click(within(within(model).getByRole('menu', { name: 'Thinking level' })).getByRole('menuitemradio', { name: 'High' }))
+  await waitFor(() => expect(saved().model).toEqual({ provider: 'ollama', id: 'qwen3:8b', thinking: 'high' }))
+  // The picker's foot puts the agent back on the default model.
+  await fireEvent.click(within(model).getByRole('button', { name: 'Model: qwen3:8b' }))
+  expect(within(model).getByText('qwen3:8b · this agent')).toBeInTheDocument()
+  await fireEvent.click(within(model).getByRole('button', { name: 'Use the default model' }))
+  await waitFor(() => expect(saved().model).toBeNull())
 })
 
 it('keeps an always allow rule an approval saved while the profile was open', async () => {
@@ -119,24 +155,13 @@ it('keeps an always allow rule an approval saved while the profile was open', as
   // The open profile shows no rule, and the agent's machine already holds one.
   const { invoke, saved } = machine({ ...agent, permissions: { ...agent.permissions, always_allow: [push] } })
   render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
-  const mode = await screen.findByRole('combobox', { name: 'Permission mode' })
-  await fireEvent.change(mode, { target: { value: 'dont_ask' } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Permissions: Ask before changes' }))
+  await fireEvent.click(screen.getByRole('menuitemradio', { name: "Don't ask" }))
   await waitFor(() => expect(saved().permissions).toEqual({ mode: 'dont_ask', always_allow: [push], ask_first: [] }))
 })
 
-it('keeps the deprecated disabled tools under Advanced', async () => {
-  const { invoke, saved } = machine()
-  render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
-  const list = screen.getByRole('list', { name: 'Disabled tools' })
-  expect(within(list).getByText('powershell')).toBeInTheDocument()
-  await fireEvent.input(screen.getByRole('combobox', { name: 'Tool id' }), { target: { value: 'bash' } })
-  await fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
-  await waitFor(() => expect(saved().tools).toEqual({ disabled: ['powershell', 'bash'] }))
-  await fireEvent.click(screen.getByRole('button', { name: 'Turn powershell on again' }))
-  await waitFor(() => expect(saved().tools).toEqual({ disabled: [] }))
-})
 
-it('runs the agent on its own machine, lists its runs and deletes it with its memory on request', async () => {
+it('runs the agent on its own machine, opens a run from its history and deletes it with its memory on request', async () => {
   const remote = { ...agent, runtimeId: 'box' }
   const { invoke, requests } = machine(remote)
   const onrun = vi.fn()
@@ -147,13 +172,14 @@ it('runs the agent on its own machine, lists its runs and deletes it with its me
   // A paired machine's agent keeps its folder and memory there.
   expect(screen.queryByRole('button', { name: 'Open folder' })).not.toBeInTheDocument()
   expect(screen.queryByText('Memory')).not.toBeInTheDocument()
-  expect(screen.getByRole('region', { name: 'Primary machine' })).toHaveTextContent('Build box')
-  const activity = screen.getByRole('region', { name: 'Activity' })
-  expect(activity).toHaveTextContent('Completed')
-  expect(activity).toHaveTextContent('Schedule')
-  expect(activity).toHaveTextContent('30s')
-  expect(activity).toHaveTextContent('silent')
-  await fireEvent.click(within(activity).getByRole('button', { name: 'Open conversation' }))
+  // One machine in reach shows no primary machine to pick.
+  expect(screen.queryByRole('region', { name: 'Primary machine' })).not.toBeInTheDocument()
+  const history = screen.getByRole('region', { name: 'History' })
+  const row = within(history).getByRole('button', { name: /^Schedule, / })
+  expect(row).toHaveTextContent(/at \d{1,2}:\d{2}/)
+  expect(row).toHaveTextContent('No reply needed')
+  expect(row.closest('li')).toHaveAttribute('data-light', 'yellow')
+  await fireEvent.click(row)
   expect(onopen).toHaveBeenCalledWith('t1')
 
   await fireEvent.click(screen.getByRole('button', { name: 'Run now' }))
@@ -171,8 +197,9 @@ it('opens scoped memory only on request', async () => {
   const invoke = vi.fn(async (command) => command === 'agent_memory' ? [{ id: 'fact', title: 'Source preference', content: 'Use primary sources.', source: 'Chat' }] : null)
   render(AgentProfile, { agent, tauri: { invoke } })
   expect(invoke.mock.calls.some(([command]) => command === 'agent_memory')).toBe(false)
-  await fireEvent.click(screen.getByText('Memory', { exact: true }))
-  await screen.findByText('Source preference')
+  await fireEvent.click(within(screen.getByRole('region', { name: 'Memory' })).getByRole('button', { name: 'Open memory' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Agent memory' })
+  await within(dialog).findByText('Source preference')
   expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_facts' }))
 })
 
@@ -185,7 +212,10 @@ it('accepts or dismisses routines core proposed and edits a schedule', async () 
   const onchange = vi.fn()
   render(AgentProfile, { agent: withRoutines, tauri: { invoke }, onchange })
   const routines = screen.getByRole('region', { name: 'Routines' })
-  expect(within(routines).getByText('Every day at 09:00 · UTC')).toBeInTheDocument()
+  // A schedule names no time zone, and its switch is the small one.
+  expect(within(routines).getByText('Every day at 09:00')).toBeInTheDocument()
+  expect(within(routines).queryByText(/UTC/)).not.toBeInTheDocument()
+  expect(within(routines).getByRole('switch', { name: 'Briefing on' })).toHaveClass('small')
   const digest = await screen.findByRole('article', { name: 'Proposed routine Morning digest' })
   expect(digest).toHaveTextContent('Proposed from instructions')
   expect(screen.getByRole('article', { name: 'Proposed routine Urgent mail' })).toHaveTextContent('Proposed from the imported template')
@@ -242,7 +272,7 @@ const swarm = {
   agents: [], groups: [], approvals: [], absence: { paused: false },
 }
 
-it('moves the agent after a confirm, through the machine that holds it', async () => {
+it('moves the agent to the machine picked in its profile after a confirm, through the machine that holds it', async () => {
   const placed = { ...agent, runtimeId: 'local', primaryRuntime: 'core-laptop' }
   const { invoke, requests } = machine(placed)
   invoke.mockImplementation(async (command, args) => {
@@ -252,11 +282,16 @@ it('moves the agent after a confirm, through the machine that holds it', async (
   })
   const onchange = vi.fn()
   render(AgentProfile, { agent: placed, tauri: { invoke }, swarm, onchange })
-  await fireEvent.click(within(screen.getByRole('region', { name: 'Primary machine' })).getByRole('button', { name: 'Move' }))
+  const row = screen.getByRole('region', { name: 'Primary machine' })
+  await fireEvent.click(within(row).getByRole('button', { name: 'Primary machine: This computer' }))
+  const menu = within(row).getByRole('menu', { name: 'Primary machine' })
+  expect(within(menu).getAllByRole('menuitemradio').map((item) => item.textContent.trim())).toEqual(['This computer', 'Build box', 'Studio Offline'])
+  expect(within(menu).getByRole('menuitemradio', { name: 'This computer' })).toHaveAttribute('aria-checked', 'true')
+  await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Build box' }))
   const dialog = await screen.findByRole('dialog', { name: 'Move agent' })
   const move = within(dialog).getByRole('button', { name: 'Move agent' })
   expect(move).toBeDisabled()
-  await fireEvent.change(within(dialog).getByRole('combobox', { name: 'Move to' }), { target: { value: 'core-box' } })
+  expect(within(dialog).getByRole('combobox', { name: 'Move to' })).toHaveValue('core-box')
   await fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Move Scout to Build box' }))
   await fireEvent.click(move)
   await waitFor(() => expect(requests.at(-1)).toEqual({ runtime: 'local', operation: 'agent.move', body: { id: 'scout', to: 'core-box', force: false } }))
@@ -269,9 +304,10 @@ it('forces a move off an offline primary only with the warning acknowledged, on 
   const requests = []
   const invoke = vi.fn(async (_command, args) => { requests.push(args); return args.operation === 'agent.move' ? { status: 'forced' } : { proposals: [] } })
   render(AgentProfile, { agent: stranded, tauri: { invoke }, swarm, onchange: vi.fn() })
-  await fireEvent.click(within(screen.getByRole('region', { name: 'Primary machine' })).getByRole('button', { name: 'Move' }))
+  await fireEvent.click(screen.getByRole('button', { name: /^Primary machine:/ }))
+  await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Build box' }))
   const dialog = await screen.findByRole('dialog', { name: 'Move agent' })
-  await fireEvent.change(within(dialog).getByRole('combobox', { name: 'Move to' }), { target: { value: 'core-box' } })
+  expect(within(dialog).getByRole('combobox', { name: 'Move to' })).toHaveValue('core-box')
   expect(within(dialog).getByRole('note')).toHaveTextContent('Studio does not answer.')
   expect(within(dialog).queryByRole('checkbox', { name: 'Move Scout to Build box' })).not.toBeInTheDocument()
   await fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Force the move' }))
@@ -330,16 +366,18 @@ it('creates a webhook routine and shows its secret once, then rotates it', async
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New routine' })).not.toBeInTheDocument())
 })
 
-it('loads an existing webhook\'s address and shows a tool check\'s last poll', async () => {
+it('loads an existing webhook\'s address and shows a tool check\'s failed poll', async () => {
   const hook = { hook_id: 'h1', preset: 'forgejo', urls: ['https://192.0.2.20:7443/hooks/h1'], certificate_sha256: 'cd'.repeat(32), listening: true }
   const routines = [
     { id: 'build', name: 'Build finished', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'webhook', hook_id: 'h1', preset: 'forgejo' }, last_fired_at: null, last_result: null },
-    { id: 'leads', name: 'New leads', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'mcp', server: 'crm', tool: 'search', args: {}, every: { expr: '*/30 * * * *', tz: 'UTC' }, condition: { all: [] } }, last_fired_at: null, last_result: null, last_poll: { at: new Date().toISOString(), fired: false, failures: 0 } },
+    { id: 'leads', name: 'New leads', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'mcp', server: 'crm', tool: 'search', args: {}, every: { expr: '*/30 * * * *', tz: 'UTC' }, condition: { all: [] } }, last_fired_at: null, last_result: null, last_poll: { at: new Date().toISOString(), fired: false, failures: 2, error: 'The server did not answer.' } },
   ]
   const withHook = { ...agent, routines }
   const invoke = vi.fn(async (_command, args) => args.operation === 'routine.webhook_info' ? { hook } : { proposals: [] })
   render(AgentProfile, { agent: withHook, tauri: { invoke }, onchange: vi.fn() })
-  expect(screen.getByRole('group', { name: 'New leads' })).toHaveTextContent('condition did not hold')
+  expect(screen.getByRole('group', { name: 'New leads' })).toHaveTextContent('crm search · every 30 minutes')
+  expect(screen.getByRole('group', { name: 'New leads' })).toHaveTextContent('failed: The server did not answer. · 2 failures in a row')
+  expect(screen.getByRole('group', { name: 'Build finished' })).toHaveTextContent('Webhook · Forgejo')
   await fireEvent.click(screen.getByRole('button', { name: 'Build finished' }))
   const editor = await screen.findByRole('dialog', { name: 'Edit routine' })
   expect(await within(editor).findByText('https://192.0.2.20:7443/hooks/h1')).toBeInTheDocument()
@@ -348,9 +386,10 @@ it('loads an existing webhook\'s address and shows a tool check\'s last poll', a
   expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'routine.webhook_info', body: { agent_id: 'scout', routine_id: 'build' } })
 })
 
-it('lists failed runs, replays one against the agent as it is now and links the new run', async () => {
-  const replay = { replay_id: 'rp1', agent_id: 'scout', trigger: { kind: 'webhook', routine_id: 'hook' }, error: 'The model could not complete this reply.', failed_at: '2026-01-01T14:05:00Z', redacted: true, replayed_by: [], prompt_preview: 'Summarize the build.', prompt_bytes: 20, definition_changed: true }
-  const run = { id: 'run-r', agent_id: 'scout', thread_id: null, status: 'queued', trigger: { kind: 'webhook', source: 'replay' }, origin_run_id: 'rp1' }
+it('lists runs in one history with stoplight colors, retries a failed run core kept and opens each run', async () => {
+  const replay = { replay_id: 'rp1', agent_id: 'scout', thread_id: 't-fail', trigger: { kind: 'webhook', routine_id: 'hook' }, error: 'The model could not complete this reply.', failed_at: '2026-01-01T14:05:00Z', redacted: true, replayed_by: [], prompt_preview: 'Summarize the build.', prompt_bytes: 20, definition_changed: true }
+  const done = { id: 'r-done', agent_id: 'scout', thread_id: 't-done', status: 'completed', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  const run = { id: 'run-r', agent_id: 'scout', thread_id: null, status: 'queued', trigger: { kind: 'webhook', source: 'replay' }, origin_run_id: 'rp1', created_at: new Date().toISOString() }
   const { invoke, requests } = machine({ ...agent, routines: [] })
   const answer = invoke.getMockImplementation()
   invoke.mockImplementation(async (command, args) => {
@@ -359,26 +398,39 @@ it('lists failed runs, replays one against the agent as it is now and links the 
     return answer(command, args)
   })
   const onrun = vi.fn()
+  const onopen = vi.fn()
   const onopenrun = vi.fn()
-  const view = render(AgentProfile, { agent: { ...agent, routines: [{ id: 'hook', name: 'Build finished', enabled: true, trigger: { kind: 'webhook' } }] }, tauri: { invoke }, catalog, onchange: vi.fn(), onrun, onopenrun })
-  const section = await screen.findByRole('region', { name: 'Failed runs' })
-  expect(await within(section).findByText('Webhook · Build finished')).toBeInTheDocument()
-  expect(section).toHaveTextContent('The agent changed since this failure. A replay uses it as it is now.')
-  expect(section).toHaveTextContent('Secrets in the input were removed.')
-  await fireEvent.click(within(section).getByRole('button', { name: 'Replay' }))
+  const routines = [{ id: 'hook', name: 'Build finished', enabled: true, trigger: { kind: 'webhook' } }, { id: 'daily', name: 'Morning digest', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' } }]
+  const view = render(AgentProfile, { agent: { ...agent, routines }, tauri: { invoke }, runs: [done], catalog, onchange: vi.fn(), onrun, onopen, onopenrun })
+  const history = screen.getByRole('region', { name: 'History' })
+  // Failed runs core kept join the runs, newest first, with no separate list.
+  const failed = await within(history).findByRole('button', { name: /^Build finished/ })
+  expect(screen.queryByRole('region', { name: 'Failed runs' })).not.toBeInTheDocument()
+  expect(within(history).getAllByRole('listitem').map((item) => item.dataset.light)).toEqual(['green', 'red'])
+  expect(within(history).getByRole('button', { name: /^Morning digest, / })).toHaveTextContent(/^Morning digestToday at \d{1,2}:\d{2}/)
+  expect(failed).toHaveTextContent(/Jan 1 at \d{1,2}:\d{2}.* · Failed$/)
+  expect(history).not.toHaveTextContent(/UTC|GMT/)
+  await fireEvent.click(failed)
+  expect(onopen).toHaveBeenCalledWith('t-fail')
+
+  await fireEvent.click(within(history).getByRole('button', { name: 'Retry Build finished' }))
   await waitFor(() => expect(requests).toContainEqual({ runtime: 'local', operation: 'agent.replay', body: { id: 'scout', replay_id: 'rp1' } }))
   expect(onrun).toHaveBeenCalledWith({ ...run, runtimeId: 'local' })
-  expect(await within(section).findByText('Replayed 1 time.')).toBeInTheDocument()
-  expect(within(section).getByText('It links here once it starts.')).toBeInTheDocument()
-  await view.rerender({ runs: [{ ...run, runtimeId: 'local', status: 'running', thread_id: 'thread-r' }] })
-  await fireEvent.click(await within(section).findByRole('button', { name: 'Open run' }))
-  expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-r', thread_id: 'thread-r' }))
+  // The retry opens through its run until it starts its conversation.
+  await view.rerender({ runs: [{ ...run, runtimeId: 'local' }, done] })
+  const retry = within(history).getByRole('button', { name: /^Retry, Today at/ })
+  expect(retry.closest('li')).toHaveAttribute('data-light', 'yellow')
+  expect(retry).toHaveTextContent('Queued')
+  await fireEvent.click(retry)
+  expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-r' }))
+  await view.rerender({ runs: [{ ...run, runtimeId: 'local', status: 'running', thread_id: 'thread-r' }, done] })
+  await fireEvent.click(within(history).getByRole('button', { name: /^Retry, Today at/ }))
+  expect(onopen).toHaveBeenCalledWith('thread-r')
 })
 
-it('says when a machine has no failed runs and shows the agent\'s activity', async () => {
+it('says when the agent has no runs yet and shows its activity', async () => {
   const { invoke } = machine()
-  render(AgentProfile, { agent, tauri: { invoke }, catalog, activity: { state: 'waiting', action: 'Run `git push` in work', since: null }, onchange: vi.fn(), onactivity: vi.fn() })
-  expect(await screen.findByText('No failed runs to replay.')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Open activity' })).toBeInTheDocument()
+  render(AgentProfile, { agent, tauri: { invoke }, catalog, activity: { state: 'waiting', action: 'Run `git push` in work', since: null }, onchange: vi.fn() })
+  expect(within(screen.getByRole('region', { name: 'History' })).getByText('No runs yet.')).toBeInTheDocument()
   expect(screen.getByText('Waiting for you: Run git push in work')).toBeInTheDocument()
 })
