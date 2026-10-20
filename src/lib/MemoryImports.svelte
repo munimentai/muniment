@@ -176,7 +176,7 @@
 <Group heading="Imports" info="Notes that Claude Code, Codex, Obsidian and other assistants keep on this computer.">
   {#snippet actions()}
     <Button disabled={scanning} onclick={scan}>{report ? 'Look again' : 'Look for memory'}</Button>
-    <Button disabled={archive?.previewing || archive?.pending} onclick={pickArchive}>Import an export ZIP…</Button>
+    <Button disabled={archive?.previewing || archive?.pending} onclick={pickArchive}>Import a ZIP…</Button>
   {/snippet}
   {#if scanning}
     <p role="status">Looking for assistant memory…</p>
