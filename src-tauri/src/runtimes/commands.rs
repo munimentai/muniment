@@ -626,10 +626,12 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use muniment_core::attach::thread_service::ThreadListService;
+    use muniment_core::attach::ProtocolError;
     use muniment_core::attach::{
         InstallKind, PairingLinkRequest, RemoteAccess, RemoteAccessOptions, RemoteListener,
         RemoteListenerConfig, RuntimeUpdateState, SignedWorkspaceApproval, UpdateCapability,
     };
+    use muniment_core::run_events::{ChatEvent, ChatEventSubscription};
 
     struct Service;
 
@@ -643,8 +645,28 @@ mod tests {
         thread: Option<std::thread::JoinHandle<()>>,
     }
 
+    /// A runtime service that also serves chat events. Each subscription
+    /// stays open until the test ends.
+    #[derive(Clone, Default)]
+    struct ChatService(Arc<Mutex<Vec<std::sync::mpsc::Sender<ChatEvent>>>>);
+
+    impl ThreadListService for ChatService {
+        fn subscribe_chat_events(&mut self) -> Result<ChatEventSubscription, ProtocolError> {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.0.lock().unwrap().push(sender);
+            Ok(ChatEventSubscription::detached(receiver))
+        }
+    }
+
     impl LoopbackRuntime {
         fn start(version: &str) -> Self {
+            Self::serving(version, || Ok::<_, ()>(Service))
+        }
+
+        fn serving<S: ThreadListService + 'static>(
+            version: &str,
+            service: impl Fn() -> Result<S, ()> + Send + Sync + 'static,
+        ) -> Self {
             let directory = std::env::temp_dir().join(format!(
                 "muniment-loopback-runtime-{}",
                 uuid::Uuid::now_v7()
@@ -670,12 +692,7 @@ mod tests {
             let served = access.clone();
             let thread = std::thread::spawn(move || {
                 listener
-                    .serve(
-                        served,
-                        SignedWorkspaceApproval::default(),
-                        || Ok::<_, ()>(Service),
-                        stopped,
-                    )
+                    .serve(served, SignedWorkspaceApproval::default(), service, stopped)
                     .unwrap();
             });
             Self {
@@ -734,6 +751,94 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out");
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn a_welcome_that_renames_the_machine_opens_no_other_connection() {
+        let runtime = LoopbackRuntime::serving(APP_VERSION, || Ok(ChatService::default()));
+        let (registry, directory) = registry();
+        let (id, _) = pair(
+            &registry,
+            runtime.link(&["thread.read", "run.write"]),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        // The app knew the machine by another name it gave itself.
+        registry
+            .observe(&id, None, None, None, Some("Old name".into()))
+            .unwrap();
+        assert_eq!(registry.entry(&id).unwrap().name, "Old name");
+
+        let runtimes = Arc::new(super::super::Runtimes::new(Some(registry.clone())));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (recorded, observed) = (Arc::clone(&runtimes), Arc::clone(&seen));
+        let connector = Connector {
+            observe: Arc::new(move |id, observation| {
+                observed.lock().unwrap().push(observation.clone());
+                recorded.record(id, observation);
+            }),
+            ..connector_for(&registry, &id, &seen)
+        };
+        let welcomes = || {
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|observation| matches!(observation, Observation::Welcome { .. }))
+                .count()
+        };
+        let supervisor = super::super::RemoteSupervisor::start(connector, |_| {}, |_| {});
+        // The desktop client and the chat events each connect once.
+        wait_for(|| supervisor.connected() && welcomes() == 2);
+        assert_eq!(registry.entry(&id).unwrap().name, "Build box");
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(welcomes(), 2);
+        assert!(supervisor.connected());
+        // The rename changes no connection state.
+        let statuses: Vec<_> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|observation| match observation {
+                Observation::Status(status) => Some(*status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(statuses, [RuntimeStatus::Connecting, RuntimeStatus::Online]);
+        supervisor.stop();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn a_connection_dropped_soon_after_it_opens_reconnects_later_each_time() {
+        let runtime = LoopbackRuntime::serving(APP_VERSION, || Ok(ChatService::default()));
+        let (registry, directory) = registry();
+        let (id, _) = pair(&registry, runtime.link(&["thread.read"]), None, None, None).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let supervisor = super::super::RemoteSupervisor::start(
+            connector_for(&registry, &id, &seen),
+            |_| {},
+            |_| {},
+        );
+        let mut opened = Vec::new();
+        for _ in 0..2 {
+            wait_for(|| supervisor.connected());
+            opened.push(Instant::now());
+            // A request the client refuses to send drops the connection, as
+            // an answer it cannot read does.
+            assert!(supervisor.holder.thread_history("", 1, None).is_err());
+            wait_for(|| !supervisor.connected());
+        }
+        wait_for(|| supervisor.connected());
+        opened.push(Instant::now());
+        let first = opened[1] - opened[0];
+        let second = opened[2] - opened[1];
+        assert!(first >= Duration::from_secs(1), "{first:?}");
+        assert!(second >= Duration::from_secs(2), "{second:?}");
+        assert!(second > first);
+        supervisor.stop();
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

@@ -9,7 +9,7 @@
   import OwnerChip from './runtimes/OwnerChip.svelte'
   import QueuedNotice from './runtimes/QueuedNotice.svelte'
   import { createFleet } from './runtimes/fleet-state.svelte.js'
-  import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, threadOwner } from './runtimes/fleet.js'
+  import { dedupeThreads, historyLine, offloadTargets, projectOwner, queuedFor, runMachineName, threadOwner } from './runtimes/fleet.js'
   import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, machineName, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
   import { machineStatusTone } from './lib/status-tone.js'
   import StatusChip from './lib/ui/StatusChip.svelte'
@@ -169,7 +169,7 @@
   const tauri = window.__TAURI__?.core
   onMount(() => { void migrateRecall(tauri); return tauri ? accountCache(tauri).start() : undefined })
   // The account snapshot follows the machine requests go to.
-  $effect(() => { if (tauri) accountCache(tauri).machine(remoteRuntime?.id ?? LOCAL_RUNTIME_ID) })
+  $effect(() => { if (tauri) accountCache(tauri).machine(remoteRuntimeId ?? LOCAL_RUNTIME_ID) })
   onMount(() => startFleetPreferences(tauri, (...args) => window.__TAURI__?.event?.listen(...args)))
   let auth = $state(bootState)
   let localEntryError = $state('')
@@ -662,6 +662,10 @@
   // artifacts and projects step aside.
   let runtimeList = $state(null)
   const remoteRuntime = $derived(remoteSelected(runtimeList) ? activeRuntime(runtimeList) : null)
+  // Each runtimes-changed event brings a new list object, so the reads that
+  // follow the selected machine depend on its id alone and a name or state
+  // change starts none of them.
+  const remoteRuntimeId = $derived(remoteRuntime?.id ?? null)
   const REMOTE_FILES_NOTE = 'Files stay on this computer. A paired runtime cannot read them.'
   // A first-run choice the providers page opens at once.
   let settingsConnectProvider = $state(null)
@@ -825,7 +829,7 @@
   // The thread's model reads again when the thread or the default changes,
   // and once its first message gives a new thread an id.
   $effect(() => {
-    void currentThreadId; void inventory?.default_provider; void inventory?.default_model; void remoteRuntime?.id; void auth.name
+    void currentThreadId; void inventory?.default_provider; void inventory?.default_model; void remoteRuntimeId; void auth.name
     untrack(() => {
       if (currentThreadId) pendingModel = null
       void refreshThreadModel()
@@ -1052,7 +1056,7 @@
   let compactError = $state('')
   let contextRequest = 0
   const replyRunning = $derived(!!active)
-  $effect(() => { void remoteRuntime?.id; void auth.name; if (!replyRunning) untrack(() => { void refreshComposerLimits() }) })
+  $effect(() => { void remoteRuntimeId; void auth.name; if (!replyRunning) untrack(() => { void refreshComposerLimits() }) })
   async function refreshContextUsage() {
     const request = ++contextRequest
     const threadId = currentThreadId
@@ -1396,7 +1400,7 @@
   // Each user message's turn: its run, or the run that answers it.
   const userTurnRuns = $derived(new Map(messages.flatMap((message, index) => message.role === 'user' ? [[message, message.id ?? messages[index + 1]?.run?.id ?? null]] : [])))
   const rewindBlocked = $derived(rewindUnavailable({ owner: currentOwner, replica: !!currentSummary?.replica, group: !!threadGroup, running: !!active }))
-  const runMachine = $derived(machineName(runtimeList?.runtimes?.find((runtime) => runtime.id === (threadMachine ?? LOCAL_RUNTIME_ID)) ?? { id: threadMachine ?? LOCAL_RUNTIME_ID }))
+  const runMachine = $derived(runMachineName(currentOwner, runtimeList, threadMachine))
   // The settled turns Review changes reads, newest first.
   const reviewTurns = $derived(messages.flatMap((message, index) => message.role === 'assistant' && message.run?.id && settledPhases.has(message.run.phase)
     ? [{ runId: message.run.id, prompt: promptFolders(message.run.prompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].text : '')).text }] : []).reverse().slice(0, 20))
@@ -2986,7 +2990,8 @@
     clearTimeout(needsYouTimer)
     needsYouTimer = setTimeout(() => { void refreshNeedsYou() }, 800)
   }
-  $effect(() => { void runtimeList; void auth.name; untrack(() => { void refreshNeedsYou() }) })
+  const needsYouMachines = $derived(JSON.stringify(machineRefs(runtimeList)))
+  $effect(() => { void needsYouMachines; void auth.name; untrack(() => { void refreshNeedsYou() }) })
   onMount(() => {
     void readNotifyPreferences(tauri).then((value) => { notifyChoice = value })
     const chosen = (event) => { notifyChoice = event.detail }

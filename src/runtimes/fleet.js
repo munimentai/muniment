@@ -2,7 +2,7 @@
 // an offline owner, the offline scope, the bootstrap progress and the audit
 // log. Core owns sync, ownership, queues and the log. This module only
 // shapes their answers for the window.
-import { LOCAL_RUNTIME_ID } from './runtimes.js'
+import { LOCAL_RUNTIME_ID, machineName as listedMachineName } from './runtimes.js'
 import { memberMachine } from '../agents/swarm.js'
 
 // HH:MM in the viewer's clock.
@@ -34,6 +34,14 @@ export function threadOwner(summary, swarm, runtimeList = null) {
   const holder = coreRuntime(swarm, summary.runtimeId)
   if (!holder || owner === holder) return null
   return memberMachine(swarm, owner, runtimeList)
+}
+
+// The machine a reply's run line names: the fleet member that owns the
+// thread, which runs its replies, else the machine that holds the thread.
+export function runMachineName(owner, runtimeList, machineId) {
+  if (owner?.name) return owner.name
+  const id = machineId ?? LOCAL_RUNTIME_ID
+  return listedMachineName(runtimeList?.runtimes?.find((runtime) => runtime.id === id) ?? { id })
 }
 
 // The machine that owns an agent, when another fleet member is its primary.

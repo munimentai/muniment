@@ -1812,4 +1812,22 @@ mod tests {
         assert_eq!(parsed.range, Range::Month);
         assert!(serde_json::from_value::<Request>(json!({"range": "1y"})).is_err());
     }
+
+    #[test]
+    fn the_answer_holds_every_field_the_desktop_client_reads() {
+        let profile = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let answer = operation(
+            &profile,
+            |_| Ok(Vec::new()),
+            json!({"range": "24h", "utc_offset_minutes": 0}),
+            NOW,
+        )
+        .unwrap();
+        let keys = muniment_attach::agent_answer_keys(muniment_attach::Operation::UsageSummary);
+        assert!(!keys.is_empty());
+        for key in keys {
+            assert!(answer.get(key).is_some(), "the answer lacks {key}");
+        }
+        let _ = std::fs::remove_dir_all(profile);
+    }
 }

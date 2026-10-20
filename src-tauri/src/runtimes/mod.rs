@@ -591,29 +591,32 @@ fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let event_app = app.clone();
     let event_runtime = id.to_owned();
     let status_app = app.clone();
-    let supervisor = RemoteSupervisor::start(
-        connector(app, registry, id),
-        move |event| {
-            let Some(event) =
-                crate::attach_service::deliver_agent_event(&event_app, &event_runtime, event)
-                    .and_then(|event| {
-                        crate::account_login::route_step(&event_app, Some(&event_runtime), event)
-                    })
-            else {
-                return;
-            };
-            let active = event_app
-                .state::<AttachCompanionState>()
-                .remote_runtime_id();
-            if active.as_deref() == Some(event_runtime.as_str()) {
-                crate::attach_service::deliver_subscription_event(&event_app, event);
-            }
-        },
-        move |_| emit_changed(&status_app),
-    );
-    if let Some(previous) = attach.insert_remote(supervisor) {
-        previous.stop();
-    }
+    attach.insert_remote_once(id, || {
+        RemoteSupervisor::start(
+            connector(app, registry, id),
+            move |event| {
+                let Some(event) =
+                    crate::attach_service::deliver_agent_event(&event_app, &event_runtime, event)
+                        .and_then(|event| {
+                            crate::account_login::route_step(
+                                &event_app,
+                                Some(&event_runtime),
+                                event,
+                            )
+                        })
+                else {
+                    return;
+                };
+                let active = event_app
+                    .state::<AttachCompanionState>()
+                    .remote_runtime_id();
+                if active.as_deref() == Some(event_runtime.as_str()) {
+                    crate::attach_service::deliver_subscription_event(&event_app, event);
+                }
+            },
+            move |_| emit_changed(&status_app),
+        )
+    });
 }
 
 /// Connects every paired runtime, so the thread list holds each one's
