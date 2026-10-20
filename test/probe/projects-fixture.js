@@ -4,8 +4,8 @@
 // arrangement of `core/protocol-fixtures/sidebar/input.json`, which core's
 // tests keep in `arranged.json`, with every time moved so the fixture's now
 // is this moment. `?state=search` searches for "re", and `settings` opens
-// Homelab's settings with its webhook agent, each default's source and its
-// tools. `agent-tools` opens that agent's Tools panel. `palette` opens the
+// Homelab's settings with its webhook agent and each default's source.
+// `palette` opens the
 // command palette and `palette-search` searches it for "re". `move` opens
 // Move to project for Trip ideas, and `model` opens the model picker on
 // Release notes, which runs Homelab's model.
@@ -41,7 +41,7 @@ const HOMELAB_MODEL = { provider: 'google', model: 'gemini-3-pro' }
 export const projectsCatalog = {
   projects: { 'p-muniment': 'Muniment', 'p-homelab': 'Homelab', 'p-garden': 'Garden' },
   threads: { 't-clean': 'p-muniment', 't-sync': 'p-muniment', 't-index': 'p-muniment', 't-roadmap': 'p-muniment', 't-branch': 'p-homelab', 't-vendor': 'p-homelab', 't-kitchen': 'p-garden' },
-  settings: { 'p-homelab': { permissionMode: 'manual', model: HOMELAB_MODEL, tools: { disabledTools: ['bash'], disabledExtensions: ['mail-server'] } } },
+  settings: { 'p-homelab': { permissionMode: 'manual', model: HOMELAB_MODEL } },
 }
 
 // Each thread's model, as core's `thread_settings` answers it. Homelab's
@@ -105,16 +105,10 @@ export function advanceProjects() {
     if (search && search.value !== 're') { search.value = 're'; search.dispatchEvent(new Event('input', { bubbles: true })) }
     return
   }
-  if (['settings', 'agent-tools'].includes(projectsState) && !document.querySelector('[aria-label="Project settings"]')) {
+  if (projectsState === 'settings' && !document.querySelector('[aria-label="Project settings"]')) {
     const menu = document.querySelector('[role="menu"][aria-label="Homelab actions"]')
     if (menu) return button(menu, 'Settings')?.click()
     return button(sidebar, 'Homelab actions')?.click()
-  }
-  if (projectsState === 'agent-tools') {
-    const tab = document.querySelector('[aria-label="Project settings"] .agent-card [role="tab"][aria-label="Tools"]')
-    if (tab?.getAttribute('aria-selected') === 'false') tab.click()
-    tab?.closest('.agent-card')?.scrollIntoView({ block: 'center' })
-    return
   }
   if (projectsState.startsWith('palette')) {
     const field = document.querySelector('[role="dialog"][aria-label="Search"] input')
@@ -146,8 +140,7 @@ export function projectsRendered() {
   if (projectsState === 'search') return !!sidebar.querySelector('[aria-label="Matching threads"] .thread-row')
   if (!sidebar.querySelector('[aria-label="Projects list"] .project-title')) return false
   const settings = document.querySelector('[aria-label="Project settings"]')
-  if (projectsState === 'settings') return !!settings?.querySelector('.agent-card') && !!settings.querySelector('textarea')?.value && settings.textContent.includes('Gemini 3 Pro · this project') && settings.textContent.includes('off in this project')
-  if (projectsState === 'agent-tools') return !!settings?.querySelector('.agent-card .tools .tool') && settings.textContent.includes('off in project Homelab')
+  if (projectsState === 'settings') return !!settings?.querySelector('.agent-card') && !!settings.querySelector('textarea')?.value && settings.textContent.includes('Gemini 3 Pro · this project')
   if (projectsState === 'palette') return !!document.querySelector('[role="dialog"][aria-label="Search"] .palette-row') && document.querySelector('[role="dialog"][aria-label="Search"]').textContent.includes('Needs you')
   if (projectsState === 'palette-search') return document.querySelector('[role="dialog"][aria-label="Search"] input')?.value === 're' && !!document.querySelector('[role="dialog"][aria-label="Search"]')?.textContent.includes('Reindex search')
   if (projectsState === 'move') return !!document.querySelector('[aria-labelledby="move-project-title"] button[aria-current="true"]')

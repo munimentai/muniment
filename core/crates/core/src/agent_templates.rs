@@ -463,13 +463,14 @@ fn map_muniment(
         agent.routines.push(routine);
     }
     if let Some(settings) = source.get("agent").filter(|value| value.is_object()) {
+        // An older export's `tools` list is read and dropped.
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Settings {
             #[serde(default)]
             model: Option<crate::agents::AgentModel>,
-            #[serde(default)]
-            tools: Option<crate::agents::AgentTools>,
+            #[serde(default, rename = "tools")]
+            _tools: serde::de::IgnoredAny,
             #[serde(default)]
             skills: Option<Vec<String>>,
             #[serde(default)]
@@ -482,7 +483,6 @@ fn map_muniment(
         let settings: Settings = serde_json::from_value(settings.clone())
             .map_err(|_| "The agent settings in the template are invalid.")?;
         agent.model = settings.model;
-        agent.tools = settings.tools;
         agent.skills = settings.skills;
         agent.permissions = settings.permissions;
         agent.messaging = settings.messaging;
@@ -885,7 +885,6 @@ fn export_muniment(
         "template": agent.template,
         "agent": {
             "model": agent.model,
-            "tools": agent.tools,
             "skills": agent.skills,
             "permissions": agent.permissions,
             "messaging": agent.messaging,
@@ -1274,9 +1273,15 @@ mod tests {
             "018f0000-0000-7000-8000-000000000095",
             "private memory",
             "lastFired",
+            "disabled",
         ] {
             assert!(!text.contains(absent), "{absent}");
         }
+        // An older export's tool list imports and is dropped.
+        let mut older: serde_json::Value = serde_json::from_str(&text).unwrap();
+        older["agent"]["tools"] = json!({"disabled": ["bash"]});
+        let older = import_text(&older.to_string(), &Installed::default(), TZ).unwrap();
+        assert_eq!(older.agent.model, saved.model);
         let preview = import_text(&text, &Installed::default(), TZ).unwrap();
         assert!(preview
             .agent

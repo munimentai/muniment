@@ -10,7 +10,6 @@ const draft = {
   label: 'Morning briefer',
   instructions: 'Summarize the new email in my inbox and list what needs a reply.',
   skills: ['pack:skills/brief/SKILL.md'],
-  tools_off: ['bash'],
   permission_mode: 'manual',
   routines: [{ id: 'extract-1', name: 'Summarize the new email in my inbox', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' }, prompt: 'Summarize the new email in my inbox.', created_from: 'instructions' }],
 }
@@ -40,7 +39,7 @@ it('shows each message and the draft core answered it with, the newest with Save
   expect(newest).toHaveAccessibleName('Draft: Inbox replies')
   expect(within(newest).getByText(draft.instructions)).toBeInTheDocument()
   expect(within(newest).getByText('Weekdays at 09:00 · America/New_York')).toBeInTheDocument()
-  await waitFor(() => expect(within(newest).getByText('Read files, brief')).toBeInTheDocument())
+  await waitFor(() => expect(within(newest).getByText('brief')).toBeInTheDocument())
   expect(within(newest).getByText('GPT-6 · default')).toBeInTheDocument()
   expect(within(newest).getByRole('button', { name: 'Save' })).toBeInTheDocument()
   expect(within(newest).getByRole('button', { name: 'Test run' })).toBeInTheDocument()
@@ -121,5 +120,5 @@ it('builds the save body from the draft', () => {
   const form = draftForm(draft)
   form.routines[0].enabled = false
   form.mode = ''
-  expect(draftAgent(form)).toEqual({ id: '', projectId: null, name: 'Inbox brief', label: 'Morning briefer', instructions: draft.instructions, schedule: null, skills: draft.skills, tools: { disabled: ['bash'] }, routines: [{ ...draft.routines[0], enabled: false, proposed: false }] })
+  expect(draftAgent(form)).toEqual({ id: '', projectId: null, name: 'Inbox brief', label: 'Morning briefer', instructions: draft.instructions, schedule: null, skills: draft.skills, routines: [{ ...draft.routines[0], enabled: false, proposed: false }] })
 })

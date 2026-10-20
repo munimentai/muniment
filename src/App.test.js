@@ -8358,7 +8358,7 @@ describe('dedicated creation chats', () => {
 describe('agent chat', () => {
   // A draft answer as core gives it: started, then done on the next ask,
   // with the chat's creation record that keeps each message and draft.
-  const drafted = { name: 'Weekly recap', label: 'Recap writer', instructions: 'Write a recap of my week from my threads and projects.', skills: [], tools_off: [], permission_mode: null,
+  const drafted = { name: 'Weekly recap', label: 'Recap writer', instructions: 'Write a recap of my week from my threads and projects.', skills: [], permission_mode: null,
     routines: [{ id: 'extract-1', name: 'Write a recap of my week', enabled: true, trigger: { kind: 'cron', expr: '0 16 * * 5', tz: 'America/New_York' }, prompt: 'Write a recap of my week.', created_from: 'instructions' }] }
   const CHAT = '01900000-0000-7000-8000-0000000000a1'
   function chatMock(saved) {

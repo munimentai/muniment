@@ -52,21 +52,6 @@ pub struct AgentModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
 }
-/// The account's tools an agent leaves out, and its choices over its
-/// project's tools. Built-in tools are on by default.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentTools {
-    #[serde(default)]
-    pub disabled: Vec<String>,
-    /// Extension ids, as a project's tools name them, the agent leaves out
-    /// although its project allows them.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub disabled_extensions: Vec<String>,
-    /// Built-in tool ids and extension ids the agent uses although its
-    /// project leaves them out.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed: Vec<String>,
-}
 /// Which agents an agent may message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessagingAllow {
@@ -110,6 +95,9 @@ pub struct AgentPermissions {
 pub struct AgentMessaging {
     pub allow: MessagingAllow,
 }
+/// An agent definition. Its runs get every tool its machine offers, and its
+/// permission mode gates what runs. The `tools` list an older file holds is
+/// ignored, and a save drops it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {
@@ -131,8 +119,6 @@ pub struct Agent {
     pub schedule: Option<Schedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<AgentModel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<AgentTools>,
     /// Installed skill ids the agent's runs load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
@@ -518,7 +504,6 @@ fn validate(agent: &Agent) -> Result<(), String> {
     validate_v2(agent)
 }
 const MAX_SKILLS: usize = 32;
-const MAX_DISABLED_TOOLS: usize = 64;
 const MAX_MESSAGING_AGENTS: usize = 64;
 fn validate_v2(agent: &Agent) -> Result<(), String> {
     let short = |text: &str, limit: usize| {
@@ -537,28 +522,6 @@ fn validate_v2(agent: &Agent) -> Result<(), String> {
             return Err(
                 "Choose a thinking level: off, minimal, low, medium, high, xhigh or max.".into(),
             );
-        }
-    }
-    if let Some(tools) = &agent.tools {
-        if tools.disabled.len() > MAX_DISABLED_TOOLS
-            || !tools.disabled.iter().all(|tool| {
-                tool.len() <= 128
-                    && !tool.is_empty()
-                    && tool.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
-                    })
-            })
-        {
-            return Err(format!(
-                "Turn off at most {MAX_DISABLED_TOOLS} tools by their names."
-            ));
-        }
-        for ids in [&tools.disabled_extensions, &tools.allowed] {
-            if ids.len() > MAX_DISABLED_TOOLS || !ids.iter().all(|id| short(id, 512)) {
-                return Err(format!(
-                    "Choose at most {MAX_DISABLED_TOOLS} project tools by their ids."
-                ));
-            }
         }
     }
     if let Some(skills) = &agent.skills {
@@ -1132,7 +1095,6 @@ pub fn runs_routines_here(agent: &Agent, runtime_id: Option<&str>) -> bool {
 pub struct AgentLaunch {
     pub agent_id: String,
     pub model: Option<AgentModel>,
-    pub disabled_tools: Vec<String>,
     pub skills: Vec<String>,
     /// The run's permission gate. Every agent run loads it.
     pub permissions: Option<crate::permission_gate::RunPermissions>,
@@ -1158,7 +1120,6 @@ pub fn thread_launch(
     Ok(Some(AgentLaunch {
         agent_id: agent.id,
         model: agent.model,
-        disabled_tools: agent.tools.map(|tools| tools.disabled).unwrap_or_default(),
         skills: agent.skills.unwrap_or_default(),
         permissions: Some(permissions),
     }))
@@ -1968,7 +1929,6 @@ mod tests {
             read.model.as_ref().unwrap().thinking.as_deref(),
             Some("high")
         );
-        assert_eq!(read.tools.as_ref().unwrap().disabled.len(), 2);
         // The old `strict` migrates to `dont_ask`, and a save writes the new id.
         assert_eq!(
             read.permissions.as_ref().unwrap().mode,
@@ -2001,6 +1961,8 @@ mod tests {
             serde_json::json!({"mode": "dont_ask"})
         );
         assert!(!file.contains("always_allow") && !file.contains("ask_first"));
+        // The tool list of an older agent loads and a save drops it.
+        assert!(value.get("tools").is_none() && !file.contains("mcp__crm__delete"));
         let any: AgentMessaging =
             serde_json::from_value(serde_json::json!({"allow": "any"})).unwrap();
         assert_eq!(any.allow, MessagingAllow::Any);
@@ -2015,10 +1977,6 @@ mod tests {
         assert!(
             invalid(&|a| a.model.as_mut().unwrap().thinking = Some("extreme".into()))
                 .contains("thinking level")
-        );
-        assert!(
-            invalid(&|a| a.tools.as_mut().unwrap().disabled = vec!["two words".into()])
-                .contains("tools")
         );
         assert!(invalid(&|a| a.skills = Some(vec!["x".into(); 33])).contains("skills"));
         assert!(invalid(&|a| a.primary_runtime = Some("../etc".into())).contains("runtime id"));

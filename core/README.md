@@ -247,9 +247,6 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
   runtime already serves. A local run in the agent's thread starts with it in
   place of the default model, and at its thinking level unless the run names
   one. A cloud grant names its own model.
-- `tools`: `{"disabled": [tool names]}`, the Pi tool names, MCP tools
-  included, that the agent's runs exclude. It is an advanced, deprecated
-  control kept for compatibility; the permission mode is the main control.
 - `skills`: installed skill and plugin ids from the extension inventory,
   picked on every turn of the agent's thread as an automatic pick is.
 - `permissions`: `{"mode"?}`. `mode` is a permission mode (see
@@ -264,6 +261,10 @@ header's v2 fields are all optional, so a v1 file loads unchanged:
 - `primary_runtime`, the runtime id that runs the agent's routines;
   `messaging`, `{"allow": "any"}` or a list of agent ids; `routines`; and
   `paused_reason`, which stops the routines while set.
+
+An agent's runs get every tool its machine offers, and its permission mode
+gates what runs. The `tools` list an older agent holds loads, leaves out
+no tool, and the next save drops it.
 
 A v1 `schedule` reads as the cron routine `schedule`, and a client that
 edits `schedule` edits that routine. A folder whose `agent.md` does not load
@@ -425,11 +426,9 @@ definition with the failed run's trigger kind, `source: "replay"` and
 draft and answers `{"draft_id", "status": "drafting"}` at once; `{"draft_id"}`
 answers the same until the draft is done and then, once, `{"draft_id",
 "status": "done", "draft", "question", "via"}`. A draft is `{"name", "label",
-"instructions", "skills", "tools_off", "permission_mode", "routines"}` from one
-cheap model call over the words and this runtime's tools, skills and modes;
-`tools_off` leaves on only the tools the model and the words name, and the
-reading tools when they name none;
-its routines come from the trigger reader and start enabled. `question` is
+"instructions", "skills", "permission_mode", "routines"}` from one
+cheap model call over the words and this runtime's skills, MCP tools and
+modes; its routines come from the trigger reader and start enabled. `question` is
 null or one `{"text", "options"}` when the job is unknown, and `via` is
 `router`, `pi` or `rules` when no model answered. `{"chat_id", "message"}`
 drafts in an agent's creation chat: the model reads every message the chat's

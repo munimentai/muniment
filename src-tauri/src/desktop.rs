@@ -323,7 +323,6 @@ pub fn run() {
             projects::project_settings,
             projects::project_settings_save,
             projects::project_move_thread,
-            projects::project_tools,
             projects::sidebar_arrange,
             projects::palette_rank,
             home::home_status,

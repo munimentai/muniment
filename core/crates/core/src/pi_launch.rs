@@ -19,8 +19,8 @@ pub const AGENT_PERMISSIONS_EXTENSION_FILE: &str = "agent-permissions.mjs";
 /// An extension tool whose name carries the harness never reaches the model.
 pub const EXCLUDED_TOOLS: &str = "bg_run_pi_attested";
 
-/// The built-in tools a chat launch offers, `(id, label)`, which an agent can
-/// turn off by id. Of the two shell tools, the host's own shell is offered.
+/// The built-in tools a chat launch offers, `(id, label)`. Of the two shell
+/// tools, the host's own shell is offered.
 pub const BUILTIN_TOOLS: [(&str, &str); 14] = [
     ("read", "Read files"),
     ("write", "Write files"),
@@ -235,14 +235,9 @@ pub trait PiLaunchBoundaries {
     }
 
     /// The settings of the agent this run's thread belongs to: its model,
-    /// the tools it leaves out, its skills and its permission profile.
+    /// its skills and its permission profile.
     fn agent_launch(&self) -> Option<crate::agents::AgentLaunch> {
         None
-    }
-
-    /// The tools the run's project and its agent leave out.
-    fn tool_policy(&self) -> crate::projects::ToolPolicy {
-        crate::projects::ToolPolicy::default()
     }
 
     /// The permission gate the run applies: its agent's, else the one the
@@ -646,7 +641,6 @@ pub fn pi_launch_config_for_executable(
     // Extension loading precedes the first RPC response.
     config.startup_timeout = std::time::Duration::from_secs(120);
     let agent = boundaries.agent_launch();
-    let tools = boundaries.tool_policy();
     // The prompt states what the assistant does; the facts state where it runs.
     let model = if grant.is_local() {
         boundaries.local_default_model()
@@ -717,35 +711,17 @@ pub fn pi_launch_config_for_executable(
         let agent_skills = agent
             .as_ref()
             .map_or(&[][..], |agent| agent.skills.as_slice());
-        crate::extend::prepare(
-            &root,
-            &thread,
-            agent_skills,
-            &tools.disabled_extensions,
-            &mut config,
-            &mut prompt,
-        )
-        .map_err(|e| PiLaunchError::rejected("extensions", e))?;
+        crate::extend::prepare(&root, &thread, agent_skills, &mut config, &mut prompt)
+            .map_err(|e| PiLaunchError::rejected("extensions", e))?;
     }
     config.args.extend(["--system-prompt".into(), prompt]);
     let identity = session_root.join(IDENTITY_EXTENSION_FILE);
     install_identity_extension(&identity)?;
-    let mut excluded: Vec<&str> = vec![EXCLUDED_TOOLS];
-    for tool in agent
-        .iter()
-        .flat_map(|agent| agent.disabled_tools.iter())
-        .chain(&tools.disabled_tools)
-    {
-        if !excluded.contains(&tool.as_str()) {
-            excluded.push(tool);
-        }
-    }
-    let excluded = excluded.join(",");
     config.args.extend([
         "--extension".into(),
         identity.to_string_lossy().into_owned(),
         "--exclude-tools".into(),
-        excluded,
+        EXCLUDED_TOOLS.into(),
     ]);
     // A run with a permission gate loads the extension that asks it.
     if boundaries.run_permissions().is_some() {

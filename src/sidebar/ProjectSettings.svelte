@@ -1,7 +1,7 @@
 <script>
   // A project's settings: what a new thread in it starts with, each with
   // where its value comes from, the instructions every run in its folder
-  // reads, the tools its runs may use, and its agents. An agent is
+  // reads, and its agents. An agent is
   // the project's triggers: each agent's card holds its model, permissions,
   // routines and activity, and Add a trigger makes the project an agent with
   // a home thread where its runs post. Core saves the defaults and the
@@ -13,11 +13,9 @@
   import Row from '../lib/ui/Row.svelte'
   import Button from '../lib/ui/Button.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import Toggle from '../lib/Toggle.svelte'
   import AgentCard from '../agents/AgentCard.svelte'
-  import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
+  import { agentMachine } from '../agents/agent-runtime.js'
   import { loadModes } from '../agents/permission-modes.js'
-  import { TOOL_KINDS, projectToolPolicy, projectTools } from '../agents/agent-tools.js'
   import { pickerGroups } from '../lib/provider-catalog.js'
   import { machineName } from '../runtimes/runtimes.js'
   import { sourceLine } from './sources.js'
@@ -63,32 +61,6 @@
     ? `${machineName(machines.find((machine) => machine.id === settings.machine) ?? { id: settings.machine })} · this project`
     : sourceLine('This computer', 'default'))
 
-  // The tools this computer offers and whether the project's runs may use
-  // each, from core's `project_tools`. A tool stays allowed until the
-  // project turns it off.
-  let toolCatalog = $state(null)
-  let toolRows = $state([])
-  $effect(() => {
-    void project.id
-    if (remote) return
-    let alive = true
-    agentRequest(tauri, 'local', 'agent.tool_catalog', {})
-      .then((answer) => { if (alive) toolCatalog = answer ?? {} })
-      .catch(() => { if (alive) toolCatalog = {} })
-    return () => { alive = false }
-  })
-  $effect(() => {
-    const catalog = toolCatalog
-    const policy = settings?.tools ?? null
-    if (!catalog || !settings) { toolRows = []; return }
-    let alive = true
-    Promise.resolve(projectTools(tauri, catalog, policy)).then((rows) => { if (alive) toolRows = rows ?? [] }).catch(() => { if (alive) toolRows = [] })
-    return () => { alive = false }
-  })
-  function toggleTool(row, enabled) {
-    return save({ tools: projectToolPolicy(settings?.tools, row, enabled) })
-  }
-
   async function save(patch) {
     if (!settings) return
     const next = { ...settings, ...patch }
@@ -127,7 +99,7 @@
 
 <section data-panel="projects" class="panel" aria-label="Project settings">
   <PanelPage>
-    <PageHead title={project.name} level={2} intro="A project shares its instructions, memory and tools with every thread in it.">
+    <PageHead title={project.name} level={2} intro="A project shares its instructions and memory with every thread in it.">
       {#snippet lead()}<button type="button" class="back" aria-label="Back to the thread" onclick={onback}><LucideIcon name="arrow-left" /></button>{/snippet}
       {#snippet actions()}
         {#if saved}<span class="saved" role="status">{saved}</span>{/if}
@@ -167,18 +139,6 @@
           </Row>
         </Group>
       {/if}
-      {#if !remote && toolRows.length}
-        <Group heading="Tools" info="Every run in this project, and each of its agents unless it chooses otherwise, may use the tools that are on.">
-          <ul class="tool-grid" aria-label="Project tools">
-            {#each toolRows as row (`${row.kind}:${row.id}`)}
-              <li class="tool">
-                <span class="tool-text"><span class="tool-name">{row.label}</span><span class="tool-source">{TOOL_KINDS[row.kind] ?? row.kind} · {row.layer === 'project' ? 'off in this project' : 'default'}</span></span>
-                <Toggle checked={row.allowed} disabled={saving} aria-label={`Allow ${row.label} in this project`} onchange={(checked) => toggleTool(row, checked)} />
-              </li>
-            {/each}
-          </ul>
-        </Group>
-      {/if}
     {/if}
     <Group heading="Triggers" info="A schedule, a webhook or a tool check starts a run. Runs post to the project's home thread.">
       {#snippet actions()}{#if plain && !remote}<Button icon="plus" disabled={busy || adding} onclick={addTrigger}>Add a trigger</Button>{/if}{/snippet}
@@ -187,7 +147,7 @@
     {#if agents.length}
       <div class="cards" aria-label="Project agents">
         {#each agents as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
-          <AgentCard {agent} {tauri} {inventory} projectTools={settings?.tools ?? null} projectName={project.name} modes={agent.replica || agent.online === false ? null : agentModes[agent.runtimeId ?? 'local']} machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} latestRun={latestRuns[agent.id] ?? null}
+          <AgentCard {agent} {tauri} {inventory} projectName={project.name} modes={agent.replica || agent.online === false ? null : agentModes[agent.runtimeId ?? 'local']} machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} latestRun={latestRuns[agent.id] ?? null}
             {onchat} {onprofile} {onrun} {onmanagemodels} {onchange} onaction={(action, name) => onaction(agent, action, name)} />
         {/each}
       </div>
@@ -203,11 +163,6 @@
   textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); resize: vertical; }
   textarea:focus, select:focus { outline: none; border-color: var(--muted); }
   .actions { display: flex; justify-content: flex-end; margin-top: 8px; }
-  .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0 24px; margin: 0; padding: 6px 0; list-style: none; }
-  .tool { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; min-height: 40px; }
-  .tool-text { display: grid; gap: 1px; min-width: 0; }
-  .tool-name { overflow: hidden; font-size: var(--text-13); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .tool-source { overflow: hidden; color: var(--muted); font-size: var(--text-12); text-overflow: ellipsis; white-space: nowrap; }
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); grid-auto-rows: 300px; gap: 12px; }
   .note, .error, .saved { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .error { color: var(--danger); }

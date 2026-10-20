@@ -476,7 +476,7 @@ fn a_run_stuck_at_a_question_is_reminded_then_cancelled() {
 }
 
 #[test]
-fn an_agent_runs_on_its_model_and_thinking_without_disabled_tools_behind_its_gate() {
+fn an_agent_runs_on_its_model_and_thinking_with_every_tool_behind_its_gate() {
     let _environment = ENVIRONMENT
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -494,6 +494,7 @@ fn an_agent_runs_on_its_model_and_thinking_without_disabled_tools_behind_its_gat
         })
         .to_string(),
     );
+    // The tool list of an older agent loads and leaves out no tool.
     let agent: Agent = serde_json::from_value(json!({
         "name": "Careful",
         "instructions": "Work carefully.",
@@ -512,7 +513,10 @@ fn an_agent_runs_on_its_model_and_thinking_without_disabled_tools_behind_its_gat
         args.contains("--provider\nstub\n--model\nstub-model\n"),
         "{args}"
     );
-    assert!(args.contains("--exclude-tools\nbg_run_pi_attested,powershell\n"));
+    assert!(
+        args.contains("--exclude-tools\nbg_run_pi_attested\n"),
+        "{args}"
+    );
     assert!(args.contains("agent-permissions.mjs"));
     let requests = std::fs::read_to_string(root.join("requests.jsonl")).unwrap();
     assert!(

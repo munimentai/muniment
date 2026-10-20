@@ -93,7 +93,7 @@ function seeded() {
   const scout = {
     id: SCOUT, name: 'Lead scout', label: 'Researcher', instructions: 'Find new leads in the CRM each weekday morning, check them against the target list and summarize the promising ones in leads.md.',
     avatar: { seed: 'scout', style: 'muniment-v2' }, template: null, projectId: null, schedule: { cadence: 'weekdays', enabled: true, time: '09:00', weekday: 0 },
-    model: { provider: 'ollama', id: 'qwen3:8b', thinking: 'medium' }, tools: { disabled: ['powershell'] }, skills: ['review'],
+    model: { provider: 'ollama', id: 'qwen3:8b', thinking: 'medium' }, skills: ['review'],
     permissions: { mode: 'manual' },
     primary_runtime: null, messaging: { allow: [INBOX] }, paused_reason: null,
     activity: ACTIVITY[SCOUT],
@@ -252,7 +252,6 @@ function probeDraft(store, body) {
     label: fromThread ? 'Release writer' : vague ? '' : 'Morning briefer',
     instructions: fromThread ? 'Write the release notes from the merged changes and list what still needs review.' : vague ? 'Help me with my work.' : 'Summarize the new email in my inbox and list what needs a reply. Group messages by sender and keep each summary to one line.',
     skills: [],
-    tools_off: [],
     permission_mode: vague || fromThread ? null : 'manual',
     routines: vague || fromThread ? [] : [{ id: 'extract-5d41402abc4b2a76', name: 'Summarize the new email in my inbox', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' }, prompt: 'Summarize the new email in my inbox.', created_from: 'instructions', last_fired_at: null, last_result: null }],
   }

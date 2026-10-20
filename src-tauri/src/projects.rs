@@ -1,4 +1,4 @@
-use muniment_core::{inherit, palette, projects, sidebar};
+use muniment_core::{palette, projects, sidebar};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -38,12 +38,6 @@ pub fn sidebar_arrange(input: sidebar::Input) -> sidebar::Sidebar {
 #[tauri::command]
 pub fn palette_rank(input: palette::Input) -> Vec<palette::Group> {
     palette::rank(&input)
-}
-/// Every tool of a machine's catalog with whether a project, and an agent
-/// in it, allows it, and the layer that decides.
-#[tauri::command]
-pub fn project_tools(input: inherit::ToolsInput) -> Vec<inherit::ToolRow> {
-    inherit::tools(&input)
 }
 /// Moves a thread into a project, or with no project out of every project.
 #[tauri::command]

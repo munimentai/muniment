@@ -460,25 +460,17 @@ fn take_turn(root: &Path, thread: &str) -> Result<Value, String> {
 /// Loads one turn's capability snapshot into the launch. `agent_skills`
 /// are the skill and plugin ids the thread's agent selected; each turn picks
 /// them as an automatic pick does, so a plugin adds its skills and never its
-/// code. `left_out` are the extension ids the thread's project and agent
-/// leave out, which no pick brings back.
+/// code.
 pub fn prepare(
     root: &Path,
     thread: &str,
     agent_skills: &[String],
-    left_out: &[String],
     config: &mut crate::sidecar::SidecarConfig,
     prompt: &mut String,
 ) -> Result<(), String> {
     let mut state = take_turn(root, thread)?;
     if state["items"].as_array().is_none_or(Vec::is_empty) {
         return Ok(());
-    }
-    if !left_out.is_empty() {
-        let turn = &mut state["turns"][thread];
-        let mut disabled = turn["disabled"].as_array().cloned().unwrap_or_default();
-        disabled.extend(left_out.iter().map(|id| json!(id)));
-        turn["disabled"] = Value::Array(disabled);
     }
     if !agent_skills.is_empty() {
         let turn = &mut state["turns"][thread];
@@ -1274,7 +1266,7 @@ mod tests {
         )
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &[], &mut config, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], &mut config, &mut String::new()).unwrap();
         let generated: Value =
             serde_json::from_slice(&fs::read(&config.env["MUNIMENT_EXTEND_MCP"]).unwrap()).unwrap();
         // Pi reads `record` from the agent directory, so the turn adds only `m`.
@@ -1291,7 +1283,7 @@ mod tests {
 
         // The selection is spent, so the next turn adds nothing.
         let mut next = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &[], &mut next, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], &mut next, &mut String::new()).unwrap();
         assert!(next.args.is_empty() && !next.env.contains_key("MUNIMENT_EXTEND_MCP"));
     }
 
@@ -1331,7 +1323,6 @@ mod tests {
                     "off".into(),
                     "missing".into(),
                 ],
-                &[],
                 &mut config,
                 &mut prompt,
             )
@@ -1372,7 +1363,7 @@ mod tests {
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
         let mut prompt = String::new();
-        prepare(&root.0, "chat", &[], &[], &mut config, &mut prompt).unwrap();
+        prepare(&root.0, "chat", &[], &mut config, &mut prompt).unwrap();
         let loaded: Vec<_> = config
             .args
             .chunks(2)
@@ -1389,53 +1380,6 @@ mod tests {
         assert!(prompt.contains("picked the skill \"ship\""));
         assert!(prompt.contains(&base.join("commands/ship.md").to_string_lossy().into_owned()));
         assert!(!prompt.contains("Ship it") && !prompt.contains("Long instructions"));
-    }
-
-    #[test]
-    fn a_project_leaves_tools_out_that_a_turn_picks() {
-        let root = Extracted(
-            std::env::temp_dir().join(format!("extend-left-out-{}", uuid::Uuid::new_v4())),
-        );
-        let base = root.0.join("extensions/packages/kit");
-        fs::create_dir_all(base.join("review")).unwrap();
-        fs::create_dir_all(base.join("commands")).unwrap();
-        fs::write(base.join("review/SKILL.md"), "Review").unwrap();
-        fs::write(base.join("commands/ship.md"), "Ship it").unwrap();
-        let inventory = json!({"items": [
-            {"id": "m", "kind": "mcp", "name": "Leads", "definition": {"url": "https://leads.example/mcp"}},
-            {"id": "k", "kind": "skill", "base": base, "skills": [
-                {"name": "review", "path": "review/SKILL.md"},
-                {"name": "ship", "path": "commands/ship.md"}
-            ]}
-        ], "turns": {"chat": {"selected": ["m", "k:review/SKILL.md"]}}});
-        fs::write(
-            root.0.join("extensions/inventory.json"),
-            serde_json::to_vec(&inventory).unwrap(),
-        )
-        .unwrap();
-        let mut config = crate::sidecar::SidecarConfig::new("unused");
-        let mut prompt = String::new();
-        prepare(
-            &root.0,
-            "chat",
-            &[],
-            &["m".into(), "k:review/SKILL.md".into()],
-            &mut config,
-            &mut prompt,
-        )
-        .unwrap();
-        assert!(!config.env.contains_key("MUNIMENT_EXTEND_MCP"));
-        let loaded: Vec<_> = config
-            .args
-            .chunks(2)
-            .filter(|pair| pair[0] == "--skill")
-            .map(|pair| pair[1].clone())
-            .collect();
-        assert_eq!(
-            loaded,
-            [base.join("commands/ship.md").to_string_lossy().into_owned()]
-        );
-        assert!(!prompt.contains("review"));
     }
 
     #[test]
