@@ -233,13 +233,12 @@ them.
 | Install progress | `.speech-install-progress progress` | Download bar | 6px, `accent-color: var(--muted)` | None |
 | Install buttons | `.speech-install-card button` | Install, Cancel install, Try again | Shell button, padding 4px 8px, `font: inherit`, margin-top 7px | Disabled while pending |
 | Close card | `.speech-install-card .close-card` | Dismisses the card | Quiet, 24px floor, `--muted`, 14px `x` icon | Hover: `--ink` |
-| Speech install notice | `.speech-install-notice` | One line after dismiss | `--muted`, `--text-12 --font-mono`, padding 0 12px | None |
 
 ## Toasts and notices
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Entitlement toast | `.entitlement-toast` | Access change notice | Fixed bottom 24px, `--surface`, 1px `--border`, `--radius-control`, `--ink`, `--shadow-overlay`, `toast-enter` at `--motion-popover --ease-out` | None |
+| Composer notice | `.composer-notice` | Short notices over the composer: background service, access change, thread move, speech model installed, voice shortcut unavailable | `[data-composer-panel]` anchor, overlay `[data-panel]`: `--surface`, 1px `--border`, `--radius-panel`, `--shadow-overlay`. `--ink` at `--text-13 --font-human`, padding 6px 6px 6px 12px, gap 8px, `composer-notice-enter` at `--motion-popover --ease-out` | Leaves after 6s. Pointer or keyboard focus holds it. Hidden while another composer panel is open. Action: shell button, hover `--faint` |
 | Auth state | `.auth-state` | Sign-in, error, and background service notices | Centered column, gap 12px, max-width 420px, margin-top 34px | None |
 | Support line | `.support` | Secondary sentence | `--muted` | None |
 | Record line | `.record` | Mono notice or error | `--font-mono`, `--text-12`, `--muted`. `.error-record` adds `--leading-body` | None |

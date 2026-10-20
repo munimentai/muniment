@@ -49,7 +49,7 @@ theme across the fleet and the shipped pair stays the default. Display holds Zoo
 Panel appearance uses `data-panel` and `src/styles/panels.css`. `data-panel-variant` selects overlay or embedded styling. Components own layout, not panel appearance.
 Shape: Settings tabs and the update control use `--radius-pill`. Other radii are `--radius-chip` 2, `--radius-control` 6, `--radius-panel` 10.
 Hairline borders do the work. `--shadow-window` and `--shadow-overlay` are the only depth tokens. Motion is purposeful and
-rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide, a running agent's outline. Reduced motion removes all of it: Motion follows the OS under System, Reduce or Full overrides it, and the root's `data-motion` carries the result to every rule.
+rare: the mark's thinking state, the active action's text sheen, the streaming underscore, the panel slide, the composer notice's fade in, a running agent's outline. Reduced motion removes all of it: Motion follows the OS under System, Reduce or Full overrides it, and the root's `data-motion` carries the result to every rule.
 
 ## Laws
 
@@ -178,7 +178,7 @@ A diff uses the stored change and stacks its sides below 480 pixels.
 
 The workspace has one `h1`, a headed thread list, and a transcript region named for the open thread.
 An error message names the failure. The control beside it names and repeats the action that failed.
-The background service notice reuses the auth error state's mono record register. A runtime that runs as the app's child adds one dismissible line over the workspace in the same register, Scheduled agents run only while Muniment is open, with Open Login Items.
+The background service notice reuses the auth error state's mono record register. A runtime that runs as the app's child shows the composer notice Scheduled agents run only while Muniment is open, with Open Login Items, and its close control keeps it away for the launch.
 One owner starts, watches and stops the runtime for every window. When the runtime exits, every window shows the same one-sentence notice and one control that starts it again. A failed start is tried again on its own with a growing wait. A pending or refused macOS folder prompt is an ochre-edged card at the top of the sidebar's list, its folder in the heading, core's message and one primary Allow access.
 The notice waits out a two second dwell, so a drop shorter than that leaves the workspace on screen. A first status that already reports the service unreachable shows the notice at once.
 An error that rejects one item from a set names that item.
@@ -229,7 +229,7 @@ The composer plus sits first at the left and matches the composer menu buttons. 
 It has a background only on hover or keyboard focus.
 Its three branches are MCPs, Plugins and Skills, followed by Manage tools.
 The paperclip opens the OS picker directly. macOS accepts multiple files and folders together. Attachment chips are one 28px row: icon, name with extension, hover-only X. Folder paths reach local tools. All composer panels share one
-anchor above the full composer with an eight-pixel gap. Only one opens at a time.
+anchor above the full composer with an eight-pixel gap. Only one opens at a time. A short notice takes that anchor and the overlay panel in the UI face, one line with at most one action and a close control, one at a time from a queue: it leaves after six seconds, holds while hovered or keyboard-focused, waits hidden under an open panel, and shows once per launch for each cause. A prompt that needs an answer before work continues, a blocking error or a state that lasts stays in place.
 Skill and plugin commands appear inline as slash commands in the reference color.
 MCP switches and optional classifier selection apply to one turn. The next turn
 starts without selected extensions. No extension chips sit below the message.
