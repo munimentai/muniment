@@ -1459,10 +1459,10 @@ function typeInto(input, value) {
 // state pastes a link and presses Pair.
 function advanceRuntimesFixture() {
   if (!runtimesFixture || fixtureRendered()) return
-  // An open thread keeps its machine, so the picker opens on a new thread,
-  // and the remote state opens the thread that lives on Build box.
+  // An open thread keeps its machine, so the switcher opens a new thread's
+  // menu, and the remote state opens the thread that lives on Build box.
   if (runtimesState === 'switcher') {
-    if (document.querySelector('span.machine-chip')) return document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
+    if (document.querySelector('button[data-menu="machine"][aria-label$="This thread stays on it"]')) return document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
     return document.querySelector('button[data-menu="machine"][aria-expanded="false"]')?.click()
   }
   if (runtimesState === 'remote') {

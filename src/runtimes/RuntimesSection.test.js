@@ -432,10 +432,11 @@ describe('machine picker', () => {
     const menu = screen.getByRole('menu', { name: 'Machines' })
     expect(menu).toHaveAttribute('data-composer-panel')
     const items = within(menu).getAllByRole('menuitemradio')
-    // A globe marks each machine's state in place of a word: green while it answers, red with a slash when it does not.
-    expect(items.map((item) => item.textContent.trim())).toEqual(['This computer', 'Studio', 'Build box'])
+    // A green globe marks a machine that answers, and one that does not is a disabled choice with its state in words.
+    expect(items.map((item) => item.textContent.trim())).toEqual(['This computer', 'Studio Offline', 'Build box'])
     expect(within(items[0]).getByRole('img', { name: 'Online' }).querySelector('[data-icon=globe]')).not.toBeNull()
-    expect(within(items[1]).getByRole('img', { name: 'Offline' }).querySelector('[data-icon=globe-off]')).not.toBeNull()
+    expect(items[1]).toBeDisabled()
+    expect(within(items[1]).getByText('Offline')).toHaveClass('status-chip')
     expect(within(items[2]).getByRole('img', { name: 'Online' })).toHaveClass('online')
     expect(items[0]).toHaveAttribute('aria-checked', 'true')
     await fireEvent.click(items[2])
@@ -443,22 +444,24 @@ describe('machine picker', () => {
     expect(screen.queryByRole('menu')).toBeNull()
     expect(toggle.querySelector('[data-icon=chevrons-up-down]')).not.toBeNull()
 
-    // An offline machine takes no new thread, so it opens Settings → Machines.
+    // An offline machine takes no new thread, so picking it does nothing.
     await fireEvent.click(toggle)
-    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Studio Offline' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Studio, Offline' }))
     expect(onselect).toHaveBeenCalledOnce()
-    expect(onmanage).toHaveBeenCalledOnce()
-    expect(screen.queryByRole('menu')).toBeNull()
+    expect(onmanage).not.toHaveBeenCalled()
+    expect(screen.getByRole('menu')).toBeInTheDocument()
 
-    await fireEvent.click(toggle)
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Add a machine' }))
-    expect(onmanage).toHaveBeenCalledTimes(2)
+    expect(onmanage).toHaveBeenCalledOnce()
   })
 
-  it('shows the machine an open thread lives on without a menu', () => {
+  it('shows the machine an open thread lives on, with a menu that keeps it', async () => {
     render(MachinePicker, { list: runtimeList(undefined, 'local'), locked: buildBox.id })
-    expect(screen.queryByRole('button', { name: /^Machine:/ })).toBeNull()
-    expect(screen.getByRole('note', { name: 'This thread stays on Build box' })).toHaveTextContent('Build box')
+    const chip = screen.getByRole('button', { name: 'Machine: Build box. This thread stays on it' })
+    expect(chip).toHaveTextContent('Build box')
+    await fireEvent.click(chip)
+    expect(screen.getByRole('menuitemradio', { name: 'Build box' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getAllByRole('menuitemradio').every((item) => item.disabled)).toBe(true)
   })
 
   it('closes its menu with Escape and returns focus to the chip', async () => {

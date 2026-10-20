@@ -169,11 +169,61 @@ describe('the machine picker', () => {
     expect(screen.getByRole('button', { name: /Machine: Pod/ })).toBeInTheDocument()
   })
 
-  it('names another member that owns the open thread', () => {
-    render(MachinePicker, { list, locked: 'local', owner: { name: 'Studio', kind: 'desktop', online: false } })
-    const chip = screen.getByRole('note', { name: 'This thread stays on Studio' })
+  it('names another member that owns the open thread and opens the menu to show it is away', async () => {
+    const studio = { coreId: 'core-studio', id: 'core-studio', name: 'Studio', kind: 'desktop', online: false }
+    render(MachinePicker, { list, locked: 'local', owner: studio, fleet: [studio] })
+    const chip = screen.getByRole('button', { name: 'Machine: on Studio, offline. This thread stays on it' })
     expect(chip).toHaveTextContent('on Studio')
-    expect(within(chip).getByRole('img', { name: 'Offline' })).toBeInTheDocument()
+    expect(chip).toBeEnabled()
+    await fireEvent.click(chip)
+    const menu = screen.getByRole('menu', { name: 'Machines' })
+    const away = within(menu).getByRole('menuitemradio', { name: 'Studio, Offline' })
+    expect(away).toBeDisabled()
+    expect(away).toHaveAttribute('aria-checked', 'true')
+    expect(away).toHaveTextContent('Offline')
+    expect(within(menu).getByText('This thread stays on Studio.')).toBeInTheDocument()
+  })
+
+  // This computer and a paired container that does not answer.
+  const pod = { id: 'pod', name: 'Pod', kind: 'container', status: 'offline' }
+  const paired = { selected: 'local', runtimes: [list.runtimes[0], pod] }
+
+  it('opens on an open thread even while its only other machine is offline, and offers no other choice', async () => {
+    const onselect = vi.fn(), onmanage = vi.fn()
+    render(MachinePicker, { list: paired, locked: 'local', onselect, onmanage })
+    const chip = screen.getByRole('button', { name: 'Machine: This computer. This thread stays on it' })
+    await fireEvent.click(chip)
+    const menu = screen.getByRole('menu', { name: 'Machines' })
+    const here = within(menu).getByRole('menuitemradio', { name: 'This computer' })
+    expect(here).toHaveAttribute('aria-checked', 'true')
+    expect(here).toBeDisabled()
+    const container = within(menu).getByRole('menuitemradio', { name: 'Pod, Offline' })
+    expect(container).toBeDisabled()
+    expect(within(container).getByText('Offline')).toHaveClass('status-chip')
+    await fireEvent.click(container)
+    expect(onselect).not.toHaveBeenCalled()
+    expect(onmanage).not.toHaveBeenCalled()
+  })
+
+  it('lists an offline machine as a disabled choice for a new thread and picks one that answers', async () => {
+    const onselect = vi.fn()
+    const box = { id: 'box', name: 'Build box', kind: 'server', status: 'online' }
+    render(MachinePicker, { list: { ...paired, runtimes: [...paired.runtimes, box] }, onselect })
+    await fireEvent.click(screen.getByRole('button', { name: 'Machine: This computer. Choose a machine' }))
+    expect(screen.getByRole('menuitemradio', { name: 'Pod, Offline' })).toBeDisabled()
+    expect(within(screen.getByRole('menuitemradio', { name: 'Build box' })).getByRole('img', { name: 'Online' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Build box' }))
+    expect(onselect).toHaveBeenCalledWith(box)
+  })
+
+  it('opens during a reply to show the machines, with every choice held', async () => {
+    const onoffload = vi.fn()
+    const member = { coreId: 'core-pod', name: 'Pod', kind: 'container', online: true }
+    render(MachinePicker, { list: paired, fleet: [member], disabled: true, onoffload })
+    const chip = screen.getByRole('button', { name: 'Machine: This computer. Choose a machine' })
+    expect(chip).toBeEnabled()
+    await fireEvent.click(chip)
+    expect(screen.getByRole('menuitemradio', { name: 'Pod' })).toBeDisabled()
   })
 
   it('draws an owner chip with its offline mark', () => {
