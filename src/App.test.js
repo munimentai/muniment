@@ -690,6 +690,34 @@ describe('workspace composer entry', () => {
     }
   })
 
+  it('says once over the workspace that scheduled agents run only while the app is open', async () => {
+    runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'attach_listener_status') return { connected: true, supervisor_running: true }
+      if (command === 'chat_thread_open') return []
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'attach_companions') return []
+      if (command === 'open_login_items') return undefined
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await findWorkspaceComposer()
+    const notice = await screen.findByTestId('foreground-only-notice')
+    expect(within(notice).getByText('Scheduled agents run only while Muniment is open.')).toBeVisible()
+    expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument()
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Open Login Items' }))
+    expect(invoke).toHaveBeenCalledWith('open_login_items')
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss background service notice' }))
+    await waitFor(() => expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument())
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
+    await Promise.resolve()
+    expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument()
+  })
+
   it.each([false, true])('shows the queued session and clears it after recovery with Home configured as %s', async (configured) => {
     homeStatus = { configured, homePath: '/Documents/Muniment' }
     const cause = 'Task Scheduler kept the runtime task in state Queued for session id 7.'

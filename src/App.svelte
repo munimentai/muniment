@@ -1451,6 +1451,8 @@
   let desktopClientStatusVersion = 0
   let runtimeNotice = $state(null)
   let backgroundServiceNoticeVisible = $derived(runtimeNotice?.visible === true)
+  let foregroundOnlyDismissed = $state(false)
+  let foregroundOnlyNotice = $derived(foregroundOnlyDismissed ? null : runtimeNotice?.foregroundOnly ?? null)
   let authRequestVersion = 0
   let signInCancelControl = $state()
   let signInPending = null
@@ -4127,6 +4129,13 @@
         {#if featureFlags.cloud && entitlementToastVisible}
           <div class="entitlement-toast" role="status">Your access changed. Some models or connections may differ.</div>
         {/if}
+        {#if foregroundOnlyNotice}
+          <section class="foreground-only-notice" aria-label="Background service" role="status" data-testid="foreground-only-notice">
+            <p class="record">{foregroundOnlyNotice.text}</p>
+            <button type="button" onclick={() => backgroundServiceNotice.openLoginItems()}>{foregroundOnlyNotice.control}</button>
+            <PopupClose label="Dismiss background service notice" onclick={() => { foregroundOnlyDismissed = true }} />
+          </section>
+        {/if}
         {#if artifactRailOpen}
           <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
           <div
@@ -4404,6 +4413,8 @@
   .agent-add { position: absolute; right: 8px; opacity: 0; padding: 4px; line-height: 0; }
   .agents-side-row:hover .agent-add, .agents-side-row:focus-within .agent-add { opacity: 1; }
   @media (hover: none) { .agent-add { opacity: 1; } }
+  .foreground-only-notice { position: fixed; z-index: 4; left: 50%; bottom: 24px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 48px); padding: 6px 6px 6px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); }
+  .foreground-only-notice p { margin: 0; overflow-wrap: anywhere; }
   .entitlement-toast { position: fixed; z-index: 4; left: 50%; bottom: 24px; max-width: calc(100% - 48px); padding: 10px 14px; transform: translateX(-50%); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); box-shadow: var(--shadow-overlay); animation: toast-enter var(--motion-popover) var(--ease-out); }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }

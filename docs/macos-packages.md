@@ -21,8 +21,18 @@ An `enabled` status permits a kick-start in that user's `gui/<uid>` domain
 when the attach endpoint is absent. A `requiresApproval` status or registration
 denial leaves the runtime inactive. The app explains the required approval and
 opens System Settings > General > Login Items on request. A `notFound` status
-or another registration error also leaves the runtime inactive. No surface
-kick-starts or privately spawns a runtime without an `enabled` status.
+or another registration error also leaves the service inactive.
+
+`launchd` applies a launch constraint to the bundle's `BundleProgram`. A
+runtime without a trusted signature, such as an ad hoc signed local build,
+fails it: the kernel ends each spawn with `OS_REASON_CODESIGNING | Launch
+Constraint Violation`, and `launchctl print` reports `last exit code = 78:
+EX_CONFIG` before the runtime runs at all. The unified log names the cause
+under `process == "launchd"`. The Developer ID build signs the runtime with the
+app's identity and the hardened runtime. When registration fails, or the job does not
+stay running, the app unregisters the job, runs the bundled runtime as its
+own child and says that scheduled agents run only while it is open. That
+child stops when the app quits. The next launch registers the service again.
 
 The runtime stays in the foreground. `launchd` spaces failed starts by five
 seconds, and the runtime stops after five failures within five minutes. It

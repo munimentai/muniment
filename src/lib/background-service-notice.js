@@ -13,6 +13,14 @@ const messages = {
   stopFailed: 'The runtime stop failed.',
 }
 
+// The runtime runs as the desktop's child because the background service could
+// not stay running, so it stops when the app quits.
+const foregroundOnly = {
+  text: 'Scheduled agents run only while Muniment is open.',
+  control: 'Open Login Items',
+  command: 'open_login_items',
+}
+
 export function runtimeNotice(state) {
   if (!state || !Object.hasOwn(messages, state.lastEvent)) return null
   const cause = state.lastEvent === 'startFailed' && typeof state.cause === 'string' ? state.cause.trim() : ''
@@ -22,6 +30,7 @@ export function runtimeNotice(state) {
     control: state.lastEvent === 'requiresApproval' ? 'Open Login Items' : 'Start runtime',
     command: state.lastEvent === 'requiresApproval' ? 'open_login_items' : 'runtime_start',
     busy: state.busy === true,
+    foregroundOnly: state.foregroundOnly === true ? foregroundOnly : null,
   }
 }
 
@@ -71,11 +80,15 @@ export function createBackgroundServiceNotice({ invoke, listen, onChange, setPol
     }
   }
 
+  async function openLoginItems() {
+    try { await invoke(foregroundOnly.command) } catch { console.error('The runtime control failed.') }
+  }
+
   function cleanup() {
     stopped = true
     clearPoll(poll)
     unlisten?.()
   }
 
-  return { start, retry, cleanup }
+  return { start, retry, openLoginItems, cleanup }
 }

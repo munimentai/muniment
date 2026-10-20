@@ -31,7 +31,7 @@ The flags are independent. Enabling either does not enable the other.
 Disabled sections have no visible controls, empty placeholders or working
 shortcuts. A request for a hidden Settings part opens its page without it.
 With cloud disabled, startup enters local mode without reading a cloud session.
-A local startup failure offers a local retry, never a cloud sign-in prompt. The runtime owner also starts the runtime again on its own after a failed start, 2 seconds later and then twice as long each time up to a minute, until its clients connect, and the failure stays on screen meanwhile.
+A local startup failure offers a local retry, never a cloud sign-in prompt. The runtime owner also starts the runtime again on its own after a failed start, 2 seconds later and then twice as long each time up to a minute, until its clients connect, and the failure stays on screen meanwhile. On macOS a background service that launchd does not keep running yields to the bundled runtime as the app's child, which stops when the app quits: the workspace says scheduled agents run only while Muniment is open, each launch registers the service again, and Quit asks first while an agent runs or a routine is due within the hour.
 Provider sign-in, model routing, allowances, MCP pairing and local tools remain
 available. They are not Muniment cloud features. These UI flags do not replace
 backend authorization and do not remove stored sessions, companies or graph APIs.

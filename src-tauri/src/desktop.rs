@@ -145,6 +145,15 @@ pub fn run() {
             launcher::setup(app.handle())?;
             app.manage(chat::ChatState::default());
             runtime_owner::setup(app.handle());
+            #[cfg(target_os = "macos")]
+            {
+                runtime_owner::replace_quit_menu_item(app.handle())?;
+                app.on_menu_event(|app, event| {
+                    if event.id() == runtime_owner::QUIT_MENU_ID {
+                        runtime_owner::quit(app);
+                    }
+                });
+            }
             let parakeet_root = state.join("models").join("parakeet");
             app.manage(model_install::ParakeetInstallState::new(
                 parakeet_root.clone(),
