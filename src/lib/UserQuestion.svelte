@@ -58,7 +58,7 @@
   <span>Waiting for your answers.</span>
   <button onclick={open}>Answer questions</button>
 </div>
-<dialog use:panelScroll data-panel="question" data-panel-variant="overlay" bind:this={dialog} aria-labelledby="question-title" use:dialogDismiss={{onclose: () => dialog.close(), disabled: pending}}>
+<dialog use:panelScroll data-panel="question" data-panel-variant="overlay" bind:this={dialog} aria-labelledby="question-title" use:dialogDismiss={{onclose: () => dialog.close(), disabled: pending, covers: false}}>
   <form onsubmit={submit}>
     <header><h2 id="question-title">A few details</h2><PopupClose disabled={pending} onclick={() => dialog.close()} /></header>
     {#if question}

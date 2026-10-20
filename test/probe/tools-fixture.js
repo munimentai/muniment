@@ -2,7 +2,7 @@
 // (shipped tools, MCP tools with and without a schema, a tool that sets its
 // own presentation, an unknown plugin tool, failed calls, long inputs and
 // script calls nested under their scripts),
-// opened to each call's details and its run line, and a turn waiting at a
+// opened to each call's details, and a turn waiting at a
 // web search gate. `agents.html?state=tool-approvals` shows the gallery's
 // gates as agent approvals on Notifications.
 import { galleryCalls, galleryGates } from './presentations.js'
@@ -82,8 +82,8 @@ export function toolApprovalItems(template) {
   })
 }
 
-// Opens the tools line, every group and call, and the run line. Opening a
-// disclosure changes no node, so the calls open in one step.
+// Opens the tools line and every group and call. Opening a disclosure
+// changes no node, so the calls open in one step.
 export function advanceTools() {
   if (toolsRendered()) return
   const workspace = document.querySelector('.workspace')
@@ -91,8 +91,6 @@ export function advanceTools() {
   if (!feedback) return
   feedback.open = true
   for (const entry of feedback.querySelectorAll('.tool-groups details:not(.tool-raw)')) entry.open = true
-  const line = workspace.querySelector('details.run-line')
-  if (line && !line.open) line.querySelector('summary').click()
 }
 
 export function toolsRendered() {
@@ -101,6 +99,5 @@ export function toolsRendered() {
   if (!feedback) return false
   const details = [...feedback.querySelectorAll('.tool-groups details:not(.tool-raw)')]
   return details.length > 0 && details.every((entry) => entry.open)
-    && workspace.querySelectorAll('details.run-line[open] .timeline li').length === galleryCalls().filter((call) => GALLERY(call.effectId)).length + 5
     && !!workspace.querySelector('.permission-card .tool-call-card')
 }

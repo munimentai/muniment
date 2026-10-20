@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { dialogDismiss } from './dialog-dismiss.js'
+import { browserCovered } from './browser-cover.svelte.js'
 
 describe('dialog dismissal', () => {
   function setup(disabled = false) {
@@ -32,5 +33,27 @@ describe('dialog dismissal', () => {
     action.destroy()
     node.dispatchEvent(new Event('cancel'))
     expect(onclose).toHaveBeenCalledOnce()
+  })
+  it('hides the native browser while a dialog is open and restores it after', async () => {
+    const backdrop = dialogDismiss(document.createElement('div'), {onclose: vi.fn()})
+    expect(browserCovered()).toBe(true)
+    backdrop.destroy()
+    expect(browserCovered()).toBe(false)
+    const node = document.createElement('dialog')
+    const dialog = dialogDismiss(node, {onclose: vi.fn()})
+    expect(browserCovered()).toBe(false)
+    node.setAttribute('open', '')
+    await Promise.resolve()
+    expect(browserCovered()).toBe(true)
+    node.removeAttribute('open')
+    await Promise.resolve()
+    expect(browserCovered()).toBe(false)
+    node.setAttribute('open', '')
+    await Promise.resolve()
+    dialog.destroy()
+    expect(browserCovered()).toBe(false)
+    const panel = dialogDismiss(document.createElement('div'), {onclose: vi.fn(), covers: false})
+    expect(browserCovered()).toBe(false)
+    panel.destroy()
   })
 })

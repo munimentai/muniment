@@ -36,7 +36,7 @@ export function threadOwner(summary, swarm, runtimeList = null) {
   return memberMachine(swarm, owner, runtimeList)
 }
 
-// The machine a reply's run line names: the fleet member that owns the
+// The machine a reply's receipt names: the fleet member that owns the
 // thread, which runs its replies, else the machine that holds the thread.
 export function runMachineName(owner, runtimeList, machineId) {
   if (owner?.name) return owner.name

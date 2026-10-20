@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import { readHomepage, saveHomepage, addressFor, DEFAULT_HOMEPAGE } from './browser-settings.js'
   import LucideIcon from './LucideIcon.svelte'
+  import { browserCovered } from './browser-cover.svelte.js'
   let { tauri, artifacts = false, requestedArtifact = null, suspended = false, navigation = null, onnavigationhandled, onurl, onartifact } = $props()
   let homepage = $state(readHomepage())
   let homepageDraft = $state(homepage)
@@ -19,7 +20,7 @@
   let displayedArtifact = null
   $effect(() => { if (artifacts) onartifact?.(items.find(item => item.id === selected)?.name || '') })
   const view = $derived(artifacts ? 'artifact' : 'browser')
-  const visible = $derived(!suspended && (!artifacts || !!selected))
+  const visible = $derived(!suspended && !browserCovered() && (!artifacts || !!selected))
   function layout() {
     queue = queue.catch(() => {}).then(async () => {
       if (!active || !visible || !host) return tauri.invoke('browser_view', { label: null, bounds: null, artifactId: null })

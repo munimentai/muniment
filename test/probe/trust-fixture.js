@@ -1,10 +1,10 @@
 // The run-trust probe: two turns that edited a folder through file tools and
-// shell commands. `?state=line` opens the last turn's run line,
+// shell commands. `?state=receipt` opens each turn's receipt,
 // `review` opens Review changes on the notes, `rewind` previews a rewind to
 // before the second message, `blocked` previews one while another reply
 // uses the folder, and `rewound` runs it with one file that fails.
 const params = typeof location === 'undefined' ? new URLSearchParams() : new URLSearchParams(location.search)
-export const trustState = params.get('state') ?? 'line'
+export const trustState = params.get('state') ?? 'receipt'
 
 const at = (seconds) => new Date(Date.parse('2026-10-18T12:00:00Z') + seconds * 1000).toISOString()
 const tool = (effectId, displayName, input, started, finished, status = 'completed') => ({ effectId, displayName, status, input: JSON.stringify(input), startedAt: at(started), finishedAt: at(finished), textOffset: 0 })
@@ -119,8 +119,9 @@ const once = (key, element) => { if (element && !clicked.has(key)) { clicked.add
 export function advanceTrust() {
   if (trustRendered()) return
   const workspace = document.querySelector('.workspace')
-  if (!workspace?.querySelector('[data-testid="run-line"]')) return
-  if (trustState === 'line') return once('line', [...workspace.querySelectorAll('details.run-line summary')].at(-1))
+  const receipts = [...(workspace?.querySelectorAll('.receipt-line button.provenance') ?? [])]
+  if (receipts.length < 2) return
+  if (trustState === 'receipt') return receipts.forEach((receipt, index) => { if (receipt.getAttribute('aria-expanded') === 'false') once(`receipt-${index}`, receipt) })
   if (trustState === 'review') {
     if (!document.querySelector('.review-panel')) return once('chip', workspace.querySelector('.composer-chips .chip'))
     return once('notes', [...document.querySelectorAll('.review-panel .file')].find((entry) => entry.textContent.includes('notes.md')))
@@ -136,7 +137,7 @@ export function advanceTrust() {
 export function trustRendered() {
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
-  if (trustState === 'line') return !!workspace.querySelector('details.run-line[open] .timeline li')
+  if (trustState === 'receipt') return workspace.querySelectorAll('.receipt-record').length === 2
   if (trustState === 'review') return !!document.querySelector('.review-panel .hunk tr.addition') && !!document.querySelector('.review-panel .file[aria-current="true"]')?.textContent.includes('notes.md')
   if (trustState === 'rewind') return !!document.querySelector('.rewind-panel #rewind-effects') && !!named(document.querySelector('.rewind-panel'), 'Rewind conversation and files')
   if (trustState === 'blocked') return !!document.querySelector('.rewind-panel [role="alert"]')

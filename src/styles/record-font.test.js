@@ -27,7 +27,6 @@ export function recordSelectorsWithoutMono(source, selectors) {
 // them take the UI face.
 const HUMAN_SELECTORS = new Map([
   ['src/App.svelte', ['.provenance', '.response-meta']],
-  ['src/activity/RunLine.svelte', ['.run-line']],
 ])
 
 describe('record fonts', () => {
