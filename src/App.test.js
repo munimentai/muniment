@@ -8497,11 +8497,11 @@ describe('agent chat', () => {
     await new Promise((resolve) => setTimeout(resolve))
     expect(profileOpen()).toBe(false)
 
-    // The agent profile's Open conversation shows the thread in its place.
+    // A run in the agent profile's history shows the thread in its place.
     await fireEvent.click(await screen.findByRole('button', { name: 'Reveal agent profile' }))
     await waitFor(() => expect(profileOpen()).toBe(true))
     for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run } })
-    await fireEvent.click(await screen.findByRole('button', { name: 'Open conversation' }))
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'History' })).findByRole('button', { name: /^Test run, / }))
     await waitFor(() => expect(profileOpen()).toBe(false))
     expect(shown()).toBe(true)
 

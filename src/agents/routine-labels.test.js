@@ -31,3 +31,17 @@ it('shows a tool check\'s last poll, its failure and its next try', () => {
   const failed = pollLabel(mcp({ at: '2026-01-01T14:59:50Z', fired: false, error: 'The server did not answer.', failures: 3, retry_at: '2026-01-01T15:04:00Z' }), now)
   expect(failed).toMatch(/^Checked just now · failed: The server did not answer\. · 3 failures in a row · next try /)
 })
+
+it('names when a routine runs with no time zone, in local time for another zone', async () => {
+  const { routineIcon, routineWhen } = await import('./routine-labels.js')
+  const { localTimeZone } = await import('./cron.js')
+  const { runTimeLabel } = await import('../lib/agent-labels.js')
+  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: localTimeZone() } })).toBe('Weekdays at 09:00')
+  const zone = localTimeZone() === 'Asia/Tokyo' ? 'Europe/Paris' : 'Asia/Tokyo'
+  const next = Math.floor(Date.now() / 1000) + 3600
+  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * *', tz: zone }, next_fire_at: next })).toBe(`Next run ${runTimeLabel(next * 1000).replace(/^T/, 't')}`)
+  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * *', tz: zone } })).toBe('Every day at 09:00')
+  expect(routineWhen({ trigger: { kind: 'webhook', preset: 'github' } })).toBe('Webhook · GitHub')
+  expect(routineWhen({ trigger: { kind: 'mcp', server: 'crm', tool: 'search', every: { expr: '*/15 * * * *', tz: 'UTC' } } })).toBe('crm search · every 15 minutes')
+  expect(['cron', 'webhook', 'mcp'].map((kind) => routineIcon({ kind }))).toEqual(['clock', 'link', 'plug-zap'])
+})

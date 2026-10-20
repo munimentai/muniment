@@ -9,7 +9,8 @@
   import { agentRequest } from './agent-runtime.js'
   import { memberMachine, moveOutcome, moveRequest } from './swarm.js'
 
-  let { tauri, agent, swarm, runtimeList = null, onclose, onmoved = () => {} } = $props()
+  // `destination` is the machine the move starts on, such as one picked in the profile.
+  let { tauri, agent, swarm, runtimeList = null, destination = '', onclose, onmoved = () => {} } = $props()
   const choices = $derived((swarm?.members ?? []).filter((member) => member.runtime_id !== agent.primaryRuntime))
   let to = $state('')
   let force = $state(false)
@@ -20,7 +21,7 @@
   const target = $derived(to ? memberMachine(swarm, to, runtimeList) : null)
   const plan = $derived(to ? moveRequest({ agent, to, swarm, force }) : null)
 
-  $effect(() => { if (!to && choices.length) to = choices[0].runtime_id })
+  $effect(() => { if (!to && choices.length) to = choices.find((member) => member.runtime_id === destination)?.runtime_id ?? choices[0].runtime_id })
 
   async function move() {
     if (!plan?.runtime) return
