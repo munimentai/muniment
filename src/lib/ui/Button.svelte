@@ -2,7 +2,8 @@
   import LucideIcon from '../LucideIcon.svelte'
   // `primary` fills the button with the scheme accent: the one action a view
   // asks for, such as New agent, Run now, Connect or Save. A submit button is
-  // primary unless it names another variant. Every other button stays quiet.
+  // primary unless it names another variant. `danger` marks an action that
+  // removes something, such as Delete agent. Every other button stays quiet.
   let { children, icon, iconOnly = false, variant = 'default', ...props } = $props()
   const shown = $derived(variant === 'default' && props.type === 'submit' ? 'primary' : variant)
 </script>
@@ -19,6 +20,8 @@
   button[data-variant="capability"][aria-pressed="true"] { color: var(--signal); background: var(--signal-soft); border-color: transparent; }
   button[data-variant="primary"] { color: var(--on-accent); background: var(--accent); border-color: var(--accent); font-weight: var(--weight-semibold); }
   button[data-variant="primary"]:is(:hover:not(:disabled), :focus-visible) { color: var(--on-accent); background: color-mix(in srgb, var(--accent) 86%, var(--ink)); border-color: color-mix(in srgb, var(--accent) 86%, var(--ink)); }
+  button[data-variant="danger"] { color: var(--oxide); background: color-mix(in srgb, var(--oxide) 8%, var(--surface)); border-color: var(--oxide); }
+  button[data-variant="danger"]:is(:hover:not(:disabled), :focus-visible) { color: var(--oxide); background: color-mix(in srgb, var(--oxide) 16%, var(--surface)); border-color: var(--oxide); }
   button:disabled { opacity: .5; cursor: default; }
   .icon-only { padding: 6px; }
 </style>

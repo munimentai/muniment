@@ -179,6 +179,9 @@ it('adds a memory from a dialog and opens the new fact in the list', async () =>
   const dialog = screen.getByRole('dialog', { name: 'Add memory' })
   expect(dialog).toHaveAttribute('open')
   await waitFor(() => expect(within(dialog).getByLabelText('Title')).toHaveFocus())
+  // Settings names itself as a new fact's source, with no agent avatar.
+  expect(within(dialog).getByLabelText('Source')).toHaveValue('Added in settings')
+  expect(dialog.querySelector('.agent-avatar')).toBeNull()
   await fireEvent.input(within(dialog).getByLabelText('Title'), { target: { value: 'Zebra rule' } })
   await fireEvent.input(within(dialog).getByLabelText('Fact'), { target: { value: 'Stripes first.' } })
   await fireEvent.click(within(dialog).getByRole('button', { name: 'Save memory' }))

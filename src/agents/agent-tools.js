@@ -25,35 +25,6 @@ export async function loadToolCatalog(tauri, runtime) {
   }
 }
 
-const without = (list, id) => (list ?? []).filter((entry) => entry !== id)
-
-// The agent's `tools` after one row turns on or off. A choice that matches
-// the project's drops the agent's own, so the row follows the project again.
-export function agentToolChoice(agent, policy, row, enabled) {
-  const tools = agent?.tools ?? {}
-  const next = {
-    ...tools,
-    disabled: without(tools.disabled, row.id),
-    disabled_extensions: without(tools.disabled_extensions, row.id),
-    allowed: without(tools.allowed, row.id),
-  }
-  const projectOn = !(row.kind === 'builtin' ? policy?.disabledTools : policy?.disabledExtensions)?.includes(row.id)
-  if (enabled !== projectOn) {
-    if (enabled) next.allowed.push(row.id)
-    else next[row.kind === 'builtin' ? 'disabled' : 'disabled_extensions'].push(row.id)
-  }
-  return next
-}
-
-// The rows of core's `project_tools` for a machine's catalog, a project's
-// tools and, for an agent's card, the agent's choices.
-export function projectTools(tauri, catalog, policy, agentTools = null) {
-  return tauri.invoke('project_tools', { input: { catalog: catalog ?? {}, policy: policy ?? {}, ...(agentTools ? { agent: agentTools } : {}) } })
-}
-
-// What a tool row's kind reads as.
-export const TOOL_KINDS = { builtin: 'Built-in tool', mcp: 'MCP server', plugin: 'Plugin', skill: 'Skill' }
-
 // The skill ids the agent selects that its machine no longer has.
 export function missingSkills(agent, catalog = emptyCatalog()) {
   const installed = new Set(catalog.skills.map((skill) => skill.id))

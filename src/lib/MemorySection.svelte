@@ -8,12 +8,18 @@
   import Button from './ui/Button.svelte'
   import SegmentedField from './ui/SegmentedField.svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import AgentAvatar from './AgentAvatar.svelte'
   import PopupClose from './PopupClose.svelte'
   import { dialogDismiss } from './dialog-dismiss.js'
   import MemoryImports from './MemoryImports.svelte'
   import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
-  let { tauri, agentId = null, part = 'all' } = $props()
+  // `agent` is the agent whose memory shows from its profile: a new fact's
+  // source names it, and its avatar marks that source. `addInPlace` shows
+  // the Add memory form in place of the list, for a host that is already a
+  // dialog, and `onadding` tells the host when the form shows.
+  let { tauri, agentId = null, agent = null, part = 'all', addInPlace = false, onadding = () => {} } = $props()
+  const newSource = $derived(agent ? `Added by ${agent.name} agent` : 'Added in settings')
   const showProfile = $derived(!agentId && part !== 'memory')
   const showMemory = $derived(part !== 'profile')
   // New chats read these choices from the profile.
@@ -60,7 +66,7 @@
   let filter = $state('')
   let showDeleted = $state(false)
   let deletedFacts = $state([])
-  let draft = $state({ id: '', title: '', content: '', source: 'Added in settings' })
+  let draft = $state({ id: '', title: '', content: '', source: '' })
   let status = $state('')
   let busy = $state(true)
   let loaded = $state(false)
@@ -72,30 +78,36 @@
   const unconfirmed = $derived(facts.filter(f => f.trust === 'external').length)
   const shown = $derived(facts.filter(f => (trustFilter === 'all' || f.trust === trustFilter) && `${f.title} ${f.content} ${f.source}`.toLowerCase().includes(filter.toLowerCase())))
   function toggle(key) { expanded = expanded === key ? '' : key; deleting = ''; if (draft.id) clearDraft() }
-  function clearDraft() { draft = { id: '', title: '', content: '', source: 'Added in settings' } }
+  function clearDraft() { draft = { id: '', title: '', content: '', source: newSource } }
   async function editFact(fact) {
     draft = { ...fact }
     deleting = ''
     await tick()
     titleInput?.focus()
   }
-  // Add memory opens a modal form and returns focus to its opener on close.
+  // Add memory opens a modal form, or the form in place of the list, and
+  // returns focus to Add memory on close.
   let adding = $state(false)
   let addDialog = $state()
+  let section = $state()
   let opener = null
   async function openAdd(event) {
     opener = event?.currentTarget ?? document.activeElement
     clearDraft()
     adding = true
+    onadding(true)
     await tick()
-    if (!addDialog.open) addDialog.showModal()
+    if (!addInPlace && !addDialog.open) addDialog.showModal()
     titleInput?.focus()
   }
-  function closeAdd() {
+  export async function closeAdd() {
     if (addDialog?.open) addDialog.close()
     adding = false
+    onadding(false)
     clearDraft()
-    opener?.focus?.({ preventScroll: true })
+    if (addInPlace) await tick()
+    const button = addInPlace ? section?.querySelector('button[aria-label="Add memory"]') : opener
+    button?.focus?.({ preventScroll: true })
   }
   // A new fact opens in the list, on a page the list shows.
   async function reveal(id) {
@@ -201,8 +213,9 @@
       if (adding) {
         filter = ''
         trustFilter = 'all'
-        closeAdd()
+        const closed = closeAdd()
         if (saved?.id) await reveal(saved.id)
+        await closed
       }
     } catch (e) { status = String(e) }
     finally { busy = false }
@@ -249,7 +262,10 @@
     finally { busy = false }
   }
 </script>
-<section class="memory" aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+<section class="memory" bind:this={section} aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+  {#if addInPlace && adding}
+    <section aria-label="Add memory">{@render factForm('Cancel', closeAdd)}</section>
+  {:else}
   {#if showProfile}
     <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
       {#snippet actions()}
@@ -316,12 +332,15 @@
         {@render factList(deletedFacts, 'deleted', deletedLimit, () => { deletedLimit += PAGE }, 'No deleted memories.')}
       </Group>
     {/if}
-    <dialog class="memory-dialog" data-panel="memory-add" data-panel-variant="overlay" bind:this={addDialog} use:dialogDismiss={{ onclose: closeAdd, disabled: busy }} aria-labelledby={`${uid}-add`}>
-      {#if adding}
-        <div class="dialog-head"><h2 id={`${uid}-add`}>Add memory</h2><PopupClose label="Close" disabled={busy} onclick={closeAdd} /></div>
-        {@render factForm('Cancel', closeAdd)}
-      {/if}
-    </dialog>
+    {#if !addInPlace}
+      <dialog class="memory-dialog" data-panel="memory-add" data-panel-variant="overlay" bind:this={addDialog} use:dialogDismiss={{ onclose: closeAdd, disabled: busy }} aria-labelledby={`${uid}-add`}>
+        {#if adding}
+          <div class="dialog-head"><h2 id={`${uid}-add`}>Add memory</h2><PopupClose label="Close" disabled={busy} onclick={closeAdd} /></div>
+          {@render factForm('Cancel', closeAdd)}
+        {/if}
+      </dialog>
+    {/if}
+  {/if}
   {/if}
   {#if status}<p role="status">{status}</p>{/if}
 </section>
@@ -426,7 +445,7 @@
   <form class="fact-form" onsubmit={saveFact}>
     <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
     <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
-    <label class="field">Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
+    <label class="field">Source<span class="source-value">{#if agent && draft.source === newSource}<AgentAvatar {agent} size={16} />{/if}<input bind:value={draft.source} required disabled={!loaded || busy} /></span></label>
     <div class="field-actions">
       <Button onclick={cancel}>{cancelLabel}</Button>
       <Button type="submit" disabled={!loaded || busy}>Save memory</Button>
@@ -494,6 +513,7 @@
   .fact-form { display: grid; gap: 12px; }
   .fact-form .field { padding: 0; }
   .fact-form .field-actions { padding: 0; }
+  .source-value { display: flex; align-items: center; gap: 8px; }
   .memory-dialog { position: fixed; inset: 0; margin: auto; width: min(520px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 20px 24px 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
   .memory-dialog::backdrop { background: var(--overlay-backdrop); }
   .memory-dialog[open] { display: grid; gap: 16px; }

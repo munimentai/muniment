@@ -37,7 +37,7 @@
   // `catalog` is core's `agent.tool_catalog` from the agent's own machine:
   // the tools, skills and MCP servers it can offer this agent.
   let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true,
-    onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onrun = () => {}, onmanagemodels = () => {}, onvisibility = () => {} } = $props()
+    onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onopenfolder = null, onrun = () => {}, onmanagemodels = () => {}, onvisibility = () => {} } = $props()
   let editing = $state(null)
   let value = $state('')
   let busy = $state(false)
@@ -45,7 +45,10 @@
   let deleting = $state(false)
   let removeMemory = $state(false)
   let memoryOpen = $state(false)
-  // The one profile menu open: project, model, thinking, mode, machine or agents.
+  // The memory dialog shows the list, or the Add memory form in its place.
+  let memoryAdding = $state(false)
+  let memorySection = $state()
+  // The one profile menu open: project, model, thinking, mode, machine, agents or export.
   let menu = $state(null)
   let moving = $state(null)
   let notice = $state('')
@@ -166,6 +169,13 @@
     const current = agent.skills ?? []
     void change({ skills: on ? [...new Set([...current, id])] : current.filter((entry) => entry !== id) })
   }
+  // The in-app file browser opens the agent's folder when the app offers it.
+  // Without it, the system file manager does.
+  const openFolder = () => action(() => onopenfolder ? onopenfolder(agent) : tauri.invoke('agent_open', { id: agent.id }))
+  function chooseExport(format) {
+    void closeMenu()
+    void action(() => exportAgent(tauri, agent, format))
+  }
   function openRun(entry) {
     if (entry.thread_id && onopen) return action(() => onopen(entry.thread_id))
     if (onopenrun) return action(() => onopenrun(entry))
@@ -239,17 +249,20 @@
       {#if catalog.loaded && !catalog.error}{#each missingSkills(agent, catalog) as id (id)}<p class="record muted">{id} is not installed on {primary.name}.</p>{/each}{/if}
     </section>
 
-    <section class="field" aria-label="Messaging">
-      <div class="field-heading"><h3>Messages to other agents</h3></div>
-      <SegmentedField label="Messages to other agents" hideLabel value={allowList === 'any' ? 'any' : 'only'} options={[{ value: 'any', label: 'Any' }, { value: 'only', label: 'Only these' }]} onchange={chooseAllow} />
-      {#if allowList !== 'any'}
-        <div class="allowed" data-profile-menu="agents">
-          {#each allowed as other (`${other.runtimeId}:${other.id}`)}<span class="agent-chip"><AgentAvatar agent={other} size={16} />{other.name}</span>{/each}
-          <ComposerMenuButton menu="agent-agents" open={menu === 'agents'} chevrons label="Choose agents" text={allowed.length ? 'Change' : 'Choose agents'} disabled={busy} onclick={() => toggleMenu('agents')}>{#snippet icon()}<LucideIcon name="users" size={14} />{/snippet}</ComposerMenuButton>
-          {#if menu === 'agents'}<ChoiceMenu label="Agents" multiple values={allowList} options={others.map((other) => ({ value: other.id, label: other.name, agent: other }))} empty="No other agents." onchoose={allowAgent} onclose={closeMenu} />{/if}
-        </div>
-      {/if}
-    </section>
+    <!-- Messages to other agents shows once there is another agent to write to. -->
+    {#if others.length}
+      <section class="field" aria-label="Messaging">
+        <div class="field-heading"><h3>Messages to other agents</h3></div>
+        <SegmentedField label="Messages to other agents" hideLabel value={allowList === 'any' ? 'any' : 'only'} options={[{ value: 'any', label: 'Any' }, { value: 'only', label: 'Only these' }]} onchange={chooseAllow} />
+        {#if allowList !== 'any'}
+          <div class="allowed" data-profile-menu="agents">
+            {#each allowed as other (`${other.runtimeId}:${other.id}`)}<span class="agent-chip"><AgentAvatar agent={other} size={16} />{other.name}</span>{/each}
+            <ComposerMenuButton menu="agent-agents" open={menu === 'agents'} chevrons label="Choose agents" text={allowed.length ? 'Change' : 'Choose agents'} disabled={busy} onclick={() => toggleMenu('agents')}>{#snippet icon()}<LucideIcon name="users" size={14} />{/snippet}</ComposerMenuButton>
+            {#if menu === 'agents'}<ChoiceMenu label="Agents" multiple values={allowList} options={others.map((other) => ({ value: other.id, label: other.name, agent: other }))} onchoose={allowAgent} onclose={closeMenu} />{/if}
+          </div>
+        {/if}
+      </section>
+    {/if}
 
     <RoutinesPanel {agent} {tauri} {catalog} {webhooks} disabled={busy} {onchange} />
 
@@ -264,17 +277,22 @@
 
     {#if local}<section class="setting memory" aria-label="Memory"><h3>Memory</h3><button class="quiet link" onclick={() => { memoryOpen = true }}>Open memory</button></section>{/if}
     {#if agent.template}<details class="template"><summary>Imported template</summary><p>{templateNote(agent.template)}</p><pre>{JSON.stringify(agent.template, null, 2)}</pre></details>{/if}
-    <div class="actions secondary">
-      <Button variant="primary" disabled={busy || runActive(run?.status)} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.run_now', { id: agent.id }); if (answer?.run) onrun({ ...answer.run, runtimeId: agent.runtimeId ?? LOCAL_RUNTIME_ID }); await onchange() })}>Run now</Button>
-      {#if local}<Button disabled={busy} onclick={() => action(() => tauri.invoke('agent_open', { id: agent.id }))}>Open folder</Button>{/if}
-      <Button disabled={busy} onclick={() => action(() => exportAgent(tauri, agent, 'muniment'))}>Export for Muniment</Button>
-      <Button disabled={busy} onclick={() => action(() => exportAgent(tauri, agent, 'grok_bot'))}>Export for Grok Bot</Button>
+    <!-- Run now leads the row, and the folder and export actions sit as icons at its end. Delete takes its own row under it. -->
+    <div class="secondary">
+      <div class="action-row" data-profile-menu="export">
+        <Button variant="primary" disabled={busy || runActive(run?.status)} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.run_now', { id: agent.id }); if (answer?.run) onrun({ ...answer.run, runtimeId: agent.runtimeId ?? LOCAL_RUNTIME_ID }); await onchange() })}>Run now</Button>
+        <span class="action-icons">
+          {#if local}<Button icon="folder-open" iconOnly aria-label="Open folder" data-tooltip="Open folder" disabled={busy} onclick={openFolder} />{/if}
+          <Button icon="download" iconOnly aria-label="Export agent" data-tooltip="Export agent" aria-haspopup="menu" aria-expanded={menu === 'export'} data-menu="agent-export" disabled={busy} onclick={() => toggleMenu('export')} />
+        </span>
+        {#if menu === 'export'}<ChoiceMenu label="Export agent" options={[{ value: 'muniment', label: 'Muniment agent file', icon: 'download' }, { value: 'grok_bot', label: 'Grok Bot notes', icon: 'file-text' }]} onchoose={chooseExport} onclose={closeMenu} />{/if}
+      </div>
       {#if deleting}
         <div class="confirm" role="group" aria-label="Delete agent">
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
-          <div class="actions"><Button disabled={busy} onclick={() => action(async () => { await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete() })}>Confirm delete</Button><Button disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete() })}>Confirm delete</Button><Button disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
         </div>
-      {:else}<Button disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button>{/if}
+      {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button></div>{/if}
     </div>
     {/if}
     {#if notice}<p class="muted" role="status">{notice}</p>{/if}
@@ -302,7 +320,7 @@
   <MoveDialog {tauri} {agent} {swarm} {runtimeList} destination={moving.destination} onclose={() => { moving = null }} onmoved={async (line) => { notice = line; await onchange() }} />
 {/if}
 {#if memoryOpen}
-  <AgentDialog title="Agent memory" panel="agent-memory" width={640} onclose={() => { memoryOpen = false }}>{#key agent.id}<MemorySection {tauri} agentId={agent.id} />{/key}</AgentDialog>
+  <AgentDialog title={memoryAdding ? 'Add memory' : 'Agent memory'} panel="agent-memory" width={640} onback={memoryAdding ? () => memorySection?.closeAdd() : null} backLabel="Back to memories" onclose={() => { memoryOpen = false; memoryAdding = false }}>{#key agent.id}<MemorySection bind:this={memorySection} {tauri} agentId={agent.id} {agent} addInPlace onadding={(on) => { memoryAdding = on }} />{/key}</AgentDialog>
 {/if}
 <style>
   .profile { grid-area: rail;   display: flex; flex-direction: column; overflow: hidden;     }
@@ -322,7 +340,7 @@
   .setting { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
   .control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
   .control > :global(button) { flex: 0 1 auto; min-width: 0; }
-  .setting > :global([data-panel-variant="overlay"]), .allowed > :global([data-panel-variant="overlay"]) { position: absolute; z-index: 5; top: calc(100% + 4px); bottom: auto; left: auto; right: 0; max-height: 60vh; }
+  .setting > :global([data-panel-variant="overlay"]), .allowed > :global([data-panel-variant="overlay"]), .action-row > :global([data-panel-variant="overlay"]) { position: absolute; z-index: 5; top: calc(100% + 4px); bottom: auto; left: auto; right: 0; max-height: 60vh; }
   .memory { padding: 6px 0; border-bottom: 1px solid var(--border); }
   p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-13); line-height: 1.5; }
   p.name { font-size: var(--text-15); font-weight: 600; }
@@ -336,8 +354,16 @@
   textarea { resize: vertical; line-height: 1.5; }
   .check { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--text-13); }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
-  .secondary { margin-top: 16px; }
-  .confirm { display: grid; gap: 8px; flex-basis: 100%; }
+  .secondary { display: grid; gap: 8px; margin-top: 16px; }
+  .action-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .action-icons { display: flex; gap: 4px; }
+  .action-icons > :global(button) { position: relative; }
+  .action-icons > :global(button)::after { content: attr(data-tooltip); position: absolute; z-index: 6; right: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .action-icons > :global(button:is(:hover, :focus-visible):not([aria-expanded="true"]))::after { opacity: 1; transition-delay: 350ms; }
+  /* The export menu sits at the profile's foot, so it opens above its row. */
+  .action-row > :global([data-panel-variant="overlay"]) { top: auto; bottom: calc(100% + 4px); }
+  .delete-row { display: grid; }
+  .confirm { display: grid; gap: 8px; }
   button { font: inherit; font-size: var(--text-12); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 8px; background: transparent; cursor: pointer; }
   button:hover { background: var(--faint); }
   button:disabled { opacity: .5; cursor: default; }
@@ -350,7 +376,10 @@
   .state[data-state="error"] { color: var(--oxide); }
   .skill span { display: grid; gap: 2px; }
   .skill small { font-size: var(--text-12); }
-  .allowed { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  /* The agents menu button takes its own full-width row under the Any and Only these choice. */
+  .allowed { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+  .allowed > :global(.composer-menu-button) { flex: 1 0 100%; max-width: none; }
+  .allowed > :global(.composer-menu-button .chevrons) { margin-left: auto; }
   .agent-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 8px 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); font: var(--text-12) var(--font-human); }
   .threads { gap: 0; }
   .thread-link { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 6px; border: 0; text-align: left; font-size: var(--text-13); }

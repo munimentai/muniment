@@ -5,7 +5,8 @@
   // provider's current models under its name with its older ones folded under
   // Legacy models, the model in use marked, a search over every model, and
   // Manage models at its foot. A mark filters the list to its provider. Each
-  // model row moves the model between the two lists.
+  // model row moves the model between the two lists. `embedded` draws it open
+  // inside another panel: no popup frame, close control or focus on mount.
   import { onMount, tick } from 'svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import LucideIcon from './LucideIcon.svelte'
@@ -15,7 +16,9 @@
 
   // `source` names where the model in use comes from, such as `from project
   // Homelab`, and `actions` are the foot's choices for it, each run by `onaction`.
-  let { inventory, current, contextUsage = null, source = '', actions = [], onaction = () => {}, onchoose, onvisibility = () => {}, onmanage, onrouting, onclose } = $props()
+  // A row shows its visibility control only when `onvisibility` is given.
+  let { inventory, current, contextUsage = null, source = '', actions = [], embedded = false, disabled = false, onaction = () => {}, onchoose, onvisibility = null, onmanage, onrouting, onclose = () => {} } = $props()
+  const uid = $props.id()
   let query = $state('')
   let search = $state()
   const searching = $derived(!!query.trim())
@@ -39,7 +42,7 @@
   let tip = $state(null)
 
   onMount(() => {
-    void tick().then(() => search?.focus())
+    if (!embedded) void tick().then(() => search?.focus())
   })
 
   function toggleLegacy(group) {
@@ -49,7 +52,7 @@
   }
 
   function keydown(event) {
-    if (event.key !== 'Escape') return
+    if (embedded || event.key !== 'Escape') return
     event.preventDefault()
     event.stopPropagation()
     onclose()
@@ -83,11 +86,11 @@
 
 <svelte:window onkeydown={keydown} />
 
-<div data-panel="model-picker" data-panel-variant="overlay" data-composer-panel class="model-picker" role="dialog" aria-label="Model">
+<div data-panel="model-picker" data-panel-variant={embedded ? 'embedded' : 'overlay'} data-composer-panel={embedded ? undefined : ''} class="model-picker" class:embedded role={embedded ? 'group' : 'dialog'} aria-label="Model">
   <div class="picker-search">
     <LucideIcon name="search" variant="action" size={14} />
     <input type="search" autocomplete="off" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
-    <PopupClose label="Close model selector" onclick={onclose} />
+    {#if !embedded}<PopupClose label="Close model selector" onclick={onclose} />{/if}
   </div>
   <div class="picker-body">
     {#if groups.length}
@@ -95,14 +98,14 @@
       <nav class="provider-rail" aria-label="Providers" onkeydown={railKeydown}>
         {#each groups as group (group.id)}
           {@const chosen = !searching && group.id === selected?.id}
-          <button type="button" class="rail-mark" aria-label={group.label} aria-current={chosen ? 'true' : undefined} aria-controls="model-picker-list" tabindex={chosen || (searching && group === groups[0]) ? 0 : -1} onclick={() => pick(group)} onpointerenter={(event) => showTip(event, group)} onpointerleave={() => tip = null} onfocus={(event) => showTip(event, group)} onblur={() => tip = null}>
+          <button type="button" class="rail-mark" aria-label={group.label} aria-current={chosen ? 'true' : undefined} aria-controls={`${uid}-list`} tabindex={chosen || (searching && group === groups[0]) ? 0 : -1} onclick={() => pick(group)} onpointerenter={(event) => showTip(event, group)} onpointerleave={() => tip = null} onfocus={(event) => showTip(event, group)} onblur={() => tip = null}>
             {#if group.classifier}<LucideIcon name="route" variant="action" size={18} />{:else}<ProviderLogo color provider={group.providerId} size={18} />{/if}
           </button>
         {/each}
       </nav>
     {/if}
     {#if tip}<span class="rail-tip" aria-hidden="true" style:top="{tip.top}px">{tip.label}</span>{/if}
-    <div class="picker-list" id="model-picker-list" role="region" aria-label={searching ? 'Search results' : 'Models'} bind:this={list} use:panelScroll>
+    <div class="picker-list" id={`${uid}-list`} role="region" aria-label={searching ? 'Search results' : 'Models'} bind:this={list} use:panelScroll>
       {#if groups.length === 0}
         <p class="support">{inventory?.providers?.length ? 'No model matches.' : 'No provider is connected.'}</p>
       {:else if searching}
@@ -134,7 +137,7 @@
     {@const label = groups.flatMap((group) => group.models).find(inUse)?.label ?? current.model}
     <div class="picker-source">
       <span class="source-line">{label} · {source}</span>
-      {#each actions as action (action.id)}<button type="button" class="quiet source-action" onclick={() => onaction(action.id)}>{action.label}</button>{/each}
+      {#each actions as action (action.id)}<button type="button" class="quiet source-action" {disabled} onclick={() => onaction(action.id)}>{action.label}</button>{/each}
     </div>
   {/if}
   <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
@@ -147,12 +150,12 @@
   {@const compacts = !used && compactsOnSwitch(contextUsage, model.contextWindow ?? windowTokens(model.context))}
   {@const auto = model.id === 'auto' && group.classifier}
   <li class="picker-item">
-    <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={used} disabled={!!model.unavailable && !used} aria-describedby={model.unavailable ? `unavailable-${group.id}-${model.id}` : undefined} onclick={() => onchoose(model.provider, model.choice)}>
-      <span class="model-label">{#if auto}<ProviderLogo provider={group.providerId} size={16} />{/if}<span class="model-id" class:classifier={auto}>{model.label ?? model.id}</span>{#if compacts}<span class="will-compact"><LucideIcon name="combine" variant="action" size={12} />will compact</span>{/if}{#if model.unavailable}<span class="unavailable" id={`unavailable-${group.id}-${model.id}`}>Unavailable. {model.unavailable}</span>{/if}</span>
+    <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={used} disabled={disabled || (!!model.unavailable && !used)} aria-describedby={model.unavailable ? `${uid}-unavailable-${group.id}-${model.id}` : undefined} onclick={() => onchoose(model.provider, model.choice)}>
+      <span class="model-label">{#if auto}<ProviderLogo provider={group.providerId} size={16} />{/if}<span class="model-id" class:classifier={auto}>{model.label ?? model.id}</span>{#if compacts}<span class="will-compact"><LucideIcon name="combine" variant="action" size={12} />will compact</span>{/if}{#if model.unavailable}<span class="unavailable" id={`${uid}-unavailable-${group.id}-${model.id}`}>Unavailable. {model.unavailable}</span>{/if}</span>
       {#if model.accounts > 1}<span class="balanced" aria-label={`Balanced across ${model.accounts} accounts`}><LucideIcon name="scale" variant="action" size={14} /><span class="tag">{model.accounts}</span></span>{/if}
       {#if used}<LucideIcon name="check" variant="action" size={14} />{/if}
     </button>
-    {#if !group.classifier}
+    {#if !group.classifier && onvisibility}
       <button type="button" class="quiet visibility" aria-label={`${model.shown ? 'Hide' : 'Show'} ${model.label ?? model.id}`} onclick={() => onvisibility(model, !model.shown)}><LucideIcon name={model.shown ? 'eye-off' : 'eye'} variant="action" size={14} /></button>
     {/if}
   </li>
@@ -164,6 +167,7 @@
   button:disabled { color: var(--muted); cursor: default; }
   .quiet { background: transparent; border-color: transparent; }
   .model-picker { width: min(420px, 100%); max-height: 60vh; display: flex; flex-direction: column; overflow: hidden; }
+  .model-picker.embedded { width: 100%; height: 100%; max-height: none; background: transparent; }
   .picker-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
   .picker-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .picker-body { position: relative; flex: 1; min-height: 0; display: flex; }
