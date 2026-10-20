@@ -25,24 +25,7 @@ export async function loadToolCatalog(tauri, runtime) {
   }
 }
 
-// The agent's `tools` after one tool turns on or off. Its choices over its
-// project's tools stay.
-export function toggleTool(agent, id, enabled) {
-  const disabled = new Set(agent?.tools?.disabled ?? [])
-  if (enabled) disabled.delete(id)
-  else disabled.add(id)
-  return { ...(agent?.tools ?? {}), disabled: [...disabled] }
-}
-
 const without = (list, id) => (list ?? []).filter((entry) => entry !== id)
-
-// A project's tools after one row of core's `project_tools` turns on or off.
-export function projectToolPolicy(policy, row, enabled) {
-  const key = row.kind === 'builtin' ? 'disabledTools' : 'disabledExtensions'
-  const next = { disabledTools: [...(policy?.disabledTools ?? [])], disabledExtensions: [...(policy?.disabledExtensions ?? [])] }
-  next[key] = enabled ? without(next[key], row.id) : [...without(next[key], row.id), row.id]
-  return next.disabledTools.length || next.disabledExtensions.length ? next : null
-}
 
 // The agent's `tools` after one row turns on or off. A choice that matches
 // the project's drops the agent's own, so the row follows the project again.

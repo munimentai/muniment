@@ -171,7 +171,6 @@ const APP_COMMANDS: &[&str] = &[
     "project_settings",
     "project_settings_save",
     "project_move_thread",
-    "project_tools",
     "sidebar_arrange",
     "palette_rank",
     "home_status",

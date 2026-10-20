@@ -42,7 +42,6 @@ export function draftForm(draft) {
     label: draft?.label ?? '',
     instructions: draft?.instructions ?? '',
     skills: [...(draft?.skills ?? [])],
-    toolsOff: [...(draft?.tools_off ?? [])],
     mode: draft?.permission_mode ?? '',
     routines: (draft?.routines ?? []).map((routine) => ({ ...routine, enabled: routine.enabled !== false })),
   }
@@ -67,7 +66,6 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
     instructions: form.instructions.trim(),
     schedule: null,
     skills: [...form.skills],
-    tools: { disabled: [...form.toolsOff] },
     routines: form.routines.map((routine) => ({ ...routine, enabled: test ? false : routine.enabled, proposed: false })),
   }
   if (form.mode) agent.permissions = { mode: form.mode }

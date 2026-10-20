@@ -1,7 +1,7 @@
 <script>
   // A new agent's chat, drawn in the transcript like any chat. Each message
   // the user sends runs core's `agent.draft`, and its reply is the agent's
-  // draft: its name, what it does, when it runs, its tools and its model.
+  // draft: its name, what it does, when it runs, its skills and its model.
   // The newest reply holds Save and Test run. Test run saves the agent with
   // its triggers off and starts one run, whose line follows the run from
   // `runs`, the window's agent runs. Save turns the triggers on. The chat's
@@ -37,7 +37,6 @@
   })
 
   const latest = $derived(turns.length - 1)
-  const toolNames = (draft) => catalog.builtin.filter((tool) => tool.id !== 'ask_user_question' && !(draft?.tools_off ?? []).includes(tool.id)).map((tool) => tool.label)
   const skillNames = (draft) => (draft?.skills ?? []).map((id) => catalog.skills.find((skill) => skill.id === id)?.name ?? id)
   const schedule = (draft) => (draft?.routines ?? []).map((routine) => triggerSummary(routine.trigger)).join(', ') || 'Runs when you ask.'
   // The test run as the window last heard of it.
@@ -81,7 +80,7 @@
         <dl>
           <dt>What it does</dt><dd class="instructions">{draft.instructions}</dd>
           <dt>When</dt><dd>{schedule(draft)}</dd>
-          {#if toolNames(draft).length || skillNames(draft).length}<dt>Tools</dt><dd>{[...toolNames(draft), ...skillNames(draft)].join(', ')}</dd>{/if}
+          {#if skillNames(draft).length}<dt>Skills</dt><dd>{skillNames(draft).join(', ')}</dd>{/if}
           {#if model}<dt>Model</dt><dd>{model}</dd>{/if}
         </dl>
         {#if reply.via === 'rules'}<p class="state">No model answered, so the draft holds your words.</p>{/if}

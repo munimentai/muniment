@@ -49,17 +49,3 @@ export function arrangeStandIn(input = {}) {
   sidebar.projects = [...listed.filter((project) => project.pinned), ...listed.filter((project) => !project.pinned), ...idle]
   return sidebar
 }
-
-// A stand-in for core's `project_tools` in window tests and probe pages:
-// each catalog tool with whether the project, and an agent's choices over
-// it, allow it, and the layer that decides. Core's tests cover the real one.
-export function toolsStandIn({ catalog = {}, policy = {}, agent = null } = {}) {
-  const groups = [['builtin', catalog.builtin], ['mcp', catalog.mcp], ['plugin', catalog.plugins], ['skill', catalog.skills]]
-  return groups.flatMap(([kind, entries]) => (entries ?? []).filter((entry) => entry.id).map((entry) => {
-    const off = (kind === 'builtin' ? policy?.disabledTools : policy?.disabledExtensions)?.includes(entry.id)
-    const agentOff = (kind === 'builtin' ? agent?.disabled : agent?.disabled_extensions)?.includes(entry.id)
-    const agentOn = agent?.allowed?.includes(entry.id)
-    const [allowed, layer] = agentOn ? [true, 'agent'] : agentOff ? [false, 'agent'] : off ? [false, 'project'] : [true, 'default']
-    return { id: entry.id, kind, label: entry.label || entry.name || entry.server || entry.id, allowed, layer }
-  }))
-}

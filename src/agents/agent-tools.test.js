@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { agentToolChoice, emptyCatalog, loadToolCatalog, missingSkills, projectToolPolicy, projectTools, serverTools, toggleTool } from './agent-tools.js'
+import { agentToolChoice, emptyCatalog, loadToolCatalog, missingSkills, projectTools, serverTools } from './agent-tools.js'
 
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
 const answer = fixture('response-agent-tool-catalog.json')
@@ -25,24 +25,6 @@ describe('agent tool catalog', () => {
   it('keeps the machine\'s refusal as the reason', async () => {
     const catalog = await loadToolCatalog(tauri(new Error('That machine is offline. Try again when it answers.')), 'box')
     expect(catalog).toMatchObject({ builtin: [], loaded: true, error: 'That machine is offline. Try again when it answers.' })
-  })
-
-  it('turns one tool on or off and keeps the rest', () => {
-    const agent = { tools: { disabled: ['powershell'] } }
-    expect(toggleTool(agent, 'bash', false)).toEqual({ disabled: ['powershell', 'bash'] })
-    expect(toggleTool(agent, 'powershell', true)).toEqual({ disabled: [] })
-    expect(toggleTool({}, 'bash', false)).toEqual({ disabled: ['bash'] })
-    // The agent's choices over its project's tools stay.
-    expect(toggleTool({ tools: { disabled: [], allowed: ['mcp-crm'] } }, 'bash', false)).toEqual({ disabled: ['bash'], allowed: ['mcp-crm'] })
-  })
-
-  it('turns a project tool on or off and drops an empty policy', () => {
-    const bash = { id: 'bash', kind: 'builtin' }
-    const crm = { id: 'mcp-crm', kind: 'mcp' }
-    const off = projectToolPolicy(null, bash, false)
-    expect(off).toEqual({ disabledTools: ['bash'], disabledExtensions: [] })
-    expect(projectToolPolicy(off, crm, false)).toEqual({ disabledTools: ['bash'], disabledExtensions: ['mcp-crm'] })
-    expect(projectToolPolicy(off, bash, true)).toBeNull()
   })
 
   it('records an agent choice only where it differs from its project', () => {

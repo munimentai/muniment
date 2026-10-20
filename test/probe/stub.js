@@ -1,6 +1,6 @@
 import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixture.js'
 import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeCreations, probeExtensions, probePosts } from './agents-fixture.js'
-import { arrangeStandIn, toolsStandIn } from '../sidebar-standin.js'
+import { arrangeStandIn } from '../sidebar-standin.js'
 import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsPalette, projectsRendered, projectsSettings, projectsSummaries, projectsThreadSettings } from './projects-fixture.js'
 import { advanceTrust, trustAnswer, trustHistory, trustRendered } from './trust-fixture.js'
 import { longThreadHistory } from './long-thread-fixture.js'
@@ -720,7 +720,6 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'sidebar_arrange') return projectsFixture ? projectsArrangement(payload.input) : arrangeStandIn(payload.input)
     // The palette answers core's ranking of the projects fixture.
     if (command === 'palette_rank') return projectsPalette(payload.input)
-    if (command === 'project_tools') return toolsStandIn(payload.input)
     if (command === 'project_move_thread') {
       const catalog = projectsFixture ? projectsCatalog : { threads: projectThreads }
       if (!payload.projectId) delete catalog.threads[payload.threadId]

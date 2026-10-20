@@ -83,7 +83,7 @@
         {
           "id": "projects",
           "title": "Projects",
-          "body": "Group tasks under a project and choose its working folder. The files and terminal panels use the selected context. Rename and archive entries through their action menus. Archive keeps the task available without placing it in the main list. Choose Move to project in a thread menu, or drag the thread onto a project, to move it with its conversation. Project settings set the model, permission mode and tools new threads start with, and each value names where it comes from. A model picked in the composer changes that thread only. Press Command K on macOS or Control K on Windows and Linux to search threads, pages and actions."
+          "body": "Group tasks under a project and choose its working folder. The files and terminal panels use the selected context. Rename and archive entries through their action menus. Archive keeps the task available without placing it in the main list. Choose Move to project in a thread menu, or drag the thread onto a project, to move it with its conversation. Project settings set the model and permission mode new threads start with, and each value names where it comes from. A model picked in the composer changes that thread only. Press Command K on macOS or Control K on Windows and Linux to search threads, pages and actions."
         },
         {
           "id": "replies",
