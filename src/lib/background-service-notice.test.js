@@ -128,6 +128,24 @@ describe('runtime notice', () => {
     vi.restoreAllMocks()
   })
 
+  it('names a foreground-only runtime once the workspace connects, with Open Login Items', async () => {
+    expect(runtimeNotice(snapshot(1, 'connected', false)).foregroundOnly).toBeNull()
+    const window = setup({ ...snapshot(1, 'connected', false), foregroundOnly: true })
+    await window.notice.start()
+    const notice = window.onChange.mock.lastCall[0]
+    expect(notice.visible).toBe(false)
+    expect(notice.foregroundOnly).toEqual({
+      text: 'Scheduled agents run only while Muniment is open.',
+      control: 'Open Login Items',
+      command: 'open_login_items',
+    })
+    await window.notice.openLoginItems()
+    expect(window.invoke).toHaveBeenCalledWith('open_login_items')
+    window.event({ ...snapshot(2, 'connected', false), foregroundOnly: false })
+    expect(window.onChange.mock.lastCall[0].foregroundOnly).toBeNull()
+    window.notice.cleanup()
+  })
+
   it('keeps a contradictory connected snapshot hidden', () => {
     expect(runtimeNotice(snapshot(1, 'connected', true)).visible).toBe(false)
   })

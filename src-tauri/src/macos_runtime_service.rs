@@ -215,25 +215,6 @@ fn activate_and_diagnose_runtime_service(
     activation
 }
 
-#[cfg(target_os = "macos")]
-fn activate_runtime_service_at_startup(
-    adapter: &impl RuntimeServiceAdapter,
-    log_directory: Option<&Path>,
-) -> Option<RuntimeServiceActivation> {
-    Some(activate_and_diagnose_runtime_service(
-        adapter,
-        log_directory,
-    ))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn activate_runtime_service_at_startup(
-    _adapter: &impl RuntimeServiceAdapter,
-    _log_directory: Option<&Path>,
-) -> Option<RuntimeServiceActivation> {
-    None
-}
-
 fn map_status(status: Result<ServiceStatus, ()>) -> RuntimeServiceActivation {
     match status {
         Ok(ServiceStatus::Enabled) => RuntimeServiceActivation::Enabled,
@@ -376,58 +357,81 @@ fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
         .map(|home| home.join("Library/Logs/Muniment"));
-    let activation = activate_runtime_service_at_startup(
-        &MacosRuntimeServiceAdapter::new(),
-        log_directory.as_deref(),
-    )
-    .expect("macOS startup activates the runtime service");
-    match activation {
-        RuntimeServiceActivation::RequiresApproval => return RuntimeEvent::RequiresApproval,
-        RuntimeServiceActivation::NotFound => return RuntimeEvent::NotFound,
-        RuntimeServiceActivation::Failed => return RuntimeEvent::RegistrationFailed,
-        RuntimeServiceActivation::Enabled => {}
-    }
     // Kickstart is idempotent without -k. A stale socket must not block a retry.
-    let (outcome, recovery, failure) = match muniment_runtime::profile_directory() {
-        Ok(directory) => {
-            let mut adapter = MacosRuntimeStartAdapter::new(directory);
-            adapter.force_request = true;
-            let (outcome, recovery) =
-                start_enabled_runtime_with_recovery(&MacosRuntimeServiceAdapter::new(), &adapter);
-            let outcome = confirm_requested_start(outcome, &adapter);
-            (outcome, recovery, adapter.request_failure())
+    let start = muniment_runtime::profile_directory().ok().map(|directory| {
+        let mut adapter = MacosRuntimeStartAdapter::new(directory);
+        adapter.force_request = true;
+        adapter
+    });
+    match start_login_service_with(
+        &MacosRuntimeServiceAdapter::new(),
+        start.as_ref(),
+        log_directory.as_deref(),
+    ) {
+        LoginServiceStart::Inactive(RuntimeServiceActivation::RequiresApproval) => {
+            RuntimeEvent::RequiresApproval
         }
-        Err(_) => (
+        LoginServiceStart::Inactive(RuntimeServiceActivation::NotFound) => RuntimeEvent::NotFound,
+        LoginServiceStart::Inactive(_) => RuntimeEvent::RegistrationFailed,
+        LoginServiceStart::Started(RuntimeStartOutcome::Requested) => RuntimeEvent::Starting,
+        LoginServiceStart::Started(
+            RuntimeStartOutcome::JobInactive | RuntimeStartOutcome::RequestFailed,
+        ) => RuntimeEvent::ServiceInactive,
+        LoginServiceStart::Started(_) => RuntimeEvent::StartFailed,
+    }
+}
+
+/// Where a start through the login service ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoginServiceStart {
+    /// The service is not enabled, so no start request went out.
+    Inactive(RuntimeServiceActivation),
+    Started(RuntimeStartOutcome),
+}
+
+/// Registers the login service when it is not registered and asks launchd to
+/// start it. A job launchd cannot keep running is unregistered again, so the
+/// desktop's child runtime runs alone and the next launch registers it anew.
+fn start_login_service_with(
+    service: &impl RuntimeServiceAdapter,
+    start: Option<&impl RuntimeStartAdapter>,
+    log_directory: Option<&Path>,
+) -> LoginServiceStart {
+    let activation = activate_and_diagnose_runtime_service(service, log_directory);
+    if activation != RuntimeServiceActivation::Enabled {
+        return LoginServiceStart::Inactive(activation);
+    }
+    let (outcome, recovery, failure) = match start {
+        Some(start) => {
+            let (outcome, recovery) = start_enabled_runtime_with_recovery(service, start);
+            let outcome = confirm_requested_start(outcome, start);
+            (outcome, recovery, start.request_failure())
+        }
+        None => (
             RuntimeStartOutcome::RequestFailed,
             StartRecovery::None,
             Some("The runtime profile directory is unavailable.".to_owned()),
         ),
     };
-    if let Some(directory) = &log_directory {
+    if let Some(directory) = log_directory {
         let _ = write_start_diagnostic(directory, outcome);
         let _ = write_start_detail(directory, outcome, recovery, failure.as_deref());
     }
-    // launchd would keep respawning an inactive job. Unregister it, so the
-    // child runtime runs alone until the next start registers again.
+    // launchd would keep respawning an inactive job. A launch constraint that
+    // the bundle's code signature fails ends each spawn with EX_CONFIG.
     if matches!(
         outcome,
         RuntimeStartOutcome::JobInactive | RuntimeStartOutcome::RequestFailed
     ) {
-        let unregistered = MacosRuntimeServiceAdapter::new().unregister().is_ok();
-        if let Some(directory) = &log_directory {
+        let unregistered = service.unregister().is_ok();
+        if let Some(directory) = log_directory {
             let _ = write_child_diagnostic(
                 directory,
                 &format!("event=runtime_service_job_inactive unregistered={unregistered}\n"),
             );
         }
     }
-    match outcome {
-        RuntimeStartOutcome::Requested => RuntimeEvent::Starting,
-        RuntimeStartOutcome::JobInactive | RuntimeStartOutcome::RequestFailed => {
-            RuntimeEvent::ServiceInactive
-        }
-        _ => RuntimeEvent::StartFailed,
-    }
+    LoginServiceStart::Started(outcome)
 }
 
 /// The runtime binary the bundle carries beside the desktop executable.
@@ -445,9 +449,10 @@ fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> 
     )
 }
 
-// A build whose code signature the service cannot verify never registers. The
+// A build whose code signature the service cannot verify never registers, and
+// launchd refuses to spawn an ad hoc signed job under its launch constraint. The
 // desktop then runs the bundled runtime as its own child, stops it when the
-// desktop exits, and the shell says so.
+// desktop exits, and the shell says that scheduled agents run only while it is open.
 #[cfg(target_os = "macos")]
 pub(crate) fn start_child(
     owner: &crate::runtime_owner::RuntimeOwner,
@@ -899,6 +904,90 @@ mod tests {
             RuntimeStartOutcome::RequestFailed
         );
         assert_eq!(RuntimeStartOutcome::JobInactive.to_string(), "jobInactive");
+    }
+
+    /// The login service as the system keeps it from one launch to the next.
+    #[derive(Default)]
+    struct LaunchdFake {
+        registered: Cell<bool>,
+        registration_calls: Cell<usize>,
+        unregister_calls: Cell<usize>,
+    }
+
+    impl RuntimeServiceAdapter for LaunchdFake {
+        fn status(&self) -> Result<ServiceStatus, ()> {
+            Ok(if self.registered.get() {
+                ServiceStatus::Enabled
+            } else {
+                ServiceStatus::NotRegistered
+            })
+        }
+
+        fn register(&self) -> Result<(), RegistrationError> {
+            self.registration_calls
+                .set(self.registration_calls.get() + 1);
+            self.registered.set(true);
+            Ok(())
+        }
+
+        fn unregister(&self) -> Result<(), ()> {
+            self.unregister_calls.set(self.unregister_calls.get() + 1);
+            self.registered.set(false);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_inactive_job_is_unregistered_and_every_later_launch_registers_it_again() {
+        let root = directory();
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let logs = root.join("logs");
+        let service = LaunchdFake::default();
+        for launch in 1..=2 {
+            assert_eq!(
+                start_login_service_with(
+                    &service,
+                    Some(&InactiveJobAdapter(Ok(false))),
+                    Some(&logs)
+                ),
+                LoginServiceStart::Started(RuntimeStartOutcome::JobInactive)
+            );
+            assert_eq!(service.registration_calls.get(), launch);
+            assert_eq!(service.unregister_calls.get(), launch);
+            assert!(!service.registered.get());
+        }
+        assert_eq!(
+            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            "event=runtime_service_job_inactive unregistered=true\n".repeat(2)
+        );
+        // A launch whose job stays up keeps the registration.
+        assert_eq!(
+            start_login_service_with(&service, Some(&InactiveJobAdapter(Ok(true))), Some(&logs)),
+            LoginServiceStart::Started(RuntimeStartOutcome::Requested)
+        );
+        assert_eq!(service.unregister_calls.get(), 2);
+        assert!(service.registered.get());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_service_that_is_not_enabled_sends_no_start_and_keeps_its_state() {
+        let service = FakeAdapter::new([Ok(ServiceStatus::RequiresApproval)], Ok(()));
+        let start = FakeStartAdapter::new(Ok(false), Ok(()));
+        assert_eq!(
+            start_login_service_with(&service, Some(&start), None),
+            LoginServiceStart::Inactive(RuntimeServiceActivation::RequiresApproval)
+        );
+        assert_eq!(start.request_calls.get(), 0);
+        assert_eq!(service.unregister_calls.get(), 0);
+        // Without a profile directory the start fails and the job does not stay registered.
+        let service = LaunchdFake::default();
+        assert_eq!(
+            start_login_service_with(&service, None::<&FakeStartAdapter>, None),
+            LoginServiceStart::Started(RuntimeStartOutcome::RequestFailed)
+        );
+        assert_eq!(service.unregister_calls.get(), 1);
     }
 
     #[test]
@@ -1547,15 +1636,5 @@ mod tests {
             activate_runtime_service(&adapter),
             RuntimeServiceActivation::Failed
         );
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn non_macos_startup_does_not_query_or_register() {
-        let adapter = FakeAdapter::new([], Ok(()));
-
-        assert_eq!(activate_runtime_service_at_startup(&adapter, None), None);
-        assert_eq!(adapter.status_calls.get(), 0);
-        assert_eq!(adapter.registration_calls.get(), 0);
     }
 }

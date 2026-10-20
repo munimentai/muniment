@@ -29,11 +29,11 @@ pub(crate) enum RuntimeEvent {
     Approved,
     #[cfg(target_os = "macos")]
     NotFound,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     RegistrationFailed,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     ServiceInactive,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     ChildStarted,
     Stopped,
     StopFailed,
@@ -47,6 +47,9 @@ pub(crate) struct Snapshot {
     visible: bool,
     busy: bool,
     cause: Option<String>,
+    /// The background service could not stay running, so the runtime runs as
+    /// the desktop's child and stops when the desktop quits.
+    foreground_only: bool,
 }
 
 #[derive(Default)]
@@ -82,14 +85,39 @@ fn retry_delay(retries: u32) -> Duration {
 /// Whether a start reports only that its request went out, and the clients
 /// still have to connect.
 fn start_requested(event: RuntimeEvent) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     if event == RuntimeEvent::ChildStarted {
         return true;
     }
     event == RuntimeEvent::Starting
 }
 
+/// Starts the runtime through the background service, and runs it as the
+/// desktop's child when the service never registers or never stays running.
+/// The flag is true when that child started, since the runtime then stops
+/// with the desktop.
+#[cfg(any(test, all(target_os = "macos", not(feature = "local-runtime"))))]
+fn start_with_fallback(
+    service: impl FnOnce() -> RuntimeEvent,
+    child: impl FnOnce() -> RuntimeEvent,
+) -> (RuntimeEvent, bool) {
+    match service() {
+        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
+            let event = child();
+            (event, event == RuntimeEvent::ChildStarted)
+        }
+        event => (event, false),
+    }
+}
+
 impl Lifecycle {
+    /// Records a start and whether its runtime lives only as long as the desktop.
+    #[cfg(any(test, target_os = "macos"))]
+    fn service_started(&mut self, event: RuntimeEvent, foreground_only: bool) {
+        self.snapshot.foreground_only = foreground_only;
+        self.started(event);
+    }
+
     fn change(&mut self, event: RuntimeEvent, visible: bool) {
         if event == RuntimeEvent::Connected {
             self.retries = 0;
@@ -424,15 +452,13 @@ fn finish_start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let owner = app.state::<RuntimeOwner>();
     #[cfg(all(target_os = "macos", feature = "local-runtime"))]
     let event = crate::macos_runtime_service::start_child(&owner);
+    #[cfg(all(target_os = "macos", feature = "local-runtime"))]
+    let event = (event, false);
     #[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
-    // A service that never registers, or registers and never runs, yields to
-    // the bundled runtime as the desktop's child.
-    let event = match crate::macos_runtime_service::start(&owner) {
-        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
-            crate::macos_runtime_service::start_child(&owner)
-        }
-        event => event,
-    };
+    let event = start_with_fallback(
+        || crate::macos_runtime_service::start(&owner),
+        || crate::macos_runtime_service::start_child(&owner),
+    );
     #[cfg(target_os = "windows")]
     {
         // The runner owns the disposable runtime, including recovery after MSI file replacement.
@@ -459,7 +485,7 @@ fn finish_start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         owner.update(app, |state| state.activation_finished(result, clients));
     }
     #[cfg(target_os = "macos")]
-    owner.update(app, |state| state.started(event));
+    owner.update(app, |state| state.service_started(event.0, event.1));
 }
 
 // Closing a window does not stop the runtime. Only an explicit stop does.
@@ -586,6 +612,97 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         }
         std::thread::sleep(Duration::from_millis(100));
     });
+}
+
+/// How far ahead a routine counts as due when the desktop quits, in seconds.
+#[cfg(any(test, target_os = "macos"))]
+const QUIT_ROUTINE_WINDOW: i64 = 60 * 60;
+
+/// The menu item that quits through [`quit`] in place of the system's Quit.
+#[cfg(target_os = "macos")]
+pub(crate) const QUIT_MENU_ID: &str = "muniment-quit";
+
+/// The line a quit confirmation shows when quitting stops agent work: a run in
+/// progress, or a routine due within the hour, from core's agent state.
+#[cfg(any(test, target_os = "macos"))]
+fn quit_warning(state: &muniment_core::agents::State, now: i64) -> Option<&'static str> {
+    if state
+        .runs
+        .values()
+        .any(|run| matches!(run.status.as_str(), "running" | "queued"))
+    {
+        return Some("An agent is running. Quitting Muniment stops it.");
+    }
+    state
+        .routines
+        .values()
+        .flat_map(|routines| routines.values())
+        .filter_map(|routine| routine.next_fire_at)
+        .any(|at| (now..=now.saturating_add(QUIT_ROUTINE_WINDOW)).contains(&at))
+        .then_some("A scheduled agent is due within the hour. It runs only while Muniment is open.")
+}
+
+/// Puts [`QUIT_MENU_ID`] in place of the app menu's system Quit, which ends
+/// the app without a request the desktop could answer.
+#[cfg(target_os = "macos")]
+pub(crate) fn replace_quit_menu_item<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<()> {
+    use tauri::menu::{MenuItem, MenuItemKind};
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() else {
+        return Ok(());
+    };
+    let Some(MenuItemKind::Predefined(quit)) = app_menu.items()?.into_iter().last() else {
+        return Ok(());
+    };
+    let text = quit.text()?;
+    if !text.starts_with("Quit") {
+        return Ok(());
+    }
+    app_menu.remove(&quit)?;
+    app_menu.append(&MenuItem::with_id(
+        app,
+        QUIT_MENU_ID,
+        text,
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?)
+}
+
+/// Quits the app, and first asks when the runtime is the desktop's child and
+/// quitting would stop a run or a routine due soon.
+#[cfg(target_os = "macos")]
+pub(crate) fn quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let warning = app
+        .state::<RuntimeOwner>()
+        .child_running()
+        .then(muniment_runtime::profile_directory)
+        .and_then(Result::ok)
+        .and_then(|profile| muniment_core::agents::state(&profile).ok())
+        .and_then(|state| quit_warning(&state, muniment_core::agents::now()));
+    let Some(warning) = warning else {
+        app.exit(0);
+        return;
+    };
+    let quitting = app.clone();
+    // The first button is the default, so Enter keeps the app open.
+    app.dialog()
+        .message(warning)
+        .title("Quit Muniment?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Keep open".into(),
+            "Quit".into(),
+        ))
+        .show(move |keep_open| {
+            if !keep_open {
+                quitting.exit(0);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1417,5 +1534,106 @@ mod tests {
         state.observe(true, false, now + Duration::from_millis(250));
         state.observe(true, false, now + DWELL);
         assert!(!state.snapshot.visible);
+    }
+
+    #[test]
+    fn an_inactive_service_starts_the_child_and_flags_a_foreground_only_runtime() {
+        let child_calls = std::cell::Cell::new(0);
+        for service in [
+            RuntimeEvent::ServiceInactive,
+            RuntimeEvent::RegistrationFailed,
+        ] {
+            let started = start_with_fallback(
+                || service,
+                || {
+                    child_calls.set(child_calls.get() + 1);
+                    RuntimeEvent::ChildStarted
+                },
+            );
+            assert_eq!(started, (RuntimeEvent::ChildStarted, true));
+        }
+        assert_eq!(child_calls.get(), 2);
+        let mut state = Lifecycle::default();
+        state.service_started(RuntimeEvent::ChildStarted, true);
+        state.observe(true, false, Instant::now());
+        // The connected workspace stays on screen and the flag outlives the connection.
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert!(!state.snapshot.visible);
+        assert_eq!(
+            serde_json::to_value(&state.snapshot).unwrap()["foregroundOnly"],
+            true
+        );
+        // A later start that the service takes clears the flag.
+        let (event, foreground_only) = start_with_fallback(
+            || RuntimeEvent::Starting,
+            || panic!("A running service must not start a child."),
+        );
+        state.service_started(event, foreground_only);
+        assert!(!state.snapshot.foreground_only);
+        // A child that does not start leaves the failure, not the flag.
+        assert_eq!(
+            start_with_fallback(
+                || RuntimeEvent::ServiceInactive,
+                || RuntimeEvent::RegistrationFailed
+            ),
+            (RuntimeEvent::RegistrationFailed, false)
+        );
+    }
+
+    #[test]
+    fn quit_warns_for_a_run_in_progress_or_a_routine_due_within_the_hour() {
+        use muniment_core::agents::{RoutineState, RunState, State};
+        let now = 1_900_000_000;
+        let mut state = State::default();
+        assert_eq!(quit_warning(&state, now), None);
+        let routine = |at| RoutineState {
+            next_fire_at: Some(at),
+            ..RoutineState::default()
+        };
+        state
+            .routines
+            .entry("agent".into())
+            .or_default()
+            .insert("later".into(), routine(now + QUIT_ROUTINE_WINDOW + 1));
+        // A fire time already past is stale state, not a routine about to run.
+        state
+            .routines
+            .entry("agent".into())
+            .or_default()
+            .insert("past".into(), routine(now - 1));
+        assert_eq!(quit_warning(&state, now), None);
+        state
+            .routines
+            .entry("agent".into())
+            .or_default()
+            .insert("soon".into(), routine(now + QUIT_ROUTINE_WINDOW));
+        assert_eq!(
+            quit_warning(&state, now),
+            Some("A scheduled agent is due within the hour. It runs only while Muniment is open.")
+        );
+        state.routines.clear();
+        for status in ["completed", "failed", "waiting"] {
+            state.runs.insert(
+                "agent".into(),
+                RunState {
+                    status: status.into(),
+                    ..RunState::default()
+                },
+            );
+            assert_eq!(quit_warning(&state, now), None);
+        }
+        for status in ["running", "queued"] {
+            state.runs.insert(
+                "agent".into(),
+                RunState {
+                    status: status.into(),
+                    ..RunState::default()
+                },
+            );
+            assert_eq!(
+                quit_warning(&state, now),
+                Some("An agent is running. Quitting Muniment stops it.")
+            );
+        }
     }
 }
