@@ -1,21 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createEntitlementToast } from './entitlement-toast.js'
+import { createComposerNotices } from './composer-notices.js'
+import { ENTITLEMENT_NOTICE, createEntitlementToast } from './entitlement-toast.js'
 
 function setup() {
   let listener
-  const onVisible = vi.fn()
+  const notices = createComposerNotices()
+  notices.attach()
   const unlisten = vi.fn()
   const controller = createEntitlementToast({
     listen: vi.fn(async (_, callback) => {
       listener = callback
       return unlisten
     }),
-    setTimer: setTimeout,
-    clearTimer: clearTimeout,
-    onVisible,
+    notices,
   })
-  return { controller, onVisible, unlisten, event: () => listener({ payload: { snapshot_version: 3 } }) }
+  return { controller, notices, unlisten, event: () => listener({ payload: { snapshot_version: 3 } }) }
 }
 
 describe('entitlement toast controller', () => {
@@ -30,7 +30,7 @@ describe('entitlement toast controller', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const controller = createEntitlementToast({
       listen: vi.fn().mockRejectedValue(new Error('registration failed')),
-      onVisible: vi.fn(),
+      notices: createComposerNotices(),
     })
 
     await expect(controller.start()).resolves.toBeUndefined()
@@ -39,40 +39,43 @@ describe('entitlement toast controller', () => {
     expect(error).toHaveBeenCalledWith('Entitlement listener registration failed.')
   })
 
-  it('shows on an entitlement change and auto-dismisses after five seconds', async () => {
+  it('shows a composer notice on an entitlement change that leaves after six seconds', async () => {
     const context = setup()
     await context.controller.start()
 
     context.event()
-    expect(context.onVisible).toHaveBeenLastCalledWith(true)
-    await vi.advanceTimersByTimeAsync(4999)
-    expect(context.onVisible).not.toHaveBeenCalledWith(false)
+    expect(context.notices.current()).toMatchObject({ id: 'entitlement', text: ENTITLEMENT_NOTICE })
+    await vi.advanceTimersByTimeAsync(5999)
+    expect(context.notices.current()).not.toBeNull()
     await vi.advanceTimersByTimeAsync(1)
-    expect(context.onVisible).toHaveBeenLastCalledWith(false)
+    expect(context.notices.current()).toBeNull()
   })
 
-  it('restarts the dismiss timer for a repeated event without stacking visibility', async () => {
+  it('restarts the clock for a repeated event and shows again after it left', async () => {
     const context = setup()
     await context.controller.start()
 
     context.event()
     await vi.advanceTimersByTimeAsync(4000)
     context.event()
-    await vi.advanceTimersByTimeAsync(4999)
-    expect(context.onVisible).toHaveBeenLastCalledWith(true)
+    await vi.advanceTimersByTimeAsync(5999)
+    expect(context.notices.current()?.id).toBe('entitlement')
     await vi.advanceTimersByTimeAsync(1)
-    expect(context.onVisible).toHaveBeenLastCalledWith(false)
+    expect(context.notices.current()).toBeNull()
+
+    context.event()
+    expect(context.notices.current()?.id).toBe('entitlement')
   })
 
-  it('clears the toast and unsubscribes during cleanup', async () => {
+  it('clears the notice and unsubscribes during cleanup', async () => {
     const context = setup()
     await context.controller.start()
     context.event()
 
     context.controller.cleanup()
-    expect(context.onVisible).toHaveBeenLastCalledWith(false)
+    expect(context.notices.current()).toBeNull()
     expect(context.unlisten).toHaveBeenCalledOnce()
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(context.onVisible).toHaveBeenCalledTimes(2)
+    context.event()
+    expect(context.notices.current()).toBeNull()
   })
 })
