@@ -6521,11 +6521,11 @@ describe('permission gates', () => {
       gateId: 'gate-select',
       kind: 'select',
       title: 'Choose access',
-      options: ['Allow once', 'Allow for this thread'],
+      options: ['Read only', 'Read and write'],
     })
 
     const options = await screen.findByRole('group', { name: 'Choose access' })
-    const selected = within(options).getByRole('button', { name: 'Allow for this thread' })
+    const selected = within(options).getByRole('button', { name: 'Read and write' })
     const deny = screen.getByRole('button', { name: 'Deny' })
     expect(options).not.toContainElement(deny)
 
@@ -6533,7 +6533,7 @@ describe('permission gates', () => {
     expect(answer).toHaveBeenLastCalledWith({
       runId: 'run-gated',
       gateId: 'gate-select',
-      answer: { type: 'select', value: 'Allow for this thread' },
+      answer: { type: 'select', value: 'Read and write' },
     })
 
     await fireEvent.click(deny)
@@ -9630,7 +9630,7 @@ describe('the swarm', () => {
 
   it('answers an approval from Notifications and says when another device answered first', async () => {
     const rule = { request_kind: 'command', resource: { type: 'command', arguments: ['bash', 'git push origin main'], working_directory: '/work/scout' } }
-    const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-box', run_id: 'r1', gate_id: 'g1', thread_id: 't1', state: 'pending', created_at: new Date().toISOString(), request: { kind: 'select', title: 'Allow bash? Writes need a yes.', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] }, rule, summary: 'bash `git push origin main` in /work/scout', answers: ['allow_once', 'allow_thread', 'always_allow_agent', 'deny'] }
+    const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-box', run_id: 'r1', gate_id: 'g1', thread_id: 't1', state: 'pending', created_at: new Date().toISOString(), request: { kind: 'select', title: 'Allow bash? Writes need a yes.', options: ['Allow once', 'Deny'] }, rule, summary: 'bash `git push origin main` in /work/scout', answers: ['allow_once', 'deny'] }
     swarmMachine({ approvals: [approval], answers: { 'agent.approval_answer': () => ({ status: 'already_answered', approval: { ...approval, state: 'answered' } }), 'agent.runs': () => ({ runs: [] }) } })
     const swarmed = invoke.getMockImplementation()
     const page = { needs_you: [{ kind: 'approval', id: approval.approval_id, machine: { id: 'local', name: 'This computer' }, agent_id: 'a1', agent_name: 'Lead scout', approval, at: approval.created_at }], running: [], days: [], upcoming: [], counts: { needs_you: 1, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
@@ -9642,9 +9642,9 @@ describe('the swarm', () => {
     expect(list).toHaveTextContent('bash `git push origin main` in /work/scout')
     expect(list).toHaveTextContent('/work/scout')
     await waitFor(() => expect(list).toHaveTextContent('Build box'))
-    expect(within(list).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny', 'Open conversation'])
-    await fireEvent.click(within(list).getByRole('button', { name: 'Always allow for this agent' }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: 'always_allow_agent' } }))
+    expect(within(list).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Allow once', 'Deny', 'Open conversation'])
+    await fireEvent.click(within(list).getByRole('button', { name: 'Allow once' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: 'allow_once' } }))
     expect(await within(list).findByText('Another device answered this first. Its answer stands.')).toBeInTheDocument()
     expect(within(list).queryByRole('button', { name: 'Deny' })).toBeNull()
   })
@@ -9770,7 +9770,7 @@ describe('permission modes', () => {
     expect(within(menu).getAllByRole('menuitemradio').map((item) => item.getAttribute('aria-label'))).toEqual(['Ask before changes', 'Edit automatically', 'Plan first', 'Auto review', "Don't ask", 'Bypass permissions'])
     expect(within(menu).getByRole('menuitemradio', { name: 'Ask before changes' })).toHaveAttribute('aria-checked', 'true')
     expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toBeEnabled()
-    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAccessibleDescription(/Nothing else asks first/)
+    expect(within(menu).getByRole('menuitemradio', { name: 'Bypass permissions' })).toHaveAccessibleDescription(/except critical commands, which ask first/)
     expect(menu).toHaveTextContent('Shift+Tabcycles modes')
     await fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Plan first' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'thread.permission_mode_set', body: { thread_id: 'thread-1', mode: 'plan' } }))
@@ -9808,10 +9808,10 @@ describe('permission modes', () => {
     expect(await screen.findByRole('button', { name: 'Permission mode: Ask before changes' })).toBeInTheDocument()
   })
 
-  it('shows a composer gate without the agent-only answer and answers Deny with its option', async () => {
-    modesRuntime({ gate: { gateId: 'gate-1', kind: 'select', title: 'Allow bash `rm old.csv` in /work? This thread asks before it changes anything.', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] } })
+  it('shows a composer gate with Allow once and Deny and answers Deny with its option', async () => {
+    modesRuntime({ gate: { gateId: 'gate-1', kind: 'select', title: 'Allow bash `rm old.csv` in /work? This thread asks before it changes anything.', options: ['Allow once', 'Deny'] } })
     const card = (await screen.findByText(/Allow bash `rm old.csv`/)).closest('.permission-card')
-    expect(within(card).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Deny', 'Allow once', 'Allow for this thread'])
+    expect(within(card).getAllByRole('button').map((button) => button.textContent.trim())).toEqual(['Deny', 'Allow once'])
     await fireEvent.click(within(card).getByRole('button', { name: 'Deny' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_answer_permission', { runId: 'run-gated', gateId: 'gate-1', answer: { type: 'select', value: 'Deny' } }))
   })

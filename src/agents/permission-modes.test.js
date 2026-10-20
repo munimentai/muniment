@@ -28,11 +28,11 @@ it('shows an agent without a mode in the default agent mode, and its own mode as
   expect(agentMode({ permissions: { mode: 'plan' } }, null)).toBeNull()
 })
 
-it('saves the mode id only when one is chosen, and keeps the rules', () => {
-  const agent = { permissions: { mode: 'manual', always_allow: ['rule'], ask_first: [], deny: ['no'] } }
-  expect(modePermissions(agent, listing.modes[4])).toEqual({ mode: 'dont_ask', always_allow: ['rule'], ask_first: [], deny: ['no'] })
-  expect(modePermissions(agent, null)).toEqual({ always_allow: ['rule'], ask_first: [], deny: ['no'] })
-  expect(modePermissions({}, listing.modes[0])).toEqual({ mode: 'manual', always_allow: [], ask_first: [] })
+it('saves the mode id only when one is chosen', () => {
+  const agent = { permissions: { mode: 'manual' } }
+  expect(modePermissions(agent, listing.modes[4])).toEqual({ mode: 'dont_ask' })
+  expect(modePermissions(agent, null)).toEqual({})
+  expect(modePermissions({}, listing.modes[0])).toEqual({ mode: 'manual' })
 })
 
 it('cycles through the available modes and skips bypass while it is off', () => {

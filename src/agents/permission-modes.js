@@ -55,10 +55,9 @@ export function agentMode(agent, listing) {
 }
 
 // The permissions an agent saves to enter a mode, or to follow the default
-// again with `null`. Its rules stay as they are.
+// again with `null`.
 export function modePermissions(agent, mode) {
-  const { mode: _saved, ...rules } = agent?.permissions ?? { always_allow: [], ask_first: [] }
-  return mode ? { ...rules, mode: mode.id } : rules
+  return mode ? { mode: mode.id } : {}
 }
 
 // The next mode Shift+Tab moves to: the next available mode after `current`,

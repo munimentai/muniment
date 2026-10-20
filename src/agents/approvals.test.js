@@ -10,23 +10,20 @@ describe('approval answers', () => {
   it('offers exactly the answers core lists, in a fixed order', () => {
     expect(approvalChoices(pending).map((choice) => [choice.label, choice.answer])).toEqual([
       ['Allow once', 'allow_once'],
-      ['Allow for this thread', 'allow_thread'],
-      ['Always allow for this agent', 'always_allow_agent'],
       ['Deny', 'deny'],
     ])
     expect(approvalChoices(pending).at(-1).tone).toBe('deny')
   })
 
-  it('leaves out Always allow when an ask-first rule matches', () => {
-    const limited = { ...pending, answers: ['deny', 'allow_thread', 'allow_once'] }
-    expect(approvalChoices(limited).map((choice) => choice.answer)).toEqual(['allow_once', 'allow_thread', 'deny'])
+  it('leaves out an answer id it does not know', () => {
+    const older = { ...pending, answers: ['deny', 'always_allow_agent', 'allow_once'] }
+    expect(approvalChoices(older).map((choice) => choice.answer)).toEqual(['allow_once', 'deny'])
   })
 
   it('answers an older runtime\'s gate with its own options', () => {
-    const request = { kind: 'select', title: 'Allow bash? A write needs a yes.', options: ['Allow once', 'Allow for this thread', 'Deny'] }
+    const request = { kind: 'select', title: 'Allow bash? A write needs a yes.', options: ['Allow once', 'Deny'] }
     expect(approvalChoices({ request })).toEqual([
       { label: 'Allow once', answer: { type: 'select', value: 'Allow once' } },
-      { label: 'Allow for this thread', answer: { type: 'select', value: 'Allow for this thread' } },
       { label: 'Deny', answer: { type: 'select', value: 'Deny' }, tone: 'deny' },
     ])
     expect(approvalChoices({ request: { kind: 'confirm', title: 'Allow bash?', message: 'git push' } }).map((choice) => choice.answer)).toEqual([
@@ -75,13 +72,9 @@ it('says when another device answered first or the answer is on its way', () => 
   expect(approvalOutcome('sent')).toBe('Answer sent. The machine applies it when it answers.')
 })
 
-it('shows a composer gate without the agent-only answer and answers Deny with its option', () => {
-  const gate = { kind: 'select', title: 'Allow bash `rm old.csv`?', options: ['Allow once', 'Allow for this thread', 'Always allow for this agent', 'Deny'] }
-  expect(composerGateOptions(gate)).toEqual({ options: ['Allow once', 'Allow for this thread'], deny: { type: 'select', value: 'Deny' } })
-  expect(composerGateOptions(gate, true).options).toContain('Always allow for this agent')
-  // A thread without an agent offers the global answer core lists for it.
-  const plain = { ...gate, options: ['Allow once', 'Allow for this thread', 'Always allow', 'Deny'] }
-  expect(composerGateOptions(plain).options).toEqual(['Allow once', 'Allow for this thread', 'Always allow'])
+it('shows a composer gate beside its Deny control and answers Deny with its option', () => {
+  const gate = { kind: 'select', title: 'Allow bash `rm old.csv`?', options: ['Allow once', 'Deny'] }
+  expect(composerGateOptions(gate)).toEqual({ options: ['Allow once'], deny: { type: 'select', value: 'Deny' } })
   expect(composerGateOptions({ kind: 'select', title: 'Export target', options: ['PDF', 'Word'] })).toEqual({ options: ['PDF', 'Word'], deny: { type: 'cancelled' } })
   expect(isPlanGate({ kind: 'select', title: 'Approve this plan?', options: [] })).toBe(true)
   expect(isPlanGate(gate)).toBe(false)
