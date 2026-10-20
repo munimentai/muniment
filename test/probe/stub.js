@@ -1055,7 +1055,7 @@ function runtimesRendered() {
     if (!machines.includes('Build box')) return false
     if (runtimesState === 'remote') return !!document.querySelector('.thread-title-heading')?.textContent.includes('Nightly test triage') && !!document.querySelector('header .machine-badge')?.textContent.includes('Build box')
     const menu = document.querySelector('.machine-menu')
-    return !!menu?.textContent.includes('Build box') && !!document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label')?.includes('This computer')
+    return !!menu?.textContent.includes('Build box') && document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label') === 'Machine: This computer. Choose a machine'
   }
   // Settings opens on all machines, with the foot row on its side and
   // Settings marked as the current page there.
@@ -1120,7 +1120,7 @@ const AGENT_STATES = {
 }
 
 const AGENT_SCREENS = {
-  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .project-title[aria-label^="Project "]').length >= 5 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
+  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .thread-row .row-agent').length >= 4 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
   notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
   approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
   'tool-approvals': () => document.querySelectorAll('[data-panel="notifications"] .approval .tool-call-card').length === 4,

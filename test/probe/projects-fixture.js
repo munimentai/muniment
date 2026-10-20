@@ -1,5 +1,5 @@
-// The projects probe: several projects, an agent on a schedule, one on a
-// webhook in its project, threads in no project, threads that need the user,
+// The projects probe: several projects, an agent on a schedule whose thread
+// is a row of its own, one on a webhook in its project, threads in no project, threads that need the user,
 // threads at work and settled threads. The sidebar shows core's own
 // arrangement of `core/protocol-fixtures/sidebar/input.json`, which core's
 // tests keep in `arranged.json`, with every time moved so the fixture's now
@@ -152,5 +152,6 @@ export function projectsRendered() {
   if (projectsState === 'palette-search') return document.querySelector('[role="dialog"][aria-label="Search"] input')?.value === 're' && !!document.querySelector('[role="dialog"][aria-label="Search"]')?.textContent.includes('Reindex search')
   if (projectsState === 'move') return !!document.querySelector('[aria-labelledby="move-project-title"] button[aria-current="true"]')
   if (projectsState === 'model') return !!document.querySelector('.picker-source')?.textContent.includes('from project Homelab')
-  return sidebar.textContent.includes('every day 9:00') && sidebar.textContent.includes('webhook') && sidebar.textContent.includes('Approve')
+  // The scheduled agent's thread is a row that names the agent, and only a project shows triggers.
+  return !!sidebar.querySelector('.thread-row .row-agent') && !sidebar.textContent.includes('every day 9:00') && sidebar.textContent.includes('webhook') && sidebar.textContent.includes('Approve')
 }

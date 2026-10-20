@@ -217,7 +217,7 @@ export function fleetSyncRendered() {
   // The sidebar names no sync state: its foot holds only its icon row.
   if (['synced', 'syncing', 'offline'].includes(state)) return !!document.querySelector('#sidebar .side-foot .sidebar-actions') && !!document.querySelector('#sidebar .thread-row')
   if (state === 'bootstrap') return !!document.querySelector('.settings-runtimes [aria-label="Sync progress"]') && document.body.textContent.includes('arriving from Pod')
-  if (state === 'owners') return document.querySelectorAll('#sidebar .owner-chip').length >= 3 && !!document.querySelector('.project-threads') && document.body.textContent.includes('Release editor')
+  if (state === 'owners') return document.querySelectorAll('#sidebar .owner-chip').length >= 3 && !!document.querySelector('.project-threads') && document.body.textContent.includes('Draft board memo')
   if (state === 'queued') return document.body.textContent.includes("Queued. Studio is offline. Sends when it's back.") && document.body.textContent.includes('Move here')
   if (state === 'replica') return document.body.textContent.includes('History arriving from Pod: 12 of 48 events.')
   if (state === 'offload') return offloadStep === 3 && !!document.querySelector('.machine-menu [role="menuitemradio"][aria-checked="true"]')?.textContent.includes('Pod')
