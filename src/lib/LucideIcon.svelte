@@ -285,7 +285,7 @@
 <style>
   /* §1.7: one geometric 1.6px-stroke icon set. */
   .lucide { flex: none; display: block; }
-  .lucide :is(rect, path, circle) { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .lucide :is(rect, path, circle, ellipse, line, polyline, polygon) { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .side-icon { color: var(--muted); }
   .action-icon { color: inherit; }
 </style>
