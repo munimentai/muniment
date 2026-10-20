@@ -1466,12 +1466,15 @@ pub(crate) fn complete(
     }
     let mut last_failure = (503, "No eligible model served this turn.".to_owned());
     let mut attempted = false;
-    // A stall moves the turn on like any failure, once. A second stall ends it.
+    // A stall moves the turn to the model's next account, so every connected
+    // account of the provider gets one try. Once they all stalled, the turn ends
+    // there: each stall already cost a full wait.
     let mut stall: Option<String> = None;
     'routes: for route in routes {
         let mut candidates = config.clone();
         // Attempts on this route, and how many of them its plan refused.
         let (mut tried, mut plan_refused) = (0_u32, 0_u32);
+        let mut route_stalled = false;
         loop {
             let (account, delivered_route, _in_flight) = match state.reserve_delivery_in(
                 &config,
@@ -1680,9 +1683,8 @@ pub(crate) fn complete(
                     state.record_error(&account.id, &message, false);
                     refusals.push(format!("{} stopped answering.", account.label));
                     last_failure = (504, message.clone());
-                    if stall.replace(message).is_some() {
-                        break 'routes;
-                    }
+                    stall = Some(message);
+                    route_stalled = true;
                     continue;
                 }
             };
@@ -1769,9 +1771,8 @@ pub(crate) fn complete(
                             settle(None, false, None);
                             refusals.push(format!("{} stopped answering.", account.label));
                             last_failure = (504, message.clone());
-                            if stall.replace(message).is_some() {
-                                break 'routes;
-                            }
+                            stall = Some(message);
+                            route_stalled = true;
                         }
                     }
                 }
@@ -1877,6 +1878,9 @@ pub(crate) fn complete(
                     refusals.push(format!("{} did not answer.", account.label));
                 }
             }
+        }
+        if route_stalled {
+            break 'routes;
         }
     }
     if let Some(message) = stall.filter(|message| *message == last_failure.1) {
@@ -3400,7 +3404,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stall_moves_the_turn_to_another_account_once() {
+    fn a_stall_moves_the_turn_through_every_account_of_the_provider() {
         let (url, count) = scripted_upstream(silent);
         let accounts = vec![
             account("a1", &url),
@@ -3410,8 +3414,8 @@ mod tests {
         let (status, body, elapsed) = stalled_turn(accounts, true);
         assert_eq!(status, 200);
         assert!(body.contains(&stalled(QUICK.first_output)), "{body}");
-        assert_eq!(count.load(Ordering::SeqCst), 2);
-        assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+        assert!(elapsed < Duration::from_secs(6), "{elapsed:?}");
 
         // A stall before output is one failure, and the next account serves.
         fn answers(stream: &mut TcpStream) {
