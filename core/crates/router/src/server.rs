@@ -33,7 +33,14 @@ pub const ENDPOINT_FILE: &str = "muniment-router-endpoint.json";
 const HEAD_LIMIT: usize = 64 * 1024;
 const BODY_LIMIT: usize = 32 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const READ_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long a model request may stay silent before the router ends it.
+pub(crate) const STALL: Stall = Stall {
+    // A reasoning model can think for minutes before its first token, and a
+    // provider may send nothing at all while it does.
+    first_output: Duration::from_secs(180),
+    // Once output flows, a provider that goes this quiet has stopped.
+    idle: Duration::from_secs(90),
+};
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 /// What a turn reads when the sign-in another machine shares has lapsed.
 const SHARED_EXPIRED: &str =
@@ -47,6 +54,39 @@ const REFRESH_TIMEOUT: Duration = Duration::from_secs(12);
 const LEASE_WAIT: Duration = Duration::from_secs(240);
 /// How often a waiting request checks that its client is still connected.
 const CLIENT_POLL: Duration = Duration::from_secs(1);
+
+/// The silences an upstream request may hold. Every byte the provider sends,
+/// keep-alives and reasoning events included, restarts the wait, so only a
+/// provider that sends nothing at all is cut off.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Stall {
+    /// From the request to its first output: the response head, then the
+    /// stream until the first text or tool call.
+    pub(crate) first_output: Duration,
+    /// Between chunks once output started.
+    pub(crate) idle: Duration,
+}
+
+impl Stall {
+    /// The socket's own read timeout. It only ends the reader a stalled
+    /// request leaves behind, so it sits past both windows.
+    fn socket(&self) -> Duration {
+        self.first_output.max(self.idle) * 2
+    }
+}
+
+/// What a stalled request answers: the silence that ended it, in words.
+fn stalled(after: Duration) -> String {
+    let seconds = after.as_secs();
+    let spoken = match seconds {
+        0 => format!("{} milliseconds", after.as_millis()),
+        1 => "1 second".to_owned(),
+        60 => "1 minute".to_owned(),
+        _ if seconds.is_multiple_of(60) => format!("{} minutes", seconds / 60),
+        _ => format!("{seconds} seconds"),
+    };
+    format!("The model stopped answering. Muniment ended the request after {spoken}.")
+}
 
 /// The port and token Pi reaches the router on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +181,8 @@ pub(crate) struct State {
     pub(crate) active: Active,
     /// The clock, so a test can hold time still.
     pub(crate) now_ms: fn() -> i64,
+    /// How long an upstream request may stay silent.
+    pub(crate) stall: Stall,
 }
 
 /// What a host learns about a turn and may refuse, beyond what the desktop
@@ -570,6 +612,7 @@ impl State {
             agent,
             active: Arc::new(Mutex::new(BTreeMap::new())),
             now_ms: clock,
+            stall: STALL,
         }
     }
 
@@ -691,6 +734,10 @@ pub fn start(agent: PathBuf) -> io::Result<Handle> {
 }
 
 fn start_with_clock(agent: PathBuf, clock: fn() -> i64) -> io::Result<Handle> {
+    start_with(agent, clock, STALL)
+}
+
+fn start_with(agent: PathBuf, clock: fn() -> i64, stall: Stall) -> io::Result<Handle> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     listener.set_nonblocking(true)?;
@@ -699,11 +746,9 @@ fn start_with_clock(agent: PathBuf, clock: fn() -> i64) -> io::Result<Handle> {
         token: token(),
     };
     write_endpoint(&agent, &endpoint)?;
-    let state = Arc::new(State::new(
-        Backend::files(&agent),
-        Some(agent.clone()),
-        clock,
-    ));
+    let mut state = State::new(Backend::files(&agent), Some(agent.clone()), clock);
+    state.stall = stall;
+    let state = Arc::new(state);
     let active = Arc::clone(&state.active);
     let stop = Arc::new(AtomicBool::new(false));
     let accept_stop = Arc::clone(&stop);
@@ -1045,37 +1090,129 @@ type Sent = (
     Result<ureq::Response, ureq::Error>,
 );
 
-/// Sends the upstream request and waits for its answer while the client stays
-/// connected. With a client to watch, the call runs on its own thread, and the
-/// answer is None once the client leaves first: the turn ends and releases its
+/// How the wait for an upstream answer ended.
+enum Answer {
+    Sent(Box<Sent>),
+    /// The client closed its connection first.
+    Gone,
+    /// The provider sent no response head within the wait.
+    Stalled,
+}
+
+/// Sends the upstream request and waits up to `wait` for its answer while the
+/// client stays connected. The call runs on its own thread, so a client that
+/// leaves or a provider that stays silent ends the turn and releases its
 /// thread, and the abandoned call finishes on its own.
 fn send_watching(
     mut upstream: super::subscription_probe::TransportRequest,
     headers: Vec<(&'static str, String)>,
     body: Value,
     client: Option<&TcpStream>,
-) -> Option<Sent> {
-    if client.is_none() {
-        let result = upstream.send_json(&headers, &body).map_err(|error| *error);
-        return Some((upstream, result));
-    }
+    wait: Duration,
+) -> Answer {
     let (sender, answer) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = upstream.send_json(&headers, &body).map_err(|error| *error);
         let _ = sender.send((upstream, result));
     });
+    let deadline = std::time::Instant::now() + wait;
     loop {
-        match answer.recv_timeout(CLIENT_POLL) {
-            Ok(result) => return Some(result),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Answer::Stalled;
+        }
+        match answer.recv_timeout(left.min(CLIENT_POLL)) {
+            Ok(result) => return Answer::Sent(Box::new(result)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Answer::Gone,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if client_gone(client) {
-                    return None;
+                    return Answer::Gone;
                 }
             }
         }
     }
 }
+
+/// What reading the next line of a provider's body gave.
+enum Next {
+    Line(String),
+    End,
+    Failed,
+    /// The provider sent nothing for this long.
+    Stalled(Duration),
+}
+
+/// A provider's body, read line by line on its own thread, so a provider that
+/// goes silent ends the wait instead of holding the turn.
+struct Lines {
+    lines: std::sync::mpsc::Receiver<Option<String>>,
+    stall: Stall,
+    /// Whether output started, which shortens the silence allowed.
+    answering: bool,
+}
+
+impl Lines {
+    fn new(reader: impl Read + Send + 'static, stall: Stall) -> Self {
+        // Bounded, so a provider faster than the client waits on the client.
+        let (sender, lines) = std::sync::mpsc::sync_channel(64);
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(reader.take(BODY_LIMIT as u64));
+            loop {
+                let mut line = String::new();
+                let read = match reader.read_line(&mut line) {
+                    Ok(0) => return,
+                    Ok(_) => Some(line),
+                    Err(_) => None,
+                };
+                let failed = read.is_none();
+                if sender.send(read).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        Self {
+            lines,
+            stall,
+            answering: false,
+        }
+    }
+
+    fn next(&self) -> Next {
+        let window = if self.answering {
+            self.stall.idle
+        } else {
+            self.stall.first_output
+        };
+        match self.lines.recv_timeout(window) {
+            Ok(Some(line)) => Next::Line(line),
+            Ok(None) => Next::Failed,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Next::End,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Next::Stalled(window),
+        }
+    }
+}
+
+/// Why a relay ended before any output reached the client.
+#[derive(Debug)]
+enum Unserved {
+    Failed(String),
+    Stalled(String),
+}
+
+/// Ends a turn whose provider stopped answering. A streamed turn gets the
+/// reason as a stream error, which a client reads as the failed model call
+/// and does not retry on a status.
+fn respond_stalled(stream: &mut dyn Write, request: &Value, message: &str) {
+    let body = wire::error_body(message, "provider_stalled");
+    if !wire::streams(request) {
+        respond(stream, 504, "Gateway Timeout", &body);
+        return;
+    }
+    if stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n").is_ok() {
+        let _ = write_event(stream, &body);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn complete(
     stream: &mut dyn Write,
@@ -1329,7 +1466,9 @@ pub(crate) fn complete(
     }
     let mut last_failure = (503, "No eligible model served this turn.".to_owned());
     let mut attempted = false;
-    for route in routes {
+    // A stall moves the turn on like any failure, once. A second stall ends it.
+    let mut stall: Option<String> = None;
+    'routes: for route in routes {
         let mut candidates = config.clone();
         // Attempts on this route, and how many of them its plan refused.
         let (mut tried, mut plan_refused) = (0_u32, 0_u32);
@@ -1516,20 +1655,36 @@ pub(crate) fn complete(
             let upstream = super::subscription_probe::TransportRequest::new(
                 crate::http::agent_builder()
                     .timeout_connect(CONNECT_TIMEOUT)
-                    .timeout_read(READ_TIMEOUT),
+                    .timeout_read(state.stall.socket()),
                 &prepared.url,
             )
             .loopback_only(offline);
             state.probe(&route.model, "pending", "none");
-            let Some((upstream, call)) = send_watching(
+            let (upstream, call) = match send_watching(
                 upstream,
                 prepared.headers.clone(),
                 prepared.body.clone(),
                 client,
-            ) else {
-                // The client left before the answer started. Nothing reads a reply.
-                settle(None, false, None);
-                return;
+                state.stall.first_output,
+            ) {
+                Answer::Sent(sent) => *sent,
+                Answer::Gone => {
+                    // The client left before the answer started. Nothing reads a reply.
+                    settle(None, false, None);
+                    return;
+                }
+                Answer::Stalled => {
+                    settle(None, false, None);
+                    state.probe(&route.model, "failed", "timeout");
+                    let message = stalled(state.stall.first_output);
+                    state.record_error(&account.id, &message, false);
+                    refusals.push(format!("{} stopped answering.", account.label));
+                    last_failure = (504, message.clone());
+                    if stall.replace(message).is_some() {
+                        break 'routes;
+                    }
+                    continue;
+                }
             };
             match call {
                 Ok(response) => {
@@ -1606,9 +1761,17 @@ pub(crate) fn complete(
                             }
                             return;
                         }
-                        Err(message) => {
+                        Err(Unserved::Failed(message)) => {
                             settle(None, false, None);
                             last_failure = (502, message);
+                        }
+                        Err(Unserved::Stalled(message)) => {
+                            settle(None, false, None);
+                            refusals.push(format!("{} stopped answering.", account.label));
+                            last_failure = (504, message.clone());
+                            if stall.replace(message).is_some() {
+                                break 'routes;
+                            }
                         }
                     }
                 }
@@ -1716,6 +1879,10 @@ pub(crate) fn complete(
             }
         }
     }
+    if let Some(message) = stall.filter(|message| *message == last_failure.1) {
+        respond_stalled(stream, request, &message);
+        return;
+    }
     let refusals = refusals.join(" ");
     let message = [
         "No eligible model served this turn.",
@@ -1749,7 +1916,7 @@ fn relay_native(
     account: &str,
     response: ureq::Response,
     request: NativeRequest<'_>,
-) -> Result<Option<wire::Tokens>, String> {
+) -> Result<Option<wire::Tokens>, Unserved> {
     let NativeRequest {
         body: request,
         model,
@@ -1760,21 +1927,24 @@ fn relay_native(
     let mut started = false;
     let mut decoder = transport::Decoder::new(model);
     decoder.response_id = response_id.to_owned();
-    let mut reader = BufReader::new(response.into_reader().take(BODY_LIMIT as u64));
-    let mut line = String::new();
+    let mut lines = Lines::new(response.into_reader(), state.stall);
     let mut data = String::new();
     let mut failure = None;
     let mut failure_class = "stream";
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => {
+        let line = match lines.next() {
+            Next::Line(line) => line,
+            Next::End => break,
+            Next::Failed => {
                 failure = Some("The provider stream ended unexpectedly.".to_owned());
                 break;
             }
-        }
+            Next::Stalled(after) => {
+                failure = Some(stalled(after));
+                failure_class = "timeout";
+                break;
+            }
+        };
         if data.len() + line.len() > BODY_LIMIT {
             failure = Some("The provider event exceeds the size limit.".to_owned());
             break;
@@ -1800,17 +1970,20 @@ fn relay_native(
         };
         data.clear();
         match decoder.event(&event) {
-            Ok(Some(chunk)) if streaming => {
-                if !started {
-                    if stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n").is_err() { return Ok(None); }
-                    started = true;
-                }
-                if write_event(stream, &chunk).is_err() {
-                    state.record_error(account, "The client closed the stream.", false);
-                    return Ok(None);
+            Ok(Some(chunk)) => {
+                lines.answering = true;
+                if streaming {
+                    if !started {
+                        if stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n").is_err() { return Ok(None); }
+                        started = true;
+                    }
+                    if write_event(stream, &chunk).is_err() {
+                        state.record_error(account, "The client closed the stream.", false);
+                        return Ok(None);
+                    }
                 }
             }
-            Ok(_) => {}
+            Ok(None) => {}
             Err(error) => {
                 failure_class = super::subscription_probe::event_error(&event);
                 failure = Some(error);
@@ -1828,8 +2001,10 @@ fn relay_native(
         state.record_error(account, &message, false);
         if started {
             let _ = write_event(stream, &wire::error_body(&message, "provider_error"));
+        } else if failure_class == "timeout" {
+            return Err(Unserved::Stalled(message));
         } else {
-            return Err(message);
+            return Err(Unserved::Failed(message));
         }
         return Ok(None);
     }
@@ -1922,19 +2097,35 @@ fn relay_once(
     account: &str,
     response: ureq::Response,
     response_id: &str,
-) -> Result<Option<wire::Tokens>, String> {
-    let Ok(mut value) = response.into_json::<Value>() else {
+) -> Result<Option<wire::Tokens>, Unserved> {
+    let lines = Lines::new(response.into_reader(), state.stall);
+    let mut body = String::new();
+    loop {
+        match lines.next() {
+            Next::Line(line) => body.push_str(&line),
+            Next::End => break,
+            Next::Failed => break,
+            Next::Stalled(after) => {
+                let message = stalled(after);
+                state.record_error(account, &message, false);
+                return Err(Unserved::Stalled(message));
+            }
+        }
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(&body) else {
         state.record_error(
             account,
             "The provider answered with something that is not JSON.",
             false,
         );
-        return Err("The provider answered with something that is not JSON.".into());
+        return Err(Unserved::Failed(
+            "The provider answered with something that is not JSON.".into(),
+        ));
     };
     if value.get("error").is_some() || !value["choices"].is_array() {
         let message = "The provider returned no completion.";
         state.record_error(account, message, false);
-        return Err(message.into());
+        return Err(Unserved::Failed(message.into()));
     }
     if let Some(object) = value.as_object_mut() {
         object.insert("id".into(), Value::String(response_id.into()));
@@ -1954,18 +2145,21 @@ fn relay_stream(
     response: ureq::Response,
     keep_usage: bool,
     response_id: &str,
-) -> Result<Option<wire::Tokens>, String> {
-    let mut reader = BufReader::new(response.into_reader().take(BODY_LIMIT as u64));
+) -> Result<Option<wire::Tokens>, Unserved> {
+    let mut lines = Lines::new(response.into_reader(), state.stall);
     let mut tokens = wire::Tokens::default();
-    let mut line = String::new();
     let mut started = false;
     let mut finished = false;
+    let mut stall = None;
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
+        let line = match lines.next() {
+            Next::Line(line) => line,
+            Next::End | Next::Failed => break,
+            Next::Stalled(after) => {
+                stall = Some(stalled(after));
+                break;
+            }
+        };
         let Some(payload) = line.trim_end().strip_prefix("data:").map(str::trim_start) else {
             continue;
         };
@@ -1992,6 +2186,14 @@ fn relay_stream(
             if stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n").is_err() { return Ok(None); }
             started = true;
         }
+        let delta = &chunk["choices"][0]["delta"];
+        if delta["content"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+            || delta["tool_calls"].is_array()
+        {
+            lines.answering = true;
+        }
         chunk["id"] = Value::String(response_id.into());
         if write_event(stream, &chunk).is_err() {
             break;
@@ -2000,12 +2202,18 @@ fn relay_stream(
     if finished {
         state.record_success(account, tokens);
     } else {
-        let message = "The provider stream ended before completion.";
-        state.record_error(account, message, false);
+        let stalled = stall.is_some();
+        let message =
+            stall.unwrap_or_else(|| "The provider stream ended before completion.".to_owned());
+        state.record_error(account, &message, false);
         if !started {
-            return Err(message.into());
+            return Err(if stalled {
+                Unserved::Stalled(message)
+            } else {
+                Unserved::Failed(message)
+            });
         }
-        let _ = write_event(stream, &wire::error_body(message, "provider_error"));
+        let _ = write_event(stream, &wire::error_body(&message, "provider_error"));
     }
     Ok(finished.then_some(tokens))
 }
@@ -2090,7 +2298,16 @@ mod tests {
             drop(client);
         });
         let started = std::time::Instant::now();
-        assert!(send_watching(request, Vec::new(), json!({}), Some(&served)).is_none());
+        assert!(matches!(
+            send_watching(
+                request,
+                Vec::new(),
+                json!({}),
+                Some(&served),
+                Duration::from_secs(60)
+            ),
+            Answer::Gone
+        ));
         assert!(started.elapsed() < Duration::from_secs(10));
         drop(hold);
     }
@@ -3054,6 +3271,259 @@ mod tests {
         assert_eq!(window.resets_at_ms, Some(reset * 1000));
         drop(handle);
         std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    /// Small windows, so a stall test ends in well under a second.
+    const QUICK: Stall = Stall {
+        first_output: Duration::from_millis(400),
+        idle: Duration::from_millis(250),
+    };
+
+    /// A stand-in provider that reads each request, counts it, and hands the
+    /// socket to `answer`, which writes what it likes and holds the line open.
+    fn scripted_upstream(
+        answer: fn(&mut TcpStream),
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::clone(&count);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let seen = Arc::clone(&seen);
+                std::thread::spawn(move || {
+                    let mut head = Vec::new();
+                    let mut byte = [0_u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") {
+                        match stream.read(&mut byte) {
+                            Ok(1) => head.push(byte[0]),
+                            _ => return,
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&head).to_ascii_lowercase();
+                    let length: usize = text
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0_u8; length];
+                    let _ = stream.read_exact(&mut body);
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    answer(&mut stream);
+                });
+            }
+        });
+        (format!("http://127.0.0.1:{port}/v1"), count)
+    }
+
+    const STREAM_HEAD: &[u8] =
+        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+
+    fn send(stream: &mut TcpStream, bytes: &[u8]) {
+        let _ = stream.write_all(bytes);
+        let _ = stream.flush();
+    }
+
+    fn silent(_: &mut TcpStream) {
+        std::thread::sleep(Duration::from_secs(5));
+    }
+
+    fn codex(id: &str, url: &str) -> Account {
+        let mut account = account(id, url);
+        account.credential = Credential::Subscription {
+            provider: "openai-codex".into(),
+            access: format!("token-{id}"),
+            refresh: None,
+            expires_ms: None,
+            account_id: Some(id.into()),
+            email: None,
+            plan: None,
+            renews_at_ms: None,
+        };
+        account
+    }
+
+    /// Serves one turn through a router with the quick stall windows, and
+    /// returns the answer and how long it took.
+    fn stalled_turn(accounts: Vec<Account>, streamed: bool) -> (u16, String, Duration) {
+        let agent = agent_dir();
+        config::save(&agent, &config(accounts)).unwrap();
+        let handle = start_with(agent.clone(), fixed_clock, QUICK).unwrap();
+        let started = std::time::Instant::now();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", streamed)),
+            &handle.endpoint().token,
+        );
+        let elapsed = started.elapsed();
+        drop(handle);
+        let _ = std::fs::remove_dir_all(agent);
+        (status, body, elapsed)
+    }
+
+    #[test]
+    fn a_stall_names_the_silence_that_ended_it() {
+        assert_eq!(
+            stalled(STALL.first_output),
+            "The model stopped answering. Muniment ended the request after 3 minutes."
+        );
+        assert_eq!(
+            stalled(STALL.idle),
+            "The model stopped answering. Muniment ended the request after 90 seconds."
+        );
+        assert!(STALL.socket() > STALL.first_output.max(STALL.idle));
+    }
+
+    #[test]
+    fn a_provider_that_never_answers_ends_the_turn_with_the_stall_error() {
+        for streamed in [true, false] {
+            let (url, count) = scripted_upstream(silent);
+            let (status, body, elapsed) = stalled_turn(vec![account("a1", &url)], streamed);
+            let expected = stalled(QUICK.first_output);
+            assert!(body.contains(&expected), "{body}");
+            assert!(!body.contains("No eligible model"));
+            assert!(elapsed >= QUICK.first_output);
+            assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            if streamed {
+                // A stream error, which the client reads as a failed model call.
+                assert_eq!(status, 200);
+                assert!(body.contains("provider_stalled"));
+                assert!(!body.contains("[DONE]"));
+            } else {
+                assert_eq!(status, 504);
+            }
+        }
+    }
+
+    #[test]
+    fn a_stall_moves_the_turn_to_another_account_once() {
+        let (url, count) = scripted_upstream(silent);
+        let accounts = vec![
+            account("a1", &url),
+            account("a2", &url),
+            account("a3", &url),
+        ];
+        let (status, body, elapsed) = stalled_turn(accounts, true);
+        assert_eq!(status, 200);
+        assert!(body.contains(&stalled(QUICK.first_output)), "{body}");
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
+
+        // A stall before output is one failure, and the next account serves.
+        fn answers(stream: &mut TcpStream) {
+            static FIRST: AtomicBool = AtomicBool::new(true);
+            if FIRST.swap(false, Ordering::SeqCst) {
+                return silent(stream);
+            }
+            send(stream, STREAM_HEAD);
+            send(
+                stream,
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"second\"}}]}\n\n",
+            );
+            send(stream, b"data: [DONE]\n\n");
+        }
+        let (url, count) = scripted_upstream(answers);
+        let (status, body, _) = stalled_turn(vec![account("b1", &url), account("b2", &url)], true);
+        assert_eq!(status, 200);
+        assert!(body.contains("second"), "{body}");
+        assert!(body.contains("[DONE]"));
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_provider_that_goes_silent_after_one_chunk_ends_the_stream_with_the_stall_error() {
+        fn chat(stream: &mut TcpStream) {
+            send(stream, STREAM_HEAD);
+            send(
+                stream,
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            );
+            silent(stream);
+        }
+        fn native(stream: &mut TcpStream) {
+            send(stream, STREAM_HEAD);
+            send(stream, b"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"i1\",\"call_id\":\"c1\",\"name\":\"read\"}}\n\n");
+            silent(stream);
+        }
+        for (answer, subscription, first) in [
+            (chat as fn(&mut TcpStream), false, "partial"),
+            (native, true, "c1"),
+        ] {
+            let (url, count) = scripted_upstream(answer);
+            let accounts = if subscription {
+                vec![codex("s1", &url), codex("s2", &url)]
+            } else {
+                vec![account("a1", &url), account("a2", &url)]
+            };
+            let (status, body, elapsed) = stalled_turn(accounts, true);
+            assert_eq!(status, 200);
+            assert!(body.contains(first), "{body}");
+            assert!(body.contains(&stalled(QUICK.idle)), "{body}");
+            assert!(!body.contains("[DONE]"));
+            assert!(elapsed >= QUICK.idle);
+            assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+            // Output reached the client, so the turn is never replayed.
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn keep_alives_and_reasoning_hold_a_stream_open_past_the_stall_windows() {
+        fn chat(stream: &mut TcpStream) {
+            send(stream, STREAM_HEAD);
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(100));
+                send(stream, b": keep-alive\n\n");
+            }
+            send(
+                stream,
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n\n",
+            );
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(100));
+                send(stream, b": keep-alive\n\n");
+            }
+            send(
+                stream,
+                b"data: {\"choices\":[{\"delta\":{\"content\":\" answer\"}}]}\n\n",
+            );
+            send(stream, b"data: [DONE]\n\n");
+        }
+        fn native(stream: &mut TcpStream) {
+            send(stream, STREAM_HEAD);
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(100));
+                send(stream, b"data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"hm\"}\n\n");
+            }
+            send(
+                stream,
+                b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"late\"}\n\n",
+            );
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(100));
+                send(stream, b": keep-alive\n\n");
+            }
+            send(stream, b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n");
+        }
+        for (answer, subscription) in [(chat as fn(&mut TcpStream), false), (native, true)] {
+            let (url, count) = scripted_upstream(answer);
+            let accounts = if subscription {
+                vec![codex("s1", &url)]
+            } else {
+                vec![account("a1", &url)]
+            };
+            let (status, body, elapsed) = stalled_turn(accounts, true);
+            assert_eq!(status, 200);
+            assert!(body.contains("late"), "{body}");
+            assert!(body.contains("[DONE]"), "{body}");
+            assert!(!body.contains("stopped answering"), "{body}");
+            assert!(elapsed > QUICK.first_output + QUICK.idle);
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]
