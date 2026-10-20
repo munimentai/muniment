@@ -134,6 +134,7 @@ pre {
    and the agent profile's header. It is a 2px line down the left edge in
    --edge-color, an agent's color or the theme accent by default, that fades
    out toward the top and the bottom. It runs straight inside the box, so it
-   never follows a rounded corner. */
+   never follows a rounded corner. --edge-inset moves it in from the left
+   edge, for a box whose panel clips that edge. */
 [data-accent-edge] { position: relative; }
-[data-accent-edge]::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: linear-gradient(transparent, var(--edge-color, var(--accent)) 30%, var(--edge-color, var(--accent)) 70%, transparent); pointer-events: none; }
+[data-accent-edge]::before { content: ''; position: absolute; top: 0; bottom: 0; left: var(--edge-inset, 0px); width: 2px; background: linear-gradient(transparent, var(--edge-color, var(--accent)) 30%, var(--edge-color, var(--accent)) 70%, transparent); pointer-events: none; }
