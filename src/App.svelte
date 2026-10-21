@@ -3598,7 +3598,7 @@
 {/snippet}
 
 <!-- A row's meta line: its status in words and its project, then for an
-     agent's thread the agent's avatar and its name in its color, or once a machine is
+     agent's thread the agent's avatar and its name, or once a machine is
      paired the machine the thread lives on, by its shape and name. At the
      right end, how long its run has been working or how long ago the thread
      last changed. A settled thread shows only its time. -->
@@ -3607,7 +3607,7 @@
   {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
   {@const machine = !agent && !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
   {@const at = (summary.row?.status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
-  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}{@const known = roster.find((entry) => entry.id === agent.id) ?? agent}<AgentAvatar agent={known} size={14} tooltip={false} /><span class="row-agent" style:color={agentColor(known)}>{agent.name}</span>{:else if owner}<OwnerChip machine={owner} />{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
+  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}{@const known = roster.find((entry) => entry.id === agent.id) ?? agent}<AgentAvatar agent={known} size={14} tooltip={false} /><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner} />{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
