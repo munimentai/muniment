@@ -454,7 +454,7 @@ export function buildProbeCommandTable(fixtureName) {
   const trustFixture = fixtureName === 'run-trust'
   const toolsFixture = fixtureName === 'tools'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
-  let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' || new URLSearchParams(location.search).has('studio-offline') ? 'agents-offline' : 'agents') : runtimesState)
+  let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' || new URLSearchParams(location.search).has('studio-offline') ? 'agents-offline' : 'agents') : projectsFixture && new URLSearchParams(location.search).has('machines') ? 'paired' : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
   let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'

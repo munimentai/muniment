@@ -3604,17 +3604,53 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row > span')).toBeUndefined()
   })
 
-  it('puts the time on a meta line over the title and names no machine while this computer is the only one', async () => {
+  it('lays a row on one line, the title and then the time, while this computer is the only machine', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
     render(App)
     const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
-    const meta = row.querySelector('.thread-row-meta')
-    expect(meta.querySelector('time[datetime="2026-07-28T11:55:00Z"]')).not.toBeNull()
-    expect(meta).not.toHaveTextContent('This computer')
-    expect(meta.querySelector('.lucide')).toBeNull()
-    // The title leads the reading order, and the meta line draws above it.
-    expect(row.querySelector('.thread-row-body').firstElementChild).toHaveClass('thread-row-title')
-    expect(appRules.get('.thread-row-body')).toMatch(/flex-direction:\s*column-reverse/)
+    const body = row.querySelector('.thread-row-body')
+    expect(body).toHaveAttribute('data-layout', 'single')
+    expect(row.querySelector('.thread-row-meta')).toBeNull()
+    expect(body).not.toHaveTextContent('This computer')
+    expect(body.querySelector('.lucide')).toBeNull()
+    // An empty lead slot, the title, then the time at the right end.
+    expect([...body.children].map((child) => child.tagName === 'TIME' ? 'TIME' : child.classList[0])).toEqual(['status-lead', 'thread-row-title', 'TIME'])
+    expect(body.querySelector('.status-lead')).toHaveAttribute('data-empty', 'true')
+    expect(body.querySelector('time')).toHaveAttribute('datetime', '2026-07-28T11:55:00Z')
+    expect(appRules.get('.thread-row-body[data-layout="single"]')).toMatch(/flex-direction:\s*row/)
+    // The time keeps the actions control's room, and the control takes its place on hover or focus.
+    expect(appRules.get('.thread-row-body[data-layout="single"] time')).toMatch(/min-width:\s*var\(--row-actions-room\)/)
+    expect(appRules.get('.thread-record:is(:hover, :focus-within) .thread-row-body[data-layout="single"] time')).toMatch(/visibility:\s*hidden/)
+    // Under a meta line, the hovered title's box ends before the control instead of padding under it.
+    expect(appRules.get('.thread-record:is(:hover, :focus-within) .thread-row-body:not([data-layout="single"]) .thread-row-title')).toMatch(/margin-right:\s*var\(--row-actions-room\)/)
+    expect(appStyles).not.toMatch(/thread-row-title[^{]*\{[^}]*padding-right/)
+  })
+
+  it('leads each row with the status ring in place of a chip, and sets an unread result semibold', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    const statuses = { work: ['working', 'Working'], ask: ['needs_you', 'Approve'], done: ['done', 'Done'], bad: ['failed', 'Failed'], read: ['read', ''] }
+    threadSummaryResult = [{ threadId: 'open', title: 'Open thread', updatedAt: at, runtimeId: 'local' }, ...Object.keys(statuses).map((id) => ({ threadId: `t-${id}`, title: `Row ${id}`, updatedAt: at, runtimeId: 'local' }))]
+    const thread = (id, status, label) => ({ thread_id: id, title: id === 'open' ? 'Open thread' : `Row ${id.slice(2)}`, project_id: '', project_name: '', status, status_label: label, home: false, pinned: false, updated_at: at })
+    const project = (row) => ({ id: row.thread_id, name: row.title, kind: 'thread', triggers: '', agent_ids: [], updated_at: at, status: row.status, status_label: row.status_label, pinned: false, threads: [row] })
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'sidebar_arrange'
+      ? Promise.resolve({ projects: [thread('open', 'read', ''), ...Object.entries(statuses).map(([id, [status, label]]) => thread(`t-${id}`, status, label))].map(project), archived: [], results: [] })
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    const row = async (id) => (await within(list).findByText(`Row ${id}`, { selector: '.thread-row-title' })).closest('.thread-row')
+    await waitFor(async () => expect((await row('work')).querySelector('.status-ring')).not.toBeNull())
+    for (const [id, tone, phase] of [['work', 'success', 'travel'], ['ask', 'warning', 'travel'], ['done', 'success', 'lit'], ['bad', 'danger', 'lit']]) {
+      const ring = (await row(id)).querySelector('.status-ring')
+      expect(ring).toHaveAttribute('data-tone', tone)
+      expect(ring).toHaveAttribute('data-phase', phase)
+      expect(await row(id)).toHaveAccessibleDescription(new RegExp(`^${statuses[id][1]}`))
+    }
+    expect((await row('read')).querySelector('.status-ring')).toBeNull()
+    expect(list.querySelector('.thread-record .status-chip')).toBeNull()
+    expect([...list.querySelectorAll('.thread-row-title[data-unread]')].map((title) => title.textContent)).toEqual(['Row done', 'Row bad'])
+    expect(appRules.get('.thread-row-title[data-unread]')).toMatch(/font-weight:\s*var\(--weight-semibold\)/)
   })
 
   it('draws a hovered row lighter than the open thread and a selection darker', () => {
@@ -3853,7 +3889,7 @@ describe('sidebar collapse', () => {
     // the agent and carries the accent edge in the agent's color.
     await waitFor(() => expect(document.querySelector('.thread-row.active-thread .row-agent')).toHaveTextContent('Scout'))
     const open = document.querySelector('.thread-row.active-thread')
-    expect(open.querySelector('.thread-row-meta .agent-avatar')).not.toBeNull()
+    expect(open.querySelector('.thread-row-body .agent-avatar')).not.toBeNull()
     expect(open).toHaveAttribute('data-accent-edge')
     expect(open.style.getPropertyValue('--edge-color')).toMatch(/^#/)
     expect(screen.queryByRole('button', { name: 'Rename thread' })).not.toBeInTheDocument()
@@ -9205,12 +9241,14 @@ describe('a run on another thread', () => {
     await renderRunning()
     await leaveForOtherThread()
     expect(screen.queryByText(/still running/)).not.toBeInTheDocument()
-    // No agent group: the agent's thread is a row of the list, its meta line the status, the Agents icon and the agent's name.
+    // No agent group: the agent's thread is a row of the list on one line, the green ring in place of the agent's avatar, with the status and the agent's name in its description.
     const projects = screen.getByRole('list', { name: 'Projects list' })
     const agentRow = await within(projects).findByRole('button', { name: 'Blue Sky Explanation' })
     await waitFor(() => expect(agentRow).toHaveAccessibleDescription(/Working.*Morning Brief/))
-    expect(agentRow.querySelector('.thread-row-meta .agent-avatar')).not.toBeNull()
-    expect(agentRow.querySelector('.thread-row-meta').textContent.match(/Working/g)).toHaveLength(1)
+    expect(agentRow.querySelector('.thread-row-body .status-ring')).toHaveAttribute('data-tone', 'success')
+    expect(agentRow.querySelector('.thread-row-body .agent-avatar')).toBeNull()
+    expect(agentRow.querySelector('.status-chip')).toBeNull()
+    expect(agentRow.querySelector('.thread-row-body').textContent.match(/Working/g)).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /^Project Morning Brief/ })).toBeNull()
   })
 
@@ -9228,9 +9266,10 @@ describe('a run on another thread', () => {
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
     const runningRow = screen.getByRole('button', { name: /^Blue Sky Explanation/ })
     expect(runningRow).toHaveAttribute('data-running', 'true')
-    // Working on its meta line marks it, once, with no second mark.
+    // The traveling ring marks it, with Working once in its description, and no second mark.
     await waitFor(() => expect(runningRow).toHaveAccessibleDescription(/Working/))
-    expect(runningRow.querySelector('.thread-row-meta').textContent.match(/Working/g)).toHaveLength(1)
+    expect(runningRow.querySelector('.status-ring')).toHaveAttribute('data-phase', 'travel')
+    expect(runningRow.querySelector('.thread-row-body').textContent.match(/Working/g)).toHaveLength(1)
     expect(runningRow.querySelector('.run-mark')).toBeNull()
     expect(runningRow).not.toHaveAttribute('aria-disabled')
     expect(row('Other thread')).not.toHaveAttribute('data-running')
@@ -9398,6 +9437,7 @@ describe('runtimes', () => {
     expect(remoteMeta).toHaveTextContent('Build box')
     expect(remoteMeta.querySelector('[data-icon=container]')).not.toBeNull()
     expect(remoteMeta.querySelector('.machine-dot, .machine-badge')).toBeNull()
+    expect(remoteMeta.closest('.thread-row-body')).not.toHaveAttribute('data-layout')
     expect(screen.getByText('Local work').closest('.thread-row').querySelector('.thread-row-meta')).toHaveTextContent('This computer')
 
     // The newest thread opens first, and New thread waits for it.

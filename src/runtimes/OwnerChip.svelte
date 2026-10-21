@@ -2,16 +2,17 @@
   // The fleet member that owns an item: its shape icon and "on Studio" in
   // mono, with a warning slashed globe while that member does not answer.
   // `compact` keeps the icons and gives the name to screen readers alone.
+  // `icon`, when given, draws in place of the shape icon.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { kindIcon, machineName } from './runtimes.js'
-  let { machine, prefix = 'on', compact = false } = $props()
+  let { machine, prefix = 'on', compact = false, icon = undefined } = $props()
   const name = $derived(machine ? machineName(machine) : '')
   const offline = $derived(machine?.online === false)
 </script>
 
 {#if machine}
   <span class="owner-chip" data-offline={offline ? 'true' : undefined}>
-    <LucideIcon name={kindIcon(machine)} size={12} />
+    {#if icon}{@render icon()}{:else}<LucideIcon name={kindIcon(machine)} size={12} />{/if}
     {#if compact}<span class="visually-hidden">{prefix ? `${prefix} ` : ''}{name}</span>{:else}<span class="owner-name">{prefix ? `${prefix} ` : ''}{name}</span>{/if}
     {#if offline}<span class="owner-offline"><LucideIcon name="globe-off" size={12} variant="action" /><span class="visually-hidden">, offline</span></span>{/if}
   </span>

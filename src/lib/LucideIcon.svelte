@@ -21,6 +21,9 @@
     <circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" />
   {:else if name === 'circle-slash'}
     <circle cx="12" cy="12" r="10" /><path d="m9 15 6-6" />
+  {:else if name === 'circle-dashed'}
+    <!-- Lucide's eight dashes, in clockwise order from the top. -->
+    <path d="M10.1 2.182a10 10 0 0 1 3.8 0" /><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7" /><path d="M21.818 10.1a10 10 0 0 1 0 3.8" /><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69" /><path d="M13.9 21.818a10 10 0 0 1-3.8 0" /><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7" /><path d="M2.182 13.9a10 10 0 0 1 0-3.8" /><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69" />
   {:else if name === 'loader-circle'}
     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
   {:else if name === 'trending-up'}
