@@ -252,3 +252,30 @@ fn retained_storage_never_exceeds_the_configured_bound() {
         assert!(segmenter.buffered_samples() <= segmenter.max_buffered_samples());
     }
 }
+
+#[test]
+fn the_utterance_in_progress_shows_once_it_qualifies_and_leaves_at_its_boundary() {
+    let mut segmenter = UtteranceSegmenter::new(config()).unwrap();
+    assert!(segmenter
+        .push_frame(&[0.1], VoiceActivity::NonSpeech)
+        .unwrap()
+        .is_empty());
+    assert_eq!(segmenter.in_progress(), None);
+    segmenter
+        .push_frame(&[0.2, 0.3], VoiceActivity::Speech)
+        .unwrap();
+    assert_eq!(segmenter.in_progress(), None);
+    segmenter.push_frame(&[0.4], VoiceActivity::Speech).unwrap();
+    assert_eq!(segmenter.in_progress(), Some(&[0.1, 0.2, 0.3, 0.4][..]));
+    let emitted = segmenter
+        .push_frame(&[0.0, 0.0], VoiceActivity::NonSpeech)
+        .unwrap();
+    assert_eq!(values(emitted), vec![vec![0.1, 0.2, 0.3, 0.4, 0.0, 0.0]]);
+    assert_eq!(segmenter.in_progress(), None);
+    segmenter
+        .push_frame(&[0.5, 0.6, 0.7], VoiceActivity::Speech)
+        .unwrap();
+    assert!(segmenter.in_progress().is_some());
+    segmenter.discontinuity();
+    assert_eq!(segmenter.in_progress(), None);
+}

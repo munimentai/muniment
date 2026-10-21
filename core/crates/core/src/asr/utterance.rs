@@ -133,6 +133,13 @@ impl UtteranceSegmenter {
         self.clear();
     }
 
+    /// The utterance in progress once it holds enough speech to emit, so a
+    /// caller can decode its words before the boundary arrives.
+    pub fn in_progress(&self) -> Option<&[f32]> {
+        (!self.active.is_empty() && self.speech_samples >= self.config.min_speech_samples)
+            .then_some(self.active.as_slice())
+    }
+
     /// Current retained sample count, exposed for fixed-memory contract checks.
     pub fn buffered_samples(&self) -> usize {
         self.pre_roll.len() + self.active.len()
