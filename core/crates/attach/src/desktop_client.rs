@@ -297,6 +297,21 @@ impl DesktopClient {
         thinking_level: Option<&str>,
         permission_mode: Option<&str>,
     ) -> Result<RunSubmitAccepted, ClientError> {
+        self.run_submit_mentioning(text, files, thread_id, thinking_level, permission_mode, &[])
+    }
+
+    /// Submits a prompt that mentions the agents `mentions` names by id.
+    /// The runtime sends the message to each, and the answer says what
+    /// became of each one.
+    pub fn run_submit_mentioning(
+        &mut self,
+        text: &str,
+        files: &[String],
+        thread_id: Option<&str>,
+        thinking_level: Option<&str>,
+        permission_mode: Option<&str>,
+        mentions: &[String],
+    ) -> Result<RunSubmitAccepted, ClientError> {
         if text.trim().is_empty()
             || text.len() > MAX_TEXT_LENGTH
             || files
@@ -305,10 +320,17 @@ impl DesktopClient {
             || thread_id.is_some_and(|thread_id| thread_id.is_empty() || thread_id.len() > 36)
             || thinking_level.is_some_and(|level| level.is_empty() || level.len() > 16)
             || permission_mode.is_some_and(|mode| mode.is_empty() || mode.len() > 16)
+            || mentions.len() > 16
+            || mentions
+                .iter()
+                .any(|id| id.trim().is_empty() || id.len() > 64)
         {
             return Err(ClientError::UnexpectedMessage);
         }
         let mut body = serde_json::json!({"text": text, "files": files, "thread_id": thread_id});
+        if !mentions.is_empty() {
+            body["mentions"] = mentions.into();
+        }
         if let Some(level) = thinking_level {
             body["thinking_level"] = level.into();
         }

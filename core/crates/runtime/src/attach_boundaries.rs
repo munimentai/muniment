@@ -1007,6 +1007,22 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         )
     }
 
+    fn route_mentions(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        text: &str,
+        mentions: &[String],
+    ) -> Vec<serde_json::Value> {
+        match &self.swarm {
+            Some(swarm) => swarm.mention(run_id, thread_id, text, mentions),
+            None => mentions
+                .iter()
+                .map(|id| serde_json::json!({"agent_id": id, "name": "", "sent": false, "error": "Agent messages are unavailable on this machine."}))
+                .collect(),
+        }
+    }
+
     fn resume_run(
         &self,
         workspace: &str,

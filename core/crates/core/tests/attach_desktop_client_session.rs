@@ -196,6 +196,7 @@ impl ThreadListService for RunControlService {
             }],
             committed_seq: 1,
             accepted_at: "2026-08-16T00:00:00Z".into(),
+            mentions: Vec::new(),
         })
     }
 
@@ -382,6 +383,7 @@ fn desktop_run_submit_rejects_invalid_accepted_attachments() {
                     attachments,
                     committed_seq: 1,
                     accepted_at: "2026-08-16T00:00:00Z".into(),
+                    mentions: Vec::new(),
                 }),
             };
             serve_desktop_client_session(server, &session(), &mut service)

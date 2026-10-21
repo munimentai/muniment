@@ -46,6 +46,10 @@ pub struct SubmitResult {
     pub committed_seq: u64,
     #[serde(skip)]
     pub accepted_at: String,
+    /// What became of each mentioned agent's message:
+    /// `{agent_id, name, sent, error}`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<serde_json::Value>,
 }
 
 pub struct ActiveRun {
@@ -112,6 +116,22 @@ pub trait RunAttachBoundaries {
         Err(RunStartError::InvalidRequest(
             "This prompt cannot be accepted.".into(),
         ))
+    }
+
+    /// Sends the message of the run `run_id` to each agent it mentions and
+    /// answers one outcome per agent: `{agent_id, name, sent, error}`.
+    #[cfg(any(unix, target_os = "windows"))]
+    fn route_mentions(
+        &self,
+        _run_id: &str,
+        _thread_id: &str,
+        _text: &str,
+        mentions: &[String],
+    ) -> Vec<serde_json::Value> {
+        mentions
+            .iter()
+            .map(|id| serde_json::json!({"agent_id": id, "name": "", "sent": false, "error": "Agent messages are unavailable on this machine."}))
+            .collect()
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -847,6 +867,7 @@ pub fn prepare_desktop_run(
         attachments,
         committed_seq: prepared.0,
         accepted_at: accepted_time_now(),
+        mentions: Vec::new(),
     };
     let launch = RunStartLaunch {
         run_id,

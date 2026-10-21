@@ -655,6 +655,18 @@ impl Swarm {
         messaging::tool(&self.inner, run_id, thread_id, tool, arguments)
     }
 
+    /// Sends the user's message of the run `run_id` in `thread_id` to each
+    /// agent it mentions. See [`messaging::mention`].
+    pub fn mention(
+        &self,
+        run_id: &str,
+        thread_id: &str,
+        text: &str,
+        agent_ids: &[String],
+    ) -> Vec<Value> {
+        messaging::mention(&self.inner, run_id, thread_id, text, agent_ids)
+    }
+
     /// Whether `thread_id` replicates an agent, group or ordinary thread
     /// that another member runs, so this runtime writes no run output into
     /// it.

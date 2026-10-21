@@ -336,6 +336,7 @@ impl DesktopClientHolder {
     }
 
     /// Captures the refusal under the client lock, before another request can replace it.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_submit_with_reason(
         &self,
         text: &str,
@@ -343,12 +344,20 @@ impl DesktopClientHolder {
         thread_id: Option<&str>,
         thinking_level: Option<&str>,
         permission_mode: Option<&str>,
+        mentions: &[String],
         compatible: impl FnOnce(&str) -> bool,
     ) -> Result<RunSubmitAccepted, (ClientError, Option<crate::ProtocolError>)> {
         let mut reason = None;
         let result = self.with_compatible_client(compatible, |client| {
             client.take_request_error();
-            let result = client.run_submit(text, files, thread_id, thinking_level, permission_mode);
+            let result = client.run_submit_mentioning(
+                text,
+                files,
+                thread_id,
+                thinking_level,
+                permission_mode,
+                mentions,
+            );
             if result.is_err() {
                 reason = client.take_request_error();
             }
@@ -744,19 +753,19 @@ mod tests {
         for (error, expected) in refusals() {
             let started = Instant::now();
             assert_eq!(
-                holder.run_submit_with_reason("prompt", &[], None, None, None, |_| true),
+                holder.run_submit_with_reason("prompt", &[], None, None, None, &[], |_| true),
                 Err((expected, Some(error)))
             );
             assert!(started.elapsed() < Duration::from_secs(30));
             assert!(holder.inner.0.lock().unwrap().is_some());
             assert_eq!(
-                holder.run_submit_with_reason("prompt", &[], None, None, None, |_| false),
+                holder.run_submit_with_reason("prompt", &[], None, None, None, &[], |_| false),
                 Err((ClientError::RuntimeUpgradePending, None))
             );
         }
         worker.join().unwrap();
         assert_eq!(
-            holder.run_submit_with_reason(" ", &[], None, None, None, |_| true),
+            holder.run_submit_with_reason(" ", &[], None, None, None, &[], |_| true),
             Err((ClientError::UnexpectedMessage, None))
         );
     }
@@ -806,7 +815,7 @@ mod tests {
 
         let started = Instant::now();
         assert_eq!(
-            holder.run_submit_with_reason("prompt", &[], None, None, None, |_| true),
+            holder.run_submit_with_reason("prompt", &[], None, None, None, &[], |_| true),
             Err((ClientError::AuthorizationExpired, Some(expected)))
         );
         assert!(started.elapsed() >= Duration::from_secs(6));

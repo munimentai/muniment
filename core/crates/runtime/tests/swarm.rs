@@ -3152,3 +3152,66 @@ fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session()
         .unwrap();
     schedule.join().unwrap();
 }
+
+#[test]
+fn a_message_that_mentions_an_agent_reaches_it_through_the_messaging_path() {
+    let _environment = environment();
+    let a = Member::new("mention-a");
+    let planner = a.agent("Planner");
+    let analyst = a.agent("Analyst");
+    let start = a.run_to_end(&planner.id, "Plan the week.");
+    let planner_thread = a.primary_thread(&planner.id);
+
+    // In an agent's thread the agent sends it, so its messaging list applies.
+    let mut limited = agents::get(a.profile(), &planner.id).unwrap();
+    limited.messaging = Some(AgentMessaging {
+        allow: MessagingAllow::Agents(vec![uuid_string()]),
+    });
+    agents::save(a.profile(), limited).unwrap();
+    let refused = a.swarm().mention(
+        &start.id,
+        &planner_thread,
+        "Check the deals.",
+        std::slice::from_ref(&analyst.id),
+    );
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0]["sent"], false);
+    assert_eq!(refused[0]["name"], "Analyst");
+    assert_eq!(
+        refused[0]["error"],
+        "Planner may not message Analyst. Choose agents under Messages to other agents in its profile."
+    );
+    let mut open = agents::get(a.profile(), &planner.id).unwrap();
+    open.messaging = Some(AgentMessaging {
+        allow: MessagingAllow::Any,
+    });
+    agents::save(a.profile(), open).unwrap();
+    let sent = a.swarm().mention(
+        &start.id,
+        &planner_thread,
+        "Check the deals.",
+        &[analyst.id.clone(), analyst.id.clone()],
+    );
+    assert_eq!(
+        sent,
+        vec![json!({"agent_id": analyst.id, "name": "Analyst", "sent": true})]
+    );
+    let request = has_prompt(&a.runs(&analyst.id), "<agent_message").unwrap();
+    assert_eq!(request.trigger.kind, TriggerKind::AgentMessage);
+    assert!(request.prompt.contains("intent=\"request\""));
+    assert!(request.prompt.contains("Check the deals."));
+
+    // In any other thread the user sends it, as a message to the agent.
+    let chat = uuid::Uuid::new_v4().to_string();
+    let posted = a.swarm().mention(
+        &start.id,
+        &chat,
+        "Summarize the week.",
+        std::slice::from_ref(&analyst.id),
+    );
+    assert_eq!(posted[0]["sent"], true);
+    assert!(a
+        .runs(&analyst.id)
+        .iter()
+        .any(|run| run.prompt == "Summarize the week." && run.trigger.kind == TriggerKind::Manual));
+}

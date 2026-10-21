@@ -212,6 +212,56 @@ fn send_from_run(
     ))
 }
 
+/// Sends the user's message of the run `run_id` to each agent it mentions,
+/// once each. In an agent's thread the agent sends it as a request through
+/// the `agent-message` path, so its messaging list applies and the answer
+/// comes back to the agent. In any other thread the user sends it, as a
+/// message the agent answers in its own thread. Answers one outcome per
+/// agent: `{agent_id, name, sent, error}`.
+pub(super) fn mention(
+    inner: &Inner,
+    run_id: &str,
+    thread_id: &str,
+    text: &str,
+    agent_ids: &[String],
+) -> Vec<Value> {
+    let in_agent_thread = agents::state(&inner.profile)
+        .ok()
+        .is_some_and(|state| state.threads.contains_key(thread_id));
+    let mut seen = std::collections::HashSet::new();
+    let mut outcomes = Vec::new();
+    for id in agent_ids {
+        if !seen.insert(id.as_str()) {
+            continue;
+        }
+        let name = directory::resolve(inner, id)
+            .map(|target| target.name)
+            .unwrap_or_default();
+        let sent = if in_agent_thread {
+            tool(
+                inner,
+                run_id,
+                thread_id,
+                "agent-message",
+                json!({"to": id, "intent": "request", "text": text}),
+            )
+            .map(drop)
+        } else {
+            let sent = {
+                let _merge = lock(&inner.merge);
+                send_user_message(inner, id, text)
+            };
+            inner.host.kick_runs();
+            sent.map(drop)
+        };
+        outcomes.push(match sent {
+            Ok(()) => json!({"agent_id": id, "name": name, "sent": true}),
+            Err(error) => json!({"agent_id": id, "name": name, "sent": false, "error": error}),
+        });
+    }
+    outcomes
+}
+
 /// Sends a user's message to an agent that has no replicated thread yet,
 /// through the agent's primary runtime.
 pub(super) fn send_user_message(

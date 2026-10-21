@@ -27,6 +27,8 @@ pub struct RunSubmitRequest {
     /// The permission mode the thread runs in from its first tool call. None
     /// leaves the thread's mode as it is.
     pub permission_mode: Option<crate::permission_gate::PermissionMode>,
+    /// The agents the message mentions, by id. Core sends the message to each.
+    pub mentions: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -36,6 +38,9 @@ pub struct RunSubmitAccepted {
     pub attachments: Vec<crate::chat_view::ChatAttachment>,
     pub committed_seq: u64,
     pub accepted_at: String,
+    /// What became of each mentioned agent's message.
+    #[serde(default)]
+    pub mentions: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
