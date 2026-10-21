@@ -1037,6 +1037,11 @@ pub fn delete(profile: &Path, id: &str) -> Result<(), String> {
 /// `remove_memory`, its private memory folder goes too; the user confirms
 /// that first, since the memory cannot be recovered.
 pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
+    remove_agent(profile, id, remove_memory)?;
+    forget_in_messaging(profile, id);
+    Ok(())
+}
+fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
     let _lock = lock(profile)?;
     let store = RunStore::open(profile)?;
     if store.active()?.iter().any(|run| run.agent_id == id) {
@@ -1076,6 +1081,29 @@ pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(),
         }
     }
     Ok(())
+}
+/// Drops a deleted agent from the agents that named it in their messaging
+/// list, so a list naming only that agent does not read as empty. An agent
+/// that fails to save keeps the stale id, which allows nothing.
+fn forget_in_messaging(profile: &Path, id: &str) {
+    let Ok(listed) = list(profile) else {
+        return;
+    };
+    for mut agent in listed.agents {
+        let Some(AgentMessaging {
+            allow: MessagingAllow::Agents(ids),
+            ..
+        }) = agent.messaging.as_mut()
+        else {
+            continue;
+        };
+        if !ids.iter().any(|named| named == id) {
+            continue;
+        }
+        ids.retain(|named| named != id);
+        agent.schedule = None;
+        let _ = save(profile, agent);
+    }
 }
 /// The agent a thread belongs to, if any.
 pub fn thread_agent(profile: &Path, thread: &str) -> Result<Option<Agent>, String> {
@@ -2082,6 +2110,40 @@ mod tests {
         assert_eq!(
             history.last().unwrap().run_id.as_deref(),
             Some(format!("run-{:04}", MAX_STATE_HISTORY + 19).as_str())
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_drops_it_from_other_messaging_lists() {
+        let (root_dir, profile) = profile();
+        let make = |name: &str, allow: MessagingAllow| {
+            save(
+                &profile,
+                Agent {
+                    name: name.into(),
+                    instructions: "Work.".into(),
+                    messaging: Some(AgentMessaging { allow }),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let helper = make("Helper", MessagingAllow::Any);
+        let other = make("Other", MessagingAllow::Any);
+        let caller = make(
+            "Caller",
+            MessagingAllow::Agents(vec![helper.id.clone(), other.id.clone()]),
+        );
+        let open = make("Open", MessagingAllow::Any);
+        delete(&profile, &helper.id).unwrap();
+        assert_eq!(
+            get(&profile, &caller.id).unwrap().messaging.unwrap().allow,
+            MessagingAllow::Agents(vec![other.id.clone()])
+        );
+        assert_eq!(
+            get(&profile, &open.id).unwrap().messaging.unwrap().allow,
+            MessagingAllow::Any
         );
         fs::remove_dir_all(root_dir).unwrap();
     }
