@@ -79,6 +79,6 @@
   .pencil { position: absolute; top: 50%; right: 2px; display: none; place-items: center; width: 24px; height: 24px; transform: translateY(-50%); border-radius: var(--radius-control); background: var(--faint); color: var(--muted); }
   .value:hover:not(:disabled) .pencil, .value:focus-visible .pencil { display: grid; }
   input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 28px; padding: 3px 5px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); outline: 0; }
-  [role="alert"] { margin: 0 6px; color: var(--oxide); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
+  [role="alert"] { margin: 0 6px; color: var(--danger); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
   @media (hover: none) { .value:not(:disabled) .pencil { display: grid; } }
 </style>

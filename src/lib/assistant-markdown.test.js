@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import DOMPurify from 'dompurify'
 
-import { renderAssistantMarkdown, renderAssistantMarkdownBlocks } from './assistant-markdown.js'
+import { markdownPlainText, renderAssistantMarkdown, renderAssistantMarkdownBlocks } from './assistant-markdown.js'
 
 function html(markdown) {
   const result = renderAssistantMarkdown(markdown)
@@ -235,5 +235,16 @@ describe('assistant Markdown', () => {
       text: 'One.\n\nTwo more',
     })
     expect(reportDiagnostic).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Markdown as plain text', () => {
+  it('drops list markers, emphasis, headings, links, code ticks and HTML', () => {
+    expect(markdownPlainText('- **Bold** and _soft_ with [a link](https://example.com) and `code`.\n- Two')).toBe('Bold and soft with a link and code. Two')
+    expect(markdownPlainText('# Title\n\nBody <b>here</b> ![chart](c.png)\n\n> quoted\n\n```js\nrun()\n```')).toBe('Title Body here chart quoted run()')
+    expect(markdownPlainText('1. one\n2. two')).toBe('one two')
+    expect(markdownPlainText('a\\*b, (kept).')).toBe('a*b, (kept).')
+    expect(markdownPlainText('')).toBe('')
+    expect(markdownPlainText(null)).toBe('')
   })
 })

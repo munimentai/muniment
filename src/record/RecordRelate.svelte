@@ -193,8 +193,8 @@
   .record-relate-meta { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .record-relate-diff { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
   .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); }
-  .record-diff-warning { margin: 0; color: var(--ochre); font: var(--text-12) var(--font-mono); }
-  .record-relate-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
+  .record-diff-warning { margin: 0; color: var(--warning); font: var(--text-12) var(--font-mono); }
+  .record-relate-error { margin: 0; color: var(--danger); font: var(--text-12) var(--font-mono); }
   .record-relate-actions { display: flex; gap: 8px; }
   .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }

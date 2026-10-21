@@ -81,6 +81,6 @@
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .line { display: flex; align-items: center; gap: 8px; font-size: var(--text-13); }
   .note { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; }
-  .error { margin: 0; color: var(--oxide); font-size: var(--text-12); }
+  .error { margin: 0; color: var(--danger); font-size: var(--text-12); }
   .spacer { flex: 1; }
 </style>

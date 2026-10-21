@@ -1,6 +1,6 @@
 <script>
   // The fleet member that owns an item: its shape icon and "on Studio" in
-  // mono, with an ochre slashed globe while that member does not answer.
+  // mono, with a warning slashed globe while that member does not answer.
   // `compact` keeps the icons and gives the name to screen readers alone.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { kindIcon, machineName } from './runtimes.js'
@@ -22,5 +22,5 @@
   .owner-chip :global(.lucide) { flex: none; color: var(--muted); }
   .owner-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .owner-offline { display: inline-flex; flex: none; }
-  .owner-chip .owner-offline :global(.lucide) { color: var(--ochre); }
+  .owner-chip .owner-offline :global(.lucide) { color: var(--warning); }
 </style>

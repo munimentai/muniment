@@ -251,8 +251,8 @@
   button:disabled { opacity: .5; cursor: default; }
   /* The catalog fills the page width and wraps to as many columns as fit. */
   .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; }
-  .catalog-card.connected { background: var(--signal-soft); border-color: var(--signal); }
-  .catalog-card.connected strong { color: var(--signal); }
+  .catalog-card.connected { background: var(--success-soft); border-color: var(--success-edge); }
+  .catalog-card.connected strong { color: var(--success); }
   .catalog-card { min-width: 0; gap: 5px; align-content: start; }
   .card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }

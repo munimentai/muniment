@@ -442,7 +442,8 @@ export function buildProbeCommandTable(fixtureName) {
   // notifications-empty, usage, usage-tokens, usage-cost, usage-partial or
   // composer-limit, with agents on three machines that all answer and a
   // synced copy from a fourth. `cards` opens the catalog's action cards, and
-  // `cards-offline` the same with the Studio machine offline.
+  // `cards-offline` the same with the Studio machine offline, which
+  // `&studio-offline` adds to any state.
   // `fleet-sync.html?state=` shows a fleet this laptop reaches only through
   // the swarm: owners, a queued post, a replica's history, a new thread on a
   // container, the offline scope, the bootstrap on Machines and the log.
@@ -453,7 +454,7 @@ export function buildProbeCommandTable(fixtureName) {
   const trustFixture = fixtureName === 'run-trust'
   const toolsFixture = fixtureName === 'tools'
   const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
-  let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' ? 'agents-offline' : 'agents') : runtimesState)
+  let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' || new URLSearchParams(location.search).has('studio-offline') ? 'agents-offline' : 'agents') : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
   let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'
@@ -1399,7 +1400,7 @@ function fixtureRendered() {
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
     return homePath?.dataset.homePath === onboardingHomePath
       && document.querySelectorAll('.connect button.option').length >= 9
-      && document.querySelector('.connect .action[data-tone="ochre"]')?.textContent.trim() === 'Add key'
+      && document.querySelector('.connect .action[data-tone="warning"]')?.textContent.trim() === 'Add key'
   }
   if (scanFixture) {
     // Settings → Data → Memory lists the assistant memory found on this computer.

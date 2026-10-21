@@ -28,5 +28,5 @@
   .name { justify-self: start; max-width: 100%; min-height: 22px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--text-13); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .name:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 2px; }
   .when { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
-  .poll-error { color: var(--oxide); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
+  .poll-error { color: var(--danger); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; }
 </style>

@@ -1,22 +1,26 @@
 <script>
   // One run on the page: a status icon in the state's color, the agent, what
-  // started it, its machine, one line of its result and its time. The row
-  // opens the run's thread.
+  // started it with its icon, its machine with its stoplight, one line of its
+  // result and its time. The row opens the run's thread.
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import { clockTime, resultLine, runWithMachine, statusMark, triggerLabel } from './notifications.js'
-  let { entry, showMachine = false, onopen = () => {} } = $props()
+  import MachineChip from '../runtimes/MachineChip.svelte'
+  import { machineState, runtimeFor } from '../runtimes/runtimes.js'
+  import { clockTime, resultLine, runWithMachine, statusMark, triggerIcon, triggerLabel } from './notifications.js'
+  let { entry, showMachine = false, runtimeList = null, onopen = () => {} } = $props()
   const mark = $derived(statusMark(entry.status))
+  const runtime = $derived(showMachine ? runtimeFor(runtimeList, entry.machine) : null)
+  const where = $derived(showMachine ? `, on ${entry.machine.name}${runtime ? `, ${machineState(runtime)}` : ''}` : '')
   const at = $derived(entry.run.updated_at)
 </script>
 
 <li class="notification-row" data-status={entry.status} data-unread={entry.unread ? 'true' : undefined}>
-  <button type="button" disabled={!entry.run.thread_id} onclick={() => onopen(runWithMachine(entry.run, entry.machine))} aria-label={`${entry.agent_name || 'Agent'}, ${mark.label}${entry.unread ? ', unread' : ''}: ${resultLine(entry)}`}>
+  <button type="button" disabled={!entry.run.thread_id} onclick={() => onopen(runWithMachine(entry.run, entry.machine))} aria-label={`${entry.agent_name || 'Agent'}, ${mark.label}${entry.unread ? ', unread' : ''}${where}: ${resultLine(entry)}`}>
     <span class="status"><LucideIcon name={mark.icon} size={16} variant="action" /></span>
     <span class="main">
       <span class="line">
         <strong>{entry.agent_name || 'Agent'}</strong>
-        <span class="chip">{triggerLabel(entry.run.trigger)}</span>
-        {#if showMachine}<span class="chip">{entry.machine.name}</span>{/if}
+        <span class="chip"><LucideIcon name={triggerIcon(entry.run.trigger)} variant="action" size={12} />{triggerLabel(entry.run.trigger)}</span>
+        {#if showMachine}<MachineChip machine={entry.machine} {runtimeList} />{/if}
       </span>
       <span class="result">{resultLine(entry)}</span>
     </span>
@@ -39,7 +43,7 @@
   .line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
   strong { color: var(--ink); font: 600 var(--text-13) var(--font-human); }
   [data-unread="true"] strong::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: var(--radius-chip); background: var(--ink); vertical-align: middle; }
-  .chip { padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--text-12); line-height: 18px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--text-12); line-height: 18px; }
   .result { overflow: hidden; color: var(--muted); font-size: var(--text-13); text-overflow: ellipsis; white-space: nowrap; }
   time { flex: none; color: var(--muted); font-size: var(--text-12); }
 </style>

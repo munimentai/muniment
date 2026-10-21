@@ -338,3 +338,23 @@ export function renderAssistantMarkdown(reply, options) {
   if (result.kind === 'text') return result
   return { kind: 'html', html: result.blocks.map(({ html }) => html).join('') }
 }
+
+// A reply's words with its Markdown syntax removed, for a one-line preview:
+// list markers, emphasis, headings and code ticks drop, a link keeps its
+// text and an image its alt text, raw HTML drops, and each block, line
+// break and run of white space becomes one space.
+const BLOCKS = new Set(['paragraph', 'heading', 'list_item', 'code', 'blockquote', 'html', 'space', 'hr', 'br'])
+export function markdownPlainText(reply) {
+  const text = typeof reply === 'string' ? reply : String(reply ?? '')
+  if (!text) return ''
+  const words = (tokens = []) => tokens.map((token) => {
+    const gap = BLOCKS.has(token.type) ? ' ' : ''
+    if (token.type === 'html' || token.type === 'space' || token.type === 'hr' || token.type === 'br') return gap
+    if (token.type === 'list') return ` ${words(token.items)} `
+    if (token.type === 'table') return ` ${[token.header, ...token.rows].map((row) => row.map((cell) => words(cell.tokens)).join(' ')).join(' ')} `
+    if (token.type === 'image') return token.text ?? ''
+    if (token.tokens?.length) return `${words(token.tokens)}${gap}`
+    return ['escape', 'codespan', 'code', 'text'].includes(token.type) ? `${token.text ?? ''}${gap}` : gap
+  }).join('')
+  return words(markdown.lexer(text)).replace(/\s+/g, ' ').trim()
+}

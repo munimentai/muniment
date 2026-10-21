@@ -311,7 +311,7 @@
   .quiet { background: transparent; border-color: transparent; }
   .small { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   /* Disconnecting drops the account from every pool, so it reads as critical. */
-  .disconnect { display: inline-flex; align-items: center; gap: 6px; color: var(--oxide); }
+  .disconnect { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); }
   .accounts { container-type: inline-size; display: grid; gap: 8px; min-width: 0; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }

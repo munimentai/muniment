@@ -102,5 +102,5 @@
   .when { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
   .record { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .empty, .note { margin: 0; color: var(--muted); font-size: var(--text-12); }
-  [role="alert"] { margin: 0; color: var(--oxide); font-size: var(--text-12); }
+  [role="alert"] { margin: 0; color: var(--danger); font-size: var(--text-12); }
 </style>

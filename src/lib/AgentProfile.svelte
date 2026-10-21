@@ -372,8 +372,8 @@
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .muted { color: var(--muted); font-size: var(--text-12); }
   .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-  .state[data-state="waiting"] { color: var(--ochre); }
-  .state[data-state="error"] { color: var(--oxide); }
+  .state[data-state="waiting"] { color: var(--warning); }
+  .state[data-state="error"] { color: var(--danger); }
   .skill span { display: grid; gap: 2px; }
   .skill small { font-size: var(--text-12); }
   /* The agents menu button takes its own full-width row under the Any and Only these choice. */
@@ -384,10 +384,10 @@
   .threads { gap: 0; }
   .thread-link { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 6px; border: 0; text-align: left; font-size: var(--text-13); }
   .thread-link span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .offline { color: var(--ochre); font: var(--text-12) var(--font-human); }
+  .offline { color: var(--warning); font: var(--text-12) var(--font-human); }
   .synced { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: var(--text-12) var(--font-human); }
   ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
   small { color: var(--muted); line-height: 1.5; }
-  [role="alert"] { margin-top: 8px; color: var(--oxide); font-size: var(--text-12); }
+  [role="alert"] { margin-top: 8px; color: var(--danger); font-size: var(--text-12); }
   @media (hover: none) { .edit { opacity: 1; } }
 </style>

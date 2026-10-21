@@ -4,6 +4,8 @@
 // and the rest by day. This module asks, names and formats.
 import { agentRequest } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
+import { routineIcon } from '../agents/routine-labels.js'
+import { markdownPlainText } from '../lib/assistant-markdown.js'
 
 export const NOTIFICATION_VIEWS = [
   { value: 'needs_you', label: 'Needs you' },
@@ -66,6 +68,16 @@ export function triggerLabel(trigger) {
   return TRIGGERS[trigger?.kind] ?? 'Event'
 }
 
+// The trigger chip's icon: a routine's own icon for a schedule, a webhook or
+// a tool check, the Run now play for a manual run and a message for another
+// agent's.
+const TRIGGER_ICONS = { manual: 'play', agent_message: 'message-square' }
+export function triggerIcon(trigger) {
+  const kind = trigger?.kind
+  if (kind in TRIGGER_ICONS) return TRIGGER_ICONS[kind]
+  return ['cron', 'webhook', 'mcp'].includes(kind) ? routineIcon(trigger) : 'zap'
+}
+
 const STATUS = {
   running: { icon: 'loader-circle', label: 'Running' },
   done: { icon: 'circle-check', label: 'Done' },
@@ -82,15 +94,17 @@ export function dayLabel(day) {
   return DAYS[day] ?? 'Earlier'
 }
 
-// The row's one line: core's summary of the result, the error, or the state.
+// The row's one line: core's summary of the result, the error, or the state,
+// as plain text with the reply's Markdown syntax removed.
 export function resultLine(entry) {
   const run = entry?.run ?? {}
+  const summary = markdownPlainText(run.result_summary)
   if (entry?.status === 'failed') return run.error || 'The run failed.'
-  if (entry?.status === 'needs_you') return run.result_summary || 'Waiting for your answer.'
+  if (entry?.status === 'needs_you') return summary || 'Waiting for your answer.'
   if (entry?.status === 'cancelled') return 'Stopped before it finished.'
   if (entry?.status === 'running') return 'Running now.'
   if (run.silent) return 'Nothing needed a reply.'
-  return run.result_summary || 'Finished.'
+  return summary || 'Finished.'
 }
 
 const NEEDS = {

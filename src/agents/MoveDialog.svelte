@@ -67,12 +67,12 @@
   .lead, .note { margin: 0; font-size: var(--text-13); line-height: 1.5; }
   .note { color: var(--muted); }
   .from { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--text-12); }
-  .offline { color: var(--ochre); font: var(--text-12) var(--font-mono); }
+  .offline { color: var(--warning); font: var(--text-12) var(--font-mono); }
   label { display: grid; gap: 4px; color: var(--muted); font-size: var(--text-12); }
   .check { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: var(--text-13); }
   select { min-height: 32px; padding: 5px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); }
-  .warning { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--ochre); border-radius: var(--radius-control); }
+  .warning { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--warning); border-radius: var(--radius-control); }
   .warning p { margin: 0; font-size: var(--text-13); line-height: 1.5; }
-  .error { margin: 0; color: var(--oxide); font-size: var(--text-12); }
+  .error { margin: 0; color: var(--danger); font-size: var(--text-12); }
   .spacer { flex: 1; }
 </style>

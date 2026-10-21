@@ -122,7 +122,7 @@
   .mono { font-family: var(--font-mono); }
   .action { justify-self: end; display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: var(--text-12); white-space: nowrap; }
   .option:hover .action { color: var(--ink); }
-  .action[data-tone="ochre"] { color: var(--ochre); }
+  .action[data-tone="warning"] { color: var(--warning); }
   .step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 12px 12px 42px; }
   .step p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .step .or { margin-top: 4px; }

@@ -93,10 +93,10 @@
   .permission-settings { display: grid; gap: var(--page-gap); }
   p { margin: 0; font-size: var(--text-13); color: var(--muted); }
   .warning { display: flex; align-items: flex-start; gap: 6px; margin-top: 4px; color: var(--ink); font-size: var(--text-12); line-height: 1.45; }
-  .warning > :global(svg) { flex: none; margin-top: 1px; color: var(--ochre); }
+  .warning > :global(svg) { flex: none; margin-top: 1px; color: var(--warning); }
   .wait { display: flex; align-items: center; gap: 6px; }
   .unit { color: var(--muted); font: var(--text-12) var(--font-mono); }
   input[type="number"] { width: 96px; height: 32px; box-sizing: border-box; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-13) var(--font-mono); }
   input:focus { outline: none; border-color: var(--muted); }
-  .error { color: var(--oxide); }
+  .error { color: var(--danger); }
 </style>

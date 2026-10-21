@@ -166,7 +166,7 @@
   .mono, .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .record { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
   .note, [role="alert"] { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; }
-  [role="alert"] { color: var(--oxide); }
+  [role="alert"] { color: var(--danger); }
   .dialog-actions { display: flex; align-items: center; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
   .spacer { flex: 1; }
 </style>

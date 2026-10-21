@@ -7,6 +7,7 @@
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import Button from '../lib/ui/Button.svelte'
+  import MachineChip from '../runtimes/MachineChip.svelte'
   import { agentRequest } from '../agents/agent-runtime.js'
   import { memberMachine } from '../agents/swarm.js'
   import { resetsIn } from '../usage/usage.js'
@@ -62,7 +63,7 @@
         {#if agent}<AgentAvatar {agent} size={18} tooltip={false} />{/if}
         <strong>{item.kind === 'offline' ? item.machine.name : item.agent_name || 'Agent'}</strong>
         <span class="kind">{mark.title}</span>
-        {#if showMachine && item.kind !== 'offline'}<span class="machine">{item.machine.name}</span>{/if}
+        {#if showMachine && item.kind !== 'offline'}<MachineChip machine={item.machine} {runtimeList} />{/if}
         {#if item.at}<time datetime={item.at}>{clockTime(item.at)}</time>{/if}
       </p>
       {#if item.kind === 'offline'}
@@ -89,12 +90,11 @@
 <style>
   .needs { display: flex; gap: 10px; padding: 12px 0; }
   .mark { flex: none; display: inline-flex; padding-top: 1px; color: var(--warning); }
-  [data-kind="offline"] .mark { color: var(--muted); }
+  [data-kind="offline"] .mark { color: var(--danger); }
   .body { display: grid; flex: 1; gap: 6px; min-width: 0; }
   .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0; color: var(--ink); font-size: var(--text-13); }
   .kind { color: var(--warning); font-size: var(--text-12); }
-  [data-kind="offline"] .kind { color: var(--muted); }
-  .machine { padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--text-12); }
+  [data-kind="offline"] .kind { color: var(--danger); }
   time { margin-left: auto; color: var(--muted); font-size: var(--text-12); }
   .detail, .note { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .actions, .reply { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

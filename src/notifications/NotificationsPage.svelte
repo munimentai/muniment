@@ -14,6 +14,7 @@
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import NeedsYouItem from './NeedsYouItem.svelte'
   import NotificationRow from './NotificationRow.svelte'
+  import MachineChip from '../runtimes/MachineChip.svelte'
   import { machineRefs } from '../usage/usage.js'
   import { NOTIFICATION_VIEWS, dayLabel, markAllRead, readNotifications, runWithMachine, scheduleTime } from './notifications.js'
 
@@ -92,7 +93,7 @@
           {#if page.upcoming.length}
             <ul class="upcoming" aria-label="Next scheduled runs">
               {#each page.upcoming as next (`${next.agent_id}:${next.routine_id}`)}
-                <li><LucideIcon name="clock" size={14} /><span>{next.agent_name}</span><span class="muted">{next.routine_name}</span>{#if showMachine && next.machine}<span class="chip">{next.machine.name}</span>{/if}<time datetime={new Date(next.at_ms).toISOString()}>{scheduleTime(next.at_ms)}</time></li>
+                <li><LucideIcon name="clock" size={14} /><span>{next.agent_name}</span><span class="muted">{next.routine_name}</span>{#if showMachine && next.machine}<MachineChip machine={next.machine} {runtimeList} />{/if}<time datetime={new Date(next.at_ms).toISOString()}>{scheduleTime(next.at_ms)}</time></li>
               {/each}
             </ul>
           {/if}
@@ -113,7 +114,7 @@
                 <span class="live"><LucideIcon name="loader-circle" size={14} variant="action" /></span>
                 <AgentAvatar agent={agentFor(entry.run.agent_id)} size={18} tooltip={false} />
                 <span>{entry.agent_name || 'Agent'}</span>
-                {#if showMachine}<span class="chip">{entry.machine.name}</span>{/if}
+                {#if showMachine}<MachineChip machine={entry.machine} {runtimeList} />{/if}
               </button></li>
             {/each}
           </ul>
@@ -122,7 +123,7 @@
 
       {#each page.days as day (day.day)}
         <Group heading={dayLabel(day.day)} plain>
-          <ul class="rows">{#each day.entries as entry (`${entry.machine.id}:${entry.run.id}`)}<NotificationRow {entry} {showMachine} {onopen} />{/each}</ul>
+          <ul class="rows">{#each day.entries as entry (`${entry.machine.id}:${entry.run.id}`)}<NotificationRow {entry} {showMachine} {runtimeList} {onopen} />{/each}</ul>
         </Group>
       {:else}
         {#if view !== 'needs_you'}<p class="note">{view === 'failed' ? 'No failed runs.' : 'No runs yet.'}</p>{/if}
@@ -151,6 +152,5 @@
   .running button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
   .running button:hover:not(:disabled) { background: var(--faint); }
   .live { display: inline-flex; color: var(--active); }
-  .chip { padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--text-12); line-height: 18px; }
   :global(.notifications-page .group-card) { padding: 0 12px; }
 </style>

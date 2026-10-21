@@ -4320,7 +4320,7 @@
       onback={() => { projectsOpen = false; settingsProject = null }} onnewthread={newProjectThread} onaddtrigger={addProjectTrigger}
       onchat={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onprofile={openAgentProfile} onchange={refreshAgentsAndRuns} onmanagemodels={openModelSettings}
       onaction={(agent, action, name) => action === 'profile' ? openAgentProfile(agent) : action === 'export' ? exportAgent(tauri, agent, 'muniment') : catalogAction('agent', agent, action, name)}
-      onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
+      onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {:else if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={(chosen)=>startCreation('artifact', chosen)}/>{/if}
         <!-- Settings sits in the workspace grid: its section list takes the sidebar column. -->
@@ -4846,7 +4846,7 @@
   .speech-install-progress { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); }
   .speech-install-progress progress { width: 100%; height: 6px; accent-color: var(--muted); }
   .speech-install-popover button { margin-top: 7px; padding: 4px 8px; font: inherit; }
-  .speech-install-popover .speech-install-error { color: var(--oxide); }
+  .speech-install-popover .speech-install-error { color: var(--danger); }
   .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   @keyframes capture { to { transform: scaleY(.55); } }
   /* Unlike the blanket duration rule, removing this animation keeps the meter

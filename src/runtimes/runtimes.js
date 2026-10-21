@@ -42,7 +42,7 @@ export function kindIcon(runtime) {
   return SHAPES[runtime?.formFactor] ?? KINDS[kind]?.[1] ?? 'server'
 }
 
-// [label, next step, tone]. The tone picks ink, ochre for caution or oxide for a refusal.
+// [label, next step, tone]. The tone picks ink, warning for caution or danger for a refusal.
 const STATES = {
   unknown: ['Not checked', '', 'quiet'],
   connecting: ['Connecting', '', 'quiet'],
@@ -52,6 +52,18 @@ const STATES = {
   revoked: ['Access revoked', 'Add it again with a new code.', 'critical'],
   version_mismatch: ['Version mismatch', 'Update the app or the runtime.', 'caution'],
   runtime_mismatch: ['Different runtime', 'Another runtime answers at its address. Add it again.', 'critical'],
+}
+
+// The runtime a machine reference names, such as a notification's
+// `{ id, name }`: this computer for the local id, else the paired runtime.
+export function runtimeFor(runtimeList, ref) {
+  return (runtimeList?.runtimes ?? []).find((runtime) => (runtime.local ? LOCAL_RUNTIME_ID : runtime.id) === ref?.id) ?? null
+}
+
+// The state word a machine shows beside its stoplight: Online for this
+// computer, else the state its runtime reports.
+export function machineState(runtime) {
+  return runtime?.local ? 'Online' : statusLabel(runtime)
 }
 
 export function statusLabel(runtime) {

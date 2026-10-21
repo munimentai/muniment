@@ -24,7 +24,7 @@ export function runActive(status) {
   return ['queued', 'leased', 'running', 'waiting_input'].includes(status)
 }
 
-// The tone a status reads in: oxide for a failure, ochre for a run that waits.
+// The tone a status reads in: danger for a failure, warning for a run that waits.
 export function runTone(status) {
   return status === 'failed' ? 'critical' : status === 'waiting_input' || status === 'interrupted' ? 'caution' : 'quiet'
 }
@@ -66,15 +66,16 @@ export function whenLabel(value, now = Date.now()) {
   return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-// When a run happened, in local time with no time zone: `Today at 8:56 AM`,
-// `Yesterday at 9:03 AM` or `Oct 12 at 9:08 AM`, with the year when it differs.
+// When a run happened or runs next, in local time with no time zone: `Today
+// at 8:56 AM`, `Yesterday at 9:03 AM`, `Tomorrow at 2:00 AM` or `Oct 12 at
+// 9:08 AM`, with the year when it differs.
 export function runTimeLabel(value, now = Date.now()) {
   const at = new Date(value)
   if (!Number.isFinite(at.getTime())) return ''
   const today = new Date(now)
   const midnight = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
   const days = Math.round((midnight(today) - midnight(at)) / 86_400_000)
-  const day = days === 0 ? 'Today' : days === 1 ? 'Yesterday'
+  const day = days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days === -1 ? 'Tomorrow'
     : at.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(at.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' }) })
   return `${day} at ${at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
 }

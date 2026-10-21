@@ -182,7 +182,7 @@
   .restore-shortcut { min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; }
   .restore-shortcut:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .restore-shortcut:disabled { opacity: .5; cursor: default; }
-  .shortcut-error { color: var(--oxide) !important; }
+  .shortcut-error { color: var(--danger) !important; }
   kbd { padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); font: var(--text-12) var(--font-mono); }
   dl { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 6px 0 0; }
   dt { color: var(--muted); font-size: var(--text-12); }
