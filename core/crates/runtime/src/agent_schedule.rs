@@ -500,7 +500,7 @@ impl RuntimeAttachState {
                         &agent.name,
                         run,
                         muniment_core::chrono::Utc::now(),
-                        &agent_routines::local_time_zone(),
+                        &muniment_core::time_display::load(profile),
                     ),
                     self.runtime_version(),
                 )?

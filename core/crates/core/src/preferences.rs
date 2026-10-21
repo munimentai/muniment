@@ -3,7 +3,7 @@
 //! choice lives where chats read it, in the memory recall settings.
 //!
 //! Fleet-wide keys replicate to every swarm member. Machine-local keys, such
-//! as the sidebar and the window, stay on this runtime. Every change sends
+//! as the sidebar, the window and the time display, stay on this runtime. Every change sends
 //! `preferences.changed` with the keys it changed.
 
 use std::collections::BTreeMap;
@@ -30,7 +30,7 @@ pub const FLEET_KEYS: [&str; 9] = [
     crate::notifications::READ_AT_KEY,
 ];
 /// The keys that stay on this machine.
-pub const LOCAL_KEYS: [&str; 7] = [
+pub const LOCAL_KEYS: [&str; 8] = [
     "sidebar-collapsed",
     "sidebar-width",
     "window",
@@ -38,6 +38,7 @@ pub const LOCAL_KEYS: [&str; 7] = [
     "local-mode",
     "voice-shortcut",
     LARGE_DOWNLOADS,
+    crate::time_display::TIME_KEY,
 ];
 /// The key that records the user's consent to large model downloads on this
 /// machine: `true` once they allowed one, so the next one starts unasked.
@@ -126,6 +127,9 @@ pub(crate) fn check(key: &str, value: &Value) -> Result<(), String> {
     if key == MEMORY_RECALL {
         serde_json::from_value::<RecallSettings>(value.clone())
             .map_err(|_| "The memory recall preference is invalid.".to_owned())?;
+    }
+    if key == crate::time_display::TIME_KEY {
+        crate::time_display::check(value)?;
     }
     Ok(())
 }

@@ -16,6 +16,8 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::time_display::TimeDisplay;
+
 /// The id prefix of the project settings of an agent without a catalog
 /// project.
 pub const AGENT_PROJECT_PREFIX: &str = "agent:";
@@ -100,6 +102,10 @@ pub struct Input {
     pub current: Option<String>,
     /// Words to search titles and project names for.
     pub query: String,
+    /// How the trigger words show clock times. The host reads it from the
+    /// machine's preferences.
+    #[serde(skip)]
+    pub time: TimeDisplay,
 }
 
 /// A row's status, most urgent first.
@@ -199,10 +205,10 @@ fn millis(time: &str) -> Option<i64> {
         .map(|at| at.timestamp_millis())
 }
 
-fn clock(minute: &str, hour: &str) -> Option<String> {
-    let minute: u8 = minute.parse().ok().filter(|m| *m < 60)?;
-    let hour: u8 = hour.parse().ok().filter(|h| *h < 24)?;
-    Some(format!("{hour}:{minute:02}"))
+fn clock(minute: &str, hour: &str) -> Option<(u32, u32)> {
+    let minute: u32 = minute.parse().ok().filter(|m| *m < 60)?;
+    let hour: u32 = hour.parse().ok().filter(|h| *h < 24)?;
+    Some((hour, minute))
 }
 
 const WEEKDAYS: [&str; 7] = [
@@ -223,8 +229,15 @@ fn interval(minutes: u32) -> String {
     }
 }
 
-/// A five-field cron expression in words, such as `every day 9:00`.
-pub fn schedule_words(expr: &str) -> String {
+/// A five-field cron expression in the zone `tz` in words, such as
+/// `every day 9:00 AM`, with its clock time read as `time` shows times.
+/// A time that falls on another day in the shown zone names that day.
+pub fn schedule_words(
+    expr: &str,
+    tz: &str,
+    time: &TimeDisplay,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();
     let other = || "on a schedule".to_string();
     let [minute, hour, day, month, weekday] = fields[..] else {
@@ -233,12 +246,15 @@ pub fn schedule_words(expr: &str) -> String {
     if day != "*" || month != "*" {
         return other();
     }
-    if let Some(time) = clock(minute, hour) {
+    if let Some((hour, minute)) = clock(minute, hour) {
+        let (at, shift) = time.schedule_time(hour, minute, tz, now);
+        let day = |n: i64| WEEKDAYS[(n + shift).rem_euclid(7) as usize];
         return match weekday {
-            "*" => format!("every day {time}"),
-            "1-5" => format!("weekdays {time}"),
-            w => match w.parse::<usize>() {
-                Ok(n) if n <= 7 => format!("{} {time}", WEEKDAYS[n % 7]),
+            "*" => format!("every day {at}"),
+            "1-5" if shift == 0 => format!("weekdays {at}"),
+            "1-5" => format!("{} to {} {at}", day(1), day(5)),
+            w => match w.parse::<i64>() {
+                Ok(n) if (0..=7).contains(&n) => format!("{} {at}", day(n)),
                 _ => other(),
             },
         };
@@ -262,9 +278,18 @@ pub fn schedule_words(expr: &str) -> String {
     }
 }
 
-fn trigger_words(trigger: &Value) -> String {
+fn trigger_words(
+    trigger: &Value,
+    time: &TimeDisplay,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     match trigger["kind"].as_str() {
-        Some("cron") => schedule_words(trigger["expr"].as_str().unwrap_or_default()),
+        Some("cron") => schedule_words(
+            trigger["expr"].as_str().unwrap_or_default(),
+            trigger["tz"].as_str().unwrap_or_default(),
+            time,
+            now,
+        ),
         Some("webhook") => "webhook".into(),
         Some("mcp") => "tool check".into(),
         _ => String::new(),
@@ -273,12 +298,12 @@ fn trigger_words(trigger: &Value) -> String {
 
 /// An agent's triggers in words: the first enabled trigger, with how many
 /// more it has, or `paused`.
-fn agent_triggers(agent: &Agent) -> String {
+fn agent_triggers(agent: &Agent, time: &TimeDisplay, now: chrono::DateTime<chrono::Utc>) -> String {
     let words: Vec<String> = agent
         .routines
         .iter()
         .filter(|routine| routine.enabled && !routine.proposed)
-        .map(|routine| trigger_words(&routine.trigger))
+        .map(|routine| trigger_words(&routine.trigger, time, now))
         .filter(|words| !words.is_empty())
         .collect();
     if words.is_empty() {
@@ -323,6 +348,7 @@ fn newest_first(rows: &mut [Row]) {
 
 /// Arranges the sidebar from what the client knows.
 pub fn arrange(input: &Input) -> Sidebar {
+    let now = chrono::Utc::now();
     let agents: BTreeMap<&str, &Agent> = input
         .agents
         .iter()
@@ -378,7 +404,7 @@ pub fn arrange(input: &Input) -> Sidebar {
             continue;
         };
         entry.agent_ids.push(agent.id.clone());
-        let words = agent_triggers(agent);
+        let words = agent_triggers(agent, &input.time, now);
         if !words.is_empty() {
             entry.triggers = if entry.triggers.is_empty() {
                 words
@@ -963,23 +989,47 @@ mod tests {
 
     #[test]
     fn schedules_read_in_words() {
-        assert_eq!(schedule_words("0 9 * * *"), "every day 9:00");
-        assert_eq!(schedule_words("30 7 * * 1-5"), "weekdays 7:30");
-        assert_eq!(schedule_words("0 8 * * 1"), "Mondays 8:00");
-        assert_eq!(schedule_words("0 8 * * 7"), "Sundays 8:00");
-        assert_eq!(schedule_words("*/15 * * * *"), "every 15 minutes");
-        assert_eq!(schedule_words("0 * * * *"), "every hour");
-        assert_eq!(schedule_words("0 */6 * * *"), "every 6 hours");
-        assert_eq!(schedule_words("0 9 1 * *"), "on a schedule");
+        use crate::time_display::Clock;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let utc = |clock| TimeDisplay {
+            zone: Some("UTC".into()),
+            clock: Some(clock),
+            computer_clock: None,
+        };
+        let (twelve, twenty_four) = (utc(Clock::Twelve), utc(Clock::TwentyFour));
+        let words = |expr: &str, time: &TimeDisplay| schedule_words(expr, "UTC", time, now);
+        assert_eq!(words("0 9 * * *", &twelve), "every day 9:00 AM");
+        assert_eq!(words("0 9 * * *", &twenty_four), "every day 09:00");
+        assert_eq!(words("30 7 * * 1-5", &twelve), "weekdays 7:30 AM");
+        assert_eq!(words("30 19 * * 1-5", &twenty_four), "weekdays 19:30");
+        assert_eq!(words("0 8 * * 1", &twelve), "Mondays 8:00 AM");
+        assert_eq!(words("0 8 * * 7", &twenty_four), "Sundays 08:00");
+        assert_eq!(words("*/15 * * * *", &twelve), "every 15 minutes");
+        assert_eq!(words("0 * * * *", &twelve), "every hour");
+        assert_eq!(words("0 */6 * * *", &twelve), "every 6 hours");
+        assert_eq!(words("0 9 1 * *", &twelve), "on a schedule");
+        // A schedule in another zone reads in the chosen zone, with no zone name.
+        let tokyo = TimeDisplay {
+            zone: Some("Asia/Tokyo".into()),
+            clock: Some(Clock::Twelve),
+            computer_clock: None,
+        };
+        let paris = |expr: &str| schedule_words(expr, "Europe/Paris", &tokyo, now);
+        assert_eq!(paris("0 8 * * *"), "every day 3:00 PM");
+        assert_eq!(paris("0 20 * * 1-5"), "Tuesdays to Saturdays 3:00 AM");
+        assert_eq!(paris("0 20 * * 0"), "Mondays 3:00 AM");
+        assert_eq!(paris("0 8 * * 1-5"), "weekdays 3:00 PM");
         let agent = Agent {
             routines: vec![cron("0 9 * * *"), cron("0 * * * *")],
             ..Agent::default()
         };
-        assert_eq!(agent_triggers(&agent), "every day 9:00 +1");
+        assert_eq!(agent_triggers(&agent, &twelve, now), "every day 9:00 AM +1");
         let paused = Agent {
             paused_reason: Some("absence".into()),
             ..agent
         };
-        assert_eq!(agent_triggers(&paused), "paused");
+        assert_eq!(agent_triggers(&paused, &twelve, now), "paused");
     }
 }
