@@ -3,6 +3,8 @@
 pub mod acquisition;
 pub mod capture;
 pub mod install;
+pub mod level;
+pub mod partial;
 pub mod pipeline;
 mod recognizer;
 pub mod utterance;

@@ -1,4 +1,4 @@
-import { appendTranscript, isDictationActive } from './dictation-state.js'
+import { appendTranscript, dictationDraft, isDictationActive } from './dictation-state.js'
 
 const transcriptQuietPeriod = 25
 
@@ -26,6 +26,9 @@ export function createDictationController({
   let cancelled = true
   let draftSnapshot = ''
   let transcript = ''
+  // The muted words of the utterance in progress, until its final transcript.
+  let partial = ''
+  let pending = 0
   let captureEpoch = 0
   let completionEpoch
   let completionTimer
@@ -40,6 +43,8 @@ export function createDictationController({
       finishing,
       draftSnapshot,
       transcript,
+      partial,
+      pending,
     }
   }
 
@@ -69,9 +74,14 @@ export function createDictationController({
     unlisten?.()
     unlisten = undefined
     const stop = await listen('dictation-event', ({ payload }) => {
-      if (epoch !== captureEpoch || payload.type !== 'transcript' || cancelled || (!isDictationActive(status) && !finishing)) return
-      transcript = appendTranscript(transcript, transform(payload.text))
-      updateDraft(appendTranscript(draftSnapshot, transcript))
+      if (epoch !== captureEpoch || (payload.type !== 'transcript' && payload.type !== 'partial') || cancelled || (!isDictationActive(status) && !finishing)) return
+      if (payload.type === 'partial') partial = payload.text ? transform(payload.text) : ''
+      else {
+        partial = ''
+        transcript = appendTranscript(transcript, transform(payload.text))
+      }
+      writeDraft()
+      publish()
       if (finishing) waitForTranscriptQuiet(epoch)
     })
     if (!stop) return
@@ -79,10 +89,21 @@ export function createDictationController({
     else unlisten = stop
   }
 
+  function writeDraft() {
+    const next = dictationDraft(draftSnapshot, transcript, partial)
+    pending = next.pending
+    updateDraft(next.text)
+  }
+
   function complete(epoch) {
     if (destroyed || epoch !== captureEpoch || epoch !== completionEpoch) return
     completionEpoch = undefined
     finishing = false
+    // Partial text that no final transcript replaced leaves with the session.
+    if (partial && !cancelled) {
+      partial = ''
+      writeDraft()
+    }
     publish()
     if (cancelled) return
     const text = transcript
@@ -105,6 +126,10 @@ export function createDictationController({
       onInactive()
       requested = false
       stopPolling()
+      if (completionEpoch === undefined && partial && !cancelled) {
+        partial = ''
+        writeDraft()
+      }
     }
     error(next.state === 'modelNotInstalled' || next.state === 'failed' ? next.message : '')
     if (next.state === 'stopped' && completionEpoch !== undefined) {
@@ -142,6 +167,8 @@ export function createDictationController({
     invalidatePolls()
     if (cancel) {
       cancelled = true
+      partial = ''
+      pending = 0
       updateDraft(draftSnapshot)
       onCancel()
       Promise.resolve().then(onFocus)
@@ -180,6 +207,8 @@ export function createDictationController({
     cancelled = false
     draftSnapshot = readDraft()
     transcript = ''
+    partial = ''
+    pending = 0
     captureEpoch += 1
     completionEpoch = undefined
     finishing = false

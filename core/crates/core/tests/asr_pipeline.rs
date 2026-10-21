@@ -224,3 +224,15 @@ fn utterances_emitted_before_a_later_decider_failure_are_returned_with_the_error
     );
     assert_eq!(pipeline.buffered_samples(), 0);
 }
+
+#[test]
+fn the_utterance_in_progress_matches_the_audio_its_flush_emits() {
+    let mut pipeline = pipeline(Rc::new(Cell::new(0)));
+    pipeline.push(&vec![0.5; VAD_FRAME_SIZE]).unwrap();
+    assert_eq!(pipeline.in_progress(), None);
+    pipeline.push(&vec![0.5; VAD_FRAME_SIZE + 40]).unwrap();
+    let in_progress = pipeline.in_progress().unwrap().to_vec();
+    assert_eq!(in_progress, vec![0.5; VAD_FRAME_SIZE * 2]);
+    assert_eq!(pipeline.flush().unwrap().samples, in_progress);
+    assert_eq!(pipeline.in_progress(), None);
+}

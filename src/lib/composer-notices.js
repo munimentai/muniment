@@ -4,6 +4,9 @@
 // The clock runs only while a view shows the notice, so none leaves unseen.
 // A notice shows once per launch for each cause: `show` with an id and cause
 // that already showed does nothing, and a new cause shows it again.
+// A `persistent` notice has no clock and stays until its cause withdraws it or
+// the user dismisses it. `update` changes a notice's fields, such as its
+// `progress`, without showing it again.
 export const COMPOSER_NOTICE_TIMEOUT = 6000
 
 export function createComposerNotices({ timeout = COMPOSER_NOTICE_TIMEOUT, setTimer = (run, ms) => setTimeout(run, ms), clearTimer = (id) => clearTimeout(id), now = () => Date.now() } = {}) {
@@ -28,7 +31,7 @@ export function createComposerNotices({ timeout = COMPOSER_NOTICE_TIMEOUT, setTi
   }
 
   function runClock() {
-    if (!current || timer !== undefined || holds.size || !views) return
+    if (!current || current.persistent || timer !== undefined || holds.size || !views) return
     armedAt = now()
     timer = setTimer(expire, remaining)
   }
@@ -73,6 +76,17 @@ export function createComposerNotices({ timeout = COMPOSER_NOTICE_TIMEOUT, setTi
     if (shown.get(next.id) === next.cause) return false
     queue.push(next)
     if (!current) advance()
+    return true
+  }
+
+  function update(id, fields) {
+    const queued = queue.findIndex((entry) => entry.id === id)
+    if (queued >= 0) queue[queued] = { ...queue[queued], ...fields }
+    if (current?.id !== id) return queued >= 0
+    current = { ...current, ...fields, id, cause: current.cause }
+    if (current.persistent) stopClock()
+    else runClock()
+    emit()
     return true
   }
 
@@ -129,5 +143,5 @@ export function createComposerNotices({ timeout = COMPOSER_NOTICE_TIMEOUT, setTi
     current = null
   }
 
-  return { show, withdraw, dismiss, act, hold, release, attach, subscribe, cleanup, current: () => current }
+  return { show, update, withdraw, dismiss, act, hold, release, attach, subscribe, cleanup, current: () => current }
 }

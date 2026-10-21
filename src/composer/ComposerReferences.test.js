@@ -49,3 +49,20 @@ it('finds the link under a point from its drawn boxes', () => {
   expect(component.linkAt(40, 10)).toBe('https://ollama.com/pricing')
   expect(component.linkAt(10, 10)).toBeNull()
 })
+it('draws the trailing partial dictation text muted and keeps every character', () => {
+  const text = 'Read @ISSUES.md then fix'
+  const view = render(ComposerReferences, { text, files, pending: 9 })
+  const overlay = view.container.querySelector('.reference-overlay')
+  const drawn = overlay.cloneNode(true)
+  drawn.querySelectorAll('.mark').forEach((node) => node.remove())
+  expect(drawn.textContent).toBe(`${text}\n`)
+  expect(overlay.querySelector('.pending')).toHaveTextContent(/^then fix$/)
+  expect(overlay.querySelector('.pending').textContent).toBe(' then fix')
+  expect(overlay.querySelectorAll('.reference')).toHaveLength(1)
+})
+it('draws no muted text without pending dictation text', async () => {
+  const view = render(ComposerReferences, { text: 'Hello', pending: 0 })
+  expect(view.container.querySelector('.pending')).toBeNull()
+  await view.rerender({ text: 'Hi', pending: 5 })
+  expect(view.container.querySelector('.pending')).toBeNull()
+})

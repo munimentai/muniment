@@ -32,6 +32,9 @@ function setup({ invoke, ...options } = {}) {
     transcript(index, text) {
       listeners[index]({ payload: { type: 'transcript', text } })
     },
+    partial(index, text) {
+      listeners[index]({ payload: { type: 'partial', text } })
+    },
   }
 }
 
@@ -141,5 +144,93 @@ describe('dictation controller', () => {
     if (failedCommand === 'dictation_stop') await context.controller.stop()
 
     expect(context.errors).toContain(message)
+  })
+
+  it('shows partial text after the draft and replaces it with the final transcript', async () => {
+    const context = setup()
+    await context.controller.start()
+    context.partial(0, 'hello')
+    expect(context.draft()).toBe('hello')
+    expect(context.controller.snapshot()).toMatchObject({ partial: 'hello', pending: 5, transcript: '' })
+    context.partial(0, 'hello wor')
+    expect(context.draft()).toBe('hello wor')
+    context.transcript(0, 'Hello world.')
+    expect(context.draft()).toBe('Hello world.')
+    expect(context.controller.snapshot()).toMatchObject({ partial: '', pending: 0, transcript: 'Hello world.' })
+    context.partial(0, 'and')
+    expect(context.draft()).toBe('Hello world. and')
+    // The joining space counts with the partial text it introduces.
+    expect(context.controller.snapshot().pending).toBe(4)
+    context.partial(0, '')
+    expect(context.draft()).toBe('Hello world.')
+    expect(context.states.at(-1)).toMatchObject({ partial: '', pending: 0 })
+  })
+
+  it('keeps the text typed before dictation ahead of the partial text', async () => {
+    let draft = 'Note:'
+    const context = setup({ readDraft: () => draft, updateDraft: (next) => { draft = next } })
+    await context.controller.start()
+    context.partial(0, 'one')
+    expect(draft).toBe('Note: one')
+    expect(context.controller.snapshot().pending).toBe(4)
+  })
+
+  it('cleans partial text like final text', async () => {
+    const context = setup({ transform: (text) => text.replace('um ', '') })
+    await context.controller.start()
+    context.partial(0, 'um hello')
+    expect(context.draft()).toBe('hello')
+  })
+
+  it('completes with the final text only and drops partial text no final replaced', async () => {
+    const onComplete = vi.fn()
+    const context = setup({ onComplete })
+    await context.controller.start()
+    context.transcript(0, 'one')
+    context.partial(0, 'two')
+    await context.controller.stop()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(context.draft()).toBe('one')
+    expect(onComplete).toHaveBeenCalledWith('one')
+    expect(context.controller.snapshot().pending).toBe(0)
+  })
+
+  it('sends the final text when the last partial turns final at stop', async () => {
+    const onComplete = vi.fn()
+    const context = setup({ onComplete })
+    await context.controller.start()
+    context.partial(0, 'send th')
+    await context.controller.stop()
+    context.transcript(0, 'Send this.')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(context.draft()).toBe('Send this.')
+    expect(onComplete).toHaveBeenCalledWith('Send this.')
+  })
+
+  it('restores the draft on cancel with partial text showing', async () => {
+    let draft = 'Before'
+    const context = setup({ readDraft: () => draft, updateDraft: (next) => { draft = next } })
+    await context.controller.start()
+    context.partial(0, 'never mind')
+    await context.controller.stop(true)
+    context.partial(0, 'late')
+    expect(draft).toBe('Before')
+    expect(context.controller.snapshot()).toMatchObject({ partial: '', pending: 0 })
+  })
+
+  it('drops partial text when the session fails', async () => {
+    let calls = 0
+    const invoke = vi.fn(async (command) => {
+      if (command === 'dictation_start') return { state: 'running' }
+      calls += 1
+      return { state: 'failed', message: 'Speech recognition failed.' }
+    })
+    const context = setup({ invoke })
+    await context.controller.start()
+    context.partial(0, 'lost')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(calls).toBe(1)
+    expect(context.draft()).toBe('')
+    expect(context.errors).toContain('Speech recognition failed.')
   })
 })

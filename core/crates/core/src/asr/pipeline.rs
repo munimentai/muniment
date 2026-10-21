@@ -123,6 +123,12 @@ impl<D: VadDecisionSource> DictationPipeline<D> {
         self.segmenter.discontinuity();
     }
 
+    /// The utterance in progress once it qualifies to emit. Its partial decode
+    /// gives way to the final decode of the utterance it becomes.
+    pub fn in_progress(&self) -> Option<&[f32]> {
+        self.segmenter.in_progress()
+    }
+
     /// Total samples currently retained by the reframer and segmenter.
     pub fn buffered_samples(&self) -> usize {
         self.partial_frame.len() + self.segmenter.buffered_samples()
