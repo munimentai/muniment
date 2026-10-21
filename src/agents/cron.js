@@ -1,6 +1,7 @@
 // The schedule builder's view of a 5-field cron expression. The runtime
 // parses, validates and fires the expression. The builder only writes the
 // shapes it offers, and any other expression stays custom.
+import { displayZone, scheduleTime } from '../lib/time-format.svelte.js'
 
 export const WEEKDAYS = [['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday'], ['0', 'Sunday']]
 export const INTERVALS = [5, 10, 15, 30, 60, 120, 180, 240, 360, 720]
@@ -65,17 +66,23 @@ export function intervalLabel(minutes) {
   return hours === 1 ? 'Every hour' : `Every ${hours} hours`
 }
 
-// The words for a cron trigger: the builder's phrase, or the raw expression.
-export function cronLabel(expr) {
+const dayName = (weekday) => WEEKDAYS.find(([value]) => value === String((Number(weekday) % 7 + 7) % 7))[1]
+
+// The words for a cron trigger in the zone `tz`: the builder's phrase with
+// its time read as the Time setting shows times, or the raw expression. A
+// time that falls on another day in the shown zone names that day.
+export function cronLabel(expr, tz = '', now = Date.now()) {
   const choice = builderFromCron(expr)
   if (!choice) return String(expr ?? '')
   if (choice.mode === 'interval') return intervalLabel(choice.minutes)
-  if (choice.mode === 'weekdays') return `Weekdays at ${choice.time}`
-  if (choice.mode === 'weekly') return `${WEEKDAYS.find(([value]) => value === choice.weekday)[1]}s at ${choice.time}`
-  return `Every day at ${choice.time}`
+  const [hour, minute] = choice.time.split(':').map(Number)
+  const { time, shift } = scheduleTime(hour, minute, tz, now)
+  if (choice.mode === 'weekdays') return shift ? `${dayName(1 + shift)}s to ${dayName(5 + shift)}s at ${time}` : `Weekdays at ${time}`
+  if (choice.mode === 'weekly') return `${dayName(Number(choice.weekday) + shift)}s at ${time}`
+  return `Every day at ${time}`
 }
 
-// The time zone a new schedule uses: this computer's.
+// The time zone a new schedule uses: the zone the Time setting shows.
 export function localTimeZone() {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
+  return displayZone()
 }

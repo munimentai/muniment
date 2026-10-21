@@ -922,14 +922,14 @@ pub fn queue_run(profile: &Path, id: &str) -> Result<(), String> {
 pub const TEST_RUN_SOURCE: &str = "test";
 
 /// The title of the thread an agent run opens: `<name> · test run` for a
-/// test run from an agent chat, and `<name> · <date and time>` in the
-/// time zone `tz` for any other run, so the thread names the agent and the
+/// test run from an agent chat, and `<name> · <date and time>` as `time`
+/// shows times for any other run, so the thread names the agent and the
 /// run rather than the run's standing prompt.
 pub fn run_thread_title(
     name: &str,
     run: &Run,
     now: chrono::DateTime<chrono::Utc>,
-    tz: &str,
+    time: &crate::time_display::TimeDisplay,
 ) -> String {
     let name: String = name.trim().chars().take(60).collect();
     let name = if name.is_empty() {
@@ -942,11 +942,7 @@ pub fn run_thread_title(
     {
         return format!("{name} · test run");
     }
-    let at = crate::agent_routines::parse_time_zone(tz).map_or_else(
-        |_| now.format("%b %-d, %H:%M").to_string(),
-        |zone| now.with_timezone(&zone).format("%b %-d, %H:%M").to_string(),
-    );
-    format!("{name} · {at}")
+    format!("{name} · {}", time.day_and_time(now))
 }
 
 /// Queues a manual run with an optional prompt and answers the run.
@@ -2181,8 +2177,14 @@ mod tests {
         )
         .unwrap();
         let test: Run = serde_json::from_value(test["run"].clone()).unwrap();
+        let time = |zone: &str, clock| crate::time_display::TimeDisplay {
+            zone: Some(zone.into()),
+            clock: Some(clock),
+            computer_clock: None,
+        };
+        let new_york = time("America/New_York", crate::time_display::Clock::TwentyFour);
         assert_eq!(
-            run_thread_title(&agent.name, &test, now, "America/New_York"),
+            run_thread_title(&agent.name, &test, now, &new_york),
             "HN AI Desktop · test run"
         );
         let mut scheduled = test.clone();
@@ -2192,8 +2194,13 @@ mod tests {
             source: None,
         };
         assert_eq!(
-            run_thread_title(&agent.name, &scheduled, now, "America/New_York"),
+            run_thread_title(&agent.name, &scheduled, now, &new_york),
             "HN AI Desktop · Oct 18, 09:05"
+        );
+        let tokyo = time("Asia/Tokyo", crate::time_display::Clock::Twelve);
+        assert_eq!(
+            run_thread_title(&agent.name, &scheduled, now, &tokyo),
+            "HN AI Desktop · Oct 18, 10:05 PM"
         );
     }
 

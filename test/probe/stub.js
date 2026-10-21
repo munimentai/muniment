@@ -438,7 +438,7 @@ export function buildProbeCommandTable(fixtureName) {
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
   // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals,
   // notifications, machines, move, transcript, group-create, meeting, approvals,
-  // approval-inline, replays, import, absence, preferences, empty,
+  // approval-inline, replays, import, absence, preferences, time, voice, empty,
   // notifications-empty, usage, usage-tokens, usage-cost, usage-partial or
   // composer-limit, with agents on three machines that all answer and a
   // synced copy from a fourth. `cards` opens the catalog's action cards, and
@@ -1111,6 +1111,8 @@ const AGENT_STATES = {
   replays: { agent: 'Lead scout' },
   'approval-inline': { agent: 'Inbox triage' },
   preferences: { agent: null },
+  time: { agent: null },
+  voice: { agent: null },
   cards: { agent: null },
   'cards-offline': { agent: null },
   empty: { agent: null },
@@ -1134,6 +1136,8 @@ const AGENT_SCREENS = {
   'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
   replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="History"] .retry').length === 2,
   preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
+  time: () => !!document.querySelector('[role="listbox"][aria-label="Time zones"] button[aria-selected="true"]') && document.querySelector('[role="radiogroup"][aria-label="Clock"] [aria-checked="true"]')?.textContent.trim() === '24-hour',
+  voice: () => !!document.querySelector('.settings-layout')?.textContent.includes('Dictation shortcut') && document.querySelector('#sidebar nav[aria-label="Settings sections"] button[aria-current="true"]')?.textContent.trim() === 'Voice',
   empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .agent-card'),
   cards: () => cardsRendered(5),
   'cards-offline': () => cardsRendered(5) && !!document.querySelector('[data-agent-card="018f0000-0000-4000-8000-0000000000a3"].read-only [role="note"]'),
@@ -1219,6 +1223,26 @@ function advanceAgentsFixture() {
     const appearance = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'General')
     if (appearance && appearance.getAttribute('aria-current') !== 'true') return appearance.click()
     document.querySelector('[aria-label="Agent avatars"]')?.scrollIntoView({ block: 'center' })
+    return
+  }
+  // General's Time part with Asia/Tokyo picked on a 24-hour clock, and the Voice page.
+  if (agentsState === 'time' || agentsState === 'voice') {
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
+    const label = agentsState === 'time' ? 'General' : 'Voice'
+    const page = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === label)
+    if (page && page.getAttribute('aria-current') !== 'true') return page.click()
+    if (agentsState === 'voice') return
+    const part = document.querySelector('[data-settings-part="time"]')
+    if (!part) return
+    part.scrollIntoView({ block: 'start' })
+    const zoneGroup = part.querySelector('[role="radiogroup"][aria-label="Time zone"]')
+    if (zoneGroup?.querySelector('[role="radio"][aria-checked="true"]')?.textContent.trim() === 'Match this computer') return zoneGroup.querySelectorAll('[role="radio"]')[1]?.click()
+    const search = part.querySelector('input[type="search"]')
+    if (search && search.value !== 'tokyo') return typeInto(search, 'tokyo')
+    const tokyo = Array.from(part.querySelectorAll('[role="option"]')).find((option) => option.textContent.trim() === 'Asia/Tokyo')
+    if (tokyo && tokyo.getAttribute('aria-selected') !== 'true') return tokyo.click()
+    const clock = Array.from(part.querySelectorAll('[role="radiogroup"][aria-label="Clock"] [role="radio"]')).find((radio) => radio.textContent.trim() === '24-hour')
+    if (clock && clock.getAttribute('aria-checked') !== 'true') clock.click()
     return
   }
   if (agentsState === 'empty') {

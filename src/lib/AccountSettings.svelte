@@ -10,6 +10,7 @@
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
+  import { formatDateTime } from './time-format.svelte.js'
 
   // `children` sits under the signed-in card, such as the MuniCloud vault switch.
   let { tauri, subject = '', onsignout = null, children } = $props()
@@ -146,7 +147,7 @@
   }
 
   function lastActive(value) {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+    return formatDateTime(value)
   }
 
   function toggleGrant(index) {

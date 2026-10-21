@@ -80,7 +80,7 @@ const TOOLS_LOCAL: [Local; 1] = [Local {
 }];
 
 /// Every Settings part that reads or changes a runtime's settings.
-pub const PARTS: [Part; 14] = [
+pub const PARTS: [Part; 15] = [
     Part {
         id: "models",
         page: "models",
@@ -197,6 +197,14 @@ pub const PARTS: [Part; 14] = [
         id: "appearance",
         page: "general",
         kept: Kept::Synced(&["preference"]),
+        machine_local: &[],
+        note: "",
+        save: None,
+    },
+    Part {
+        id: "time",
+        page: "general",
+        kept: Kept::ThisComputer,
         machine_local: &[],
         note: "",
         save: None,

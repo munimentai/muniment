@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { saveTimeSetting } from '../lib/time-format.svelte.js'
 import { applyOp, auditRow, dedupeThreads, bootstrapRows, clockTime, credentialRows, historyLine, listsArrived, offloadTargets, offlineScope, projectOwner, queuedFor, queuedLine, runMachineName, threadOwner } from './fleet.js'
 
 const LAPTOP = 'core-laptop'
@@ -14,8 +15,12 @@ const swarm = {
 const op = (op_id, state, extra = {}) => ({ op_id, state, operation: 'thread.post', item: { kind: 'thread', id: 't1' }, owner_runtime: STUDIO, owner_name: 'Studio', created_at: `2026-01-01T14:0${op_id.at(-1)}:00Z`, ...extra })
 
 describe('the clock time', () => {
-  it('reads HH:MM and nothing for a time it cannot read', () => {
-    expect(clockTime(new Date(2026, 0, 1, 9, 5).toISOString())).toBe('09:05')
+  afterEach(() => saveTimeSetting(null, { zone: '', clock: '' }))
+  it('reads the clock the Time setting names and nothing for a time it cannot read', async () => {
+    await saveTimeSetting(null, { zone: 'UTC', clock: '24h' })
+    expect(clockTime('2026-01-01T21:05:00Z')).toBe('21:05')
+    await saveTimeSetting(null, { clock: '12h' })
+    expect(clockTime('2026-01-01T21:05:00Z')).toBe('9:05 PM')
     expect(clockTime('nonsense')).toBe('')
   })
 })

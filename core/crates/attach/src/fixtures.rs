@@ -2234,6 +2234,7 @@ fn fixture_settings_scope() -> serde_json::Value {
         part("storage", "data", "this_computer", json!([]), json!([]), [this_computer, belongs]),
         part("companies", "data", "this_computer", json!([]), json!([]), [this_computer, belongs]),
         part("appearance", "general", "fleet", json!(["preference"]), json!([]), ["", ""]),
+        part("time", "general", "this_computer", json!([]), json!([]), [this_computer, belongs]),
         part("notifications", "general", "fleet", json!(["preference"]), json!([]), ["", ""]),
     ]})
 }

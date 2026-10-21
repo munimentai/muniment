@@ -5,6 +5,7 @@
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import AssistantMarkdown from '../lib/AssistantMarkdown.svelte'
   import { hopLabel, intentLabel } from './transcript.js'
+  import { formatClock } from '../lib/time-format.svelte.js'
 
   let { envelope, agent = null, sentAt = '', tauri = null, onopenlink = undefined } = $props()
   const sender = $derived(agent ?? { id: envelope.agentId ?? envelope.from, name: envelope.from })
@@ -23,7 +24,7 @@
       <strong>{envelope.from}</strong>
       <span class="chip">{intentLabel(envelope.intent)}</span>
       <span class="meta">{hopLabel(envelope.hop)}</span>
-      {#if sentAt}<time class="meta" datetime={sentAt}>{new Date(sentAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</time>{/if}
+      {#if sentAt}<time class="meta" datetime={sentAt}>{formatClock(sentAt)}</time>{/if}
     </header>
     <div class="body"><AssistantMarkdown {tauri} {onopenlink} text={envelope.text} /></div>
   </article>

@@ -10,7 +10,7 @@
   import Row from './ui/Row.svelte'
   import Button from './ui/Button.svelte'
   import FailureNote from './FailureNote.svelte'
-  // Settings takes over the workspace: the sidebar lists its seven pages, and
+  // Settings takes over the workspace: the sidebar lists its eight pages, and
   // this panel shows the picked page across the thread and rail. A page that
   // holds several parts, such as Data, shows each under its own head.
   import { onMount, setContext } from 'svelte'
@@ -25,6 +25,7 @@
   const LanguageSection = () => import('./LanguageSection.svelte')
   const NotificationSettings = () => import('../notifications/NotificationSettings.svelte')
   const VoiceSection = () => import('./VoiceSection.svelte')
+  const TimeSection = () => import('./TimeSection.svelte')
   const RuntimesSection = () => import('../runtimes/RuntimesSection.svelte')
   const ThreadRetention = () => import('./ThreadRetention.svelte')
   import { ALL_MACHINES, machineLocal, scopeNote, settingsMachine } from '../runtimes/runtimes.js'
@@ -188,16 +189,18 @@
           <SettingsSection load={CompaniesSection} properties={{tauri, onchanged:oncompanieschange, onrecord}} />
         </SettingsPart>
       {/if}
+    {:else if page === 'voice'}
+      <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
     {:else if page === 'general'}
-      <PageHead intro="How Muniment looks, listens, reads and notifies, on every machine." />
+      <PageHead intro="How Muniment looks, reads, tells time and notifies." />
       <SettingsPart id="appearance" title="Appearance" focus={part === 'appearance'}>
         <SettingsSection load={Appearance} properties={{tauri}} />
       </SettingsPart>
       <SettingsPart id="language" title="Language" focus={part === 'language'}>
         <SettingsSection load={LanguageSection} properties={{tauri}} />
       </SettingsPart>
-      <SettingsPart id="voice" title="Voice" focus={part === 'voice'}>
-        <SettingsSection load={VoiceSection} properties={{tauri, voiceShortcut, voiceShortcutChanging, onVoiceShortcutChange, defaultVoiceShortcut}} />
+      <SettingsPart id="time" title="Time" note={localNote('time')} focus={part === 'time'}>
+        <SettingsSection load={TimeSection} properties={{tauri}} />
       </SettingsPart>
       <SettingsPart id="notifications" title="Notifications" focus={part === 'notifications'}>
         <SettingsSection load={NotificationSettings} properties={{tauri}} />

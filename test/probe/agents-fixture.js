@@ -349,6 +349,13 @@ export function handleAgentRequest(stores, { runtime, operation, body = {} }) {
     const newest = store.runs.filter((entry) => entry.agent_id === agent.id).sort(newestFirst)[0]
     return newest ? [[agent.id, clone(newest)]] : []
   }))
+  // Core's preferences on each machine, such as the machine-local `time`.
+  if (operation === 'preferences.get') return { values: clone(store.preferences ?? {}) }
+  if (operation === 'preferences.set') {
+    store.preferences = { ...(store.preferences ?? {}) }
+    for (const [key, value] of Object.entries(body.values ?? {})) { if (value === null) delete store.preferences[key]; else store.preferences[key] = clone(value) }
+    return { values: clone(store.preferences) }
+  }
   if (operation === 'permission.modes') {
     const settings = permissionSettings(store, runtime)
     return { modes: clone(permissionModes(settings)), default_thread_mode: settings.default_thread_mode, default_agent_mode: settings.default_agent_mode }

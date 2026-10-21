@@ -1,9 +1,15 @@
-import { expect, it } from 'vitest'
-import { isProposal, lastFiredLabel, nextRunLabel, pollLabel, triggerSummary } from './routine-labels.js'
+import { afterEach, beforeEach, expect, it } from 'vitest'
+import { isProposal, lastFiredLabel, nextRunLabel, pollLabel, routineWhen, triggerSummary } from './routine-labels.js'
 import { runTimeLabel } from '../lib/agent-labels.js'
+import { saveTimeSetting } from '../lib/time-format.svelte.js'
+
+beforeEach(() => saveTimeSetting(null, { zone: 'UTC', clock: '24h' }))
+afterEach(() => saveTimeSetting(null, { zone: '', clock: '' }))
 
 it('names each trigger kind with its schedule or sender', () => {
-  expect(triggerSummary({ kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' })).toBe('Weekdays at 09:00 · America/New_York')
+  // A draft or an import preview names no time zone.
+  expect(triggerSummary({ kind: 'cron', expr: '0 9 * * 1-5', tz: 'UTC' })).toBe('Weekdays at 09:00')
+  expect(triggerSummary({ kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' })).not.toMatch(/America|New_York/)
   expect(triggerSummary({ kind: 'webhook', hook_id: 'h', preset: 'forgejo' })).toBe('Webhook · Forgejo')
   expect(triggerSummary({ kind: 'webhook', hook_id: 'h' })).toBe('Webhook · any sender')
   expect(triggerSummary({ kind: 'mcp', server: 'crm', tool: 'search_leads', every: { expr: '0 9 * * *', tz: 'UTC' } })).toBe('crm search_leads · Every day at 09:00')
@@ -33,18 +39,32 @@ it('shows a tool check\'s last poll, its failure and its next try', () => {
   expect(failed).toMatch(/^Checked just now · failed: The server did not answer\. · 3 failures in a row · next try /)
 })
 
-it('names when a routine runs with no time zone, in local time for another zone', async () => {
-  const { routineIcon, routineWhen } = await import('./routine-labels.js')
-  const { localTimeZone } = await import('./cron.js')
-  const { runTimeLabel } = await import('../lib/agent-labels.js')
-  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: localTimeZone() } })).toBe('Weekdays at 09:00')
-  const zone = localTimeZone() === 'Asia/Tokyo' ? 'Europe/Paris' : 'Asia/Tokyo'
-  const next = Math.floor(Date.now() / 1000) + 3600
-  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * *', tz: zone }, next_fire_at: next })).toBe(`Next run ${runTimeLabel(next * 1000).replace(/^T/, 't')}`)
-  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * *', tz: zone } })).toBe('Every day at 09:00')
+it('names when a routine runs with no time zone, in the zone the Time setting shows', async () => {
+  const { routineIcon } = await import('./routine-labels.js')
+  const now = Date.parse('2026-10-20T12:00:00Z')
+  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'UTC' } }, now)).toBe('Weekdays at 09:00')
+  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'Asia/Tokyo' } }, now)).toBe('Every day at 00:00')
+  await saveTimeSetting(null, { zone: 'Asia/Tokyo', clock: '12h' })
+  expect(routineWhen({ trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'Asia/Tokyo' } }, now)).toBe('Every day at 9:00 AM')
   expect(routineWhen({ trigger: { kind: 'webhook', preset: 'github' } })).toBe('Webhook · GitHub')
   expect(routineWhen({ trigger: { kind: 'mcp', server: 'crm', tool: 'search', every: { expr: '*/15 * * * *', tz: 'UTC' } } })).toBe('crm search · every 15 minutes')
   expect(['cron', 'webhook', 'mcp'].map((kind) => routineIcon({ kind }))).toEqual(['clock', 'link', 'plug-zap'])
+})
+
+it('reads a routine row and the agent card next run on one clock', async () => {
+  // A weekday schedule at 08:00 in New York, with its next run on Tuesday.
+  const now = Date.parse('2026-10-20T10:00:00Z')
+  const next = Date.parse('2026-10-20T12:00:00Z') / 1000
+  const routine = { id: 'brief', enabled: true, trigger: { kind: 'cron', expr: '0 8 * * 1-5', tz: 'America/New_York' }, next_fire_at: next }
+  await saveTimeSetting(null, { zone: 'America/New_York', clock: '12h' })
+  expect(routineWhen(routine, now)).toBe('Weekdays at 8:00 AM')
+  expect(nextRunLabel({ routines: [routine] }, now)).toBe('Today at 8:00 AM')
+  await saveTimeSetting(null, { clock: '24h' })
+  expect(routineWhen(routine, now)).toBe('Weekdays at 08:00')
+  expect(nextRunLabel({ routines: [routine] }, now)).toBe('Today at 08:00')
+  await saveTimeSetting(null, { zone: 'Europe/London' })
+  expect(routineWhen(routine, now)).toBe('Weekdays at 13:00')
+  expect(nextRunLabel({ routines: [routine] }, now)).toBe('Today at 13:00')
 })
 
 it('names the next run in local time with no time zone', () => {

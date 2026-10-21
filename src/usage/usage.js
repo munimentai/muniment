@@ -6,6 +6,7 @@
 import { agentRuntimes } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { familyName, providerName } from '../lib/provider-catalog.js'
+import { formatDate, formatHour, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const USAGE_VIEWS = [
   { value: 'limits', label: 'Limits' },
@@ -36,7 +37,7 @@ export function machineRefs(runtimeList) {
 
 // One request through the window: each named machine answers and core joins them.
 export function readUsage(tauri, machines, { range = '7d', provider = null } = {}) {
-  const body = { range, utc_offset_minutes: -new Date().getTimezoneOffset() }
+  const body = { range, utc_offset_minutes: zoneOffsetMinutes() }
   if (provider) body.provider = provider
   return tauri.invoke('usage_summary', { machines, body })
 }
@@ -152,11 +153,11 @@ export function measureLabel(value, view) {
   return view === 'cost' ? dollars(value) : compactTokens(value)
 }
 
-// A bucket's short axis label: the hour for a day, else the day of the month.
+// A bucket's short axis label: the hour for a day, on the clock the Time
+// setting shows, else the day of the month.
 export function bucketLabel(startMs, bucket) {
-  const at = new Date(startMs)
-  if (bucket === 'hour') return at.toLocaleTimeString([], { hour: 'numeric' })
-  return at.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  if (bucket === 'hour') return formatHour(startMs)
+  return formatDate(startMs)
 }
 
 // A breakdown row's name: the label core gives, else what an empty key means.

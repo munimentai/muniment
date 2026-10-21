@@ -1,6 +1,7 @@
 // The runtimes this app attaches to: labels, states and the Settings pages
 // that change while a paired runtime is selected. `runtime_list` answers
 // { appVersion, deviceName, selected, runtimes }, this computer first.
+import { formatDate } from '../lib/time-format.svelte.js'
 
 export const LOCAL_RUNTIME_ID = 'local'
 export const DEFAULT_SSH_COMMAND = 'muniment-server'
@@ -268,5 +269,5 @@ export function seenLabel(value, now = Date.now()) {
   if (minutes < 60) return `${minutes}m ago`
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h ago`
-  return date.toLocaleDateString()
+  return formatDate(date, { month: 'short', day: 'numeric', year: 'numeric' })
 }

@@ -418,7 +418,7 @@ Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
 `agent.delete` (`{"id", "remove_memory"?}`), `agent.run_now` (`{"id",
 "prompt"?, "test"?}` → `{"run"}`; a run that opens the agent's thread titles
 it `<name> · test run` for a `test` run and `<name> · <date and time>`
-otherwise), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
+otherwise, in the machine's `time` preference), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
 → `{"runs", "next_cursor"}`, newest first), `routine.list` (`{"agent_id"}`),
 `routine.save` (`{"agent_id", "routine"}` → `{"routine"}`),
 `routine.delete` (`{"agent_id", "routine_id"}`),
@@ -918,7 +918,11 @@ steering, gate answers and run starts through `SwarmHost`.
   Fleet-wide keys are `theme`, `agent-avatars`, `type`, `thinking-mark`,
   `browser.search`, `browser.homepage` and `memory-recall`, which reads and
   writes the memory recall settings. `sidebar-collapsed`, `sidebar-width`,
-  `window`, `frame`, `local-mode` and `voice-shortcut` stay local. Every
+  `window`, `frame`, `local-mode`, `voice-shortcut`, `large-downloads` and
+  `time` stay local. `time` is `{"zone"?, "clock"?, "computer_clock"?}`: an
+  IANA zone and `12h` or `24h`, each empty to match the computer, and the
+  clock the client reads from the computer's locale. Core phrases clock times
+  through it, with no zone name. Every
   change sends `preferences.changed` (`{"values", "source"}`, `source`
   `local` or `fleet`).
 

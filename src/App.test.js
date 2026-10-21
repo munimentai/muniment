@@ -14,6 +14,7 @@ vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord:
 
 import { historyMessages } from './lib/chat-state.js'
 import { SCAN_RETRY_DELAYS } from './lib/first-run-providers.js'
+import { cronLabel } from './agents/cron.js'
 
 const extensionInstances = vi.hoisted(() => [])
 vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
@@ -1550,9 +1551,10 @@ describe('workspace composer entry', () => {
     expect(settingsStyles).toMatch(/\.settings-layout \{[^}]*grid-column:\s*2 \/ -1/)
     expect(appStyles).toMatch(/\.workspace\.settings-open > :global\(:not\(\.titlebar, \.sidebar, \.sidebar-divider,/)
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
-    // Seven pages, each holding its settings once, with no group headings.
+    // Eight pages, each holding its settings once, with no group headings.
     expect(within(nav).queryAllByRole('heading')).toEqual([])
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Account', 'Models', 'Tools', 'Machines', 'Permissions', 'Data', 'General'])
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Account', 'Models', 'Tools', 'Machines', 'Permissions', 'Data', 'Voice', 'General'])
+    expect(within(nav).getByRole('button', { name: 'Voice' }).querySelector('[data-icon=mic]')).not.toBeNull()
     expect(within(nav).getByRole('button', { name: 'Machines' }).querySelector('[data-icon=network]')).not.toBeNull()
     expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
@@ -1570,9 +1572,10 @@ describe('workspace composer entry', () => {
     await fireEvent.keyDown(dialog, navigator.platform.startsWith('Mac') ? { key: 'f', metaKey: true } : { key: 'f', ctrlKey: true })
     expect(document.activeElement).toBe(search)
     await fireEvent.input(search, { target: { value: 'dictation' } })
-    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['General', 'Voice'])
-    await fireEvent.click(within(nav).getByRole('button', { name: 'Voice' }))
-    expect(within(nav).getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'true')
+    expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Voice', 'Shortcut', 'Speech model', 'Transcription'])
+    await fireEvent.click(within(nav).getByRole('button', { name: 'Shortcut' }))
+    expect(within(nav).getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-current', 'true')
+    expect(await within(dialog).findByRole('button', { name: /Change voice shortcut/ })).toBeInTheDocument()
     await fireEvent.input(search, { target: { value: '' } })
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
     expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
@@ -5116,7 +5119,7 @@ describe('voice dictation', () => {
     const composer = await findReadyWorkspaceComposer()
     await fireEvent.keyDown(composer, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
     expect(registerGlobalShortcut).toHaveBeenCalledTimes(1)
-    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
 
     await fireEvent.click(capture)
@@ -5141,7 +5144,7 @@ describe('voice dictation', () => {
   it('captures the artifact rail chord without toggling the rail', async () => {
     render(App)
     const railToggle = await screen.findByRole('button', { name: 'Artifacts' })
-    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     const mac = navigator.platform.startsWith('Mac')
 
@@ -5159,7 +5162,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut, current Control\+Shift\+Space/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -5175,7 +5178,7 @@ describe('voice dictation', () => {
   it('keeps the registered and displayed shortcut when persistence fails', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('private storage detail', 'QuotaExceededError') })
     const view = render(App)
-    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -5196,7 +5199,7 @@ describe('voice dictation', () => {
       registeredShortcuts.delete(shortcut)
     })
     render(App)
-    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -5217,7 +5220,7 @@ describe('voice dictation', () => {
       globalShortcutHandler = handler
     })
     render(App)
-    await openSettings('General')
+    await openSettings('Voice')
     const capture = within(screen.getByRole('dialog', { name: 'Settings' })).getByRole('button', { name: /Change voice shortcut/ })
     expect(capture).toBeDisabled()
     await fireEvent.click(capture)
@@ -5243,7 +5246,7 @@ describe('voice dictation', () => {
         registeredShortcuts.delete(shortcut)
       })
     }
-    const dialog = (await openSettings('General')).querySelector('[data-settings-part="voice"]')
+    const dialog = await openSettings('Voice')
     const capture = within(dialog).getByRole('button', { name: /Change voice shortcut/ })
     await fireEvent.click(capture)
     await fireEvent.keyDown(capture, { key: 'K', code: 'KeyK', ctrlKey: true, altKey: true })
@@ -5670,7 +5673,7 @@ describe('voice dictation', () => {
     expect(invoke.mock.calls.some(([command]) => command === 'parakeet_install_start')).toBe(false)
     await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true }))
-    expect(saved).toEqual({ 'large-downloads': true })
+    expect(saved).toMatchObject({ 'large-downloads': true })
     unmount()
 
     // The next time the model is missing, the download starts on its own.
@@ -5948,9 +5951,9 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     view.unmount()
     // Every event listener ends, the agent run updates, swarm changes,
-    // approvals, agent activity, group posts, preference changes and the
-    // fleet's forwarded actions and swarm changes among them.
-    expect(eventUnlisten).toHaveBeenCalledTimes(17)
+    // approvals, agent activity, group posts, preference changes, the time
+    // setting and the fleet's forwarded actions and swarm changes among them.
+    expect(eventUnlisten).toHaveBeenCalledTimes(18)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')
@@ -8534,7 +8537,8 @@ describe('agent chat', () => {
     // The template's sentence is the chat's first message, with one draft and no chat run.
     expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ chat_id: CHAT, message: 'Every Friday at 4pm, write a recap of my week from my threads and projects.' }])
     expect(screen.getByText('Every Friday at 4pm, write a recap of my week from my threads and projects.', { selector: '.user-message p' })).toBeInTheDocument()
-    expect(within(reply).getByText('Fridays at 16:00 · America/New_York')).toBeInTheDocument()
+    expect(within(reply).getByText(cronLabel('0 16 * * 5', 'America/New_York'))).toBeInTheDocument()
+    expect(within(reply).queryByText(/America\/New_York/)).toBeNull()
     expect(invoke.mock.calls.some(([name]) => name === 'chat_submit')).toBe(false)
     expect(screen.getByPlaceholderText('Ask for a change')).toBeInTheDocument()
     // The chat is one row of its own in Projects, the open one.

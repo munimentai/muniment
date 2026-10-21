@@ -1,13 +1,16 @@
 // The words a routine row shows for its trigger and its last result.
-import { cronLabel, localTimeZone } from './cron.js'
+import { cronLabel } from './cron.js'
 import { runStatusLabel, runTimeLabel, whenLabel } from '../lib/agent-labels.js'
+import { formatClock } from '../lib/time-format.svelte.js'
 
 const SENDERS = { github: 'GitHub', forgejo: 'Forgejo' }
 
+// A trigger in words with no time zone, as a draft or an import preview
+// lists it.
 export function triggerSummary(trigger) {
-  if (trigger?.kind === 'cron') return `${cronLabel(trigger.expr)} · ${trigger.tz}`
+  if (trigger?.kind === 'cron') return cronLabel(trigger.expr, trigger.tz)
   if (trigger?.kind === 'webhook') return `Webhook · ${SENDERS[trigger.preset] ?? 'any sender'}`
-  if (trigger?.kind === 'mcp') return `${trigger.server} ${trigger.tool} · ${cronLabel(trigger.every?.expr)}`
+  if (trigger?.kind === 'mcp') return `${trigger.server} ${trigger.tool} · ${cronLabel(trigger.every?.expr, trigger.every?.tz)}`
   return trigger?.kind ?? ''
 }
 
@@ -18,17 +21,14 @@ export function routineIcon(trigger) {
 
 const lower = (text) => text.replace(/^[A-Z]/, (letter) => letter.toLowerCase())
 
-// When a routine runs, with no time zone. A schedule in this computer's zone
-// reads as its phrase. One in another zone names the next run that core
-// reports, in local time.
+// When a routine runs, with no time zone: its phrase, with the time read in
+// the zone and on the clock the Time setting shows, as the agent card's next
+// run reads.
 export function routineWhen(routine, now = Date.now()) {
   const trigger = routine?.trigger
-  if (trigger?.kind === 'cron') {
-    if (trigger.tz && trigger.tz !== localTimeZone() && Number.isFinite(routine.next_fire_at)) return `Next run ${lower(runTimeLabel(routine.next_fire_at * 1000, now))}`
-    return cronLabel(trigger.expr)
-  }
+  if (trigger?.kind === 'cron') return cronLabel(trigger.expr, trigger.tz, now)
   if (trigger?.kind === 'webhook') return `Webhook · ${SENDERS[trigger.preset] ?? 'any sender'}`
-  if (trigger?.kind === 'mcp') return `${trigger.server} ${trigger.tool} · ${lower(cronLabel(trigger.every?.expr))}`
+  if (trigger?.kind === 'mcp') return `${trigger.server} ${trigger.tool} · ${lower(cronLabel(trigger.every?.expr, trigger.every?.tz, now))}`
   return trigger?.kind ?? ''
 }
 
@@ -65,7 +65,7 @@ export function pollLabel(routine, now = Date.now()) {
   const when = whenLabel(poll.at, now)
   if (poll.error) {
     const retry = Date.parse(poll.retry_at ?? '')
-    const next = Number.isFinite(retry) ? ` · next try ${new Date(retry).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : ''
+    const next = Number.isFinite(retry) ? ` · next try ${formatClock(retry)}` : ''
     const failures = poll.failures > 1 ? ` · ${poll.failures} failures in a row` : ''
     return `Checked ${when.toLowerCase()} · failed: ${poll.error}${failures}${next}`
   }

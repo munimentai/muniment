@@ -42,6 +42,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | inherit | It resolves each thread value from the thread, its agent, its project or the default, and names the layer. |
 | module | thread_settings | It keeps each thread's own model and the project defaults it started with. |
 | module | preferences | It stores the user's preferences and marks which keys every swarm member shares. |
+| module | time_display | It phrases clock times in the user's time zone and 12- or 24-hour clock, with no zone name. |
 | module | usage_report | It sums run receipts and subscription windows into usage by provider, model, agent, project and machine. |
 | module | notifications | It lists agent runs, waiting approvals and scheduled runs, and joins machines into the notifications page. |
 | module | fleet_sync | It maps the settings, project and memory classes onto swarm records, both ways. |

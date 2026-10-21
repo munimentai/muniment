@@ -1,9 +1,13 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import AgentDraftChat from './AgentDraftChat.svelte'
 import { draftAgent, draftForm, requestDraft } from './agent-draft.js'
+import { saveTimeSetting } from '../lib/time-format.svelte.js'
 afterEach(cleanup)
+// Times read in one zone on a 24-hour clock, whatever the computer uses.
+beforeEach(() => saveTimeSetting(null, { zone: 'America/New_York', clock: '24h' }))
+afterEach(() => saveTimeSetting(null, { zone: '', clock: '' }))
 
 const draft = {
   name: 'Inbox brief',
@@ -38,7 +42,9 @@ it('shows each message and the draft core answered it with, the newest with Save
   const newest = drafts[1]
   expect(newest).toHaveAccessibleName('Draft: Inbox replies')
   expect(within(newest).getByText(draft.instructions)).toBeInTheDocument()
-  expect(within(newest).getByText('Weekdays at 09:00 · America/New_York')).toBeInTheDocument()
+  // The draft names no time zone.
+  expect(within(newest).getByText('Weekdays at 09:00')).toBeInTheDocument()
+  expect(newest).not.toHaveTextContent('America/New_York')
   await waitFor(() => expect(within(newest).getByText('brief')).toBeInTheDocument())
   expect(within(newest).getByText('GPT-6 · default')).toBeInTheDocument()
   expect(within(newest).getByRole('button', { name: 'Save' })).toBeInTheDocument()
