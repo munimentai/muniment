@@ -26,11 +26,13 @@
 
 ## Features
 
-- **Your models, together.** Connect provider accounts, API keys, or local models. Choose a model or let Jev route each request.
-- **One workspace.** Keep projects, chats, files, a terminal, and a browser together.
-- **Tools that fit your work.** Add MCP servers, skills, and plugins. Choose what each turn can use.
-- **Agents and artifacts.** Create reusable agents and interactive outputs beside the conversation.
-- **Memory and voice.** Keep context across chats and use on-device voice.
+- **Your models, together.** Connect provider accounts, API keys, or local models. Choose a model or let Jev route each request. Usage shows what each subscription window has left.
+- **One workspace.** Keep projects, threads, files, a terminal, and a browser together.
+- **Tools that fit your work.** Add MCP servers, skills, and plugins. Pick extra ones for a single turn.
+- **Permission modes.** Each thread and agent runs in one of six modes, from Ask before changes to Bypass permissions. An approval is Allow once or Deny.
+- **Agents and artifacts.** Create agents that run on a schedule, a webhook, or a tool check, and interactive outputs beside the conversation.
+- **Your machines.** Pair other desktops, servers, and containers, and run a thread or an agent on any of them.
+- **Memory and voice.** Keep context across threads, see where each memory came from, and dictate on-device with live words.
 
 ## Start
 

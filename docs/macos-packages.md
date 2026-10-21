@@ -106,3 +106,21 @@ spctl --assess --type execute --verbose=4 muniment.app
 ```
 
 All three must pass before distribution.
+
+## Local signed build
+
+`node scripts/build-macos-local.mjs` builds the Apple silicon app, signs it
+with the nightly's `codesign` arguments, and installs it in `~/Applications`.
+A Developer ID Application signature passes the launch constraint above, so
+the background service runs from a local build. An ad hoc signature does not.
+The certificate comes from the environment and never sits in the repository:
+
+| Variable | Value |
+| --- | --- |
+| `MUNIMENT_SIGNING_CERTIFICATE_FILE` | The path of the Developer ID `.p12`. |
+| `MUNIMENT_SIGNING_CERTIFICATE` | The `.p12` in base64, read when no file is named. |
+| `MUNIMENT_SIGNING_CERTIFICATE_PASSWORD` | The `.p12` password. |
+
+The script imports the identity into a throwaway keychain and deletes it on
+exit. It does not notarize. `--build-only` leaves the signed app in
+`src-tauri/target/release/bundle/macos/` and installs nothing.
