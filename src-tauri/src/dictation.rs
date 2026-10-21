@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use muniment_core::asr::level::VoiceLevelFrame;
+use muniment_core::asr::partial::{PartialPacing, PartialTranscripts};
 use muniment_core::asr::utterance::{Utterance, UtteranceConfig};
 use muniment_core::asr::{
     AsrLifecycleError, AsrModelSetStamp, DictationPipeline, OfflineParakeetRecognizer,
@@ -17,6 +19,8 @@ use crate::voice_capture::{CapturedPcm, VoiceCaptureError, VoiceCaptureState};
 use crate::voice_output::{self, OutputMute, Tone};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// The wait between two voice level events, about 30 a second.
+const LEVEL_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "state")]
@@ -46,10 +50,15 @@ pub struct DictationOptions {
     words: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum DictationEvent {
+    /// The final transcript of one utterance. It replaces the utterance's partial text.
     Transcript { text: String },
+    /// The words of the utterance in progress so far. Empty text clears them.
+    Partial { text: String },
+    /// The speaker's voice loudness, from 0 for silence to 1.
+    Level { level: f32 },
 }
 
 #[derive(Clone, Copy)]
@@ -335,7 +344,16 @@ fn run_native(
         recognizer: recognizer.as_ref(),
         hotwords,
     };
-    run_coordinator(capture, pipeline, &decoder, stop, running, emit)
+    let partials = PartialTranscripts::new(PartialPacing::default());
+    run_coordinator(
+        capture,
+        pipeline,
+        &decoder,
+        Some(partials),
+        stop,
+        running,
+        emit,
+    )
 }
 
 trait CaptureSource {
@@ -343,6 +361,7 @@ trait CaptureSource {
     fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError>;
     fn stop_and_take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError>;
     fn stop(&self) -> Result<(), VoiceCaptureError>;
+    fn level(&self) -> Option<VoiceLevelFrame>;
 }
 
 impl CaptureSource for VoiceCaptureState {
@@ -357,6 +376,9 @@ impl CaptureSource for VoiceCaptureState {
     }
     fn stop(&self) -> Result<(), VoiceCaptureError> {
         self.stop()
+    }
+    fn level(&self) -> Option<VoiceLevelFrame> {
+        self.level()
     }
 }
 
@@ -379,48 +401,114 @@ impl TranscriptDecoder for BiasedDecoder<'_> {
     }
 }
 
-fn run_coordinator<C: CaptureSource, D: VadDecisionSource, R: TranscriptDecoder>(
+/// Runs one dictation session. With `partials`, the utterance in progress is
+/// decoded again at their pace and its words go out as partial events.
+fn run_coordinator<C: CaptureSource + Sync, D: VadDecisionSource, R: TranscriptDecoder>(
     capture: &C,
     mut pipeline: DictationPipeline<D>,
     recognizer: &R,
+    mut partials: Option<PartialTranscripts>,
     stop: &AtomicBool,
     running: &Running,
     emit: &Emit,
 ) -> Result<(), DictationFailure> {
     capture.start().map_err(redact_capture)?;
     running();
-    let result = (|| {
-        while !stop.load(Ordering::Acquire) {
-            let batch = capture.take_samples().map_err(redact_capture)?;
-            push_and_recognize(&mut pipeline, recognizer, &batch.samples, emit)?;
-            if batch.discontinuity_after {
-                pipeline.discontinuity();
-            }
-            std::thread::sleep(POLL_INTERVAL);
-        }
-        let batch = capture.stop_and_take_samples().map_err(redact_capture)?;
-        push_and_recognize(&mut pipeline, recognizer, &batch.samples, emit)?;
-        if batch.discontinuity_after {
-            pipeline.discontinuity();
-        }
-        if let Some(utterance) = pipeline.flush() {
-            recognize(recognizer, utterance, emit)?;
-        }
-        Ok(())
-    })();
+    let levels_done = AtomicBool::new(false);
+    let result = std::thread::scope(|scope| {
+        // Decodes hold the loop below, so the levels go out from their own thread.
+        scope.spawn(|| send_levels(capture, &levels_done, emit));
+        let result = run_capture(
+            capture,
+            &mut pipeline,
+            recognizer,
+            &mut partials,
+            stop,
+            emit,
+        );
+        levels_done.store(true, Ordering::Release);
+        result
+    });
     if result.is_err() {
         let _ = capture.stop();
     }
     result
 }
 
+/// Sends each new voice level of the capture until `done`.
+fn send_levels<C: CaptureSource>(capture: &C, done: &AtomicBool, emit: &Emit) {
+    let mut sent = None;
+    while !done.load(Ordering::Acquire) {
+        if let Some(frame) = capture.level().filter(|frame| sent != Some(frame.sequence)) {
+            sent = Some(frame.sequence);
+            emit(DictationEvent::Level { level: frame.level });
+        }
+        std::thread::sleep(LEVEL_INTERVAL);
+    }
+}
+
+fn run_capture<C: CaptureSource, D: VadDecisionSource, R: TranscriptDecoder>(
+    capture: &C,
+    pipeline: &mut DictationPipeline<D>,
+    recognizer: &R,
+    partials: &mut Option<PartialTranscripts>,
+    stop: &AtomicBool,
+    emit: &Emit,
+) -> Result<(), DictationFailure> {
+    while !stop.load(Ordering::Acquire) {
+        let batch = capture.take_samples().map_err(redact_capture)?;
+        push_and_recognize(
+            pipeline,
+            recognizer,
+            &batch.samples,
+            partials.as_mut(),
+            emit,
+        )?;
+        if batch.discontinuity_after {
+            pipeline.discontinuity();
+            end_partial(partials.as_mut(), emit);
+        }
+        if let Some(partials) = partials.as_mut() {
+            recognize_partial(pipeline, recognizer, partials, emit);
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    let batch = capture.stop_and_take_samples().map_err(redact_capture)?;
+    push_and_recognize(
+        pipeline,
+        recognizer,
+        &batch.samples,
+        partials.as_mut(),
+        emit,
+    )?;
+    if batch.discontinuity_after {
+        pipeline.discontinuity();
+    }
+    if let Some(utterance) = pipeline.flush() {
+        recognize(recognizer, utterance, emit)?;
+    }
+    // A session that ends without a final transcript leaves no partial text.
+    end_partial(partials.as_mut(), emit);
+    Ok(())
+}
+
 fn push_and_recognize<D: VadDecisionSource, R: TranscriptDecoder>(
     pipeline: &mut DictationPipeline<D>,
     recognizer: &R,
     samples: &[f32],
+    partials: Option<&mut PartialTranscripts>,
     emit: &Emit,
 ) -> Result<(), DictationFailure> {
-    match pipeline.push(samples) {
+    let pushed = pipeline.push(samples);
+    let emitted = match &pushed {
+        Ok(utterances) => !utterances.is_empty(),
+        Err(error) => !error.emitted.is_empty(),
+    };
+    // The final transcript replaces the partial text of its utterance.
+    if let (true, Some(partials)) = (emitted, partials) {
+        partials.ended();
+    }
+    match pushed {
         Ok(utterances) => recognize_all(recognizer, utterances, emit),
         Err(error) => {
             recognize_all(recognizer, error.emitted, emit)?;
@@ -453,6 +541,38 @@ fn recognize<R: TranscriptDecoder>(
         .map_err(|_| failure("recognitionFailed", "Speech recognition failed."))?;
     emit(DictationEvent::Transcript { text });
     Ok(())
+}
+
+/// Decodes the utterance in progress when it is due and sends its words when
+/// they changed. A failed partial decode is skipped: the final decode reports.
+fn recognize_partial<D: VadDecisionSource, R: TranscriptDecoder>(
+    pipeline: &DictationPipeline<D>,
+    recognizer: &R,
+    partials: &mut PartialTranscripts,
+    emit: &Emit,
+) {
+    let Some(samples) = pipeline.in_progress() else {
+        return;
+    };
+    let started = Instant::now();
+    if !partials.due(started, samples.len()) {
+        return;
+    }
+    let Ok(text) = recognizer.decode(samples) else {
+        return;
+    };
+    if let Some(text) = partials.decoded(started, started.elapsed(), samples.len(), text) {
+        emit(DictationEvent::Partial { text });
+    }
+}
+
+/// Clears the partial text of an utterance that ends without a final transcript.
+fn end_partial(partials: Option<&mut PartialTranscripts>, emit: &Emit) {
+    if partials.is_some_and(|partials| partials.ended()) {
+        emit(DictationEvent::Partial {
+            text: String::new(),
+        });
+    }
 }
 
 fn failure(category: &'static str, message: &'static str) -> DictationFailure {
@@ -665,6 +785,9 @@ mod tests {
         fn stop(&self) -> Result<(), VoiceCaptureError> {
             Ok(())
         }
+        fn level(&self) -> Option<VoiceLevelFrame> {
+            None
+        }
     }
 
     struct FakeVad {
@@ -711,6 +834,16 @@ mod tests {
         lengths: Arc<Mutex<Vec<usize>>>,
         discontinuities: Arc<std::sync::atomic::AtomicUsize>,
     ) -> Arc<Runner> {
+        paced_runner(capture, decisions, lengths, discontinuities, None)
+    }
+
+    fn paced_runner(
+        capture: FakeCapture,
+        decisions: VecDeque<Result<VoiceActivity, VadError>>,
+        lengths: Arc<Mutex<Vec<usize>>>,
+        discontinuities: Arc<std::sync::atomic::AtomicUsize>,
+        pacing: Option<PartialPacing>,
+    ) -> Arc<Runner> {
         let capture = Arc::new(capture);
         Arc::new(
             move |_: &Path, _: &VoiceCaptureState, _: &[String], stop, running, emit| {
@@ -728,6 +861,7 @@ mod tests {
                     &FakeDecoder {
                         lengths: lengths.clone(),
                     },
+                    pacing.map(PartialTranscripts::new),
                     stop,
                     running,
                     emit,
@@ -901,5 +1035,161 @@ mod tests {
         assert_eq!(lengths.lock().unwrap().len(), 1);
         let json = serde_json::to_string(&expected).unwrap();
         assert!(!json.contains("NativeDetectorUnavailable") && !json.contains("onnx"));
+    }
+
+    fn eager() -> Option<PartialPacing> {
+        Some(PartialPacing {
+            min_interval: Duration::ZERO,
+            max_interval: Duration::ZERO,
+            load_factor: 1,
+            min_new_samples: 1,
+        })
+    }
+
+    fn events(app: &tauri::App<tauri::test::MockRuntime>) -> mpsc::Receiver<String> {
+        let (tx, rx) = mpsc::channel();
+        app.handle().listen("dictation-event", move |event| {
+            let _ = tx.send(event.payload().to_owned());
+        });
+        rx
+    }
+
+    #[test]
+    fn the_utterance_in_progress_sends_partial_text_until_its_final_transcript() {
+        let lengths = Arc::new(Mutex::new(Vec::new()));
+        let batch = |frames| CapturedPcm {
+            samples: pcm(frames),
+            discontinuity_after: false,
+        };
+        let runner = paced_runner(
+            FakeCapture {
+                batches: Mutex::new(VecDeque::from([batch(10), batch(4), batch(16)])),
+                stopped: Mutex::new(None),
+            },
+            vad(14, 16),
+            lengths.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            eager(),
+        );
+        let app = app_with_runner(runner);
+        let rx = events(&app);
+        dictation_start(app.handle().clone(), app.state(), app.state(), None);
+        let received: Vec<_> = (0..3)
+            .map(|_| rx.recv_timeout(Duration::from_secs(1)).unwrap())
+            .collect();
+        assert_eq!(
+            received,
+            [
+                r#"{"type":"partial","text":"decoded-1"}"#,
+                r#"{"type":"partial","text":"decoded-2"}"#,
+                r#"{"type":"transcript","text":"decoded-3"}"#,
+            ]
+        );
+        dictation_stop(app.state());
+        wait_status(&app, DictationStatus::Stopped);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            *lengths.lock().unwrap(),
+            vec![
+                10 * VAD_FRAME_SIZE,
+                14 * VAD_FRAME_SIZE,
+                14 * VAD_FRAME_SIZE + 8_000
+            ]
+        );
+    }
+
+    #[test]
+    fn lost_audio_clears_the_partial_text() {
+        let runner = paced_runner(
+            FakeCapture {
+                batches: Mutex::new(VecDeque::from([
+                    CapturedPcm {
+                        samples: pcm(10),
+                        discontinuity_after: false,
+                    },
+                    CapturedPcm {
+                        samples: Vec::new(),
+                        discontinuity_after: true,
+                    },
+                ])),
+                stopped: Mutex::new(None),
+            },
+            vad(10, 0),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            eager(),
+        );
+        let app = app_with_runner(runner);
+        let rx = events(&app);
+        dictation_start(app.handle().clone(), app.state(), app.state(), None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            r#"{"type":"partial","text":"decoded-1"}"#
+        );
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            r#"{"type":"partial","text":""}"#
+        );
+        dictation_stop(app.state());
+        wait_status(&app, DictationStatus::Stopped);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// A capture whose levels a test stores.
+    struct LevelCapture(muniment_core::asr::level::VoiceLevelSlot);
+
+    impl CaptureSource for LevelCapture {
+        fn start(&self) -> Result<(), VoiceCaptureError> {
+            Ok(())
+        }
+        fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
+            Ok(CapturedPcm {
+                samples: Vec::new(),
+                discontinuity_after: false,
+            })
+        }
+        fn stop_and_take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
+            self.take_samples()
+        }
+        fn stop(&self) -> Result<(), VoiceCaptureError> {
+            Ok(())
+        }
+        fn level(&self) -> Option<VoiceLevelFrame> {
+            self.0.load()
+        }
+    }
+
+    #[test]
+    fn each_new_voice_level_goes_out_once_until_the_session_ends() {
+        let capture = LevelCapture(muniment_core::asr::level::VoiceLevelSlot::new());
+        let done = AtomicBool::new(false);
+        let (tx, rx) = mpsc::channel();
+        let emit = move |event| {
+            let _ = tx.send(event);
+        };
+        std::thread::scope(|scope| {
+            scope.spawn(|| send_levels(&capture, &done, &emit));
+            std::thread::sleep(LEVEL_INTERVAL * 2);
+            assert!(rx.try_recv().is_err());
+            capture.0.store(0.5);
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                DictationEvent::Level { level: 0.5 }
+            );
+            std::thread::sleep(LEVEL_INTERVAL * 3);
+            assert!(rx.try_recv().is_err());
+            capture.0.store(0.25);
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                DictationEvent::Level { level: 0.25 }
+            );
+            done.store(true, Ordering::Release);
+        });
+        capture.0.store(1.0);
+        assert!(rx.recv_timeout(LEVEL_INTERVAL * 3).is_err());
+        assert_eq!(
+            serde_json::to_string(&DictationEvent::Level { level: 0.5 }).unwrap(),
+            r#"{"type":"level","level":0.5}"#
+        );
     }
 }
