@@ -709,7 +709,7 @@ export function buildProbeCommandTable(fixtureName) {
     // other page reads a quiet fleet, so the composer shows no limit.
     if (command === 'usage_summary') {
       const usage = probeUsage(payload, agentsState)
-      return agentsState?.startsWith('usage') || agentsState === 'composer-limit' ? usage : { ...usage, limits: [], unmetered: [] }
+      return agentsState?.startsWith('usage') || agentsState === 'composer-limit' ? usage : { ...usage, accounts: [], unmetered: [] }
     }
     if (command === 'notifications_list') {
       const page = probeNotifications(payload, agentsState)
@@ -1125,7 +1125,7 @@ const AGENT_SCREENS = {
   approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
   'tool-approvals': () => document.querySelectorAll('[data-panel="notifications"] .approval .tool-call-card').length === 4,
   'notifications-empty': () => document.querySelector('[data-panel="notifications"]')?.textContent.includes('Nothing needs you') && document.querySelectorAll('[data-panel="notifications"] .upcoming li').length === 3,
-  usage: () => document.querySelectorAll('[data-panel="usage"] .limit-card').length === 10 && !!document.querySelector('[data-panel="usage"] .unmetered'),
+  usage: () => document.querySelectorAll('[data-panel="usage"] .limit-card').length === 9 && document.querySelectorAll('[data-panel="usage"] .limit-card .meter').length === 11 && !!document.querySelector('[data-panel="usage"] .limit-card .tokens'),
   'usage-tokens': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7 && document.querySelectorAll('[data-panel="usage"] .breakdown li').length === 5,
   'usage-cost': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 30 && document.querySelector('[data-panel="usage"] .tiles')?.textContent.includes('API estimate'),
   'usage-partial': () => document.querySelector('[data-panel="usage"]')?.textContent.includes('Build box did not answer') && document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7,

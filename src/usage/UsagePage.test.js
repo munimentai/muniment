@@ -3,15 +3,16 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
 import LimitBanner from './LimitBanner.svelte'
+import LimitCard from './LimitCard.svelte'
 import { machineRows } from '../runtimes/machines.js'
-import { composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, providerLabel, resetsIn, rowLabel, totalTiles, windowLabel } from './usage.js'
+import { composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, meterLevel, providerLabel, resetsIn, rowLabel, totalTiles, unmeteredSubtitle, windowLabel } from './usage.js'
 
 afterEach(cleanup)
 
 const NOW = Date.UTC(2026, 9, 17, 12)
 const HOUR = 3_600_000
-const limit = (extra = {}) => ({ provider: 'anthropic', kind: 'five_hour', scope: '', remaining_percent: 62, resets_at_ms: NOW + 2 * HOUR + 14 * 60_000, elapsed_percent: 40, pace: 'ahead', status: 'ok', account_id: 'a', label: 'sam@example.com', plan: 'max', ...extra })
-const account = (windows, extra = {}) => ({ provider: windows[0].provider, identity: `${windows[0].provider}:${windows[0].account_id}`, account_id: windows[0].account_id, name: providerLabel(windows[0].provider), subtitle: 'sam@example.com · max', pace: 'ahead', windows, ...extra })
+const limit = (extra = {}) => ({ provider: 'anthropic', kind: 'five_hour', scope: '', remaining_percent: 62, resets_at_ms: NOW + 2 * HOUR + 14 * 60_000, status: 'ok', account_id: 'a', label: 'sam@example.com', plan: 'max', ...extra })
+const account = (windows, extra = {}) => ({ provider: windows[0].provider, identity: `${windows[0].provider}:${windows[0].account_id}`, account_id: windows[0].account_id, name: providerLabel(windows[0].provider), subtitle: 'sam@example.com · max', windows, ...extra })
 const amount = (processed, cost) => ({ tokens: { input: 1, output: 1, cache_read: 1, cache_write: 0, reasoning: 0 }, processed, runs: 2, cost_usd: cost, unpriced_runs: 0 })
 const summary = (extra = {}) => ({
   range: '7d', bucket: 'day',
@@ -21,10 +22,13 @@ const summary = (extra = {}) => ({
   providers: ['anthropic', 'openai'],
   accounts: [
     account([limit(), limit({ kind: 'weekly', remaining_percent: 80, resets_at_ms: NOW + 50 * HOUR }), limit({ kind: 'weekly', scope: 'Fable', remaining_percent: 12, status: 'low' })]),
-    account([limit({ account_id: 'b', label: 'Home', plan: null, remaining_percent: 30 })], { subtitle: 'Home', pace: null }),
-    account([limit({ provider: 'openai', kind: 'weekly', remaining_percent: 0, status: 'limit', pace: null, elapsed_percent: null })], { pace: 'on' }),
+    account([limit({ account_id: 'b', label: 'Home', plan: null, remaining_percent: 30 })], { subtitle: 'Home' }),
+    account([limit({ provider: 'openai', kind: 'weekly', remaining_percent: 0, status: 'limit' })]),
   ],
-  unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }, { provider: 'xai', label: 'xAI', reason: 'pending' }],
+  unmetered: [
+    { provider: 'omlx', label: 'oMLX', reason: 'local', endpoint: '127.0.0.1:8080', machines: ['local'], usage: { input: 842_000, output: 398_000, processed: 1_240_000, runs: 37 } },
+    { provider: 'xai', label: 'xAI', reason: 'pending', machines: ['local'], usage: { input: 0, output: 0, processed: 0, runs: 0 } },
+  ],
   windows: [],
   machines: [{ id: 'local', name: 'This computer', state: 'ok' }, { id: 'box', name: 'Build box', state: 'error', error: 'offline' }],
   partial: true,
@@ -88,24 +92,34 @@ describe('Usage page', () => {
     expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }) })
     expect(within(card).getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument()
     expect(within(card).getAllByText('sam@example.com · max')).toHaveLength(1)
-    expect(within(card).getByRole('img', { name: 'Ahead of pace' })).toBeInTheDocument()
+    expect(within(card).queryByRole('img')).not.toBeInTheDocument()
     const rows = within(card).getAllByRole('listitem')
     expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual(['5-hour', 'Weekly', 'Weekly Fable'])
-    expect(within(rows[0]).getByText('62% left')).toBeInTheDocument()
+    expect(within(rows[0]).getByText('62%')).toBeInTheDocument()
     expect(within(rows[0]).getByRole('meter')).toHaveAttribute('aria-valuenow', '62')
+    expect(within(rows[0]).getByRole('meter').getAttribute('aria-valuetext')).toMatch(/^62% left, resets/)
     expect(within(rows[0]).getByText(/^Resets/)).toBeInTheDocument()
-    expect(within(rows[1]).getByText('80% left')).toBeInTheDocument()
-    expect(within(rows[2]).getByText('12% left')).toBeInTheDocument()
-    expect(rows[2]).toHaveAttribute('data-status', 'low')
+    expect(within(rows[1]).getByText('80%')).toBeInTheDocument()
+    expect(within(rows[2]).getByText('12%')).toBeInTheDocument()
+    expect(rows.map((row) => row.dataset.level)).toEqual(['3', '4', '1'])
     // A second account of one provider has its own card.
     const second = screen.getByRole('article', { name: 'Anthropic, Home' })
     expect(within(second).getAllByRole('listitem')).toHaveLength(1)
-    expect(within(second).getByText('30% left')).toBeInTheDocument()
-    expect(within(second).queryByRole('img', { name: /pace/ })).not.toBeInTheDocument()
-    expect(within(screen.getByRole('article', { name: 'OpenAI, sam@example.com · max' })).getByText('Limit reached')).toBeInTheDocument()
-    expect(screen.getAllByRole('article')).toHaveLength(3)
-    expect(screen.getByText('No limit')).toBeInTheDocument()
-    expect(screen.getByText('Allowance pending')).toBeInTheDocument()
+    expect(within(second).getByText('30%')).toBeInTheDocument()
+    expect(within(screen.getByRole('article', { name: 'OpenAI, sam@example.com · max' })).getByText('Limit')).toBeInTheDocument()
+    // Each provider no window meters has a card in the same grid.
+    expect(screen.getAllByRole('article')).toHaveLength(5)
+    expect(screen.queryByRole('heading', { name: 'Without a window' })).not.toBeInTheDocument()
+    const omlx = screen.getByRole('article', { name: 'oMLX, 127.0.0.1:8080 · on this computer' })
+    expect(within(omlx).getByText('No limit')).toBeInTheDocument()
+    expect(within(omlx).getByText('1.2M')).toBeInTheDocument()
+    expect(within(omlx).getByText('tokens in the last 7 days')).toBeInTheDocument()
+    expect(within(omlx).getByText('842K in, 398K out across 37 runs.')).toBeInTheDocument()
+    const xai = screen.getByRole('article', { name: 'xAI' })
+    expect(within(xai).getByText('Allowance pending')).toBeInTheDocument()
+    expect(within(xai).getByText('No runs in this range.')).toBeInTheDocument()
+    // The page shows no meter legend.
+    expect(screen.queryByText(/75% or more/)).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
   })
 
@@ -154,6 +168,50 @@ describe('Usage page', () => {
   it('names the failure when no machine answers', async () => {
     render(UsagePage, { tauri: { invoke: vi.fn(async () => { throw 'The background service is not running.' }) }, runtimeList })
     expect(await screen.findByRole('alert')).toHaveTextContent('The background service is not running.')
+  })
+})
+
+describe('limit card', () => {
+  const card = (windows) => render(LimitCard, { account: account(windows), now: NOW })
+
+  it('lights four, three, two, one or no steps by the share left', () => {
+    const shares = [100, 75, 74.9, 50, 49.9, 25, 24.9, 0.4, 0]
+    expect(shares.map((left) => meterLevel({ remaining_percent: left, status: left <= 0 ? 'limit' : 'ok' }))).toEqual([4, 4, 3, 3, 2, 2, 1, 1, 0])
+    expect(meterLevel({ remaining_percent: 40, status: 'limit' })).toBe(0)
+    card([75, 50, 25, 10, 0].map((left, index) => limit({ kind: ['five_hour', 'daily', 'weekly', 'monthly', 'other'][index], remaining_percent: left, status: left <= 0 ? 'limit' : left < 20 ? 'low' : 'ok' })))
+    const meters = screen.getAllByRole('meter')
+    expect(meters.map((meter) => meter.dataset.level)).toEqual(['4', '3', '2', '1', '0'])
+    expect(meters.every((meter) => meter.querySelectorAll('i').length === 4)).toBe(true)
+    expect(screen.getAllByRole('listitem').map((row) => row.querySelector('.left').textContent)).toEqual(['75%', '50%', '25%', '10%', 'Limit'])
+    expect(meters[4]).toHaveAttribute('aria-valuetext', 'Limit reached, resets in 2h 14m')
+  })
+
+  it('says Not started only for a window core says has not started', () => {
+    card([limit({ resets_at_ms: null, remaining_percent: 100, not_started: true }), limit({ kind: 'weekly', resets_at_ms: null, remaining_percent: 60 })])
+    const [fresh, unknown] = screen.getAllByRole('listitem')
+    expect(within(fresh).getByText('Not started')).toBeInTheDocument()
+    expect(within(fresh).getByRole('meter')).toHaveAttribute('aria-valuetext', '100% left, not started')
+    expect(within(unknown).getByText('Reset time unknown')).toBeInTheDocument()
+  })
+
+  it('shows a provider no window meters with its tokens in the range', () => {
+    const entry = { provider: 'omlx', label: 'oMLX', reason: 'local', endpoint: '127.0.0.1:8080', machines: ['studio'], usage: { input: 900, output: 100, processed: 1000, runs: 1 } }
+    render(LimitCard, { unmetered: entry, range: '30d', machines: [{ id: 'studio', name: 'Studio' }] })
+    const card = screen.getByRole('article', { name: 'oMLX, 127.0.0.1:8080 · on Studio' })
+    expect(within(card).getByText('No limit')).toBeInTheDocument()
+    expect(within(card).getByText('1.0K')).toBeInTheDocument()
+    expect(within(card).getByText('tokens in the last 30 days')).toBeInTheDocument()
+    expect(within(card).getByText('900 in, 100 out across 1 run.')).toBeInTheDocument()
+    expect(within(card).queryByRole('meter')).not.toBeInTheDocument()
+    expect(unmeteredSubtitle({ ...entry, machines: ['local', 'studio'] })).toBe('127.0.0.1:8080 · on 2 machines')
+    expect(unmeteredSubtitle({ provider: 'openrouter', reason: 'key', machines: ['local'] })).toBe('')
+  })
+
+  it('says a provider with no runs in the range has none', () => {
+    render(LimitCard, { unmetered: { provider: 'openrouter', label: 'OpenRouter', reason: 'key', usage: { input: 0, output: 0, processed: 0, runs: 0 } } })
+    const card = screen.getByRole('article', { name: 'OpenRouter' })
+    expect(within(card).getByText('Billed by use')).toBeInTheDocument()
+    expect(within(card).getByText('No runs in this range.')).toBeInTheDocument()
   })
 })
 

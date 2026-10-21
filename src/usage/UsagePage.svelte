@@ -1,7 +1,8 @@
 <script>
   // Usage takes the main panel: what each account's subscription windows
-  // have left, and what the runs on every machine used, by provider, model,
-  // agent, project and machine. Core sums and reads; the page asks again when
+  // have left, what each provider no window meters used in the range, and
+  // what the runs on every machine used, by provider, model, agent, project
+  // and machine. Core sums and reads; the page asks again when
   // a filter changes and every minute while it shows. Refresh asks each
   // account's upstream first.
   import { onMount } from 'svelte'
@@ -12,13 +13,12 @@
   import SegmentedField from '../lib/ui/SegmentedField.svelte'
   import InfoTip from '../lib/ui/InfoTip.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
-  import ProviderLogo from '../lib/ProviderLogo.svelte'
   import LimitCard from './LimitCard.svelte'
   import UsageChart from './UsageChart.svelte'
   import UsageBreakdown from './UsageBreakdown.svelte'
   import { accountCache } from '../lib/account-cache.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
-  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerLabel, providerOptions, readUsage, totalTiles, unmeteredLabel } from './usage.js'
+  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerOptions, readUsage, totalTiles } from './usage.js'
 
   let { tauri, runtimeList = null, folderAccess = null, onconnect = null } = $props()
   let view = $state('limits')
@@ -81,7 +81,7 @@
       </div>
       <div class="controls">
         <SegmentedField label="Usage view" hideLabel value={view} options={USAGE_VIEWS} onchange={(value) => { view = value }} />
-        {#if view !== 'limits'}<SegmentedField label="Range" hideLabel value={range} options={USAGE_RANGES} onchange={(value) => { range = value }} />{/if}
+        {#if view !== 'limits' || summary?.unmetered?.length}<SegmentedField label="Range" hideLabel value={range} options={USAGE_RANGES} onchange={(value) => { range = value }} />{/if}
         <Button icon="refresh-cw" disabled={loading} onclick={refreshNow} aria-label="Refresh usage">Refresh</Button>
       </div>
     </div>
@@ -92,17 +92,14 @@
     {#if !summary && !error}
       <p class="note" role="status">Reading usage…</p>
     {:else if summary && view === 'limits'}
-      {#if summary.accounts?.length}
-        <div class="limits">{#each summary.accounts as account (`${account.provider}:${account.identity || account.account_id}`)}<LimitCard {account} {now} />{/each}</div>
-      {:else}
+      {#if !summary.accounts?.length}
         <div class="empty"><p>No subscription reports a limit yet.</p>{#if onconnect}<Button icon="plus" variant="primary" onclick={onconnect}>Connect account</Button>{/if}</div>
       {/if}
-      {#if summary.unmetered.length}
-        <Group heading="Without a window">
-          {#each summary.unmetered as entry (`${entry.provider}:${entry.reason}`)}
-            <div class="unmetered"><ProviderLogo provider={entry.provider} size={16} color /><span>{entry.label || providerLabel(entry.provider)}</span><em>{unmeteredLabel(entry)}</em></div>
-          {/each}
-        </Group>
+      {#if summary.accounts?.length || summary.unmetered?.length}
+        <div class="limits">
+          {#each summary.accounts ?? [] as account (`${account.provider}:${account.identity || account.account_id}`)}<LimitCard {account} {now} />{/each}
+          {#each summary.unmetered ?? [] as entry (`${entry.provider}:${entry.reason}:${entry.label}:${entry.endpoint ?? ''}`)}<LimitCard unmetered={entry} {range} machines={summary.machines ?? []} />{/each}
+        </div>
       {/if}
     {:else if summary}
       <dl class="tiles">
@@ -129,12 +126,9 @@
   .filter { width: 170px; }
   .note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--text-13); }
   .note.error { color: var(--danger); }
-  .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+  .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); align-items: start; gap: 12px; }
   .empty { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
   .empty p { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .unmetered { display: flex; align-items: center; gap: 8px; min-height: 36px; color: var(--ink); font-size: var(--text-13); }
-  .unmetered span { flex: 1; }
-  .unmetered em { color: var(--muted); font-style: normal; font-size: var(--text-12); }
   .tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 0; }
   .tiles div { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   dt { color: var(--muted); font-size: var(--text-12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

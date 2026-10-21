@@ -88,6 +88,26 @@ export function percentLeft(value) {
   return `${Math.round(Number(value) || 0)}% left`
 }
 
+// A window's line under its name: the reset, "Not started" for a window
+// core says starts on the next use, else that the upstream named no reset.
+export function resetLine(limit, now = Date.now()) {
+  if (limit?.not_started) return 'Not started'
+  return resetsIn(limit?.resets_at_ms, now) || 'Reset time unknown'
+}
+
+// The meter's lit steps by share left: 4 from 75%, 3 from 50%, 2 from 25%,
+// 1 under that, and none at the limit.
+export function meterLevel(limit) {
+  const left = Number(limit?.remaining_percent) || 0
+  if (limit?.status === 'limit' || left <= 0) return 0
+  return left >= 75 ? 4 : left >= 50 ? 3 : left >= 25 ? 2 : 1
+}
+
+const RANGE_PHRASES = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days', '90d': 'the last 90 days' }
+export function rangePhrase(range) {
+  return RANGE_PHRASES[range] ?? RANGE_PHRASES['7d']
+}
+
 // 950, 12.4K, 3.1M, 2.0B.
 export function compactTokens(count) {
   const value = Number(count) || 0
@@ -157,6 +177,18 @@ export function unmeteredLabel(entry) {
   return UNMETERED[entry?.reason] ?? 'No limit'
 }
 
+// A local server's address and the machine it runs on, such as
+// "127.0.0.1:8080 · on this computer". `machines` is the page's machine list.
+export function unmeteredSubtitle(entry, machines = []) {
+  const held = entry?.machines ?? []
+  const named = machines.find((machine) => machine.id === held[0])?.name
+  const where = entry?.reason !== 'local' || !held.length ? ''
+    : held.length > 1 ? `on ${held.length} machines`
+    : held[0] === LOCAL_RUNTIME_ID ? 'on this computer'
+    : named ? `on ${named}` : ''
+  return [entry?.endpoint, where].filter(Boolean).join(' · ')
+}
+
 // The pool the composer warns about: a spent window first, else one under a
 // tenth left, for the provider in use when one is known. Core's `pools`
 // spend a provider's window only once every account in it is spent.
@@ -165,12 +197,6 @@ export function composerLimit(limits, provider = null) {
   return pool.find((limit) => limit.status === 'limit')
     ?? pool.filter((limit) => limit.status === 'low' && limit.remaining_percent < 10).sort((a, b) => a.remaining_percent - b.remaining_percent)[0]
     ?? null
-}
-
-export const PACE_LABELS = {
-  ahead: 'Ahead of pace',
-  on: 'On pace',
-  under: 'Under pace',
 }
 
 // Settings opens the Usage page through the shell, which owns the pages.
