@@ -37,3 +37,11 @@ it('restores archived items and dismisses with Escape',async()=>{
  document.removeEventListener('keydown',outerEscape)
  expect(screen.queryByRole('menu')).not.toBeInTheDocument()
 })
+it('hands Delete to its owner when the owner confirms it',async()=>{
+ const onaction=vi.fn().mockResolvedValue()
+ render(CatalogActions,{name:'Scout',confirmDelete:false,onaction})
+ await fireEvent.click(screen.getByRole('button',{name:'Actions for Scout'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ expect(onaction).toHaveBeenCalledWith('delete','')
+ expect(screen.queryByRole('button',{name:'Confirm delete'})).not.toBeInTheDocument()
+})

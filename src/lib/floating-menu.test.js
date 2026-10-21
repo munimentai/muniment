@@ -32,3 +32,19 @@ it('keeps the HTML menu available if the popup cannot open',async()=>{
  await waitFor(()=>expect(Window.getByLabel).toHaveBeenCalled())
  expect(node.style.opacity).toBe('');action.destroy()
 })
+it('keeps a menu that became its dialog when the popup it left closes',async()=>{
+ window.__TAURI_INTERNALS__={}
+ const popup={setSize:vi.fn(),setPosition:vi.fn(),emit:vi.fn(),hide:vi.fn()}
+ Window.getByLabel.mockResolvedValue(popup)
+ const node=document.createElement('div');node.setAttribute('role','menu');node.innerHTML='<button>Delete</button>';document.body.append(node)
+ const action=floatingMenu(node)
+ await waitFor(()=>expect(popup.emit).toHaveBeenCalled())
+ const payload=popup.emit.mock.calls[0][1]
+ const escape=vi.fn();node.addEventListener('keydown',escape)
+ node.setAttribute('role','dialog')
+ await waitFor(()=>expect(popup.hide).toHaveBeenCalled())
+ listen.mock.calls.find(([name])=>name==='action-menu-closed')[1]({payload:payload.id})
+ expect(escape).not.toHaveBeenCalled()
+ expect(node.style.opacity).toBe('')
+ action.destroy()
+})

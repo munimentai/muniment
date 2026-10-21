@@ -632,11 +632,28 @@
       if (!browserPanel) revealAgentProfile()
     } finally { agentOpening = false }
   }
-  // An agent's profile alone, beside whatever thread is open.
-  function openAgentProfile(agent) {
+  // An agent's profile alone, beside whatever thread is open. A card's
+  // Delete opens it at the profile's delete confirmation.
+  let profileDelete = $state({ agentId: null, count: 0 })
+  function openAgentProfile(agent, { deleting = false } = {}) {
     profileOnlyAgent = agent.id
     projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
-    if (!browserPanel) revealAgentProfile()
+    if (deleting) profileDelete = { agentId: agent.id, count: profileDelete.count + 1 }
+    if (!browserPanel || deleting) revealAgentProfile()
+  }
+  // A deleted agent's threads leave the sidebar, and core removed its
+  // creation chat, so an open creation chat gives way to a new thread.
+  async function agentDeleted(agent) {
+    const chats = creations.filter(item => item.kind === 'agent' && item.resultId === agent.id).map(item => item.threadId)
+    const next = { ...threadOrganization }
+    for (const id of Object.keys(agentThreadMap).filter(id => agentThreadMap[id] === agent.id)) next[id] = { ...next[id], archived: true }
+    localStorage.setItem(THREAD_ORGANIZATION_KEY, JSON.stringify(next))
+    threadOrganization = next
+    if (selectedAgent === agent.id) selectedAgent = null
+    if (profileOnlyAgent === agent.id) profileOnlyAgent = null
+    agentProfileOpen = false
+    await Promise.all([refreshCreations(), refreshAgents()])
+    if (chats.includes(currentThreadId)) await newSidebarThread()
   }
   // The agent whose thread is starting keeps its profile open until the
   // listing names that thread.
@@ -2307,6 +2324,8 @@
     for (const id of targets) {
       if (!(await chatController.deleteThread(id))) break
     }
+    // Core deletes a creation chat's record with its thread.
+    if (targets.some((id) => creations.some((item) => item.threadId === id))) void refreshCreations()
     deletePending = false
     deleteFromTitle = false
     deletingThreadId = null
@@ -4300,7 +4319,7 @@
         runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} threads={agentListing.threads?.[profileAgent.id] ?? []}
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
-        ondelete={() => { agentProfileOpen = false; selectedAgent = null; profileOnlyAgent = null; void refreshAgents() }}
+        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={() => { void agentDeleted(profileAgent) }}
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
@@ -4319,7 +4338,7 @@
     <ProjectSettings {tauri} project={sidebarProjectById[settingsProject]} agents={roster.filter(agent => sidebarProjectById[settingsProject].agent_ids.includes(agent.id))} {inventory} modes={modeListing?.listing ?? null} {runtimeList} latestRuns={agentListing.latestRuns} busy={switchLocked || projectBusy}
       onback={() => { projectsOpen = false; settingsProject = null }} onnewthread={newProjectThread} onaddtrigger={addProjectTrigger}
       onchat={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onprofile={openAgentProfile} onchange={refreshAgentsAndRuns} onmanagemodels={openModelSettings}
-      onaction={(agent, action, name) => action === 'profile' ? openAgentProfile(agent) : action === 'export' ? exportAgent(tauri, agent, 'muniment') : catalogAction('agent', agent, action, name)}
+      onaction={(agent, action, name) => action === 'profile' || action === 'delete' ? openAgentProfile(agent, { deleting: action === 'delete' }) : action === 'export' ? exportAgent(tauri, agent, 'muniment') : catalogAction('agent', agent, action, name)}
       onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {:else if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={(chosen)=>startCreation('artifact', chosen)}/>{/if}

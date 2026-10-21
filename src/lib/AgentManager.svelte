@@ -46,9 +46,11 @@
       }
     })
   })
-  // The card menu opens the profile and exports here; the rest is the catalog's.
+  // The card menu opens the profile, its delete confirmation included, and
+  // exports here; the rest is the catalog's.
   async function cardAction(agent, action, name) {
     if (action === 'profile') return onprofile(agent)
+    if (action === 'delete') return onprofile(agent, { deleting: true })
     if (action === 'export') return exportAgent(tauri, agent, 'muniment')
     return onaction('agent', agent, action, name)
   }

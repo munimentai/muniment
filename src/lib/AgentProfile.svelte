@@ -1,6 +1,6 @@
 <script>
   import { panelScroll } from './panel-scroll.js'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
   import MemorySection from './MemorySection.svelte'
@@ -37,7 +37,7 @@
   // `catalog` is core's `agent.tool_catalog` from the agent's own machine:
   // the tools, skills and MCP servers it can offer this agent.
   let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true,
-    onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onopenfolder = null, onrun = () => {}, onmanagemodels = () => {}, onvisibility = () => {} } = $props()
+    deleteAsked = 0, onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onopenfolder = null, onrun = () => {}, onmanagemodels = () => {}, onvisibility = () => {} } = $props()
   let editing = $state(null)
   let value = $state('')
   let busy = $state(false)
@@ -84,6 +84,12 @@
     return threads.filter((thread) => !thread.primary && !reached.has(thread.thread_id))
   })
   let instructionsOpen = $state(false)
+  // A card's Delete opens the profile at this confirmation.
+  $effect(() => {
+    if (!deleteAsked) return
+    untrack(() => { deleting = true })
+    void tick().then(() => panel?.querySelector('[aria-label="Delete agent"]')?.scrollIntoView?.({ block: 'nearest' }))
+  })
   const fieldLabel = (field) => field === 'label' ? 'job title' : field
 
   // A click outside the open menu's row closes it.

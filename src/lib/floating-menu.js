@@ -56,7 +56,9 @@ export function floatingMenu(node) {
       restore()
       buttons()[payload.item]?.click()
     }))
-    retain(await listen('action-menu-closed', ({ payload }) => { if (payload === id && !disposed) { restore(); dismiss() } }))
+    // A menu that became its own dialog, such as a delete confirmation, stays
+    // when the popup it left closes.
+    retain(await listen('action-menu-closed', ({ payload }) => { if (payload === id && !disposed) { restore(); if (node.getAttribute('role') === 'menu') dismiss() } }))
     if (!disposed) await open()
   })().catch(() => restore())
   return { destroy() { pointer.destroy(); disposed = true; observer.disconnect(); stops.forEach(off => off()); if (floating) void popup?.hide(); restore() } }

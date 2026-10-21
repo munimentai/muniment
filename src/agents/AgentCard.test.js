@@ -265,3 +265,13 @@ it('shows an agent whose machine is offline read only, with a note', async () =>
   await fireEvent.click(screen.getByRole('tab', { name: 'Model' }))
   expect(screen.getByRole('button', { name: 'qwen3:8b' })).toBeDisabled()
 })
+
+it('hands its menu\'s Delete to the profile\'s delete confirmation', async () => {
+  const machineCore = core()
+  const onaction = vi.fn().mockResolvedValue()
+  show({ tauri: machineCore.tauri, onaction })
+  await fireEvent.click(screen.getByRole('button', { name: 'Actions for Scout' }))
+  await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+  expect(onaction).toHaveBeenCalledWith('delete', '')
+  expect(machineCore.requests.some((request) => request.operation === 'agent.delete')).toBe(false)
+})

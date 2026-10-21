@@ -514,3 +514,15 @@ it('says when the agent has no runs yet and shows its activity', async () => {
   expect(within(screen.getByRole('region', { name: 'History' })).getByText('No runs yet.')).toBeInTheDocument()
   expect(screen.getByText('Waiting for you: Run git push in work')).toBeInTheDocument()
 })
+
+it('opens at its delete confirmation when a card asks to delete the agent', async () => {
+  const { invoke } = machine()
+  const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+  expect(screen.queryByRole('button', { name: 'Confirm delete' })).not.toBeInTheDocument()
+  await view.rerender({ deleteAsked: 1 })
+  expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
+  expect(screen.getByRole('checkbox', { name: 'Also delete its memory' })).not.toBeChecked()
+  await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  await view.rerender({ deleteAsked: 2 })
+  expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
+})

@@ -8475,6 +8475,40 @@ describe('agent chat', () => {
     expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
   })
 
+  it('deletes a saved agent from its card through the profile confirmation, and its creation chat goes with it', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    invoke.mockImplementation((command, payload) => {
+      // Core removes the agent's creation chat record when it deletes the agent.
+      if (command === 'agent_request' && payload?.operation === 'agent.delete') { deleted = true; saved.splice(0); return Promise.resolve({}) }
+      if (command === 'creation_list' && deleted) return Promise.resolve([])
+      if (command === 'chat_new_thread' && deleted) return Promise.resolve('01900000-0000-7000-8000-0000000000b2')
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    const list = screen.getByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Weekly recap' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    expect(within(confirm).getByRole('checkbox', { name: 'Also delete its memory' })).toBeInTheDocument()
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.delete', body: { id: 'agent-1', remove_memory: false } }))
+    const rows = () => screen.getByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(rows()).queryByText('Weekly recap', { selector: '.thread-row-title' })).toBeNull())
+    expect(within(rows()).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
+  })
+
   it('revises the draft with the next message in the same chat', async () => {
     chatMock([])
     render(App)
