@@ -3806,9 +3806,9 @@
             </div>
             <nav class="side-scroll" aria-label="Settings sections" use:panelScroll>
               {#each settingsNav(settingsQuery, { remote: !!remoteRuntime }) as [id, label, icon, parts] (id)}
-                <button class="side-action" aria-current={settingsPage(settingsSection) === id ? 'true' : undefined} onclick={() => { settingsSection = id }}><LucideIcon name={icon} /><span>{label}</span></button>
+                <button class="side-action" aria-current={settingsPage(settingsSection) === id ? 'true' : undefined} onclick={(event) => { settingsSection = id; event.currentTarget.focus({ focusVisible: false }) }}><LucideIcon name={icon} /><span>{label}</span></button>
                 {#each parts as [part, name] (part)}
-                  <button class="side-action settings-result" onclick={() => { settingsSection = part }}><span>{name}</span></button>
+                  <button class="side-action settings-result" onclick={(event) => { settingsSection = part; event.currentTarget.focus({ focusVisible: false }) }}><span>{name}</span></button>
                 {/each}
               {:else}
                 <p class="settings-empty" role="status">No setting matches.</p>
