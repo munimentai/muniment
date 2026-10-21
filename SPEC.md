@@ -478,9 +478,9 @@ The desktop's Pi carries four items:
 
 1. **The extension packages** `pins/pins.toml` lists: `npm:pi-web-access`,
    `npm:pi-subagents`, `npm:pi-background-tasks`, and `npm:pi-claude-bridge`
-   for Anthropic through Claude Code. They give Pi web search and
-   fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
-   `bg_result`. They render into `settings.json` as
+   for Anthropic through Claude Code. They give Pi web search, fetch and `source_check`, child agents,
+   `bg_run` with `bg_status`, `bg_logs`, `bg_kill` and `bg_wait`, and `bg_delegate` and the `fusion_*` tools
+   with `bg_result`. They render into `settings.json` as
    `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` searches
    through core's built-in keyless engine on loopback, then Exa without a key,
    in the order the search settings set.
@@ -489,7 +489,7 @@ The desktop's Pi carries four items:
    tools and decision models and returns only what the model needs. Extend's
    servers join for the turn that picks them under their own names, never an id, each through scripts or in the tool list as its details set, and sign-in and tests use Pi's commands. Every enabled skill is listed by name and description and read when a task needs it, and a picked skill is named, not pasted.
 3. **The system prompt.** The desktop passes Pi its own prompt: purpose, tools, the bash
-   timeout rule, and the launch facts: the model, earlier thread models, host and shell, and
+   timeout rule, and the launch facts. Its `Tools:` block names the built-in and package tools, which the pins compatibility suite checks, and `App tools:` names core's own: questions, agents, routines, agent messages, creations and artifacts, the `browser` with `fetch_content` and `web_search` when it cannot be used, and `plan_submit`, each with one line on when to use it, and the memory rules name the memory tools the recall settings turn on. The launch facts are the model, earlier thread models, host and shell, and
    the working directory, which is the thread's project or session folder. Each message opens with its
    send time. No harness or product name. Pi reads `bash` `timeout` in seconds with no
    default, so the prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
