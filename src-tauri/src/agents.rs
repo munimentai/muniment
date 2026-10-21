@@ -202,12 +202,17 @@ pub async fn fleet_thread_create(
     .map_err(|_| crate::auth::background_service_error())?
 }
 
+/// The agent's folder lives in Home, so opening it runs off the main thread.
 #[tauri::command]
-pub fn agent_open(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let folder = agents::folder(&profile()?, &id)?;
-    app.opener()
-        .open_path(folder.to_string_lossy(), None::<String>)
-        .map_err(|_| "The agent folder could not be opened.".into())
+pub async fn agent_open(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let folder = agents::folder(&profile()?, &id)?;
+        app.opener()
+            .open_path(folder.to_string_lossy(), None::<String>)
+            .map_err(|_| "The agent folder could not be opened.".to_string())
+    })
+    .await
+    .map_err(|_| "The agent folder could not be opened.".to_string())?
 }
 
 /// Saves the file `agent.export` answered where the user picks. Core builds

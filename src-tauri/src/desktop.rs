@@ -405,3 +405,139 @@ pub fn run() {
             let _ = event;
         });
 }
+
+#[cfg(test)]
+mod command_thread_tests {
+    use std::path::Path;
+
+    /// Each `#[tauri::command]` under `src`: its name, whether it is async,
+    /// and its body up to the closing brace at the start of a line.
+    fn commands() -> Vec<(String, bool, String)> {
+        fn walk(dir: &Path, found: &mut Vec<(String, bool, String)>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    let lines: Vec<&str> = source.lines().collect();
+                    for (index, line) in lines.iter().enumerate() {
+                        if !line.trim_start().starts_with("#[tauri::command") {
+                            continue;
+                        }
+                        let start = (index + 1..lines.len())
+                            .find(|&i| lines[i].contains("fn "))
+                            .unwrap();
+                        let signature = lines[start];
+                        let name = signature.split("fn ").nth(1).unwrap();
+                        let name: String =
+                            name.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        let end = (start..lines.len())
+                            .find(|&i| lines[i].starts_with('}'))
+                            .unwrap_or(lines.len() - 1);
+                        let body = lines[start..=end].join("\n");
+                        found.push((name, signature.contains("async fn "), body));
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut found);
+        found
+    }
+
+    /// Tauri runs a synchronous command on the main thread. A command that
+    /// reads the user's folders must be async, or a pending macOS folder
+    /// prompt stops the whole window. Only these commands stay synchronous,
+    /// and none of them reads Home, Documents or a folder the user picks.
+    const SYNCHRONOUS: &[&str] = &[
+        "artifact_read",
+        "attach_companions",
+        "attach_listener_status",
+        "attach_pairing_decide",
+        "attach_revoke_companion",
+        "browser_language",
+        "creation_delete",
+        "creation_list",
+        "creation_save",
+        "dictation_start",
+        "dictation_status",
+        "dictation_stop",
+        "home_folder_settings",
+        "installed_fonts",
+        "launcher_close",
+        "launcher_is_visible",
+        "launcher_open",
+        "launcher_present_main",
+        "launcher_register",
+        "launcher_start_failed",
+        "local_mode_enter",
+        "local_mode_leave",
+        "local_mode_open_url",
+        "local_mode_status",
+        "model_registry",
+        "onboarding_model_settings_error",
+        "open_login_items",
+        "palette_rank",
+        "parakeet_install_cancel",
+        "parakeet_install_facts",
+        "parakeet_install_start",
+        "record_thread_retention_choice",
+        "restart_muniment",
+        "runtime_notice_observed",
+        "runtime_state",
+        "sidebar_arrange",
+        "subscription_probe_observed",
+        "subscription_probe_progress",
+        "terminal_close",
+        "terminal_read",
+        "terminal_resize",
+        "terminal_write",
+        "thread_retention_choice",
+    ];
+
+    #[test]
+    fn only_commands_that_read_no_user_folder_run_on_the_main_thread() {
+        let mut synchronous: Vec<String> = commands()
+            .into_iter()
+            .filter(|(_, is_async, _)| !is_async)
+            .map(|(name, _, _)| name)
+            .collect();
+        synchronous.sort();
+        synchronous.dedup();
+        assert_eq!(synchronous, SYNCHRONOUS);
+    }
+
+    #[test]
+    fn folder_commands_do_their_file_work_on_a_blocking_thread() {
+        let commands = commands();
+        for name in [
+            "agent_open",
+            "artifact_edit",
+            "artifact_list",
+            "chat_file_metadata",
+            "home_confirm",
+            "home_status",
+            "project_create",
+            "project_list",
+            "project_move_thread",
+            "project_open",
+            "project_rename",
+            "project_settings",
+            "project_settings_save",
+            "workspace_folders",
+            "workspace_open",
+            "workspace_reveal",
+        ] {
+            let (_, is_async, body) = commands
+                .iter()
+                .find(|(found, _, _)| found == name)
+                .unwrap_or_else(|| panic!("{name} is not a command"));
+            assert!(is_async, "{name} must be async");
+            assert!(
+                body.contains("spawn_blocking") || body.contains("blocking("),
+                "{name} must read the file system on a blocking thread"
+            );
+        }
+    }
+}

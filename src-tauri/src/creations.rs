@@ -18,8 +18,11 @@ pub fn creation_delete(webview: tauri::Webview, thread_id: String) -> Result<(),
     crate::workspace_tools::shell(&webview)?;
     creations::remove(&profile()?, &thread_id)
 }
+/// An artifact's folder lives in Home, so the edit runs off the main thread.
 #[tauri::command]
-pub fn artifact_edit(webview: tauri::Webview, id: String, name: Option<String>) -> Result<(), String> {
+pub async fn artifact_edit(webview: tauri::Webview, id: String, name: Option<String>) -> Result<(), String> {
     crate::workspace_tools::shell(&webview)?;
-    creations::edit_artifact(&profile()?, &id, name.as_deref())
+    tauri::async_runtime::spawn_blocking(move || creations::edit_artifact(&profile()?, &id, name.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
 }

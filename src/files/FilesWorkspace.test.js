@@ -26,6 +26,22 @@ it('expands folders inline, keeps siblings visible, and preserves the tree while
   expect(screen.getByRole('treeitem',{name:'README.md'})).toBeInTheDocument()
   expect(invoke.mock.calls.filter(([cmd,args])=>cmd==='workspace_list' && args.path==='/home')).toHaveLength(1)
 })
+it('shows the reading state while its folders wait on a folder prompt', async () => {
+  let answer
+  const invoke=vi.fn((command,args) => command==='workspace_folders' ? new Promise(resolve => { answer=resolve }) : Promise.resolve({path:args.path,entries:[{name:'notes.md',path:args.path+'/notes.md',directory:false}]}))
+  render(FilesWorkspace,{tauri:{invoke}})
+  expect(screen.getByRole('status')).toHaveTextContent('Reading folder…')
+  expect(screen.queryByText(/No files here yet/)).toBeNull()
+  answer([{label:'Home',path:'/home'}])
+  expect(await screen.findByRole('treeitem',{name:'notes.md'})).toBeInTheDocument()
+  expect(screen.queryByText('Reading folder…')).toBeNull()
+})
+it('leaves the reading state when its folders cannot be read', async () => {
+  const invoke=vi.fn(async () => { throw 'Choose a Home folder first.' })
+  render(FilesWorkspace,{tauri:{invoke}})
+  expect(await screen.findByRole('alert')).toHaveTextContent('Choose a Home folder first.')
+  expect(screen.queryByText('Reading folder…')).toBeNull()
+})
 it('creates a file inside the selected folder and protects bulk deletion with confirmation', async () => {
   const invoke=vi.fn(async (command,args) => {
     if(command==='workspace_folders')return [{label:'Home',path:'/home'}]

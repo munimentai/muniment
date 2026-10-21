@@ -189,15 +189,21 @@ pub async fn workspace_file_action(
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn workspace_reveal(
+pub async fn workspace_reveal(
     webview: tauri::Webview,
     app: tauri::AppHandle,
     path: PathBuf,
 ) -> Result<(), String> {
     shell(&webview)?;
-    app.opener()
-        .reveal_item_in_dir(path)
-        .map_err(|e| e.to_string())
+    // Revealing resolves the path first, which reads a folder macOS may hold
+    // behind a prompt.
+    tauri::async_runtime::spawn_blocking(move || {
+        app.opener()
+            .reveal_item_in_dir(path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[cfg(test)]
 mod tests {
