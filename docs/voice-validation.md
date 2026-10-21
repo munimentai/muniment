@@ -63,6 +63,14 @@ transcript latency, first-PCM-to-final-transcript latency, and post-end-of-
 speech offline decode latency. Process peak RSS is JSON `null`, never zero, on
 platforms where the runner cannot measure it.
 
+The app shows partial words while dictation listens, because the offline
+recognizer has no streaming mode: it decodes the utterance so far again,
+at least 600 ms and at most 4 seconds apart and at least three times the
+last decode time, so partial decodes take at most a third of the time
+(`muniment_core::asr::partial`). The final decode replaces them. The runner
+measures the offline decode alone, so its first and final latencies stay the
+same.
+
 ## 100-utterance endurance gate
 
 On each target machine, run the same release binary and corpus with

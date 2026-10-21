@@ -415,7 +415,9 @@ records every live run, and the next start resumes each of them.
 Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",
 "latest_runs", "errors"}`), `agent.read` (`{"id"}` → `{"agent",
 "primary_thread_id"}`), `agent.save` (`{"agent"}` → `{"agent"}`),
-`agent.delete` (`{"id", "remove_memory"?}`), `agent.run_now` (`{"id",
+`agent.delete` (`{"id", "remove_memory"?}`; it also deletes the agent's
+creation chat and drops the agent from every other agent's `messaging`
+list), `agent.run_now` (`{"id",
 "prompt"?, "test"?}` → `{"run"}`; a run that opens the agent's thread titles
 it `<name> · test run` for a `test` run and `<name> · <date and time>`
 otherwise, in the machine's `time` preference), `agent.runs` (`{"agent_id"?, "limit"?, "cursor"?}`
@@ -514,6 +516,9 @@ No answer saves a rule: the next call of the same kind asks again.
   cannot follow, a variable assignment, and anything behind a wrapper (`bash
   -c`, `eval`, `sudo`, `env`, `xargs` and the like) counts as a command that
   may do anything.
+- **Web.** `web_search`, `fetch_content`, `get_search_content` and
+  `source_check` count as web calls, never as reads, so each mode's web
+  baseline decides them.
 - **Paths.** Checks separate reads from writes and match both the given path
   and its symlink-resolved form. A write to `.git`, `.muniment`, an MCP
   configuration file, a shell startup file, or the runtime's state folder

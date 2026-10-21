@@ -9,7 +9,7 @@
         {
           "id": "workspace",
           "title": "Choose a workspace",
-          "body": "Open muniment and choose a workspace folder. The local desktop needs no Muniment account. Keep project files in folders you control. Settings → Storage shows your workspace and opens managed extension storage."
+          "body": "Open muniment and choose a workspace folder. The local desktop needs no Muniment account. Keep project files in folders you control. Settings → Data → Storage shows your workspace and opens managed extension storage."
         },
         {
           "id": "account",
@@ -24,7 +24,7 @@
         {
           "id": "next",
           "title": "Make it your workspace",
-          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings → Tools. Use Preferences to choose a theme, text size, and separate fonts for headers, prose, and records."
+          "body": "Open the files, terminal, or browser panel beside the chat. Add tools in Settings → Tools. Use Settings → General → Appearance to choose a theme, text size, and separate fonts for headers, prose, and records."
         }
       ]
     },
@@ -36,27 +36,27 @@
         {
           "id": "accounts",
           "title": "Accounts",
-          "body": "The Accounts tab groups connections by provider. Connect a supported subscription or API key. Name accounts so you can tell work and personal usage apart. See usage opens the Usage page with what each account has left. A chat subscription does not automatically include API credit."
+          "body": "Connections in Settings → Models groups accounts by provider. Connect a supported subscription or API key. Name accounts so you can tell work and personal usage apart. See usage opens the Usage page with what each account has left. A chat subscription does not automatically include API credit."
         },
         {
           "id": "models",
           "title": "Models",
-          "body": "The Models tab lists each provider’s newest model of every family first, with the models you turned on. Older models fold under Other models and stay out of the composer picker until you turn them on. Local endpoints such as Ollama and LM Studio need a running server. Check the endpoint and model name if no models appear."
+          "body": "The composer’s model picker lists each connected provider’s newest model of every family. Older models fold under Legacy models, and Hide or Show on a model moves it between the lists. A provider mark at the picker’s left shows that provider’s models alone. Local endpoints such as Ollama and LM Studio need a running server. Check the endpoint and model name if no models appear."
         },
         {
           "id": "routing",
           "title": "Decision models",
-          "body": "A decision model is a small, fast model that answers typed questions about your message. Connect one in Accounts, such as Clef on Cloudflare, GPT-6 Luna with an OpenAI API key, a System One endpoint, or a llama.cpp or Ollama server. A new model, URL, or key passes a connection test before it saves. Chats can also call connected decision models from codemode scripts."
+          "body": "A decision model is a small, fast model that answers typed questions about your message. Connect one under Roles in Settings → Models, such as Clef on Cloudflare, GPT-6 Luna with an OpenAI API key, a System One endpoint, or a llama.cpp or Ollama server. A new model, URL, or key passes a connection test before it saves. Chats can also call connected decision models from codemode scripts."
         },
         {
           "id": "decisions",
           "title": "Routing and assistance",
-          "body": "The Decisions tab has two parts. Model routing sends your message to the decision model you choose, which picks the answer model and balances across accounts. Use Test routing to inspect a choice. Assistance picks MCP servers and skills for each message, with its own decision model or the routing one. While assistance is on, the composer names the model, such as Clef Flash assists, and you can turn it off for one message. A timeout or a low-confidence answer adds nothing."
+          "body": "Roles, at the top of Settings → Models, has two parts. Model routing sends your message to the decision model you choose, which picks the answer model and balances across accounts. Use Test routing to inspect a choice. Assistance picks MCP servers and skills for each message, with its own decision model or the routing one. While assistance is on, the composer names the model, such as Clef Flash assists, and you can turn it off for one message. A timeout or a low-confidence answer adds nothing."
         },
         {
           "id": "capacity",
           "title": "Usage",
-          "body": "Open Usage, the chart icon at the bottom of the sidebar, to see each subscription account and what its session and weekly windows have left. Each account, including a second account of the same provider, has its own card. Reset times appear when the provider supplies them. An unavailable allowance is unknown, not zero. API charges follow your provider account."
+          "body": "Open Usage, the chart icon at the bottom of the sidebar, to see each subscription account and what its session and weekly windows have left. Each account, including a second account of the same provider, has its own card. Each window shows a four-step meter and the share left. Reset times appear when the provider supplies them. A provider without a limit, such as a local server or an API key, has a card with the tokens its runs used in the range. An unavailable allowance is unknown, not zero. API charges follow your provider account."
         },
         {
           "id": "machines",
@@ -86,9 +86,14 @@
           "body": "Group tasks under a project and choose its working folder. The files and terminal panels use the selected context. Rename and archive entries through their action menus. Archive keeps the task available without placing it in the main list. Choose Move to project in a thread menu, or drag the thread onto a project, to move it with its conversation. Project settings set the model and permission mode new threads start with, and each value names where it comes from. A model picked in the composer changes that thread only. Press Command K on macOS or Control K on Windows and Linux to search threads, pages and actions."
         },
         {
+          "id": "permissions",
+          "title": "Permission modes",
+          "body": "Each thread runs in one permission mode: Ask before changes, Edit automatically, Plan first, Auto review, Don’t ask, or Bypass permissions. Pick it in the composer, or press Shift+Tab for the next one. Settings → Permissions sets the mode new threads and agents start in. When a call waits for you, answer Allow once or Deny. No answer is saved, so the next call of that kind asks again."
+        },
+        {
           "id": "replies",
           "title": "Replies and actions",
-          "body": "Expand actions to inspect tool activity. Check changed files before keeping edits. A retry prepares a request for review and does not undo earlier actions. Stop ends the active reply, but cannot undo completed tool calls."
+          "body": "Expand actions to inspect tool activity. A turn that changed files shows Review changes in its footer, where you can revert a file or one change. A retry prepares a request for review and does not undo earlier actions. Stop ends the active reply, but cannot undo completed tool calls."
         }
       ]
     },
@@ -120,7 +125,7 @@
         {
           "id": "turn",
           "title": "Use extensions for one turn",
-          "body": "Open the composer’s ellipsis menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. With assistance on, the decision model named in the composer picks MCP servers and skills, and you can turn it off for one message. Selections reset after submission and remain with an unsent task draft."
+          "body": "Open the composer’s plus menu. Enable the MCP servers needed for this turn. Choose a skill or plugin to insert its /command into the message. With assistance on, the decision model named in the composer picks MCP servers and skills, and you can turn it off for one message. Selections reset after submission and remain with an unsent task draft."
         },
         {
           "id": "tools",
@@ -147,7 +152,7 @@
         {
           "id": "browser",
           "title": "Browser",
-          "body": "The browser opens the online docs at muniment.ai/docs. Type an address to visit a site, or words to search with the engine Preferences names. A bang such as !w or !yt searches one site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view. A chat can use the browser too: its browser tool opens the Browser tab and picks each click with your assistance decision model, which receives the page text. It asks you before a click that buys, sends, deletes, or changes an account, and you type passwords yourself. Stop the reply to stop it."
+          "body": "The browser opens the online docs at muniment.ai/docs. Type an address to visit a site, or words to search with the engine Settings → General → Language names. A bang such as !w or !yt searches one site. The tab shows the domain and path. Browser settings let you choose another homepage. Hiding the panel keeps the page available. Closing the tab releases its browser view. A chat can use the browser too: its browser tool opens the Browser tab. While assistance is on, your assistance decision model picks each step and receives the page text. Without it, the chat model reads the page’s numbered elements and acts on them. It asks you before a click that buys, sends, deletes, or changes an account, and you type passwords yourself. Stop the reply to stop it."
         },
         {
           "id": "artifacts",
@@ -174,7 +179,7 @@
         {
           "id": "memory",
           "title": "Agent memory",
-          "body": "Each agent has its own profile and saved facts. Review its instructions before use. Add, correct, or remove facts through its memory controls. Task context still comes from the files and tools used in that conversation."
+          "body": "Each agent has its own profile and saved facts. Review its instructions before use. Add, correct, or remove facts through its memory controls. Each memory names where it came from, such as Added in a chat or Added by an agent. Task context still comes from the files and tools used in that conversation."
         }
       ]
     },
@@ -196,7 +201,7 @@
         {
           "id": "memory",
           "title": "Profile and memory",
-          "body": "Edit your name, work, and response instructions in Profile & Memory. Save the profile to use it in new replies. Add facts with a source. Search appears when memories exist. Deleted memories can be restored."
+          "body": "Edit your name, work, and response instructions in Settings → Account → Profile. Save the profile to use it in new replies. Add facts with a source. Search appears when memories exist. Deleted memories can be restored."
         },
         {
           "id": "storage",
@@ -206,7 +211,7 @@
         {
           "id": "voice",
           "title": "Voice",
-          "body": "The desktop voice stack runs on the device. Install the voice resources from the speech controls, choose the microphone, and use the configured shortcut. Dictation inserts text into the composer. Read the text before sending it."
+          "body": "The desktop voice stack runs on the device. Open Settings → Voice to choose the microphone and the shortcut and to install the speech model. While you dictate, the words in progress show in the composer and its top edge follows your voice. Dictation inserts text into the composer. Read the text before sending it."
         }
       ]
     },
@@ -218,7 +223,7 @@
         {
           "id": "models",
           "title": "No models or a failed reply",
-          "body": "Check Accounts for a valid connection. Make sure a local endpoint is running. Choose an available model and review provider limits. If a reply fails, inspect its message and actions before using Try again."
+          "body": "Check Settings → Models for a valid connection. Make sure a local endpoint is running. Choose an available model and review provider limits. If a reply fails, inspect its message and actions before using Try again."
         },
         {
           "id": "mcp",
@@ -228,7 +233,7 @@
         {
           "id": "files",
           "title": "A file or folder is missing",
-          "body": "Check the active task or project and its full workspace path. Use Storage to confirm the workspace root. Skills and plugins use managed storage. Open their folder through Extend to inspect the installed files."
+          "body": "Check the active task or project and its full workspace path. Use Settings → Data → Storage to confirm the workspace root. Skills and plugins use managed storage. Open their folder through Settings → Tools to inspect the installed files."
         },
         {
           "id": "browser",
