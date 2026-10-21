@@ -1,7 +1,8 @@
 // The tone each state that core reports reads in, for ui/StatusChip. Core
 // decides every state. These only pick its color: success for online and
-// done, active for running, danger for a failure, warning for queued and
-// waiting, and neutral for offline, idle and anything unknown.
+// done, active for running, danger for a failure or an offline machine,
+// warning for queued, waiting and a connecting machine, and neutral for idle
+// and anything unknown.
 
 const RUN = {
   queued: 'warning', leased: 'active', running: 'active', waiting_input: 'warning',
@@ -12,7 +13,7 @@ export function runStatusTone(status) {
 }
 
 const MACHINE = {
-  online: 'success', connecting: 'active', offline: 'neutral', unknown: 'neutral',
+  online: 'success', connecting: 'warning', offline: 'danger', unknown: 'warning',
   version_mismatch: 'warning', certificate_changed: 'danger', revoked: 'danger', runtime_mismatch: 'danger',
 }
 export function machineStatusTone(status) {
@@ -30,7 +31,7 @@ export function machineLight(runtime) {
 
 // A swarm member reports only whether it answers.
 export function onlineTone(online) {
-  return online ? 'success' : 'neutral'
+  return online ? 'success' : 'danger'
 }
 
 const UPDATE = {

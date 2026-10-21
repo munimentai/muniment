@@ -116,7 +116,7 @@
             <button type="button" role="menuitemradio" aria-checked={owner ? owner.id === member.coreId : offload?.coreId === member.coreId} aria-label="{member.name}{member.online ? '' : ', Offline'}" disabled={!member.online || fixed} onclick={() => pickMember(member)}>
               <LucideIcon name={kindIcon(member)} size={14} />
               <span class="name">{member.name}</span>
-              {#if member.online}<span class="state online" role="img" aria-label="Online"><LucideIcon name="globe" variant="action" size={14} /></span>{:else}<StatusChip tone="neutral">Offline</StatusChip>{/if}
+              {#if member.online}<span class="state online" role="img" aria-label="Online"><LucideIcon name="globe" variant="action" size={14} /></span>{:else}<StatusChip tone="danger">Offline</StatusChip>{/if}
             </button>
           {/each}
         {/if}

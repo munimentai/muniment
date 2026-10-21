@@ -9,8 +9,8 @@ describe('status tones', () => {
 
   it('colors machine and swarm states', () => {
     expect(['online', 'connecting', 'offline', 'unknown', 'version_mismatch', 'revoked', undefined].map(machineStatusTone))
-      .toEqual(['success', 'active', 'neutral', 'neutral', 'warning', 'danger', 'neutral'])
-    expect([true, false].map(onlineTone)).toEqual(['success', 'neutral'])
+      .toEqual(['success', 'warning', 'danger', 'warning', 'warning', 'danger', 'neutral'])
+    expect([true, false].map(onlineTone)).toEqual(['success', 'danger'])
   })
 
   it('colors update states', () => {
