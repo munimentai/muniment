@@ -12,6 +12,7 @@ const RADIUS_EXCEPTIONS = {
     'button': ['var(--radius-pill)', 'A switch is a pill track.'],
     'span': ['50%', 'A switch knob is round.'],
   },
+  'src/usage/LimitCard.svelte': { '.meter i': ['var(--radius-pill)', 'A usage meter step is a pill.'] },
   'src/App.svelte': {
     '.artifact-divider': ['0', '§4 square divider reset'],
     '.sidebar-divider': ['0', '§4 square divider reset'],

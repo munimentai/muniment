@@ -1,8 +1,9 @@
 // Usage and Notifications for the probe, in the shapes core's merge answers
 // through `usage_summary` and `notifications_list`: three machines, four
-// providers, pooled accounts, a low and a spent window, a local server, and
-// runs that run, wait, stop at a limit, fail and finish. The `partial` state
-// has the build box give no answer.
+// providers, accounts with every meter level, a window that has not started
+// and a spent one, pooled windows, providers no window meters with and
+// without runs, and runs that run, wait, stop at a limit, fail and finish.
+// The `partial` state has the build box give no answer.
 import { BOX, STUDIO, probeApprovals } from './agents-fixture.js'
 
 const SCOUT = '018f0000-0000-4000-8000-0000000000a1'
@@ -58,46 +59,59 @@ function sum(rows) {
   return total
 }
 
-// One card per account and window, as core's `limits` answers, and each
-// provider's pool of a window, as core's `pools` answers for the composer.
-function windowCard(now, provider, kind, remaining, resetsIn, elapsed, account = null) {
+// One card per account with a row per window, as core's `accounts`
+// answers, and each provider's pool of a window, as core's `pools` answers
+// for the composer.
+function windowCard(now, provider, kind, remaining, resetsIn, extra = {}) {
   return {
-    provider, ...(account ?? {}), kind, scope: '', window_seconds: { five_hour: 18000, daily: 86400, weekly: 604800 }[kind], remaining_percent: remaining,
-    resets_at_ms: now + resetsIn, elapsed_percent: elapsed, pace: 100 - remaining > elapsed + 5 ? 'ahead' : 100 - remaining < elapsed - 5 ? 'under' : 'on',
-    status: remaining <= 0 ? 'limit' : remaining < 20 ? 'low' : 'ok',
+    provider, kind, scope: '', window_seconds: { five_hour: 18000, daily: 86400, weekly: 604800 }[kind], remaining_percent: remaining,
+    ...(resetsIn == null ? { not_started: remaining >= 100 } : { resets_at_ms: now + resetsIn }),
+    status: remaining <= 0 ? 'limit' : remaining < 20 ? 'low' : 'ok', ...extra,
   }
 }
 
-function limits(provider, now) {
-  const account = (account_id, label, plan) => ({ account_id, label, plan })
-  const work = account('a-work', 'sam@northwind.example', 'max')
-  const home = account('a-home', 'sam.home@example.com', 'pro')
-  const codex = account('o-pro', 'sam@northwind.example', 'pro')
-  const codexHome = account('o-home', 'sam.home@example.com', 'plus')
-  const grok = account('x-1', 'sam@northwind.example', 'SuperGrok')
+function accounts(provider, now) {
+  const card = (provider, account_id, label, plan, windows, note = null) => ({
+    identity: `${provider}:email:${label}:`, provider, account_id, name: { anthropic: 'Anthropic', google: 'Google', openai: 'OpenAI', xai: 'xAI' }[provider],
+    subtitle: `${label} · ${plan}`, ...(note ? { note } : {}),
+    windows: windows.map(([kind, remaining, resetsIn, scope = '']) => windowCard(now, provider, kind, remaining, resetsIn, { account_id, label, plan, scope })),
+  })
   return [
-    windowCard(now, 'anthropic', 'five_hour', 70, 2 * HOUR + 14 * 60_000, 55, work),
-    windowCard(now, 'anthropic', 'weekly', 84, 4 * 24 * HOUR, 40, work),
-    windowCard(now, 'anthropic', 'five_hour', 54, 3 * HOUR, 40, home),
-    windowCard(now, 'anthropic', 'weekly', 78, 5 * 24 * HOUR, 29, home),
-    windowCard(now, 'google', 'daily', 93, 9 * HOUR, 62, account('g-1', 'sam@gmail.example', 'pro')),
-    windowCard(now, 'openai', 'five_hour', 14, 47 * 60_000, 84, codex),
-    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR + 20 * HOUR, 10, codex),
-    windowCard(now, 'openai', 'five_hour', 100, 5 * HOUR, 0, codexHome),
-    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR, 14, codexHome),
-    { ...windowCard(now, 'xai', 'weekly', 100, 5 * 24 * HOUR, 29, grok), note: 'The plan reports no 5-hour window.' },
-  ].filter((limit) => !provider || limit.provider === provider)
+    card('anthropic', 'a-work', 'sam@northwind.example', 'max', [['five_hour', 100, null], ['weekly', 84, 4 * 24 * HOUR + 22 * HOUR], ['weekly', 77, 4 * 24 * HOUR + 22 * HOUR, 'Fable']]),
+    card('anthropic', 'a-home', 'sam.home@example.com', 'pro', [['five_hour', 31, HOUR + 40 * 60_000], ['weekly', 12, 2 * 24 * HOUR + 3 * HOUR]]),
+    card('google', 'g-1', 'sam@gmail.example', 'ai pro', [['daily', 93, 9 * HOUR]]),
+    card('openai', 'o-pro', 'sam@northwind.example', 'pro', [['five_hour', 14, 47 * 60_000], ['weekly', 0, 6 * 24 * HOUR + 20 * HOUR]]),
+    card('openai', 'o-home', 'sam.home@example.com', 'plus', [['five_hour', 100, 5 * HOUR], ['weekly', 62, 6 * 24 * HOUR + 7 * HOUR]]),
+    card('xai', 'x-1', 'sam@northwind.example', 'SuperGrok', [['weekly', 100, 5 * 24 * HOUR]], 'The plan reports no 5-hour window.'),
+  ].filter((account) => !provider || account.provider === provider)
 }
 
 function pools(provider, now) {
   return [
-    windowCard(now, 'anthropic', 'five_hour', 62, 2 * HOUR + 14 * 60_000, 55),
-    windowCard(now, 'anthropic', 'weekly', 81, 4 * 24 * HOUR, 40),
-    windowCard(now, 'google', 'daily', 93, 9 * HOUR, 62),
-    windowCard(now, 'openai', 'five_hour', 57, 47 * 60_000, 84),
-    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR, 14),
-    windowCard(now, 'xai', 'weekly', 100, 5 * 24 * HOUR, 29),
+    windowCard(now, 'anthropic', 'five_hour', 62, 2 * HOUR + 14 * 60_000),
+    windowCard(now, 'anthropic', 'weekly', 81, 4 * 24 * HOUR),
+    windowCard(now, 'google', 'daily', 93, 9 * HOUR),
+    windowCard(now, 'openai', 'five_hour', 57, 47 * 60_000),
+    windowCard(now, 'openai', 'weekly', 0, 6 * 24 * HOUR),
+    windowCard(now, 'xai', 'weekly', 100, 5 * 24 * HOUR),
   ].filter((limit) => !provider || limit.provider === provider)
+}
+
+// Each provider no window meters with its tokens in the range, which core
+// sums from the same model rows.
+function unmetered(provider, models, answering) {
+  const used = (id) => {
+    const rows = models.filter((row) => row.provider === id)
+    const input = rows.reduce((sum, row) => sum + row.tokens.input + row.tokens.cache_read + row.tokens.cache_write, 0)
+    const output = rows.reduce((sum, row) => sum + row.tokens.output, 0)
+    return { input, output, processed: input + output, runs: rows.reduce((sum, row) => sum + row.runs, 0) }
+  }
+  const held = answering.map((machine) => machine.id)
+  return [
+    { provider: 'ollama', label: 'Ollama', reason: 'local', endpoint: 'localhost:11434', machines: held.slice(0, 1) },
+    { provider: 'kimi', label: 'Kimi', reason: 'pending', machines: held.slice(0, 1) },
+    { provider: 'openrouter', label: 'OpenRouter', reason: 'key', machines: held },
+  ].filter((entry) => !provider || entry.provider === provider).map((entry) => ({ ...entry, usage: used(entry.provider) }))
 }
 
 export function probeUsage({ machines = [], body = {} }, state) {
@@ -110,20 +124,21 @@ export function probeUsage({ machines = [], body = {} }, state) {
   const total = sum(buckets.flatMap((bucket) => Object.values(bucket.providers)))
   const input = total.tokens.input + total.tokens.cache_read + total.tokens.cache_write
   const row = (key, label, part, extra = {}) => ({ key, label, ...amount(Math.round(total.processed * part), Number((total.cost_usd * part).toFixed(4)), Math.max(1, Math.round(total.runs * part))), ...extra })
+  const models = [row('anthropic/claude-opus-5', 'claude-opus-5', 0.41, { provider: 'anthropic' }), row('openai/gpt-5.5-codex', 'gpt-5.5-codex', 0.27, { provider: 'openai' }), row('ollama/qwen3:8b', 'qwen3:8b', 0.17, { provider: 'ollama' }), row('anthropic/claude-sonnet-5', 'claude-sonnet-5', 0.09, { provider: 'anthropic' }), row('google/gemini-3-pro', 'gemini-3-pro', 0.06, { provider: 'google' })].filter((entry) => !provider || entry.provider === provider)
   return {
     range, start_ms: buckets[0]?.start_ms, end_ms: now, bucket: range === '24h' ? 'hour' : 'day',
     totals: { processed: total.processed, cached_input: total.tokens.cache_read, uncached_input: total.tokens.input + total.tokens.cache_write, output: total.tokens.output, cache_hit_percent: input ? Math.round(total.tokens.cache_read / input * 1000) / 10 : null, runs: total.runs, cost_usd: total.cost_usd, unpriced_runs: 3 },
     series: buckets,
     breakdown: {
-      model: [row('anthropic/claude-opus-5', 'claude-opus-5', 0.41, { provider: 'anthropic' }), row('openai/gpt-5.5-codex', 'gpt-5.5-codex', 0.27, { provider: 'openai' }), row('ollama/qwen3:8b', 'qwen3:8b', 0.17, { provider: 'ollama' }), row('anthropic/claude-sonnet-5', 'claude-sonnet-5', 0.09, { provider: 'anthropic' }), row('google/gemini-3-pro', 'gemini-3-pro', 0.06, { provider: 'google' })].filter((entry) => !provider || entry.provider === provider),
+      model: models,
       agent: [row(SCOUT, 'Lead scout', 0.34), row(TRIAGE, 'Nightly test triage', 0.22), row('', '', 0.21), row(INBOX, 'Inbox triage', 0.14), row(EDITOR, 'Release editor', 0.09)],
       project: [row('', '', 0.48), row('p-launch', 'Launch plan', 0.31), row('p-renewals', 'Renewals', 0.21)],
       machine: answering.map((machine, index) => row(machine.id, machine.name, [0.52, 0.31, 0.17][index] ?? 0.1)),
     },
     providers: ['anthropic', 'google', 'ollama', 'openai'],
-    limits: limits(provider, now),
+    accounts: accounts(provider, now),
     pools: pools(provider, now),
-    unmetered: [{ provider: 'ollama', label: 'Ollama', reason: 'local' }, { provider: 'kimi', label: 'Kimi', reason: 'pending' }, { provider: 'openrouter', label: 'OpenRouter', reason: 'key' }].filter((entry) => !provider || entry.provider === provider),
+    unmetered: unmetered(provider, models, answering),
     windows: [],
     machines: machines.map((machine) => answering.includes(machine) ? { ...machine, state: 'ok' } : { ...machine, state: 'error', error: 'That machine is offline. Try again when it answers.' }),
     partial: answering.length < machines.length,

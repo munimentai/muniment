@@ -613,3 +613,24 @@
   --danger-edge: color-mix(in srgb, var(--danger) 50%, transparent);
   --warning-edge: color-mix(in srgb, var(--warning) 50%, transparent);
 }
+
+/* Meter colors: the lit steps of a usage meter by share left, from four
+   steps at 75% or more down to one under 25%, and an unlit step. They are
+   fixed status colors, the same in every color scheme and never a provider's
+   brand color, with one light, one dark and one high contrast set. Each lit
+   step clears 3:1 on every theme's surface, and --meter-1 clears 4.5:1 as
+   text. */
+:root {
+  --meter-4: light-dark(#2E8B4E, #5CC27A);
+  --meter-3: light-dark(#B58A00, #E3C443);
+  --meter-2: light-dark(#C2610C, #E39A3B);
+  --meter-1: light-dark(#B42318, #F07167);
+  --meter-off: light-dark(#D5DAD8, #3A3E3D);
+}
+:root[data-theme*="-contrast-"] {
+  --meter-4: light-dark(#00703A, #4BE07F);
+  --meter-3: light-dark(#8A6A00, #FFD83D);
+  --meter-2: light-dark(#A34A00, #FFA640);
+  --meter-1: light-dark(#A3000F, #FF7B72);
+  --meter-off: light-dark(#B9BFBC, #4A4F4D);
+}

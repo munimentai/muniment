@@ -2123,7 +2123,6 @@ fn fixture_usage() -> serde_json::Value {
             "account_id": "acct-1",
             "name": "Anthropic",
             "subtitle": "work@example.com · max",
-            "pace": "on",
             "windows": [{
                 "provider": "anthropic",
                 "account_id": "acct-1",
@@ -2134,8 +2133,6 @@ fn fixture_usage() -> serde_json::Value {
                 "window_seconds": 18000,
                 "remaining_percent": 62.0,
                 "resets_at_ms": 1767830400000_i64,
-                "elapsed_percent": 40.0,
-                "pace": "on",
                 "status": "ok"
             }]
         }],
@@ -2146,11 +2143,15 @@ fn fixture_usage() -> serde_json::Value {
             "window_seconds": 18000,
             "remaining_percent": 62.0,
             "resets_at_ms": 1767830400000_i64,
-            "elapsed_percent": 40.0,
-            "pace": "on",
             "status": "ok"
         }],
-        "unmetered": [{"provider": "ollama", "label": "Ollama", "reason": "local"}],
+        "unmetered": [{
+            "provider": "ollama",
+            "label": "Ollama",
+            "reason": "local",
+            "endpoint": "localhost:11434",
+            "usage": {"input": 0, "output": 0, "processed": 0, "runs": 0}
+        }],
         "windows": [{
             "account_id": "acct-1",
             "label": "work@example.com",

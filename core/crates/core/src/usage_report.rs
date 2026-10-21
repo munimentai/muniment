@@ -24,8 +24,6 @@ use crate::model_router::{config, family, quota};
 
 /// Percent left under which a window shows as low.
 pub const LOW_PERCENT: f64 = 20.0;
-/// Points between spent and elapsed share that still count as on pace.
-const PACE_SLACK: f64 = 5.0;
 const ROUTER_PROVIDER: &str = "muniment-router";
 
 /// The span a summary covers.
@@ -327,12 +325,10 @@ pub struct Limit {
     /// The soonest reset among the accounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at_ms: Option<i64>,
-    /// The share of the window already past, where even spending would be.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub elapsed_percent: Option<f64>,
-    /// `ahead` spends faster than the window passes, `under` slower.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pace: Option<String>,
+    /// The window has no reset time and nothing spent: the upstream starts
+    /// it on the next use, or its last reset has passed since the probe.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_started: bool,
     /// `ok`, `low` under [`LOW_PERCENT`] left, or `limit` when the account,
     /// or every account of a pool, is spent.
     pub status: String,
@@ -351,9 +347,6 @@ pub struct AccountLimits {
     /// The account's name and plan, such as `user@example.com · max`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subtitle: String,
-    /// The pace of the window furthest ahead: `ahead`, `on` or `under`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pace: Option<String>,
     /// What the card says under its rows, such as a weekly window whose
     /// upstream reports no 5-hour window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -362,8 +355,8 @@ pub struct AccountLimits {
     pub windows: Vec<Limit>,
 }
 
-/// A provider no window meters, with the reason.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// A provider no window meters, with the reason and what its runs used.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Unmetered {
     pub provider: String,
     pub label: String,
@@ -371,6 +364,44 @@ pub struct Unmetered {
     /// use, `pending` for a subscription whose first probe has not answered,
     /// `unread` for a subscription whose upstream reports no quota.
     pub reason: String,
+    /// Where a local server listens, such as `127.0.0.1:8080`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub endpoint: String,
+    /// The ids of the machines that list the provider, which [`merge`] names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<String>,
+    /// What the provider's finished runs used in the range.
+    #[serde(default)]
+    pub usage: RangeTokens,
+}
+
+/// One provider's tokens in the range, from the same receipts as the totals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RangeTokens {
+    /// Every input token, cached or not.
+    pub input: u64,
+    pub output: u64,
+    /// Input and output together.
+    pub processed: u64,
+    pub runs: u64,
+}
+
+/// Each unmetered provider's tokens in the range, summed from the model rows.
+fn tally(unmetered: &mut [Unmetered], models: &[Row]) {
+    for entry in unmetered {
+        let mut usage = RangeTokens::default();
+        for row in models
+            .iter()
+            .filter(|row| row.provider.as_deref() == Some(entry.provider.as_str()))
+        {
+            let tokens = row.amount.tokens;
+            usage.input += tokens.input + tokens.cache_read + tokens.cache_write;
+            usage.output += tokens.output;
+            usage.runs += row.amount.runs;
+        }
+        usage.processed = usage.input + usage.output;
+        entry.usage = usage;
+    }
 }
 
 /// One machine's answer to `usage.summary`, or the joined view.
@@ -652,6 +683,12 @@ pub fn summarize(
             .filter(|window| wanted(&window.provider))
             .collect(),
     );
+    let models = ranked(models);
+    let mut unmetered: Vec<Unmetered> = unmetered
+        .into_iter()
+        .filter(|entry| wanted(&entry.provider))
+        .collect();
+    tally(&mut unmetered, &models);
     Summary {
         range: Some(request.range),
         start_ms,
@@ -665,7 +702,7 @@ pub fn summarize(
         totals: Totals::of(&total),
         series,
         breakdown: Breakdown {
-            model: ranked(models),
+            model: models,
             agent: ranked(agents),
             project: ranked(projects),
             machine: Vec::new(),
@@ -673,10 +710,7 @@ pub fn summarize(
         providers: providers.into_iter().collect(),
         accounts: accounts(&windows, now_ms),
         pools: pools(&windows, now_ms),
-        unmetered: unmetered
-            .into_iter()
-            .filter(|entry| wanted(&entry.provider))
-            .collect(),
+        unmetered,
         windows,
     }
 }
@@ -745,14 +779,6 @@ pub fn accounts(windows: &[AccountWindow], now_ms: i64) -> Vec<AccountLimits> {
                 })
                 .collect();
             let windows = grouped(&rows, now_ms, true);
-            let pace = ["ahead", "on", "under"]
-                .into_iter()
-                .find(|pace| {
-                    windows
-                        .iter()
-                        .any(|limit| limit.pace.as_deref() == Some(*pace))
-                })
-                .map(str::to_owned);
             let unscoped = |kind| {
                 windows
                     .iter()
@@ -775,7 +801,6 @@ pub fn accounts(windows: &[AccountWindow], now_ms: i64) -> Vec<AccountLimits> {
                 identity,
                 provider,
                 account_id: named.account_id.clone(),
-                pace,
                 note,
                 windows,
             }
@@ -834,21 +859,6 @@ fn grouped(windows: &[AccountWindow], now_ms: i64, by_account: bool) -> Vec<Limi
                 readings.iter().map(|(left, _, _)| left).sum::<f64>() / readings.len() as f64;
             let resets_at_ms = readings.iter().filter_map(|(_, _, at)| *at).min();
             let seconds = window_seconds(first.kind);
-            let elapsed = seconds.zip(resets_at_ms).map(|(seconds, at)| {
-                let left = (at - now_ms) as f64 / (seconds as f64 * 1000.0) * 100.0;
-                (100.0 - left).clamp(0.0, 100.0)
-            });
-            let used = 100.0 - remaining;
-            let pace = elapsed.map(|elapsed| {
-                if used > elapsed + PACE_SLACK {
-                    "ahead"
-                } else if used < elapsed - PACE_SLACK {
-                    "under"
-                } else {
-                    "on"
-                }
-                .to_owned()
-            });
             let spent = readings.iter().all(|(_, reached, _)| *reached) || remaining <= 0.0;
             Limit {
                 provider: first.provider.clone(),
@@ -868,8 +878,7 @@ fn grouped(windows: &[AccountWindow], now_ms: i64, by_account: bool) -> Vec<Limi
                 window_seconds: seconds,
                 remaining_percent: (remaining * 10.0).round() / 10.0,
                 resets_at_ms,
-                elapsed_percent: elapsed.map(|elapsed| (elapsed * 10.0).round() / 10.0),
-                pace,
+                not_started: resets_at_ms.is_none() && remaining >= 100.0,
                 status: if spent {
                     "limit"
                 } else if remaining < LOW_PERCENT {
@@ -901,6 +910,7 @@ pub fn account_windows(agent: &Path) -> (Vec<AccountWindow>, Vec<Unmetered>) {
                     provider: family,
                     label: name,
                     reason: "key".into(),
+                    ..Unmetered::default()
                 });
                 continue;
             }
@@ -916,6 +926,7 @@ pub fn account_windows(agent: &Path) -> (Vec<AccountWindow>, Vec<Unmetered>) {
                     provider: family,
                     label: name,
                     reason: if pending { "pending" } else { "unread" }.into(),
+                    ..Unmetered::default()
                 });
                 continue;
             };
@@ -977,6 +988,7 @@ fn claude_windows(
                     Some(_) => "unread",
                 }
                 .into(),
+                ..Unmetered::default()
             });
             continue;
         };
@@ -1024,21 +1036,24 @@ fn local_servers(agent: &Path) -> Vec<Unmetered> {
     providers
         .iter()
         .filter(|(id, _)| id.as_str() != ROUTER_PROVIDER)
-        .filter(|(_, provider)| {
-            provider
+        .filter_map(|(id, provider)| {
+            let url = provider
                 .get("baseUrl")
                 .and_then(Value::as_str)
-                .and_then(|url| url::Url::parse(url).ok())
-                .and_then(|url| url.host_str().map(str::to_owned))
-                .is_some_and(|host| {
-                    host == "localhost"
-                        || host
-                            .trim_matches(['[', ']'])
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback())
-                })
+                .and_then(|url| url::Url::parse(url).ok())?;
+            let host = url.host_str()?;
+            let loopback = host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback());
+            let endpoint = match url.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host.to_owned(),
+            };
+            loopback.then_some((id, provider, endpoint))
         })
-        .map(|(id, provider)| Unmetered {
+        .map(|(id, provider, endpoint)| Unmetered {
             provider: id.clone(),
             label: given(id)
                 .or_else(|| {
@@ -1050,6 +1065,8 @@ fn local_servers(agent: &Path) -> Vec<Unmetered> {
                 .or_else(|| crate::models::registry::display_name(id).map(str::to_owned))
                 .unwrap_or_else(|| id.clone()),
             reason: "local".into(),
+            endpoint,
+            ..Unmetered::default()
         })
         .collect()
 }
@@ -1149,7 +1166,7 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
     let mut projects = BTreeMap::new();
     let mut machines_rows = Vec::new();
     let mut providers = BTreeSet::new();
-    let mut unmetered = BTreeSet::new();
+    let mut unmetered: BTreeMap<(String, String, String, String), Unmetered> = BTreeMap::new();
     let mut windows: Vec<AccountWindow> = Vec::new();
     let mut machines = Vec::new();
     for answer in answers {
@@ -1187,7 +1204,7 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
         }
         total.add(&machine);
         machines_rows.push(Row {
-            key: answer.id,
+            key: answer.id.clone(),
             label: answer.name,
             provider: None,
             amount: machine,
@@ -1196,7 +1213,21 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
         add_rows(&mut agents, summary.breakdown.agent);
         add_rows(&mut projects, summary.breakdown.project);
         providers.extend(summary.providers);
-        unmetered.extend(summary.unmetered);
+        for entry in summary.unmetered {
+            let key = (
+                entry.provider.clone(),
+                entry.label.clone(),
+                entry.reason.clone(),
+                entry.endpoint.clone(),
+            );
+            let held = unmetered.entry(key).or_insert_with(|| Unmetered {
+                machines: Vec::new(),
+                ..entry
+            });
+            if !held.machines.contains(&answer.id) {
+                held.machines.push(answer.id.clone());
+            }
+        }
         windows.extend(summary.windows);
     }
     let partial = machines.iter().any(|machine| machine.state != "ok");
@@ -1222,7 +1253,8 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
     joined.providers = providers.into_iter().collect();
     joined.accounts = accounts(&windows, now_ms);
     joined.pools = pools(&windows, now_ms);
-    joined.unmetered = unmetered.into_iter().collect();
+    joined.unmetered = unmetered.into_values().collect();
+    tally(&mut joined.unmetered, &joined.breakdown.model);
     joined.windows = windows;
     FleetSummary {
         summary: joined,
@@ -1391,7 +1423,6 @@ mod tests {
 
     #[test]
     fn one_account_has_one_card_with_a_row_per_window() {
-        // Each window is most of the way through, so each row spends under pace.
         let kind = |kind, scope: &str, remaining: f64| AccountWindow {
             kind,
             scope: scope.into(),
@@ -1438,19 +1469,56 @@ mod tests {
                 (week, "Fable", 50.0),
             ]
         );
-        assert_eq!(card.pace.as_deref(), Some("under"));
-        // A 5-hour row that spends faster than its window passes leads the card.
-        let ahead = accounts(
-            &[
-                kind(week, "", 70.0),
-                AccountWindow {
-                    resets_at_ms: Some(NOW + 4 * HOUR),
-                    ..kind(quota::WindowKind::FiveHour, "", 10.0)
-                },
-            ],
-            NOW,
+        assert!(card.windows.iter().all(|row| !row.not_started));
+        // The card and its rows carry no pace.
+        let shown = serde_json::to_value(card).unwrap();
+        assert!(shown.get("pace").is_none());
+        assert!(shown["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("pace").is_none() && row.get("elapsed_percent").is_none()));
+    }
+
+    #[test]
+    fn a_full_window_without_a_reset_has_not_started() {
+        let unset = |remaining: f64| AccountWindow {
+            resets_at_ms: None,
+            ..window("one", remaining, 0)
+        };
+        let fresh = limits(&[unset(100.0)], NOW);
+        assert!(fresh[0].not_started);
+        assert_eq!(
+            serde_json::to_value(&fresh[0]).unwrap()["not_started"],
+            true
         );
-        assert_eq!(ahead[0].pace.as_deref(), Some("ahead"));
+        // Some spent with no reset time is a reset the upstream did not name.
+        let unknown = limits(&[unset(60.0)], NOW);
+        assert!(!unknown[0].not_started);
+        assert!(serde_json::to_value(&unknown[0])
+            .unwrap()
+            .get("not_started")
+            .is_none());
+        // A passed reset reads as a full window that starts on the next use.
+        let passed = limits(&[window("one", 30.0, -HOUR)], NOW);
+        assert!(passed[0].not_started && passed[0].resets_at_ms.is_none());
+        assert!(!limits(&[window("one", 100.0, HOUR)], NOW)[0].not_started);
+    }
+
+    #[test]
+    fn an_older_answer_with_pace_still_reads() {
+        let older = json!({
+            "range": "7d", "start_ms": 0, "end_ms": 0, "bucket": "day",
+            "totals": Totals::default(), "series": [], "breakdown": Breakdown::default(),
+            "providers": [],
+            "accounts": [{"identity": "i", "provider": "openai", "account_id": "a", "name": "OpenAI", "pace": "on", "windows": [{"provider": "openai", "kind": "weekly", "remaining_percent": 50.0, "elapsed_percent": 40.0, "pace": "ahead", "status": "ok"}]}],
+            "pools": [{"provider": "openai", "kind": "weekly", "remaining_percent": 50.0, "elapsed_percent": 40.0, "pace": "ahead", "status": "ok"}],
+            "unmetered": [{"provider": "ollama", "label": "Ollama", "reason": "local"}],
+            "windows": []
+        });
+        let summary: Summary = serde_json::from_value(older).unwrap();
+        assert_eq!(summary.accounts[0].windows[0].remaining_percent, 50.0);
+        assert_eq!(summary.unmetered[0].usage, RangeTokens::default());
     }
 
     #[test]
@@ -1497,12 +1565,9 @@ mod tests {
         assert!(card.account_id.is_empty() && card.label.is_empty());
         assert_eq!(card.remaining_percent, 20.0);
         assert_eq!(card.resets_at_ms, Some(NOW + HOUR));
-        assert_eq!(card.elapsed_percent, Some(80.0));
-        assert_eq!(card.pace.as_deref(), Some("on"));
         assert_eq!(card.status, "ok");
         let low = limits(&[window("one", 5.0, 4 * HOUR)], NOW);
         assert_eq!(low[0].status, "low");
-        assert_eq!(low[0].pace.as_deref(), Some("ahead"));
         let spent = limits(&[window("one", 0.0, HOUR)], NOW);
         assert_eq!(spent[0].status, "limit");
         let passed = limits(&[window("one", 0.0, -HOUR)], NOW);
@@ -1803,7 +1868,119 @@ mod tests {
                 ("ollama", "Ollama"),
             ]
         );
+        assert_eq!(
+            unmetered
+                .iter()
+                .map(|entry| entry.endpoint.as_str())
+                .collect::<Vec<_>>(),
+            vec!["127.0.0.1:8000", "localhost:9000", "localhost:11434"]
+        );
         let _ = std::fs::remove_dir_all(&agent);
+    }
+
+    fn local(provider: &str) -> Unmetered {
+        Unmetered {
+            provider: provider.into(),
+            label: provider.into(),
+            reason: "local".into(),
+            endpoint: "127.0.0.1:8080".into(),
+            ..Unmetered::default()
+        }
+    }
+
+    #[test]
+    fn each_unmetered_provider_carries_its_tokens_in_the_range() {
+        let runs = vec![
+            run("a", NOW - HOUR, "omlx/qwen", 50, None),
+            run("b", NOW - 2 * HOUR, "omlx/gemma", 20, None),
+            run("c", NOW - 3 * HOUR, "anthropic/claude", 999, Some(1.0)),
+            // Outside the day, so the day leaves it out.
+            run("d", NOW - 30 * HOUR, "omlx/qwen", 400, None),
+        ];
+        let unmetered = vec![local("omlx"), local("ollama")];
+        let day = summarize(
+            &runs,
+            &Owners::default(),
+            Vec::new(),
+            unmetered.clone(),
+            &request(Range::Day),
+            NOW,
+        );
+        // Each run reads 100 cached and its own uncached input, and writes 10.
+        let omlx = &day.unmetered[0];
+        assert_eq!(omlx.provider, "omlx");
+        assert_eq!(
+            omlx.usage,
+            RangeTokens {
+                input: 270,
+                output: 20,
+                processed: 290,
+                runs: 2
+            }
+        );
+        assert_eq!(day.unmetered[1].usage, RangeTokens::default());
+        let week = summarize(
+            &runs,
+            &Owners::default(),
+            Vec::new(),
+            unmetered.clone(),
+            &request(Range::Week),
+            NOW,
+        );
+        assert_eq!(week.unmetered[0].usage.runs, 3);
+        assert_eq!(week.unmetered[0].usage.processed, 800);
+        // The provider filter keeps only the provider asked for.
+        let only = summarize(
+            &runs,
+            &Owners::default(),
+            Vec::new(),
+            unmetered,
+            &Request {
+                provider: Some("omlx".into()),
+                ..request(Range::Day)
+            },
+            NOW,
+        );
+        assert_eq!(only.unmetered.len(), 1);
+        assert_eq!(only.unmetered[0].usage.runs, 2);
+    }
+
+    #[test]
+    fn machines_join_one_unmetered_provider_and_sum_its_tokens() {
+        let answer = |id: &str, input: u64, servers: Vec<Unmetered>| MachineAnswer {
+            id: id.into(),
+            name: id.into(),
+            summary: Ok(summarize(
+                &[run(id, NOW - HOUR, "omlx/qwen", input, None)],
+                &Owners::default(),
+                Vec::new(),
+                servers,
+                &request(Range::Week),
+                NOW,
+            )),
+        };
+        let joined = merge(
+            vec![
+                answer("local", 50, vec![local("omlx")]),
+                answer("studio", 150, vec![local("omlx")]),
+                answer("box", 0, Vec::new()),
+            ],
+            NOW,
+        );
+        assert_eq!(joined.summary.unmetered.len(), 1);
+        let omlx = &joined.summary.unmetered[0];
+        assert_eq!(omlx.machines, vec!["local", "studio"]);
+        assert_eq!(omlx.endpoint, "127.0.0.1:8080");
+        // Three runs: 50, 150 and 0 uncached input, each with 100 cached.
+        assert_eq!(
+            omlx.usage,
+            RangeTokens {
+                input: 500,
+                output: 30,
+                processed: 530,
+                runs: 3
+            }
+        );
     }
 
     #[test]
