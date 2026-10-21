@@ -908,6 +908,7 @@ export function buildProbeCommandTable(fixtureName) {
         skipped: paired.filter((runtime) => !(runtime.updateOffered && runtime.status === 'online')).map((runtime) => ({ id: runtime.id, name: runtime.name, reason: runtime.status === 'online' ? 'current' : 'offline' })),
       }
     }
+    if (command === 'home_folder_state') return { state: 'open' }
     if (command === 'voice_input_devices') return ['MacBook Pro Microphone', 'USB Audio Device']
     if (command === 'parakeet_install_facts') return { totalDownloadBytes: 482_000_000, requiredFreeBytes: 1_100_000_000 }
     if (command === 'parakeet_install_status') return { state: 'installed' }
@@ -1123,7 +1124,7 @@ const AGENT_STATES = {
 }
 
 const AGENT_SCREENS = {
-  list: () => document.querySelectorAll('[data-panel="agents"] .machine-mark').length === 5 && document.querySelectorAll('#sidebar .thread-row .row-agent').length >= 4 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
+  list: () => document.querySelectorAll('[data-panel="agents"] .agent-card .signal:is([aria-label="Online"], [aria-label="Offline"])').length === 5 && document.querySelectorAll('#sidebar .thread-row .row-agent').length >= 4 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
   notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
   approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
   'tool-approvals': () => document.querySelectorAll('[data-panel="notifications"] .approval .tool-call-card').length === 4,

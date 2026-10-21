@@ -26,6 +26,13 @@ id = "generic-api-key"
     '''^core/protocol-fixtures/muniment\.relay-encryption/1/relay-encryption-v1\.json$''',
     '''^src-tauri/core/src/browser_control/linux_transport\.rs$''',
   ]
+  # The attach protocol fixtures and their generator carry synthetic rewind
+  # tokens.
+  [[rules.allowlists]]
+  paths = [
+    '''^core/protocol-fixtures/muniment\.attach/1/''',
+    '''^core/crates/attach/src/fixtures\.rs$''',
+  ]
 
 [[rules]]
 id = "jwt"

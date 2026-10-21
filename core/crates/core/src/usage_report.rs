@@ -1363,7 +1363,7 @@ mod tests {
         assert_eq!(summary.totals.cost_usd, 0.5);
         assert_eq!(summary.totals.unpriced_runs, 1);
         assert_eq!(summary.providers, vec!["anthropic", "openai"]);
-        assert_eq!(summary.breakdown.model[0].key, "anthropic/claude");
+        assert_eq!(summary.breakdown.model[0].key, "anthropic/claude"); // gitleaks:allow
         let agent = &summary.breakdown.agent;
         assert!(agent
             .iter()
