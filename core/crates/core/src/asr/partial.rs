@@ -25,8 +25,8 @@ impl Default for PartialPacing {
     fn default() -> Self {
         Self {
             min_interval: Duration::from_millis(600),
-            max_interval: Duration::from_millis(2_000),
-            load_factor: 4,
+            max_interval: Duration::from_millis(4_000),
+            load_factor: 3,
             min_new_samples: 3_200,
         }
     }
