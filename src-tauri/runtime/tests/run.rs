@@ -7,11 +7,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use muniment_core::active_run::cancel_active_run;
+use muniment_core::active_run::{cancel_active_run, capacity_message, RunRegistry};
 use muniment_core::attach::linux::{CompanionProvenance, RunResumeRequest, ThreadListService};
 use muniment_core::attach::{ErrorCode, Id, RuntimeActivityRegistry};
 use muniment_core::chat_resume::clear_active_run;
-use muniment_core::pi_execution::{coordinate_prepared_prompt, PiRuntime};
+use muniment_core::pi_execution::{coordinate_prepared_prompt, PiProcesses};
 use muniment_core::run_events::{ChatEvent, ChatEventSink};
 use muniment_core::run_preparation::{
     prepare_new_run_with_session_thread, OpenSelectedFile, SessionThreadStart,
@@ -112,9 +112,9 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
+    let runtime = PiProcesses::default();
     let runtime_activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(None));
+    let active = RunRegistry::default();
     let session_thread = SessionThread::default();
     let first_run_id = "018f0000-0000-7000-8000-000000000021";
     let second_run_id = "018f0000-0000-7000-8000-000000000022";
@@ -123,7 +123,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         &desktop_host(),
         &profile,
         Arc::clone(&storage),
-        Arc::clone(&runtime),
+        runtime.clone(),
         &runtime_activity,
         &config,
         first_run_id.into(),
@@ -135,7 +135,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         Some("owner".into()),
         Vec::new(),
         fixture_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         None,
     )
@@ -159,7 +159,7 @@ fn accept_two_prompts_with_session_thread(continue_existing: bool) -> (String, S
         Some("owner".into()),
         Vec::new(),
         fixture_grant(),
-        Arc::clone(&active),
+        active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         None,
     )
@@ -232,8 +232,8 @@ fn four_model_switches_with_artifacts(pre_repair: bool) {
     let captured_args = temporary.root.join("args");
     std::env::set_var("PI_RESUME_STUB_ARGS", &captured_args);
     let storage = open_profile_storage(profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None));
-    let active = Arc::new(Mutex::new(None));
+    let runtime = PiProcesses::default();
+    let active = RunRegistry::default();
     let activity = RuntimeActivityRegistry::new();
     let session = SessionThread::default();
     let mut thread = None;
@@ -260,7 +260,7 @@ fn four_model_switches_with_artifacts(pre_repair: bool) {
             &desktop_host(),
             profile,
             Arc::clone(&storage),
-            Arc::clone(&runtime),
+            runtime.clone(),
             &activity,
             profile,
             run_id.clone(),
@@ -272,7 +272,7 @@ fn four_model_switches_with_artifacts(pre_repair: bool) {
             None,
             Vec::new(),
             muniment_desktop_integration::chat_grant::ChatGrant::local(),
-            Arc::clone(&active),
+            active.clone(),
             RuntimeChatEventTarget::Subscriber(None),
             Some(descriptor),
         )
@@ -289,7 +289,7 @@ fn four_model_switches_with_artifacts(pre_repair: bool) {
             "run.completed",
             "{events:?}"
         );
-        assert!(active.lock().unwrap().is_none());
+        assert!(active.is_empty());
         let args = fs::read_to_string(&captured_args).unwrap();
         assert!(args
             .lines()
@@ -400,15 +400,21 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
     let temporary_profile = TemporaryProfile::new("occupied", false);
     let profile = temporary_profile.profile.clone();
     let activity = RuntimeActivityRegistry::new();
-    let active = Arc::new(Mutex::new(Some(ActiveRun {
-        id: "018f0000-0000-7000-8000-000000000001".into(),
-        workspace: "workspace-a".into(),
-        cancelled: Arc::new(AtomicBool::new(false)),
-        transport: Arc::new(Mutex::new(None)),
-        adapter: Arc::new(Mutex::new(None)),
-        permission_answers: Arc::new(Mutex::new(VecDeque::new())),
-        _activity: activity.mark_active_run(),
-    })));
+    let active = RunRegistry::with_limit(1);
+    active
+        .install(
+            ActiveRun {
+                id: "018f0000-0000-7000-8000-000000000001".into(),
+                workspace: "workspace-a".into(),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                transport: Arc::new(Mutex::new(None)),
+                adapter: Arc::new(Mutex::new(None)),
+                permission_answers: Arc::new(Mutex::new(VecDeque::new())),
+                _activity: activity.mark_active_run(),
+            },
+            None,
+        )
+        .unwrap();
     let run_id = "018f0000-0000-7000-8000-000000000002";
     let storage = open_profile_storage(&profile).unwrap();
 
@@ -416,7 +422,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
         &desktop_host(),
         &profile,
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        PiProcesses::default(),
         &activity,
         temporary_profile.config.clone(),
         run_id.into(),
@@ -434,7 +440,7 @@ fn an_occupied_active_run_slot_does_not_prepare_a_new_run() {
     )
     .unwrap_err();
 
-    assert_eq!(error, "A reply is already in progress.");
+    assert_eq!(error, capacity_message(1));
     assert!(storage
         .lock()
         .unwrap()
@@ -453,7 +459,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
-    let runtime = Arc::new(Mutex::new(None::<PiRuntime>));
+    let runtime = PiProcesses::default();
     let runtime_activity = RuntimeActivityRegistry::new();
     let descriptor = stage_pi_stub(&temporary_root);
     let captured_prompts = temporary_root.join("prompts");
@@ -466,7 +472,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         &desktop_host(),
         &profile,
         Arc::clone(&storage),
-        Arc::clone(&runtime),
+        runtime.clone(),
         &runtime_activity,
         &config,
         unknown_run_id.into(),
@@ -478,7 +484,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         Some("owner".into()),
         Vec::new(),
         fixture_grant(),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
     )
@@ -494,7 +500,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let run_id = "018f0000-0000-7000-8000-000000000003";
     let prompt = "pointer install prompt";
     let (subscriber, events) = mpsc::channel();
-    let active = Arc::new(Mutex::new(None));
+    let active = RunRegistry::default();
     std::env::set_var("PI_RESUME_STUB_MEMORY_QUERY", "hold the run open");
     std::thread::scope(|scope| {
         let run = scope.spawn(|| {
@@ -502,7 +508,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 &desktop_host(),
                 &profile,
                 Arc::clone(&storage),
-                Arc::clone(&runtime),
+                runtime.clone(),
                 &runtime_activity,
                 &config,
                 run_id.into(),
@@ -514,7 +520,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 Some("owner".into()),
                 Vec::new(),
                 fixture_grant(),
-                Arc::clone(&active),
+                active.clone(),
                 RuntimeChatEventTarget::Subscriber(Some(subscriber)),
                 Some(descriptor),
             )
@@ -527,7 +533,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         run.join().unwrap().unwrap();
     });
     std::env::remove_var("PI_RESUME_STUB_MEMORY_QUERY");
-    assert!(active.lock().unwrap().is_none());
+    assert!(active.is_empty());
     assert_eq!(
         cancel_active_run(&active, run_id, Some("workspace-a")),
         Err("That reply is no longer active.".into())
@@ -545,12 +551,12 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let attachment_path = temporary_root.join("runtime-attachment.txt");
     let attachment_bytes = b"runtime attachment";
     fs::write(&attachment_path, attachment_bytes).unwrap();
-    let second_active = Arc::new(Mutex::new(None));
+    let second_active = RunRegistry::default();
     let (accepted, launch) = accept_prompt(
         &desktop_host(),
         &profile,
         Arc::clone(&storage),
-        Arc::clone(&runtime),
+        runtime.clone(),
         &runtime_activity,
         &config,
         second_run_id.into(),
@@ -566,7 +572,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
             byte_length: attachment_bytes.len() as u64,
         }],
         fixture_grant(),
-        Arc::clone(&second_active),
+        second_active.clone(),
         RuntimeChatEventTarget::Subscriber(None),
         Some(descriptor),
     )
@@ -580,10 +586,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     );
     assert!(accepted.committed_seq > 0);
     assert!(!accepted.accepted_at.is_empty());
-    assert_eq!(
-        second_active.lock().unwrap().as_ref().unwrap().id,
-        second_run_id
-    );
+    assert_eq!(second_active.identities()[0].run_id, second_run_id);
     assert!(runtime_activity.snapshot().active_run);
     assert!(storage
         .lock()
@@ -597,9 +600,9 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
             "run.completed" | "run.failed" | "run.cancelled" | "run.needs_attention"
         )));
     drive_prompt(launch);
-    assert!(second_active.lock().unwrap().is_none());
+    assert!(second_active.is_empty());
     assert!(!runtime_activity.snapshot().active_run);
-    assert!(runtime.lock().unwrap().is_some());
+    assert!(runtime.slot(&thread_id).lock().unwrap().is_some());
 
     // Each prompt arrives behind the line that says when it was sent.
     let captured = fs::read_to_string(captured_prompts).unwrap();
@@ -615,7 +618,11 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
         "{captured}"
     );
     let args = fs::read_to_string(captured_args).unwrap();
-    let extension = profile.join("memory").join("memory-search-extension.js");
+    let extension = muniment_core::memory_runtime::ApplicationMemoryRuntime::new(
+        config.clone(),
+        profile.join("memory"),
+    )
+    .agent_extension_path(&thread_id);
     assert!(args
         .lines()
         .collect::<Vec<_>>()
@@ -651,7 +658,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
     let page = thread_page(
         &profile,
         Arc::clone(&storage),
-        &std::sync::Mutex::new(None),
+        &RunRegistry::default(),
         Some("owner".into()),
         thread_id,
         10,

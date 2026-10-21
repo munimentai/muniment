@@ -27,6 +27,7 @@ pub enum FolderAccess {
 
 /// The script Pi's executable runs as Bun: it lists the folder its argument
 /// names and says so in `ls`'s words when the operating system refused.
+#[cfg(target_os = "macos")]
 const PI_READ_SCRIPT: &str = "try { require('fs').readdirSync(process.argv[1]) } catch (error) { if (error.code === 'EPERM') { console.error('Operation not permitted'); process.exit(1) } }";
 
 /// Lists `directory` in a child process and waits `bound` at most, or until

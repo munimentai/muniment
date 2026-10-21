@@ -6,13 +6,14 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use muniment_core::active_run::RunRegistry;
 use muniment_core::attach::linux::{CompanionProvenance, RunSubmitRequest, ThreadListService};
 use muniment_core::attach::{Id, RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::chat_view::SelectedFile;
 use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
-use muniment_core::pi_execution::PiRuntime;
+use muniment_core::pi_execution::PiProcesses;
 use muniment_core::run_start::{
     prepare_desktop_run, RunStartBoundaries, RunStartError, RunStartRequest,
 };
@@ -72,10 +73,10 @@ fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
     let storage = open_profile_storage(&temporary_profile.profile).unwrap();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         temporary_profile.profile.clone(),
         temporary_profile.config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             temporary_profile.config.clone(),
             temporary_profile.profile.join("memory"),
@@ -282,9 +283,11 @@ fn local_mode_run(configured: bool) {
     assert_eq!(payloads[5].as_object().unwrap().len(), 2);
     assert_eq!(payloads[5]["output"].as_str(), Some(""));
     let receipt = payloads[6]["receipt"].as_object().unwrap();
-    // A local reply carries no route: the time and the tool tally, and the stub names no model.
-    assert_eq!(receipt.len(), 2);
+    // A local reply carries no route: the time, the tool tally and the run's
+    // permission mode, and the stub names no model.
+    assert_eq!(receipt.len(), 3, "{receipt:?}");
     assert!(receipt.get("route").is_none());
+    assert_eq!(receipt["permission_mode"].as_str(), Some("bypass"));
     assert_eq!(receipt["tools"][0]["name"].as_str(), Some("read"));
     let elapsed = receipt["time"].as_str().unwrap();
     assert!(elapsed.ends_with('s'));
@@ -613,10 +616,10 @@ fn runtime_boundaries_prepare_a_desktop_run() {
     let activity = RuntimeActivityRegistry::new();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.clone(),
         config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             config,
             profile.join("memory"),

@@ -3,18 +3,19 @@
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use muniment_attach::{connect_desktop_client_at, ClientError, Operation};
+use muniment_core::active_run::RunRegistry;
 use muniment_core::attach::linux::{AttachFilesystem, CompanionProvenance, ThreadListService};
 use muniment_core::attach::{
     save_client_credentials, ClientCredential, Id, ProtocolError, RuntimeActivityRegistry,
     SignedWorkspaceApproval, COMPANION_CREDENTIAL_FILE_NAME,
 };
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
-use muniment_core::pi_execution::PiRuntime;
+use muniment_core::pi_execution::PiProcesses;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime_core::{
     compose_attach_service, open_companion_registry, open_profile_storage, revoke_companion,
@@ -131,10 +132,10 @@ fn check_history_failures(poisoned: bool) {
                 move || {
                     let boundaries = RuntimeAttachBoundaries::new(
                         Arc::clone(&storage),
-                        Arc::new(Mutex::new(None)),
+                        RunRegistry::default(),
                         profile_directory.clone(),
                         config_directory.clone(),
-                        Arc::new(Mutex::new(None)),
+                        PiProcesses::default(),
                         Arc::new(ApplicationMemoryRuntime::new(
                             config_directory.clone(),
                             profile_directory.join("memory"),
@@ -233,10 +234,10 @@ fn check_history_failures(poisoned: bool) {
 fn boundaries(profile: &TemporaryProfile) -> RuntimeAttachBoundaries {
     RuntimeAttachBoundaries::new(
         open_profile_storage(&profile.profile).unwrap(),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.profile.clone(),
         profile.config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             profile.config.clone(),
             profile.profile.join("memory"),
@@ -347,10 +348,10 @@ fn service_lists_and_idempotently_revokes_companions() {
     let registry = open_companion_registry(&profile.profile).unwrap();
     let boundaries = RuntimeAttachBoundaries::new(
         open_profile_storage(&profile.profile).unwrap(),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.profile.clone(),
         profile.config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             profile.config.clone(),
             profile.profile.join("memory"),
