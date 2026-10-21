@@ -2844,7 +2844,7 @@ describe('artifact rail', () => {
     const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, { target: { value: 'Original draft' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Voice' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-pressed', 'true'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop dictation' })).toHaveAttribute('aria-pressed', 'true'))
     await fireEvent.click(screen.getByRole('button', { name: 'Artifacts' }))
 
     await fireEvent.keyDown(document, { key: 'Escape' })
@@ -5482,17 +5482,26 @@ describe('voice dictation', () => {
     const voice = screen.getByRole('button', { name: 'Voice' })
     await fireEvent.click(voice)
 
+    // The button's icon is the wave while dictation listens, and the composer bar carries no status line.
     expect(voice).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('status')).toHaveTextContent('Starting local dictation…')
-    expect(composer).toHaveAccessibleDescription('Starting local dictation…')
+    expect(voice).toHaveAccessibleName('Stop dictation')
+    expect(within(voice).getByTestId('voice-wave')).toBeInTheDocument()
+    expect(screen.queryByText(/local dictation|Listening/)).toBeNull()
+    expect(composer).not.toHaveAccessibleDescription(/dictation|Listening/)
+    dictationListener({ payload: { type: 'partial', text: 'spoken wor' } })
+    await waitFor(() => expect(composer).toHaveValue('Existing draft spoken wor'))
+    expect(screen.getByTestId('dictation-partial')).toHaveTextContent('spoken wor')
     dictationListener({ payload: { type: 'transcript', text: 'spoken words' } })
     await waitFor(() => expect(composer).toHaveValue('Existing draft spoken words'))
+    expect(screen.queryByTestId('dictation-partial')).toBeNull()
     await fireEvent.input(composer, { target: { value: 'Edited transcript' } })
     await stopClickCapture(voice)
 
     expect(invoke).toHaveBeenCalledWith('dictation_start', expect.objectContaining({ options: expect.any(Object) }))
     expect(invoke).toHaveBeenCalledWith('dictation_stop')
     expect(voice).toHaveAttribute('aria-pressed', 'false')
+    expect(voice).toHaveAccessibleName('Voice')
+    expect(within(voice).queryByTestId('voice-wave')).toBeNull()
     expect(composer).toHaveValue('Edited transcript')
   })
 
@@ -5595,13 +5604,20 @@ describe('voice dictation', () => {
     expect(card).not.toHaveTextContent('The speech model is not installed.')
 
     await fireEvent.click(within(card).getByRole('button', { name: 'Install' }))
-    expect(within(card).getByRole('status')).toHaveTextContent('Installing.')
-    const progress = within(card).getByRole('progressbar', { name: 'Speech model download progress' })
+    // The download notice takes the card's place at the composer's right edge.
+    expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
+    const progress = await screen.findByRole('progressbar', { name: 'Speech model download progress' })
+    const download = progress.closest('[data-composer-notice]')
+    expect(download).toHaveClass('end')
+    expect(download).toHaveTextContent('Downloading the speech model.')
     expect(progress).toHaveAttribute('value', '134476861')
     expect(progress).toHaveAttribute('max', '672384307')
-    expect(card).toHaveTextContent('128 MB / 641 MB')
-    // The card leaves once the model is on disk, and the hint carries the next step.
-    expect((await screen.findByText('Installed. Press Voice again to dictate.')).closest('[role="status"]')).toHaveAttribute('data-composer-notice')
+    expect(download).toHaveTextContent('128 MB of 641 MB')
+    // The download notice turns into the installed notice once the model is on disk.
+    const installed = (await screen.findByText('Installed. Press Voice again to dictate.')).closest('[role="status"]')
+    expect(installed).toHaveAttribute('data-composer-notice')
+    expect(installed).toHaveClass('end')
+    expect(screen.queryByRole('progressbar')).toBeNull()
     expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
     expect(invoke).toHaveBeenCalledWith('parakeet_install_start', { consent: true })
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_status')).toHaveLength(3)
@@ -5736,14 +5752,18 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Voice dictation' })
-    const cancel = await within(card).findByRole('button', { name: 'Cancel install' })
+    // A running download shows its notice in place of the card, and the notice cancels it.
+    const progress = await screen.findByRole('progressbar', { name: 'Speech model download progress' })
+    expect(screen.queryByRole('region', { name: 'Voice dictation' })).not.toBeInTheDocument()
+    const cancel = within(progress.closest('[data-composer-notice]')).getByRole('button', { name: 'Cancel' })
     await waitFor(() => expect(statusCalls).toBe(2))
     await fireEvent.click(cancel)
     await fireEvent.click(cancel)
 
     expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_cancel')).toHaveLength(1)
-    expect(await within(card).findByRole('status')).toHaveTextContent('Cancelled.')
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.')
     expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
 
     resolveStatus({ state: 'installed' })
@@ -5779,12 +5799,13 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Voice dictation' })
-    const cancel = await within(card).findByRole('button', { name: 'Cancel install' })
-    await fireEvent.click(cancel)
+    const progress = await screen.findByRole('progressbar', { name: 'Speech model download progress' })
+    await fireEvent.click(within(progress.closest('[data-composer-notice]')).getByRole('button', { name: 'Cancel' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
-    expect(cancel).toBeDisabled()
+    expect(invoke.mock.calls.filter(([command]) => command === 'parakeet_install_cancel')).toHaveLength(1)
     resolveStatus({ state: 'cancelled' })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.'))
     expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
   })
@@ -5817,12 +5838,15 @@ describe('voice dictation', () => {
     render(App)
     await fireEvent.click(await screen.findByRole('button', { name: 'Voice' }))
 
-    const card = await screen.findByRole('region', { name: 'Voice dictation' })
-    await fireEvent.click(await within(card).findByRole('button', { name: 'Cancel install' }))
+    const progress = await screen.findByRole('progressbar', { name: 'Speech model download progress' })
+    await fireEvent.click(within(progress.closest('[data-composer-notice]')).getByRole('button', { name: 'Cancel' }))
 
-    expect(await within(card).findByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
+    // The download notice states the failed cancel while the download runs on.
+    expect(await screen.findByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
+    expect(screen.getByRole('alert')).toHaveAttribute('data-composer-notice')
     expect(statusCalls).toBe(2)
     resolveStatus({ state: 'installing', completedBytes: 1, totalBytes: 2 })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' })
     await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.'))
     expect(statusCalls).toBe(3)
     expect(within(card).getByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
@@ -5912,9 +5936,9 @@ describe('voice dictation', () => {
     await fireEvent.click(voice)
     view.unmount()
     // Every event listener ends, the agent run updates, swarm changes,
-    // approvals, agent activity, group posts, preference changes and the
-    // fleet's forwarded actions and swarm changes among them.
-    expect(eventUnlisten).toHaveBeenCalledTimes(17)
+    // approvals, agent activity, group posts, preference changes, the voice
+    // wave's levels and the fleet's forwarded actions and swarm changes among them.
+    expect(eventUnlisten).toHaveBeenCalledTimes(18)
     expect(pairingUnlisten).toHaveBeenCalledTimes(1)
     await new Promise((resolve) => setTimeout(resolve, 130))
     expect(invoke).not.toHaveBeenCalledWith('dictation_status')

@@ -83,6 +83,7 @@
   import { OPEN_USAGE_EVENT, composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
   import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
   import ComposerNotice from './composer/ComposerNotice.svelte'
+  import VoiceWave from './composer/VoiceWave.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
@@ -128,6 +129,7 @@
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { formatBytes, installStateWords } from './lib/speech-install.js'
+  import { createSpeechInstallNotice } from './lib/speech-install-notice.js'
   import { downloadsAllowed, installSpeechModel, resumeSpeechModel } from './lib/large-downloads.js'
   import RunMark from './lib/RunMark.svelte'
   import ExecutionTime from './lib/ExecutionTime.svelte'
@@ -1362,6 +1364,7 @@
   let dictationRequested = false
   let dictationDraftSnapshot = $state('')
   let dictationTranscript = $state('')
+  let dictationPending = $state(0)
   let dictationFinishing = $state(false)
   // Derived flags, so a streamed chunk that changes the run leaves the composer's controls untouched.
   const voiceDisabled = $derived(!!active || dictationFinishing)
@@ -1373,7 +1376,8 @@
   let speechInstallTimer
   let speechInstallEpoch = 0
   let speechInstallDismissed = $state(false)
-  let speechInstallNotice = $state('')
+  // The install popover asks for consent. Once the download runs, its composer notice takes over.
+  const speechInstallOpen = $derived(dictation.state === 'modelNotInstalled' && !speechInstallDismissed && speechInstallStatus?.state !== 'installing')
   let globalVoiceRegistered = false
   let globalVoiceError = $state(false)
   let globalVoiceShortcutValue = $state(holdToTalkShortcut())
@@ -1878,11 +1882,21 @@
   // Short notices over the composer, one at a time. Each shows once per
   // launch for each cause, so a state read again does not bring it back.
   const composerNotices = createComposerNotices()
+  const speechInstallNotice = createSpeechInstallNotice({ notices: composerNotices, cancel: () => cancelSpeechInstall(), retry: () => startSpeechInstall() })
   $effect(() => {
-    const text = speechInstallNotice
+    const status = speechInstallStatus
+    const error = speechInstallError
+    untrack(() => speechInstallNotice.update(status, error))
+  })
+  // A dictation failure shows at the composer's right edge, over the Voice button.
+  const dictationNotice = $derived(dictation.state === 'modelNotInstalled' ? '' : dictationError)
+  let dictationFailures = 0
+  $effect(() => {
+    const text = dictationNotice
     untrack(() => {
-      if (text) composerNotices.show({ id: 'speech-install', cause: text, text, dismissLabel: 'Dismiss voice notice' })
-      else composerNotices.withdraw('speech-install')
+      if (!text) { composerNotices.withdraw('dictation-error'); return }
+      dictationFailures += 1
+      composerNotices.show({ id: 'dictation-error', cause: dictationFailures, text, placement: 'end', alert: true, dismissLabel: 'Dismiss dictation error' })
     })
   })
   // A shortcut that fails again after it worked is a new cause.
@@ -2351,8 +2365,9 @@
       dictationFinishing = state.finishing
       dictationDraftSnapshot = state.draftSnapshot
       dictationTranscript = state.transcript
+      dictationPending = state.pending
       if (state.status.state === 'modelNotInstalled') void openSpeechInstall()
-      else speechInstallNotice = ''
+      else speechInstallNotice.clear()
     },
     onError: (message) => { dictationError = message },
     onInactive: () => voiceGesture.inactive(),
@@ -2402,10 +2417,9 @@
     }
   }
 
-  // The card leaves once the model is on disk, and the composer hint carries the next step.
+  // The card leaves once the model is on disk, and the installed notice carries the next step.
   function settleSpeechInstall() {
     speechInstallDismissed = true
-    speechInstallNotice = installStateWords('installed')
   }
 
   function dismissSpeechInstall() {
@@ -2423,7 +2437,6 @@
   async function openSpeechInstall() {
     openComposerPanel('speech')
     speechInstallDismissed = false
-    speechInstallNotice = ''
     if (speechInstallFacts || speechInstallPending) return
     speechInstallPending = true
     speechInstallError = ''
@@ -2460,6 +2473,8 @@
       const next = await install(tauri)
       if (destroyed || epoch !== speechInstallEpoch) return
       speechInstallStatus = next
+      // The download notice takes the card's place, so focus returns to the composer.
+      if (next.state === 'installing') dismissSpeechInstall()
       if (next.state === 'installing') await readSpeechInstallStatus(epoch)
     } catch (_) {
       if (destroyed || epoch !== speechInstallEpoch) return
@@ -3318,7 +3333,7 @@
         toggleFullPage(isUsageShortcut(event) ? 'usage' : 'notifications')
         return
       }
-      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || modeOpen || machineOpen || contextOpen || (dictation.state === 'modelNotInstalled' && !speechInstallDismissed))) { openComposerPanel(null); event.preventDefault(); return }
+      if (event.key === 'Escape' && (pickerOpen || thinkingOpen || modeOpen || machineOpen || contextOpen || speechInstallOpen)) { openComposerPanel(null); event.preventDefault(); return }
       if (event.key === 'Escape' && projectsOpen) { projectsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && artifactsOpen) { artifactsOpen = false; event.preventDefault() }
       if (event.key === 'Escape' && agentsOpen) { agentsOpen = false; event.preventDefault() }
@@ -4058,6 +4073,7 @@
         <p class="visually-hidden" aria-live="polite" aria-atomic="true" data-testid="run-announcement">{announcement}</p>
         </div>
         <ChatComposer bind:element={composerBox}>
+        <VoiceWave active={isDictationActive(dictation)} listen={(...args) => window.__TAURI__?.event?.listen(...args)} />
         {#if rewindNotice}
           <section aria-label="Rewind result" class="rewind-notice" role={rewindNotice.done ? 'status' : 'alert'}>
             <p>{#if !rewindNotice.done}<LucideIcon name="triangle-alert" size={14} />{/if}<strong>{rewindNotice.headline}</strong>{#if rewindNotice.notCovered.length}<span>Not covered: <span class="mono">{rewindNotice.notCovered.join(', ')}</span>.</span>{/if}</p>
@@ -4083,7 +4099,7 @@
         {#if modeOpen && composerModeShown}
           <ModePicker modes={modeListing.listing.modes} current={composerMode.id} source={modeSource} onchoose={chooseMode} onclose={closeModes} />
         {/if}
-        {#if dictation.state === 'modelNotInstalled' && !speechInstallDismissed}
+        {#if speechInstallOpen}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <section data-composer-panel data-panel="speech" data-panel-variant="overlay" class="speech-install-popover" aria-labelledby="speech-install-title" onkeydown={speechInstallKeydown}>
             <header class="speech-install-head">
@@ -4101,22 +4117,10 @@
                   <div><dt>Voice activity model license</dt><dd>{speechInstallFacts.voiceActivityModelLicense}</dd></div>
                 </dl>
               </details>
-              {#if speechInstallStatus?.state === 'installing'}
-                <div class="speech-install-progress">
-                  <progress
-                    aria-label="Speech model download progress"
-                    max={Math.max(speechInstallStatus.totalBytes, 1)}
-                    value={Math.min(speechInstallStatus.completedBytes, speechInstallStatus.totalBytes)}
-                  ></progress>
-                  <span>{formatBytes(speechInstallStatus.completedBytes)} / {formatBytes(speechInstallStatus.totalBytes)}</span>
-                </div>
-              {/if}
               <!-- The Install control states a missing model, so only a later state earns a line. -->
               {#if speechInstallStatus && speechInstallStatus.state !== 'notInstalled'}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
               {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
                 <button type="button" disabled={speechInstallPending} onclick={() => startSpeechInstall()}>Install</button>
-              {:else if speechInstallStatus?.state === 'installing'}
-                <button type="button" disabled={speechInstallPending} onclick={cancelSpeechInstall}>Cancel install</button>
               {/if}
             {:else if speechInstallPending}
               <p role="status">Loading install details.</p>
@@ -4156,9 +4160,9 @@
           {/if}
           <div class="composer-input">
             {#if mention && threadGroup}<AgentMentions agents={mentionAgents} selected={mentionSelected} onchoose={chooseAgentMention} />{:else if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
-            <ComposerReferences bind:this={composerReferences} commands={extensionCommandNames} text={draft} files={selectedFiles} agents={threadGroup ? threadGroupMembers : []} selection={composerSelection} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
+            <ComposerReferences bind:this={composerReferences} commands={extensionCommandNames} text={draft} pending={isDictationActive(dictation) || dictationFinishing ? dictationPending : 0} files={selectedFiles} agents={threadGroup ? threadGroupMembers : []} selection={composerSelection} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onmousedown={openComposerLink} onmousemove={composerPointer} onclick={() => { updateMention(); trackComposerSelection() }} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention(); trackComposerSelection() }} onselect={trackComposerSelection} onselectionchange={trackComposerSelection} onfocus={trackComposerSelection} onblur={() => { closeMentions(); composerSelection = null }} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onmousedown={openComposerLink} onmousemove={composerPointer} onclick={() => { updateMention(); trackComposerSelection() }} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention(); trackComposerSelection() }} onselect={trackComposerSelection} onselectionchange={trackComposerSelection} onfocus={trackComposerSelection} onblur={() => { closeMentions(); composerSelection = null }} aria-describedby={threadSwitching || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
@@ -4201,17 +4205,13 @@
             {#if compacting || contextOpen || contextMeterShown(contextUsage)}<ContextMeter usage={contextUsage} open={contextOpen} {compacting} onclick={() => openComposerPanel(contextOpen ? null : 'context')} />{/if}
             {#if threadSwitching}
               <span id="composer-hint" role="status">Send waits for the thread. Your draft stays here.</span>
-            {:else if isDictationActive(dictation)}
-              <span id="composer-hint" class="capture-status" role="status">
-                <span class="capture-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-                {dictation.state === 'starting' ? 'Starting local dictation…' : 'Listening on this device…'}
-              </span>
             {:else}
               {#if composerHint}<span id="composer-hint">{composerHint}</span>{/if}
             {/if}
             </div>
             <div class="composer-actions">
-              <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={voiceDisabled} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label="Voice" aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? !speechInstallDismissed : undefined}><LucideIcon name="mic" variant="action" size={16} /></button>
+              <!-- While dictation listens, the button's icon is the pulsing wave and the button stops it. -->
+              <button type="button" class="quiet composer-icon" aria-pressed={isDictationActive(dictation)} aria-keyshortcuts={ariaKeyShortcut(globalVoiceShortcutValue)} disabled={voiceDisabled} onpointerdown={voicePointerDown} onpointerup={voicePointerEnd} onpointercancel={voicePointerEnd} onkeydown={voiceKeyDown} onkeyup={voiceKeyUp} onclick={voiceClick} aria-label={isDictationActive(dictation) ? 'Stop dictation' : 'Voice'} aria-haspopup={dictation.state === 'modelNotInstalled' ? 'dialog' : undefined} aria-expanded={dictation.state === 'modelNotInstalled' ? speechInstallOpen : undefined}>{#if isDictationActive(dictation)}<span class="voice-wave" class:starting={dictation.state === 'starting'} data-testid="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>{:else}<LucideIcon name="mic" variant="action" size={16} />{/if}</button>
               {#if active || outgoingDraft().trim()}
                 <button type="button" class="composer-action primary" class:stop={!!active} aria-label={active ? 'Stop' : 'Send'} disabled={threadSwitching} aria-disabled={composerActionInactive() ? 'true' : undefined} onclick={composerActionClick}>
                   <LucideIcon name={active ? 'square' : 'arrow-up'} variant="action" size={active ? 12 : 16} />
@@ -4219,7 +4219,6 @@
               {:else}<span class="composer-action-slot" aria-hidden="true"></span>{/if}
             </div>
           </div>
-          {#if dictationError && dictation.state !== 'modelNotInstalled' && !speechInstallNotice}<div class="dictation-error" role="alert">{dictationError}</div>{/if}
         </ChatComposer>
         </div>
         {#if artifactRailOpen}
@@ -4826,12 +4825,12 @@
   /* During a run the send button becomes Stop in the same place and color, with a filled square. */
   .composer-action.stop :global(svg) { fill: currentColor; }
   .composer-action.stop[aria-disabled="true"] { border-color: transparent; }
-  .capture-status { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
-  .capture-meter { height: 14px; display: flex; align-items: center; gap: 2px; }
-  .capture-meter i { width: 2px; height: 6px; background: var(--muted); animation: capture 900ms ease-in-out infinite alternate; }
-  .capture-meter i:nth-child(2), .capture-meter i:nth-child(4) { height: 10px; animation-delay: -300ms; }
-  .capture-meter i:nth-child(3) { height: 14px; animation-delay: -600ms; }
-  .dictation-error { margin-top: 7px; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .voice-wave { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; gap: 1px; }
+  .voice-wave i { width: 2px; height: 6px; background: currentColor; animation: voice-wave 900ms ease-in-out infinite alternate; }
+  .voice-wave i:nth-child(2), .voice-wave i:nth-child(4) { height: 10px; animation-delay: -300ms; }
+  .voice-wave i:nth-child(3) { height: 14px; animation-delay: -600ms; }
+  /* The microphone is still opening. */
+  .voice-wave.starting { opacity: .5; }
   .speech-install-popover { width: min(340px, 100%); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-mono); box-shadow: var(--shadow-overlay); }
   .speech-install-lead { margin: 7px 0 0; color: var(--ink); font: var(--text-13) var(--font-human); }
   .speech-install-lead .nowrap { white-space: nowrap; }
@@ -4843,14 +4842,12 @@
   .speech-install-popover dt { color: var(--muted); }
   .speech-install-popover dd { margin: 0; overflow-wrap: anywhere; }
   .speech-install-popover p { margin: 7px 0 0; color: var(--muted); }
-  .speech-install-progress { display: grid; gap: 4px; margin-top: 9px; color: var(--muted); }
-  .speech-install-progress progress { width: 100%; height: 6px; accent-color: var(--muted); }
   .speech-install-popover button { margin-top: 7px; padding: 4px 8px; font: inherit; }
   .speech-install-popover .speech-install-error { color: var(--danger); }
   .speech-install-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  @keyframes capture { to { transform: scaleY(.55); } }
+  @keyframes voice-wave { to { transform: scaleY(.4); } }
   /* Unlike the blanket duration rule, removing this animation keeps the meter
      at its full-height resting state instead of the keyframe's 55% endpoint. */
-  :global(:root[data-motion="reduce"]) .capture-meter i { animation: none; }
+  :global(:root[data-motion="reduce"]) .voice-wave i { animation: none; }
   :global(:root[data-motion="reduce"]) .receipt-marker { transition: none; }
 </style>

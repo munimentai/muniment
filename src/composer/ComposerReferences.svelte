@@ -8,11 +8,13 @@
   // boxes, so every glyph and line break matches. An icon covers the characters it stands for, a link's
   // scheme or a reference's @, which stay in the text as transparent glyphs and show again while the
   // selection touches that part. `files` are the selected files, `agents` the group members the draft
-  // can name, and `selection` the textarea's selection, or null while it has no focus.
-  let { text = '', files = [], agents = [], commands = [], selection = null, scrollTop = 0, scrollLeft = 0, width } = $props()
+  // can name, and `selection` the textarea's selection, or null while it has no focus. `pending`
+  // counts the trailing characters of dictation's partial text, drawn muted until they turn final.
+  let { text = '', files = [], agents = [], commands = [], selection = null, scrollTop = 0, scrollLeft = 0, width, pending = 0 } = $props()
   let overlay = $state()
   const named = $derived(agents.length ? [EVERYONE, ...agents] : [])
-  const parts = $derived(composerParts(text, files.map((file) => file.referenceName), commands, named.map((agent) => agent.name)))
+  const split = $derived(pending > 0 && pending <= text.length ? text.length - pending : text.length)
+  const parts = $derived(composerParts(text.slice(0, split), files.map((file) => file.referenceName), commands, named.map((agent) => agent.name)))
   function mark(part) {
     const prefix = referencePrefix(part)
     if (part.type === 'link') return { prefix }
@@ -27,11 +29,12 @@
     return null
   }
 </script>
-<div class="reference-overlay" aria-hidden="true" bind:this={overlay}><div style:width={width ? `${width}px` : undefined} style:transform={`translate(${-scrollLeft}px, ${-scrollTop}px)`}>{#each parts as part, i (i)}{@const icon = part.type === 'text' ? null : mark(part)}{#if part.type === 'text'}<span>{part.text}</span>{:else if icon}<span class="reference" class:link={part.type === 'link'} class:agent={part.type === 'agent'} class:editing={editing(part)} data-url={part.type === 'link' ? part.text : undefined}><span class="prefix">{icon.prefix}<span class="mark">{#if icon.file}<FileIcon name={icon.file.referenceName} directory={icon.file.isDirectory} />{:else if icon.agent?.everyone}<LucideIcon name="users" variant="action" />{:else if icon.agent}<AgentAvatar agent={icon.agent} size={14} tooltip={false} />{:else}<LucideIcon name="globe" variant="action" />{/if}</span></span>{part.text.slice(icon.prefix.length)}</span>{:else}<span class="reference">{part.text}</span>{/if}{/each}{'\n'}</div></div>
+<div class="reference-overlay" aria-hidden="true" bind:this={overlay}><div style:width={width ? `${width}px` : undefined} style:transform={`translate(${-scrollLeft}px, ${-scrollTop}px)`}>{#each parts as part, i (i)}{@const icon = part.type === 'text' ? null : mark(part)}{#if part.type === 'text'}<span>{part.text}</span>{:else if icon}<span class="reference" class:link={part.type === 'link'} class:agent={part.type === 'agent'} class:editing={editing(part)} data-url={part.type === 'link' ? part.text : undefined}><span class="prefix">{icon.prefix}<span class="mark">{#if icon.file}<FileIcon name={icon.file.referenceName} directory={icon.file.isDirectory} />{:else if icon.agent?.everyone}<LucideIcon name="users" variant="action" />{:else if icon.agent}<AgentAvatar agent={icon.agent} size={14} tooltip={false} />{:else}<LucideIcon name="globe" variant="action" />{/if}</span></span>{part.text.slice(icon.prefix.length)}</span>{:else}<span class="reference">{part.text}</span>{/if}{/each}{#if split < text.length}<span class="pending" data-testid="dictation-partial">{text.slice(split)}</span>{/if}{'\n'}</div></div>
 <style>
   /* Kerning and ligatures are off here and in the textarea: a span edge, such as after a hidden scheme, would drop a kerning pair and move every later glyph. */
   .reference-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; color: var(--ink); white-space: pre-wrap; overflow-wrap: break-word; font: inherit; line-height: inherit; font-kerning: none; font-variant-ligatures: none; }
   .reference { color: var(--reference); }
+  .pending { color: var(--muted); }
   /* The icon box is the hidden characters' own box, so it never moves a glyph or a line break. */
   .prefix { position: relative; }
   .reference:not(.editing) .prefix { color: transparent; }

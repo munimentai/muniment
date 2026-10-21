@@ -205,10 +205,10 @@ them.
 | Composer textarea | `textarea` in `App.svelte` | Draft text | Transparent, no border or outline, `--ink`, `font: inherit` at body size | Disabled while resuming or switching threads. Placeholder changes to the resuming line |
 | Selected files | `.attachments li` | Files chosen before Send | 1px `--border`, `--radius-chip`, `--muted`, `--text-12 --font-mono`, padding 4px 6px 4px 9px | Remove button: no border, transparent, inherits color, `--text-12` |
 | Composer row | `.composer-row` | Band under the input | `--muted`, `--text-12`, gap 8px, margin-top 8px | None |
-| Composer hint | `#composer-hint` | One status line in the band, absent in flight | Inherits the row register | Thread switching and dictation replace the hint |
+| Composer hint | `#composer-hint` | One status line in the band, absent in flight | Inherits the row register | Thread switching replaces the hint. Dictation adds no line |
 | Model chip | `.quiet.model-chip` | Model source chip, opens the model panel | 1px `--border`, `--radius-chip`, `--ink`, `--text-12 --font-mono`, 24px floor, padding 2px 8px | Hover: `--faint`. `aria-expanded` follows the panel |
 | Mode menu | `.mode-picker` in `ModePicker.svelte` | The composer's permission modes, opened from the `mode` composer menu button | Overlay panel, 360px, a mono `--muted` Modes heading, rows of a 16px icon, the title in `--text-13` over one `--text-12` `--muted` line clipped with an ellipsis, a check on the thread's mode, and a `Shift+Tab` mono chip on `--faint` under a 1px `--border` | Hover and the current mode take `--faint`. A mode core marks unavailable is disabled, `--muted`, and shows its reason |
-| Voice | `.composer-actions .quiet` | Hold or toggle dictation | Quiet button | `aria-pressed` while dictating. Disabled while a run is active or dictation finishes |
+| Voice | `.composer-actions .quiet` | Hold or toggle dictation | Quiet button, 16px `mic` icon | While dictating: `aria-pressed`, named Stop dictation, and the icon is the voice wave. Disabled while a run is active or dictation finishes |
 | Add files | `.composer-actions .quiet` | Opens the file picker | Quiet button | Hidden while a run is active |
 | Composer action | `.composer-action` | The band's one action control at its right end, absent while the draft is empty | 24px floor, padding 4px, one `action` icon | `.primary` with `arrow-up` once the draft has text: sends, tooltip `Send (⏎)`. Inactive: `--faint`, `--border`, `--muted`. `.stop` with `square` while a reply is in flight: transparent, 1px `--border`, `--muted`, cancels the run, tooltip `Stop the reply`. `aria-disabled` with a transparent border while the run is pending or resuming. Disabled while switching threads |
 | Cancel error | `.cancel-error` | Submit, cancel, or queue failure | `--muted`, `--text-12 --font-mono`, margin-bottom 8px | None |
@@ -229,19 +229,20 @@ them.
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Capture status | `.capture-status` | Listening line in the band | `--font-mono`, gap 8px | None |
-| Capture meter | `.capture-meter i` | Five 2px bars | `--muted`, heights 6, 10, 14, 10, 6px, `capture 900ms ease-in-out infinite alternate` | Reduced motion: no animation, bars rest at full height |
-| Dictation error | `.dictation-error` | Dictation failure line | `--muted`, `--text-12 --font-mono`, margin-top 7px | None |
+| Voice wave | `.voice-wave i` | The Voice button's icon while dictating | Five 2px bars in `currentColor` in a 16px box, gap 1px, heights 6, 10, 14, 10, 6px, `voice-wave 900ms ease-in-out infinite alternate` | `.starting` at opacity .5 while the microphone opens. Reduced motion: no animation, bars rest at full height |
+| Voice wave line | `.voice-wave-line` in `VoiceWave.svelte` | The composer's top border follows the speaker's voice while dictating | A 48px canvas centered on the top border, the straight edge between the corners. 1px stroke from the border color into `--accent` over min(140px, 18% of the edge), a 2px `--accent` stroke with transparent ends and a glow. Ripples under a drifting envelope, 0.6px idle to 8px at full loudness. The middle blends 55% toward `#F2E36B` as the voice rises | Levels arrive about 30 a second from the native capture. Fades out after dictation stops, then clears. Animates under reduced motion |
+| Partial text | `.reference-overlay .pending` | The words of the utterance in progress | `--muted` in the composer text | Turns final and takes `--ink` when the utterance ends |
+| Dictation error | `.composer-notice.end` | Dictation failure | Composer notice at the composer's right edge, `role="alert"` | Leaves after 6s |
 | Speech install card | `.speech-install-card` | Install facts and progress | 1px `--border`, `--radius-control`, `--surface`, `--ink`, `--text-12 --font-mono`, padding 10px 12px, `strong` at `font-weight: 600` (raw, `--weight-semibold` exists) | `dt` in `--muted`, `dd` wraps anywhere. Error `.speech-install-error`: `--danger` |
-| Install progress | `.speech-install-progress progress` | Download bar | 6px, `accent-color: var(--muted)` | None |
-| Install buttons | `.speech-install-card button` | Install, Cancel install, Try again | Shell button, padding 4px 8px, `font: inherit`, margin-top 7px | Disabled while pending |
+| Install download | `.composer-notice.end` | Download progress while the model downloads | Composer notice at the composer's right edge: a 96px 6px bar at `accent-color: var(--muted)`, the bytes in `--muted` `--text-12 --font-mono`, and Cancel | Stays until the download ends, then turns into Installed. Press Voice again to dictate. A failed download offers Try again. No total yet: an indeterminate bar |
+| Install buttons | `.speech-install-card button` | Install, Try again | Shell button, padding 4px 8px, `font: inherit`, margin-top 7px | Disabled while pending. The card hides while the download runs |
 | Close card | `.speech-install-card .close-card` | Dismisses the card | Quiet, 24px floor, `--muted`, 14px `x` icon | Hover: `--ink` |
 
 ## Toasts and notices
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Composer notice | `.composer-notice` | Short notices over the composer: background service, access change, thread move, speech model installed, voice shortcut unavailable | `[data-composer-panel]` anchor, overlay `[data-panel]`: `--surface`, 1px `--border`, `--radius-panel`, `--shadow-overlay`. `--ink` at `--text-13 --font-human`, padding 6px 6px 6px 12px, gap 8px, `composer-notice-enter` at `--motion-popover --ease-out` | Leaves after 6s. Pointer or keyboard focus holds it. Hidden while another composer panel is open. Action: shell button, hover `--faint` |
+| Composer notice | `.composer-notice` | Short notices over the composer: background service, access change, thread move, speech model installed, voice shortcut unavailable | `[data-composer-panel]` anchor, overlay `[data-panel]`: `--surface`, 1px `--border`, `--radius-panel`, `--shadow-overlay`. `--ink` at `--text-13 --font-human`, padding 6px 6px 6px 12px, gap 8px, `composer-notice-enter` at `--motion-popover --ease-out` | Leaves after 6s, or stays while `persistent`. Pointer or keyboard focus holds it. Hidden while another composer panel is open. `.end` sets it at the composer's right edge, over the Voice button: the speech model install and dictation errors. An optional 6px progress bar. Action: shell button, hover `--faint` |
 | Auth state | `.auth-state` | Sign-in, error, and background service notices | Centered column, gap 12px, max-width 420px, margin-top 34px | None |
 | Support line | `.support` | Secondary sentence | `--muted` | None |
 | Record line | `.record` | Mono notice or error | `--font-mono`, `--text-12`, `--muted`. `.error-record` adds `--leading-body` | None |

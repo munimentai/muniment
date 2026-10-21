@@ -20,7 +20,7 @@ const field = createRawSnippet(() => ({ render: () => '<textarea rows="2"></text
 const modes = [{ id: 'ask', title: 'Ask before changes', description: 'Asks before each change.' }]
 
 // The composer near the foot of the window with a notice showing over it.
-function composerWithNotice() {
+function composerWithNotice(notice = { id: 'one', text: 'Scheduled agents run only while Muniment is open.', action: { label: 'Open Login Items', run: () => {} } }) {
   const host = document.createElement('div')
   host.style.cssText = 'padding-top: 400px;'
   document.body.append(host)
@@ -28,7 +28,7 @@ function composerWithNotice() {
   const composer = host.querySelector('.composer')
   const notices = createComposerNotices()
   components.push(mount(ComposerNotice, { target: composer, props: { notices } }))
-  notices.show({ id: 'one', text: 'Scheduled agents run only while Muniment is open.', action: { label: 'Open Login Items', run: () => {} } })
+  notices.show(notice)
   flushSync()
   return { composer, notice: composer.querySelector('[data-composer-notice]') }
 }
@@ -68,4 +68,19 @@ it('hides under an open composer menu and returns once it closes', () => {
   unmount(picker)
   flushSync()
   expect(notice.checkVisibility({ visibilityProperty: true })).toBe(true)
+})
+
+it('sits at the composer right edge with the end placement, while other notices keep the left', () => {
+  document.documentElement.dataset.motion = 'reduce'
+  const { composer, notice } = composerWithNotice({ id: 'speech-install', text: 'Downloading.', placement: 'end', persistent: true, progress: { label: 'Speech model download progress', max: 100, value: 40, text: '40 B of 100 B' } })
+  const frame = composer.getBoundingClientRect()
+  const box = notice.getBoundingClientRect()
+  const inner = frame.right - (composer.offsetWidth - composer.clientWidth - composer.clientLeft)
+  expect(Math.round(box.right)).toBe(Math.round(inner))
+  expect(Math.round(frame.top + composer.clientTop - box.bottom)).toBe(8)
+  expect(box.left).toBeGreaterThan(frame.left + composer.clientLeft)
+  const bar = notice.querySelector('progress')
+  expect(bar.checkVisibility()).toBe(true)
+  expect(bar.getBoundingClientRect().width).toBeGreaterThan(40)
+  expect(notice.querySelector('.amount').textContent).toBe('40 B of 100 B')
 })
