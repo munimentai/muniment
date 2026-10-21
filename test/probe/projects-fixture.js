@@ -8,7 +8,8 @@
 // `palette` opens the
 // command palette and `palette-search` searches it for "re". `move` opens
 // Move to project for Trip ideas, and `model` opens the model picker on
-// Release notes, which runs Homelab's model.
+// Release notes, which runs Homelab's model. `&machines` pairs two machines,
+// so every row carries its meta line.
 const FIXTURE_NOW = Date.parse('2026-10-18T13:00:00Z')
 const params = typeof location === 'undefined' ? new URLSearchParams() : new URLSearchParams(location.search)
 export const projectsState = params.get('state') ?? 'sidebar'

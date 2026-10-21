@@ -13,6 +13,7 @@
   import { activeRuntime, kindIcon, LOCAL_RUNTIME_ID, machineName, pairedRuntimes, remoteSelected, statusHint, statusLabel } from './runtimes/runtimes.js'
   import { machineStatusTone } from './lib/status-tone.js'
   import StatusChip from './lib/ui/StatusChip.svelte'
+  import StatusRing from './sidebar/StatusRing.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
@@ -137,7 +138,7 @@
   import ProjectPicker from './sidebar/ProjectPicker.svelte'
   import { SETTINGS_PAGE, isPaletteShortcut, paletteInput, paletteShortcut, settingsPages } from './sidebar/palette.js'
   import { layerLabel, sourceLine } from './sidebar/sources.js'
-  import { arrangeSidebar, emptySidebar, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar/sidebar-model.js'
+  import { arrangeSidebar, emptySidebar, markRead, readMarks, runStates, shownRows, sidebarInput } from './sidebar/sidebar-model.js'
   import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -3583,7 +3584,7 @@
 {#snippet freshRow()}
   {#if showFreshThread}
     {@const projectName = selectedProject ? sidebarProjectById[selectedProject]?.name : ''}
-    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined} data-accent-edge><div class="thread-row-body"><div class="thread-row-title">{currentThreadTitle}</div><span class="thread-row-meta"><StatusChip tone="neutral">New</StatusChip>{#if projectName}<span class="row-project">{projectName}</span>{/if}</span></div></li>
+    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined} data-accent-edge><div class="thread-row-body"><div class="thread-row-title">{currentThreadTitle}</div>{#if projectName}<span class="thread-row-meta"><span class="row-project">{projectName}</span></span>{/if}</div></li>
   {/if}
 {/snippet}
 
@@ -3597,17 +3598,29 @@
   {#if machine}<span class="machine-badge"><i class="machine-dot" data-tone={machineStatusTone(machine.status)} aria-hidden="true"></i><span class="machine-name">{machineName(machine)}</span><span class="visually-hidden">, {statusLabel(machine)}</span></span>{/if}
 {/snippet}
 
-<!-- A row's meta line: its status in words and its project, then for an
-     agent's thread the agent's avatar and its name, or once a machine is
-     paired the machine the thread lives on, by its shape and name. At the
-     right end, how long its run has been working or how long ago the thread
-     last changed. A settled thread shows only its time. -->
-{#snippet rowMeta(summary, id = undefined)}
+<!-- A row's text. Once a machine is paired, or while the thread lives with
+     another fleet member, a meta line over the title names the agent by its
+     avatar and name, or else the machine by its shape and name, with the time
+     at its right end. Otherwise the row is one line: an agent's avatar, the
+     title, and the time at the right end. While core reports a status, the
+     status ring takes the place of the leading icon, and an unread result
+     sets its title semibold. The time is how long the thread's run has been
+     working, or how long ago the thread last changed. -->
+{#snippet rowBody(summary, title, rowId = undefined)}
   {@const agent = summary.row?.agent}
+  {@const known = agent && (roster.find((entry) => entry.id === agent.id) ?? agent)}
   {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
-  {@const machine = !agent && !owner && pairedRuntimes(runtimeList).length ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  {@const at = (summary.row?.status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
-  <span class="thread-row-meta" {id}>{#if summary.row?.status_label}<StatusChip tone={statusTone(summary.row.status)}>{summary.row.status_label}</StatusChip>{#if summary.row.project_name}<span class="row-project">{summary.row.project_name}</span>{/if}<span aria-hidden="true">·</span>{/if}{#if agent}{@const known = roster.find((entry) => entry.id === agent.id) ?? agent}<AgentAvatar agent={known} size={14} tooltip={false} /><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner} />{:else if machine}<LucideIcon name={kindIcon(machine)} size={12} /><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{/if}<time datetime={at}>{relativeTime(at)}</time></span>
+  {@const lined = !!owner || pairedRuntimes(runtimeList).length > 0}
+  {@const machine = lined && !agent && !owner ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
+  {@const status = summary.row?.status}
+  {@const ring = { status, label: summary.row?.status_label ?? '', key: `${summary.threadId}:${summary.row?.updated_at ?? summary.updatedAt ?? ''}` }}
+  {@const unread = status === 'done' || status === 'failed' ? 'true' : undefined}
+  {@const at = (status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
+  {#if lined}
+    <div class="thread-row-body"><div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><span class="thread-row-meta" id={rowId && `${rowId}-meta`}>{#if agent}<StatusRing {...ring}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner}>{#snippet icon()}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(owner)} size={12} /></StatusRing>{/snippet}</OwnerChip>{:else if machine}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(machine)} size={12} /></StatusRing><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{:else}<StatusRing {...ring} size={12} />{/if}<time datetime={at}>{relativeTime(at)}</time></span></div>
+  {:else}
+    <div class="thread-row-body" data-layout="single">{#if agent}<StatusRing {...ring} id={rowId && `${rowId}-lead`}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent visually-hidden" id={rowId && `${rowId}-agent`}>{agent.name}</span>{:else}<StatusRing {...ring} id={rowId && `${rowId}-lead`} />{/if}<div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><time id={rowId && `${rowId}-meta`} datetime={at}>{relativeTime(at)}</time></div>
+  {/if}
 {/snippet}
 
 {#snippet unconnectedModelIcon()}<LucideIcon name="cpu" size={14} />{/snippet}
@@ -3635,10 +3648,10 @@
                     </form>
                   {:else if current && !catalogTitle}
                     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} data-accent-edge style:--edge-color={summary.row?.agent?.color} aria-current="true" aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title">{rowTitle}</div>{@render rowMeta(summary)}</div></div>
+                    <div class="thread-row active-thread" tabindex="-1" class:selected data-thread-id={summary.threadId} data-accent-edge style:--edge-color={summary.row?.agent?.color} aria-current="true" aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} onclick={(event) => currentRowClick(event, summary.threadId)}>{@render rowMark(selected)}{@render rowBody(summary, rowTitle)}</div>
                   {:else}
                     {@const running = summary.threadId === backgroundRun?.threadId}
-                    <button class="thread-row" class:selected aria-labelledby={`${rowId}-title`} aria-describedby={`${rowId}-meta`} data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => sidebarRowClick(event, summary)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected)}<div class="thread-row-body"><div class="thread-row-title" id={`${rowId}-title`}>{rowTitle}</div>{@render rowMeta(summary, `${rowId}-meta`)}</div>{#if running}<span class="visually-hidden">Running</span>{/if}</button>
+                    <button class="thread-row" class:selected aria-labelledby={`${rowId}-title`} aria-describedby={`${rowId}-lead ${rowId}-agent ${rowId}-meta`} data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => sidebarRowClick(event, summary)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected)}{@render rowBody(summary, rowTitle, rowId)}{#if running}<span class="visually-hidden">Running</span>{/if}</button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
                     <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
@@ -4594,7 +4607,8 @@
   .thread-row.selected > .select-mark { color:var(--ink); }
   .delete-titles { margin:4px 0 0; padding-left:18px; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
-  .thread-record { position: relative; }
+  /* The room the actions control takes at a row's right end: its width and its inset, less the row's own padding, and a gap before it. */
+  .thread-record { position: relative; --row-actions-room: 24px; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); user-select: none; -webkit-user-select: none; }
   /* Hover is a lighter wash than the open thread's faint row, as a selection is darker, so the three never look alike. */
   button.thread-row:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--faint) 55%, transparent); }
@@ -4603,11 +4617,19 @@
   /* The row's actions control shows at the right end of the title line while the pointer or focus rests on the row, so the time above it stays put. */
   .thread-actions { position: absolute; bottom: var(--row-pad); right: 4px; min-width: 22px; min-height: 22px; padding: 0 4px; color: var(--muted); opacity: 0; pointer-events: none; }
   .thread-record:hover .thread-actions, .thread-record:focus-within .thread-actions { opacity: 1; pointer-events: auto; }
-  .thread-record:hover .thread-row-title, .thread-record:focus-within .thread-row-title { padding-right: 22px; }
+  /* Under a meta line the control sits at the title's end, so the title's box, and the fade at its end, stop short of the control. */
+  .thread-record:is(:hover, :focus-within) .thread-row-body:not([data-layout="single"]) .thread-row-title { margin-right: var(--row-actions-room); }
   .thread-actions:hover:not(:disabled) { color: var(--ink); background: var(--faint); }
   button.thread-row[aria-disabled="true"] { opacity: .55; }
   /* Inbox rows: a small muted meta line over the title, which fades at its end. The title leads in reading order, so a row's name starts with it. */
   .thread-row-body { flex: 1 1 auto; display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; }
+  /* With no meta line the row is one line: the leading mark, the title and the time. The time keeps the actions control's room, and the control takes its place while the pointer or focus rests on the row. */
+  .thread-row-body[data-layout="single"] { flex-direction: row; align-items: center; gap: 0; }
+  .thread-row-body[data-layout="single"] > :global(.status-lead) { margin-right: 6px; }
+  .thread-row-body[data-layout="single"] time { min-width: var(--row-actions-room); margin-left: 6px; text-align: right; }
+  .thread-record:is(:hover, :focus-within) .thread-row-body[data-layout="single"] time { visibility: hidden; }
+  /* A finished thread the user has not read yet. */
+  .thread-row-title[data-unread] { font-weight: var(--weight-semibold); }
   .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
   .thread-row-meta .row-project, .thread-row-meta .row-agent { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
