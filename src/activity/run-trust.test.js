@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { irreversibleLines, rewindFiles, rewindOutcome, rewindUnavailable, runContextRows } from './run-trust.js'
+import { irreversibleLines, rewindFiles, rewindOutcome, rewindUnavailable, runContextRows, turnSources } from './run-trust.js'
 
 const modes = [{ id: 'bypass', title: 'Bypass permissions' }, { id: 'manual', title: 'Ask before changes' }]
 
@@ -13,6 +13,16 @@ describe('the receipt rows for where a turn ran', () => {
     expect(runContextRows(run, { machine: 'Studio', modes, sources: { model: 'from project Homelab', mode: 'this thread' } }).map((row) => [row.label, row.value])).toEqual([
       ['Machine', 'Studio'], ['Mode', 'Bypass permissions (this thread)'], ['Model source', 'from project Homelab'],
     ])
+  })
+
+  it('keeps an earlier turn\'s sources after a later turn arrives', () => {
+    const sources = turnSources()
+    const first = { id: 'run-1' }, second = { id: 'run-2' }
+    const now = { model: 'from project Homelab', mode: 'this thread' }
+    expect(sources(first, 'run-1', () => now)).toEqual(now)
+    expect(sources(second, 'run-2', () => ({ model: null, mode: 'default' }))).toEqual({ model: null, mode: 'default' })
+    expect(sources(first, 'run-2', () => ({}))).toEqual(now)
+    expect(sources({ id: 'run-0' }, 'run-2', () => now)).toEqual({})
   })
 
   it('leaves out what the run did not record', () => {

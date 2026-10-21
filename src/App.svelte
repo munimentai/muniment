@@ -98,7 +98,7 @@
   let codeDiffModule
   const loadCodeDiff = () => codeDiffModule ??= import('./lib/CodeDiff.svelte')
   import FileChanges from './files/FileChanges.svelte'
-  import { rewindOutcome, rewindUnavailable, runContextRows } from './activity/run-trust.js'
+  import { rewindOutcome, rewindUnavailable, runContextRows, turnSources } from './activity/run-trust.js'
   import RoutingDetails from './lib/RoutingDetails.svelte'
   import { appliedDiffLabel, changedFiles, createChangedFiles, fileName, ranCommands } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
@@ -870,6 +870,7 @@
   // The newest turn's receipt names where its model and mode come from
   // while the thread still runs on them.
   const newestRunId = $derived(messages.findLast((message) => message.run && settledPhases.has(message.run.phase))?.run.id ?? null)
+  const footerSources = turnSources()
   function runSources(run) {
     const receipt = run?.receipt ?? {}
     const model = typeof receipt.model === 'string' ? receipt.model : ''
@@ -4014,7 +4015,7 @@
                 {@const summary = receiptSummary(message.run.receipt, providerNames)}
                 {@const provider = receiptProvider(message.run.receipt)}
                 {@const ownRows = receiptRows({ ...message.run.receipt, routing: [] }, { tools: !parts.some((part) => part.type === 'actions' && actionGroups(part.activities, false).length) })}
-                {@const rows = [...ownRows, ...runContextRows(message.run, { machine: runMachine, modes: modeListing?.listing?.modes ?? [], sources: message.run.id === newestRunId ? runSources(message.run) : {} })]}
+                {@const rows = [...ownRows, ...runContextRows(message.run, { machine: runMachine, modes: modeListing?.listing?.modes ?? [], sources: footerSources(message.run, newestRunId, runSources) })]}
                 {@const routing = routedTurns(message.run.receipt)}
                 {@const columns = receiptUsageColumns(message.run.receipt, providerNames)}
                 {@const hasDetails = rows.length > 0 || columns.length > 0 || routing.length > 0}
