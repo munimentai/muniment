@@ -289,9 +289,9 @@
   .routines { display: grid; gap: 6px; padding: 4px 8px; }
   .empty { margin: 0; padding: 6px 8px; color: var(--muted); font-size: var(--text-12); }
   .note { display: flex; align-items: flex-start; gap: 6px; margin: 2px 2px 6px; padding: 6px 8px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font-size: var(--text-12); line-height: 1.4; }
-  .note > :global(svg) { flex: none; margin-top: 2px; color: var(--ochre); }
+  .note > :global(svg) { flex: none; margin-top: 2px; color: var(--warning); }
   .read-only:not(.away) .note > :global(svg) { color: var(--muted); }
-  .error { margin: 2px 8px 6px; color: var(--oxide); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
+  .error { margin: 2px 8px 6px; color: var(--danger); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
   /* The picker's foot action, under a separator inset to the list's padding. */
   .foot { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin-top: 6px; padding: 7px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }
   .foot::before { content: ''; position: absolute; top: -3px; left: 0; right: 0; height: 1px; background: var(--border); opacity: .75; }

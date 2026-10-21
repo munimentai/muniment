@@ -6,8 +6,8 @@
   // sits beside it. It draws the head alone in the avatar style picked in Appearance and
   // the tone of the theme in use, and redraws when either changes.
   // `activity`, when given, outlines the head with what the agent does now and names it
-  // on hover: a breathing signal outline while it runs, ochre while it waits for an
-  // answer and oxide after a failed run. Idle shows no outline.
+  // on hover: a breathing signal outline while it runs, warning while it waits for an
+  // answer and danger after a failed run. Idle shows no outline.
   // `tooltip` false leaves the hover label to the surface, such as a sidebar row
   // whose own mark names the activity where the avatar's label would be clipped.
   let { agent, size = 24, activity = undefined, tooltip = true } = $props()
@@ -26,8 +26,8 @@
   .agent-avatar.agent-avatar[data-activity] :global(svg) { filter: drop-shadow(1px 0 0 var(--activity)) drop-shadow(-1px 0 0 var(--activity)) drop-shadow(0 1px 0 var(--activity)) drop-shadow(0 -1px 0 var(--activity)); }
   .agent-avatar.agent-avatar[data-activity="idle"] :global(svg) { filter: none; }
   .agent-avatar.agent-avatar[data-activity="running"] { --activity: var(--signal); animation: avatar-running 2.4s ease-in-out infinite; }
-  .agent-avatar.agent-avatar[data-activity="waiting"] { --activity: var(--ochre); }
-  .agent-avatar.agent-avatar[data-activity="error"] { --activity: var(--oxide); }
+  .agent-avatar.agent-avatar[data-activity="waiting"] { --activity: var(--warning); }
+  .agent-avatar.agent-avatar[data-activity="error"] { --activity: var(--danger); }
   /* The hover label names what the agent does now. */
   .agent-avatar.agent-avatar[data-tooltip] { position: relative; }
   .agent-avatar.agent-avatar[data-tooltip]::after { content: attr(data-tooltip); position: absolute; z-index: 6; left: 0; bottom: calc(100% + 6px); width: max-content; max-width: 280px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); line-height: 1.4; white-space: normal; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }

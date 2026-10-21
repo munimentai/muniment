@@ -188,7 +188,7 @@
   .classifier { color: var(--ink); font-weight: 600; }
   .balanced { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--muted); }
   .unavailable { min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); white-space: normal; }
-  .will-compact { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--ochre); font: var(--text-12) var(--font-human); }
+  .will-compact { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--warning); font: var(--text-12) var(--font-human); }
   .picker-group ul { margin: 0; padding: 0; list-style: none; }
   .picker-item { position: relative; }
   .picker-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 34px 5px 8px; text-align: left; font-size: var(--text-13); }

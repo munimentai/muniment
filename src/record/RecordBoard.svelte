@@ -148,8 +148,8 @@
   .record-board { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; padding-top: 10px; }
   .record-board-pending { display: grid; gap: 4px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); }
   .record-diff-line, .record-diff-warning, .record-diff-error { margin: 0; font: var(--text-12) var(--font-mono); }
-  .record-diff-warning { color: var(--ochre); }
-  .record-diff-error { color: var(--oxide); }
+  .record-diff-warning { color: var(--warning); }
+  .record-diff-error { color: var(--danger); }
   .record-board-actions { display: flex; gap: 8px; margin-top: 4px; }
   .record-commit, .record-discard { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }

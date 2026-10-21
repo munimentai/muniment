@@ -157,7 +157,7 @@ export function probeNotifications({ machines = [], filter = {} }, state) {
     run('n-2', TRIAGE, BOX, 3, 'running', 'cron', triage),
     run('n-3', INBOX, 'local', 6, 'waiting_input', 'cron', { ...inbox, result: 'Two invoices disagree. Which total should I file?' }),
     run('n-4', RECEPTION, 'local', 35, 'failed', 'webhook', { ...desk, error: 'This provider has no remaining allowance. Wait for the reset, add an account, or choose another provider.' }),
-    run('n-5', EDITOR, STUDIO, 50, 'completed', 'cron', { ...editor, result: 'Published the weekly changelog draft.' }),
+    run('n-5', EDITOR, STUDIO, 50, 'completed', 'cron', { ...editor, result: '- **Published the weekly changelog draft.** Two entries cite [the release notes](https://example.com/notes) and `v0.4`.' }),
     run('n-6', SCOUT, 'local', 95, 'completed', 'manual', { ...scout, result: 'Found 4 new leads. Two match the target list.' }),
     run('n-7', TRIAGE, BOX, 140, 'failed', 'webhook', { ...triage, error: 'The test log was not in the webhook payload.' }),
     run('n-8', INBOX, 'local', 200, 'completed', 'cron', { ...inbox, silent: true }),

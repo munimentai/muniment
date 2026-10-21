@@ -24,9 +24,9 @@
 </section>
 
 <style>
-  .folder-access { display: grid; gap: 8px; margin: 4px 8px 8px; padding: 10px; border: 1px solid var(--ochre); border-radius: var(--radius-control); background: var(--surface); }
+  .folder-access { display: grid; gap: 8px; margin: 4px 8px 8px; padding: 10px; border: 1px solid var(--warning); border-radius: var(--radius-control); background: var(--surface); }
   p { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; }
-  .head { display: flex; align-items: center; gap: 6px; color: var(--ochre); }
+  .head { display: flex; align-items: center; gap: 6px; color: var(--warning); }
   .head strong { color: var(--ink); font-weight: 600; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>

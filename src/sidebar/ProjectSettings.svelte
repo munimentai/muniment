@@ -6,7 +6,8 @@
   // routines and activity, and Add a trigger makes the project an agent with
   // a home thread where its runs post. Core saves the defaults and the
   // instructions through `project_settings_save`, and each agent change is an
-  // agent operation on the agent's own machine.
+  // agent operation on the agent's own machine. A card's History row opens
+  // the run's conversation through `onopenrun`, and a failed run's Retry runs it again.
   import PanelPage from '../lib/ui/PanelPage.svelte'
   import PageHead from '../lib/ui/PageHead.svelte'
   import Group from '../lib/ui/Group.svelte'
@@ -22,7 +23,7 @@
   import { untrack } from 'svelte'
 
   let { tauri, project, agents = [], inventory = null, modes = null, runtimeList = null, latestRuns = {}, busy = false,
-    onback, onnewthread, onaddtrigger, onchat = () => {}, onprofile = () => {}, onaction = async () => {}, onchange = async () => {}, onrun = () => {}, onmanagemodels = () => {} } = $props()
+    onback, onnewthread, onaddtrigger, onchat = () => {}, onprofile = () => {}, onaction = async () => {}, onchange = async () => {}, onrun = () => {}, onopenrun = null, onmanagemodels = () => {} } = $props()
 
   let settings = $state(null)
   let instructions = $state('')
@@ -148,7 +149,7 @@
       <div class="cards" aria-label="Project agents">
         {#each agents as agent (`${agent.runtimeId ?? 'local'}:${agent.id}`)}
           <AgentCard {agent} {tauri} {inventory} projectName={project.name} modes={agent.replica || agent.online === false ? null : agentModes[agent.runtimeId ?? 'local']} machine={agent.primaryMachine ?? agentMachine(runtimeList, agent)} latestRun={latestRuns[agent.id] ?? null}
-            {onchat} {onprofile} {onrun} {onmanagemodels} {onchange} onaction={(action, name) => onaction(agent, action, name)} />
+            {onchat} {onprofile} {onrun} {onopenrun} {onmanagemodels} {onchange} onaction={(action, name) => onaction(agent, action, name)} />
         {/each}
       </div>
     {/if}

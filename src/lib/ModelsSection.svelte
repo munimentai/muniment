@@ -641,7 +641,7 @@
   .classifier-edit { padding: 10px 0; }
   .action-label { white-space: nowrap; }
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
-  .icon-action.critical { color: var(--oxide); }
+  .icon-action.critical { color: var(--danger); }
   .sign-in-again { min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
@@ -658,7 +658,7 @@
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-count { flex: none; white-space: nowrap; }
-  .model-count[data-tone="caution"] { color: var(--ochre); }
+  .model-count[data-tone="caution"] { color: var(--warning); }
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .provider-list li + li { border-top: 1px solid var(--border); }

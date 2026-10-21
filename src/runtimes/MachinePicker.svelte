@@ -144,14 +144,14 @@
   .machine-menu .name { flex: 1; }
   /* A green globe marks a machine that answers. One that does not shows its state chip. */
   .state { flex: none; display: inline-flex; margin-left: auto; }
-  .state.online { color: var(--signal); }
+  .state.online { color: var(--success); }
   .machine-menu :global(.status-chip) { margin-left: auto; }
   .machine-menu .state :global(.lucide) { color: inherit; }
   .separator { height: 1px; margin: 2px 4px; background: var(--border); }
   .manage { color: var(--muted) !important; }
   .source { margin: 2px 0 0; padding: 4px 8px 2px; border-top: 1px solid var(--border); color: var(--muted); font: var(--text-12) var(--font-human); }
   .heading { margin: 2px 8px 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
-  /* The open thread's owner that is away keeps the ochre slashed globe beside its shape. */
-  .away { display: inline-flex; color: var(--ochre); }
+  /* The open thread's owner that is away keeps the warning slashed globe beside its shape. */
+  .away { display: inline-flex; color: var(--warning); }
   .away :global(.lucide) { color: inherit; }
 </style>

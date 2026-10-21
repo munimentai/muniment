@@ -112,7 +112,7 @@
 
   .code-diff-warning {
     margin-bottom: 8px;
-    border-left: 3px solid var(--ochre);
+    border-left: 3px solid var(--warning);
     color: var(--ink);
   }
 

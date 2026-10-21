@@ -130,8 +130,8 @@
   ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
   li, .item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; font-size: var(--text-13); }
   .note { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; }
-  .warning { margin: 0; padding: 8px 10px; border: 1px solid var(--ochre); border-radius: var(--radius-control); font-size: var(--text-12); line-height: 1.5; }
+  .warning { margin: 0; padding: 8px 10px; border: 1px solid var(--warning); border-radius: var(--radius-control); font-size: var(--text-12); line-height: 1.5; }
   .check { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: var(--text-13); }
-  .error { margin: 0; color: var(--oxide); font-size: var(--text-12); }
+  .error { margin: 0; color: var(--danger); font-size: var(--text-12); }
   .spacer { flex: 1; }
 </style>

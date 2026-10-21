@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
-import { isProposal, lastFiredLabel, pollLabel, triggerSummary } from './routine-labels.js'
+import { isProposal, lastFiredLabel, nextRunLabel, pollLabel, triggerSummary } from './routine-labels.js'
+import { runTimeLabel } from '../lib/agent-labels.js'
 
 it('names each trigger kind with its schedule or sender', () => {
   expect(triggerSummary({ kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' })).toBe('Weekdays at 09:00 · America/New_York')
@@ -44,4 +45,15 @@ it('names when a routine runs with no time zone, in local time for another zone'
   expect(routineWhen({ trigger: { kind: 'webhook', preset: 'github' } })).toBe('Webhook · GitHub')
   expect(routineWhen({ trigger: { kind: 'mcp', server: 'crm', tool: 'search', every: { expr: '*/15 * * * *', tz: 'UTC' } } })).toBe('crm search · every 15 minutes')
   expect(['cron', 'webhook', 'mcp'].map((kind) => routineIcon({ kind }))).toEqual(['clock', 'link', 'plug-zap'])
+})
+
+it('names the next run in local time with no time zone', () => {
+  const now = Date.now()
+  const next = Math.floor(now / 1000) + 3600
+  const cron = (tz, extra = {}) => ({ id: tz, enabled: true, trigger: { kind: 'cron', expr: '0 2 * * *', tz }, ...extra })
+  expect(nextRunLabel({ routines: [cron('UTC', { next_fire_at: next })] }, now)).toBe(runTimeLabel(next * 1000, now))
+  expect(nextRunLabel({ routines: [cron('UTC')] }, now)).toBe('Every day at 02:00')
+  expect(nextRunLabel({ routines: [cron('UTC')] }, now)).not.toMatch(/UTC|GMT/)
+  expect(nextRunLabel({ routines: [cron('UTC', { enabled: false })] }, now)).toBe('Manual')
+  expect(nextRunLabel({ paused_reason: 'budget', routines: [cron('UTC')] }, now)).toBe('Paused')
 })

@@ -423,8 +423,8 @@
   .record-import-identity { display: flex; align-items: center; gap: 8px; font: var(--text-12) var(--font-mono); color: var(--ink); }
   .record-import-diff { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
   .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
-  .record-diff-warning { margin: 0; color: var(--ochre); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
-  .record-import-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .record-diff-warning { margin: 0; color: var(--warning); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
+  .record-import-error { margin: 0; color: var(--danger); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .record-import-line { margin: 0; font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .record-import-queue td { white-space: normal; overflow-wrap: anywhere; }
   .record-import-actions { display: flex; gap: 8px; }

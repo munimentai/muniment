@@ -40,5 +40,5 @@
   .class-count { color: var(--muted); white-space: nowrap; }
   .bar { grid-column: 1 / -1; display: block; height: 3px; border-radius: var(--radius-chip); background: var(--faint); overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--muted); }
-  .done .bar span { background: var(--ink); }
+  .done .bar span { background: var(--success); }
 </style>

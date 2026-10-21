@@ -3,7 +3,8 @@
  * source for color, radius, and type tokens; components reference the custom
  * properties, never raw values. `--signal` may only be referenced by
  * components on the §1.2 allowed list (color means computation). `--accent`
- * fills primary actions, and the state tokens color reported states.
+ * fills primary actions, and the state tokens color reported states in
+ * every color scheme alike.
  *
  * Themes follow the OS by default (§1.3); an explicit per-device preference
  * overrides the media query through the data-theme selectors below.
@@ -592,10 +593,23 @@
 
 /* State colors for the states core reports: online and done in success,
    running in active, failures in danger, queued and waiting in warning.
-   Each clears 4.5:1 on paper, surface, faint and its own chip fill. */
+   They are a stoplight of green, yellow and red, plus a blue for running,
+   that no color scheme redefines: a theme's color-scheme picks only the
+   light or the dark value. Status marks, words, chips and tinted
+   buttons, destructive ones included, use them, never the accent or signal.
+   Each clears 4.5:1 on paper, surface, faint and its own soft fill, which
+   chips and tinted buttons lay under it, and its edge draws their hairline. */
 :root {
   --success: light-dark(#105E34, #5FCF8C);
   --active: light-dark(#174E99, #7AB2F7);
   --danger: light-dark(#9A2424, #F28B82);
-  --warning: light-dark(#6E4600, #E9BB5C);
+  --warning: light-dark(#664E00, #F0C850);
+  --success-soft: color-mix(in srgb, var(--success) 14%, transparent);
+  --active-soft: color-mix(in srgb, var(--active) 14%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 14%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 14%, transparent);
+  --success-edge: color-mix(in srgb, var(--success) 50%, transparent);
+  --active-edge: color-mix(in srgb, var(--active) 50%, transparent);
+  --danger-edge: color-mix(in srgb, var(--danger) 50%, transparent);
+  --warning-edge: color-mix(in srgb, var(--warning) 50%, transparent);
 }

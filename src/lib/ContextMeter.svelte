@@ -23,8 +23,8 @@
   circle { fill: none; stroke-width: 2; }
   .track { stroke: var(--border); }
   .fill { stroke: var(--muted); }
-  [data-level="caution"] { color: var(--ochre); }
-  [data-level="caution"] .fill { stroke: var(--ochre); }
+  [data-level="caution"] { color: var(--warning); }
+  [data-level="caution"] .fill { stroke: var(--warning); }
   [data-level="unknown"] .track { stroke: var(--muted); stroke-dasharray: 2 2; }
   .compacting .ring { animation: turn 1.1s linear infinite; }
   @keyframes turn { to { transform: rotate(270deg); } }

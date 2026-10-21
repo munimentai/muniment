@@ -41,7 +41,7 @@ export function connectOptions(scan) {
 
 export const SERVER_STATES = {
   ready: { action: 'Connect', tone: 'signal' },
-  'needs-key': { action: 'Add key', tone: 'ochre' },
+  'needs-key': { action: 'Add key', tone: 'warning' },
   'not-running': { action: 'Not running', tone: 'muted' },
 }
 

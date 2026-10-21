@@ -133,6 +133,6 @@
   .question p { margin: 0; font-weight: var(--weight-semibold); }
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .error { margin: 0; color: var(--oxide); font-size: var(--text-13); }
+  .error { margin: 0; color: var(--danger); font-size: var(--text-13); }
   @media (max-width: 560px) { dl { grid-template-columns: minmax(0, 1fr); } }
 </style>

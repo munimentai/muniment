@@ -60,7 +60,7 @@
 {/if}
 <style>
   .update { position: relative; display: flex; }
-  button { display: inline-flex; align-items: center; justify-content: center; gap: 0; height: 24px; min-width: 24px; padding: 0 5px; border: 0; border-radius: var(--radius-pill); background: var(--signal-soft); color: var(--signal); font: var(--text-12) var(--font-mono); cursor: pointer; }
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 0; height: 24px; min-width: 24px; padding: 0 5px; border: 0; border-radius: var(--radius-pill); background: var(--success-soft); color: var(--success); font: var(--text-12) var(--font-mono); cursor: pointer; }
   span { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
   button:hover span, button:focus-visible span, .installing span { max-width: 90px; opacity: 1; margin: 0 4px 0 2px; }
   button:disabled { cursor: default; opacity: .6; }

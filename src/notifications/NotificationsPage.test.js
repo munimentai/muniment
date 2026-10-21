@@ -3,7 +3,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import '@testing-library/jest-dom/vitest'
 import NotificationsPage from './NotificationsPage.svelte'
 import SidebarActions from '../lib/SidebarActions.svelte'
-import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, resultLine, triggerLabel } from './notifications.js'
+import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, resultLine, triggerIcon, triggerLabel } from './notifications.js'
+import { machineLight } from '../lib/status-tone.js'
 
 afterEach(cleanup)
 
@@ -35,6 +36,22 @@ describe('notification words', () => {
     expect(triggerLabel({ kind: 'mcp' })).toBe('MCP')
     expect(resultLine({ status: 'failed', run: { error: 'Boom.' } })).toBe('Boom.')
     expect(resultLine({ status: 'done', run: { silent: true } })).toBe('Nothing needed a reply.')
+  })
+
+  it('gives each trigger the routine rows\' icon and a manual run the Run now play', () => {
+    expect(['cron', 'webhook', 'mcp', 'manual', 'agent_message', 'other'].map((kind) => triggerIcon({ kind })))
+      .toEqual(['clock', 'link', 'plug-zap', 'play', 'message-square', 'zap'])
+  })
+
+  it('previews a Markdown result as plain text', () => {
+    const summary = '- **Tauri 2.12 raises compatibility requirements.** Released with [notes](https://example.com) and `cargo` fixes.\n- Second _item_'
+    expect(resultLine({ status: 'done', run: { result_summary: summary } })).toBe('Tauri 2.12 raises compatibility requirements. Released with notes and cargo fixes. Second item')
+    expect(resultLine({ status: 'needs_you', run: { result_summary: '## Which total?' } })).toBe('Which total?')
+  })
+
+  it('lights a machine green while it answers, yellow while it connects and red otherwise', () => {
+    expect([{ local: true }, { status: 'online' }, { status: 'connecting' }, { status: 'unknown' }, { status: 'offline' }, { status: 'revoked' }, null].map(machineLight))
+      .toEqual(['green', 'green', 'yellow', 'yellow', 'red', 'red', null])
   })
 
   it('notifies for what needs the user and, by choice, what finished', () => {
@@ -88,6 +105,29 @@ describe('Notifications page', () => {
     render(NotificationsPage, { tauri: { invoke: vi.fn(async () => quiet) }, runtimeList: null })
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Next scheduled runs' })).toHaveTextContent('Weekday briefing')
+  })
+
+  it('names each run\'s trigger with its icon and its machine with its stoplight', async () => {
+    const box = { id: 'box', name: 'Build box' }
+    const runs = page({ needs_you: [], running: [], days: [{ day: 'today', entries: [
+      { status: 'done', machine: local, agent_name: 'Lead scout', run: run('r4', 'completed', { result_summary: 'Found **4** leads.' }), unread: false },
+      { status: 'failed', machine: box, agent_name: 'Builder', run: run('r5', 'failed', { error: 'No answer.', trigger: { kind: 'webhook' } }), unread: false },
+    ] }], upcoming: [{ agent_id: 'scout', agent_name: 'Lead scout', routine_id: 'daily', routine_name: 'Weekday briefing', machine: box, at_ms: Date.now() + 3_600_000 }] })
+    const runtimeList = { runtimes: [{ id: 'local', local: true, kind: 'local', formFactor: 'laptop', status: 'online' }, { id: 'studio', kind: 'desktop', status: 'online' }, { id: 'box', kind: 'container', status: 'offline' }] }
+    render(NotificationsPage, { tauri: { invoke: vi.fn(async () => runs) }, runtimeList })
+    const today = await screen.findByRole('region', { name: 'Today' })
+    const done = within(today).getByRole('button', { name: 'Lead scout, Done, on This computer, Online: Found 4 leads.' })
+    expect(done.querySelector('.chip [data-icon="clock"]')).not.toBeNull()
+    expect(done.querySelector('.machine-chip')).toHaveAttribute('data-light', 'green')
+    expect(done.querySelector('.machine-chip [data-icon="laptop"]')).not.toBeNull()
+    expect(done.querySelector('.machine-chip')).toHaveAttribute('data-tooltip', 'Online')
+    const failed = within(today).getByRole('button', { name: 'Builder, Failed, on Build box, Offline: No answer.' })
+    expect(failed.querySelector('.chip [data-icon="link"]')).not.toBeNull()
+    expect(failed.querySelector('.machine-chip')).toHaveAttribute('data-light', 'red')
+    expect(failed.querySelector('.machine-chip [data-icon="container"]')).not.toBeNull()
+    const upcoming = screen.getByRole('list', { name: 'Next scheduled runs' })
+    expect(upcoming.querySelector('.machine-chip')).toHaveAttribute('data-light', 'red')
+    expect(upcoming).toHaveTextContent('Build box, Offline')
   })
 
   it('asks again for the failed view', async () => {

@@ -112,8 +112,9 @@ it('keeps every accent in the hue family of its color', () => {
 })
 
 // The state tokens hold a light and a dark value. Each clears 4.5:1 on the
-// paper, surface and faint of every theme in its scheme, and on its own chip
-// fill: 14% of the state color over surface or faint.
+// paper, surface and faint of every theme in its scheme, on its own soft
+// fill, 14% of the state color over surface or faint, under chips and tinted
+// buttons, and on a tinted button's hover fill, 20% over surface.
 const states = Object.fromEntries([...source.matchAll(/--(success|active|danger|warning):\s*light-dark\((#[\dA-F]{6}),\s*(#[\dA-F]{6})\)/gi)]
   .map(([, token, light, dark]) => [token, { light, dark }]))
 const mixed = (color, base, share) => `#${[0, 2, 4].map((at) => Math.round(parseInt(color.slice(1 + at, 3 + at), 16) * share + parseInt(base.slice(1 + at, 3 + at), 16) * (1 - share)).toString(16).padStart(2, '0')).join('')}`
@@ -124,7 +125,7 @@ it('keeps every state color readable in every theme and on its chip', () => {
     const scheme = name.endsWith('dark') ? 'dark' : 'light'
     for (const [token, values] of Object.entries(states)) {
       const color = values[scheme]
-      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14), mixed(color, palette.faint, .14)]) {
+      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14), mixed(color, palette.faint, .14), mixed(color, palette.surface, .2)]) {
         expect(contrastRatio(color, background), `${name} --${token} on ${background}`).toBeGreaterThanOrEqual(4.5)
       }
     }

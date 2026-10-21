@@ -63,6 +63,8 @@ it('names when a run started in local time with no time zone', async () => {
   const lastYear = new Date(2025, 11, 30, 9, 8)
   expect(runTimeLabel(today.toISOString(), now)).toBe(`Today at ${time(today)}`)
   expect(runTimeLabel(yesterday.toISOString(), now)).toBe(`Yesterday at ${time(yesterday)}`)
+  const tomorrow = new Date(2026, 9, 21, 2, 0)
+  expect(runTimeLabel(tomorrow.toISOString(), now)).toBe(`Tomorrow at ${time(tomorrow)}`)
   expect(runTimeLabel(earlier.toISOString(), now)).toBe(`${earlier.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${time(earlier)}`)
   expect(runTimeLabel(lastYear.toISOString(), now)).toContain('2025')
   expect(runTimeLabel(today.toISOString(), now)).not.toMatch(/UTC|GMT|[A-Z]{3,4}T\b/)

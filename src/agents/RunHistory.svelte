@@ -101,6 +101,6 @@
   .retry:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .retry:disabled { opacity: .5; cursor: default; }
   .empty { padding: 4px 6px; color: var(--muted); font-size: var(--text-12); }
-  [role="alert"] { margin: 0; color: var(--oxide); font-size: var(--text-12); }
+  [role="alert"] { margin: 0; color: var(--danger); font-size: var(--text-12); }
   .embedded [role="alert"] { margin: 2px 8px; }
 </style>

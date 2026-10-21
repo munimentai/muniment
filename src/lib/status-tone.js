@@ -19,6 +19,15 @@ export function machineStatusTone(status) {
   return MACHINE[status] ?? 'neutral'
 }
 
+// A machine's stoplight light for its shape icon: green while it answers,
+// yellow while it connects or is not checked yet, red when it does not
+// answer or refuses this app, and none for a machine the list does not know.
+export function machineLight(runtime) {
+  if (!runtime) return null
+  if (runtime.local || runtime.status === 'online') return 'green'
+  return runtime.status === 'connecting' || runtime.status === 'unknown' || !runtime.status ? 'yellow' : 'red'
+}
+
 // A swarm member reports only whether it answers.
 export function onlineTone(online) {
   return online ? 'success' : 'neutral'

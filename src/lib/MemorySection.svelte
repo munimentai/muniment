@@ -495,7 +495,7 @@
   .quick :global(button) { min-width: 24px; min-height: 24px; padding: 3px; color: var(--ink); }
   /* Each icon's border takes the icon's own color on hover and focus. */
   .quick :global(button:hover:not(:disabled)), .quick :global(button:focus-visible) { border-color: currentColor; }
-  .quick .danger :global(button) { color: var(--oxide); }
+  .quick .danger :global(button) { color: var(--danger); }
   /* Confirm takes the theme's accent, else its signal. Moss keeps its green
      signal even in the vibrant set, whose accent is not green. */
   .quick .confirm { --confirm: var(--accent, var(--signal)); }

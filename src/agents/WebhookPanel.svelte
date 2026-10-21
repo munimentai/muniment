@@ -76,10 +76,10 @@
   .value { display: flex; align-items: center; gap: 8px; min-width: 0; }
   code { flex: 1; min-width: 0; padding: 6px; border-radius: var(--radius-control); background: var(--faint); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .wrap { word-break: break-all; }
-  .secret { padding: 10px; border: 1px solid var(--ochre); border-radius: var(--radius-control); }
+  .secret { padding: 10px; border: 1px solid var(--warning); border-radius: var(--radius-control); }
   small, .note, .record { margin: 0; color: var(--muted); font-size: var(--text-12); line-height: 1.5; }
   .record { font-family: var(--font-mono); }
-  .warning { margin: 0; padding: 8px 10px; border: 1px solid var(--ochre); border-radius: var(--radius-control); font-size: var(--text-12); line-height: 1.5; }
+  .warning { margin: 0; padding: 8px 10px; border: 1px solid var(--warning); border-radius: var(--radius-control); font-size: var(--text-12); line-height: 1.5; }
   .actions { display: flex; gap: 6px; }
-  .error { margin: 0; color: var(--oxide); font-size: var(--text-12); }
+  .error { margin: 0; color: var(--danger); font-size: var(--text-12); }
 </style>
