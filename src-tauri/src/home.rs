@@ -114,38 +114,48 @@ pub(crate) fn default_home<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, St
     choose_default_home(app.path().document_dir().ok(), app.path().home_dir().ok())
 }
 
+/// Home sits in a folder macOS may hold behind a prompt, so every command
+/// that reads it runs off the main thread and the window keeps drawing.
 #[tauri::command]
-pub fn home_status(app: AppHandle) -> Result<HomeStatus, String> {
+pub async fn home_status(app: AppHandle) -> Result<HomeStatus, String> {
     let config = config_dir(&app)?;
-    let selected =
-        muniment_core::home::configured_home(&config).map_err(|error| error.to_string())?;
-    let configured = selected.is_some();
-    let home = match selected {
-        Some(home) => home,
-        None => default_home(&app)?,
-    };
-    Ok(HomeStatus {
-        configured,
-        home_path: home.to_string_lossy().into_owned(),
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected =
+            muniment_core::home::configured_home(&config).map_err(|error| error.to_string())?;
+        let configured = selected.is_some();
+        let home = match selected {
+            Some(home) => home,
+            None => default_home(&app)?,
+        };
+        Ok(HomeStatus {
+            configured,
+            home_path: home.to_string_lossy().into_owned(),
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, String> {
+pub async fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, String> {
     let config = config_dir(&app)?;
     let home = PathBuf::from(home_path);
-    muniment_core::home::confirm_home(&config, &home).map_err(|error| {
-        eprintln!(
-            "home_confirm failed: config={} home={} error={error}",
-            config.display(),
-            home.display()
-        );
-        error.to_string()
-    })?;
-    Ok(HomeStatus {
-        configured: true,
-        home_path: home.to_string_lossy().into_owned(),
+    tauri::async_runtime::spawn_blocking(move || {
+        muniment_core::home::confirm_home(&config, &home).map_err(|error| {
+            eprintln!(
+                "home_confirm failed: config={} home={} error={error}",
+                config.display(),
+                home.display()
+            );
+            error.to_string()
+        })?;
+        Ok(HomeStatus {
+            configured: true,
+            home_path: home.to_string_lossy().into_owned(),
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// How long the first run waits for the answer to macOS's folder prompt.

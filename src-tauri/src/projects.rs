@@ -6,28 +6,39 @@ fn profile() -> Result<std::path::PathBuf, String> {
     muniment_runtime::profile_directory().map_err(|_| "The project catalog is unavailable.".into())
 }
 
+/// Runs a project command's file work off the main thread. Projects live in
+/// Home, which macOS may hold behind a folder prompt, and a command on the
+/// main thread would stop the window until the prompt is answered.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|_| "The project catalog is unavailable.".to_string())?
+}
+
 #[tauri::command]
-pub fn project_list() -> Result<projects::Catalog, String> {
-    projects::list(&profile()?)
+pub async fn project_list() -> Result<projects::Catalog, String> {
+    blocking(|| projects::list(&profile()?)).await
 }
 #[tauri::command]
-pub fn project_create(name: String) -> Result<String, String> {
-    projects::create(&profile()?, &name)
+pub async fn project_create(name: String) -> Result<String, String> {
+    blocking(move || projects::create(&profile()?, &name)).await
 }
 #[tauri::command]
-pub fn project_rename(project_id: String, name: String) -> Result<(), String> {
-    projects::rename(&profile()?, &project_id, &name)
+pub async fn project_rename(project_id: String, name: String) -> Result<(), String> {
+    blocking(move || projects::rename(&profile()?, &project_id, &name)).await
 }
 #[tauri::command]
-pub fn project_settings(project_id: String) -> Result<projects::Settings, String> {
-    projects::settings(&profile()?, &project_id)
+pub async fn project_settings(project_id: String) -> Result<projects::Settings, String> {
+    blocking(move || projects::settings(&profile()?, &project_id)).await
 }
 #[tauri::command]
-pub fn project_settings_save(
+pub async fn project_settings_save(
     project_id: String,
     settings: projects::Settings,
 ) -> Result<(), String> {
-    projects::save_settings(&profile()?, &project_id, &settings)
+    blocking(move || projects::save_settings(&profile()?, &project_id, &settings)).await
 }
 /// The sidebar's sections, arranged by core from what the window knows,
 /// with clock times as this machine's time preference shows them.
@@ -45,8 +56,11 @@ pub fn palette_rank(input: palette::Input) -> Vec<palette::Group> {
 }
 /// Moves a thread into a project, or with no project out of every project.
 #[tauri::command]
-pub fn project_move_thread(thread_id: String, project_id: Option<String>) -> Result<(), String> {
-    projects::move_thread(&profile()?, &thread_id, project_id.as_deref())
+pub async fn project_move_thread(
+    thread_id: String,
+    project_id: Option<String>,
+) -> Result<(), String> {
+    blocking(move || projects::move_thread(&profile()?, &thread_id, project_id.as_deref())).await
 }
 
 /// Starts a new thread with its project's defaults on the runtime that
@@ -83,11 +97,14 @@ pub(crate) async fn seed_thread(app: &AppHandle, thread: &str, project_id: Optio
     }
 }
 #[tauri::command]
-pub fn project_open(app: AppHandle, project_id: String) -> Result<(), String> {
-    let folder = projects::folder(&profile()?, &project_id)?;
-    app.opener()
-        .open_path(folder.to_string_lossy(), None::<String>)
-        .map_err(|_| "The project folder could not be opened.".into())
+pub async fn project_open(app: AppHandle, project_id: String) -> Result<(), String> {
+    blocking(move || {
+        let folder = projects::folder(&profile()?, &project_id)?;
+        app.opener()
+            .open_path(folder.to_string_lossy(), None::<String>)
+            .map_err(|_| "The project folder could not be opened.".into())
+    })
+    .await
 }
 
 pub(crate) fn prepare_thread(

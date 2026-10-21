@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 const RUNTIME_AGENT_PLIST: &str = "ai.muniment.runtime.plist";
+/// The profile file that names the runtime signature the running
+/// registration was made under.
+#[cfg(target_os = "macos")]
+const RUNTIME_SIGNATURE_RECORD: &str = "runtime-service-signature";
 const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
 const RUNTIME_SERVICE_NOT_FOUND_RECORD: &[u8] =
     b"event=runtime_service_not_found message=runtime service not found\n";
@@ -120,6 +124,11 @@ trait RuntimeStartAdapter {
     fn request_failure(&self) -> Option<String> {
         None
     }
+    /// Whether the last job reading found launchd refusing the spawn under a
+    /// launch constraint, which launchd reports as exit code 78, EX_CONFIG.
+    fn constraint_violation(&self) -> bool {
+        false
+    }
 }
 
 // SMAppService can report Enabled while launchd holds no job, for example
@@ -184,35 +193,126 @@ fn request_enabled_runtime_start(
     }
 }
 
+#[cfg(test)]
 fn activate_runtime_service(adapter: &impl RuntimeServiceAdapter) -> RuntimeServiceActivation {
+    activate_for_signature(adapter, false).0
+}
+
+fn register_and_recheck(adapter: &impl RuntimeServiceAdapter) -> RuntimeServiceActivation {
+    let registration = adapter.register();
+    let rechecked_status = adapter.status();
+    if registration == Err(RegistrationError::Denied) {
+        return RuntimeServiceActivation::RequiresApproval;
+    }
+    if registration.is_err() {
+        return RuntimeServiceActivation::Failed;
+    }
+    map_status(rechecked_status)
+}
+
+/// Registers a service that is not registered. An enabled registration
+/// made under another code signature of the runtime is made again first,
+/// because launchd checks each spawn against the signature it holds for the
+/// registration. The flag is true when this launch made the registration.
+fn activate_for_signature(
+    adapter: &impl RuntimeServiceAdapter,
+    signature_changed: bool,
+) -> (RuntimeServiceActivation, bool) {
     match adapter.status() {
         Ok(ServiceStatus::NotRegistered | ServiceStatus::NotFound) => {
-            let registration = adapter.register();
-            let rechecked_status = adapter.status();
-            if registration == Err(RegistrationError::Denied) {
-                return RuntimeServiceActivation::RequiresApproval;
-            }
-            if registration.is_err() {
-                return RuntimeServiceActivation::Failed;
-            }
-            map_status(rechecked_status)
+            (register_and_recheck(adapter), true)
         }
-        status => map_status(status),
+        Ok(ServiceStatus::Enabled) if signature_changed => {
+            let _ = adapter.unregister();
+            (register_and_recheck(adapter), true)
+        }
+        status => (map_status(status), false),
     }
 }
 
+#[cfg(test)]
 fn activate_and_diagnose_runtime_service(
     adapter: &impl RuntimeServiceAdapter,
     log_directory: Option<&Path>,
 ) -> RuntimeServiceActivation {
-    let activation = activate_runtime_service(adapter);
+    activate_and_diagnose_for_signature(adapter, false, log_directory).0
+}
+
+fn activate_and_diagnose_for_signature(
+    adapter: &impl RuntimeServiceAdapter,
+    signature_changed: bool,
+    log_directory: Option<&Path>,
+) -> (RuntimeServiceActivation, bool) {
+    let (activation, registered) = activate_for_signature(adapter, signature_changed);
     // A second failure record can rotate the log and erase the native error.
     if !adapter.registration_diagnostic_written() {
         if let Some(log_directory) = log_directory {
             let _ = write_activation_diagnostic(log_directory, activation);
         }
     }
-    activation
+    (activation, registered)
+}
+
+/// The runtime's code signature as launchd checks it at each spawn: its
+/// team, signing identifier and code directory hash.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct Signatures {
+    /// The signature recorded when the running registration was made.
+    recorded: Option<String>,
+    /// The signature of the runtime the bundle carries now.
+    current: Option<String>,
+}
+
+impl Signatures {
+    /// A registration with no record, or a record of another signature,
+    /// predates the runtime the bundle carries now. An unreadable current
+    /// signature changes nothing.
+    fn changed(&self) -> bool {
+        match (&self.recorded, &self.current) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(recorded), Some(current)) => recorded != current,
+        }
+    }
+}
+
+/// The signature line from `codesign -dvvv` output, or None when the output
+/// names no code directory hash.
+fn code_signature(codesign_output: &str) -> Option<String> {
+    let field = |name: &str| {
+        codesign_output
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let cdhash = field("CDHash=")?;
+    Some(format!(
+        "team={} identifier={} cdhash={cdhash}",
+        field("TeamIdentifier=").unwrap_or("not set"),
+        field("Identifier=").unwrap_or("none"),
+    ))
+}
+
+/// What a launch does when the job it started did not stay running.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InactiveJobStep {
+    /// Make the registration again once and start the job once more.
+    Reregister,
+    /// Unregister the job and run the runtime as the desktop's child.
+    FallBack,
+}
+
+/// A registration that an earlier launch made can hold a launch constraint
+/// from an older signature of the runtime, so a constraint failure makes it
+/// again once. A registration this launch made is already fresh, and its
+/// failure falls back at once.
+fn after_inactive_job(constraint_violation: bool, registered_this_launch: bool) -> InactiveJobStep {
+    if constraint_violation && !registered_this_launch {
+        InactiveJobStep::Reregister
+    } else {
+        InactiveJobStep::FallBack
+    }
 }
 
 fn map_status(status: Result<ServiceStatus, ()>) -> RuntimeServiceActivation {
@@ -353,7 +453,6 @@ pub(crate) fn start(
 
 #[cfg(target_os = "macos")]
 fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
-    use crate::runtime_owner::RuntimeEvent;
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
         .map(|home| home.join("Library/Logs/Muniment"));
@@ -363,11 +462,53 @@ fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
         adapter.force_request = true;
         adapter
     });
-    match start_login_service_with(
+    let record = muniment_runtime::profile_directory()
+        .ok()
+        .map(|directory| directory.join(RUNTIME_SIGNATURE_RECORD));
+    let current = std::env::current_exe()
+        .ok()
+        .and_then(|desktop| bundled_runtime_executable(&desktop))
+        .and_then(|runtime| read_code_signature(&runtime));
+    let signatures = Signatures {
+        recorded: record
+            .as_ref()
+            .and_then(|record| std::fs::read_to_string(record).ok())
+            .map(|text| text.trim().to_owned()),
+        current,
+    };
+    // launchd repairs a stale launch constraint at the job's next spawn only
+    // for a runtime signed by a team, so only such a runtime waits for it.
+    let start = start.map(|mut adapter| {
+        adapter.await_repair = signatures
+            .current
+            .as_deref()
+            .is_some_and(|signature| !signature.starts_with("team=not set"));
+        adapter
+    });
+    let result = start_login_service_with(
         &MacosRuntimeServiceAdapter::new(),
         start.as_ref(),
+        &signatures,
         log_directory.as_deref(),
-    ) {
+    );
+    if let (
+        LoginServiceStart::Started(RuntimeStartOutcome::Requested),
+        Some(record),
+        Some(current),
+    ) = (result, &record, &signatures.current)
+    {
+        let _ = std::fs::write(record, format!("{current}\n"));
+    }
+    login_service_event(result)
+}
+
+/// The shell's event for a start through the login service. A service the
+/// user turned off in Login Items needs approval, so the notice names Login
+/// Items, and only a job that never stays running falls back to the child.
+#[cfg(target_os = "macos")]
+fn login_service_event(start: LoginServiceStart) -> crate::runtime_owner::RuntimeEvent {
+    use crate::runtime_owner::RuntimeEvent;
+    match start {
         LoginServiceStart::Inactive(RuntimeServiceActivation::RequiresApproval) => {
             RuntimeEvent::RequiresApproval
         }
@@ -395,16 +536,41 @@ enum LoginServiceStart {
 fn start_login_service_with(
     service: &impl RuntimeServiceAdapter,
     start: Option<&impl RuntimeStartAdapter>,
+    signatures: &Signatures,
     log_directory: Option<&Path>,
 ) -> LoginServiceStart {
-    let activation = activate_and_diagnose_runtime_service(service, log_directory);
+    let signature_changed = signatures.changed();
+    let (activation, registered) =
+        activate_and_diagnose_for_signature(service, signature_changed, log_directory);
     if activation != RuntimeServiceActivation::Enabled {
         return LoginServiceStart::Inactive(activation);
     }
+    if signature_changed && registered {
+        if let Some(directory) = log_directory {
+            let _ = write_child_diagnostic(directory, "event=runtime_service_signature_changed\n");
+        }
+    }
     let (outcome, recovery, failure) = match start {
         Some(start) => {
-            let (outcome, recovery) = start_enabled_runtime_with_recovery(service, start);
-            let outcome = confirm_requested_start(outcome, start);
+            let (outcome, mut recovery) = start_enabled_runtime_with_recovery(service, start);
+            let mut outcome = confirm_requested_start(outcome, start);
+            if outcome == RuntimeStartOutcome::JobInactive
+                && recovery == StartRecovery::None
+                && after_inactive_job(start.constraint_violation(), registered)
+                    == InactiveJobStep::Reregister
+            {
+                let _ = service.unregister();
+                recovery = if register_and_recheck(service) == RuntimeServiceActivation::Enabled {
+                    outcome = confirm_requested_start(
+                        request_enabled_runtime_start(RuntimeServiceActivation::Enabled, start),
+                        start,
+                    );
+                    StartRecovery::Reregistered
+                } else {
+                    outcome = RuntimeStartOutcome::RequestFailed;
+                    StartRecovery::Failed
+                };
+            }
             (outcome, recovery, start.request_failure())
         }
         None => (
@@ -424,10 +590,15 @@ fn start_login_service_with(
         RuntimeStartOutcome::JobInactive | RuntimeStartOutcome::RequestFailed
     ) {
         let unregistered = service.unregister().is_ok();
+        let constraint = start.is_some_and(|start| start.constraint_violation());
         if let Some(directory) = log_directory {
             let _ = write_child_diagnostic(
                 directory,
-                &format!("event=runtime_service_job_inactive unregistered={unregistered}\n"),
+                &if constraint {
+                    format!("event=runtime_service_job_inactive unregistered={unregistered} launch_constraint=true\n")
+                } else {
+                    format!("event=runtime_service_job_inactive unregistered={unregistered}\n")
+                },
             );
         }
     }
@@ -438,6 +609,25 @@ fn start_login_service_with(
 fn bundled_runtime_executable(desktop_executable: &Path) -> Option<PathBuf> {
     let contents = desktop_executable.parent()?.parent()?;
     Some(contents.join("Library/LaunchServices/muniment-runtime"))
+}
+
+/// Reads the bundled runtime's signature with `codesign`, which prints it to
+/// standard error.
+#[cfg(target_os = "macos")]
+fn read_code_signature(executable: &Path) -> Option<String> {
+    use std::process::{Command, Stdio};
+    let output = Command::new("/usr/bin/codesign")
+        .arg("-dvvv")
+        .arg(executable)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    code_signature(&String::from_utf8_lossy(&output.stderr))
 }
 
 fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> {
@@ -571,7 +761,11 @@ fn runtime_endpoint_accepts_connections(endpoint: &Path) -> bool {
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
     force_request: bool,
+    /// Whether a refused spawn waits for launchd's next spawn, which first
+    /// asks for the registration's launch constraint again.
+    await_repair: bool,
     failure: std::cell::RefCell<Option<String>>,
+    constraint_violation: std::cell::Cell<bool>,
 }
 
 impl MacosRuntimeStartAdapter {
@@ -579,9 +773,36 @@ impl MacosRuntimeStartAdapter {
         Self {
             endpoint: profile_directory.join("muniment/attach-v1.sock"),
             force_request: false,
+            await_repair: false,
             failure: std::cell::RefCell::new(None),
+            constraint_violation: std::cell::Cell::new(false),
         }
     }
+
+    /// Whether the endpoint accepts a connection within `attempts` checks
+    /// spaced 200 milliseconds apart.
+    #[cfg(target_os = "macos")]
+    fn endpoint_answers_within(&self, attempts: u32) -> bool {
+        for _ in 0..attempts {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if runtime_endpoint_accepts_connections(&self.endpoint) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Whether `launchctl print` output shows a job that launchd refused to
+/// spawn: not running, with exit code 78, EX_CONFIG, which a launch
+/// constraint violation leaves.
+fn launchctl_constraint_violation(output: &str) -> bool {
+    launchctl_job_state(output).is_some_and(|state| state != "running")
+        && output.lines().any(|line| {
+            line.trim()
+                .strip_prefix("last exit code = ")
+                .is_some_and(|code| code == "78" || code.starts_with("78:"))
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -632,30 +853,46 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
         self.failure.borrow().clone()
     }
 
+    fn constraint_violation(&self) -> bool {
+        self.constraint_violation.get()
+    }
+
     fn job_active(&self) -> Result<bool, ()> {
         use std::process::{Command, Stdio};
 
+        self.constraint_violation.set(false);
         // The endpoint is the proof of a running job. Wait two seconds for it.
-        for _ in 0..10 {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            if runtime_endpoint_accepts_connections(&self.endpoint) {
-                return Ok(true);
-            }
+        if self.endpoint_answers_within(10) {
+            return Ok(true);
         }
         // SAFETY: geteuid reads the effective user ID without dereferencing memory.
         let effective_uid = unsafe { libc::geteuid() };
         let target = format!("gui/{effective_uid}/ai.muniment.runtime");
-        let output = Command::new("/bin/launchctl")
-            .args(["print", target.as_str()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .map_err(|_| ())?;
-        if !output.status.success() {
-            return Err(());
+        let print = || {
+            let output = Command::new("/bin/launchctl")
+                .args(["print", target.as_str()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .output()
+                .map_err(|_| ())?;
+            if !output.status.success() {
+                return Err(());
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let mut stdout = print()?;
+        // After a refused spawn launchd asks for the registration's launch
+        // constraint again at the next spawn, five seconds later under the
+        // agent's ThrottleInterval. Unregistering sooner cancels that repair.
+        if self.await_repair && launchctl_constraint_violation(&stdout) {
+            if self.endpoint_answers_within(35) {
+                return Ok(true);
+            }
+            stdout = print()?;
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        self.constraint_violation
+            .set(launchctl_constraint_violation(&stdout));
         let Some(state) = launchctl_job_state(&stdout) else {
             return Err(());
         };
@@ -949,6 +1186,7 @@ mod tests {
                 start_login_service_with(
                     &service,
                     Some(&InactiveJobAdapter(Ok(false))),
+                    &Signatures::default(),
                     Some(&logs)
                 ),
                 LoginServiceStart::Started(RuntimeStartOutcome::JobInactive)
@@ -963,7 +1201,12 @@ mod tests {
         );
         // A launch whose job stays up keeps the registration.
         assert_eq!(
-            start_login_service_with(&service, Some(&InactiveJobAdapter(Ok(true))), Some(&logs)),
+            start_login_service_with(
+                &service,
+                Some(&InactiveJobAdapter(Ok(true))),
+                &Signatures::default(),
+                Some(&logs)
+            ),
             LoginServiceStart::Started(RuntimeStartOutcome::Requested)
         );
         assert_eq!(service.unregister_calls.get(), 2);
@@ -976,7 +1219,7 @@ mod tests {
         let service = FakeAdapter::new([Ok(ServiceStatus::RequiresApproval)], Ok(()));
         let start = FakeStartAdapter::new(Ok(false), Ok(()));
         assert_eq!(
-            start_login_service_with(&service, Some(&start), None),
+            start_login_service_with(&service, Some(&start), &Signatures::default(), None),
             LoginServiceStart::Inactive(RuntimeServiceActivation::RequiresApproval)
         );
         assert_eq!(start.request_calls.get(), 0);
@@ -984,7 +1227,12 @@ mod tests {
         // Without a profile directory the start fails and the job does not stay registered.
         let service = LaunchdFake::default();
         assert_eq!(
-            start_login_service_with(&service, None::<&FakeStartAdapter>, None),
+            start_login_service_with(
+                &service,
+                None::<&FakeStartAdapter>,
+                &Signatures::default(),
+                None
+            ),
             LoginServiceStart::Started(RuntimeStartOutcome::RequestFailed)
         );
         assert_eq!(service.unregister_calls.get(), 1);
@@ -1636,5 +1884,246 @@ mod tests {
             activate_runtime_service(&adapter),
             RuntimeServiceActivation::Failed
         );
+    }
+
+    /// A start adapter whose job readings come in order, each with whether
+    /// launchd refused that spawn under a launch constraint.
+    struct ConstraintJobAdapter {
+        readings: RefCell<VecDeque<(bool, bool)>>,
+        constraint: Cell<bool>,
+        request_calls: Cell<usize>,
+    }
+
+    impl ConstraintJobAdapter {
+        fn new(readings: impl IntoIterator<Item = (bool, bool)>) -> Self {
+            Self {
+                readings: RefCell::new(readings.into_iter().collect()),
+                constraint: Cell::new(false),
+                request_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl RuntimeStartAdapter for ConstraintJobAdapter {
+        fn endpoint_exists(&self) -> Result<bool, ()> {
+            Ok(false)
+        }
+
+        fn request_start(&self) -> Result<(), ()> {
+            self.request_calls.set(self.request_calls.get() + 1);
+            Ok(())
+        }
+
+        fn job_active(&self) -> Result<bool, ()> {
+            let (active, constraint) = self.readings.borrow_mut().pop_front().unwrap();
+            self.constraint.set(constraint);
+            Ok(active)
+        }
+
+        fn constraint_violation(&self) -> bool {
+            self.constraint.get()
+        }
+    }
+
+    const AD_HOC: &str = "team=not set identifier=muniment-runtime cdhash=aaaa";
+    const DEVELOPER_ID: &str = "team=VF895CP335 identifier=muniment-runtime cdhash=bbbb";
+
+    fn signatures(recorded: Option<&str>, current: Option<&str>) -> Signatures {
+        Signatures {
+            recorded: recorded.map(str::to_owned),
+            current: current.map(str::to_owned),
+        }
+    }
+
+    fn logs() -> (PathBuf, PathBuf) {
+        let root = directory();
+        fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let logs = root.join("logs");
+        (root, logs)
+    }
+
+    #[test]
+    fn a_signature_differs_only_when_the_current_one_is_known_and_another_was_recorded() {
+        assert!(signatures(Some(AD_HOC), Some(DEVELOPER_ID)).changed());
+        assert!(signatures(None, Some(DEVELOPER_ID)).changed());
+        assert!(!signatures(Some(DEVELOPER_ID), Some(DEVELOPER_ID)).changed());
+        assert!(!signatures(Some(AD_HOC), None).changed());
+        assert!(!Signatures::default().changed());
+    }
+
+    #[test]
+    fn codesign_output_gives_team_identifier_and_code_directory_hash() {
+        let developer_id = "Executable=/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime\nIdentifier=muniment-runtime\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20500 size=46588 flags=0x10000(runtime) hashes=1450+2 location=embedded\nCDHash=c20854cc91ca951f59622f679b6fe66514275bb9\nAuthority=Developer ID Application: Example (VF895CP335)\nTeamIdentifier=VF895CP335\n";
+        assert_eq!(
+            code_signature(developer_id).as_deref(),
+            Some("team=VF895CP335 identifier=muniment-runtime cdhash=c20854cc91ca951f59622f679b6fe66514275bb9")
+        );
+        let ad_hoc = "Identifier=muniment-runtime\nCDHash=5254c04b64703dfa8a0d79d50ab17cb0727e7d59\nSignature=adhoc\nTeamIdentifier=not set\n";
+        assert_eq!(
+            code_signature(ad_hoc).as_deref(),
+            Some("team=not set identifier=muniment-runtime cdhash=5254c04b64703dfa8a0d79d50ab17cb0727e7d59")
+        );
+        assert_eq!(code_signature("code object is not signed at all\n"), None);
+    }
+
+    #[test]
+    fn launchctl_names_a_refused_spawn_by_its_exit_code_while_the_job_is_down() {
+        let refused = "gui/501/ai.muniment.runtime = {\n\tstate = spawn scheduled\n\tlast exit code = 78: EX_CONFIG\n}\n";
+        assert!(launchctl_constraint_violation(refused));
+        let running = "gui/501/ai.muniment.runtime = {\n\tstate = running\n\tlast exit code = 78: EX_CONFIG\n}\n";
+        assert!(!launchctl_constraint_violation(running));
+        let exited = "gui/501/ai.muniment.runtime = {\n\tstate = not running\n\tlast exit code = 75: EX_TEMPFAIL\n}\n";
+        assert!(!launchctl_constraint_violation(exited));
+    }
+
+    #[test]
+    fn a_constraint_failure_makes_an_earlier_registration_again_once() {
+        assert_eq!(after_inactive_job(true, false), InactiveJobStep::Reregister);
+        assert_eq!(after_inactive_job(true, true), InactiveJobStep::FallBack);
+        assert_eq!(after_inactive_job(false, false), InactiveJobStep::FallBack);
+        assert_eq!(after_inactive_job(false, true), InactiveJobStep::FallBack);
+    }
+
+    #[test]
+    fn an_enabled_registration_under_another_signature_is_made_again_before_its_start() {
+        let (root, logs) = logs();
+        let service = LaunchdFake::default();
+        service.registered.set(true);
+        let start = ConstraintJobAdapter::new([(true, false)]);
+        assert_eq!(
+            start_login_service_with(
+                &service,
+                Some(&start),
+                &signatures(Some(AD_HOC), Some(DEVELOPER_ID)),
+                Some(&logs)
+            ),
+            LoginServiceStart::Started(RuntimeStartOutcome::Requested)
+        );
+        assert_eq!(service.unregister_calls.get(), 1);
+        assert_eq!(service.registration_calls.get(), 1);
+        assert!(service.registered.get());
+        assert_eq!(start.request_calls.get(), 1);
+        assert_eq!(
+            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            "event=runtime_service_signature_changed\n"
+        );
+        // The same signature keeps the registration as it is.
+        let start = ConstraintJobAdapter::new([(true, false)]);
+        assert_eq!(
+            start_login_service_with(
+                &service,
+                Some(&start),
+                &signatures(Some(DEVELOPER_ID), Some(DEVELOPER_ID)),
+                Some(&logs)
+            ),
+            LoginServiceStart::Started(RuntimeStartOutcome::Requested)
+        );
+        assert_eq!(service.registration_calls.get(), 1);
+        assert_eq!(service.unregister_calls.get(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_constraint_failure_of_an_earlier_registration_registers_once_more_and_starts() {
+        let service = LaunchdFake::default();
+        service.registered.set(true);
+        let start = ConstraintJobAdapter::new([(false, true), (true, false)]);
+        assert_eq!(
+            start_login_service_with(
+                &service,
+                Some(&start),
+                &signatures(Some(DEVELOPER_ID), Some(DEVELOPER_ID)),
+                None
+            ),
+            LoginServiceStart::Started(RuntimeStartOutcome::Requested)
+        );
+        assert_eq!(service.unregister_calls.get(), 1);
+        assert_eq!(service.registration_calls.get(), 1);
+        assert_eq!(start.request_calls.get(), 2);
+        assert!(service.registered.get());
+    }
+
+    #[test]
+    fn a_constraint_failure_after_the_fresh_registration_falls_back_to_the_child() {
+        let (root, logs) = logs();
+        let service = LaunchdFake::default();
+        service.registered.set(true);
+        let start = ConstraintJobAdapter::new([(false, true), (false, true)]);
+        let result = start_login_service_with(
+            &service,
+            Some(&start),
+            &signatures(Some(DEVELOPER_ID), Some(DEVELOPER_ID)),
+            Some(&logs),
+        );
+        assert_eq!(
+            result,
+            LoginServiceStart::Started(RuntimeStartOutcome::JobInactive)
+        );
+        // One registration more, never a loop, and the job does not stay registered.
+        assert_eq!(service.registration_calls.get(), 1);
+        assert_eq!(service.unregister_calls.get(), 2);
+        assert_eq!(start.request_calls.get(), 2);
+        assert!(!service.registered.get());
+        assert!(fs::read_to_string(logs.join("runtime.log"))
+            .unwrap()
+            .ends_with("event=runtime_service_job_inactive unregistered=true launch_constraint=true\n"));
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            login_service_event(result),
+            crate::runtime_owner::RuntimeEvent::ServiceInactive
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_registration_this_launch_made_falls_back_at_its_first_constraint_failure() {
+        let service = LaunchdFake::default();
+        let start = ConstraintJobAdapter::new([(false, true)]);
+        assert_eq!(
+            start_login_service_with(
+                &service,
+                Some(&start),
+                &signatures(None, Some(DEVELOPER_ID)),
+                None
+            ),
+            LoginServiceStart::Started(RuntimeStartOutcome::JobInactive)
+        );
+        assert_eq!(service.registration_calls.get(), 1);
+        assert_eq!(service.unregister_calls.get(), 1);
+        assert_eq!(start.request_calls.get(), 1);
+    }
+
+    #[test]
+    fn a_service_the_user_turned_off_asks_for_login_items_and_starts_no_child() {
+        // macOS reports a registration the user turned off in Login Items as
+        // requiring approval, and a new registration as denied by the user.
+        for (statuses, registration) in [
+            (vec![Ok(ServiceStatus::RequiresApproval)], Ok(())),
+            (
+                vec![Ok(ServiceStatus::NotRegistered), Ok(ServiceStatus::NotRegistered)],
+                Err(RegistrationError::Denied),
+            ),
+        ] {
+            let service = FakeAdapter::new(statuses, registration);
+            let start = ConstraintJobAdapter::new([]);
+            let result = start_login_service_with(
+                &service,
+                Some(&start),
+                &signatures(Some(AD_HOC), Some(DEVELOPER_ID)),
+                None,
+            );
+            assert_eq!(
+                result,
+                LoginServiceStart::Inactive(RuntimeServiceActivation::RequiresApproval)
+            );
+            assert_eq!(start.request_calls.get(), 0);
+            assert_eq!(service.unregister_calls.get(), 0);
+            #[cfg(target_os = "macos")]
+            assert_eq!(
+                login_service_event(result),
+                crate::runtime_owner::RuntimeEvent::RequiresApproval
+            );
+        }
     }
 }

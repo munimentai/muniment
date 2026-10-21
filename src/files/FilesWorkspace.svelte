@@ -16,7 +16,8 @@
   const storageKey = `muniment.files:${contextKey}`
   let folders = $state([])
   let listing = $state(null)
-  let loading = $state(false)
+  // The view reads its folders as it opens, so it starts in the reading state.
+  let loading = $state(true)
   let error = $state('')
   let selected = $state(null)
   let selection = $state(new Set())
@@ -189,7 +190,8 @@
           try { children = {...children, [entry]:(await tauri.invoke('workspace_list',{path:entry})).entries}; expanded = new Set([...expanded,entry]) } catch { /* A removed folder stays closed. */ }
         }
       })
-    }).catch(e => { error = String(e) })
+      loading = false
+    }).catch(e => { error = String(e); loading = false })
     return () => { if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
   })
 </script>

@@ -366,23 +366,28 @@ fn artifact_path(root: &std::path::Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid artifact.".to_string())?;
     Ok(root.join("artifacts").join(format!("{id}.json")))
 }
+/// Each artifact's folder lives in Home, so the listing runs off the main thread.
 #[tauri::command]
-pub fn artifact_list(app: tauri::AppHandle, webview: tauri::Webview) -> Result<Vec<Value>, String> {
+pub async fn artifact_list(app: tauri::AppHandle, webview: tauri::Webview) -> Result<Vec<Value>, String> {
     shell(&webview)?;
-    let storage = app.state::<BrowserStorage>();
-    let mut items = Vec::new();
-    for entry in std::fs::read_dir(storage.root.join("artifacts")).map_err(err)? {
-        let path = entry.map_err(err)?.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
+    let root = app.state::<BrowserStorage>().root.join("artifacts");
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut items = Vec::new();
+        for entry in std::fs::read_dir(root).map_err(err)? {
+            let path = entry.map_err(err)?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let artifact: Artifact =
+                serde_json::from_slice(&std::fs::read(path).map_err(err)?).map_err(err)?;
+            let profile = muniment_runtime::profile_directory().map_err(err)?;
+            muniment_core::creations::artifact_folder(&profile, &artifact.id)?;
+            items.push(json!({"id":artifact.id,"name":artifact.name,"threadId":artifact.thread_id}));
         }
-        let artifact: Artifact =
-            serde_json::from_slice(&std::fs::read(path).map_err(err)?).map_err(err)?;
-        let profile = muniment_runtime::profile_directory().map_err(err)?;
-        muniment_core::creations::artifact_folder(&profile, &artifact.id)?;
-        items.push(json!({"id":artifact.id,"name":artifact.name,"threadId":artifact.thread_id}));
-    }
-    Ok(items)
+        Ok(items)
+    })
+    .await
+    .map_err(err)?
 }
 #[tauri::command]
 pub fn artifact_read(
