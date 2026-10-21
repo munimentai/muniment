@@ -53,7 +53,7 @@
   import { notificationKey, notificationText, shouldNotify, showNotification } from './agents/notify.js'
   import { applyApproval, emptySwarm, listSwarm, moveRequest, postTarget, swarmRoster, swarmThreads } from './agents/swarm.js'
   import { agentEnvelope, applyGroupPost, meetingSections, silentRun, timeline, visiblePosts } from './agents/transcript.js'
-  import { agentMentions, insertAgentMention } from './agents/mentions.js'
+  import { agentMentions, insertAgentMention, mentionedAgentIds } from './agents/mentions.js'
   import { groupMembers } from './agents/groups.js'
   import AgentMessage from './agents/AgentMessage.svelte'
   import ThreadPost from './agents/ThreadPost.svelte'
@@ -1669,7 +1669,7 @@
       }
       await composerExtensions?.prepare(prompt)
     },
-    onSubmitted: () => composerExtensions?.submitted(),
+    onSubmitted: () => { mentionedAgents = []; composerExtensions?.submitted() },
     listen: (...args) => window.__TAURI__?.event?.listen(...args),
     readMessages: () => messages,
     readActive: () => active,
@@ -1678,6 +1678,9 @@
     readFiles: () => selectedFiles,
     readThinkingLevel: () => chipThinking?.level ?? null,
     readPermissionMode: () => composerThreadId ? null : pendingMode,
+    readMentions: (prompt) => threadGroup ? [] : mentionedAgentIds(prompt, mentionedAgents),
+    // Core says why an agent did not get the message, such as its messaging list.
+    onMentions: (outcomes) => { const refused = outcomes.filter((outcome) => !outcome.sent).map((outcome) => outcome.error).filter(Boolean); if (refused.length) submitError = refused.join(' ') },
     readPendingModel: () => currentThreadId ? null : pendingModel,
     readThreadId: () => currentThreadId,
     readThreadSummaries: () => threadSummaries,
@@ -2659,8 +2662,13 @@
   let mention = $state(null)
   let mentionFiles = $state([])
   // In a group thread, `@` lists the members and @everyone instead of files.
+  // In any other thread it lists the agents before the files, and the send
+  // carries the ids of the agents the message still names.
   let mentionAgents = $state([])
-  const mentionCount = $derived(threadGroup ? mentionAgents.length : mentionFiles.length)
+  let mentionedAgents = $state([])
+  const mentionable = $derived(agentChat ? [] : roster.filter((agent) => agent.id !== agentThreadMap[currentThreadId]))
+  const mentionCount = $derived(threadGroup ? mentionAgents.length : mentionAgents.length + mentionFiles.length)
+  const mentionOptionId = (index) => threadGroup || index < mentionAgents.length ? `agent-mention-${index}` : `file-mention-${index - mentionAgents.length}`
   let mentionSelected = $state(0)
   let mentionLoading = $state(false)
   let mentionError = $state('')
@@ -2708,12 +2716,14 @@
   function updateMention() {
     clearTimeout(mentionTimer)
     const version = ++mentionVersion
-    // A paired runtime cannot read this computer's files, so `@` finds none there.
-    mention = !active && (threadGroup || !remoteRuntime) && composer ? mentionQuery(composer.value, composer.selectionStart) : null
+    // A paired runtime cannot read this computer's files, so `@` lists only agents there.
+    mention = !active && (threadGroup || !remoteRuntime || mentionable.length) && composer ? mentionQuery(composer.value, composer.selectionStart) : null
     mentionSelected = 0; mentionError = ''; mentionFiles = []; mentionAgents = []
     if (!mention) { mentionLoading = false; return }
     openComposerPanel('mentions')
     if (threadGroup) { mentionLoading = false; mentionAgents = agentMentions(mention.query, threadGroupMembers); return }
+    mentionAgents = agentMentions(mention.query, mentionable, 8, { everyone: false })
+    if (remoteRuntime) { mentionLoading = false; return }
     mentionLoading = true
     const query = mention.query
     mentionTimer = setTimeout(async () => {
@@ -2740,6 +2750,7 @@
     const current = mention
     closeMentions()
     if (!current) return
+    if (!threadGroup) mentionedAgents = [...mentionedAgents.filter((entry) => entry.id !== agent.id), { id: agent.id, name: agent.name }]
     const inserted = insertAgentMention(draft, current, agent)
     draft = inserted.text
     await tick()
@@ -3528,13 +3539,13 @@
       if (['ArrowDown', 'ArrowUp'].includes(event.key) && mentionCount) {
         event.preventDefault()
         mentionSelected = (mentionSelected + (event.key === 'ArrowDown' ? 1 : -1) + mentionCount) % mentionCount
-        void tick().then(() => document.getElementById(`${threadGroup ? 'agent' : 'file'}-mention-${mentionSelected}`)?.scrollIntoView({ block: 'nearest' }))
+        void tick().then(() => document.getElementById(mentionOptionId(mentionSelected))?.scrollIntoView({ block: 'nearest' }))
         return
       }
       if (event.key === 'Enter' || (event.key === 'Tab' && mentionCount)) {
         event.preventDefault()
-        if (threadGroup) { if (mentionAgents[mentionSelected]) void chooseAgentMention(mentionAgents[mentionSelected]) }
-        else if (mentionFiles[mentionSelected]) void chooseMention(mentionFiles[mentionSelected])
+        if (threadGroup || mentionSelected < mentionAgents.length) { if (mentionAgents[mentionSelected]) void chooseAgentMention(mentionAgents[mentionSelected]) }
+        else if (mentionFiles[mentionSelected - mentionAgents.length]) void chooseMention(mentionFiles[mentionSelected - mentionAgents.length])
         return
       }
     }
@@ -4175,10 +4186,10 @@
             </ul>
           {/if}
           <div class="composer-input">
-            {#if mention && threadGroup}<AgentMentions agents={mentionAgents} selected={mentionSelected} onchoose={chooseAgentMention} />{:else if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} files={mentionFiles} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} />{/if}
+            {#if mention && threadGroup}<AgentMentions agents={mentionAgents} selected={mentionSelected} onchoose={chooseAgentMention} />{:else if mention}<FileMentions rootLabel={workspaceDirectory || (selectedProject ? 'Project folder' : currentThreadId ? 'Thread workspace' : 'Muniment folder')} agents={mentionAgents} files={mentionFiles} searchFiles={!remoteRuntime} loading={mentionLoading} error={mentionError} selected={mentionSelected} onchoose={chooseMention} onchooseagent={chooseAgentMention} />{/if}
             <ComposerReferences bind:this={composerReferences} commands={extensionCommandNames} text={draft} files={selectedFiles} agents={threadGroup ? threadGroupMembers : []} selection={composerSelection} scrollTop={composerScrollTop} scrollLeft={composerScrollLeft} width={composerTextWidth} />
             <label class="visually-hidden" for="composer-message">Message</label>
-            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : 'file-mentions') : undefined} aria-activedescendant={threadGroup ? (mentionAgents[mentionSelected] ? `agent-mention-${mentionSelected}` : undefined) : mentionFiles[mentionSelected] ? `file-mention-${mentionSelected}` : undefined} onscroll={syncComposerScroll} onmousedown={openComposerLink} onmousemove={composerPointer} onclick={() => { updateMention(); trackComposerSelection() }} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention(); trackComposerSelection() }} onselect={trackComposerSelection} onselectionchange={trackComposerSelection} onfocus={trackComposerSelection} onblur={() => { closeMentions(); composerSelection = null }} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
+            <textarea id="composer-message" class="reference-input" data-focus-frame aria-autocomplete="list" aria-controls={mention ? (threadGroup ? 'agent-mentions' : [mentionAgents.length ? 'agent-mentions' : '', remoteRuntime ? '' : 'file-mentions'].filter(Boolean).join(' ')) : undefined} aria-activedescendant={mentionSelected < mentionCount ? mentionOptionId(mentionSelected) : undefined} onscroll={syncComposerScroll} onmousedown={openComposerLink} onmousemove={composerPointer} onclick={() => { updateMention(); trackComposerSelection() }} onkeyup={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateMention(); trackComposerSelection() }} onselect={trackComposerSelection} onselectionchange={trackComposerSelection} onfocus={trackComposerSelection} onblur={() => { closeMentions(); composerSelection = null }} aria-describedby={threadSwitching || isDictationActive(dictation) || composerHint ? 'composer-hint' : undefined} bind:this={composer} use:focusComposerOnMount bind:value={draft} oninput={composerInput} onkeydown={keydown} rows="2" placeholder={resumingReply ? 'Resuming interrupted reply…' : agentChat ? (agentChat.record ? 'Ask for a change' : 'Describe your agent, for example: Every weekday at 9am, summarize my inbox') : 'Ask anything'} disabled={composer && (resumingReply || threadSwitching)}></textarea>
           </div>
           {#if submitError}<p class="cancel-error" role="alert">{submitError}</p>{/if}
           {#if cancelError}<p class="cancel-error" role="alert">{cancelError}</p>{/if}
@@ -4332,7 +4343,7 @@
   {#if moveTarget}<ProjectPicker title={moveTarget.title} projects={moveProjects} current={projectCatalog.threads[moveTarget.threadId] ?? null} busy={moveBusy} error={moveError} onmove={(projectId) => moveThread(moveTarget.threadId, projectId)} onclose={() => { moveTarget = null }} />{/if}
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
-    <AgentManager {tauri} {runtimeList} agents={roster} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentChat(chosen?.description ? { description: chosen.description } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
+    <AgentManager {tauri} {runtimeList} agents={roster} ongroup={roster.length > 1 ? () => { groupCreateOpen = true } : null} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentChat(chosen?.description ? { description: chosen.description } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
       {inventory} latestRuns={agentListing.latestRuns} onprofile={openAgentProfile} onmanagemodels={openModelSettings} onvisibility={setModelShown} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {/key}{/if}
   {#if projectsOpen && settingsProject && sidebarProjectById[settingsProject]}

@@ -6004,6 +6004,50 @@ describe('local file selection', () => {
     expect(screen.getByText('Files in /chosen')).toBeInTheDocument()
   })
 
+  it('opens New group from the Agents page once two agents exist', async () => {
+    const original = invoke.getMockImplementation()
+    const agents = ['Lead scout', 'Deal desk'].map((name, index) => ({ id: `018f0000-0000-4000-8000-0000000000e${index}`, name, instructions: 'Work.', routines: [] }))
+    invoke.mockImplementation(async (command, payload) => isAgentList(command, payload) ? agentListAnswer(agents) : original(command, payload))
+    render(App)
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'New group' }))
+    expect(await screen.findByRole('heading', { name: 'New group' })).toBeInTheDocument()
+  })
+
+  it('lists agents before files for @ in an ordinary thread and sends the mentioned agent ids', async () => {
+    const original = invoke.getMockImplementation()
+    const helper = { id: '018f0000-0000-4000-8000-0000000000d1', name: 'Drive helper', instructions: 'Help.', routines: [], avatar: { style: 'muniment', seed: 'd' } }
+    invoke.mockImplementation(async (command, payload) => {
+      if (isAgentList(command, payload)) return agentListAnswer([helper])
+      if (command === 'chat_search_files') return [{ path: '/home/DRAFT.md', displayName: 'DRAFT.md', relativePath: 'DRAFT.md' }]
+      if (command === 'chat_submit') return { runId: 'run-mention', attachments: [], mentions: [{ agent_id: helper.id, name: 'Drive helper', sent: false, error: 'Drive helper is busy. Try again later.' }] }
+      return original(command, payload)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'New thread', exact: true }))
+    const composer = await findWorkspaceComposer()
+    await screen.findByRole('button', { name: 'Extensions' })
+    await tick()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    await fireEvent.input(composer, { target: { value: 'Ask @dr' } })
+    composer.setSelectionRange(7, 7)
+    await fireEvent.click(composer)
+    const agents = await screen.findByRole('listbox', { name: 'Agent suggestions' })
+    expect(within(agents).getAllByRole('option').map((option) => option.textContent)).toEqual(['@Drive helper'])
+    expect(agents.querySelector('.agent-avatar')).not.toBeNull()
+    await screen.findByRole('option', { name: 'DRAFT.md' })
+    expect(agents.closest('.mentions').querySelector('p')).toHaveTextContent('Agents')
+    // Agents come first, so Enter picks the agent.
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(composer).toHaveValue('Ask @Drive helper '))
+    await fireEvent.input(composer, { target: { value: 'Ask @Drive helper to check it' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Ask @Drive helper to check it', mentions: [helper.id] })))
+    expect(await screen.findByText('Drive helper is busy. Try again later.')).toBeInTheDocument()
+  })
+
   it('selects an @ file with Enter without sending and closes suggestions with Escape', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, payload) => {

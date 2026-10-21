@@ -17,7 +17,8 @@
   import { exportAgent } from '../agents/import.js'
   import { loadModes } from '../agents/permission-modes.js'
   // `onselect` opens the agent's chat, `onprofile` its profile alone and `onopenrun` a run's conversation.
-  let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onopenrun=null, onvisibility=null, onmanagemodels=()=>{}}=$props()
+  // `ongroup`, given once two agents exist, opens New group.
+  let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onopenrun=null, onvisibility=null, onmanagemodels=()=>{}, ongroup=null}=$props()
   let archived = $state(false)
   let importOpen = $state(false)
   // The machines an import can land on: this computer and each that answers.
@@ -60,6 +61,7 @@
     <PageHead title="Agents" level={2} intro="Each agent keeps its own instructions and memory, works in its own chat, and can run on a schedule, a webhook or a tool check.">
       {#snippet actions()}
         {#if archived || (agents ?? listing.agents).some(agent=>isArchived('agent',agent)) || pending.some(plan=>isArchived('creation',plan))}<Button aria-pressed={archived} onclick={()=>archived=!archived}>{archived ? 'Show active' : 'Show archived'}</Button>{/if}
+        {#if ongroup}<Button icon="users" onclick={()=>ongroup()}>New group</Button>{/if}
         <Button icon="download" onclick={()=>importOpen=true}>Import agent</Button>
         <Button icon="plus" variant="primary" onclick={()=>oncreate?.()}>New agent</Button>
       {/snippet}

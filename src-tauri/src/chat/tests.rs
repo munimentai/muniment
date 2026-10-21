@@ -45,6 +45,7 @@ impl RunCommandClient for FakeRunClient {
         thread_id: Option<&str>,
         thinking_level: Option<&str>,
         permission_mode: Option<&str>,
+        _mentions: &[String],
     ) -> Result<RunSubmitAccepted, String> {
         if self.1 {
             return Err(auth::desktop_client_error(
@@ -64,6 +65,7 @@ impl RunCommandClient for FakeRunClient {
             attachments: Vec::new(),
             committed_seq: 7,
             accepted_at: "now".to_string(),
+            mentions: Vec::new(),
         })
     }
 
@@ -173,6 +175,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         vec![],
         None,
         None,
+        &[],
     )));
 
     state
@@ -189,6 +192,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         }],
         Some("high"),
         None,
+        &[],
     ));
     assert_eq!(connected.unwrap().run_id, "remote-run");
     assert_eq!(
@@ -216,6 +220,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         vec![],
         None,
         Some("plan"),
+        &[],
     ));
     assert!(created.is_ok());
     assert_eq!(
@@ -240,6 +245,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         vec![],
         None,
         None,
+        &[],
     )));
     assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
         FakeRunClient,
@@ -251,6 +257,7 @@ fn chat_submit_routes_all_desktop_client_states() {
         vec![],
         None,
         None,
+        &[],
     )));
 }
 

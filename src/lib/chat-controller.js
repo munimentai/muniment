@@ -46,6 +46,10 @@ export function createChatController({
   // The model the composer picked before any thread exists. The first
   // message carries it to the thread it starts.
   readPendingModel = () => null,
+  // The ids of the agents a prompt mentions. Core sends the prompt to each
+  // and answers what became of each one, which `onMentions` receives.
+  readMentions = () => [],
+  onMentions = () => {},
   readThreadId = () => null,
   readThreadSummaries = () => [],
   // The machine the composer sends to. A run left running on one machine
@@ -932,9 +936,11 @@ export function createChatController({
       // A launcher thread takes no mode from the main composer.
       const permissionMode = preserveDraft ? null : readPermissionMode()
       const model = preserveDraft ? null : readPendingModel()
-      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}) })
+      const mentions = preserveDraft ? [] : readMentions(prompt)
+      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}), ...(mentions.length ? { mentions } : {}) })
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
+      if (run.mentions?.length) onMentions(run.mentions)
       if (!preserveDraft) {
         onDraft('')
         onFiles([])
