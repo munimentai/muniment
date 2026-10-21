@@ -3863,7 +3863,7 @@
             {@const message = item.message}
             {@const envelope = message.role === 'user' ? agentEnvelope(message.text) : null}
             {#if envelope}
-              <div class="agent-turn"><AgentMessage {envelope} agent={roster.find((agent) => agent.id === envelope.agentId) ?? null} sentAt={message.sentAt ?? ''} /></div>
+              <div class="agent-turn"><AgentMessage {envelope} {tauri} onopenlink={openChatLink} agent={roster.find((agent) => agent.id === envelope.agentId) ?? null} sentAt={message.sentAt ?? ''} /></div>
             {:else if message.role === 'user'}
                 {@const userCopyId = `user:${message.id ?? message.submissionId}`}
                 {@const sent = promptFolders(message.text)}
