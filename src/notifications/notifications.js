@@ -6,6 +6,7 @@ import { agentRequest } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 import { routineIcon } from '../agents/routine-labels.js'
 import { markdownPlainText } from '../lib/assistant-markdown.js'
+import { formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const NOTIFICATION_VIEWS = [
   { value: 'needs_you', label: 'Needs you' },
@@ -20,7 +21,7 @@ export const NOTIFY_KEY = 'notify'
 export const DEFAULT_NOTIFY = Object.freeze({ needs_you: true, finished: false })
 
 export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null } = {}) {
-  const filter = { view, utc_offset_minutes: -new Date().getTimezoneOffset() }
+  const filter = { view, utc_offset_minutes: zoneOffsetMinutes() }
   if (machine) filter.machine = machine
   if (agent) filter.agent = agent
   return tauri.invoke('notifications_list', { machines, filter })
@@ -117,21 +118,19 @@ export function needsMark(kind) {
   return NEEDS[kind] ?? NEEDS.input
 }
 
-export function clockTime(at) {
+// A row's time as the Time setting shows times: the clock time today, else the date.
+export function clockTime(at, now = Date.now()) {
   const date = new Date(at)
   if (Number.isNaN(date.getTime())) return ''
-  const today = new Date().toDateString() === date.toDateString()
-  return today
-    ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    : date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  return sameDay(date, now) ? formatClock(date) : formatDate(date)
 }
 
 // When a scheduled run fires: the time today, else the day and the time.
-export function scheduleTime(at) {
+export function scheduleTime(at, now = Date.now()) {
   const date = new Date(at)
   if (Number.isNaN(date.getTime())) return ''
-  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  return new Date().toDateString() === date.toDateString() ? time : `${date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`
+  const time = formatClock(date)
+  return sameDay(date, now) ? time : `${formatDate(date, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`
 }
 
 // The run the page opens: its thread on the machine that answered for it.

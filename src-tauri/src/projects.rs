@@ -1,4 +1,4 @@
-use muniment_core::{palette, projects, sidebar};
+use muniment_core::{palette, projects, sidebar, time_display};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -29,9 +29,13 @@ pub fn project_settings_save(
 ) -> Result<(), String> {
     projects::save_settings(&profile()?, &project_id, &settings)
 }
-/// The sidebar's sections, arranged by core from what the window knows.
+/// The sidebar's sections, arranged by core from what the window knows,
+/// with clock times as this machine's time preference shows them.
 #[tauri::command]
-pub fn sidebar_arrange(input: sidebar::Input) -> sidebar::Sidebar {
+pub fn sidebar_arrange(mut input: sidebar::Input) -> sidebar::Sidebar {
+    if let Ok(profile) = profile() {
+        input.time = time_display::load(&profile);
+    }
     sidebar::arrange(&input)
 }
 /// The command palette's groups for a query, ranked by core.

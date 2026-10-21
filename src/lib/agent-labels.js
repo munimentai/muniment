@@ -1,6 +1,7 @@
 // The words the agent profile, the routines and Notifications show for a run and
 // a trigger. The runtime decides every state, and these only name it.
 import { executionTime } from './execution-time.js'
+import { dayNumber, formatClock, formatDate, sameYear } from './time-format.svelte.js'
 
 const runWords = {
   queued: 'Queued',
@@ -63,21 +64,20 @@ export function whenLabel(value, now = Date.now()) {
   if (minutes < 1) return 'Just now'
   if (minutes < 60) return `${minutes}m ago`
   if (minutes < 24 * 60) return `${Math.round(minutes / 60)}h ago`
-  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return formatDate(at)
 }
 
-// When a run happened or runs next, in local time with no time zone: `Today
-// at 8:56 AM`, `Yesterday at 9:03 AM`, `Tomorrow at 2:00 AM` or `Oct 12 at
-// 9:08 AM`, with the year when it differs.
+// When a run happened or runs next, in the zone and on the clock the Time
+// setting shows, with no time zone: `Today at 8:56 AM`, `Yesterday at
+// 9:03 AM`, `Tomorrow at 2:00 AM` or `Oct 12 at 9:08 AM`, with the year when
+// it differs.
 export function runTimeLabel(value, now = Date.now()) {
   const at = new Date(value)
   if (!Number.isFinite(at.getTime())) return ''
-  const today = new Date(now)
-  const midnight = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-  const days = Math.round((midnight(today) - midnight(at)) / 86_400_000)
+  const days = dayNumber(now) - dayNumber(at)
   const day = days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days === -1 ? 'Tomorrow'
-    : at.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(at.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' }) })
-  return `${day} at ${at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+    : formatDate(at, { month: 'short', day: 'numeric', ...(sameYear(at, now) ? {} : { year: 'numeric' }) })
+  return `${day} at ${formatClock(at)}`
 }
 
 // A run's title in the history: its routine's name, else what started it.

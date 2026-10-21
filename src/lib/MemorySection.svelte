@@ -13,6 +13,7 @@
   import { dialogDismiss } from './dialog-dismiss.js'
   import MemoryImports from './MemoryImports.svelte'
   import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
+  import { formatDateTime } from './time-format.svelte.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
   // `agent` is the agent whose memory shows from its profile: a new fact's
   // source names it, and its avatar marks that source. `addInPlace` shows
@@ -121,7 +122,7 @@
   // Proposed changes from finished chats wait here until the user applies or
   // dismisses them. A runtime without the action leaves the list empty.
   const OP = { add: 'Add', update: 'Update', delete: 'Delete' }
-  const when = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  const when = { format: formatDateTime }
   let pending = $state([])
   let reviewing = $state(false)
   // A failed apply keeps its row and error until the user closes it, even

@@ -1,8 +1,12 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import AgentProfile from './AgentProfile.svelte'
+import { saveTimeSetting } from './time-format.svelte.js'
 afterEach(cleanup)
+// Times read in one zone on a 24-hour clock, whatever the computer uses.
+beforeEach(() => saveTimeSetting(null, { zone: 'UTC', clock: '24h' }))
+afterEach(() => saveTimeSetting(null, { zone: '', clock: '' }))
 
 // Core's `agent.tool_catalog` from the agent's machine, as the window maps it.
 const catalog = {

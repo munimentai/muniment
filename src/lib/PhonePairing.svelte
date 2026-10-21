@@ -5,6 +5,7 @@
   import Button from './ui/Button.svelte'
   import { pairingRequests } from './pairing-requests.js'
   import { dialogDismiss } from './dialog-dismiss.js'
+  import { formatDateTime } from './time-format.svelte.js'
   import {
     challengeExpired,
     pairingChallengeState,
@@ -176,7 +177,7 @@
   }
 
   function lastActive(value) {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+    return formatDateTime(value)
   }
 
   onMount(() => {

@@ -1,6 +1,7 @@
 import { modelLabel, modelReason, receiptNames } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
+import { formatClock } from './time-format.svelte.js'
 
 export function composerAction(event, text, active) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !text.trim()) return null
@@ -338,9 +339,8 @@ export function unsettledRun(messages = []) {
   return null
 }
 
+// A message's clock time, as the Time setting shows times.
 export function messageLocalTime(timestamp) {
   if (!timestamp) return ''
-  const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) return ''
-  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  return formatClock(timestamp)
 }

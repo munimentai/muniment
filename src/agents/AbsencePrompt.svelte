@@ -5,12 +5,13 @@
   import Button from '../lib/ui/Button.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { agentRequest } from './agent-runtime.js'
+  import { formatDate } from '../lib/time-format.svelte.js'
 
   let { tauri, runtime, pausedAt = null, count = 0, onresumed = () => {} } = $props()
   let busy = $state(false)
   let error = $state('')
   let hidden = $state(false)
-  const since = $derived(pausedAt ? new Date(pausedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '')
+  const since = $derived(pausedAt ? formatDate(pausedAt) : '')
 
   async function resume() {
     busy = true

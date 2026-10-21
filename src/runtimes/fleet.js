@@ -4,12 +4,11 @@
 // shapes their answers for the window.
 import { LOCAL_RUNTIME_ID, machineName as listedMachineName } from './runtimes.js'
 import { memberMachine } from '../agents/swarm.js'
+import { formatClock, formatDateTime } from '../lib/time-format.svelte.js'
 
-// HH:MM in the viewer's clock.
+// The clock time as the Time setting shows times.
 export function clockTime(value) {
-  const date = value ? new Date(value) : null
-  if (!date || Number.isNaN(date.getTime())) return ''
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  return value ? formatClock(value) : ''
 }
 
 // The forwarded actions after one `fleet-op-updated` event, newest first.
@@ -228,8 +227,7 @@ export function auditRow(entry, swarm) {
 function auditTime(value) {
   const date = value ? new Date(value) : null
   if (!date || Number.isNaN(date.getTime())) return ''
-  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-  return `${day} ${clockTime(value)}`
+  return formatDateTime(date)
 }
 
 // The fleet members a new thread can start on, beyond the machines this app
