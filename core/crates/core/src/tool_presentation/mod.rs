@@ -22,7 +22,9 @@ mod result;
 mod tests;
 pub mod text;
 
-pub use hints::{lookup, remember, remember_catalog, PresentationHints, ToolMeta};
+pub use hints::{
+    agent_name, lookup, remember, remember_agent, remember_catalog, PresentationHints, ToolMeta,
+};
 
 use crate::journal::reducer::{ToolActivity, ToolActivityStatus};
 use crate::journal::ThreadPermissionResource;

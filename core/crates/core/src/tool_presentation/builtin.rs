@@ -389,7 +389,17 @@ fn agents(tool: &str, input: &Value) -> Option<Call> {
     let call = |icon: &'static str, headline: String, progress: &str| {
         Call::new("agent", "agent", icon, headline, progress.into())
     };
-    let to = text(input, "to").unwrap_or("another agent");
+    // A call may name the agent by its id, which reads as the agent's name.
+    let named = text(input, "to").map(|to| {
+        super::hints::agent_name(to).unwrap_or_else(|| {
+            if uuid::Uuid::parse_str(to.trim()).is_ok() {
+                "another agent".into()
+            } else {
+                to.to_owned()
+            }
+        })
+    });
+    let to = named.as_deref().unwrap_or("another agent");
     let id = text(input, "id").map(|id| clip(id, 32)).unwrap_or_default();
     Some(match tool {
         "agent-message" => call(
@@ -860,6 +870,10 @@ pub(super) fn failure(tool: &str, output: &str, seconds: Option<f64>) -> Option<
             } else {
                 None
             }
+        }
+        // Their errors start with an agent's name, which keeps its capital.
+        "agent-message" | "agent-handoff" => {
+            Some(super::result::failure_cased(output, str::to_owned))
         }
         _ => None,
     }

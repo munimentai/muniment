@@ -780,3 +780,30 @@ fn the_gallery_fixture_matches_the_describers() {
         presented
     );
 }
+
+#[test]
+fn an_agent_named_by_its_id_reads_with_its_name_and_its_refusal_keeps_the_capital() {
+    let id = "4f3c0183-7f2a-4c4e-9b1d-2a6f0c9e8d11";
+    remember_agent(id, "Drive9 Helper");
+    let message = json!({"to": id, "intent": "request", "text": "Find the release."});
+    assert_eq!(
+        call("agent-message", message.clone()).headline,
+        "Message Drive9 Helper: \u{201c}Find the release.\u{201d}"
+    );
+    let unknown = json!({"to": "0b7e1f3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "text": "Hi"});
+    assert_eq!(
+        call("agent-message", unknown).headline,
+        "Message another agent: \u{201c}Hi\u{201d}"
+    );
+    let refused = ended(
+        "agent-message",
+        message,
+        CallStatus::Failed,
+        "Tauri Morning may not message Drive9 Helper. Choose agents under Messages to other agents in its profile.",
+        None,
+    );
+    assert_eq!(
+        refused.result.as_deref(),
+        Some("Failed: Tauri Morning may not message Drive9 Helper")
+    );
+}

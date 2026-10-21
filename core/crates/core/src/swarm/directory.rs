@@ -467,6 +467,9 @@ pub(super) fn resolve(inner: &Inner, to: &str) -> Result<Target, String> {
             });
         }
     }
+    for candidate in &candidates {
+        crate::tool_presentation::remember_agent(&candidate.agent_id, &candidate.name);
+    }
     if let Some(found) = candidates.iter().find(|candidate| candidate.agent_id == to) {
         return Ok(found.clone());
     }

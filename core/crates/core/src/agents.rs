@@ -331,6 +331,7 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
     agent.instructions = instructions.trim_end().into();
     migrate(&mut agent)?;
     validate(&agent)?;
+    crate::tool_presentation::remember_agent(&agent.id, &agent.name);
     Ok(agent)
 }
 /// Reads a v1 `schedule` as the cron routine it becomes, and fills the
