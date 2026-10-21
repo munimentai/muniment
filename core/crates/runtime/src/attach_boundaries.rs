@@ -45,7 +45,8 @@ use muniment_core::engine::{AgentEngine, CompactionSettings, PiRpcEngine, Thread
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::journal::thread_mutation::{
-    append_thread_delete_now, append_thread_rename_now, create_thread_now, ThreadMutationError,
+    append_thread_rename_now, create_thread_now, delete_thread_with_creation_now,
+    ThreadMutationError,
 };
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
@@ -1623,8 +1624,9 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         let mut storage = self.storage.lock().map_err(|error| {
             persistence_error("lock", error.to_string()).desktop_protocol_error()
         })?;
-        append_thread_delete_now(
+        delete_thread_with_creation_now(
             &mut storage.journal,
+            &self.profile_directory,
             subject.as_deref(),
             thread_id,
             &provenance,
@@ -2222,7 +2224,9 @@ fn browser_command_with_browser(url: &str, browser: Option<&std::ffi::OsStr>) ->
 fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
     match error {
         ThreadMutationError::NotOwned => ProtocolError::thread_not_found(),
-        ThreadMutationError::Ownership(_) | ThreadMutationError::Journal(_) => {
+        ThreadMutationError::Ownership(_)
+        | ThreadMutationError::Journal(_)
+        | ThreadMutationError::Creation(_) => {
             persistence_error("journal", error).desktop_protocol_error()
         }
     }

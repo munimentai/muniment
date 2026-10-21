@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use muniment_core::journal::thread_mutation::{
     append_thread_delete, append_thread_delete_now, append_thread_rename, append_thread_rename_now,
-    create_thread_now, ThreadMutationError,
+    create_thread_now, delete_thread_with_creation_now, ThreadMutationError,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use rusqlite::Connection;
@@ -428,4 +428,59 @@ fn a_rewind_takes_a_run_and_later_runs_out_of_the_conversation() {
         [first, next.run_id]
     );
     assert_eq!(journal.events(&later[0]).unwrap().len(), 2);
+}
+
+#[test]
+fn deletes_an_agent_creation_chat_that_holds_no_run() {
+    let profile = std::env::temp_dir().join(format!("muniment-creation-delete-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&profile).unwrap();
+    let (path, mut journal, owned) = journal_with_thread(Some("owner"));
+    let chat = Uuid::new_v4().to_string();
+    for thread_id in [&chat, &owned] {
+        muniment_core::creations::save(
+            &profile,
+            muniment_core::creations::Creation {
+                thread_id: thread_id.clone(),
+                kind: "agent".into(),
+                goal: "Find sources".into(),
+                output: "A saved agent".into(),
+                result_id: None,
+                turns: Vec::new(),
+            },
+        )
+        .unwrap();
+    }
+    delete_thread_with_creation_now(
+        &mut journal,
+        &profile,
+        Some("owner"),
+        &chat,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(muniment_core::creations::read(&profile, &chat)
+        .unwrap()
+        .is_none());
+    delete_thread_with_creation_now(
+        &mut journal,
+        &profile,
+        Some("owner"),
+        &owned,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert_eq!(stored_thread_event(&path, &owned).0, "thread.deleted");
+    assert!(muniment_core::creations::read(&profile, &owned)
+        .unwrap()
+        .is_none());
+    // A thread with neither a run nor a creation chat is still not found.
+    assert!(delete_thread_with_creation_now(
+        &mut journal,
+        &profile,
+        Some("owner"),
+        &Uuid::new_v4().to_string(),
+        &provenance(Some("owner")),
+    )
+    .is_err());
+    std::fs::remove_dir_all(profile).unwrap();
 }
