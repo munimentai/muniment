@@ -256,7 +256,7 @@
         <SegmentedField label="Messages to other agents" hideLabel value={allowList === 'any' ? 'any' : 'only'} options={[{ value: 'any', label: 'Any' }, { value: 'only', label: 'Only these' }]} onchange={chooseAllow} />
         {#if allowList !== 'any'}
           <div class="allowed" data-profile-menu="agents">
-            {#each allowed as other (`${other.runtimeId}:${other.id}`)}<span class="agent-chip"><AgentAvatar agent={other} size={16} />{other.name}</span>{/each}
+            {#each allowed as other (`${other.runtimeId}:${other.id}`)}<span class="agent-chip"><AgentAvatar agent={other} size={16} />{other.name}</span>{:else}<p class="muted none-allowed">This agent can message no other agent.</p>{/each}
             <ComposerMenuButton menu="agent-agents" open={menu === 'agents'} chevrons label="Choose agents" text={allowed.length ? 'Change' : 'Choose agents'} disabled={busy} onclick={() => toggleMenu('agents')}>{#snippet icon()}<LucideIcon name="users" size={14} />{/snippet}</ComposerMenuButton>
             {#if menu === 'agents'}<ChoiceMenu label="Agents" multiple values={allowList} options={others.map((other) => ({ value: other.id, label: other.name, agent: other }))} onchoose={allowAgent} onclose={closeMenu} />{/if}
           </div>
@@ -379,6 +379,7 @@
   /* The agents menu button takes its own full-width row under the Any and Only these choice. */
   .allowed { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
   .allowed > :global(.composer-menu-button) { flex: 1 0 100%; max-width: none; }
+  .none-allowed { flex: 1 0 100%; margin: 0; }
   .allowed > :global(.composer-menu-button .chevrons) { margin-left: auto; }
   .agent-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 8px 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); font: var(--text-12) var(--font-human); }
   .threads { gap: 0; }
