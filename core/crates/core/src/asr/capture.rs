@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
 
+use super::level::{VoiceLevelMeter, VoiceLevelSlot};
 use super::recognizer::SAMPLE_RATE;
 
 const LOW_PASS_TAPS: usize = 63;
@@ -25,6 +26,7 @@ pub struct PcmProducer {
     resample_accumulator: u32,
     low_pass: Option<LowPassFilter>,
     gap: Arc<GapState>,
+    level: Option<(VoiceLevelMeter, Arc<VoiceLevelSlot>)>,
 }
 
 /// Fixed-memory anti-alias filter used before reducing a device sample rate.
@@ -135,12 +137,20 @@ pub fn bounded_pcm_channel(
             resample_accumulator: 0,
             low_pass: (source_rate > SAMPLE_RATE).then(|| LowPassFilter::new(source_rate)),
             gap: gap.clone(),
+            level: None,
         },
         PcmConsumer { receiver, gap },
     ))
 }
 
 impl PcmProducer {
+    /// Meters the voice loudness of the queued 16 kHz PCM into `slot`, the
+    /// dropped samples of a full queue included.
+    pub fn with_level(mut self, slot: Arc<VoiceLevelSlot>) -> Self {
+        self.level = Some((VoiceLevelMeter::new(SAMPLE_RATE), slot));
+        self
+    }
+
     pub fn push_f32(&mut self, samples: &[f32]) {
         self.push(samples.iter().map(|sample| {
             if sample.is_finite() {
@@ -186,6 +196,11 @@ impl PcmProducer {
             self.resample_accumulator += SAMPLE_RATE;
             while self.resample_accumulator >= self.source_rate {
                 self.resample_accumulator -= self.source_rate;
+                if let Some((meter, slot)) = &mut self.level {
+                    if let Some(level) = meter.push(mono) {
+                        slot.store(level);
+                    }
+                }
                 if self.gap.is_latched() {
                     self.gap.record_drop();
                     continue;
@@ -228,6 +243,19 @@ mod overflow_tests {
     use super::*;
     use std::sync::{Arc, Barrier};
     use std::thread;
+
+    #[test]
+    fn a_metered_producer_stores_one_level_per_window_of_output() {
+        let slot = Arc::new(crate::asr::level::VoiceLevelSlot::new());
+        let (producer, consumer) = bounded_pcm_channel(2, SAMPLE_RATE * 2, 16_000).unwrap();
+        let mut producer = producer.with_level(slot.clone());
+        // 533 output samples at 16 kHz from stereo 32 kHz input.
+        producer.push_f32(&vec![0.0; 532 * 4]);
+        assert_eq!(slot.load(), None);
+        producer.push_f32(&[0.0; 4]);
+        assert_eq!(slot.load().map(|frame| frame.level), Some(0.0));
+        assert_eq!(consumer.drain().len(), 533);
+    }
 
     #[test]
     fn taking_drops_resets_the_overflow_counter() {
