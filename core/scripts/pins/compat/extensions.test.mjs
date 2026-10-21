@@ -10,13 +10,14 @@ import {
 } from './harness.mjs'
 
 /**
- * The tool names the system prompt in `crates/core/src/pi_launch.rs` promises the model. The
- * record server registers its `mcp__record__` tools once a session connects to it, so the
- * record server's own tests cover those.
+ * The tool names the `Tools:` block of the system prompt in `crates/core/src/pi_launch.rs`
+ * promises the model. The block ends at the first blank line. The record server registers its
+ * `mcp__record__` tools once a session connects to it, so the record server's own tests cover
+ * those. The app's own tools follow under `App tools:`, and core's tests cover them.
  */
 function promisedTools() {
   const source = readFileSync(join(env.root, 'crates/core/src/pi_launch.rs'), 'utf8')
-  const tools = source.split('\nTools:\n')[1].split('\n\nRules:')[0]
+  const tools = source.split('\nTools:\n')[1].split('\n\n')[0]
   return tools.split('\n').flatMap(line => line.replace(/^- /, '').split(':')[0].split(',').map(name => name.trim()))
     .filter(name => !name.startsWith('mcp__record__'))
 }

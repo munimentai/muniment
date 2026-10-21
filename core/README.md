@@ -63,7 +63,7 @@ compatibility suite on the host platform:
 
 - the pinned Pi in JSON and RPC modes against a fake OpenAI-compatible stream
   server (`scripts/pins/compat/`),
-- a load check for every pinned package and for the tools the system prompt names,
+- a load check for every pinned package and for the tools the system prompt's `Tools:` block names,
 - muniment-core's sidecar, launch and RPC frame tests against the real Pi,
 - one `pi-claude-bridge` turn through the pinned Claude Code CLI against a fake
   Anthropic endpoint.

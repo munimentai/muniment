@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use muniment_core::chat_launch::{ChatGrant, FetchGrantError};
+use muniment_core::permission_gate::PLAN_TOOL;
 
 #[path = "pi_launch/acquisition_coordinate.rs"]
 mod acquisition_coordinate;
@@ -649,6 +650,23 @@ fn the_system_prompt_states_purpose_and_tools_and_names_no_harness_or_product() 
     assert!(!lower
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|word| word == "pi"));
+    // The `Tools:` block holds the built-in and package tools, which the pins
+    // compatibility suite loads, and `App tools:` holds core's own.
+    let block = |heading: &str| {
+        SYSTEM_PROMPT
+            .split(&format!("\n{heading}\n"))
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .unwrap_or_default()
+            .lines()
+            .flat_map(|line| {
+                let line = line.trim_start_matches("- ");
+                line.split(':').next().unwrap_or_default().split(',')
+            })
+            .map(str::trim)
+            .collect::<Vec<_>>()
+    };
+    let harness = block("Tools:");
     for tool in [
         "read",
         "write",
@@ -660,17 +678,59 @@ fn the_system_prompt_states_purpose_and_tools_and_names_no_harness_or_product() 
         "ls",
         "web_search",
         "fetch_content",
+        "get_search_content",
+        "source_check",
+        "codemode",
         "subagent",
         "bg_run",
         "bg_status",
         "bg_logs",
-        "mcp",
-        "codemode",
+        "bg_kill",
+        "bg_wait",
+        "bg_delegate",
+        "bg_result",
+        "fusion_reason",
+        "fusion_investigate",
+        "fusion_research",
+        "fusion_validate",
+        "mcp__record__sql",
+        "mcp__record__propose",
+        "mcp__record__commit",
     ] {
-        assert!(SYSTEM_PROMPT.contains(tool), "{tool}");
+        assert!(harness.contains(&tool), "{tool}");
     }
+    let app = block("App tools:");
+    for tool in [
+        "ask_user_question",
+        "agent-list",
+        "agent-read",
+        "agent-save",
+        "agent-run",
+        "routine-list",
+        "routine-save",
+        "routine-delete",
+        "agent-message",
+        "agent-handoff",
+        "creation-plan",
+        "artifact-publish",
+        "browser",
+        PLAN_TOOL,
+    ] {
+        assert!(app.contains(&tool), "{tool}");
+        assert!(!harness.contains(&tool), "{tool}");
+    }
+    // Each tool has one line.
+    let mut listed: Vec<&str> = harness.iter().chain(&app).copied().collect();
+    let count = listed.len();
+    listed.sort_unstable();
+    listed.dedup();
+    assert_eq!(listed.len(), count);
     assert!(SYSTEM_PROMPT.contains("`timeout` in SECONDS"));
     assert!(SYSTEM_PROMPT.contains("Send anything longer to `bg_run`"));
+    assert!(SYSTEM_PROMPT.contains("When the browser cannot be used, read the page with fetch_content or find it with web_search."));
+    assert!(SYSTEM_PROMPT.contains("Use them whenever the user asks about agents."));
+    // The memory rules name the memory tools only while recall settings turn them on.
+    assert!(!SYSTEM_PROMPT.contains("memory-"));
 }
 
 #[test]
@@ -1053,7 +1113,9 @@ fn the_launch_prompt_follows_the_recall_settings_and_keeps_the_profile() {
         )
     };
     let defaults = prompt().unwrap();
-    assert!(defaults.contains("Use memory-search to recall relevant facts."));
+    assert!(defaults.contains(
+        "Use memory-search to recall relevant facts and when the user asks what you remember."
+    ));
     assert!(defaults.contains("Do not ask for confirmation for routine memory maintenance."));
     assert!(defaults.contains("Call me Alex."));
 

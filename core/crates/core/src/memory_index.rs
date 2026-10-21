@@ -250,7 +250,7 @@ impl Default for MemorySearchSession {
     fn default() -> Self {
         let definition = json!({
             "name": "memory-search",
-            "description": "Search the Markdown files in the user's Home folder.",
+            "description": "Search the saved facts and Markdown notes this thread recalls: the user's Home folder, or the agent's own folder in an agent's thread.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
