@@ -331,6 +331,7 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
     agent.instructions = instructions.trim_end().into();
     migrate(&mut agent)?;
     validate(&agent)?;
+    crate::tool_presentation::remember_agent(&agent.id, &agent.name);
     Ok(agent)
 }
 /// Reads a v1 `schedule` as the cron routine it becomes, and fills the
@@ -1070,7 +1071,15 @@ pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(),
     state.routines.remove(id);
     state.dismissed_proposals.remove(id);
     state.refined_instructions.remove(id);
-    persist_state(profile, &state)
+    persist_state(profile, &state)?;
+    // The chat that created the agent goes with it. The agent is gone by
+    // now, so a record that stays is one the user can still delete.
+    for creation in crate::creations::list(profile).unwrap_or_default() {
+        if creation.kind == "agent" && creation.result_id.as_deref() == Some(id) {
+            let _ = crate::creations::remove(profile, &creation.thread_id);
+        }
+    }
+    Ok(())
 }
 /// The agent a thread belongs to, if any.
 pub fn thread_agent(profile: &Path, thread: &str) -> Result<Option<Agent>, String> {
@@ -2115,6 +2124,38 @@ mod tests {
         assert!(!removed_memory.exists());
         assert!(store.latest(&removed.id).unwrap().is_none());
         assert!(list(&profile).unwrap().agents.is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_deletes_the_chat_that_created_it() {
+        let (root_dir, profile) = profile();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "Scout".into(),
+                instructions: "Work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let creation = |result_id: Option<String>| crate::creations::Creation {
+            thread_id: uuid::Uuid::new_v4().to_string(),
+            kind: "agent".into(),
+            goal: "Find sources".into(),
+            output: "A saved agent".into(),
+            result_id,
+            turns: Vec::new(),
+        };
+        let chat = crate::creations::save(&profile, creation(Some(agent.id.clone()))).unwrap();
+        let other = crate::creations::save(&profile, creation(None)).unwrap();
+        delete(&profile, &agent.id).unwrap();
+        assert!(crate::creations::read(&profile, &chat.thread_id)
+            .unwrap()
+            .is_none());
+        assert!(crate::creations::read(&profile, &other.thread_id)
+            .unwrap()
+            .is_some());
         fs::remove_dir_all(root_dir).unwrap();
     }
 

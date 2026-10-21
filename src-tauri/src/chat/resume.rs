@@ -56,6 +56,7 @@ pub async fn chat_submit(
     thinking_level: Option<String>,
     permission_mode: Option<String>,
     model: Option<serde_json::Value>,
+    mentions: Option<Vec<String>>,
 ) -> Result<SubmitResult, SubmissionError> {
     #[cfg(any(unix, target_os = "windows"))]
     {
@@ -108,6 +109,7 @@ pub async fn chat_submit(
             selected_files,
             thinking_level.as_deref(),
             permission_mode.as_deref(),
+            &mentions.unwrap_or_default(),
         )
         .await
         .map_err(SubmissionError::at("submit"));

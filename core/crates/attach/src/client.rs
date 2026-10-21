@@ -134,6 +134,21 @@ pub struct RunSubmitAccepted {
     pub attachments: Vec<RunSubmitAttachment>,
     pub committed_seq: u64,
     pub accepted_at: String,
+    /// What became of each mentioned agent's message.
+    #[serde(default)]
+    pub mentions: Vec<MentionOutcome>,
+}
+
+/// One agent a message mentioned: whether the runtime sent it the message,
+/// and the reason when it did not.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct MentionOutcome {
+    pub agent_id: String,
+    #[serde(default)]
+    pub name: String,
+    pub sent: bool,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]

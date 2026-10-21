@@ -20,6 +20,8 @@ pub enum ThreadMutationError {
     Ownership(ThreadOwnershipError),
     NotOwned,
     Journal(JournalError),
+    /// The creation chat record could not be removed.
+    Creation(String),
 }
 
 fn check_ownership(
@@ -98,6 +100,32 @@ pub fn append_thread_delete_now(
         &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
         provenance,
     )
+}
+
+/// Deletes a thread and its creation chat record in `profile`. An agent's
+/// creation chat holds its messages in that record and may hold no run, so
+/// the record alone is enough to delete it.
+pub fn delete_thread_with_creation_now(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+    subject: Option<&str>,
+    thread_id: &str,
+    provenance: &Provenance,
+) -> Result<(), ThreadMutationError> {
+    let creation = crate::creations::read(profile, thread_id)
+        .ok()
+        .flatten()
+        .is_some();
+    match append_thread_delete_now(journal, subject, thread_id, provenance) {
+        Ok(()) => {}
+        // The journal holds no run of the chat.
+        Err(ThreadMutationError::NotOwned | ThreadMutationError::Ownership(_)) if creation => {}
+        Err(error) => return Err(error),
+    }
+    if creation {
+        crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
+    }
+    Ok(())
 }
 
 /// Takes a run and every later run out of the thread's conversation.

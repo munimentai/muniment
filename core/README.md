@@ -542,7 +542,12 @@ The thread's mode is journal state: `thread.permission.mode.set`
 thread with none runs in its agent's mode, else the runtime's default.
 `run.submit` takes an optional `permission_mode`. The runtime journals it,
 else the default thread mode for a new thread that is no agent's, before the
-run starts, so it decides the run's first tool call. The runtime's settings
+run starts, so it decides the run's first tool call. `run.submit` also takes
+`mentions`, up to 16 agent ids the message names. Once the run is accepted,
+the runtime sends the message to each: in an agent's thread the agent sends it
+as an `agent-message` request, under its messaging list, and elsewhere the
+user sends it to the agent. The answer's `mentions` holds
+`{agent_id, name, sent, error}` for each. The runtime's settings
 live in `<profile>/permission-settings.json`. Bypass is on and both default
 modes are `bypass` until the owner saves other settings. A field the file
 leaves out takes that default, or `manual` for a mode while bypass is off.

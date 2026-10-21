@@ -34,6 +34,8 @@ const MAX_RESPONSE_BODY_LENGTH: usize = MAX_FRAME_LENGTH - 4096;
 const MAX_HANDOFF_NONCE_BYTES: usize = 128;
 const MAX_HANDOFF_DEADLINE_MS: u64 = 60_000;
 pub const MAX_RUN_START_TEXT_LENGTH: usize = 32 * 1024;
+/// The most agents one message mentions.
+pub const MAX_MENTIONS: usize = 16;
 pub const MAX_RUN_MESSAGE_TEXT_LENGTH: usize = 32 * 1024;
 pub const MAX_RUN_START_CONTEXT_LENGTH: usize = 64 * 1024;
 pub const MAX_PERMISSION_GATE_ID_LENGTH: usize = 256;
@@ -1423,6 +1425,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
                     thread_id: Some(accepted.thread_id.clone()),
                     thinking_level: body.thinking_level,
                     permission_mode: body.permission_mode,
+                    mentions: Vec::new(),
                 },
                 &request.request_id,
                 idempotency_key,
@@ -2108,6 +2111,8 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             thinking_level: Option<String>,
             #[serde(default)]
             permission_mode: Option<crate::permission_gate::PermissionMode>,
+            #[serde(default)]
+            mentions: Vec<String>,
         }
         let body: Body = serde_json::from_value(request.body).map_err(|_| {
             ProtocolError::invalid_request_with_reason("The run request body is invalid.")
@@ -2134,6 +2139,13 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             .is_some_and(|level| crate::engine::thinking_level(level).is_none())
         {
             Some("Choose a thinking level the model offers.")
+        } else if body.mentions.len() > MAX_MENTIONS
+            || body
+                .mentions
+                .iter()
+                .any(|id| id.trim().is_empty() || id.len() > 64)
+        {
+            Some("Mention at most 16 agents by id.")
         } else {
             None
         };
@@ -2154,6 +2166,7 @@ pub(super) fn dispatch_request<S: ThreadListService>(
                 thread_id: body.thread_id,
                 thinking_level: body.thinking_level,
                 permission_mode: body.permission_mode,
+                mentions: body.mentions,
             },
             &request.request_id,
             idempotency_key,
@@ -2179,13 +2192,17 @@ pub(super) fn dispatch_request<S: ThreadListService>(
         {
             return Err(ProtocolError::persistence_failed().into());
         }
-        return bounded_response(serde_json::json!({
+        let mut answer = serde_json::json!({
             "run_id": accepted.run_id,
             "thread_id": accepted.thread_id,
             "attachments": accepted.attachments,
             "committed_seq": accepted.committed_seq,
             "accepted_at": accepted.accepted_at,
-        }));
+        });
+        if !accepted.mentions.is_empty() {
+            answer["mentions"] = serde_json::json!(accepted.mentions);
+        }
+        return bounded_response(answer);
     }
     if request.operation == Operation::RunResume {
         #[derive(serde::Deserialize)]

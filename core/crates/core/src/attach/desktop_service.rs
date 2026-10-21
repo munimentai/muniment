@@ -1481,6 +1481,9 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
         if let Some(mode) = request.permission_mode {
             canonical_input["permission_mode"] = json!(mode);
         }
+        if !request.mentions.is_empty() {
+            canonical_input["mentions"] = json!(&request.mentions);
+        }
         let ledger_request = AttachRequest {
             protocol: Protocol,
             request_id: request_id.clone(),
@@ -1496,6 +1499,7 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
             &canonical_input,
             || Ok(()),
             || {
+                let text = request.text.clone();
                 let accepted = self
                     .boundaries
                     .submit_run(
@@ -1513,11 +1517,24 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
                         request.permission_mode,
                     )
                     .map_err(|error| error.desktop_protocol_error())?;
-                Ok(CommittedResult {
-                    body: serde_json::to_value(accepted)
-                        .map_err(|_| ProtocolError::persistence_failed())?,
-                    cursor: None,
-                })
+                // The run is accepted first, so a message an agent refuses
+                // leaves the user's own turn running.
+                let mentions = if request.mentions.is_empty() {
+                    Vec::new()
+                } else {
+                    self.boundaries.route_mentions(
+                        &accepted.run_id,
+                        &accepted.thread_id,
+                        &text,
+                        &request.mentions,
+                    )
+                };
+                let mut body = serde_json::to_value(accepted)
+                    .map_err(|_| ProtocolError::persistence_failed())?;
+                if !mentions.is_empty() {
+                    body["mentions"] = json!(mentions);
+                }
+                Ok(CommittedResult { body, cursor: None })
             },
         )?;
         let committed = match outcome {
@@ -3021,6 +3038,7 @@ mod tests {
             thread_id: None,
             thinking_level: None,
             permission_mode: None,
+            mentions: Vec::new(),
         };
 
         let first = service
@@ -3066,6 +3084,7 @@ mod tests {
                         thread_id: None,
                         thinking_level,
                         permission_mode,
+                        mentions: Vec::new(),
                     },
                     &request_id,
                     &key,

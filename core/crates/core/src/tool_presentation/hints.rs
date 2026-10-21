@@ -149,6 +149,32 @@ pub fn lookup(name: &str) -> Option<ToolMeta> {
     registry().read().ok()?.get(name).cloned()
 }
 
+fn agent_names() -> &'static RwLock<HashMap<String, String>> {
+    static NAMES: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+    NAMES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Keeps the name of the agent `id`, so a call that names the agent by its
+/// id reads with its name. A full registry keeps the agents it holds.
+pub fn remember_agent(id: &str, name: &str) {
+    let (id, name) = (id.trim(), name.trim());
+    if id.is_empty() || name.is_empty() || id.len() > 64 || name.len() > 256 {
+        return;
+    }
+    let Ok(mut names) = agent_names().write() else {
+        return;
+    };
+    if names.len() >= MAX_TOOLS && !names.contains_key(id) {
+        return;
+    }
+    names.insert(id.to_owned(), name.to_owned());
+}
+
+/// The name the runtime holds for the agent `id`.
+pub fn agent_name(id: &str) -> Option<String> {
+    agent_names().read().ok()?.get(id.trim()).cloned()
+}
+
 /// Fills a template's `{property}` slots from `values`. `None` when a slot
 /// names a property that is missing or empty.
 pub fn fill(

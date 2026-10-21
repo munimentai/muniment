@@ -53,6 +53,16 @@ fn allowed_url(value: &str) -> Result<tauri::Url, String> {
     }
     Ok(url)
 }
+/// A view shows a blank page until its first load finishes.
+const LOADING: &str = "The page is still loading.";
+/// Checks the page agent control acts on. A view that just opened is blank,
+/// and a chat may navigate it, while every other action waits for a page.
+fn agent_page(action: &str, url: &str) -> Result<(), String> {
+    if url == "about:blank" {
+        return if action == "navigate" { Ok(()) } else { Err(LOADING.into()) };
+    }
+    allowed_url(url).map(|_| ())
+}
 fn origin(value: &str) -> Result<String, String> {
     Ok(allowed_url(value)?.origin().ascii_serialization())
 }
@@ -112,7 +122,7 @@ fn operate(app: &tauri::AppHandle, req: Request, agent: bool) -> Result<Value, S
         if *control.active.lock().unwrap() != req.view {
             return Err("Open this view before using agent control.".into());
         }
-        allowed_url(&url)?;
+        agent_page(&req.action, &url)?;
         if *control.stopped.lock().unwrap() {
             return Err("Agent control stopped.".into());
         }
@@ -223,7 +233,7 @@ impl ChatBrowser {
         for _ in 0..20 {
             match self.run(action, "", "") {
                 Ok(value) => return Ok(value),
-                Err(error) if error == "The page could not complete this action." || error == "Browser action failed." || error.contains("timed out") => last = error,
+                Err(error) if error == "The page could not complete this action." || error == "Browser action failed." || error == LOADING || error.contains("timed out") => last = error,
                 Err(error) => return Err(error),
             }
             std::thread::sleep(Duration::from_millis(250));
@@ -574,6 +584,14 @@ mod tests {
             assert!(allowed_url(url).is_err(), "{url}");
         }
         assert!(allowed_url("https://example.org/path").is_ok());
+    }
+    #[test]
+    fn a_new_blank_view_takes_a_navigation_and_waits_for_reads() {
+        assert!(agent_page("navigate", "about:blank").is_ok());
+        assert_eq!(agent_page("observe", "about:blank"), Err(LOADING.into()));
+        assert!(agent_page("navigate", "https://muniment.ai/docs/").is_ok());
+        assert!(agent_page("navigate", "file:///etc/passwd").is_err());
+        assert!(agent_page("observe", "data:text/html,hello").is_err());
     }
     #[test]
     fn grants_use_exact_origins() {

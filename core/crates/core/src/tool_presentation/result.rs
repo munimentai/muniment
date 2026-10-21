@@ -53,6 +53,12 @@ pub(super) fn summary(
 
 /// `Failed: <the error's message>`, or `Failed` when it carries none.
 pub(super) fn failure(output: &str) -> String {
+    failure_cased(output, lower_first)
+}
+
+/// `Failed: <the error's message>` with the message's first letter as
+/// `case` sets it.
+pub(super) fn failure_cased(output: &str, case: impl Fn(&str) -> String) -> String {
     let message = serde_json::from_str::<Value>(output)
         .ok()
         .and_then(|value| error_message(&value))
@@ -69,7 +75,7 @@ pub(super) fn failure(output: &str) -> String {
     if message.is_empty() {
         "Failed".into()
     } else {
-        format!("Failed: {}", lower_first(&clip(&message, 100)))
+        format!("Failed: {}", case(&clip(&message, 100)))
     }
 }
 

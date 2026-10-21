@@ -179,7 +179,7 @@
     <div class="head-name">
       <InlineEdit bind:this={nameField} value={agent.name} label="Agent name" maxlength={100} required strong disabled={readOnly} onsave={(name) => saveField({ name })} />
     </div>
-    <CatalogActions name={agent.name} {archived} allowRename={false} allowArchive={!agent.replica} allowDelete={!agent.replica} extraActions={kebabActions} onaction={onaction} />
+    <CatalogActions name={agent.name} {archived} allowRename={false} allowArchive={!agent.replica} allowDelete={!agent.replica} confirmDelete={false} extraActions={kebabActions} onaction={onaction} />
   </header>
   <div class="card-body">
     <div class="panel-rail" role="tablist" aria-orientation="vertical" aria-label={`${agent.name} panels`} tabindex="-1" onkeydown={railKeydown}>

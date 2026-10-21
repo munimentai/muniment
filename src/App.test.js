@@ -6040,6 +6040,50 @@ describe('local file selection', () => {
     expect(screen.getByText('Files in /chosen')).toBeInTheDocument()
   })
 
+  it('opens New group from the Agents page once two agents exist', async () => {
+    const original = invoke.getMockImplementation()
+    const agents = ['Lead scout', 'Deal desk'].map((name, index) => ({ id: `018f0000-0000-4000-8000-0000000000e${index}`, name, instructions: 'Work.', routines: [] }))
+    invoke.mockImplementation(async (command, payload) => isAgentList(command, payload) ? agentListAnswer(agents) : original(command, payload))
+    render(App)
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'New group' }))
+    expect(await screen.findByRole('heading', { name: 'New group' })).toBeInTheDocument()
+  })
+
+  it('lists agents before files for @ in an ordinary thread and sends the mentioned agent ids', async () => {
+    const original = invoke.getMockImplementation()
+    const helper = { id: '018f0000-0000-4000-8000-0000000000d1', name: 'Drive helper', instructions: 'Help.', routines: [], avatar: { style: 'muniment', seed: 'd' } }
+    invoke.mockImplementation(async (command, payload) => {
+      if (isAgentList(command, payload)) return agentListAnswer([helper])
+      if (command === 'chat_search_files') return [{ path: '/home/DRAFT.md', displayName: 'DRAFT.md', relativePath: 'DRAFT.md' }]
+      if (command === 'chat_submit') return { runId: 'run-mention', attachments: [], mentions: [{ agent_id: helper.id, name: 'Drive helper', sent: false, error: 'Drive helper is busy. Try again later.' }] }
+      return original(command, payload)
+    })
+    render(App)
+    await fireEvent.click(await screen.findByRole('button', { name: 'New thread', exact: true }))
+    const composer = await findWorkspaceComposer()
+    await screen.findByRole('button', { name: 'Extensions' })
+    await tick()
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    await fireEvent.input(composer, { target: { value: 'Ask @dr' } })
+    composer.setSelectionRange(7, 7)
+    await fireEvent.click(composer)
+    const agents = await screen.findByRole('listbox', { name: 'Agent suggestions' })
+    expect(within(agents).getAllByRole('option').map((option) => option.textContent)).toEqual(['@Drive helper'])
+    expect(agents.querySelector('.agent-avatar')).not.toBeNull()
+    await screen.findByRole('option', { name: 'DRAFT.md' })
+    expect(agents.closest('.mentions').querySelector('p')).toHaveTextContent('Agents')
+    // Agents come first, so Enter picks the agent.
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    await waitFor(() => expect(composer).toHaveValue('Ask @Drive helper '))
+    await fireEvent.input(composer, { target: { value: 'Ask @Drive helper to check it' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Ask @Drive helper to check it', mentions: [helper.id] })))
+    expect(await screen.findByText('Drive helper is busy. Try again later.')).toBeInTheDocument()
+  })
+
   it('selects an @ file with Enter without sending and closes suggestions with Escape', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, payload) => {
@@ -8509,6 +8553,40 @@ describe('agent chat', () => {
     await waitFor(() => expect(within(list).getByText('Weekly recap', { selector: '.thread-row-title' }).closest('.thread-row').querySelector('.row-agent')).toHaveTextContent('Weekly recap'))
     expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1)
     expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
+  })
+
+  it('deletes a saved agent from its card through the profile confirmation, and its creation chat goes with it', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    invoke.mockImplementation((command, payload) => {
+      // Core removes the agent's creation chat record when it deletes the agent.
+      if (command === 'agent_request' && payload?.operation === 'agent.delete') { deleted = true; saved.splice(0); return Promise.resolve({}) }
+      if (command === 'creation_list' && deleted) return Promise.resolve([])
+      if (command === 'chat_new_thread' && deleted) return Promise.resolve('01900000-0000-7000-8000-0000000000b2')
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    const list = screen.getByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Weekly recap' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    expect(within(confirm).getByRole('checkbox', { name: 'Also delete its memory' })).toBeInTheDocument()
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.delete', body: { id: 'agent-1', remove_memory: false } }))
+    const rows = () => screen.getByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(rows()).queryByText('Weekly recap', { selector: '.thread-row-title' })).toBeNull())
+    expect(within(rows()).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
   })
 
   it('revises the draft with the next message in the same chat', async () => {

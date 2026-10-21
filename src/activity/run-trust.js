@@ -13,6 +13,20 @@ export function runContextRows(run, { machine = null, modes = [], sources = {} }
   ].filter(Boolean).map((row) => ({ ...row, route: false }))
 }
 
+// Each turn's sources as its footer named them while it was the newest
+// turn, so a later turn leaves an earlier footer as it was. `current` reads
+// the newest turn's sources.
+export function turnSources() {
+  const seen = new Map()
+  return (run, newestRunId, current) => {
+    if (!run?.id) return {}
+    if (run.id !== newestRunId) return seen.get(run.id) ?? {}
+    const sources = current(run)
+    seen.set(run.id, sources)
+    return sources
+  }
+}
+
 const EFFECT_WORDS = {
   command: ['command ran', 'commands ran', 'Their changes inside the folder are restored. Anything else they did stays.'],
   network: ['web request went out', 'web requests went out', 'What they sent stays sent.'],
