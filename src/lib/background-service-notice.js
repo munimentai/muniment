@@ -4,7 +4,7 @@ const messages = {
   disconnected: 'The runtime connection closed.',
   exited: 'The runtime exited.',
   startFailed: 'The runtime start failed.',
-  requiresApproval: 'The runtime registration needs approval.',
+  requiresApproval: 'The runtime registration needs approval in System Settings > General > Login Items.',
   approved: 'The runtime registration has approval.',
   notFound: 'The runtime registration found no service.',
   registrationFailed: 'The runtime registration failed.',
