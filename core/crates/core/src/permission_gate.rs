@@ -302,6 +302,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "web_search",
     "fetch_content",
     "get_search_content",
+    "source_check",
     "memory-search",
     "memory-profile-read",
     "agent-list",
@@ -315,7 +316,12 @@ const READ_ONLY_TOOLS: &[&str] = &[
 
 /// Tools that reach the web. They read, but every mode short of `auto` and
 /// `bypass` asks before them.
-const WEB_TOOLS: &[&str] = &["web_search", "fetch_content", "get_search_content"];
+const WEB_TOOLS: &[&str] = &[
+    "web_search",
+    "fetch_content",
+    "get_search_content",
+    "source_check",
+];
 
 /// Muniment's own tools that keep the user's memory and the run's plan.
 /// They run in every mode.
