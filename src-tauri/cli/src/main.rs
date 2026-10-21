@@ -851,7 +851,7 @@ fn one_line(value: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use muniment_attach::{

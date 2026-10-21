@@ -57,6 +57,8 @@ struct FakeAcceptor {
     stop: FakeStopSignal,
     wait_for_stop: bool,
     retention_state: Option<Arc<RuntimeAttachState>>,
+    /// How long each accept takes before its outcome.
+    serve_delay: Duration,
 }
 
 impl WindowsAttachAcceptBoundary for FakeAcceptor {
@@ -72,6 +74,7 @@ impl WindowsAttachAcceptBoundary for FakeAcceptor {
 
     fn serve_next(&mut self) -> WindowsAttachAcceptOutcome {
         self.calls.set(self.calls.get() + 1);
+        std::thread::sleep(self.serve_delay);
         if self.wait_for_stop {
             let (stopped, wake) = &*self.stop.stopped;
             let mut stopped = stopped.lock().unwrap();
@@ -93,6 +96,7 @@ fn fake_acceptor(outcome: WindowsAttachAcceptOutcome, wait_for_stop: bool) -> Fa
         },
         wait_for_stop,
         retention_state: None,
+        serve_delay: Duration::ZERO,
     }
 }
 
@@ -394,6 +398,9 @@ fn a_bound_acceptor_runs_retention_until_the_activation_ends() {
     let state = Arc::new(RuntimeAttachState::open(desktop_host(), &directory, &directory).unwrap());
     let mut acceptor = fake_acceptor(WindowsAttachAcceptOutcome::Failed, false);
     acceptor.retention_state = Some(state);
+    // The retention schedule first restores the model search, which can take
+    // hundreds of milliseconds, so the acceptor lives well past that.
+    acceptor.serve_delay = Duration::from_millis(400);
     let factory = FakeFactory {
         result: Ok(acceptor),
     };

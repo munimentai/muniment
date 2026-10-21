@@ -88,6 +88,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | memory_extract | It proposes memory changes from a finished run. |
 | module | memory_failure | It defines memory-search failures. |
 | module | memory_index | It indexes local memory. |
+| module | memory_origin | It records where a memory fact came from. |
 | module | memory_runtime | It coordinates memory sessions. |
 | module | memory_secret | It rejects secrets from memory writes. |
 | module | model_acquisition_transport | It downloads pinned model artifacts. |

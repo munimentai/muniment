@@ -30,7 +30,7 @@ fn executable_replacement_requests_an_upgrade_refresh_exit() {
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
     let endpoint = filesystem.endpoint_path().to_owned();
     drop(filesystem);
-    let (_stop_tx, stop_rx) = mpsc::channel();
+    let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
         let watched_executable = executable.clone();
@@ -51,6 +51,10 @@ fn executable_replacement_requests_an_upgrade_refresh_exit() {
         });
         let deadline = Instant::now() + Duration::from_secs(2);
         while !endpoint.exists() {
+            if Instant::now() >= deadline {
+                // Stop the activation so the scope can join it before the failure.
+                let _ = stop_tx.send(());
+            }
             assert!(Instant::now() < deadline, "runtime endpoint did not open");
             thread::sleep(Duration::from_millis(5));
         }

@@ -248,6 +248,7 @@ pub fn credentials_with_expiry(expires_at: u64) -> NativeCredentials {
 /// profile's own install root, so a run resolves it with or without the
 /// `MUNIMENT_PI_ROOT` override.
 pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
+    use_temporary_state_directory(temporary_root);
     let pi_root = muniment_core::chat_profile::ChatProfile::new(temporary_root).pi_install_root();
     let revision_root = pi_root.join("revisions").join(PI_SELECTED_ARTIFACT.version);
     let staged_stub = revision_root.join(PI_SELECTED_ARTIFACT.executable);
@@ -307,4 +308,25 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
         sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
         executable: PI_SELECTED_ARTIFACT.executable,
     }
+}
+
+/// Points the state root at `temporary_root` unless a test already chose a
+/// temporary one, so the runtime never reads or writes the real `~/.muniment`.
+pub fn use_temporary_state_directory(temporary_root: &Path) {
+    let current = std::env::var_os(muniment_core::state_root::STATE_DIRECTORY_OVERRIDE);
+    let temporary = current
+        .as_deref()
+        .map(Path::new)
+        .is_some_and(|path| path.starts_with(std::env::temp_dir()) && path.exists());
+    if !temporary {
+        set_state_directory(temporary_root);
+    }
+}
+
+/// Points the state root at `directory` for the rest of the test process.
+pub fn set_state_directory(directory: &Path) {
+    std::env::set_var(
+        muniment_core::state_root::STATE_DIRECTORY_OVERRIDE,
+        directory,
+    );
 }

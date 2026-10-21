@@ -3007,6 +3007,11 @@ impl AuthorizedClient {
         ""
     }
 
+    // A companion off unix is bound to no runtime profile.
+    pub fn profile_id(&self) -> &str {
+        ""
+    }
+
     pub fn onboard_workspace(
         &mut self,
         _opened_directory: &str,

@@ -1643,7 +1643,12 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             assert_eq!(calls.load(Ordering::SeqCst), expected, "{learn} {message}");
-            fs::remove_dir_all(root).unwrap();
+            // The session's index build thread can still write under the root.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while fs::remove_dir_all(&root).is_err() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(!root.exists());
         }
     }
 

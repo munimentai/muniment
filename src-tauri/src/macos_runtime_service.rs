@@ -758,6 +758,7 @@ fn runtime_endpoint_accepts_connections(endpoint: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(endpoint).is_ok()
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
     force_request: bool,

@@ -225,6 +225,7 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
 
     let _guard = TEST_LOCK.lock().unwrap();
     let profile = TemporaryProfile::new("packaged-desktop-start", false);
+    common::set_state_directory(&profile.profile);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
     let resources = profile.root.join(resources);
@@ -349,6 +350,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
     let store = KeyringNativeCredentialStore::new();
     store.clear_session().unwrap();
     let profile = TemporaryProfile::new("cold-desktop", true);
+    common::set_state_directory(&profile.profile);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
     let endpoint = filesystem.endpoint_path();
@@ -498,6 +500,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
 #[test]
 fn sign_in_cannot_override_a_return_to_local_mode() {
     let profile = TemporaryProfile::new("sign-in-marker", false);
+    common::set_state_directory(&profile.profile);
     let state =
         RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let marker = profile
@@ -521,6 +524,7 @@ fn runtime_boundaries_serve_sign_in_and_refuse_a_concurrent_attempt() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-sign-in", false);
+    common::set_state_directory(&temporary_profile.profile);
     let state = Arc::new(
         RuntimeAttachState::open(
             desktop_host(),
@@ -576,6 +580,7 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-session", false);
+    common::set_state_directory(&temporary_profile.profile);
     let state = RuntimeAttachState::open(
         desktop_host(),
         &temporary_profile.profile,
@@ -639,6 +644,7 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
 fn runtime_boundaries_answer_all_attach_reads() {
     let _guard = TEST_LOCK.lock().unwrap();
     let temporary_profile = TemporaryProfile::new("attach-boundaries", false);
+    common::set_state_directory(&temporary_profile.profile);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime_activity = RuntimeActivityRegistry::new();
@@ -1008,6 +1014,7 @@ fn runtime_boundaries_answer_all_attach_reads() {
 #[test]
 fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
     let temporary_profile = TemporaryProfile::new("attach-artifacts", false);
+    common::set_state_directory(&temporary_profile.profile);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let config = temporary_profile.config.clone();
@@ -1161,6 +1168,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-approval", false);
+    common::set_state_directory(&temporary_profile.profile);
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();

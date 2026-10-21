@@ -163,10 +163,16 @@ impl Store {
         };
         let connection = Connection::open(&store.path)
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+        // One transaction keeps the schema and the backfill to a single commit.
         connection
-            .execute_batch(SCHEMA)
+            .execute_batch("BEGIN")
+            .and_then(|()| connection.execute_batch(SCHEMA))
             .and_then(|()| connection.execute_batch(BACKFILL_THREAD_VERSIONS))
-            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+            .and_then(|()| connection.execute_batch("COMMIT"))
+            .map_err(|error| {
+                let _ = connection.execute_batch("ROLLBACK");
+                format!("The swarm store could not be opened: {error}")
+            })?;
         Ok(store)
     }
 
@@ -207,6 +213,9 @@ impl Store {
             .busy_timeout(Duration::from_secs(5))
             .map_err(|error| format!("The swarm store is unavailable: {error}"))?;
         let _ = connection.pragma_update(None, "journal_mode", "WAL");
+        // Tests skip fsync so the large store scenarios finish in time.
+        #[cfg(test)]
+        let _ = connection.pragma_update(None, "synchronous", "OFF");
         Ok(connection)
     }
 

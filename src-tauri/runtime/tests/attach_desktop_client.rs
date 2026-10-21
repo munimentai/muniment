@@ -202,7 +202,11 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-desktop-submit-no-workspace", true);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    common::set_state_directory(&profile.profile);
     let descriptor = stage_pi_stub(&profile.root);
+    // One run place, so the busy run below fills the runtime's capacity.
+    let previous_limit = std::env::var_os(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV);
+    std::env::set_var(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV, "1");
     let state = Arc::new(
         RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap(),
     );
@@ -220,8 +224,17 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         spawn_server_sequence(vec![(200, session_body.into()), (201, grant_body)]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let (stop_tx, stop_rx) = mpsc::channel();
+    // Stops the listener when the scope ends, also on a failed assertion, so
+    // the scope joins it instead of waiting forever.
+    struct StopOnDrop(mpsc::Sender<()>);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
 
     thread::scope(|scope| {
+        let stop = StopOnDrop(stop_tx);
         let active_boundaries = state.boundaries();
         let service_state = Arc::clone(&state);
         let profile_directory = profile.profile.clone();
@@ -274,7 +287,10 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         );
         assert_eq!(
             client.last_request_error().unwrap().to_string(),
-            "code=\"invalid_request\" reason=\"A reply is already in progress.\""
+            format!(
+                "code=\"invalid_request\" reason={:?}",
+                muniment_core::active_run::capacity_message(1)
+            )
         );
         active_boundaries.clear_active_run("busy-run");
         let accepted = client.run_submit("hello", &[], None, None, None).unwrap();
@@ -282,7 +298,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         assert_eq!(approval.approval().unwrap().workspace, "local");
 
         drop(client);
-        stop_tx.send(()).unwrap();
+        drop(stop);
         listener.join().unwrap();
     });
 
@@ -290,6 +306,10 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     credential_store.clear_session().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
     std::env::remove_var("MUNIMENT_PI_ROOT");
+    match previous_limit {
+        Some(value) => std::env::set_var(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV, value),
+        None => std::env::remove_var(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV),
+    }
 }
 
 #[test]
