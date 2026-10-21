@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use muniment_core::attach::{ModelAction, SubscriptionEvent};
-use muniment_runtime::sign_in_callback::{self, CallbackServer};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -31,7 +30,7 @@ const LOCAL_RUNTIME: &str = "local";
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// The callback port held for a paired runtime's sign-in, by its generation.
-static FORWARD: Mutex<Option<(u64, CallbackServer)>> = Mutex::new(None);
+static FORWARD: Mutex<Option<(u64, muniment_runtime::sign_in_callback::CallbackServer)>> = Mutex::new(None);
 static FORWARD_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// The machine the sign-in in flight runs on: `Some(None)` for this
 /// computer's runtime, `Some(Some(id))` for a paired one, `None` while none runs.
@@ -97,7 +96,7 @@ fn callback_path(started: &Value) -> String {
         .pointer("/callback/path")
         .and_then(Value::as_str)
         .filter(|path| path.starts_with('/') && !path.contains(['?', '#', ' ']))
-        .unwrap_or(sign_in_callback::CALLBACK_PATH)
+        .unwrap_or(muniment_runtime::sign_in_callback::CALLBACK_PATH)
         .to_owned()
 }
 
@@ -113,14 +112,14 @@ fn hold_callback<R: tauri::Runtime>(
     let Some(port) = callback_port(started) else {
         return Ok(());
     };
-    let listeners = sign_in_callback::bind(port)?;
+    let listeners = muniment_runtime::sign_in_callback::bind(port)?;
     let forward_app = app.clone();
-    let server = CallbackServer::start_on(
+    let server = muniment_runtime::sign_in_callback::CallbackServer::start_on(
         listeners,
         port,
         callback_path(started),
         Arc::new(muniment_runtime::sign_in_page),
-        sign_in_callback::provider_display_name(provider).to_owned(),
+        muniment_runtime::sign_in_callback::provider_display_name(provider).to_owned(),
         Arc::new(move |url| {
             tauri::async_runtime::block_on(model_service::request_on(
                 &forward_app,

@@ -8,7 +8,7 @@ afterEach(cleanup)
 const inventory = {
   providers: [
     { id: 'custom-omlx', name: 'oMLX', source: 'custom', base_url: 'http://127.0.0.1:8080/v1', models: [{ id: 'Qwen3.8-27B-4bit' }, { id: 'gemma-4-26b-a4b-it-4bit' }] },
-    { id: 'custom-empty', name: 'Spare box', source: 'custom', base_url: 'http://10.0.0.2:4000/v1', models: [] },
+    { id: 'custom-empty', name: 'Spare box', source: 'custom', base_url: 'http://192.0.2.2:4000/v1', models: [] },
   ],
   hidden: [], shown: [], default_provider: 'custom-omlx', default_model: 'Qwen3.8-27B-4bit',
 }

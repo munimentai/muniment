@@ -54,17 +54,32 @@ gates:
       - "npm run build"
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo build --workspace --all-targets --locked --features muniment-pins/cli"
     timeout_s: 3300
+  # The lint gate runs the repository checks of CI's checks and smoke jobs,
+  # formats and lints the core workspace and the src-tauri crates that build
+  # without Tauri, and formats and vets the Go reader. The Tauri crate needs
+  # the CEF download, so CI's desktop preflight lints it.
   lint:
     commands:
       - "bash scripts/check-steering.sh ."
       - "node test/ui-copy-lint.mjs src src-tauri browser-control"
+      - "bash scripts/check-private-addresses.sh"
+      - "python3 -B scripts/version.py check"
+      - "CARGO_HOME=$HOME/.cargo bash test/smoke.sh"
+      - "CARGO_HOME=$HOME/.cargo bash test/cli-dependency-boundary.sh"
+      - "CARGO_HOME=$HOME/.cargo bash test/runtime-dependency-boundary.sh"
+      - "RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo fmt --manifest-path src-tauri/Cargo.toml --all --check"
+      - >-
+        RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy --manifest-path src-tauri/Cargo.toml
+        --package muniment-desktop-integration --package muniment-acp --package muniment-cli
+        --package muniment-runtime --all-targets --locked -- -D warnings
+      - 'cd src-tauri/reader && test -z "$(gofmt -l .)" && go vet ./...'
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo fmt --all --check"
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy --workspace --all-targets --locked --features muniment-pins/cli -- -D warnings"
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy -p muniment-router --all-targets --features server --locked -- -D warnings"
       # The core boundary check runs the port tests. One test thread keeps the
       # router's timing tests stable on the sandbox's four CPUs.
       - "cd core && RUST_TEST_THREADS=1 RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo scripts/check-core-boundary.sh"
-    timeout_s: 3000
+    timeout_s: 5400
   # The sandbox has no GTK, WebKit, browser, rustfmt, clippy or desktop-ci
   # access. The gate runs the main vitest suite, the CI routing tests, the
   # browser-control relay core tests, the Go reader tests and the tests of the
@@ -81,6 +96,8 @@ gates:
     commands:
       - "CARGO_HOME=$HOME/.cargo npx vitest run --root . --exclude 'test/e2e/**' --exclude 'prototypes/**' --exclude 'browser-control/**' --exclude '**/*.browser.test.js' --retry=1"
       - "node --test test/ci-routing.node.mjs"
+      - "node --test test/subscription-acceptance.node.mjs"
+      - "python3 -B scripts/test_check_steering.py && python3 -B scripts/test_private_addresses.py && python3 -B scripts/test_version.py"
       - "npm run browser-control"
       - "cd src-tauri/reader && go test ./..."
       # The sandbox kernel has no inet_diag, so the test that reads real socket
@@ -93,6 +110,7 @@ gates:
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo test --workspace --locked --features muniment-pins/cli -- --test-threads=1"
       - "cd core && python3 -B scripts/test_release.py"
       - "cd core && python3 -B scripts/pins/test_update.py"
+      - "cd core && python3 -B scripts/test_desktop_ci.py"
     timeout_s: 7200
   # Set explicitly, so a change of the contract defaults leaves these gates as they are.
   complexity:

@@ -225,6 +225,10 @@ mod tests {
     #[test]
     fn a_home_the_process_may_not_write_is_denied() {
         use std::os::unix::fs::PermissionsExt;
+        // Root opens a folder whatever its mode.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         let parent =
             std::env::temp_dir().join(format!("muniment-locked-home-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&parent).unwrap();
@@ -239,6 +243,10 @@ mod tests {
     #[test]
     fn a_home_whose_holding_folder_the_process_may_not_read_is_denied() {
         use std::os::unix::fs::PermissionsExt;
+        // Root opens a folder whatever its mode.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         let parent =
             std::env::temp_dir().join(format!("muniment-unlisted-home-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&parent).unwrap();

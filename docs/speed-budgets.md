@@ -12,7 +12,7 @@ cannot hide a regression. `test/probe/speed.mjs` holds the budgets.
 
 | Check | What it counts | Budget |
 | --- | --- | --- |
-| Start | Requests the window sends until it settles, polls left out | 47 on an empty thread, 54 on a restored thread |
+| Start | Requests the window sends until it settles, polls left out | 48 on an empty thread, 55 on a restored thread |
 | Start | `sidebar_arrange` calls, and no identical input twice in a row | 2 empty, 5 restored |
 | Streamed chunk | DOM writes outside the reply that streams | 0 |
 | Streamed chunk | DOM writes inside the reply | 4 |

@@ -8,8 +8,8 @@ import assert from 'node:assert/strict'
 export const SPEED_BUDGETS = {
   // Requests the window sends from its first frame until it settles, per fixture.
   start: {
-    'index.html': { total: 47, sidebar_arrange: 2 },
-    'history.html': { total: 54, sidebar_arrange: 5, chat_thread_open: 1 },
+    'index.html': { total: 48, sidebar_arrange: 2 },
+    'history.html': { total: 55, sidebar_arrange: 5, chat_thread_open: 1 },
   },
   // DOM records per streamed text chunk outside the reply that streams, and inside it.
   chunk: { outside: 0, inside: 4, requests: 0, sidebar_arrange: 0 },

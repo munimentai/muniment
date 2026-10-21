@@ -185,6 +185,10 @@ impl<'ast> Visit<'ast> for DesktopBoundary {
                             | "windows_local_app_data"
                             | "write_windows_diagnostic"
                             | "clear_windows_crash_window"
+                            // The desktop holds the sign-in callback port for a
+                            // paired runtime and forwards the redirect to it.
+                            | "sign_in_callback"
+                            | "sign_in_page"
                     )
                 ),
                 "The desktop may use runtime lifecycle helpers, not runtime session services."

@@ -437,7 +437,8 @@ async function checkCreationBudget(browser, baseUrl) {
     assert.deepEqual(first.map(({ body }) => body.message), ['Every weekday at 9am, summarize my inbox and list what needs a reply.'])
     assert.ok(first[0].body.chat_id)
     const reply = page.getByRole('article', { name: 'Draft: Inbox brief' })
-    assert.ok((await reply.textContent()).includes('Weekdays at 09:00'))
+    // The schedule shows in the viewer's time zone and clock.
+    assert.match(await reply.textContent(), /Weekdays at \d{1,2}:00( [AP]M)?/)
     // A change is one more message and one more round trip, and its reply returns within the budget.
     const started = Date.now()
     await page.locator('#composer-message').fill('Group the summary by sender.')
@@ -502,7 +503,7 @@ async function checkCreationBudget(browser, baseUrl) {
 async function checkAgentAvatars(browser, baseUrl) {
   const surfaces = {
     '': ['.agent-card .head-avatar', '.starter .thumb'],
-    profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .check'],
+    profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .agent-chip'],
     transcript: ['.agent-message header'],
     meeting: ['.agent-post header', '#agent-mentions [role="option"]'],
     approvals: ['.approval .who', '.running button'],

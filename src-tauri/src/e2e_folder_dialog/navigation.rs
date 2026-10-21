@@ -540,7 +540,8 @@ pub(super) fn enter_and_commit<A: AccessibilityActions>(
         return Err(KeyboardFocusLost);
     }
     check_deadline()?;
-    ax.set_value(&target.field, path).map_err(|_| ValueRejected)?;
+    ax.set_value(&target.field, path)
+        .map_err(|_| ValueRejected)?;
     record(NavigationEvent::stage("value_set"));
     // Let the remote field process its edit before the value check and the commit.
     settle();
