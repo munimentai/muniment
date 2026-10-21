@@ -138,7 +138,7 @@ fn send_from_run(
     {
         if !allowed.contains(&target.agent_id) {
             return Err(format!(
-                "{} may not message {}. Its messaging list allows only the agents it names.",
+                "{} may not message {}. Choose agents under Messages to other agents in its profile.",
                 sender.name, target.name
             ));
         }

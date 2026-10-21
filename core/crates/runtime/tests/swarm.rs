@@ -1203,6 +1203,10 @@ fn agents_message_across_runtimes_with_results_hops_allow_lists_and_handoffs() {
         )
         .unwrap_err();
     assert!(blocked.contains("may not message"), "{blocked}");
+    assert!(
+        blocked.ends_with("Choose agents under Messages to other agents in its profile."),
+        "{blocked}"
+    );
     let mut open = agents::get(a.profile(), &planner.id).unwrap();
     open.messaging = Some(AgentMessaging {
         allow: MessagingAllow::Any,
