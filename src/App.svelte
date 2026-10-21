@@ -67,7 +67,6 @@
   import FolderAccessPrompt from './lib/FolderAccessPrompt.svelte'
   import { exportAgent } from './agents/import.js'
   import ApprovalList from './agents/ApprovalList.svelte'
-  import AgentStatus from './agents/AgentStatus.svelte'
   import GroupMembers from './agents/GroupMembers.svelte'
   import { agentActivity, applyActivity } from './agents/activity.js'
   import { emptyCatalog, loadToolCatalog } from './agents/agent-tools.js'
