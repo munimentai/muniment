@@ -1561,6 +1561,8 @@ describe('workspace composer entry', () => {
     expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Refresh models' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'General' }))
+    // Focus moves with the click, so no page but the open one keeps the focus outline.
+    expect(document.activeElement).toBe(within(nav).getByRole('button', { name: 'General' }))
     expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
     expect(within(dialog).queryByText('Summarize older messages to make room. Full history stays saved.')).not.toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Data' }))
