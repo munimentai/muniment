@@ -310,8 +310,9 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
     }
 }
 
-/// Points the state root at `temporary_root` unless a test already chose a
-/// temporary one, so the runtime never reads or writes the real `~/.muniment`.
+/// Points the state root at the given test directory unless the test already
+/// chose an existing directory under the system temp dir, so the runtime never
+/// reads or writes the real `~/.muniment`.
 pub fn use_temporary_state_directory(temporary_root: &Path) {
     let current = std::env::var_os(muniment_core::state_root::STATE_DIRECTORY_OVERRIDE);
     let temporary = current

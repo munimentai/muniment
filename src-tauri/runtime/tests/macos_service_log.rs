@@ -48,7 +48,7 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
         fs::canonicalize(&spec_state).unwrap().display(),
         muniment_runtime_core::macos_attach_socket_path(&profile).display()
     );
-    // The log lives in the temporary directory, not the user's real log folder.
+    // The log lives in the test directory, not the user's real log folder.
     let logs = directory.join("logs");
     fs::DirBuilder::new().mode(0o700).create(&logs).unwrap();
     let log = logs.join("runtime-service.log");
