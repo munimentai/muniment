@@ -6,6 +6,11 @@ name: Core
 #
 # The root .cargo/config.toml links core builds against the libraries under
 # src-tauri/third-party, so both paths start this workflow.
+#
+# Forgejo holds the source and its CI, so this workflow runs on Forgejo only.
+# Its jobs report Forgejo commit statuses named "Core / <job> (<event>)", and
+# .github/lib/release-promotion.mjs reads every Forgejo status of the release
+# SHA, so a failed or pending core job refuses the release.
 on:
   push:
     branches: [main]

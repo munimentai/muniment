@@ -721,4 +721,13 @@ describe("single E2E waiver", () => {
       expect(() => run({})).toThrow(/FETCH_CALLED/);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it("refuses a release while a Forgejo Core workflow status is failed or pending", async () => {
+    for (const status of ["failure", "pending"]) {
+      const statuses = [{ context: "CI / smoke (push)", status: "success" }, { context: "Core / checks (push)", status: "success" }, { context: "Core / runtime-image (push)", status }];
+      const { calls, fetchImpl } = promotionFetch({ route: (url) => url.startsWith(`${forgejo}/commits/${sha}/status?`) ? response({ statuses }) : null });
+      await expect(promote(fetchImpl)).rejects.toThrow("CI is not green");
+      expect(calls.some(({ url }) => url.endsWith("/releases/tags/nightly"))).toBe(false);
+    }
+  });
 });
