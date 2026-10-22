@@ -16,7 +16,7 @@ static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// process never removes or reuses the directory of another process that
 /// shares the temporary directory and the process id.
 static PROCESS_TOKEN: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| uuid::Uuid::new_v4().simple().to_string());
+    std::sync::LazyLock::new(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_owned());
 
 /// Points the state directory at one temporary directory for the test process
 /// unless a test already named one. A run's launch resolves the agent settings
