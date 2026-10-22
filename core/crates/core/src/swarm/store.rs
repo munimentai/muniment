@@ -164,19 +164,11 @@ impl Store {
         let connection = Connection::open(&store.path)
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
         connection
-            .busy_timeout(Duration::from_secs(5))
+            .execute_batch(SCHEMA)
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
-        // Reserve the writer before reading the schema: a stopped runtime's
-        // last pass can still be committing while its replacement opens.
         connection
-            .execute_batch("BEGIN IMMEDIATE")
-            .and_then(|()| connection.execute_batch(SCHEMA))
-            .and_then(|()| connection.execute_batch(BACKFILL_THREAD_VERSIONS))
-            .and_then(|()| connection.execute_batch("COMMIT"))
-            .map_err(|error| {
-                let _ = connection.execute_batch("ROLLBACK");
-                format!("The swarm store could not be opened: {error}")
-            })?;
+            .execute_batch(BACKFILL_THREAD_VERSIONS)
+            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
         Ok(store)
     }
 
@@ -392,38 +384,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM log", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 4);
-        drop(store);
-        std::fs::remove_dir_all(profile).unwrap();
-    }
-
-    #[test]
-    fn replacement_store_waits_for_an_in_flight_writer() {
-        let profile = std::env::temp_dir().join(format!("swarm-reopen-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&profile).unwrap();
-        let store = Store::open(&profile).unwrap();
-        let connection = store.connect().unwrap();
-        connection
-            .execute_batch("BEGIN IMMEDIATE; INSERT INTO meta VALUES('holder', 'old')")
-            .unwrap();
-        let (opened, received) = std::sync::mpsc::channel();
-        let replacement_profile = profile.clone();
-        let replacement = std::thread::spawn(move || {
-            opened.send(Store::open(&replacement_profile)).unwrap();
-        });
-        let waiting = received.recv_timeout(Duration::from_millis(100));
-        connection.execute_batch("COMMIT").unwrap();
-        assert!(matches!(
-            waiting,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
-        let reopened = received
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap()
-            .unwrap();
-        assert_eq!(reopened.meta("holder").unwrap().as_deref(), Some("old"));
-        replacement.join().unwrap();
-        drop(reopened);
-        drop(connection);
         drop(store);
         std::fs::remove_dir_all(profile).unwrap();
     }
