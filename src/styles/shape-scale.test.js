@@ -17,6 +17,9 @@ const RADIUS_EXCEPTIONS = {
     '.artifact-divider': ['0', '§4 square divider reset'],
     '.sidebar-divider': ['0', '§4 square divider reset'],
   },
+  'src/composer/ChatComposer.svelte': {
+    '.composer:global([data-voice-wave]):focus-within::before': ['calc(var(--radius-panel) + 1px)', 'The focused wave edge sits 1px outside the panel, so its outer radius is 1px larger.'],
+  },
   'src/lib/Appearance.svelte': {
     '.theme-options button': ['0', '§4 square inner edges in the segmented control'],
     '.theme-options button:first-child': ['var(--radius-control) 0 0 var(--radius-control)', '§4 segmented-control corner composition'],

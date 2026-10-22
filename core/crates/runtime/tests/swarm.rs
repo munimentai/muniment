@@ -1061,7 +1061,7 @@ fn a_move_hands_over_webhook_secrets_and_the_mcp_servers_routines_call() {
     );
 
     // The new primary takes the hook's deliveries with the same secret; the
-    // old one no longer does.
+    // old one refuses them.
     let (status, answer) = deliver(&b, &hook, &secret, br#"{"build":"failed"}"#);
     assert_eq!(status, 202, "{answer}");
     let run = b
@@ -3029,15 +3029,16 @@ impl AccountService for ProbeAccount {
 /// ```sh
 /// MUNIMENT_RELAY_CONTROL_API=http://127.0.0.1:58787 \
 /// MUNIMENT_RELAY_CONTROL_DIR=/tmp/control-probe \
-/// cargo test -p muniment-runtime-core --test swarm a_phone_probe -- --ignored --nocapture
+/// cargo test -p muniment-runtime-core --test swarm a_phone_probe -- --nocapture
 /// ```
+///
+/// Without both variables the test returns before it starts a member.
 ///
 /// The probe writes `desktop.json` with the pair, reads `fleet.json` (with
 /// the hash and SHA-256 of an artifact on Box, and a Box thread with an
 /// attachment), and writes `done.json` with
 /// the text it posted to Box's thread and the thread it started on Box.
 #[test]
-#[ignore = "needs a local cloud API and the phone probe"]
 fn a_phone_probe_reads_and_acts_on_the_fleet_through_the_relay_control_session() {
     let (Ok(api), Ok(directory)) = (
         std::env::var("MUNIMENT_RELAY_CONTROL_API"),

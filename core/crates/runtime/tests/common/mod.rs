@@ -22,7 +22,7 @@ static PROCESS_TOKEN: std::sync::LazyLock<String> =
 /// unless a test already named one. A run's launch resolves the agent settings
 /// and package tree from the state directory, so without it a test writes the
 /// user's own `~/.muniment`. The name carries a random id besides the process
-/// id: test processes in separate containers can share one temporary
+/// id: test processes in separate containers can share one system temp
 /// directory and the same process id.
 pub fn isolate_state_directory() {
     let variable = muniment_core::state_root::STATE_DIRECTORY_OVERRIDE;
