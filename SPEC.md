@@ -11,7 +11,6 @@ not block the desktop release. The company record and graph remain a separate,
 hidden feature while the desktop harness earns adoption.
 
 The shared core, the platform-neutral runtime, model router and runtime pins live in `core/`, and the desktop builds them through path dependencies.
-The shared core, the platform-neutral runtime, model router and runtime pins come from one `munimentai/muniment-core` release tag.
 `muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control. [core/docs/core-boundary.md](core/docs/core-boundary.md) lists the shared and desktop crates.
 Existing company data and cloud credentials remain on disk when those features are hidden.
 The release license is FSL-1.1-Apache-2.0. Each version converts to Apache 2.0 two years after its release. Third-party notices ship with the app.

@@ -2465,6 +2465,8 @@ mod tests {
             ]})
         );
         assert!(threads(&profile, &mut journal, "no-such-agent").is_err());
+        drop(runs);
+        drop(journal);
         fs::remove_dir_all(root_dir).unwrap();
     }
 

@@ -327,7 +327,16 @@ pub fn import_pi_auth(
         if provider.is_some_and(|wanted| wanted != pi) {
             continue;
         }
-        if let Some(family) = family::family_for_pi_provider(pi) {
+        // Legacy Pi auth files can hold an Anthropic sign-in even though
+        // new Anthropic sign-ins use Claude Code rather than the pool catalog.
+        let pooled_family = family::family_for_pi_provider(pi).or_else(|| {
+            if pi == "anthropic" {
+                family::family("anthropic")
+            } else {
+                None
+            }
+        });
+        if let Some(family) = pooled_family {
             if let Some(credential) = Credential::from_pi_auth(pi, entry) {
                 ids.push(import(backend, family.id, credential, label.clone())?);
                 continue;

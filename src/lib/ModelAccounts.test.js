@@ -68,6 +68,7 @@ describe('sign-ins on other machines', () => {
       if (command === 'model_router_settings') return router
       return inventory
     })
+    await import('./ModelsSection.svelte')
     render(Settings, { tauri: { invoke }, inventory, section: 'models', onclose: vi.fn() })
     const group = (await screen.findByRole('heading', { name: 'Signed in on other machines' })).closest('section')
     expect(within(group).getByText('anthropic')).toBeInTheDocument()

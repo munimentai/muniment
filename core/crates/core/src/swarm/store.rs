@@ -163,9 +163,13 @@ impl Store {
         };
         let connection = Connection::open(&store.path)
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
-        // One transaction keeps the schema and the backfill to a single commit.
         connection
-            .execute_batch("BEGIN")
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+        // Reserve the writer before reading the schema: a stopped runtime's
+        // last pass can still be committing while its replacement opens.
+        connection
+            .execute_batch("BEGIN IMMEDIATE")
             .and_then(|()| connection.execute_batch(SCHEMA))
             .and_then(|()| connection.execute_batch(BACKFILL_THREAD_VERSIONS))
             .and_then(|()| connection.execute_batch("COMMIT"))
@@ -320,4 +324,105 @@ impl Store {
 
 pub(super) fn sql(error: rusqlite::Error) -> String {
     format!("The swarm store failed: {error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn populated_store_backfills_missing_versions_and_reopens_idempotently() {
+        let profile = std::env::temp_dir().join(format!("swarm-upgrade-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&profile).unwrap();
+        let connection = Connection::open(profile.join(STORE_FILE)).unwrap();
+        // The replication log predates thread versions. A partially indexed
+        // store can also contain versions that the backfill must preserve.
+        connection
+            .execute_batch(
+                "CREATE TABLE log(
+                   thread_id TEXT NOT NULL, origin TEXT NOT NULL, seq INTEGER NOT NULL,
+                   kind TEXT NOT NULL, event_id TEXT NOT NULL, run_id TEXT,
+                   run_seq INTEGER, event_type TEXT,
+                   PRIMARY KEY(thread_id, origin, seq));
+                 INSERT INTO log(thread_id, origin, seq, kind, event_id) VALUES
+                   ('a', 'local', 1, 'thread', 'a1'),
+                   ('a', 'local', 2, 'thread', 'a2'),
+                   ('b', 'remote', 1, 'thread', 'b1'),
+                   ('existing', 'local', 1, 'thread', 'e1');",
+            )
+            .unwrap();
+        drop(connection);
+        let versions = |store: &Store| {
+            let connection = store.connect().unwrap();
+            let mut statement = connection
+                .prepare("SELECT thread_id, version FROM thread_versions ORDER BY thread_id")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let store = Store::open(&profile).unwrap();
+        assert_eq!(
+            versions(&store),
+            vec![("a".into(), 1), ("b".into(), 2), ("existing".into(), 3)]
+        );
+        {
+            let connection = store.connect().unwrap();
+            connection
+                .execute_batch(
+                    "UPDATE thread_versions SET version=42 WHERE thread_id='existing';
+                     DELETE FROM thread_versions WHERE thread_id IN ('a', 'b');",
+                )
+                .unwrap();
+        }
+        drop(store);
+        let expected = vec![("a".into(), 43), ("b".into(), 44), ("existing".into(), 42)];
+        let store = Store::open(&profile).unwrap();
+        assert_eq!(versions(&store), expected);
+        drop(store);
+        let store = Store::open(&profile).unwrap();
+        assert_eq!(versions(&store), expected);
+        let count: i64 = store
+            .connect()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM log", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 4);
+        drop(store);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn replacement_store_waits_for_an_in_flight_writer() {
+        let profile = std::env::temp_dir().join(format!("swarm-reopen-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&profile).unwrap();
+        let store = Store::open(&profile).unwrap();
+        let connection = store.connect().unwrap();
+        connection
+            .execute_batch("BEGIN IMMEDIATE; INSERT INTO meta VALUES('holder', 'old')")
+            .unwrap();
+        let (opened, received) = std::sync::mpsc::channel();
+        let replacement_profile = profile.clone();
+        let replacement = std::thread::spawn(move || {
+            opened.send(Store::open(&replacement_profile)).unwrap();
+        });
+        let waiting = received.recv_timeout(Duration::from_millis(100));
+        connection.execute_batch("COMMIT").unwrap();
+        assert!(matches!(
+            waiting,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        let reopened = received
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        assert_eq!(reopened.meta("holder").unwrap().as_deref(), Some("old"));
+        replacement.join().unwrap();
+        drop(reopened);
+        drop(connection);
+        drop(store);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
 }
