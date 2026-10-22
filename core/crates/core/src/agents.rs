@@ -669,7 +669,7 @@ pub(crate) fn save_definition(
                     });
             }
         }
-        // An enabled routine is no longer a proposal.
+        // An enabled routine is not a proposal.
         if routine.enabled {
             routine.proposed = false;
         }

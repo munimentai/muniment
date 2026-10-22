@@ -455,7 +455,7 @@ Claude Code on the thread's Anthropic account. Other providers use their configu
 ### Production pin and candidate
 
 The **production pin** is the exact Pi version and extension versions a shipped desktop carries.
-`pins/pins.toml` in the `muniment-core` tag holds every pin: the Pi release and its rollback, each platform
+`core/pins/pins.toml` holds every pin: the Pi release and its rollback, each platform
 archive with size and SHA-256, the extension packages, and the Claude Code version.
 The **candidate** is the exact versions the nightly exercises ahead of production, and only passing nightly
 evidence on Linux, macOS and Windows qualifies it for promotion. Neither track follows npm `latest`, a
@@ -492,7 +492,7 @@ The desktop's Pi carries four items:
    the working directory, which is the thread's project or session folder. Each message opens with its
    send time. No harness or product name. Pi reads `bash` `timeout` in seconds with no
    default, so the prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
-4. **The version pin** follows `pins/pins.toml` in the `muniment-core` tag.
+4. **The version pin** follows `core/pins/pins.toml`.
 
 The desktop enables every built-in tool the pinned registry defines and sets
 `defaultTools` in `settings.json` to that full set. It never uses `--tools`,

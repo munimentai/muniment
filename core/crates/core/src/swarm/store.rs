@@ -358,7 +358,9 @@ mod tests {
                 .prepare("SELECT thread_id, version FROM thread_versions ORDER BY thread_id")
                 .unwrap();
             statement
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
