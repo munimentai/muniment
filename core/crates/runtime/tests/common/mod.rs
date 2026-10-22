@@ -12,16 +12,28 @@ use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIF
 
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// A random id for this test process. Temporary paths carry it so a test
+/// process never removes or reuses the directory of another process that
+/// shares the temporary directory and the process id.
+static PROCESS_TOKEN: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| uuid::Uuid::new_v4().simple().to_string());
+
 /// Points the state directory at one temporary directory for the test process
 /// unless a test already named one. A run's launch resolves the agent settings
 /// and package tree from the state directory, so without it a test writes the
-/// user's own `~/.muniment`.
+/// user's own `~/.muniment`. The name carries a random id besides the process
+/// id: test processes in separate containers can share one temporary
+/// directory and the same process id.
 pub fn isolate_state_directory() {
     let variable = muniment_core::state_root::STATE_DIRECTORY_OVERRIDE;
     if std::env::var_os(variable).is_none() {
         std::env::set_var(
             variable,
-            std::env::temp_dir().join(format!("muniment-runtime-state-{}", std::process::id())),
+            std::env::temp_dir().join(format!(
+                "muniment-runtime-state-{}-{}",
+                std::process::id(),
+                *PROCESS_TOKEN
+            )),
         );
     }
 }
@@ -51,8 +63,9 @@ impl TemporaryProfile {
         isolate_state_directory();
         let sequence = TEMPORARY_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "muniment-runtime-{test_name}-{}-{sequence}",
-            std::process::id()
+            "muniment-runtime-{test_name}-{}-{}-{sequence}",
+            std::process::id(),
+            *PROCESS_TOKEN
         ));
         let _ = fs::remove_dir_all(&root);
         let profile = root.join("profile");

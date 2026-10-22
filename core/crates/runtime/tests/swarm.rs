@@ -819,8 +819,11 @@ fn an_ordinary_thread_reaches_every_member_and_a_post_runs_on_its_owner() {
         );
     }
 
-    // Every member reports itself synced.
-    let status = b.op(Operation::FleetSyncStatus, json!({})).unwrap();
+    // Every member reports itself synced once the events of the mode change
+    // reach it: a peer can name them in its clocks a moment before.
+    let sync_status = || b.op(Operation::FleetSyncStatus, json!({})).unwrap();
+    wait(|| sync_status()["state"] == "synced");
+    let status = sync_status();
     assert_eq!(status["state"], "synced", "{status}");
 }
 

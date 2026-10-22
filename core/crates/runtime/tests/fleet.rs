@@ -685,13 +685,27 @@ fn a_holder_killed_mid_refresh_never_double_spends_and_hold_sign_in_recovers() {
             .all(|account| refresh_of(account).is_none()));
     }
 
-    // B holds the sign-in from now on.
-    let held = b
-        .op(
+    // B holds the sign-in from now on. B writes a received connection
+    // before it records which member shares it, so the request waits until
+    // B knows the holder.
+    let hold = || {
+        b.op(
             Operation::FleetHoldSignIn,
             json!({"account": "router:work"}),
         )
-        .unwrap();
+    };
+    let mut answer = hold();
+    assert!(
+        wait(|| match &answer {
+            Err(error) if error == "No fleet member shares that sign-in." => {
+                answer = hold();
+                false
+            }
+            _ => true,
+        }),
+        "B never learned who holds the sign-in"
+    );
+    let held = answer.unwrap();
     assert_eq!(held["status"], "requested");
     assert_eq!(held["holder"], holder_id);
     assert!(
