@@ -85,3 +85,57 @@ it.each([['moss-dark', '#58B39F'], ['clay-light', null]])('draws the wave over t
   await view.rerender({ active: false })
   await until(() => painted(canvas) === 0, 8000)
 })
+
+it('hides the straight top border under the wave, curves the side borders into it at the corners, and restores it once the wave stops', async () => {
+  document.documentElement.dataset.theme = 'moss-dark'
+  const { composer, view, speak } = composerWithWave()
+  const transparent = (color) => color === 'transparent' || /^rgba\(.*,\s*0\)$/.test(color)
+  const overlay = () => getComputedStyle(composer, '::before')
+  const idle = getComputedStyle(composer)
+  const border = idle.borderTopColor
+  expect(transparent(border)).toBe(false)
+  expect(idle.borderTopWidth).toBe('1px')
+  expect(overlay().content).toBe('none')
+
+  await view.rerender({ active: true })
+  const timer = setInterval(() => speak(0.6), 33)
+  try {
+    await until(() => composer.hasAttribute('data-voice-wave'))
+    const live = getComputedStyle(composer)
+    expect(transparent(live.borderTopColor)).toBe(true)
+    expect(transparent(live.outlineColor) || live.outlineStyle === 'none').toBe(true)
+    // The overlay draws the edge in the composer's border color, rounded like the frame.
+    const edge = overlay()
+    expect(edge.borderLeftColor).toBe(border)
+    expect(edge.borderRightColor).toBe(border)
+    expect(edge.borderTopLeftRadius).toBe(idle.borderTopLeftRadius)
+    // The top band of the mask keeps each corner in the border color and fades
+    // to fully transparent along the straight top edge.
+    const radius = idle.borderTopLeftRadius
+    const mask = edge.maskImage || edge.webkitMaskImage
+    const band = mask.slice(mask.indexOf('to right'))
+    const stops = band.match(/rgba?\([^)]*\)|transparent/g).map((color) => transparent(color) ? 'clear' : 'edge')
+    expect(stops).toEqual(['edge', 'clear', 'clear', 'edge'])
+    expect(band).toContain(radius)
+    expect((edge.maskSize || edge.webkitMaskSize).split(',')[1]).toContain(radius)
+
+    // Focused, the corners take the focus color.
+    composer.querySelector('textarea').focus()
+    await until(() => composer.matches(':focus-within'))
+    const focused = getComputedStyle(composer)
+    expect(transparent(focused.borderTopColor)).toBe(true)
+    expect(transparent(focused.outlineColor) || focused.outlineStyle === 'none').toBe(true)
+    const probe = document.createElement('i')
+    probe.style.color = 'var(--focus-edge)'
+    document.body.append(probe)
+    expect(overlay().borderLeftColor).toBe(getComputedStyle(probe).color)
+    expect(overlay().borderLeftWidth).toBe('2px')
+  } finally {
+    clearInterval(timer)
+  }
+  composer.querySelector('textarea').blur()
+  await view.rerender({ active: false })
+  await until(() => !composer.hasAttribute('data-voice-wave'), 8000)
+  expect(getComputedStyle(composer).borderTopColor).toBe(border)
+  expect(overlay().content).toBe('none')
+})

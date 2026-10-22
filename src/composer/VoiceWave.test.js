@@ -119,3 +119,21 @@ it('stops listening and cancels its frame when it unmounts', async () => {
   expect(wave.unlisten).toHaveBeenCalledOnce()
   expect(cancelFrame).toHaveBeenCalledOnce()
 })
+
+it('marks the composer while the wave shows and clears the mark once the wave fades out', async () => {
+  const wave = setup()
+  await Promise.resolve()
+  const composer = wave.view.getByTestId('voice-wave-line').parentElement
+  expect(composer).not.toHaveAttribute('data-voice-wave')
+  await wave.view.rerender({ active: true })
+  flushSync()
+  expect(composer).toHaveAttribute('data-voice-wave')
+  wave.level(0.7)
+  wave.advance(0.5)
+  await wave.view.rerender({ active: false })
+  wave.advance(0.2)
+  expect(composer).toHaveAttribute('data-voice-wave')
+  wave.advance(10)
+  expect(wave.pending()).toBe(0)
+  expect(composer).not.toHaveAttribute('data-voice-wave')
+})

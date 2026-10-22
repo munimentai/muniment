@@ -31,12 +31,24 @@
     Promise.resolve(listen?.('dictation-event', ({ payload }) => {
       if (payload?.type === 'level' && Number.isFinite(payload.level)) level = Math.max(0, Math.min(1, payload.level))
     })).then((stop) => { if (stopped) stop?.(); else unlisten = stop }, () => {})
-    return () => { stopped = true; unlisten?.(); if (frame !== undefined) cancelFrame(frame); frame = undefined }
+    return () => { stopped = true; unlisten?.(); if (frame !== undefined) cancelFrame(frame); frame = undefined; edge(false) }
   })
+
+  // Marks the composer while the wave shows, so the composer drops its straight
+  // top border and outline and the wave is the only line on the top edge.
+  let marked
+  function edge(on) {
+    const composer = on ? canvas?.parentElement : marked
+    marked = on ? composer : undefined
+    if (!composer) return
+    if (on) composer.dataset.voiceWave = ''
+    else delete composer.dataset.voiceWave
+  }
 
   $effect(() => {
     if (!active) return
     level = 0
+    edge(true)
     if (frame === undefined) { last = undefined; frame = requestFrame(draw) }
   })
 
@@ -67,6 +79,7 @@
       ctx.clearRect(0, 0, width, height)
       motion.loud = 0
       motion.blend = 0
+      edge(false)
       return
     }
     const composer = canvas.parentElement
@@ -75,7 +88,9 @@
       width,
       height,
       radius: parseFloat(style.borderTopLeftRadius) || 18,
-      border: style.borderTopColor,
+      // The composer's top border is transparent under the wave, so the wave
+      // takes the edge color the composer's sides show.
+      border: style.getPropertyValue('--composer-edge').trim() || style.borderTopColor,
       accent: getComputedStyle(canvas).getPropertyValue('--accent').trim() || getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
       motion,
     })

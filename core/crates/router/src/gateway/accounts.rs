@@ -327,16 +327,7 @@ pub fn import_pi_auth(
         if provider.is_some_and(|wanted| wanted != pi) {
             continue;
         }
-        // Legacy Pi auth files can hold an Anthropic sign-in even though
-        // new Anthropic sign-ins use Claude Code rather than the pool catalog.
-        let pooled_family = family::family_for_pi_provider(pi).or_else(|| {
-            if pi == "anthropic" {
-                family::family("anthropic")
-            } else {
-                None
-            }
-        });
-        if let Some(family) = pooled_family {
+        if let Some(family) = family::family_for_pi_provider(pi) {
             if let Some(credential) = Credential::from_pi_auth(pi, entry) {
                 ids.push(import(backend, family.id, credential, label.clone())?);
                 continue;
@@ -703,7 +694,9 @@ mod tests {
         )
         .unwrap();
         let ids = import_pi_auth(&backend, &path, None, None).unwrap();
-        assert_eq!(ids.len(), 3);
+        // The pool takes no Anthropic sign-in, so only the Codex sign-in and
+        // the OpenAI key import.
+        assert_eq!(ids.len(), 2);
         // A second sign-in to the same subscription refreshes its account.
         std::fs::write(
             &path,
@@ -712,19 +705,11 @@ mod tests {
         .unwrap();
         let again = import_pi_auth(&backend, &path, Some("openai-codex"), None).unwrap();
         let config = backend.config().unwrap();
-        assert_eq!(config.accounts.len(), 3);
+        assert_eq!(config.accounts.len(), 2);
         let codex = config.account(&again[0]).unwrap();
         assert_eq!(codex.credential.bearer(), "c2");
         assert!(ids.contains(&again[0]));
-        assert_eq!(
-            config
-                .accounts
-                .iter()
-                .find(|a| a.family == "anthropic")
-                .unwrap()
-                .label,
-            "x@example.com"
-        );
+        assert!(!config.accounts.iter().any(|a| a.family == "anthropic"));
         std::fs::remove_dir_all(agent).unwrap();
     }
 
