@@ -66,14 +66,15 @@ class PrivateAddressCheck(unittest.TestCase):
         self.assertRejected("e.txt", "ssh " + name + "\n")
 
     def test_ignores_third_party(self):
-        result = self.run_check(
-            "src-tauri/third-party/lib/f.txt", dotted(10, 1, 10, 10) + "\n"
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ("src-tauri/third-party/lib/f.txt", "core/third-party/lib/f.txt"):
+            with self.subTest(name=name):
+                result = self.run_check(name, dotted(10, 1, 10, 10) + "\n")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_ignores_lockfiles(self):
         addr = dotted(10, 1, 10, 10) + "\n"
-        for name in ("Cargo.lock", "x.lock", "x.lock.json", "package-lock.json", "app/package-lock.json"):
+        for name in ("Cargo.lock", "x.lock", "x.lock.json", "package-lock.json", "app/package-lock.json",
+                     "core/pins/packages.bun.lock"):
             with self.subTest(name=name):
                 result = self.run_check(name, addr)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

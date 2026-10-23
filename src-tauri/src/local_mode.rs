@@ -108,15 +108,18 @@ pub(crate) async fn local_mode_store_local_provider(
     .map(drop)
 }
 
+/// The provider inventory. `cached` answers the stored rows at once, so a
+/// page draws them before the full read fills the rest.
 #[tauri::command]
 pub(crate) async fn local_mode_provider_inventory(
     app: tauri::AppHandle,
     force: Option<bool>,
+    cached: Option<bool>,
 ) -> Result<Value, String> {
     model_service::request(
         &app,
         ModelAction::ProviderInventory,
-        data([("force", json!(force))]),
+        data([("force", json!(force)), ("cached", json!(cached))]),
     )
     .await
 }
@@ -164,6 +167,45 @@ pub(crate) async fn local_mode_set_default_model(
         None,
     );
     result
+}
+
+/// A thread's model and where it comes from: the thread, its agent, its
+/// project or the default.
+#[tauri::command]
+pub(crate) async fn thread_settings(
+    app: tauri::AppHandle,
+    thread_id: String,
+) -> Result<Value, String> {
+    model_service::request(
+        &app,
+        ModelAction::ThreadSettings,
+        json!({ "thread_id": thread_id }),
+    )
+    .await
+}
+
+/// Changes one thread's model, returns it to the one it started with, or
+/// starts it again from a project's defaults. The default model stays as it
+/// is.
+#[tauri::command]
+pub(crate) async fn thread_settings_set(
+    app: tauri::AppHandle,
+    thread_id: String,
+    model: Option<Value>,
+    reset: Option<bool>,
+    seed: Option<Value>,
+) -> Result<Value, String> {
+    let mut body = json!({ "thread_id": thread_id });
+    if let Some(model) = model {
+        body["model"] = model;
+    }
+    if let Some(seed) = seed {
+        body["seed"] = seed;
+    }
+    if reset == Some(true) {
+        body["reset"] = json!(true);
+    }
+    model_service::request(&app, ModelAction::ThreadSettingsSet, body).await
 }
 
 /// Saves the thinking level a model runs at when a chat names none. No level
@@ -245,25 +287,6 @@ pub(crate) async fn local_mode_store_endpoint(
     .await?;
     serde_json::from_value(provider)
         .map_err(|_| "The background service returned an invalid response. Restart Muniment.".into())
-}
-
-#[tauri::command]
-pub(crate) async fn local_mode_claude_code_status(app: tauri::AppHandle) -> Result<Value, String> {
-    model_service::request(&app, ModelAction::ClaudeCodeStatus, json!({})).await
-}
-
-#[tauri::command]
-pub(crate) async fn local_mode_connect_claude_code(
-    app: tauri::AppHandle,
-    executable: String,
-) -> Result<(), String> {
-    model_service::request(
-        &app,
-        ModelAction::ConnectClaudeCode,
-        data([("executable", json!(executable))]),
-    )
-    .await
-    .map(drop)
 }
 
 #[cfg(test)]

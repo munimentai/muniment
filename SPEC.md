@@ -10,9 +10,8 @@ Phase two adds cloud availability with paid accounts. Cloud development does
 not block the desktop release. The company record and graph remain a separate,
 hidden feature while the desktop harness earns adoption.
 
-This repo contains the Tauri v2 shell, the runtime binary with its host and service registration, the Pi sidecar and the on-device voice stack.
-The shared core, the platform-neutral runtime, model router and runtime pins come from one `munimentai/muniment-core` release tag.
-`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control. [docs/core-boundary.md](docs/core-boundary.md) lists the shared and desktop crates.
+The shared core, the platform-neutral runtime, model router and runtime pins live in `core/`, and the desktop builds them through path dependencies.
+`muniment-desktop-integration` holds cloud sign-in, cloud chat grants and browser control. [core/docs/core-boundary.md](core/docs/core-boundary.md) lists the shared and desktop crates.
 Existing company data and cloud credentials remain on disk when those features are hidden.
 The release license is FSL-1.1-Apache-2.0. Each version converts to Apache 2.0 two years after its release. Third-party notices ship with the app.
 
@@ -24,57 +23,62 @@ These are developer build options, not controls in user Settings.
 
 - `VITE_MUNIMENT_CLOUD=true` enables Muniment cloud sign-in, the account footer,
   Account settings, phone pairing, saved-session startup and cloud entitlement notices.
-- `VITE_MUNIMENT_COMPANY_RECORD=true` enables Record, its keyboard shortcut,
+- `VITE_MUNIMENT_COMPANY_RECORD=true` enables Record, its ⌘⇧K shortcut,
   the company record panel and Companies settings.
 
 The flags are independent. Enabling either does not enable the other.
 Disabled sections have no visible controls, empty placeholders or working
-shortcuts. A request for a hidden Settings page opens Model providers.
+shortcuts. A request for a hidden Settings part opens its page without it.
 With cloud disabled, startup enters local mode without reading a cloud session.
-A local startup failure offers a local retry, never a cloud sign-in prompt.
+A local startup failure offers a local retry, never a cloud sign-in prompt. The runtime owner also starts the runtime again on its own after a failed start, 2 seconds later and then twice as long each time up to a minute, until its clients connect, and the failure stays on screen meanwhile. On macOS a background service that launchd does not keep running yields to the bundled runtime as the app's child, which stops when the app quits: the workspace says scheduled agents run only while Muniment is open, each launch registers the service again, and Quit asks first while an agent runs or a routine is due within the hour.
 Provider sign-in, model routing, allowances, MCP pairing and local tools remain
 available. They are not Muniment cloud features. These UI flags do not replace
 backend authorization and do not remove stored sessions, companies or graph APIs.
 
 ## Project folders
 
-The default Home is `Documents/muniment`. Existing Home choices persist.
+The default Home is `Documents/muniment`. Existing Home choices persist. The runtime names session folders from older versions on a thread of its own, so a Home read that a macOS folder prompt holds never holds the runtime's start. Once Home is set, each launch reads Home beside that start: while macOS asks about or refuses the folder that holds Home, the sidebar names the folder with core's message and one Allow access action, which reads Home again or, after a refusal, opens Files & Folders, and Usage shows that message for this computer in place of did not answer.
 Projects are folders under Home's `projects/`, with stable thread membership. Before each reply, the app automatically retrieves relevant context from other ordinary chats in that project. Recall excludes other projects, other owners, and agent or artifact chats.
-Create makes the folder. Rename moves the folder and preserves its files and threads.
-A project thread runs in its folder. Generated files stay there unless the user names another path.
-Threads without a project use `sessions/<thread-name>-<short-id>/`. Project folders use `<project-name>-<short-id>`. Search and previews use the same folder.
-Saved artifacts have an editable HTML export in `artifacts/<artifact-name>-<short-id>/index.html`. Full identifiers remain the lookup keys; readable folder names use underscores, a bounded portable name, and eight identifier characters, with case-insensitive collision checks. Files follows the active catalog, project, agent, artifact, or thread and remembers browsing state per context. Internal folders are hidden by default. Workspace tools stay open across navigation. Browser keeps its page; Terminal uses a retained shell per context, started in that context’s folder. Switching contexts never changes or stops a retained shell. Closing the Terminal tab ends its shells.
-Agent definitions live in `agents/<agent-name>-<short-id>/agent.md`, with name, job title, instructions, avatar, project and schedule.
-The profile shows the instructions under Instructions, and a card shows the schedule. Original SVG avatars use a stable, versioned seed. Faces are mostly neutral or happy; frown and kiss mouths each have a 1-in-500 chance.
-New avatars combine shapes, colors, eyes, mouths, glasses, cheeks and face positions. Saved versions keep their appearance.
-Avatars render locally in the sidebar, catalog and profile. Rename preserves the seed; Change avatar replaces it.
-The Agents control follows New thread and exposes a plus button on hover or keyboard focus.
-It opens a card catalog. New agent opens a dedicated creation chat that offers the catalog starters, with the chosen one marked.
-An empty catalog opens the creation chat. Each agent or artifact has a goal, a specified output, and one dedicated chat. Artifacts opens saved artifact chats or a creation chat with suggestions. The preview opens when a creation chat first saves its artifact. Creation chats stay outside ordinary thread lists.
+Create makes the folder. Rename moves the folder and preserves its files and threads. A project thread runs in its folder. Generated files stay there unless the user names another path.
+A project is a group of threads and agents, and a thread that no catalog project or agent holds is a project of its own. A new thread starts in no project unless it starts in one, and a thread assigned to the retired `chats` id belongs to no project. A thread in no project uses `sessions/<thread-name>-<short-id>/` and shares no recall. Project folders use `<project-name>-<short-id>`. Search and previews use the same folder.
+A project's settings hold what a new thread in it starts with, its model, permission mode and machine, in core's catalog, and the instructions every run in its folder reads from the folder's `AGENTS.md`. Core starts a new thread with its project's defaults once, and its `thread_settings` keeps each thread's own model, so a pick changes one thread and never the project or the default. Every run gets every tool its machine offers, and the permission mode gates what runs. Core's `inherit` names each value's layer, this thread, agent, project or default, and the composer menus and the settings page show it, such as `Gemini 3 Pro · from project Homelab`. An agent is a project with triggers: an agent saved with a project works in that project's folder, and an agent without one reads as its own project. Add a trigger, and Make this an agent on a project's thread, open a new agent chat in that project, whose Save puts the agent in it, and the agent's primary conversation is the project's home thread, where its runs post. The settings page shows each agent's action card.
+Core's `sidebar::arrange` places each thread once in the Projects list: a project row groups its threads and agents and opens to show them, and a thread in no project is its own row with its title, status and machine, which opens the thread. An agent has no row of its own: each of its threads and runs is a thread row that carries the agent's id, name and color, in its agent's project, or else in the project it was filed in, and it leads with the agent's avatar, with the agent's name on the meta line once a machine is paired. Pinned rows lead, then newest activity first. Core states each row's status in words (Approve, Answer, Working, Failed or Done; a run that waits on a tool approval shows once, as Approve), which the row's status ring carries for screen readers: in place of the row's leading icon, a dashed circle whose light travels in green while the thread works and in amber while it needs the user, or, for Done or Failed, lights every dash in green or red for 4 seconds before the row's own icon returns, at every Motion setting, and an unread result keeps its title semibold until read. With one machine a row is one line, title then time; once a machine is paired a meta line over the title names its machine or agent and the time. A project row the most urgent status of its threads and the triggers of its agents in words, such as `every day 9:00` or `webhook`; a settled thread shows only its time and keeps its place, since reading it adds no activity. Needs-you rows also stay on Notifications. The open thread's project opens so its row shows. Move to project in a thread's menu or the palette, or a row dropped on a project, moves a thread with its conversation into one of this computer's projects, and No project makes it its own row again; an agent's thread stays with its agent, and the files it wrote stay where it wrote them. Archived threads fold under Show archived at the end of Projects. Read times and pins stay on the device.
+Saved artifacts have an editable HTML export in `artifacts/<artifact-name>-<short-id>/index.html`. Full identifiers remain the lookup keys; readable folder names use underscores, a bounded portable name, and eight identifier characters, with case-insensitive collision checks. Files follows the active catalog, project, agent, artifact, or thread and remembers browsing state per context. Internal folders are hidden by default. Workspace tools stay open across thread navigation. Settings and the catalog pages hide the open tool, and returning to a thread shows it again. The native browser view draws above the page, so it hides while a full-window dialog is open. Browser keeps its page; Terminal uses a retained shell per context, started in that context’s folder. Switching contexts never changes or stops a retained shell. Closing the Terminal tab ends its shells.
+Agent definitions live in `agents/<agent-name>-<short-id>/agent.md`, with name, job title, instructions, avatar, project, model, skills, permissions, messaging and routines.
+The runtime that holds an agent owns its definition, routines and runs. Every agent view reads and changes them through that runtime's agent operations, for this computer and for each paired machine.
+The profile shows the name, job title and instructions, then one row each for the project, the model with its thinking level from the composer's model and thinking menus, the permission mode from that machine's `permission.modes` in the composer's mode menu, which core saves on a new agent from the default agent mode, or the default for an older agent without one, which saves no mode, and the primary machine once the fleet has another machine, where a pick starts the move. It then shows a check box per skill from the `agent.tool_catalog` of the agent's own machine, Any or Only these for messages to other agents once another agent exists, where an empty Only these list says the agent can message no agent, its routines, its run history, its other conversations from `agent.threads`, which leave the ordinary thread list, and its memory in a dialog, where Add memory shows its form in place of the list with a back arrow, and a new fact's source names the agent beside its avatar. Run now leads the actions, with Open folder, which shows the agent's folder in Files, and an Export agent menu as icons at its end. Delete agent, under them in the danger style, asks once and can also delete the agent's memory. Core deletes the agent's creation chat with it and drops it from every other agent's messaging list.
+The run history lists each run on one row: a status icon in green, yellow or red, the routine's name or what started the run, and when it started in the zone and on the clock that Settings → General → Time names. A row opens the run's conversation. Failed runs keep their input; Retry on a failed row runs it again against the agent as it is now.
+Avatars draw locally from the agent's saved seed with the brand's generators, `src/lib/colorful-avatar.js` and `src/lib/muniment-avatar.js`, copies that draw the same head for a seed on every client. Appearance picks Colorful, the default, or Muniment on the device; the agent's saved style id is not read. Rename preserves the seed; Generate another avatar replaces it.
+One avatar component renders every agent avatar: the head alone in the theme's light or dark tone, redrawn when either changes, centered in its slot. Rows and the catalog's action cards center it across their text, and the profile and the import preview center it at their top. Core's `agent.activity` events outline it while the agent runs, waits or failed, and hover names the action.
+New and Search lead the sidebar, then an Agents row that opens the Agents catalog, an Artifacts row and Projects. Search finds Agents, Projects, New group chat, Notifications, Usage and Settings beside threads. ⌘K opens the command palette everywhere but a focused terminal, which keeps ⌘K to clear itself, and core's `palette::rank` orders it: with no words, Needs you, then recent threads, then the actions that apply; a leading `>` keeps the actions; otherwise threads, pages, Settings parts and actions by match, newest first, each row with its shortcut. The record panel takes ⌘⇧K.
+Agents opens a catalog of action cards in a grid of fixed-height rows. Each card puts the avatar at its top left, the name beside it, edited in place through `agent.save` with core's refusal shown, and a rail of panels down the left: Overview (job title in place, primary machine and last run in words with a stoplight signal at the row's end, the machine's icon green online and red offline, and the run's status icon, next run from core's `next_fire_at`, Run now, Open chat), Model (the composer's model picker open in the panel, with Use the default model at its foot), Permissions (the profile's mode menu over core's `permission.modes`, the default marked when the agent chose none), Routines (the profile's routine rows) and History (the profile's run history). Skills, instructions and routine editing stay in the profile. The card menu holds Open profile, Export, Archive and Delete, which opens the profile at its delete confirmation. A synced copy or an agent whose machine does not answer shows a read-only card with a note. New agent, the Set up an agent starter, each agent template, a project's Add a trigger and every thread menu's Make this an agent open a new agent chat: a thread titled New agent with an empty transcript and the composer. A template's sentence is its first message, and Make this an agent sends one that names the thread, which the draft reads in its place. Each message runs core's `agent.draft` over every message of the chat with one model call, and the reply is the draft: name, job title, what it does, when it runs from core's trigger reader, its skills, the default permission mode for a job that only reads, and the model. A question shows in the reply only when core cannot tell the job, and each option sends its answer. The newest reply holds Save and Test run: Test run saves the agent with its triggers off and starts one test run, titled `<name> · test run`, whose line follows the run to its result with a link to its thread; Save turns the triggers on. The chat's creation record keeps each message and draft, so the chat stays the agent's creation chat, and a later Save updates the same agent. A creation chat's composer shows its template as a chip with its goal on hover and sends the user's words, or the goal when they typed none. The goal and output travel in the creation record, which the run's instructions carry with a hint to build at once, so the thread takes its title from the words. A creation message an older version sent shows as one line, the template and its goal, that expands.
+An empty catalog opens the creation chat. Each agent or artifact has a goal, a specified output, and one dedicated chat. Artifacts opens saved artifact chats or a creation chat with suggestions. The preview opens when a creation chat first saves its artifact. A creation chat, and an ordinary chat that saves an artifact, also stays in the Threads list.
 Each agent has one persisted primary conversation. Interactive messages and routine runs reuse it.
-Routine history stays in the agent profile with time, status, errors, and conversation links.
+Notifications, the bell at the sidebar's foot, is a full page from core's `notifications.list` on each machine, joined by core: Needs you (approvals with their answers, questions with a reply posted to the run's thread, runs a usage limit stopped with the reset and Run again once it passes, and machines that do not answer), a Running strip, then every other run under Today, Yesterday and Earlier with its trigger's icon and words, its machine's shape in the machine's stoplight color, one plain-text line of result and its time, opening its thread. Filters pick the machine, the agent, and Needs you, All or Failed. Mark all read sets the fleet preference `notifications-read-at`. With nothing waiting it says Nothing needs you and lists the next scheduled runs. The bell's badge counts Needs you without the offline machines and reads again on each run or approval event.
+A completed, failed or waiting run that the app did not start, or a new approval, raises a system notification where the system allows one. A runtime that marks a run's notification decides it. Settings → General → Notifications holds the fleet preference `notify`: Needs you, on by default, covers approvals, questions, failures and usage stops, and Finished, off by default, covers replies.
 Agent facts live under agents/<id>/memory/facts. Agent recall reads its own memory.
 General recall excludes agent facts. Manual edits and chat tools use the same files, with recoverable deletion.
 Changing the agent project directs new work to that project and preserves existing files.
-The agent is the sidebar and title-bar identity. Its stored conversations do not appear in regular, pinned, archived, or project thread lists.
-An agent profile occupies a 220 px right sidebar. Profile fields reveal inline edit controls on hover or focus.
-Agent chats and regular threads use one shared composer with the same features.
+The agent is the title-bar identity. Its conversations list as rows that name it, and its home thread takes the sections like any thread. An agent profile occupies a 220 px right sidebar. Profile fields reveal inline edit controls on hover or focus.
+Agent chats and regular threads use one shared composer with the same features. Its mode menu lists core's `permission.modes` for the thread's machine, sets the thread's mode through `thread.permission_mode_set`, and shows `thread.permission_mode`. Shift+Tab moves to the next available mode. A new thread shows the default thread mode, Bypass permissions unless bypass is off, checked. A mode picked on it goes with its first message as `run.submit`'s `permission_mode`, and core sets it before the run starts, so it covers the first tool call. A composer thread's gate card offers Allow once and Deny and shows a plan from `thread.plan`. No answer saves a rule, so permissions are the modes alone. Settings → Permissions edits the runtime's `permission.settings`: default thread and agent modes, the bypass switch, on by default, which falls the defaults back to Ask before changes when turned off, and the unattended wait.
 Agent panels and maximized record panels fill the chat area while the expanded sidebar stays visible.
 Agent threads retain their agent across replies.
-Templates import from JSON, Markdown or public Grok share links into an editable draft.
-Public link imports identify their profile-only coverage. Supplied skills, memories, plugins and routines persist as template context.
-Plugins and routines are setup requirements, not installed capabilities or active schedules. Import never starts a run.
-Portable export preserves template context and the avatar seed, with schedules paused.
-Export for Grok Bot writes a Markdown setup file containing the profile, template context and original SVG.
-Exports omit local project assignments, conversation history, account credentials and private learned memory.
+Import agent reads a share link, a template file or pasted text through the runtime and shows a preview before Import saves it: the profile, routines as proposals that stay off, skills matched or kept as reference text, tools to set up, routine notes, and memories to keep or drop. A public share page's preview says it holds the profile only. Import never starts a run.
+Export agent offers a Muniment agent file and Grok Bot notes, and each saves the file the runtime writes. Exports omit project assignments, conversation history, credentials, webhook secrets and private memory.
+Linked machines form a fleet. A machine added with admin access links into this computer's fleet as it pairs, and Settings → Machines lists every machine once. The catalog lists every agent the fleet knows with its primary machine's shape, an offline mark, and a sync mark on an agent seen only as a synced copy. The profile's Move hands an agent to another member after a confirm, and offers a forced move with a warning when the primary does not answer.
+A message to a group thread, or to a synced copy of another machine's agent or ordinary thread, posts through the runtime to the group or to the owner. While the owner is offline the composer says the message is queued, with Cancel, and an agent whose machine has been away a day offers Move here. A replica thread fetches its history from its owner on open. The composer's machine menu also lists fleet members the app does not reach itself, containers included, and a new thread started on one that answers runs there. A run left running in another thread holds a send only on its own machine, and the composer says so there. This computer's row on Settings → Machines sets what it keeps available offline and lists the fleet's audit log. Available offline keeps each project's details and membership, and a project's files stay on the machine that owns it. The Projects catalog lists other members' projects after this computer's, each with its owner. Model providers names the machine each sign-in is signed in on. Theme, type, avatar style, the thinking mark, browser search and homepage, and memory recall follow the user across the fleet. Transcripts show another agent's message as Markdown with its sender, intent and hop count, and a handoff or a silent run as a note.
+Groups hold two to six agents from any machine, with a lead, a meeting mode and its debate rounds. In a group the composer's @ list offers its agents and @everyone, and meeting replies show under their round. A group chat is a thread in no project, and a project's menu, the Agents page and Search start one.
+Notifications, and the agent's own thread in place of the run's gate, show each waiting approval as a card: the agent, its machine, core's summary of the exact operation and its inputs, long ones folded, the reason the gate asks, a plan waiting for approval, and only the answers core lists of Allow once and Deny, or the plan's approvals into Ask before changes, Edit automatically or Auto review and Keep planning. An answer another device gave first says so. Group posts arrive live from `group.posted`, with their round from core, and a group's composer names its members instead of a model. After 14 days without a client the runtime pauses routines, and the sidebar asks to resume them.
 Chat can list, read, save and run agents through harness tools backed by the same files as manual editing.
-Daily, weekday and weekly schedules use the host time zone and the local background service.
+The Projects list holds the agents of every paired machine that answers, each with its machine's shape. An agent on a paired machine opens its conversation there once its first run starts it. An agent's thread lists, in Projects and in its profile, once a run holds a message.
+Routines start an agent on a cron schedule in a time zone, a webhook, or a tool check whose condition holds on an MCP tool's result. The routine editor builds daily, weekday, weekly and interval schedules beside the raw expression, and all and any groups of checks. A webhook routine shows its addresses, the certificate fingerprint, a warning when the machine does not accept connections, and its secret once when created or rotated. A tool check shows its last poll. Routines proposed from instructions or an imported template wait as Accept and Dismiss cards, and core proposes none on the trigger of a routine the agent has.
 Due runs wait for the current reply. A missed schedule runs once when the service returns.
 An interrupted dispatch requires review instead of an automatic retry. Run results link to their thread.
-Profile has separate name, preferred name, work and instructions fields backed by `memory/profile.md`. Memory lists, edits, restores and exports saved facts. Voice holds the dictation shortcut and its hold, toggle or auto behavior, the microphone, the Parakeet install, start and stop tones, a macOS output mute, filler removal, custom words that bias recognition and fix casing, and send on stop. Each dictation reads them at its start, and Escape cancels from any app while it listens. Companies' Backups is the one setting that runs ahead of the runtime, and it stays on the device in `device-preferences.js` until the runtime reads it.
+Profile has separate name, preferred name, work and instructions fields backed by `memory/profile.md`. Memory lists, edits, restores and exports saved facts. Settings → Voice holds the dictation shortcut and its hold, toggle or auto behavior, the microphone, the Parakeet install, start and stop tones, a macOS output mute, filler removal, custom words that bias recognition and fix casing, and send on stop. Each dictation reads them at its start, and Escape cancels from any app while it listens. While it listens, core sends the words of the utterance in progress, which the composer shows muted until they turn final, and the voice level, which the composer's top border follows while the Voice button shows the voice wave. A speech model download shows its bytes and progress in a notice at the composer's right edge. Companies' Backups is the one setting that runs ahead of the runtime, and it stays on the device in `device-preferences.js` until the runtime reads it.
 Unrecognized profile sections remain editable. Each new reply receives the saved profile.
-Durable facts live in `memory/facts/<id>.md` with their source. Users can edit and delete them.
-The memory-save tool records the originating thread and run. It rejects credentials.
+Durable facts live in `memory/facts/<id>.md` with their source and origin. Users can edit and delete them.
+The memory-save tool and the after-run pass record the originating thread and run, and the agent when the run or thread belongs to one. The memory-save tool rejects credentials.
+Each memory names its origin: "Added in Settings", "Added in a chat", or "Added by <name> agent" for a memory an agent created or the user added in that agent's profile, beside the agent's avatar. A deleted agent reads "Added by an agent". Older memories get their origin from their source text.
 Memory's Recall lives in the private `memory-recall.json`, and each new chat reads it. Save facts from chats and Use memories in replies default on. Ask before saving defaults off and shows each proposed fact for approval. With saving on and asking off, chat maintains facts automatically, including corrections and deletion of verified obsolete facts. The profile reaches every reply whatever Recall says.
 Deleted facts leave recall and stay in private recovery storage. Settings can restore them.
 Memory search rebuilds its index from files. Profile imports require Save before taking effect.
@@ -114,6 +118,8 @@ encrypted, and its account tiers belong to phase two.
 **muniment-mobile, phase two.** After QR pairing, mobile drives this runtime through the relay
 and sees the live tool stream, Stop, queued follow-ups and the permission-gate card
 that becomes a run receipt. Approving a proposal from the phone is that card.
+Through the pair's control session the phone reads the whole fleet, and its posts, answers, Run now,
+stops and new threads reach the owning machine through this runtime. Nothing runs on the phone.
 
 **muniment-qa.** The local-mode chat smoke is the first installed nightly spec
 on Linux, Windows and macOS, and real sign-in gates no other spec.
@@ -123,17 +129,12 @@ There is no custom tap. Acceptance belongs to the Homebrew maintainers.
 **muniment-site.** `docs/public-evidence/` is lifted verbatim into the public
 docs, and a change to what an outside user sees updates it, law 12.
 
-**Other runtimes.** The app keeps its own runtime and attaches to one selected runtime at a time: this computer, another desktop, or a `muniment-server` host or container. Settings → Runtimes pairs one from its one-time `muniment://pair` link, pasted or read over SSH from `<command> pair --json`, with no account, and keeps its device credential in an owner-only file under `~/.muniment/runtimes/`.
-An SSH runtime attaches through `ssh -N -L` to a loopback port, which opens with the attach and closes when the app leaves the runtime or quits. Threads, models, memory, search and context come from the selected runtime, and a thread stays on the runtime that holds it. The cloud account, phone pairing, extensions and Storage stay with this computer, so Account hides and those pages say so.
-Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Update asks an older runtime, where this device holds `runtime.admin`, to install the app's version, and Update all asks every such runtime. Remove first revokes the device there when it holds that scope. The composer attaches no local file while a paired runtime is selected. The composer's machine menu marks a machine that answers with a green globe and one that does not with a red slashed globe, and picking one that does not answer opens Settings → Machines.
-This computer turns pairing on and off, off by default, sets the listen port and the addresses links name, creates a one-time link with its QR code, and lists and revokes paired devices. An update request to this computer's runtime runs the app updater, which installs once runtime work is idle, and the app clears the request once it runs that version.
+**Other runtimes.** The app keeps its own runtime and attaches to one selected runtime at a time: this computer, another desktop, or a `muniment-server` host or container. Settings → Machines → Add machine pairs one from its one-time `muniment://pair` link, pasted or read over SSH from `<command> pair --json`, with no account, and keeps its device credential in an owner-only file under `~/.muniment/runtimes/`. A paired machine's name follows the name it gives itself, on each connect and pairing, until the user renames it.
+An SSH runtime attaches through `ssh -N -L` to a loopback port, which opens with the attach and closes when the app leaves the runtime or quits. Threads, models, memory, search and context come from the selected runtime, and a thread stays on the runtime that holds it. Once another machine answers, the Settings pages that read the selected runtime name their scope at their top: All machines by default, whose shared settings fleet sync carries to every member, or one machine that answers. Core's `settings.scope` names where each part keeps its values: shared through fleet sync, on each machine, or on this computer. Under All machines a part that stays on each machine, such as Allow bypass, says so, and a save to all machines that changes one is refused. Pairing a machine never selects it. The cloud account, phone pairing and Storage stay with this computer, so Account hides and those pages say so. An extension added on this computer reaches every machine, and turning it on or off changes only this computer, so Tools says so.
+Each runtime lists its kind, version and state: online, offline, certificate changed, access revoked or version mismatch. Every paired desktop, server and container updates to the app's version, which they all release under. The app subscribes to each runtime's `runtime.update_status` and reads `update_capability` and `update_status` from `runtime.info`, so a row shows only what the runtime reports: Update queued, Downloading vX, Finishing current work with the blockers in a tooltip, Updating to vX while it installs or restarts, Update failed with the error in a tooltip, or vX available, update manually for a behind runtime that installs by hand. A request the runtime has not acted on shows Update requested, and an older runtime without the fields shows only its version. The app asks a behind runtime to update on each welcome while it reports no pending or failed update for that version, at most once per runtime and version in ten minutes, and never asks a manual runtime or again for a version the runtime failed until a newer one exists. A paired desktop that runs a newer app moves this app to it. A newer server or container never does. The row menu's Update asks one runtime where this device holds `runtime.update` or `runtime.admin`. Update all shows while an update waits. It asks every runtime that is behind and online, lists the ones it skips as offline, no permission, manual install or already current, and updates this computer last. Remove drops every link to the machine from each machine this app reaches, revokes the access it holds on this computer, and revokes this device there when it holds that scope. A device without `runtime.admin` shows Limited. The composer attaches no local file while a paired runtime is selected. The composer's machine menu opens on every thread, during a reply too, and lists each paired machine with a green globe while it answers, or as a disabled choice with its state chip, such as Offline, while it does not. An open thread's menu checks its machine and offers no other choice. The app holds one supervised connection set per paired machine, and a connection that ends soon after it opens makes the next wait twice as long, from one second up to a minute. A change of a machine's name or version never reconnects it.
+Add machine creates this computer's one-time admin link with its QR code, and turns connections on the first time. This computer's row sets the listen port and the addresses links name. An update request to this computer's runtime runs the app updater, and the app clears the request once it runs that version. The app saves each step in the runtime's update status, so paired devices see it.
 
-**Updates.** The in-app updater reads the public stable release feed, sends
-nothing that identifies the user or machine, and verifies signatures bound to
-the announced version. It shows one install control after download and waits
-for idle runtime activity. Windows preserves MSI scope or NSIS identity, macOS
-uses the signed app bundle, and Linux uses AppImage. Debian updates use the
-system package manager.
+**Updates.** The in-app updater reads the public stable release feed, sends nothing that identifies the user or machine, and verifies signatures bound to the announced version. It shows one install control after download. Before an install the app asks this computer's runtime to drain: it refuses new runs, waits for its runs, records each run it stops and answers. An install the owner starts confirms how many replies it stops and stops them at once. A requested or automatic install waits up to 120 seconds for idle, then proceeds. Core resumes each stopped run after the restart, and the thread notes Resumed after update. Windows preserves MSI scope or NSIS identity, macOS uses the signed app bundle, and Linux uses AppImage. Debian updates use the system package manager.
 
 ## The definition of working
 
@@ -161,22 +162,22 @@ checkable in the diff:
 The first run asks one question: which model to connect. The provider scan runs
 at launch, and its finds lead the list: ready local servers, then subscriptions
 with a sign-in hint, then servers that need a key or a start. Every subscription
-Muniment signs in to follows in full color. Each card is one line: logo, name and action. More providers opens the provider
-catalog, and Explore without connecting opens the composer with no model. A pick saves Home, and a found server connects in place. The composer band
+Muniment signs in to follows in full color. Each card is one line: logo, name and action. The action reads Connect only where one click connects, and Sign in where a sign-in follows. More providers opens the provider
+catalog, and Explore without connecting opens the composer with no model. A pick saves Home, the app and the runtime that runs Pi each write its sessions folder and read Home and the folder that holds it then, so macOS asks while a hint beside Home shows and no prompt holds the first chat. A run that still waits on a folder prompt names it in place of its stage word and waits up to ten minutes for the answer. A refusal keeps the first run and names the setting. A found server connects in place. A subscription's sign-in starts at once, opens the browser, and shows its progress under its card until the account connects. A scan that fails while the runtime starts runs again before it names the failure. Settings → Connect account lists the servers the scan finds that no connection serves: one connects in one step, and one that needs more opens a custom endpoint form with its name and address. The composer band
 shows the model source, Home, the context meter and the running cost. A global shortcut opens a one-line launcher that starts a new thread with the line typed into it.
 
-**The provider scan.** It probes known model servers on `127.0.0.1` only, never the network, in about two seconds, and names each by its answer, not its port: Ollama, LM Studio, llama.cpp, MLX LM, oMLX, vLLM, Jan, Osaurus, LocalAI, Lemonade, KoboldCpp, Docker Model Runner, Text Generation WebUI and exo. It sends no key. A `401` asks *Add key*, and an installed server that does not answer asks *Start*. A key comes from the user, or for oMLX from its own settings file on request. A sign-in hint only tests that a CLI's executable, folder or credential file exists and never reads it: Claude Code, Codex, Grok Build, Gemini, Copilot, Kimi, Devin, Muse Code and Ori.
+**The provider scan.** It probes known model servers on `127.0.0.1` only, never the network, in about two seconds, and names each by its answer, not its port: Ollama, LM Studio, llama.cpp, MLX LM, oMLX, vLLM, Jan, Osaurus, LocalAI, Lemonade, KoboldCpp, Docker Model Runner, Text Generation WebUI and exo. It sends no key. A `401` asks *Add key*, and an installed server that does not answer reads *Not running* and opens how to start it. A key comes from the user, or for oMLX from its own settings file on request. A sign-in hint only tests that a CLI's executable, folder or credential file exists and never reads it: Claude Code, Codex, Grok Build, Gemini, Copilot, Kimi, Devin, Muse Code and Ori.
 
 **The model chip.** The chip shows the provider's mark and the model id in use,
-the saved default when it is shown, else the first shown model. When no
-provider answers it reads `Connect a model`, and the chip and Send open the provider catalog.
+the open thread's own model from core's `thread_settings`, else the saved default when it is shown, else the router's pick among the models the catalog knows, else the first shown model that some plan offers; a model every plan refused shows unavailable with the reason. When no
+provider answers it reads `Connect a model`, and the chip and Send open the provider catalog. A re-read of the same machine after a reply or a reconnect keeps the model the chip names.
 Beside it, a thinking level control lists only the levels the chip's model supports and hides for a model without reasoning.
 The runtime keeps one level per model in Pi's settings, so every window shows the same choice, and each send carries it.
 
-**Settings → Models is one component on two pages.** Model providers
-and Decision models share its state, and the Settings sidebar picks the page. Full-width account rows show allowance, with usage
-in account details. Decision models holds the routing statements once a decision model is connected. The chip's picker shows each provider's
-current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
+**Settings → Models is one page.** Roles leads it with routing, assistance and their decision models,
+then the routing statements once a decision model is connected, then Connections. Connections draw the stored rows core answers at once, and the full read with discovery replaces them. Full-width account rows show the plan,
+routing state and Disconnect, and See usage opens the Usage page, the one place usage shows. The chip's picker lists every connected provider's
+current generation, the newest version of each family read from the model ids, and folds the rest under Legacy models: older versions, models models.dev dates a year behind the provider's newest, and models the user hid. A local or custom server shows every model it serves, since the user installed each one. A row shows the name core's catalog or the server gives, else a provider id formatted, or a server's id as served. Hide and Show on a row move a model between the lists, and the router leaves legacy models out of the running. A sample routing test shows the choice and fallback cause without
 generating a reply. A key added here goes into Pi's `auth.json`, an
 account sign-in runs Pi's own OAuth flow in an RPC process the runtime owns
 and lands in the same file, or in the router's pool when the router pools
@@ -184,19 +185,19 @@ its family, and a local or custom endpoint goes into Pi's `models.json`, so Pi u
 to that provider. Startup and Settings supplement bundled models through xAI key or subscription discovery and OpenAI, Anthropic and Google key discovery. Unsupported sign-ins keep bundled models. Refresh models bypasses the ten-minute cache. Failed requests preserve saved models, overrides and defaults. Discoveries feed the picker, routing and classifier choices. The section
 lists connected providers with their source and Disconnect. Connect account
 opens the provider catalog and searches its connection methods. A provider opens on one view with its first
-method, an account where Pi signs in, Claude Code for Anthropic through
-`pi-claude-bridge`, an API key, or a server URL, with its other methods one
+method, an account where Pi signs in or, for Anthropic, Claude Code's own
+login, an API key, or a server URL, with its other methods one
 switch away. The OpenAI redirect lands on the runtime's own page on port
 1455, held on both loopback addresses, in muniment's mark and voice, and the
-runtime hands Pi the code. A port another program holds stops the sign-in
-with its number. A
+runtime hands Pi the code. A sign-in runs on the machine the Models page names, and its redirect, answers and steps stay with that machine. For a paired runtime's sign-in the app holds that port on this computer and forwards the redirect to the runtime. Each Anthropic account has its own Claude Code config folder under the agent directory, where the bundled Claude Code at the pinned version runs `claude auth login`, exchanges the code and keeps the token, so Muniment never holds an Anthropic token. The runtime hands the client the URL Claude Code opens, and a paired runtime's client holds the port of Claude Code's own loopback listener and forwards the redirect to it. The browser page says signed in only after `claude auth status` on that machine names the account. When Claude Code opens no browser, the client shows its code URL and types the pasted code into its prompt. `claude auth status` names the account, and Claude Code's `get_usage` control request reads its 5-hour and weekly windows. A thread keeps the account it first ran on, and a new thread takes the account with no spent window and the fewest threads. A Claude Code connection from before stays readable as one row with Sign in again, and the first account that signs in replaces it. Each subscription is its own row with Disconnect, and once a family holds one, its sign-in reads Add another account. A port another program holds stops the sign-in
+with its number, and a sign-in the browser never finishes fails after fifteen minutes. A
 connect adopts the provider's largest-context model that answers a probe as
 the default, and an account sign-in brings the app to the front. A local server is a
 first-class provider beside the hosted ones, never a fallback. The custom
 endpoint form takes a name, a base URL, an optional key and a model list. The
-chip's picker sets Pi's `defaultProvider` and `defaultModel` at once.
+chip's picker sets the open thread's model, and its foot names the layer and offers the project model, Make project default and Make default, which alone sets Pi's `defaultProvider` and `defaultModel`.
 
-**Routing leads Settings → Decision models.** Pi's `auth.json` holds one credential per
+**Routing leads Settings → Models → Roles.** Pi's `auth.json` holds one credential per
 provider id, so a second account of one provider cannot live there. The router, which the runtime runs,
 holds those pools itself in `muniment-router.json` beside it at the same
 `0600`, answers the OpenAI chat wire on `127.0.0.1` behind a random token, and
@@ -214,21 +215,21 @@ the family, named by its email. Kimi, Antigravity and Devin have no Pi
 sign-in, so the router runs its own: Kimi by device code at `auth.kimi.com`,
 Antigravity and Devin through the browser, each landing on a loopback page in
 muniment's mark. Antigravity is a Google account and pools into Google. A
-Kimi, Google, xAI, Codex or Claude token refreshes before it dies, ahead of the turn that
+Kimi, Google, xAI or Codex token refreshes before it dies, ahead of the turn that
 would find it dead. The router asks the upstream
 what the account has left: Codex at `chatgpt.com/backend-api/wham/usage`,
-Anthropic at `api.anthropic.com/api/oauth/usage`, Kimi at
+Kimi at
 `api.kimi.com/coding/v1/usages`, Antigravity at
 `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, and Devin
-at its seat service's `GetUserStatus`. xAI has no such route, and its card
-says what the router cannot read. A window is known by its length in
+at its seat service's `GetUserStatus`, and xAI at Grok Build's
+`cli-chat-proxy.grok.com/v1/billing` credits window, which leaves the share
+out while nothing is used, so a current period without one reads as unused. A window is known by its length in
 seconds, never by its slot, because a Pro plan's primary window is the weekly
-one. The card shows what is left, not what is used, with the reset, the plan,
-and Codex's banked resets. The store in `muniment-router-quota.json` carries
-no token and no prompt. Allowances refresh when the settings page opens and
-every two minutes while it is visible, without overlapping probes. The card's
-foot shows the read time with a refresh icon on the left and a red Disconnect on the right. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Claude
-and Kimi subscriptions use Messages. Native streams preserve tool calls and
+one. A weekly window with no 5-hour window says the plan reports none. The store in `muniment-router-quota.json` is keyed by account, so a
+second account of one provider keeps its own windows, and carries
+no token and no prompt. An account's windows are read as soon as it connects and
+every two minutes while the app runs, without overlapping probes. Every account routes, with no switch and no share. Codex and xAI subscriptions use Responses. Kimi
+subscriptions use Messages, and Anthropic accounts never join a pool. Native streams preserve tool calls and
 usage. Other subscriptions remain ineligible until their transport exists.
 
 **The router balances, and a refusal moves the turn.** Among the accounts of a
@@ -238,10 +239,9 @@ sits furthest below its weight takes the next turn. A `401`, `402`, `403`,
 `429` or `5xx` is the account refused, not the request: it cools from fifteen
 seconds doubling to fifteen minutes and the next account takes the turn, three
 accounts at most. Every other status is the request, and it comes straight back
-without spending a second account. The ledger in `muniment-router-usage.json`
+without spending a second account. A provider that sends nothing for three minutes before its first output, or for 90 seconds once output flows, has stopped answering; any byte, a keep-alive or a reasoning event included, restarts that wait. A stall before output moves the turn to the model's next account, so every connected account of that provider gets one try. Once each has stalled, or after a stall once output flows, the turn ends with that reason, which fails the run. The ledger in `muniment-router-usage.json`
 counts turns, tokens and failures per account for thirty days, names the last
-refusal, and carries no prompt and no reply. Settings shows a summary per
-provider, the turns each account has in flight, and that thirty-day bar. A key never balances with its family's subscriptions. With its overflow switch on, it takes a turn only once every subscription is cooling or at its limit.
+refusal, and carries no prompt and no reply. A key never balances with its family's subscriptions. With its overflow switch on, it takes a turn only once every subscription is cooling or at its limit. Usage, at the sidebar's foot, is a full page from core's `usage.summary` on each machine, joined by core with each account's newest reading counted once, a shared copy under the name of the account it copies: header filters for machine and provider, Limits, Tokens or Cost, and 24h, 7d, 30d or 90d. Limits shows one card per account, however many machines hold it, headed by the provider, the account and its plan once, with one line per window: its name over its reset, or Not started for a full window with no reset time, a four-step meter of its share left, and that share, or Limit at its limit. The meter lights four steps from 75% left, three from 50%, two from 25%, one under that and none at the limit, in fixed status colors that no color scheme or provider changes. Each provider no window meters has a card in the same grid: a local server as No limit with its address and machine, a key as Billed by use, a subscription whose first read has not answered as Allowance pending, and an unreadable subscription, each with the tokens core sums from its runs in the selected range, or No runs in this range. Tokens and Cost show processed, cached and uncached input, output and the cache hit rate, or the API estimate, a stacked bar per hour or day by provider, and a breakdown by model, agent, project and machine. Core sums each finished run's receipt, which carries Pi's per-message usage and the catalog's `cost_usd`. A run that fails or stops keeps no receipt, so its tokens are not counted. A machine that does not answer is named and left out. The composer shows no usage control, and a banner over its band names a spent window, or one under a tenth left, of the chip's provider pool with its reset. A pool is spent only once every account in it is.
 
 **Every active model is in the running.** The options the classifier chooses
 between are the pool itself: each model an enabled account serves, keyed
@@ -282,10 +282,10 @@ balancer mark, and picking it balances across them with no other step. A saved c
 
 **Home.** A line under the list shows `~/Documents/muniment`, lowercase, with no
 control. A configured Home keeps its path, and a pick creates the four folders.
-Settings → Storage → `Change workspace folder…` changes Home later. When one Obsidian
+Settings → Data → Storage → `Change workspace folder…` changes Home later. When one Obsidian
 vault holds most of the memory files found, that picker offers the vault's parent and says why.
 
-**Imports.** Settings → Memory runs the memory scan on request and lists one row
+**Imports.** Settings → Data → Memory runs the memory scan on request and lists one row
 per assistant that holds files. Import copies that assistant's files under
 `memory/imports/<assistant>/` through the onboarding write plan with its secret
 rejection and size caps: 128 files, 256 KB in all and 64 KB per file. A store
@@ -370,30 +370,30 @@ onboarding spec proves the connect question, the Home picker and More providers.
     writes back to a source.
 14. **Monetization, launch and publicity are maintainer-only.**
 
-Settings loads on demand. Its sidebar groups pages under Models, Extend, which ends with Machines, Preferences, Personal, which ends with Storage, and Workspace, which holds Companies. Storage distinguishes the workspace from managed extensions.
+Settings loads on demand. Its sidebar holds a search and eight pages: Account, Models, Tools, Machines, Permissions, Data, Voice and General. Each setting lives on one page, and a link to an older page id opens the page and part that hold it. The search narrows the pages to the ones that match and lists the matching parts, and the platform's find shortcut focuses it. Search finds every heading and row title on each page and the common words for them, such as animation for Motion. General holds Appearance (theme, type, display, motion and the thinking indicator), Language, Time, Notifications and About. Settings → General → Time picks the time zone, this computer's or a chosen IANA zone from a searchable list, and the clock: this computer's, 12-hour or 24-hour. Core keeps the choice on this computer as the machine-local `time` preference. Every clock time the app shows reads through `time-format.svelte.js`, and core phrases its own times, such as sidebar schedules and run thread titles, through `time_display`. No time names a zone. A schedule keeps its own zone for firing, and its words follow the setting. Relative times stay as they are.
 ## Workspace panels
 
 The title bar menu opens Browser, Files and Terminal in a shared tab panel.
 Tabs keep a fixed width and scroll horizontally without a scrollbar. Edge fades
 stay inside the tab strip, clear of the maximize and panel-collapse controls.
 Browser labels show the host, path, query and fragment without the scheme or
-leading `www.`. Long browser labels fade on the right. Terminal and Files labels
-show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names.
+leading `www.`. Terminal and Files labels
+show readable folder names without generated task suffixes and fade on the left. Hover reveals full paths. Artifact tabs show artifact names. Open file tabs retain file names. Browser, artifact and file tab labels keep their start and end in an ellipsis, and hover shows the full label.
 Terminal and Files path headers share `OverflowText.svelte`: the full path stays on one line, starts at its end, and scrolls horizontally without a scrollbar.
 Fades mark clipped content and clear when the content fits. A new browser tab opens https://muniment.ai/docs/. Closing a browser tab releases its native view.
-Settings → Language picks one language for the app and its Browser tab. The Browser tab applies it, and the app's own text ships in English. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Language names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with the assistance decision model, with no grant or control banner, and a stopped reply stops its browse. Each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. Passwords stay with the user.
+Settings → General → Language picks one language for the app and its Browser tab. The Browser tab applies it, and the app's own text ships in English. The installer carries 15 Chromium languages. The rest download once from the release archive, which the installer pins by size and SHA-256. A change applies at the next launch. The address bar opens an address or searches with the engine Language names, Google by default, and reads bangs such as `!w` before or after the words. The chat `browser` tool opens the Browser tab when it is closed and drives it with no grant or control banner, and a stopped reply stops its browse. While a decision model assists each message, the tool drives with it: each step asks the next operation and its numbered target in one request, and acts at 0.7 confidence. The chat model writes text, confirms clicks that buy, send, delete or change an account with the user, settles doubt and checks the done state. With no decision model, or with Assist each message off, the chat model drives: each call runs the steps it sends (text, a dropdown option, a click or a scroll) on element ids the page lists, and answers the page with its numbered elements. A click whose element name reads as buying, paying, sending, deleting or changing a password waits for the user's yes. Code maps every answer to an action, never a selector, a coordinate or a script. A failed call points the chat model to `fetch_content` and `web_search`. Passwords stay with the user.
 
 **The file panel.** A read or edited file opens in the shared rail, exclusive
 with records and artifacts, with the same resize and maximize controls.
 Syntax colors follow the selected theme. The composer has a changed-files
 chip with recorded addition and deletion counts. Hover or click opens its
-file list. Unknown counts stay unnumbered. Only actions with details expand.
+file list. Unknown counts stay unnumbered. Only actions with details expand. Before each reply core records the run's folder and the thread's saved conversation, and after it records the folder again, so a turn's changes cover file tools and shell commands alike. A click on the chip opens Review changes: each turn's files from core's `run.changes` with their diff, where Revert file or Revert change puts the turn's change back through `run.revert` while the file still holds it. A turn whose record or commands changed files shows Review changes in its footer, which opens on that turn. A settled turn's receipt adds the machine that ran it, which for a synced copy is the member that owns the thread, and its permission mode, the newest turn naming the layer of a model and mode the thread still runs on, and its tool calls fold under the one tools line. Core's `tool_presentation` describes every tool call, MCP and plugin tools it has never seen included, from the tool's name, arguments, schema and opt-in hints: a category and icon, an imperative headline such as Run `npm test` in muniment-desktop, the words while it runs, labeled details without empty or default values, and a one-line result such as Exit 0 in 4.2 s. The tools line, the receipt, the stage word, gate and approval cards render it as it comes, with the raw input and output behind Show details. A user message offers Rewind to here: `thread.rewind_preview` lists the files it restores and removes, the files it cannot restore, the folders it leaves out and the commands, web requests, messages and outside edits it cannot undo, and `thread.rewind` returns the conversation, and the files when asked, to before that message and puts the message back in the composer. Core refuses while a reply runs in the thread or another run uses the folder, refuses a thread another machine runs, and reports a partial restore as partial with each failure.
 Subscription names default to the supplied sign-in email and remain editable
 through a hover pencil and inline form. Grok allowance uses its credits window.
 
-The composer highlights URLs and attached file references. Typing `@` searches
-file names under the selected Files folder or the active workspace; selecting a result attaches it. Search excludes hidden
-files, generated folders and symbolic links. The composer's context meter opens Compact now, `/compact` runs it with an optional summary focus, and Settings → Context controls automatic
+The composer highlights URLs, file references, group `@` mentions and `/` commands in place, with a globe over a link's scheme and a file icon or the agent's avatar over the `@`, which show again while the caret is in that part. ⌘-click, or Ctrl-click off macOS, opens a link. Outside a group, typing `@` lists the agents with their avatars, then the files. A message that still names a chosen agent goes with its id in `run.submit`'s `mentions`, and core sends the message to that agent. The `@` file search covers
+file names under the selected Files folder or the active workspace; selecting a result attaches it, and deleting its name detaches it. Files added from the menu or by a drop show as chips. Search excludes hidden
+files, generated folders and symbolic links. The composer's context meter opens Compact now, `/compact` runs it with an optional summary focus, and Settings → Data → Context controls automatic
 compaction and its token limits. Compaction preserves the conversation, runs in the runtime,
 and reports start, completion with token counts, cancellation or failure in the action feed.
 Web search returns sources without opening a browser unless configured to do so.
@@ -449,13 +449,13 @@ the graph, never from the source API.
 
 ## Pi version policy
 
-The desktop owns its Pi release cycle. Its agent harness is Pi. The optional Claude provider bridge uses the
-user's Claude Code connection. Other providers use their configured transports.
+The desktop owns its Pi release cycle. Its agent harness is Pi. The optional Claude provider bridge runs
+Claude Code on the thread's Anthropic account. Other providers use their configured transports.
 
 ### Production pin and candidate
 
 The **production pin** is the exact Pi version and extension versions a shipped desktop carries.
-`pins/pins.toml` in the `muniment-core` tag holds every pin: the Pi release and its rollback, each platform
+`core/pins/pins.toml` holds every pin: the Pi release and its rollback, each platform
 archive with size and SHA-256, the extension packages, and the Claude Code version.
 The **candidate** is the exact versions the nightly exercises ahead of production, and only passing nightly
 evidence on Linux, macOS and Windows qualifies it for promotion. Neither track follows npm `latest`, a
@@ -477,9 +477,9 @@ The desktop's Pi carries four items:
 
 1. **The extension packages** `pins/pins.toml` lists: `npm:pi-web-access`,
    `npm:pi-subagents`, `npm:pi-background-tasks`, and `npm:pi-claude-bridge`
-   for Anthropic through the Claude Code sign-in. They give Pi web search and
-   fetch, child agents, and `bg_run` with `bg_status`, `bg_logs` and
-   `bg_result`. They render into `settings.json` as
+   for Anthropic through Claude Code. They give Pi web search, fetch and `source_check`, child agents,
+   `bg_run` with `bg_status`, `bg_logs`, `bg_kill` and `bg_wait`, and `bg_delegate` and the `fusion_*` tools
+   with `bg_result`. They render into `settings.json` as
    `{"packages": [...], "defaultTools": [...]}`. `pi-web-access` searches
    through core's built-in keyless engine on loopback, then Exa without a key,
    in the order the search settings set.
@@ -488,11 +488,11 @@ The desktop's Pi carries four items:
    tools and decision models and returns only what the model needs. Extend's
    servers join for the turn that picks them under their own names, never an id, each through scripts or in the tool list as its details set, and sign-in and tests use Pi's commands. Every enabled skill is listed by name and description and read when a task needs it, and a picked skill is named, not pasted.
 3. **The system prompt.** The desktop passes Pi its own prompt: purpose, tools, the bash
-   timeout rule, and the launch facts: the model, earlier thread models, host and shell, and
+   timeout rule, and the launch facts. Its `Tools:` block names the built-in and package tools, which the pins compatibility suite checks, and `App tools:` names core's own: questions, agents, routines, agent messages, creations and artifacts, the `browser` with `fetch_content` and `web_search` when it cannot be used, and `plan_submit`, each with one line on when to use it, and the memory rules name the memory tools the recall settings turn on. The launch facts are the model, earlier thread models, host and shell, and
    the working directory, which is the thread's project or session folder. Each message opens with its
    send time. No harness or product name. Pi reads `bash` `timeout` in seconds with no
    default, so the prompt says pass one on every call, 60 quick, 600 for a build, longer to `bg_run`.
-4. **The version pin** follows `pins/pins.toml` in the `muniment-core` tag.
+4. **The version pin** follows `core/pins/pins.toml`.
 
 The desktop enables every built-in tool the pinned registry defines and sets
 `defaultTools` in `settings.json` to that full set. It never uses `--tools`,
@@ -502,7 +502,7 @@ the exact pin.
 ## Local models
 
 **The cloud-routing classifier is bundled.** It is separate from the optional
-local provider classifier configured in Decision models. Its taxonomy is three
+local provider classifier configured in Models → Roles. Its taxonomy is three
 classes, `route.cloud`, `route.local`, `route.proxy`. The shipped artifact is
 granite-embedding-278m-multilingual, Apache-2.0, int8 per-channel ONNX, about
 282 MB with its tokenizer. The
@@ -548,8 +548,8 @@ is open work: closing it is a gate change first and a symptom ticket second.
    line is on every reply. Enforcers: the three law steps in the `ci.yml` smoke job.
 7. The update path follows the Updates paragraph above. Enforcers:
    `.github/lib/updater-signature.test.js` and `.github/lib/update-feed.test.js`.
-8. The steering files obey the rules in `AGENTS.md`. Enforcer:
-   `scripts/check-steering.sh .` in the `ci.yml` smoke job.
+8. The steering files obey the rules in `AGENTS.md`. Enforcer: `scripts/check-steering.sh .` in the `ci.yml` smoke job.
+9. The speed, layout stability and focus ring budgets hold. Enforcers: `test/probe/speed.mjs`, `stability.mjs` and `focus.mjs` in `npm run probe:check`, and `scripts/speed-timing.mjs` nightly on one Mac, as `docs/speed-budgets.md` describes.
 
 ## Folder hierarchy standard
 
@@ -559,7 +559,7 @@ the pull request. Depth stops at 3 levels below the source root. Related files
 share a prefix stem, and a family of 15 or more is the designated split. Tests
 mirror source except where a harness needs a layout. Append-only stores,
 generated, vendored and asset trees are exempt. `docs/public-evidence/`
-and `protocol-fixtures/` are frozen machine-read paths that
+and `core/protocol-fixtures/` are frozen machine-read paths that
 move only with a consumer sweep. A directory over the ceiling is a recorded
 gap, closed gate-first with a check that holds the new shape, and related changes include their readers when a family moves.
 
@@ -569,16 +569,16 @@ Every file the app, the runtime and the agent harness keep sits under
 `~/.muniment` or the directory `MUNIMENT_STATE_DIR` names. Home is the document
 folder, a different thing, and logs keep their platform paths.
 
-Thread names use a separate model request on the first message, limited to one
-to three words. A failed request keeps a short prompt fallback. Manual names
+Thread names use a separate model request on the first message, limited to six
+words. A failed request keeps the prompt's first words, cut at a word with an ellipsis. Manual names
 win over generated names. Action feedback groups reads, searches, commands
 and edits with expandable, bounded, credential-filtered details. Saved runs
 retain those details. Cancel sign-in returns to local mode and rejects a late
-browser result. Partial replies remain visible with their interruption cause. A reply keeps running in the runtime while the user opens another thread, a new thread, an agent, an artifact or a project. Its sidebar row, or its collapsed Agents or Artifacts group, carries a quiet running mark, and the row reopens the live reply. Send in any other thread waits with no notice until that reply settles. The running thread cannot be renamed, archived or deleted. Other threads stay deletable.
+browser result. Partial replies remain visible with their interruption cause. A reply keeps running in the runtime while the user opens another thread, a new thread, an agent, an artifact or a project. Its sidebar row's ring travels in green, its description says Working once, and the row reopens the live reply. Send in any other thread waits with no notice until that reply settles. The running thread cannot be renamed, archived or deleted. Other threads stay deletable.
 Reports link possible duplicate groups to their records and a merge preview.
 Record fields, states and actor names read as words. Raw evidence stays available.
-### Extend
-Settings → Extend manages MCP servers, skills and plugins without a Muniment account. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect starts browser OAuth sign-in directly. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
+### Tools
+Settings → Tools manages MCP servers, skills, plugins and web search without a Muniment account, behind one type filter and one Add. The MCP catalog lists remote servers with provider logos, compact cards and popularity sorting. Details and Custom open app dialogs. Connect starts browser OAuth sign-in directly. A sliders button reveals filters. Custom servers attempt to cache a service favicon. Catalog entries use provider endpoints. Users can add any custom server.
 Search matches names, descriptions, publishers and categories. Category, installed and setup-required filters combine before pagination. Provider account requirements and unsupported setup methods remain visible.
 
 Skills and plugins use managed storage under `~/.muniment/extensions/packages`, with Open folder controls. They install from GitHub repositories, local folders or ZIP/TAR archives. A preview
@@ -592,7 +592,7 @@ The composer tools menu has MCPs, Plugins and Skills branches. File attachments 
 MCP switches and inline slash commands apply to one turn and reset after submission. Unsent text, files, and extension choices stay with each task in the open app session. Creation plans remain temporary until Send and offer Cancel creation.
 All composer panels share the same anchor. Explicit selections take priority. Disabled
 extensions stay outside the runtime MCP snapshot and skill context.
-Assistance on the Decisions tab picks from installed, enabled extensions with its
+Assist each message in Settings → Models → Roles picks from installed, enabled extensions with its
 own decision model or the model routing one. While it is on, the composer shows
 `<name> assists`, on for each message, and it is hidden while assistance is off.
 A timeout or low confidence adds no capability. Credentials

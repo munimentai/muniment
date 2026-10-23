@@ -5,28 +5,34 @@
 
 mod commands;
 mod connection;
+mod fleet_link;
 mod local_access;
 mod registry;
 mod requested_update;
 mod sharing;
 mod ssh;
+mod update_state;
 mod version;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager};
 
 use crate::attach_service::AttachCompanionState;
 pub(crate) use commands::*;
-pub(crate) use sharing::*;
 pub(crate) use connection::{Connector, RemoteSupervisor};
 use connection::{Observation, RemoteControl, RuntimeStatus};
 pub(crate) use local_access::*;
 use registry::{PairedRuntime, Registry, LOCAL_RUNTIME_ID};
-pub(crate) use requested_update::update_requested;
-use version::{target_version, update_offered, APP_VERSION};
+pub(crate) use requested_update::{check_saved_request, update_requested};
+pub(crate) use sharing::*;
+pub(crate) use update_state::UpdateStatus;
+use update_state::{plan_update_all, self_follow_version, should_request, Candidate, SkipReason};
+pub(crate) use version::is_older as is_older_version;
+use version::{is_older, may_update, target_version, APP_VERSION};
 
 /// What a runtime answered last, kept for the runtime list.
 #[derive(Clone, Debug)]
@@ -35,9 +41,14 @@ struct Observed {
     version: Option<String>,
     install_kind: Option<String>,
     form_factor: Option<String>,
-    /// The runtime turned down the update the app asked for, so its row
-    /// stops showing one on the way.
-    update_refused: bool,
+    /// Who installs a requested version there: `launcher`, `desktop` or
+    /// `manual`. An older runtime does not say.
+    update_capability: Option<String>,
+    /// The runtime's update state as it last reported it.
+    update_status: Option<UpdateStatus>,
+    /// The version this app asked the runtime for and the runtime has not
+    /// acted on yet.
+    requested: Option<String>,
 }
 
 impl Default for Observed {
@@ -47,7 +58,9 @@ impl Default for Observed {
             version: None,
             install_kind: None,
             form_factor: None,
-            update_refused: false,
+            update_capability: None,
+            update_status: None,
+            requested: None,
         }
     }
 }
@@ -58,10 +71,12 @@ pub(crate) struct Runtimes {
     observed: Mutex<HashMap<String, Observed>>,
     /// One pairing runs at a time.
     pairing: Mutex<()>,
-    /// The runtimes asked to update to this app's version since it started.
-    /// The app asks each one once, on the first welcome that names an older
-    /// version.
-    auto_updates: Mutex<HashSet<String>>,
+    /// The last version the app asked each runtime for, and when. The app
+    /// asks again only after the backoff, so reconnects do not repeat it.
+    auto_updates: Mutex<HashMap<String, (String, Instant)>>,
+    /// The last version this app followed a newer paired desktop to, and
+    /// when.
+    followed: Mutex<Option<(String, Instant)>>,
     sharing: sharing::Sharing,
 }
 
@@ -71,7 +86,8 @@ impl Runtimes {
             registry,
             observed: Mutex::new(HashMap::new()),
             pairing: Mutex::new(()),
-            auto_updates: Mutex::new(HashSet::new()),
+            auto_updates: Mutex::new(HashMap::new()),
+            followed: Mutex::new(None),
             sharing: sharing::Sharing::default(),
         }
     }
@@ -91,10 +107,10 @@ impl Runtimes {
             .unwrap_or_default()
     }
 
-    /// Whether `id` should be asked to update now: it is paired, it runs an
-    /// older version than its kind's target, this device may ask, and the app
-    /// has not asked it yet. A yes is recorded, so each runtime is asked once.
-    fn claim_auto_update(&self, id: &str) -> bool {
+    /// Whether `id` should be asked to update now: it is paired, this device
+    /// may ask, and [`should_request`] agrees. A yes is recorded for the
+    /// backoff.
+    fn claim_auto_update(&self, id: &str, now: Instant) -> bool {
         if id == LOCAL_RUNTIME_ID {
             return false;
         }
@@ -108,31 +124,101 @@ impl Runtimes {
         let entry = registry.entry(id);
         let version = observed
             .version
+            .clone()
             .or_else(|| entry.as_ref().and_then(|entry| entry.version.clone()));
         let kind = observed
             .install_kind
+            .clone()
             .or_else(|| entry.and_then(|entry| entry.install_kind));
-        if !update_offered(
-            version.as_deref(),
-            &record.scopes,
-            target_version(kind.as_deref()),
-        ) {
+        let Some(target) = target_version(kind.as_deref()) else {
+            return false;
+        };
+        let behind = version
+            .as_deref()
+            .and_then(|version| is_older(version, target))
+            == Some(true);
+        let mut requests = self
+            .auto_updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !may_update(&record.scopes)
+            || !should_request(
+                behind,
+                observed.update_capability.as_deref(),
+                observed.update_status.as_ref(),
+                target,
+                requests.get(id),
+                now,
+            )
+        {
             return false;
         }
-        self.auto_updates
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_owned())
+        requests.insert(id.to_owned(), (target.to_owned(), now));
+        true
     }
 
-    /// Records that `id` turned down the update the app asked for.
-    fn refuse_update(&self, id: &str) {
-        self.observed
+    /// Records that the app asked `id` for `version`, until the runtime acts.
+    fn mark_requested(&self, id: &str, version: &str) {
+        let mut observed = self
+            .observed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(id.to_owned())
-            .or_default()
-            .update_refused = true;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = observed.entry(id.to_owned()).or_default();
+        if !entry
+            .update_status
+            .as_ref()
+            .is_some_and(|status| status.acted_on(version))
+        {
+            entry.requested = Some(version.to_owned());
+        }
+    }
+
+    /// The version this app should follow a paired desktop to now, once per
+    /// version within the backoff.
+    fn claim_self_follow(
+        &self,
+        kind: Option<&str>,
+        version: Option<&str>,
+        now: Instant,
+    ) -> Option<String> {
+        let version = self_follow_version(kind, version, APP_VERSION)?;
+        let mut followed = self
+            .followed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((last, at)) = followed.as_ref() {
+            let newer = is_older(last, &version) == Some(true);
+            if !newer && now.saturating_duration_since(*at) < update_state::REQUEST_BACKOFF {
+                return None;
+            }
+        }
+        *followed = Some((version.clone(), now));
+        Some(version)
+    }
+
+    /// The newest app version a paired desktop runs, when it is newer than
+    /// this app's.
+    fn newest_desktop_peer(&self) -> Option<String> {
+        let observed = self
+            .observed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observed
+            .values()
+            .filter_map(|observed| {
+                self_follow_version(
+                    observed.install_kind.as_deref(),
+                    observed.version.as_deref(),
+                    APP_VERSION,
+                )
+            })
+            .reduce(|newest, version| {
+                if is_older(&newest, &version) == Some(true) {
+                    version
+                } else {
+                    newest
+                }
+            })
     }
 
     /// Records an observation and answers whether the list changed.
@@ -148,28 +234,65 @@ impl Runtimes {
                 entry.status = status;
                 changed
             }
+            Observation::Update(info) => {
+                let changed = entry.update_capability != info.capability
+                    || entry.update_status != info.status;
+                entry.update_capability = info.capability;
+                entry.update_status = info.status;
+                entry.settle_request();
+                changed
+            }
+            Observation::UpdateStatus(status) => {
+                let changed = entry.update_status.as_ref() != Some(&status);
+                entry.update_status = Some(status);
+                entry.settle_request();
+                changed
+            }
             Observation::Welcome {
                 version,
                 install_kind,
                 form_factor,
+                runtime_name,
             } => {
                 let changed = entry.version != version
                     || entry.install_kind != install_kind
                     || entry.form_factor != form_factor;
-                if entry.version != version {
-                    entry.update_refused = false;
-                }
                 entry.version = version.clone();
+                entry.settle_request();
                 entry.install_kind = install_kind.clone();
                 entry.form_factor = form_factor.clone();
                 drop(observed);
-                if changed {
-                    if let Some(registry) = &self.registry {
-                        let _ = registry.observe(id, version, install_kind, form_factor);
-                    }
-                }
-                changed
+                // The runtime's own name can change while the rest stays, so
+                // the registry hears each welcome that names one.
+                let renamed = (changed || runtime_name.is_some())
+                    && self.registry.as_ref().is_some_and(|registry| {
+                        registry
+                            .observe(id, version, install_kind, form_factor, runtime_name)
+                            .unwrap_or(false)
+                    });
+                changed || renamed
             }
+        }
+    }
+}
+
+impl Observed {
+    /// Forgets the app's request once the runtime acted on it or runs that
+    /// version.
+    fn settle_request(&mut self) {
+        let Some(requested) = self.requested.as_deref() else {
+            return;
+        };
+        let reached = self
+            .version
+            .as_deref()
+            .is_some_and(|version| is_older(version, requested) == Some(false));
+        let acted = self
+            .update_status
+            .as_ref()
+            .is_some_and(|status| status.acted_on(requested));
+        if reached || acted {
+            self.requested = None;
         }
     }
 }
@@ -192,14 +315,25 @@ pub(crate) struct RuntimeView {
     scopes: Vec<String>,
     /// The device holds `runtime.admin` there.
     admin: bool,
+    /// The runtime runs an older version than the one this app brings it to.
+    behind: bool,
+    /// This device holds the update or the admin scope there.
+    may_update: bool,
+    /// The runtime is behind, reachable for a request, and installs releases
+    /// itself.
     update_offered: bool,
-    /// The version an offered update brings the runtime to.
+    /// The version the runtime is behind.
     #[serde(skip_serializing_if = "Option::is_none")]
-    update_target: Option<&'static str>,
+    update_target: Option<String>,
+    /// Who installs a requested version there, when the runtime says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_capability: Option<String>,
+    /// The runtime's update state, when the runtime reports one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_status: Option<UpdateStatus>,
+    /// This app asked for an update the runtime has not acted on yet.
+    update_requested: bool,
     ssh_host: Option<String>,
-    /// How the last share of this computer's model connections went there.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sharing: Option<sharing::ShareState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -209,11 +343,9 @@ pub(crate) struct RuntimeList {
     device_name: String,
     selected: String,
     runtimes: Vec<RuntimeView>,
-    /// Whether this computer shares its model connections with its machines.
-    share_models: bool,
-    /// Whether the shared connections live in the account's model vault.
+    /// Whether the account's model vault holds this computer's connections.
     share_via_cloud: bool,
-    /// Why the last share could not reach the model vault.
+    /// Why the last upload could not reach the model vault.
     #[serde(skip_serializing_if = "Option::is_none")]
     share_error: Option<String>,
     /// One line about the command that answered this list, such as a removed
@@ -222,12 +354,20 @@ pub(crate) struct RuntimeList {
     notice: Option<String>,
 }
 
-fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
+fn local_view(
+    attach: &AttachCompanionState,
+    active: bool,
+    newer_peer: Option<String>,
+) -> RuntimeView {
     // This computer's runtime ships inside the app, so the app's version
     // names it, as it does for a paired desktop.
     let version = attach
         .local_runtime_version()
         .map(|_| APP_VERSION.to_owned());
+    let update_status = crate::app_update::local_status()
+        .as_ref()
+        .and_then(|status| serde_json::to_value(status).ok())
+        .and_then(|body| UpdateStatus::from_body(&body));
     RuntimeView {
         id: LOCAL_RUNTIME_ID.into(),
         name: "This computer".into(),
@@ -243,10 +383,14 @@ fn local_view(attach: &AttachCompanionState, active: bool) -> RuntimeView {
         local: true,
         scopes: Vec::new(),
         admin: true,
+        behind: newer_peer.is_some(),
+        may_update: true,
         update_offered: false,
-        update_target: None,
+        update_target: newer_peer,
+        update_capability: Some("desktop".into()),
+        update_status,
+        update_requested: false,
         ssh_host: None,
-        sharing: None,
     }
 }
 
@@ -258,11 +402,21 @@ fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> Runt
     let admin = runtime
         .scopes
         .contains(muniment_core::attach::SCOPE_RUNTIME_ADMIN);
-    let offered =
-        !observed.update_refused && update_offered(version.as_deref(), &runtime.scopes, target);
+    let behind = version
+        .as_deref()
+        .zip(target)
+        .and_then(|(version, target)| is_older(version, target))
+        == Some(true);
+    let may = may_update(&runtime.scopes);
+    let manual = observed.update_capability.as_deref() == Some("manual");
     RuntimeView {
-        update_offered: offered,
-        update_target: target.filter(|_| offered),
+        behind,
+        may_update: may,
+        update_offered: behind && may && !manual,
+        update_target: target.filter(|_| behind).map(str::to_owned),
+        update_capability: observed.update_capability,
+        update_status: observed.update_status,
+        update_requested: observed.requested.is_some(),
         id: runtime.id,
         name: runtime.entry.name,
         kind,
@@ -274,7 +428,6 @@ fn paired_view(runtime: PairedRuntime, observed: Observed, active: bool) -> Runt
         scopes: runtime.scopes.into_iter().collect(),
         admin,
         ssh_host: runtime.entry.ssh.map(|ssh| ssh.host),
-        sharing: None,
     }
 }
 
@@ -283,22 +436,18 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
     let attach = app.state::<AttachCompanionState>();
     let runtimes = app.state::<Runtimes>();
     let active = attach.remote_runtime_id();
-    let mut views = vec![local_view(&attach, active.is_none())];
+    let mut views = vec![local_view(
+        &attach,
+        active.is_none(),
+        runtimes.newest_desktop_peer(),
+    )];
     if let Some(registry) = &runtimes.registry {
         views.extend(registry.list().into_iter().map(|runtime| {
             let observed = runtimes.observed(&runtime.id);
             let selected = active.as_deref() == Some(runtime.id.as_str());
-            let sharing = runtimes.sharing.state(&runtime.id);
-            RuntimeView {
-                sharing,
-                ..paired_view(runtime, observed, selected)
-            }
+            paired_view(runtime, observed, selected)
         }));
     }
-    let share_models = runtimes
-        .registry
-        .as_ref()
-        .is_some_and(Registry::share_models);
     let share_via_cloud = runtimes
         .registry
         .as_ref()
@@ -308,7 +457,6 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
         device_name: device_name(),
         selected: active.unwrap_or_else(|| LOCAL_RUNTIME_ID.into()),
         runtimes: views,
-        share_models,
         share_via_cloud,
         share_error: runtimes.sharing.error(),
         notice: None,
@@ -316,30 +464,93 @@ pub(crate) fn list<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> RuntimeList 
 }
 
 pub(crate) fn emit_changed<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    // The app updater reports before setup manages the runtimes.
+    if app.try_state::<Runtimes>().is_none() || app.try_state::<AttachCompanionState>().is_none() {
+        return;
+    }
     let _ = app.emit("runtimes-changed", list(app));
+}
+
+/// Handles a `runtime.update_status` event of this computer's runtime. The
+/// local row reads the saved status, so the list only needs to change.
+pub(crate) fn local_update_status<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    _status: serde_json::Value,
+) {
+    emit_changed(app);
+}
+
+/// The machines Update all asks, and the ones it skips with the reason.
+pub(crate) fn update_all_plan<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> (Vec<RuntimeView>, Vec<(RuntimeView, SkipReason)>) {
+    let views: Vec<RuntimeView> = list(app)
+        .runtimes
+        .into_iter()
+        .filter(|runtime| !runtime.local)
+        .collect();
+    let candidates: Vec<Candidate> = views
+        .iter()
+        .map(|view| Candidate {
+            id: &view.id,
+            online: view.status == RuntimeStatus::Online,
+            behind: view.behind,
+            may_update: view.may_update,
+            capability: view.update_capability.as_deref(),
+        })
+        .collect();
+    let (asked, skipped) = plan_update_all(&candidates);
+    let find = |id: &str| views.iter().find(|view| view.id == id).cloned();
+    (
+        asked.into_iter().filter_map(find).collect(),
+        skipped
+            .into_iter()
+            .filter_map(|(id, reason)| find(id).map(|view| (view, reason)))
+            .collect(),
+    )
 }
 
 fn observer<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> connection::Observer {
     let app = app.clone();
     Arc::new(move |id: &str, observation: Observation| {
-        let welcome = matches!(observation, Observation::Welcome { .. });
+        let welcome = match &observation {
+            Observation::Welcome {
+                version,
+                install_kind,
+                ..
+            } => Some((version.clone(), install_kind.clone())),
+            _ => None,
+        };
         let runtimes = app.state::<Runtimes>();
         if runtimes.record(id, observation) {
             emit_changed(&app);
         }
-        // A machine that connects gets this computer's connections at once.
-        if welcome && runtimes.registry.as_ref().is_some_and(Registry::share_models) {
+        let Some((version, kind)) = welcome else {
+            return;
+        };
+        // A machine that connects and still holds a bundle this computer sent
+        // over the pairing link drops it at once.
+        if runtimes
+            .registry
+            .as_ref()
+            .is_some_and(|registry| registry.shared_with().contains(id))
+        {
             runtimes.sharing.wake();
         }
-        // Updates are automatic: a runtime that answers with an older version
-        // is asked once to install its kind's target version.
-        if welcome && runtimes.claim_auto_update(id) {
+        let now = Instant::now();
+        // A paired desktop that runs a newer app moves this app to it.
+        if let Some(version) = runtimes.claim_self_follow(kind.as_deref(), version.as_deref(), now)
+        {
+            requested_update::follow(&app, version);
+        }
+        // Updates are automatic: each welcome of an older runtime asks it to
+        // install its kind's target version, within the backoff.
+        if runtimes.claim_auto_update(id, now) {
             let app = app.clone();
             let id = id.to_owned();
             std::thread::spawn(move || {
-                let result = update_one(&app, &id);
+                let result = update_one(&app, &id, false);
                 if !result.ok {
-                    app.state::<Runtimes>().refuse_update(&id);
                     eprintln!(
                         "muniment-desktop: automatic runtime update not requested runtime={id} reason={}",
                         result.message
@@ -366,7 +577,8 @@ fn connector<R: tauri::Runtime>(
 }
 
 /// Starts connections to the paired runtime `id` unless it has them. Its
-/// chat events reach the window while it is the active runtime.
+/// chat events reach the window while it is the active runtime, and its
+/// agent runs, swarm changes and approvals always do.
 fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let attach = app.state::<AttachCompanionState>();
     if attach.has_remote(id) {
@@ -379,21 +591,32 @@ fn connect<R: tauri::Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let event_app = app.clone();
     let event_runtime = id.to_owned();
     let status_app = app.clone();
-    let supervisor = RemoteSupervisor::start(
-        connector(app, registry, id),
-        move |event| {
-            let active = event_app
-                .state::<AttachCompanionState>()
-                .remote_runtime_id();
-            if active.as_deref() == Some(event_runtime.as_str()) {
-                crate::attach_service::deliver_subscription_event(&event_app, event);
-            }
-        },
-        move |_| emit_changed(&status_app),
-    );
-    if let Some(previous) = attach.insert_remote(supervisor) {
-        previous.stop();
-    }
+    attach.insert_remote_once(id, || {
+        RemoteSupervisor::start(
+            connector(app, registry, id),
+            move |event| {
+                let Some(event) =
+                    crate::attach_service::deliver_agent_event(&event_app, &event_runtime, event)
+                        .and_then(|event| {
+                            crate::account_login::route_step(
+                                &event_app,
+                                Some(&event_runtime),
+                                event,
+                            )
+                        })
+                else {
+                    return;
+                };
+                let active = event_app
+                    .state::<AttachCompanionState>()
+                    .remote_runtime_id();
+                if active.as_deref() == Some(event_runtime.as_str()) {
+                    crate::attach_service::deliver_subscription_event(&event_app, event);
+                }
+            },
+            move |_| emit_changed(&status_app),
+        )
+    });
 }
 
 /// Connects every paired runtime, so the thread list holds each one's
@@ -477,10 +700,10 @@ pub(crate) fn name_unreachable<R: tauri::Runtime>(
 pub(crate) fn unreachable_message(name: &str, status: RuntimeStatus) -> String {
     match status {
         RuntimeStatus::CertificateChanged => {
-            format!("{name} answered with a new certificate. Pair it again in Settings, Runtimes.")
+            format!("{name} answered with a new certificate. Add it again in Settings, Machines.")
         }
         RuntimeStatus::Revoked => {
-            format!("{name} revoked this computer. Pair it again in Settings, Runtimes.")
+            format!("{name} revoked this computer. Add it again in Settings, Machines.")
         }
         RuntimeStatus::VersionMismatch => {
             format!("{name} runs an incompatible version. Update the app or the runtime.")
@@ -508,6 +731,7 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if selected.is_some() {
         activate(app, selected.as_deref());
     }
+    crate::app_update::settle_status_after_start(APP_VERSION);
     requested_update::check_saved_request(app);
 }
 
@@ -540,6 +764,7 @@ mod tests {
             id: "018f0000-0000-7000-8000-000000000042".into(),
             entry: RuntimeEntry {
                 name: "Build box".into(),
+                user_named: None,
                 ssh: None,
                 version: version.map(str::to_owned),
                 install_kind: Some("server".into()),
@@ -555,8 +780,8 @@ mod tests {
         let view = paired_view(older, Observed::default(), false);
         assert!(view.admin);
         assert!(view.update_offered);
-        // A server updates to the core release the app bundles.
-        assert_eq!(view.update_target, Some(version::CORE_VERSION));
+        // A server updates to the app's version.
+        assert_eq!(view.update_target.as_deref(), Some(version::APP_VERSION));
         assert_eq!(view.kind.as_deref(), Some("server"));
         assert_eq!(view.status, RuntimeStatus::Unknown);
 
@@ -564,28 +789,34 @@ mod tests {
         let view = paired_view(reader, Observed::default(), true);
         assert!(!view.admin);
         assert!(!view.update_offered);
-        assert_eq!(view.update_target, None);
+        assert!(view.behind);
+        assert!(!view.may_update);
         assert!(view.active);
 
-        // A runtime that turned the update down shows no update on the way.
-        let refused = paired(&["runtime.admin"], Some("0.0.1"));
+        // A runtime that installs by hand is behind but takes no request.
+        let manual = paired(&["runtime.admin"], Some("0.0.1"));
         let observed = Observed {
-            update_refused: true,
+            update_capability: Some("manual".into()),
             ..Observed::default()
         };
-        assert!(!paired_view(refused, observed, false).update_offered);
+        let view = paired_view(manual, observed, false);
+        assert!(view.behind);
+        assert!(!view.update_offered);
+        assert_eq!(view.update_capability.as_deref(), Some("manual"));
 
         // A newer welcome replaces the version the index kept.
         let current = paired(&["runtime.admin"], Some("0.0.1"));
         let observed = Observed {
             status: RuntimeStatus::Online,
-            version: Some(version::CORE_VERSION.into()),
+            version: Some(version::APP_VERSION.into()),
             install_kind: Some("container".into()),
             form_factor: None,
-            update_refused: false,
+            ..Observed::default()
         };
         let view = paired_view(current, observed, false);
         assert!(!view.update_offered);
+        assert!(!view.behind);
+        assert_eq!(view.update_target, None);
         assert_eq!(view.kind.as_deref(), Some("container"));
         assert_eq!(view.status, RuntimeStatus::Online);
     }
@@ -600,10 +831,104 @@ mod tests {
             version: Some("1.0.0".into()),
             install_kind: Some("desktop".into()),
             form_factor: Some("laptop".into()),
+            runtime_name: None,
         };
         assert!(runtimes.record(id, welcome.clone()));
         assert!(!runtimes.record(id, welcome));
         assert_eq!(runtimes.observed(id).version.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn a_request_shows_until_the_runtime_acts_on_it() {
+        let runtimes = Runtimes::new(None);
+        let id = "018f0000-0000-7000-8000-000000000042";
+        runtimes.mark_requested(id, "1.15.0");
+        assert_eq!(runtimes.observed(id).requested.as_deref(), Some("1.15.0"));
+        // A status for another version leaves the request waiting.
+        let idle = UpdateStatus::from_body(&serde_json::json!({"state": "idle"})).unwrap();
+        assert!(runtimes.record(id, Observation::UpdateStatus(idle)));
+        assert_eq!(runtimes.observed(id).requested.as_deref(), Some("1.15.0"));
+        let queued = UpdateStatus::from_body(
+            &serde_json::json!({"state": "queued", "target_version": "1.15.0"}),
+        )
+        .unwrap();
+        assert!(runtimes.record(id, Observation::UpdateStatus(queued.clone())));
+        assert_eq!(runtimes.observed(id).requested, None);
+        // A runtime that already works toward the version is not marked.
+        runtimes.mark_requested(id, "1.15.0");
+        assert_eq!(runtimes.observed(id).requested, None);
+
+        // An older runtime without status clears the request once it runs
+        // the version.
+        let older = "018f0000-0000-7000-8000-000000000043";
+        runtimes.mark_requested(older, "1.15.0");
+        let welcome = |version: &str| Observation::Welcome {
+            version: Some(version.into()),
+            install_kind: Some("server".into()),
+            form_factor: None,
+            runtime_name: None,
+        };
+        runtimes.record(older, welcome("1.14.0"));
+        assert_eq!(
+            runtimes.observed(older).requested.as_deref(),
+            Some("1.15.0")
+        );
+        runtimes.record(older, welcome("1.15.0"));
+        assert_eq!(runtimes.observed(older).requested, None);
+    }
+
+    #[test]
+    fn this_app_follows_a_newer_desktop_peer_once_per_backoff() {
+        let runtimes = Runtimes::new(None);
+        let now = Instant::now();
+        let newer = version::tests::bump(APP_VERSION);
+        assert_eq!(
+            runtimes.claim_self_follow(Some("desktop"), Some(&newer), now),
+            Some(newer.clone())
+        );
+        assert_eq!(
+            runtimes.claim_self_follow(Some("desktop"), Some(&newer), now),
+            None
+        );
+        assert_eq!(
+            runtimes.claim_self_follow(
+                Some("desktop"),
+                Some(&newer),
+                now + update_state::REQUEST_BACKOFF
+            ),
+            Some(newer.clone())
+        );
+        // A newer container core never moves the app.
+        let fresh = Runtimes::new(None);
+        assert_eq!(
+            fresh.claim_self_follow(Some("container"), Some("999.0.0"), now),
+            None
+        );
+        assert_eq!(
+            fresh.claim_self_follow(Some("server"), Some("999.0.0"), now),
+            None
+        );
+
+        // The local row names the newest desktop peer as its target.
+        fresh.record(
+            "a",
+            Observation::Welcome {
+                version: Some(newer.clone()),
+                install_kind: Some("desktop".into()),
+                form_factor: None,
+                runtime_name: None,
+            },
+        );
+        fresh.record(
+            "b",
+            Observation::Welcome {
+                version: Some("999.0.0".into()),
+                install_kind: Some("container".into()),
+                form_factor: None,
+                runtime_name: None,
+            },
+        );
+        assert_eq!(fresh.newest_desktop_peer(), Some(newer));
     }
 
     #[test]

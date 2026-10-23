@@ -1,6 +1,7 @@
-import { modelLabel, modelReason } from './model-label.js'
+import { modelLabel, modelReason, receiptNames } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
+import { formatClock } from './time-format.svelte.js'
 
 export function composerAction(event, text, active) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || !text.trim()) return null
@@ -49,17 +50,26 @@ export { modelLabel } from './model-label.js'
 // rather than the head of a flat array: §1.2 permits --signal on the route
 // segment only, so a receipt without a route must never paint whatever
 // follows green.
-export function receiptSummary(receipt = {}) {
+// `names` maps provider ids to the names the user gave them.
+export function receiptSummary(receipt = {}, names = null) {
   const route = recorded(receipt?.route) ? receipt.route : null
-  const model = modelLabel(receipt?.model)
+  const model = modelLabel(receipt?.model, receiptNames(receipt, names))
   const time = recorded(receipt?.time) ? receiptTime(receipt.time) : null
   return { route, model, time }
 }
 
+// The provider whose mark leads the receipt's model: the part of the model id
+// before its first slash, or null for a bare model id.
+export function receiptProvider(receipt = {}) {
+  const model = recorded(receipt?.model) ? String(receipt.model) : ''
+  const slash = model.indexOf('/')
+  return slash > 0 ? model.slice(0, slash) : null
+}
+
 // What a screen reader hears instead of the line: engines pronounce →
 // inconsistently, so the accessible name states the relation in words.
-export function receiptLabel(receipt = {}) {
-  const { route, model, time } = receiptSummary(receipt)
+export function receiptLabel(receipt = {}, names = null) {
+  const { route, model, time } = receiptSummary(receipt, names)
   const relation = route !== null && model !== null ? `Routed via ${route} to model ${model}`
     : route !== null ? `Routed via ${route}`
     : model !== null ? `Model ${model}`
@@ -67,9 +77,9 @@ export function receiptLabel(receipt = {}) {
   return [relation, time].filter(recorded).join(', ')
 }
 
-export function receiptUsageColumns(receipt = {}) {
+export function receiptUsageColumns(receipt = {}, names = null) {
   if (!receipt?.classifiers?.length) return []
-  const columns = [{ model: modelLabel(receipt.model) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
+  const columns = [{ model: modelLabel(receipt.model, receiptNames(receipt, names)) ?? 'LLM', cost: receipt.cost ?? 'Unavailable', tokens: receipt.tokens }]
   for (const classifier of receipt.classifiers) {
     columns.push({ model: modelLabel(classifier.model) ?? 'Classifier', cost: Number.isFinite(classifier.cost) ? `$${classifier.cost.toFixed(6)} est.` : 'Unavailable', tokens: classifier.tokens })
   }
@@ -152,8 +162,9 @@ export function toolStatus(activity = {}) {
   return ['running', 'completed', 'failed'].includes(activity.status) ? activity.status : 'status unknown'
 }
 
-// The in-flight word is the plain verb of the run's last event. It names no
-// vendor, no model and no harness, and it never rotates.
+// The in-flight word is the plain verb of the run's last event: the words
+// core gives a running tool call, or for a record without them, a verb for
+// the tool. It names no vendor, no model and no harness, and it never rotates.
 const toolVerbs = new Map([
   ['read', 'Reading'], ['grep', 'Reading'], ['find', 'Reading'], ['ls', 'Reading'],
   ['write', 'Editing'], ['edit', 'Editing'],
@@ -175,7 +186,12 @@ export function toolVerb(name = '') {
 const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
 
 export function stageWord(stage = 'routing') {
-  if (typeof stage === 'string' && stage.startsWith('tool:')) return toolVerb(stage.slice(5))
+  if (typeof stage === 'string' && stage.startsWith('tool:')) {
+    const [name, progress] = stage.slice(5).split('\n')
+    return progress?.trim() || toolVerb(name)
+  }
+  if (stage === 'folder-access') return 'macOS is asking for access to this folder. Choose Allow.'
+  if (typeof stage === 'string' && stage.startsWith('folder-access:')) return `macOS is asking for access to ${stage.slice('folder-access:'.length)}. Choose Allow.`
   return stageWords[stage] ?? stageWords.routing
 }
 
@@ -184,13 +200,15 @@ export function stageWord(stage = 'routing') {
 // the runtime reports the started turn.
 export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
-  if (running) return `tool:${running.displayName ?? ''}`
+  if (running) return `tool:${running.displayName ?? ''}${running.presentation?.progress ? `\n${running.presentation.progress}` : ''}`
   if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
+  // The run waits on a macOS consent prompt for its folder.
+  if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:'))) return next.routingStage
   // A restored run has no earlier projection: its phase names the word.
   if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
   if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
   if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
-  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage)) return previous.stage
+  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage) && !previous.stage.startsWith('folder-access')) return previous.stage
   return next.turnStarted ? 'thinking' : 'routing'
 }
 
@@ -218,14 +236,47 @@ const retryGuidance = new RegExp(`(?:^|(?<=[.!?])\\s)(?:${[
   'Choose a PNG, JPEG, GIF, or WebP image before sending again',
 ].join('|')})\\.?$`, 'i')
 
+// A runtime rejection the transport passes through as a log record, such as
+// `code="invalid_request" reason="…"`. The UI shows a sentence for its code
+// and keeps the record under Details.
+const RAW_REJECTION = /\bcode="([a-z_]+)"/
+const REJECTIONS = {
+  invalid_request: 'The runtime rejected the request.',
+  unauthorized: 'The runtime refused the request. Sign in again.',
+  persistence_failed: 'The runtime could not save the request.',
+  runtime_draining: 'The runtime is restarting. Try again shortly.',
+}
+
+function failureText(run) {
+  return typeof run?.failureReason === 'string' ? run.failureReason.trim().replace(/\s+/g, ' ') : ''
+}
+
 // The retry button carries the next step, not the recorded cause.
 export function runFailureMessage(run) {
-  const reason = typeof run?.failureReason === 'string'
-    ? run.failureReason.trim().replace(/\s+/g, ' ').replace(retryGuidance, '').trim()
-    : ''
+  const recorded = failureText(run)
+  const raw = RAW_REJECTION.exec(recorded)
+  if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
+  const reason = recorded.replace(retryGuidance, '').trim()
   if (run?.text?.trim() && (!reason || /reply (could not be started|did not start)/i.test(reason))) return 'The reply stopped before it finished.'
   if (!reason) return 'Reply failed.'
   return /[.!?]$/.test(reason) ? reason : `${reason}.`
+}
+
+// What a failed reply's Details disclosure holds: the provider's own reason
+// when core reports one, and a raw runtime record the message replaced.
+export function runFailureDetails(run) {
+  const details = []
+  const detail = [run?.failureDetail, run?.failure_detail, run?.detail].find((value) => typeof value === 'string' && value.trim())
+  if (detail) details.push(detail.trim())
+  const recorded = failureText(run)
+  if (RAW_REJECTION.test(recorded)) details.push(recorded)
+  return details
+}
+
+// The provider's reason for a failure, from the field core fills when it knows one.
+function failureDetail(source) {
+  const value = source?.failureDetail ?? source?.failure_detail ?? source?.detail ?? null
+  return typeof value === 'string' && value.trim() ? value : null
 }
 
 // Streamed text never reaches the live region until the run settles.
@@ -253,12 +304,12 @@ export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
   if (event.sentAt) run = { ...run, startedAt: event.sentAt }
   const pendingPermission = event.pendingPermission ?? null
-  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
+  if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, resumeNotice: event.resumeNotice ?? run.resumeNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, failureDetail: failureDetail(event), text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
   if (event.type === 'text-delta') return { ...run, phase: 'streaming', text: run.text + event.text, pendingPermission }
   if (event.type === 'completed') return { ...run, phase: 'complete', receipt: event.receipt ?? {}, recalls: event.recalls ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'cancelled') return { ...run, phase: 'cancelled', pendingPermission }
-  if (event.type === 'failed') return { ...run, phase: 'failed', failureReason: event.failureReason ?? null, pendingPermission }
+  if (event.type === 'failed') return { ...run, phase: 'failed', failureReason: event.failureReason ?? null, failureDetail: failureDetail(event), pendingPermission }
   return run
 }
 
@@ -269,7 +320,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, failureDetail: failureDetail(entry), text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 
@@ -288,9 +339,8 @@ export function unsettledRun(messages = []) {
   return null
 }
 
+// A message's clock time, as the Time setting shows times.
 export function messageLocalTime(timestamp) {
   if (!timestamp) return ''
-  const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) return ''
-  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  return formatClock(timestamp)
 }

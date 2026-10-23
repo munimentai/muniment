@@ -48,14 +48,22 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
         fs::canonicalize(&spec_state).unwrap().display(),
         muniment_runtime_core::macos_attach_socket_path(&profile).display()
     );
-    let log = muniment_runtime::effective_user_macos_log_directory()
-        .unwrap()
-        .join("runtime-service.log");
+    // The log lives in the test directory, not the user's real log folder.
+    let logs = directory.join("logs");
+    fs::DirBuilder::new().mode(0o700).create(&logs).unwrap();
+    let log = logs.join("runtime-service.log");
     let started = Instant::now();
     let child = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
         // Model launchd with the login home and no variable from the runner.
         .env_clear()
         .env("HOME", &login_home)
+        // A debug runtime marked as a test run keeps its secrets in memory.
+        .env(muniment_core::state_root::TEST_RUN_VARIABLE, "1")
+        // The child logs where this test reads.
+        .env(
+            muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+            log.parent().unwrap(),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

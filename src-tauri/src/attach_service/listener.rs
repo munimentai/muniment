@@ -137,9 +137,58 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
             let _ = app.emit("chat-event", event);
         }
         SubscriptionEvent::ModelsLogin(step) => crate::account_login::deliver_step(app, step),
-        // Only this computer's runtime sends an update request, on its owner route.
-        SubscriptionEvent::RuntimeUpdateRequested(_) => {}
+        // Only this computer's runtime sends an update request, on its owner
+        // route. The runtimes list takes each runtime's update status.
+        SubscriptionEvent::RuntimeUpdateRequested(_)
+        | SubscriptionEvent::RuntimeUpdateStatus(_) => {}
+        // Each runtime's agent and swarm events reach the window whichever
+        // runtime is selected, through `deliver_agent_event`.
+        SubscriptionEvent::AgentRunUpdated(_)
+        | SubscriptionEvent::SwarmChanged(_)
+        | SubscriptionEvent::ApprovalPending(_)
+        | SubscriptionEvent::ApprovalResolved(_)
+        | SubscriptionEvent::AgentActivity(_)
+        | SubscriptionEvent::GroupPosted(_)
+        | SubscriptionEvent::FleetSyncChanged(_)
+        | SubscriptionEvent::FleetOpUpdated(_)
+        | SubscriptionEvent::PreferencesChanged(_) => {}
     }
+}
+
+/// Hands one runtime's agent or swarm event to the window whichever runtime
+/// is selected: `agent-run-updated` `{runtimeId, run}`, `swarm-changed`
+/// `{runtimeId, change}`, `agent-approval-pending` or
+/// `agent-approval-resolved` `{runtimeId, approval}`, `agent-activity`
+/// `{runtimeId, update}`, `group-posted` `{runtimeId, posted}`,
+/// `fleet-sync-changed` `{runtimeId, status}`, `fleet-op-updated`
+/// `{runtimeId, op}` and `preferences-changed` `{runtimeId, change}`. Any
+/// other event comes back to the caller.
+#[cfg(any(unix, target_os = "windows"))]
+pub(crate) fn deliver_agent_event<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    runtime_id: &str,
+    event: SubscriptionEvent,
+) -> Option<SubscriptionEvent> {
+    let (name, field, body) = match event {
+        SubscriptionEvent::AgentRunUpdated(run) => ("agent-run-updated", "run", run),
+        SubscriptionEvent::SwarmChanged(change) => ("swarm-changed", "change", change),
+        SubscriptionEvent::ApprovalPending(approval) => {
+            ("agent-approval-pending", "approval", approval)
+        }
+        SubscriptionEvent::ApprovalResolved(approval) => {
+            ("agent-approval-resolved", "approval", approval)
+        }
+        SubscriptionEvent::AgentActivity(update) => ("agent-activity", "update", update),
+        SubscriptionEvent::GroupPosted(posted) => ("group-posted", "posted", posted),
+        SubscriptionEvent::FleetSyncChanged(status) => ("fleet-sync-changed", "status", status),
+        SubscriptionEvent::FleetOpUpdated(op) => ("fleet-op-updated", "op", op),
+        SubscriptionEvent::PreferencesChanged(change) => {
+            ("preferences-changed", "change", change)
+        }
+        event => return Some(event),
+    };
+    let _ = app.emit(name, serde_json::json!({"runtimeId": runtime_id, field: body}));
+    None
 }
 
 /// Hands a local runtime event to the window only while this computer's
@@ -149,8 +198,14 @@ pub(crate) fn deliver_subscription_event<R: tauri::Runtime>(
 fn deliver_local_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: SubscriptionEvent) {
     if let SubscriptionEvent::RuntimeUpdateRequested(request) = event {
         crate::runtimes::update_requested(app, request);
-    } else if !app.state::<AttachCompanionState>().remote_active() {
-        deliver_subscription_event(app, event);
+    } else if let SubscriptionEvent::RuntimeUpdateStatus(status) = event {
+        crate::runtimes::local_update_status(app, status);
+    } else if let Some(event) = deliver_agent_event(app, "local", event)
+        .and_then(|event| crate::account_login::route_step(app, None, event))
+    {
+        if !app.state::<AttachCompanionState>().remote_active() {
+            deliver_subscription_event(app, event);
+        }
     }
 }
 
@@ -263,7 +318,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_after(cursor)?;
+                    client.subscribe_chat_events_with_fleet(cursor)?;
                     Ok(client)
                 })
             {
@@ -292,7 +347,7 @@ pub(super) fn serve_chat_events_at(
                 diagnostic.connect(endpoint, "chat-events", &stop.inner, io_timeout, |stream| {
                     let mut client =
                         handshake_desktop_client_stream(stream, client_version, io_timeout)?;
-                    client.subscribe_chat_events_after(cursor)?;
+                    client.subscribe_chat_events_with_fleet(cursor)?;
                     Ok(client)
                 })
             {

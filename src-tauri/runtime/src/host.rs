@@ -7,7 +7,7 @@ use muniment_core::chat_launch::{ChatGrant, FetchGrantError, FetchReceiptError};
 use muniment_core::sidecar::pi_chat::Receipt;
 use muniment_desktop_integration::auth::api_base_url;
 use muniment_desktop_integration::chat_grant;
-use muniment_runtime_core::host::{ChatGrantService, KeyringCredentialStore};
+use muniment_runtime_core::host::{platform_credentials, ChatGrantService};
 use muniment_runtime_core::RuntimeHost;
 
 use crate::account::DesktopAccount;
@@ -20,27 +20,32 @@ const READER_NAME: &str = if cfg!(windows) {
     "muniment-reader"
 };
 
-/// The desktop's cloud account and grants, the platform keychain, the
+/// The desktop's cloud account and grants, the platform keychain (a file
+/// store in a temporary directory in a test run), the
 /// installed desktop executable, the reader sidecar beside this binary, this
 /// binary's package version, which the runtime announces on attach, the
-/// desktop's provider OAuth clients and Muniment's sign-in page.
+/// desktop's provider OAuth clients, Muniment's sign-in page, and this binary
+/// as the one Pi runs to read an endpoint key from the keychain.
 pub fn desktop_host() -> RuntimeHost {
     let runtime_executable = std::env::current_exe().ok();
     RuntimeHost {
         account: Arc::new(DesktopAccount::default()),
         chat_grants: Arc::new(DesktopChatGrants),
-        credentials: Arc::new(KeyringCredentialStore),
+        credentials: platform_credentials(),
         expected_desktop_executable: crate::installed_desktop_executable(),
         reader_executable: runtime_executable.as_deref().and_then(reader_beside),
         runtime_version: env!("CARGO_PKG_VERSION"),
         provider_clients: muniment_desktop_integration::provider_clients::provider_clients(),
         sign_in_page: Arc::new(sign_in_page),
+        secret_executable: runtime_executable,
     }
 }
 
 /// Opens remote access for this runtime and starts its remote listener as
 /// the stored settings direct. The listener stays off until the owner turns
-/// pairing on, and the local desktop's welcome then names this runtime.
+/// pairing on, and the local desktop's welcome then names this runtime. It
+/// then resumes the runs the last update interrupted and watches for the
+/// app's update drain requests.
 pub fn start_remote_route(state: &Arc<muniment_runtime_core::RuntimeAttachState>) {
     use muniment_core::attach::{
         InstallKind, RemoteAccessOptions, RemoteRouteOptions, RemoteSettingsOverrides,
@@ -56,6 +61,13 @@ pub fn start_remote_route(state: &Arc<muniment_runtime_core::RuntimeAttachState>
     };
     if let Err(error) = state.start_remote_route(options) {
         eprintln!("muniment-runtime: {error}");
+        return;
+    }
+    // The desktop app installs updates. Runs an update interrupted resume
+    // now, and the app's drain requests arrive beside the update status.
+    state.resume_after_update();
+    if let Ok(profile) = crate::profile_directory() {
+        crate::update_drain::start(state, profile.join("remote"));
     }
 }
 

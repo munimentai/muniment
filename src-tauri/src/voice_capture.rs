@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use muniment_core::asr::capture::{bounded_pcm_channel, PcmConsumer, PcmProducer};
+use muniment_core::asr::level::{VoiceLevelFrame, VoiceLevelSlot};
 
 const CAPTURE_START_TIMEOUT: Duration = Duration::from_secs(10);
 const QUEUE_CAPACITY_SAMPLES: usize = 16_000 * 10;
@@ -31,6 +32,7 @@ pub struct VoiceCaptureState {
     active: Mutex<Option<ActiveCapture>>,
     runtime_failed: Arc<AtomicBool>,
     input: Mutex<Option<String>>,
+    level: Arc<VoiceLevelSlot>,
 }
 
 struct ActiveCapture {
@@ -54,6 +56,7 @@ impl VoiceCaptureState {
             active: Mutex::new(None),
             runtime_failed: Arc::new(AtomicBool::new(false)),
             input: Mutex::new(None),
+            level: Arc::new(VoiceLevelSlot::new()),
         }
     }
 
@@ -72,6 +75,8 @@ impl VoiceCaptureState {
             return Err(VoiceCaptureError::AlreadyRunning);
         }
         self.runtime_failed.store(false, Ordering::Release);
+        self.level.reset();
+        let level = self.level.clone();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let (stop_tx, stop_rx) = mpsc::sync_channel(1);
         let runtime_failed = self.runtime_failed.clone();
@@ -79,12 +84,14 @@ impl VoiceCaptureState {
         let capture_thread = thread::Builder::new()
             .name("voice-capture".into())
             .spawn(move || {
-                let result = Self::open_stream(input, runtime_failed).and_then(|(stream, consumer)| {
-                    stream
-                        .play()
-                        .map_err(|_| VoiceCaptureError::StreamBuildFailed)?;
-                    Ok((stream, consumer))
-                });
+                let result = Self::open_stream(input, runtime_failed, level).and_then(
+                    |(stream, consumer)| {
+                        stream
+                            .play()
+                            .map_err(|_| VoiceCaptureError::StreamBuildFailed)?;
+                        Ok((stream, consumer))
+                    },
+                );
                 match result {
                     Ok((stream, consumer)) => {
                         if ready_tx.send(Ok(consumer)).is_ok() {
@@ -139,6 +146,11 @@ impl VoiceCaptureState {
         ))
     }
 
+    /// The voice loudness the capture metered last.
+    pub fn level(&self) -> Option<VoiceLevelFrame> {
+        self.level.load()
+    }
+
     pub fn take_samples(&self) -> Result<CapturedPcm, VoiceCaptureError> {
         if self.runtime_failed.swap(false, Ordering::AcqRel) {
             return Err(VoiceCaptureError::RuntimeStreamFailed);
@@ -159,6 +171,7 @@ impl VoiceCaptureState {
     fn open_stream(
         input: Option<String>,
         runtime_failed: Arc<AtomicBool>,
+        level: Arc<VoiceLevelSlot>,
     ) -> Result<(cpal::Stream, PcmConsumer), VoiceCaptureError> {
         let host = cpal::default_host();
         let device = input
@@ -182,7 +195,7 @@ impl VoiceCaptureState {
             &device,
             &config,
             supported.sample_format(),
-            producer,
+            producer.with_level(level),
             runtime_failed,
         )?;
         Ok((stream, consumer))

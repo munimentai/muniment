@@ -4,10 +4,13 @@
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
   import { onMount } from 'svelte'
-  import { COLORS, STYLES, THEME_STORAGE_KEY, applyTheme, paletteId, paletteName, readStoredTheme, serializeTheme, themeId } from './theme-state.js'
+  import { COLORS, STYLES, THEME_EVENT, commitTheme, paletteId, paletteName, readStoredTheme, themeId } from './theme-state.js'
   import RunMark from './RunMark.svelte'
-  import { MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
+  import { MARK_EVENT, MARK_OPTIONS, commitMark, readStoredMark } from './thinking-mark-state.js'
   import { FRAME_OPTIONS, commitFrame, readStoredFrame } from './frame-state.js'
+  import { AVATAR_STYLE_EVENT, AVATAR_STYLE_OPTIONS, commitAvatarStyle, readStoredAvatarStyle } from './avatar-style-state.js'
+  import AgentAvatar from './AgentAvatar.svelte'
+  import { DENSITY_OPTIONS, DISPLAY_EVENT, MOTION_OPTIONS, ZOOM_OPTIONS, commitDisplay, readStoredDisplay, zoomLabel } from './display-state.js'
   import { SHIPPED_FONTS, SIZE_STEP_MAX, SIZE_STEP_MIN, TYPE_EVENT, bodySize, commitType, filterFonts, readStoredType, stepType, typeSizeShortcut, typeSizeShortcutLabel } from './type-state.js'
 
   let { tauri } = $props()
@@ -26,7 +29,13 @@
   })
 
   let theme = $state(readStoredTheme())
+  // Every agent avatar draws in this style. The preview shows three sample seeds.
+  let avatarStyle = $state(readStoredAvatarStyle())
+  const AVATAR_SAMPLES = ['scout', 'inbox', 'editor', 'triage'].map((seed) => ({ id: seed, name: seed, avatar: { seed } }))
   let frame = $state(readStoredFrame())
+  // Zoom, density and motion: the window's scale, its spacing and its animation.
+  let display = $state(readStoredDisplay())
+  const chooseDisplay = (change) => { display = commitDisplay({ ...display, ...change }) }
 
   // Type: one size step for the body register, and a family for each register
   // picked from the fonts installed on this device. The shipped pair stays the default.
@@ -37,8 +46,15 @@
   const registers = [['human', 'Conversation'], ['heading', 'Headers'], ['mono', 'Records']]
 
   onMount(() => {
-    const follow = (event) => { type = event.detail }
-    window.addEventListener(TYPE_EVENT, follow)
+    // A change that starts elsewhere, such as on another machine, shows here too.
+    const follows = [
+      [TYPE_EVENT, (event) => { type = event.detail }],
+      [THEME_EVENT, (event) => { theme = event.detail }],
+      [MARK_EVENT, (event) => { mark = event.detail }],
+      [AVATAR_STYLE_EVENT, (event) => { avatarStyle = event.detail }],
+      [DISPLAY_EVENT, (event) => { display = event.detail }],
+    ]
+    for (const [name, follow] of follows) window.addEventListener(name, follow)
     void (async () => {
       try {
         const names = await tauri?.invoke('installed_fonts')
@@ -48,7 +64,7 @@
       }
       fontsRead = true
     })()
-    return () => window.removeEventListener(TYPE_EVENT, follow)
+    return () => { for (const [name, follow] of follows) window.removeEventListener(name, follow) }
   })
 
   function step(delta) {
@@ -66,9 +82,7 @@
   }
 
   function commit(next) {
-    theme = next
-    applyTheme(document.documentElement, theme)
-    try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(theme)) } catch (_) {}
+    theme = commitTheme(next)
   }
 
   // Mode picks the light or dark version, and a palette keeps its mode.
@@ -82,16 +96,16 @@
 </script>
 
 <section class="appearance" aria-label="Appearance">
-  <PageHead intro="Choose how Muniment looks on this device." />
+  <PageHead intro="Theme and type follow you to every machine." />
   <Group heading="Theme">
-  <Row title="Mode" description="Follow the system, or keep one.">
+  <Row title="Mode">
   <div class="theme-options" role="group" aria-label="Mode">
     {#each modeOptions as option}
       <button type="button" aria-pressed={theme.mode === option[1]} onclick={() => chooseMode(option[1])}>{option[0]}</button>
     {/each}
   </div>
   </Row>
-  <Row title="Frame" description="Framed sets each panel as a card. Frameless joins the panels with hairlines.">
+  <Row title="Frame" info="Framed sets each panel as a card. Frameless joins the panels with hairlines.">
   <div class="frame-options" role="group" aria-label="Frame">
     {#each FRAME_OPTIONS as [id, label] (id)}
       <button type="button" class="frame-pick" aria-pressed={frame === id} onclick={() => { frame = commitFrame(id) }}>
@@ -103,9 +117,22 @@
   </Row>
   </Group>
 
-  <Group heading="Color scheme" description="Four colors, each in three styles. Mode picks the light or dark version.">
+  <Group heading="Agent avatars">
+  <Row title="Style">
+  <div class="theme-options" role="group" aria-label="Agent avatars">
+    {#each AVATAR_STYLE_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={avatarStyle === id} onclick={() => { avatarStyle = commitAvatarStyle(id) }}>{label}</button>
+    {/each}
+  </div>
+  </Row>
+  <div class="avatar-preview" aria-label="Agent avatar preview">
+    {#each AVATAR_SAMPLES as agent (agent.id)}<AgentAvatar {agent} size={40} />{/each}
+  </div>
+  </Group>
+
+  <Group heading="Color scheme" info="Four colors, each in three styles. Mode picks the light or dark version.">
   {#each STYLES as [style, styleName] (style)}
-    <Row title={styleName} description={STYLE_NOTES[style]}>
+    <Row title={styleName} info={STYLE_NOTES[style]}>
       <div class="palettes" role="group" aria-label={`${styleName} color schemes`}>
         {#each COLORS as [color, colorName] (color)}
           {@const palette = paletteId(color, style)}
@@ -124,8 +151,8 @@
   </Group>
 
   <Group heading="Type">
-  <Row title="Size" description="The body size every register scales from.">
-  <div class="type-size" role="group" aria-label="Size">
+  <Row title="Text size" info="Scales text in every pane, the terminal and the editor included. Controls and spacing keep their size.">
+  <div class="type-size" role="group" aria-label="Text size">
     <button type="button" aria-label="Smaller type" aria-keyshortcuts={typeSizeShortcut('smaller')} disabled={type.step <= SIZE_STEP_MIN} onclick={() => step(-1)}>Smaller <kbd>{typeSizeShortcutLabel('smaller')}</kbd></button>
     <span class="type-readout" role="status">{bodySize(type.step)} px body</span>
     <button type="button" aria-label="Larger type" aria-keyshortcuts={typeSizeShortcut('larger')} disabled={type.step >= SIZE_STEP_MAX} onclick={() => step(1)}>Larger <kbd>{typeSizeShortcutLabel('larger')}</kbd></button>
@@ -149,8 +176,32 @@
   {/each}
   </Group>
 
+  <Group heading="Display">
+  <Row title="Zoom" info="Scales the whole window, controls and spacing included. Text size scales text alone.">
+  <div class="theme-options" role="group" aria-label="Zoom">
+    {#each ZOOM_OPTIONS as zoom (zoom)}
+      <button type="button" aria-pressed={display.zoom === zoom} onclick={() => chooseDisplay({ zoom })}>{zoomLabel(zoom)}</button>
+    {/each}
+  </div>
+  </Row>
+  <Row title="Density" info="Compact tightens rows and spacing. Text keeps its size and every control keeps a 24 px target.">
+  <div class="theme-options" role="group" aria-label="Density">
+    {#each DENSITY_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={display.density === id} onclick={() => chooseDisplay({ density: id })}>{label}</button>
+    {/each}
+  </div>
+  </Row>
+  <Row title="Motion" info="System follows the reduced motion setting of this device. Reduce stills every animation. Full keeps them.">
+  <div class="theme-options" role="group" aria-label="Motion">
+    {#each MOTION_OPTIONS as [id, label] (id)}
+      <button type="button" aria-pressed={display.motion === id} onclick={() => chooseDisplay({ motion: id })}>{label}</button>
+    {/each}
+  </div>
+  </Row>
+  </Group>
+
   <Group heading="Thinking indicator">
-  <Row title="Style" description="The mark a reply shows while it works.">
+  <Row title="Style" info="The mark a reply shows while it works.">
   <div class="theme-options" role="group" aria-label="Thinking indicator">
     {#each MARK_OPTIONS as [id, label] (id)}
       <button type="button" aria-pressed={mark === id} onclick={() => { mark = commitMark(id) }}>{label}</button>
@@ -188,6 +239,7 @@
   .frame-sketch[data-sketch="frameless"] .sketch-side { background-color: var(--frame-sidebar-panel); }
   .frame-sketch[data-sketch="frameless"] .sketch-main { background: var(--surface); }
   .mark-preview { display: flex; align-items: center; min-height: 64px; }
+  .avatar-preview { display: flex; align-items: center; gap: 16px; min-height: 64px; }
   /* Each palette pick shows its light and dark versions side by side over the color's name. */
   .palettes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .palette-pick { display: grid; justify-items: start; gap: 6px; min-width: 0; padding: 6px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: inherit; font-size: var(--text-13); text-align: left; cursor: pointer; }

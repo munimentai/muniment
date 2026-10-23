@@ -1,0 +1,1302 @@
+//! The runtime's model service: provider keys, accounts and endpoints, the
+//! default and hidden models, the inventory, the Anthropic accounts Claude
+//! Code signs in to, the model router
+//! with its accounts, routes and classifier, the local server scan and
+//! provider sign-in. It writes Pi's files and the router config under their
+//! locks, and it runs the router listener. It also holds the web search
+//! settings and runs the built-in search server, and it reads and writes the
+//! memory profile, facts, recall settings and the memory changes kept for
+//! review. Clients reach it through the
+//! `models.request` attach operation and hear sign-in steps as `models.login`
+//! events.
+
+pub mod callback;
+mod claude;
+mod connections;
+pub mod endpoint_secrets;
+mod memory;
+mod pool_sign_in;
+mod providers;
+mod router;
+mod scan;
+mod search;
+mod sign_in;
+
+use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+use muniment_core::attach::{Id, ModelAction, ModelRequest, ProtocolError};
+use muniment_core::engine::PiRpcEngine;
+use muniment_core::serde_json::{self, Value};
+use muniment_core::sha2::{Digest, Sha256};
+
+use crate::host::{CredentialStore, SignInPage};
+
+/// How many mutating answers the service keeps for a retried key.
+const REPLAYS: usize = 32;
+
+/// The model service of one runtime.
+pub struct ModelService {
+    state_directory: PathBuf,
+    agent: PathBuf,
+    engine: PiRpcEngine,
+    router: router::RouterState,
+    search: search::SearchState,
+    sign_ins: sign_in::SignInState,
+    pool_sign_ins: pool_sign_in::PoolSignIns,
+    claude_sign_ins: claude::ClaudeSignIns,
+    listed: providers::ListedModels,
+    sign_in_page: Arc<SignInPage>,
+    subscribers: Mutex<Vec<Sender<Value>>>,
+    replays: Mutex<VecDeque<Replay>>,
+    endpoint_keys: Option<EndpointKeys>,
+}
+
+/// Where endpoint keys live instead of `models.json`, and the executable Pi
+/// runs to read one.
+struct EndpointKeys {
+    store: Arc<dyn CredentialStore>,
+    executable: PathBuf,
+}
+
+/// One mutating answer, by its idempotency key and its request's digest.
+struct Replay {
+    key: String,
+    digest: [u8; 32],
+    result: Value,
+}
+
+impl ModelService {
+    /// A service for the profile's agent directory and Pi install root.
+    /// `sign_in_page` renders the page a sign-in's browser lands on.
+    pub fn new(profile_directory: &Path, sign_in_page: Arc<SignInPage>) -> Self {
+        let agent = muniment_core::state_root::agent_directory(profile_directory);
+        let engine = PiRpcEngine::new(None)
+            .with_agent_directory(&agent)
+            .with_harness_root(
+                muniment_core::chat_profile::ChatProfile::new(profile_directory)
+                    .installed_pi_root(),
+            );
+        Self {
+            state_directory: profile_directory.to_path_buf(),
+            agent,
+            engine,
+            router: router::RouterState::default(),
+            search: search::SearchState::default(),
+            sign_ins: sign_in::SignInState::default(),
+            pool_sign_ins: pool_sign_in::PoolSignIns::default(),
+            claude_sign_ins: claude::ClaudeSignIns::default(),
+            listed: providers::ListedModels::default(),
+            sign_in_page,
+            subscribers: Mutex::new(Vec::new()),
+            replays: Mutex::new(VecDeque::new()),
+            endpoint_keys: None,
+        }
+    }
+
+    /// Keeps endpoint keys in `store`, which `executable` answers Pi from,
+    /// and moves the keys `models.json` holds there now.
+    pub fn with_endpoint_keys(
+        mut self,
+        store: Arc<dyn CredentialStore>,
+        executable: PathBuf,
+    ) -> Self {
+        self.endpoint_keys = Some(EndpointKeys { store, executable });
+        self.seal_endpoint_keys();
+        self
+    }
+
+    /// Moves each plain endpoint key in `models.json` to the credential store.
+    fn seal_endpoint_keys(&self) {
+        let Some(keys) = &self.endpoint_keys else {
+            return;
+        };
+        if let Err(error) =
+            endpoint_secrets::seal(&self.agent, keys.store.as_ref(), &keys.executable)
+        {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: endpoint_keys outcome=failed error={error}"
+            );
+        }
+    }
+
+    /// Starts the router listener when its record says on, and writes its
+    /// entry in Pi's `models.json`.
+    pub fn restore_router(&self) {
+        router::restore(&self.agent, &self.router);
+    }
+
+    /// The agent directory: Pi's `auth.json`, its `models.json` and the
+    /// router record.
+    pub fn agent_directory(&self) -> &Path {
+        &self.agent
+    }
+
+    /// Starts or stops the router listener to match its record, as after a
+    /// paired device changes the connections it shares.
+    pub fn apply_router(&self) {
+        if let Ok(config) = router::load(&self.agent) {
+            let _ = router::apply(&self.agent, &self.router, &config);
+        }
+    }
+
+    /// Starts the search server with the recorded engines and writes
+    /// pi-web-access's `web-search.json`.
+    pub fn restore_search(&self) {
+        search::restore(&self.state_directory, &self.agent, &self.search);
+    }
+
+    /// Stops the router listener, the search server and any sign-in in flight.
+    pub fn stop(&self) {
+        self.router.stop();
+        self.search.stop(&self.agent);
+        self.sign_ins.stop();
+        self.pool_sign_ins.stop();
+        self.claude_sign_ins.stop();
+    }
+
+    /// Subscribes to the sign-in steps, each a `models.login` event body.
+    pub fn subscribe(&self) -> Receiver<Value> {
+        let (sender, receiver) = mpsc::channel();
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        receiver
+    }
+
+    /// Sends one sign-in step to every subscriber that still listens.
+    fn emit(&self, payload: Value) {
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|subscriber| subscriber.send(payload.clone()).is_ok());
+    }
+
+    fn sign_in_page(&self, provider: Option<&str>) -> String {
+        (self.sign_in_page)(provider)
+    }
+
+    /// Runs one action and answers its result. A refusal carries the reason a
+    /// client shows. A repeated idempotency key answers the first result, and
+    /// the same key on another request is a conflict.
+    pub fn request(
+        self: &Arc<Self>,
+        request: ModelRequest,
+        idempotency_key: Option<&Id>,
+    ) -> Result<Value, ProtocolError> {
+        let key = idempotency_key.map(|key| key.as_str().to_owned());
+        let digest = key.as_ref().map(|_| digest(&request));
+        if let (Some(key), Some(digest)) = (&key, &digest) {
+            let replays = self
+                .replays
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(replay) = replays.iter().find(|replay| &replay.key == key) {
+                if &replay.digest != digest {
+                    return Err(ProtocolError::idempotency_conflict());
+                }
+                return Ok(replay.result.clone());
+            }
+        }
+        // A cached inventory only reads, so it never waits on the model file
+        // lock a full read holds.
+        let cached = request.action == ModelAction::ProviderInventory
+            && request.data.get("cached") == Some(&Value::Bool(true));
+        let result = self
+            .run(request.action, request.data)?
+            .map_err(ProtocolError::invalid_request_with_reason)?;
+        // A saved endpoint, a scan or a shared connection may have written a key.
+        if !cached {
+            self.seal_endpoint_keys();
+        }
+        if let (Some(key), Some(digest)) = (key, digest) {
+            let mut replays = self
+                .replays
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if replays.len() == REPLAYS {
+                replays.pop_front();
+            }
+            replays.push_back(Replay {
+                key,
+                digest,
+                result: result.clone(),
+            });
+        }
+        Ok(result)
+    }
+
+    /// Runs one action. The outer error is malformed data, and the inner one
+    /// is the action's refusal.
+    fn run(
+        self: &Arc<Self>,
+        action: ModelAction,
+        data: Value,
+    ) -> Result<Result<Value, String>, ProtocolError> {
+        let agent = self.agent.as_path();
+        Ok(match action {
+            ModelAction::ProviderStatus => {
+                parse::<Empty>(data)?;
+                answer(providers::provider_status(agent))
+            }
+            ModelAction::StoreProviderKey => {
+                let data: ProviderKey = parse(data)?;
+                answer(providers::store_key(
+                    agent,
+                    &self.engine,
+                    &data.provider,
+                    &data.key,
+                    &data.env.unwrap_or_default(),
+                ))
+            }
+            ModelAction::StoreLocalProvider => {
+                let data: LocalProvider = parse(data)?;
+                let key = data.api_key.unwrap_or_default();
+                answer(providers::store_local_provider(
+                    agent,
+                    &data.base_url,
+                    key.trim(),
+                ))
+            }
+            ModelAction::ProviderInventory => {
+                let data: Inventory = parse(data)?;
+                if data.cached == Some(true) {
+                    answer(providers::cached_inventory(agent, &self.listed))
+                } else {
+                    answer(providers::inventory(
+                        agent,
+                        &self.engine,
+                        data.force.unwrap_or(false),
+                        &self.listed,
+                    ))
+                }
+            }
+            ModelAction::SetDefaultModel => {
+                let data: ProviderModel = parse(data)?;
+                answer(providers::set_default_model(
+                    agent,
+                    &data.provider,
+                    &data.model,
+                ))
+            }
+            ModelAction::SetModelHidden => {
+                let data: HiddenModel = parse(data)?;
+                answer(providers::set_model_hidden(
+                    agent,
+                    &data.provider,
+                    &data.model,
+                    data.hidden,
+                ))
+            }
+            ModelAction::SetThinkingLevel => {
+                let data: ThinkingLevel = parse(data)?;
+                answer(providers::set_thinking_level(
+                    agent,
+                    &data.provider,
+                    &data.model,
+                    data.level.as_deref(),
+                ))
+            }
+            ModelAction::DisconnectProvider => {
+                let data: Provider = parse(data)?;
+                let result = providers::disconnect_provider(agent, &data.provider);
+                if let (Ok(()), Some(keys)) = (&result, &self.endpoint_keys) {
+                    if let Err(error) =
+                        endpoint_secrets::forget(keys.store.as_ref(), &data.provider)
+                    {
+                        muniment_core::runtime_eprintln!(
+                            "muniment-runtime: endpoint_key provider={} outcome=kept error={error}",
+                            data.provider
+                        );
+                    }
+                }
+                answer(result)
+            }
+            ModelAction::StoreEndpoint => {
+                let data: Endpoint = parse(data)?;
+                answer(providers::store_endpoint(
+                    agent,
+                    &self.engine,
+                    &data.kind,
+                    &data.name,
+                    &data.base_url,
+                    &data.key,
+                    &data.models,
+                ))
+            }
+            ModelAction::RouterSettings => {
+                parse::<Empty>(data)?;
+                answer(router::settings(agent, &self.router))
+            }
+            ModelAction::RouterSetEnabled => {
+                let data: Enabled = parse(data)?;
+                answer(router::set_enabled(agent, &self.router, data.enabled))
+            }
+            ModelAction::RouterAddAccount => {
+                answer(router::add_account(agent, &self.router, parse(data)?))
+            }
+            ModelAction::RouterUpdateAccount => {
+                answer(router::update_account(agent, &self.router, parse(data)?))
+            }
+            ModelAction::RouterRemoveAccount => {
+                let data: Named = parse(data)?;
+                if claude::is_account(agent, &data.id) {
+                    answer(
+                        claude::remove(agent, &data.id)
+                            .and_then(|()| router::settings(agent, &self.router)),
+                    )
+                } else {
+                    answer(router::remove_account(agent, &self.router, &data.id))
+                }
+            }
+            ModelAction::RouterSetHidden => {
+                let data: HiddenKeys = parse(data)?;
+                answer(router::set_hidden(agent, &self.router, data.keys))
+            }
+            ModelAction::RouterSaveRoutes => {
+                answer(router::save_routes(agent, &self.router, parse(data)?))
+            }
+            ModelAction::RouterSetClassifier => {
+                answer(router::set_classifier(agent, &self.router, parse(data)?))
+            }
+            ModelAction::RouterTestClassifier => {
+                parse::<Empty>(data)?;
+                answer(router::test_classifier(agent))
+            }
+            ModelAction::RouterTestRoute => {
+                let data: Sample = parse(data)?;
+                answer(self.router.test_route(&data.sample))
+            }
+            ModelAction::RouterSubscriptionStart => {
+                let data: Provider = parse(data)?;
+                answer(sign_in::start_into_pool(self, &data.provider))
+            }
+            ModelAction::RouterRefreshQuota => {
+                let data: OptionalId = parse(data)?;
+                // Claude Code reads its own accounts' plan limits.
+                claude::refresh_all(agent, data.id.as_deref());
+                match data.id {
+                    Some(id) if claude::is_account(agent, &id) => {
+                        answer(router::settings(agent, &self.router))
+                    }
+                    id => answer(router::refresh_quotas(agent, &self.router, id)),
+                }
+            }
+            ModelAction::RouterSetAssist => {
+                let data: Assist = parse(data)?;
+                answer(connections::set_assist(
+                    agent,
+                    &self.router,
+                    data.enabled,
+                    &data.id,
+                ))
+            }
+            ModelAction::RouterConnectClassifier => {
+                answer(connections::connect(agent, &self.router, parse(data)?))
+            }
+            ModelAction::RouterUpdateClassifier => {
+                answer(connections::update(agent, &self.router, parse(data)?))
+            }
+            ModelAction::RouterSelectClassifier => {
+                let data: Named = parse(data)?;
+                answer(connections::select(agent, &self.router, &data.id))
+            }
+            ModelAction::RouterDisconnectClassifier => {
+                let data: Named = parse(data)?;
+                answer(connections::disconnect(agent, &self.router, &data.id))
+            }
+            ModelAction::ProviderScan => {
+                parse::<Empty>(data)?;
+                answer(scan::scan())
+            }
+            ModelAction::ConnectServer => {
+                answer(scan::connect_server(agent, &self.engine, parse(data)?))
+            }
+            ModelAction::LoginStart => {
+                let data: Provider = parse(data)?;
+                answer(sign_in::start(self, &data.provider))
+            }
+            ModelAction::LoginAnswer => {
+                let data: LoginAnswer = parse(data)?;
+                if self.claude_sign_ins.has_prompt(&data.id) {
+                    return Ok(answer(
+                        self.claude_sign_ins
+                            .answer(data.value.as_deref().unwrap_or_default()),
+                    ));
+                }
+                answer(sign_in::answer(
+                    &self.sign_ins,
+                    &data.id,
+                    data.value,
+                    data.confirmed,
+                ))
+            }
+            ModelAction::LoginCallback => {
+                let data: LoginCallback = parse(data)?;
+                if self.claude_sign_ins.active() {
+                    answer(self.claude_sign_ins.deliver(&data.url))
+                } else {
+                    answer(sign_in::deliver_redirect(&self.sign_ins, &data.url))
+                }
+            }
+            ModelAction::LoginCancel => {
+                parse::<Empty>(data)?;
+                sign_in::cancel(self);
+                Ok(Value::Null)
+            }
+            ModelAction::SearchSettings => {
+                parse::<Empty>(data)?;
+                answer(search::settings(&self.state_directory, &self.search))
+            }
+            ModelAction::SearchSaveOrder => {
+                let data: SearchOrder = parse(data)?;
+                answer(search::save_order(
+                    &self.state_directory,
+                    agent,
+                    &self.search,
+                    data.order,
+                ))
+            }
+            ModelAction::SearchSaveEngines => {
+                let data: SearchEngines = parse(data)?;
+                answer(search::save_engines(
+                    &self.state_directory,
+                    agent,
+                    &self.search,
+                    data.engines,
+                ))
+            }
+            ModelAction::SearchSetKey => {
+                let data: SearchKey = parse(data)?;
+                answer(search::set_key(
+                    &self.state_directory,
+                    agent,
+                    &self.search,
+                    &data.provider,
+                    muniment_core::search_settings::ProviderKey {
+                        api_key: data.api_key,
+                        base_url: data.base_url,
+                        extra: data.extra.unwrap_or_default(),
+                    },
+                ))
+            }
+            ModelAction::SearchRemoveKey => {
+                let data: Provider = parse(data)?;
+                answer(search::remove_key(
+                    &self.state_directory,
+                    agent,
+                    &self.search,
+                    &data.provider,
+                ))
+            }
+            ModelAction::ThreadSettings | ModelAction::ThreadSettingsSet => {
+                let default = muniment_core::launch_facts::read_local_default_model(agent);
+                muniment_core::thread_settings::operation(
+                    &self.state_directory,
+                    action == ModelAction::ThreadSettingsSet,
+                    data,
+                    default.as_deref(),
+                )
+            }
+            ModelAction::MemoryProfileRead => {
+                parse::<Empty>(data)?;
+                answer(muniment_core::memory_files::profile_read(
+                    &self.state_directory,
+                ))
+            }
+            ModelAction::MemoryProfileSave => {
+                let data: MemoryProfile = parse(data)?;
+                muniment_core::memory_files::profile_save(&self.state_directory, &data.content)
+                    .map(|()| Value::Null)
+            }
+            ModelAction::MemoryFacts => answer(memory::facts(&self.state_directory, parse(data)?)),
+            ModelAction::MemoryDeletedFacts => {
+                answer(memory::deleted_facts(&self.state_directory, parse(data)?))
+            }
+            ModelAction::MemoryFactSave => {
+                let data: MemoryFact = parse(data)?;
+                answer(memory::fact_save(
+                    &self.state_directory,
+                    memory::Scope { agent: data.agent },
+                    data.fact,
+                ))
+            }
+            ModelAction::MemoryFactDelete => {
+                let data: MemoryFactId = parse(data)?;
+                memory::fact_delete(
+                    &self.state_directory,
+                    memory::Scope { agent: data.agent },
+                    &data.id,
+                )
+            }
+            ModelAction::MemoryFactRestore => {
+                let data: MemoryFactId = parse(data)?;
+                memory::fact_restore(
+                    &self.state_directory,
+                    memory::Scope { agent: data.agent },
+                    &data.id,
+                )
+            }
+            ModelAction::MemoryRecallSettings => {
+                parse::<Empty>(data)?;
+                memory::recall_settings(&self.state_directory)
+            }
+            ModelAction::MemoryRecallSettingsSave => {
+                let data: MemoryRecall = parse(data)?;
+                answer(memory::recall_settings_save(
+                    &self.state_directory,
+                    data.settings,
+                ))
+            }
+            ModelAction::MemoryPending => {
+                answer(memory::pending(&self.state_directory, parse(data)?))
+            }
+            ModelAction::MemoryPendingApply => {
+                let data: MemoryFactId = parse(data)?;
+                memory::pending_apply(
+                    &self.state_directory,
+                    memory::Scope { agent: data.agent },
+                    &data.id,
+                )
+            }
+            ModelAction::MemoryPendingDismiss => {
+                let data: MemoryFactId = parse(data)?;
+                memory::pending_dismiss(
+                    &self.state_directory,
+                    memory::Scope { agent: data.agent },
+                    &data.id,
+                )
+            }
+        })
+    }
+}
+
+impl Drop for ModelService {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn parse<T: DeserializeOwned>(data: Value) -> Result<T, ProtocolError> {
+    serde_json::from_value(data).map_err(|_| ProtocolError::invalid_request())
+}
+
+fn answer<T: Serialize>(result: Result<T, String>) -> Result<Value, String> {
+    result.and_then(|value| {
+        serde_json::to_value(value).map_err(|_| providers::READ_SETTINGS_ERROR.to_string())
+    })
+}
+
+fn digest(request: &ModelRequest) -> [u8; 32] {
+    let bytes = serde_json::to_vec(request).unwrap_or_default();
+    Sha256::digest(bytes).into()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Empty {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderKey {
+    provider: String,
+    key: String,
+    #[serde(default)]
+    env: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalProvider {
+    base_url: String,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Inventory {
+    #[serde(default)]
+    force: Option<bool>,
+    /// Answers the stored rows at once, without discovery or a Pi start.
+    #[serde(default)]
+    cached: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderModel {
+    provider: String,
+    model: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HiddenModel {
+    provider: String,
+    model: String,
+    hidden: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThinkingLevel {
+    provider: String,
+    model: String,
+    #[serde(default)]
+    level: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Provider {
+    provider: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Endpoint {
+    kind: String,
+    name: String,
+    base_url: String,
+    key: String,
+    models: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Enabled {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchOrder {
+    order: Vec<muniment_core::search_settings::OrderEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchEngines {
+    engines: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchKey {
+    provider: String,
+    api_key: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    extra: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryProfile {
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryFact {
+    #[serde(default)]
+    agent: Option<String>,
+    fact: muniment_core::memory_files::Fact,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryFactId {
+    #[serde(default)]
+    agent: Option<String>,
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryRecall {
+    settings: muniment_core::memory_files::RecallSettings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Named {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OptionalId {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HiddenKeys {
+    keys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Sample {
+    sample: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Assist {
+    enabled: bool,
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginCallback {
+    url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginAnswer {
+    id: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    confirmed: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muniment_core::attach::ErrorDetails;
+
+    fn service() -> (Arc<ModelService>, PathBuf) {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-model-service-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&profile).unwrap();
+        let page: Arc<SignInPage> = Arc::new(crate::host::plain_sign_in_page);
+        (Arc::new(ModelService::new(&profile, page)), profile)
+    }
+
+    fn request(action: ModelAction, data: Value) -> ModelRequest {
+        ModelRequest { action, data }
+    }
+
+    fn reason(error: &ProtocolError) -> Option<&str> {
+        match error.details() {
+            Some(ErrorDetails::RequestReason { reason }) => Some(reason),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_saved_endpoint_key_lives_in_the_credential_store_and_leaves_with_the_endpoint() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-model-service-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_core::state_root::agent_directory(&profile);
+        std::fs::create_dir_all(&agent).unwrap();
+        // A key saved before the store held endpoint keys moves at startup.
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-old":{"baseUrl":"https://old.example/v1","apiKey":"sk-old","models":[{"id":"m"}]}}}"#,
+        )
+        .unwrap();
+        let store: Arc<dyn CredentialStore> = Arc::new(crate::host::FileCredentialStore::new(
+            profile.join("credentials"),
+        ));
+        let page: Arc<SignInPage> = Arc::new(crate::host::plain_sign_in_page);
+        let executable = PathBuf::from("/opt/muniment/muniment-runtime");
+        let service = Arc::new(
+            ModelService::new(&profile, page).with_endpoint_keys(Arc::clone(&store), executable),
+        );
+        let text = || std::fs::read_to_string(agent.join("models.json")).unwrap();
+        assert!(!text().contains("sk-old"));
+        assert_eq!(
+            store
+                .read(endpoint_secrets::SERVICE, "custom-old")
+                .as_deref(),
+            Some("sk-old")
+        );
+
+        let provider = service
+            .request(
+                request(
+                    ModelAction::StoreEndpoint,
+                    serde_json::json!({"kind": "custom", "name": "Proxy", "base_url": "https://proxy.example/v1", "key": "sk-new", "models": ["m"]}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert_eq!(provider, "custom-proxy");
+        assert!(!text().contains("sk-new"));
+        assert!(text().contains(r#"secret get custom-proxy"#));
+        assert_eq!(
+            store
+                .read(endpoint_secrets::SERVICE, "custom-proxy")
+                .as_deref(),
+            Some("sk-new")
+        );
+
+        service
+            .request(
+                request(
+                    ModelAction::DisconnectProvider,
+                    serde_json::json!({"provider": "custom-proxy"}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert_eq!(store.read(endpoint_secrets::SERVICE, "custom-proxy"), None);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn a_refusal_carries_the_reason_and_malformed_data_carries_none() {
+        let (service, profile) = service();
+        let refusal = service
+            .request(
+                request(
+                    ModelAction::SetDefaultModel,
+                    serde_json::json!({"provider": "", "model": "x"}),
+                ),
+                Some(&Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap()),
+            )
+            .unwrap_err();
+        assert_eq!(reason(&refusal), Some("Choose a provider and a model."));
+        let malformed = service
+            .request(
+                request(ModelAction::SetDefaultModel, serde_json::json!({"x": 1})),
+                Some(&Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap()),
+            )
+            .unwrap_err();
+        assert_eq!(reason(&malformed), None);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn a_repeated_key_answers_the_first_result_and_another_request_conflicts() {
+        let (service, profile) = service();
+        let key = Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+        let first = service
+            .request(
+                request(
+                    ModelAction::RouterSetHidden,
+                    serde_json::json!({"keys": ["openai/gpt-5"]}),
+                ),
+                Some(&key),
+            )
+            .unwrap();
+        assert_eq!(first["hidden"], serde_json::json!(["openai/gpt-5"]));
+        // The record changes under the key, and a retry still answers the first result.
+        service
+            .request(
+                request(
+                    ModelAction::RouterSetHidden,
+                    serde_json::json!({"keys": []}),
+                ),
+                Some(&Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap()),
+            )
+            .unwrap();
+        let replayed = service
+            .request(
+                request(
+                    ModelAction::RouterSetHidden,
+                    serde_json::json!({"keys": ["openai/gpt-5"]}),
+                ),
+                Some(&key),
+            )
+            .unwrap();
+        assert_eq!(replayed, first);
+        let conflict = service
+            .request(
+                request(
+                    ModelAction::RouterSetHidden,
+                    serde_json::json!({"keys": []}),
+                ),
+                Some(&key),
+            )
+            .unwrap_err();
+        assert_eq!(
+            conflict.code(),
+            ProtocolError::idempotency_conflict().code()
+        );
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn the_settings_never_carry_a_key_and_a_route_test_needs_the_router() {
+        let (service, profile) = service();
+        let settings = service
+            .request(
+                request(
+                    ModelAction::RouterAddAccount,
+                    serde_json::json!({"family": "openai", "label": "work", "key": "sk-secret"}),
+                ),
+                Some(&Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap()),
+            )
+            .unwrap();
+        assert!(!settings.to_string().contains("sk-secret"));
+        assert_eq!(settings["accounts"][0]["label"], "work");
+        let test = service
+            .request(
+                request(
+                    ModelAction::RouterTestRoute,
+                    serde_json::json!({"sample": "hi"}),
+                ),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(
+            reason(&test),
+            Some("Turn on account balancing before testing routing.")
+        );
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn a_cancel_reaches_every_subscriber() {
+        let (service, profile) = service();
+        let first = service.subscribe();
+        let second = service.subscribe();
+        drop(service.subscribe());
+        assert_eq!(
+            service
+                .request(
+                    request(ModelAction::LoginCancel, serde_json::json!({})),
+                    Some(&Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap()),
+                )
+                .unwrap(),
+            Value::Null
+        );
+        for receiver in [first, second] {
+            assert_eq!(
+                receiver.try_recv().unwrap(),
+                serde_json::json!({"stage": "cancelled"})
+            );
+        }
+        assert_eq!(service.subscribers.lock().unwrap().len(), 2);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn memory_actions_serve_settings_and_mark_their_facts_as_the_users() {
+        let (service, profile) = service();
+        let home = profile.join("Home");
+        muniment_core::home::confirm_home(&profile, &home).unwrap();
+        let key = || Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+        let run = |action, data: Value, keyed: bool| {
+            service.request(request(action, data), keyed.then(key).as_ref())
+        };
+        assert_eq!(
+            run(
+                ModelAction::MemoryRecallSettings,
+                serde_json::json!({}),
+                false
+            )
+            .unwrap(),
+            Value::Null
+        );
+        let settings = serde_json::json!({"learn": false, "use": true, "ask": true});
+        assert_eq!(
+            run(
+                ModelAction::MemoryRecallSettingsSave,
+                serde_json::json!({"settings": settings}),
+                true
+            )
+            .unwrap(),
+            settings
+        );
+        assert_eq!(
+            run(
+                ModelAction::MemoryRecallSettings,
+                serde_json::json!({}),
+                false
+            )
+            .unwrap(),
+            settings
+        );
+        run(
+            ModelAction::MemoryProfileSave,
+            serde_json::json!({"content": "Call me Sam."}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            run(ModelAction::MemoryProfileRead, serde_json::json!({}), false).unwrap(),
+            "Call me Sam."
+        );
+        let saved = run(
+            ModelAction::MemoryFactSave,
+            serde_json::json!({"fact": {"id": "", "title": "Tone", "content": "Use short answers.", "source": "Added in settings", "trust": "external"}}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(saved["trust"], "user");
+        assert_eq!(
+            saved["origin"],
+            serde_json::json!({"kind": "user", "surface": "settings"})
+        );
+        assert_eq!(saved["origin_label"], "Added in Settings");
+        let id = saved["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            run(ModelAction::MemoryFacts, serde_json::json!({}), false).unwrap()[0]["id"],
+            id.as_str()
+        );
+        run(
+            ModelAction::MemoryFactDelete,
+            serde_json::json!({"id": id}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            run(ModelAction::MemoryFacts, serde_json::json!({}), false).unwrap(),
+            serde_json::json!([])
+        );
+        assert_eq!(
+            run(
+                ModelAction::MemoryDeletedFacts,
+                serde_json::json!({}),
+                false
+            )
+            .unwrap()[0]["id"],
+            id.as_str()
+        );
+        run(
+            ModelAction::MemoryFactRestore,
+            serde_json::json!({"id": id}),
+            true,
+        )
+        .unwrap();
+        assert!(home.join(format!("memory/facts/{id}.md")).is_file());
+        assert!(reason(
+            &run(
+                ModelAction::MemoryFacts,
+                serde_json::json!({"agent": "missing"}),
+                false
+            )
+            .unwrap_err()
+        )
+        .is_some());
+        assert!(reason(
+            &run(
+                ModelAction::MemoryFacts,
+                serde_json::json!({"other": 1}),
+                false
+            )
+            .unwrap_err()
+        )
+        .is_none());
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn a_fact_added_in_an_agent_profile_names_that_agent() {
+        let (service, profile) = service();
+        muniment_core::home::confirm_home(&profile, &profile.join("Home")).unwrap();
+        let agent = muniment_core::agents::save(
+            &profile,
+            muniment_core::agents::Agent {
+                name: "Tauri Morning".into(),
+                instructions: "Summarize the morning.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let run = |action, data: Value| {
+            let key = Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+            service.request(request(action, data), Some(&key))
+        };
+        let saved = run(
+            ModelAction::MemoryFactSave,
+            serde_json::json!({"agent": agent.id, "fact": {"id": "", "title": "Tone", "content": "Use short answers.", "source": "Added in settings", "trust": "external", "origin": {"kind": "agent"}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            saved["origin"],
+            serde_json::json!({"kind": "user", "surface": "agent_profile", "agent_id": agent.id})
+        );
+        assert_eq!(saved["origin_label"], "Added by Tauri Morning agent");
+        let listed = run(
+            ModelAction::MemoryFacts,
+            serde_json::json!({"agent": agent.id}),
+        )
+        .unwrap();
+        assert_eq!(listed[0]["origin"], saved["origin"]);
+        assert_eq!(listed[0]["origin_label"], "Added by Tauri Morning agent");
+        let settings = run(ModelAction::MemoryFacts, serde_json::json!({})).unwrap();
+        assert_eq!(settings, serde_json::json!([]));
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn pending_memory_actions_list_apply_and_dismiss_proposed_changes() {
+        use muniment_core::memory_files::{
+            self, ChangeOp, Fact, PendingChange, ProposedFact, Trust,
+        };
+        let (service, profile) = service();
+        let home = profile.join("Home");
+        muniment_core::home::confirm_home(&profile, &home).unwrap();
+        let key = || Id::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+        let run = |action, data: Value, keyed: bool| {
+            service.request(request(action, data), keyed.then(key).as_ref())
+        };
+        let editor = memory_files::fact_save_in(
+            &profile,
+            &home,
+            Fact {
+                id: String::new(),
+                title: "Editor".into(),
+                content: "Uses Helix.".into(),
+                source: "Added in settings".into(),
+                trust: Trust::User,
+                origin: None,
+            },
+        )
+        .unwrap();
+        let change = |id: &str, op, after: Option<(&str, &str)>| PendingChange {
+            id: id.into(),
+            op,
+            fact_id: (op != ChangeOp::Add).then(|| editor.id.clone()),
+            before: (op != ChangeOp::Add).then(|| editor.clone()),
+            after: after.map(|(title, content)| ProposedFact {
+                title: title.into(),
+                content: content.into(),
+            }),
+            source: "extracted thread:t run:r".into(),
+            origin: None,
+            created: "2026-01-01T00:00:00.000Z".into(),
+        };
+        memory_files::pending_stage(
+            &profile,
+            vec![
+                change("add-1", ChangeOp::Add, Some(("Pets", "Has a dog."))),
+                change("update-1", ChangeOp::Update, Some(("Editor", "Uses Zed."))),
+                change("delete-1", ChangeOp::Delete, None),
+            ],
+        )
+        .unwrap();
+
+        let listed = run(ModelAction::MemoryPending, serde_json::json!({}), false).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 3);
+        assert_eq!(listed[0]["id"], "delete-1");
+        assert_eq!(listed[0]["after"], Value::Null);
+        assert_eq!(listed[1]["op"], "update");
+        assert_eq!(listed[1]["fact_id"], editor.id.as_str());
+        assert_eq!(listed[1]["before"]["content"], "Uses Helix.");
+        assert_eq!(
+            listed[1]["after"],
+            serde_json::json!({"title": "Editor", "content": "Uses Zed."})
+        );
+        assert_eq!(listed[2]["fact_id"], Value::Null);
+        assert_eq!(listed[2]["before"], Value::Null);
+        assert_eq!(listed[2]["source"], "extracted thread:t run:r");
+        assert_eq!(listed[2]["created"], "2026-01-01T00:00:00.000Z");
+        let fields: Vec<&String> = listed[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            fields,
+            [
+                "after",
+                "before",
+                "created",
+                "fact_id",
+                "id",
+                "op",
+                "origin",
+                "origin_label",
+                "source"
+            ]
+        );
+        assert_eq!(
+            listed[2]["origin"],
+            serde_json::json!({"kind": "chat", "thread_id": "t", "run_id": "r"})
+        );
+        assert_eq!(listed[2]["origin_label"], "Added in a chat");
+        // A retried apply answers the first result and writes nothing more.
+        let apply_key = key();
+        let added = service
+            .request(
+                request(
+                    ModelAction::MemoryPendingApply,
+                    serde_json::json!({"id": "add-1"}),
+                ),
+                Some(&apply_key),
+            )
+            .unwrap();
+        let retried = service
+            .request(
+                request(
+                    ModelAction::MemoryPendingApply,
+                    serde_json::json!({"id": "add-1"}),
+                ),
+                Some(&apply_key),
+            )
+            .unwrap();
+        assert_eq!(retried, added);
+        assert_eq!(memory_files::facts_in(&home).unwrap().len(), 2);
+        assert_eq!(added["title"], "Pets");
+        assert_eq!(added["trust"], "conversation");
+        let updated = run(
+            ModelAction::MemoryPendingApply,
+            serde_json::json!({"id": "update-1"}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(updated["id"], editor.id.as_str());
+        assert_eq!(updated["content"], "Uses Zed.");
+        // The update changed the fact the delete proposal saw.
+        let refused = run(
+            ModelAction::MemoryPendingApply,
+            serde_json::json!({"id": "delete-1"}),
+            true,
+        )
+        .unwrap_err();
+        assert!(reason(&refused).unwrap().contains("changed"));
+        assert_eq!(
+            run(ModelAction::MemoryPending, serde_json::json!({}), false).unwrap(),
+            serde_json::json!([])
+        );
+
+        memory_files::pending_stage(&profile, vec![change("delete-2", ChangeOp::Delete, None)])
+            .unwrap();
+        assert_eq!(
+            run(
+                ModelAction::MemoryPendingDismiss,
+                serde_json::json!({"id": "delete-2"}),
+                true
+            )
+            .unwrap(),
+            Value::Null
+        );
+        assert!(reason(
+            &run(
+                ModelAction::MemoryPendingDismiss,
+                serde_json::json!({"id": "delete-2"}),
+                true
+            )
+            .unwrap_err()
+        )
+        .is_some());
+        assert!(home
+            .join(format!("memory/facts/{}.md", editor.id))
+            .is_file());
+        assert!(reason(
+            &run(
+                ModelAction::MemoryPending,
+                serde_json::json!({"agent": "missing"}),
+                false
+            )
+            .unwrap_err()
+        )
+        .is_some());
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+}

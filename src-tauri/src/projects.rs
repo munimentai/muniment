@@ -1,4 +1,4 @@
-use muniment_core::projects;
+use muniment_core::{palette, projects, sidebar, time_display};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -6,24 +6,105 @@ fn profile() -> Result<std::path::PathBuf, String> {
     muniment_runtime::profile_directory().map_err(|_| "The project catalog is unavailable.".into())
 }
 
+/// Runs a project command's file work off the main thread. Projects live in
+/// Home, which macOS may hold behind a folder prompt, and a command on the
+/// main thread would stop the window until the prompt is answered.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|_| "The project catalog is unavailable.".to_string())?
+}
+
 #[tauri::command]
-pub fn project_list() -> Result<projects::Catalog, String> {
-    projects::list(&profile()?)
+pub async fn project_list() -> Result<projects::Catalog, String> {
+    blocking(|| projects::list(&profile()?)).await
 }
 #[tauri::command]
-pub fn project_create(name: String) -> Result<String, String> {
-    projects::create(&profile()?, &name)
+pub async fn project_create(name: String) -> Result<String, String> {
+    blocking(move || projects::create(&profile()?, &name)).await
 }
 #[tauri::command]
-pub fn project_rename(project_id: String, name: String) -> Result<(), String> {
-    projects::rename(&profile()?, &project_id, &name)
+pub async fn project_rename(project_id: String, name: String) -> Result<(), String> {
+    blocking(move || projects::rename(&profile()?, &project_id, &name)).await
 }
 #[tauri::command]
-pub fn project_open(app: AppHandle, project_id: String) -> Result<(), String> {
-    let folder = projects::folder(&profile()?, &project_id)?;
-    app.opener()
-        .open_path(folder.to_string_lossy(), None::<String>)
-        .map_err(|_| "The project folder could not be opened.".into())
+pub async fn project_settings(project_id: String) -> Result<projects::Settings, String> {
+    blocking(move || projects::settings(&profile()?, &project_id)).await
+}
+#[tauri::command]
+pub async fn project_settings_save(
+    project_id: String,
+    settings: projects::Settings,
+) -> Result<(), String> {
+    blocking(move || projects::save_settings(&profile()?, &project_id, &settings)).await
+}
+/// The sidebar's sections, arranged by core from what the window knows,
+/// with clock times as this machine's time preference shows them.
+#[tauri::command]
+pub fn sidebar_arrange(mut input: sidebar::Input) -> sidebar::Sidebar {
+    if let Ok(profile) = profile() {
+        input.time = time_display::load(&profile);
+    }
+    sidebar::arrange(&input)
+}
+/// The command palette's groups for a query, ranked by core.
+#[tauri::command]
+pub fn palette_rank(input: palette::Input) -> Vec<palette::Group> {
+    palette::rank(&input)
+}
+/// Moves a thread into a project, or with no project out of every project.
+#[tauri::command]
+pub async fn project_move_thread(
+    thread_id: String,
+    project_id: Option<String>,
+) -> Result<(), String> {
+    blocking(move || projects::move_thread(&profile()?, &thread_id, project_id.as_deref())).await
+}
+
+/// Starts a new thread with its project's defaults on the runtime that
+/// holds it. A thread in no project, or a project without defaults, leaves
+/// the thread on the default.
+pub(crate) async fn seed_thread(app: &AppHandle, thread: &str, project_id: Option<&str>) {
+    let Some(project) = project_id else {
+        return;
+    };
+    let Ok(settings) = projects::settings(&profile().unwrap_or_default(), project) else {
+        return;
+    };
+    let defaults = settings.defaults;
+    if defaults.model.is_none() && defaults.permission_mode.is_none() && defaults.machine.is_none()
+    {
+        return;
+    }
+    let seed = muniment_core::thread_settings::Seed {
+        project_id: project.into(),
+        model: defaults.model,
+        permission_mode: defaults.permission_mode,
+        machine: defaults.machine,
+    };
+    let body = serde_json::json!({ "thread_id": thread, "seed": seed });
+    if crate::model_service::request(
+        app,
+        muniment_core::attach::ModelAction::ThreadSettingsSet,
+        body,
+    )
+    .await
+    .is_err()
+    {
+        eprintln!("muniment-desktop: thread_seed outcome=failed");
+    }
+}
+#[tauri::command]
+pub async fn project_open(app: AppHandle, project_id: String) -> Result<(), String> {
+    blocking(move || {
+        let folder = projects::folder(&profile()?, &project_id)?;
+        app.opener()
+            .open_path(folder.to_string_lossy(), None::<String>)
+            .map_err(|_| "The project folder could not be opened.".into())
+    })
+    .await
 }
 
 pub(crate) fn prepare_thread(

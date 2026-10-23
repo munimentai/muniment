@@ -600,7 +600,7 @@
   .record-save-diff { display: grid; gap: 4px; }
   .record-save-actions { display: flex; gap: 8px; }
   .record-diff-line { margin: 0; font: var(--text-12) var(--font-mono); }
-  .record-diff-error { margin: 0; color: var(--oxide); font: var(--text-12) var(--font-mono); }
+  .record-diff-error { margin: 0; color: var(--danger); font: var(--text-12) var(--font-mono); }
   .record-commit, .record-discard { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }
   .record-commit:disabled { background: var(--faint); color: var(--muted); cursor: default; }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { appendTranscript, ariaKeyShortcut, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, shortcutFromKeyboardEvent, validHoldToTalkShortcut } from './dictation-state.js'
+import { appendTranscript, ariaKeyShortcut, dictationDraft, handsFreeActivationDelay, holdToTalkShortcut, isDictationActive, shortcutFromKeyboardEvent, validHoldToTalkShortcut } from './dictation-state.js'
 
 describe('dictation state', () => {
   it('recognizes only starting and running as active', () => {
@@ -36,5 +36,13 @@ describe('dictation state', () => {
 
   it('uses a short, explicit double-activation window', () => {
     expect(handsFreeActivationDelay).toBe(300)
+  })
+
+  it('counts the partial text at the end of the dictation draft', () => {
+    expect(dictationDraft('', '', '')).toEqual({ text: '', pending: 0 })
+    expect(dictationDraft('Note:', 'One.', '')).toEqual({ text: 'Note: One.', pending: 0 })
+    expect(dictationDraft('Note:', 'One.', 'two')).toEqual({ text: 'Note: One. two', pending: 4 })
+    expect(dictationDraft('', '', 'two')).toEqual({ text: 'two', pending: 3 })
+    expect(dictationDraft('Note: ', '', 'two')).toEqual({ text: 'Note: two', pending: 3 })
   })
 })

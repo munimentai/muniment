@@ -6,13 +6,14 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use muniment_core::active_run::RunRegistry;
 use muniment_core::attach::linux::{CompanionProvenance, RunSubmitRequest, ThreadListService};
 use muniment_core::attach::{Id, RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::chat_view::SelectedFile;
 use muniment_core::journal::thread_mutation::create_thread_now;
 use muniment_core::journal::Provenance;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
-use muniment_core::pi_execution::PiRuntime;
+use muniment_core::pi_execution::PiProcesses;
 use muniment_core::run_start::{
     prepare_desktop_run, RunStartBoundaries, RunStartError, RunStartRequest,
 };
@@ -22,6 +23,7 @@ use muniment_runtime::desktop_host;
 use muniment_runtime_core::{open_profile_storage, RuntimeAttachBoundaries, RuntimeAttachState};
 
 mod common;
+use common::CI_WAIT;
 use common::{credentials, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -72,10 +74,10 @@ fn local_mode_prepares_a_journaled_run_without_native_auth_or_a_cloud_grant() {
     let storage = open_profile_storage(&temporary_profile.profile).unwrap();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         temporary_profile.profile.clone(),
         temporary_profile.config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             temporary_profile.config.clone(),
             temporary_profile.profile.join("memory"),
@@ -181,6 +183,8 @@ fn local_mode_run(configured: bool) {
                 files: Vec::new(),
                 thread_id: None,
                 thinking_level: None,
+                permission_mode: None,
+                mentions: Vec::new(),
             },
             &Id::new("018f0000-0000-7000-8000-000000000021").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000022").unwrap(),
@@ -193,7 +197,7 @@ fn local_mode_run(configured: bool) {
             },
         )
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -280,9 +284,11 @@ fn local_mode_run(configured: bool) {
     assert_eq!(payloads[5].as_object().unwrap().len(), 2);
     assert_eq!(payloads[5]["output"].as_str(), Some(""));
     let receipt = payloads[6]["receipt"].as_object().unwrap();
-    // A local reply carries no route: the time and the tool tally, and the stub names no model.
-    assert_eq!(receipt.len(), 2);
+    // A local reply carries no route: the time, the tool tally and the run's
+    // permission mode, and the stub names no model.
+    assert_eq!(receipt.len(), 3, "{receipt:?}");
     assert!(receipt.get("route").is_none());
+    assert_eq!(receipt["permission_mode"].as_str(), Some("bypass"));
     assert_eq!(receipt["tools"][0]["name"].as_str(), Some("read"));
     let elapsed = receipt["time"].as_str().unwrap();
     assert!(elapsed.ends_with('s'));
@@ -383,6 +389,8 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
                 files: Vec::new(),
                 thread_id: None,
                 thinking_level: None,
+                permission_mode: None,
+                mentions: Vec::new(),
             },
             &Id::new("018f0000-0000-7000-8000-000000000011").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000012").unwrap(),
@@ -409,7 +417,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
 
     let boundaries = state.boundaries();
     assert!(boundaries.active_run_exists());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -423,6 +431,8 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
                 files: Vec::new(),
                 thread_id: None,
                 thinking_level: None,
+                permission_mode: None,
+                mentions: Vec::new(),
             },
             &Id::new("018f0000-0000-7000-8000-000000000013").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000014").unwrap(),
@@ -436,7 +446,7 @@ fn workspace_less_submit_records_the_resolved_grant_workspace() {
         )
         .unwrap();
     assert_ne!(first.thread_id, second.thread_id);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -503,6 +513,8 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
                 files: Vec::new(),
                 thread_id: None,
                 thinking_level: None,
+                permission_mode: None,
+                mentions: Vec::new(),
             },
             &Id::new("018f0000-0000-7000-8000-000000000015").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000016").unwrap(),
@@ -516,7 +528,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
         )
         .unwrap();
     let boundaries = state.boundaries();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -530,6 +542,8 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
                 files: Vec::new(),
                 thread_id: Some(first.thread_id.clone()),
                 thinking_level: None,
+                permission_mode: None,
+                mentions: Vec::new(),
             },
             &Id::new("018f0000-0000-7000-8000-000000000017").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000018").unwrap(),
@@ -544,7 +558,7 @@ fn attach_dispatch_submits_to_an_explicit_thread() {
         .unwrap();
     assert_eq!(accepted.thread_id, first.thread_id);
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -603,10 +617,10 @@ fn runtime_boundaries_prepare_a_desktop_run() {
     let activity = RuntimeActivityRegistry::new();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.clone(),
         config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             config,
             profile.join("memory"),
@@ -713,14 +727,14 @@ fn runtime_service_broadcasts_a_driven_prompts_chat_events() {
 
     boundaries.launch(launch);
 
-    let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+    let event = events.recv_timeout(CI_WAIT).unwrap();
     assert_eq!(event.run_id, result.run_id);
     let thread_id = boundaries.run_thread_id(&result.run_id).unwrap();
     assert_eq!(event.thread_id.as_deref(), Some(thread_id.as_str()));
-    let second_event = second_events.recv_timeout(Duration::from_secs(10)).unwrap();
+    let second_event = second_events.recv_timeout(CI_WAIT).unwrap();
     assert_eq!(second_event.run_id, result.run_id);
     assert_eq!(second_event.thread_id.as_deref(), Some(thread_id.as_str()));
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -770,6 +784,8 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
                 files: Vec::new(),
                 thread_id: None,
                 thinking_level: None,
+                permission_mode: None,
+                mentions: Vec::new(),
             },
             &Id::new("018f0000-0000-7000-8000-000000000019").unwrap(),
             &Id::new("018f0000-0000-7000-8000-000000000020").unwrap(),
@@ -783,14 +799,14 @@ fn attach_submit_reaches_a_chat_event_subscriber() {
         )
         .unwrap();
 
-    let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+    let event = events.recv_timeout(CI_WAIT).unwrap();
     assert_eq!(event.run_id, accepted.run_id);
     assert_eq!(
         event.thread_id.as_deref(),
         Some(accepted.thread_id.as_str())
     );
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }

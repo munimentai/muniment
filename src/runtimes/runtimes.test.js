@@ -1,8 +1,11 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   activeRuntime,
   errorLine,
   kindIcon,
+  machineName,
   kindLabel,
   looksLikePairingLink,
   pairedRuntimes,
@@ -12,7 +15,18 @@ import {
   statusTone,
   updatableRuntimes,
   versionLabel,
+  updateLabel,
+  blockersLine,
+  canRequestUpdate,
+  olderVersion,
+  skipLabel,
+  settingsMachine,
+  scopeNote,
+  machineLocal,
 } from './runtimes.js'
+
+// Core's `settings.scope` answer.
+const settingsScope = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1/response-settings-scope.json'), 'utf8')).body
 
 const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', active: true, local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
 const studio = { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.1.4', status: 'offline', active: false, local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
@@ -51,7 +65,7 @@ describe('runtime labels', () => {
     expect(statusLabel({ status: 'online' })).toBe('Online')
     expect(statusHint({ status: 'online' })).toBe('')
     expect(statusLabel({ status: 'certificate_changed' })).toBe('Certificate changed')
-    expect(statusHint({ status: 'certificate_changed' })).toBe('Pair it again to trust its new certificate.')
+    expect(statusHint({ status: 'certificate_changed' })).toBe('Add it again to trust its new certificate.')
     expect(statusTone({ status: 'revoked' })).toBe('critical')
     expect(statusTone({ status: 'offline' })).toBe('caution')
     expect(statusLabel({ status: 'version_mismatch' })).toBe('Version mismatch')
@@ -79,5 +93,106 @@ describe('runtime labels', () => {
     expect(errorLine('')).toBe('The runtime did not answer.')
     expect(looksLikePairingLink(' muniment://pair?v=1&id=x#secret ')).toBe(true)
     expect(looksLikePairingLink('https://example.com')).toBe(false)
+  })
+})
+
+describe('update labels', () => {
+  const machine = (fields) => ({ ...buildBox, ...fields })
+  const status = (state, fields = {}) => machine({ updateStatus: { state, targetVersion: '0.2.0', blockers: [], ...fields } })
+
+  it('names each state the machine reports', () => {
+    expect(updateLabel(status('queued'))).toEqual({ text: 'Update queued', tooltip: '' })
+    expect(updateLabel(status('downloading'))).toEqual({ text: 'Downloading v0.2.0', tooltip: '' })
+    expect(updateLabel(status('draining', { blockers: ['active_run'] }))).toEqual({ text: 'Finishing current work', tooltip: 'Waiting for a reply in progress.' })
+    expect(updateLabel(status('installing'))).toEqual({ text: 'Updating to v0.2.0', tooltip: '' })
+    expect(updateLabel(status('restarting'))).toEqual({ text: 'Updating to v0.2.0', tooltip: '' })
+    expect(updateLabel(status('failed', { error: 'Version 0.2.0 did not report healthy.' }))).toEqual({ text: 'Update failed', tooltip: 'Version 0.2.0 did not report healthy.' })
+    expect(updateLabel(status('idle', { targetVersion: null }))).toBeNull()
+  })
+
+  it('names a request the machine has not acted on and a manual machine that is behind', () => {
+    expect(updateLabel(machine({ updateRequested: true }))).toEqual({ text: 'Update requested', tooltip: '' })
+    expect(updateLabel(machine({ behind: true, updateCapability: 'manual', updateTarget: '0.2.0' }))).toEqual({ text: 'v0.2.0 available, update manually', tooltip: '' })
+    // A machine that is behind and installs releases itself shows only its version.
+    expect(updateLabel(machine({ behind: true, updateCapability: 'launcher', updateTarget: '0.2.0' }))).toBeNull()
+    // An older runtime without update fields never claims an update.
+    expect(updateLabel(buildBox)).toBeNull()
+  })
+
+  it('drops a status for a version the machine already runs', () => {
+    expect(updateLabel(status('restarting', {}))).not.toBeNull()
+    expect(updateLabel({ ...status('restarting'), version: '0.2.0' })).toBeNull()
+    expect(updateLabel({ ...status('failed'), version: 'v0.2.0' })).toBeNull()
+  })
+
+  it('words the blockers and compares versions', () => {
+    expect(blockersLine([])).toBe('')
+    expect(blockersLine(['active_run', 'session_refresh', 'in_flight_external_effect'])).toBe('Waiting for a reply in progress, a session refresh and an action in progress.')
+    expect(olderVersion('0.1.9', '0.2.0')).toBe(true)
+    expect(olderVersion('v0.2.0', '0.2.0')).toBe(false)
+    expect(olderVersion('0.10.0', '0.9.0')).toBe(false)
+    expect(olderVersion('1.0.0-rc.1', '1.0.0')).toBe(true)
+    expect(olderVersion('nightly', '1.0.0')).toBeNull()
+  })
+
+  it('offers Update only for a reachable machine that takes requests and has none on the way', () => {
+    expect(canRequestUpdate(buildBox)).toBe(true)
+    expect(canRequestUpdate(studio)).toBe(false)
+    expect(canRequestUpdate(local)).toBe(false)
+    expect(canRequestUpdate({ ...buildBox, status: 'offline' })).toBe(false)
+    expect(canRequestUpdate(status('downloading'))).toBe(false)
+    expect(canRequestUpdate(status('failed'))).toBe(true)
+    expect(skipLabel({ name: 'Rack', reason: 'manual' })).toBe('Rack (manual install)')
+    expect(skipLabel({ name: 'Lab', reason: 'no_permission' })).toBe('Lab (no permission)')
+  })
+})
+
+describe('the machine a Settings page applies to', () => {
+  it('names the selected machine on machine pages once a machine is paired, with the machines that answer', () => {
+    const list = runtimeList([{ ...local, active: false }, studio, { ...buildBox, active: true }], buildBox.id)
+    const scope = settingsMachine(list, 'models')
+    expect(scope.selected.name).toBe('Build box')
+    expect(scope.choices.map((runtime) => runtime.name)).toEqual(['This computer', 'Build box'])
+    expect(settingsMachine(list, 'general')).toBeNull()
+    expect(settingsMachine(list, 'machines')).toBeNull()
+  })
+
+  it('shows no machine while this computer is the only one that answers', () => {
+    expect(settingsMachine(runtimeList([local]), 'models')).toBeNull()
+    expect(settingsMachine(runtimeList([local, studio]), 'models')).toBeNull()
+  })
+
+  it('names what stays on each machine from core while Settings changes all machines', () => {
+    const all = { all: true, machine: 'Build box' }
+    expect(scopeNote(settingsScope, 'mcp', all)).toBe('What you add reaches every machine. On or off changes only this computer.')
+    expect(scopeNote(settingsScope, 'models', all)).toBe('Sign-ins stay on the machine that holds them. Machines can share them with the others.')
+    expect(scopeNote(settingsScope, 'context', all)).toBe('This part changes only Build box. Each machine keeps its own.')
+    expect(scopeNote(settingsScope, 'storage', all)).toBe('This part changes only this computer. Each machine keeps its own.')
+    expect(scopeNote(settingsScope, 'retention', all)).toBe('')
+    expect(machineLocal(settingsScope, 'permissions').map((local) => local.field)).toEqual(['bypass_enabled'])
+  })
+
+  it('names what this computer keeps from core while one other machine is picked', () => {
+    const one = { machine: 'Build box' }
+    expect(scopeNote(settingsScope, 'storage', one)).toBe('These settings belong to this computer. Build box keeps its own.')
+    // On or off stays on this computer, and what is added reaches every machine.
+    expect(scopeNote(settingsScope, 'mcp', one)).toBe('What you add reaches every machine. On or off changes only this computer.')
+    // Retention reaches every machine, and the picked machine reads its own context.
+    expect(scopeNote(settingsScope, 'retention', one)).toBe('')
+    expect(scopeNote(settingsScope, 'context', one)).toBe('')
+  })
+
+  it('shows no line before core answers', () => {
+    expect(scopeNote(null, 'storage', { all: true })).toBe('')
+    expect(machineLocal(null, 'permissions')).toEqual([])
+  })
+})
+
+describe('machineName', () => {
+  it('names this computer one way, and a runtime with the generic name by its kind', () => {
+    expect(machineName({ id: 'local', local: true, name: 'This computer' })).toBe('This computer')
+    expect(machineName({ id: 'pod', kind: 'container', name: 'Muniment runtime' })).toBe('Container')
+    expect(machineName({ id: 'box', kind: 'server', name: 'Build box' })).toBe('Build box')
+    expect(machineName(null)).toBe('Machine')
   })
 })

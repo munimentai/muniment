@@ -1,20 +1,20 @@
 name: CI
 
-# Native checks use disposable Proxmox VMs. Each platform runs its preflight
+# Native checks use disposable VMs. Each platform runs its preflight
 # and, for packaging changes, its installer build in the same VM and checkout.
 # Release-only helpers run their JavaScript tests without native compilation.
 # Main reuses green PR checks only for the exact tested Git tree.
 # The nightly proves signed, installed apps on all platforms.
 # Forgejo runs .forgejo/workflows/ci.yml, a byte-identical copy of this file.
 # The PR proof store and main reuse read the GitHub API, so they run on GitHub only.
+# Forgejo alone runs core.yml for the core workspace under core/.
 
 on:
   pull_request:
   push:
     branches:
       - main
-  # The muniment-core update dispatches the full checks on its branch, because
-  # a pull request a workflow token opens starts no workflow.
+  # A dispatch runs every lane.
   workflow_dispatch:
 
 # A PR refresh cancels only that PR. Each main run keeps its acceptance proof.
@@ -44,17 +44,24 @@ jobs:
       - name: Steering check
         if: needs.changes.outputs.reuse != 'true'
         run: scripts/check-steering.sh .
+      - name: Steering check tests
+        run: python3 -B scripts/test_check_steering.py
       - name: Private address check
         run: |
           scripts/check-private-addresses.sh
           python3 -B scripts/test_private_addresses.py
+      # core/Cargo.toml names the one release version. The desktop copies must match it.
+      - name: Version check
+        run: |
+          python3 -B scripts/version.py check
+          python3 -B scripts/test_version.py
       - name: Forgejo workflow copy
         run: |
-          for workflow in ci.yml secret-scan.yml muniment-core-update.yml nightly.yml release.yml; do
+          for workflow in ci.yml secret-scan.yml nightly.yml release.yml; do
             cmp ".github/workflows/$workflow" ".forgejo/workflows/$workflow"
           done
       - name: UI copy law
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true')
         run: node test/ui-copy-lint.mjs src src-tauri browser-control
 
   changes:
@@ -68,6 +75,7 @@ jobs:
       attach_fixtures: ${{ steps.changes.outputs.attach_fixtures }}
       code_diff_fixtures: ${{ steps.changes.outputs.code_diff_fixtures }}
       desktop: ${{ steps.changes.outputs.desktop }}
+      core_shared: ${{ steps.changes.outputs.core_shared }}
       installer: ${{ steps.changes.outputs.installer }}
       release_tooling: ${{ steps.changes.outputs.release_tooling }}
       release_only: ${{ steps.changes.outputs.release_only }}
@@ -94,7 +102,7 @@ jobs:
             const { reusePullRequest } = await import(`${process.env.GITHUB_WORKSPACE}/.github/lib/ci-proof.mjs`);
             core.setOutput('reuse', await reusePullRequest({ github, context, core, workflow: 'ci.yml' }));
 
-      - name: Classify PR changes
+      - name: Classify changes
         if: steps.proof.outputs.reuse != 'true'
         id: changes
         env:
@@ -106,15 +114,29 @@ jobs:
           attach_fixtures=false
           code_diff_fixtures=false
           desktop=false
+          core_shared=false
           installer=false
           release_tooling=false
           release_only=true
-          if [ "${GITHUB_EVENT_NAME:-pull_request}" != pull_request ]; then
+          # A pull request and a push with a known base classify their diff. A
+          # dispatch, a new branch or a base outside the clone runs every lane.
+          classify=true
+          case "${GITHUB_EVENT_NAME:-pull_request}" in
+            pull_request) ;;
+            push)
+              if [ -z "${BASE_SHA//0/}" ] || ! git cat-file -e "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+                classify=false
+              fi
+              ;;
+            *) classify=false ;;
+          esac
+          if [ "$classify" != true ]; then
             docs_only=false
             companion=true
             attach_fixtures=true
             code_diff_fixtures=true
             desktop=true
+            core_shared=true
             installer=true
             release_only=false
           fi
@@ -141,16 +163,28 @@ jobs:
                 companion=true
                 desktop=true
                 ;;
-              protocol-fixtures/code-diff/*|protocol-fixtures/code-diff/**)
+              core/docs/*|core/docs/**|core/deploy/*|core/deploy/**|core/scripts/*|core/scripts/**|core/ci/*|core/ci/**|core/test_support/*|core/test_support/**|core/Cargo.lock|.forgejo/workflows/core*.yml)
+                # core.yml checks these. No desktop build reads them.
+                docs_only=false
+                ;;
+              core/protocol-fixtures/code-diff/*|core/protocol-fixtures/code-diff/**)
                 docs_only=false
                 companion=true
-                desktop=true
+                core_shared=true
                 code_diff_fixtures=true
                 ;;
-              protocol-fixtures/*|protocol-fixtures/**)
+              core/protocol-fixtures/*|core/protocol-fixtures/**)
                 docs_only=false
                 companion=true
+                core_shared=true
                 attach_fixtures=true
+                ;;
+              core/crates/*|core/crates/**|core/Cargo.toml|core/pins/*|core/pins/**|core/third-party/*|core/third-party/**)
+                # The desktop builds these shared crates by path. They get the
+                # Linux checks without the three-platform preflight.
+                docs_only=false
+                companion=true
+                core_shared=true
                 ;;
               src-tauri/integration/*|src-tauri/integration/**)
                 docs_only=false
@@ -181,7 +215,7 @@ jobs:
                 installer=true
                 ;;
             esac
-          done < <(if [ "${GITHUB_EVENT_NAME:-pull_request}" = pull_request ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
+          done < <(if [ "$classify" = true ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
           [ "$release_tooling" = true ] || release_only=false
           echo "release_tooling=$release_tooling" >> "$GITHUB_OUTPUT"
           echo "release_only=$release_only" >> "$GITHUB_OUTPUT"
@@ -190,6 +224,7 @@ jobs:
           echo "attach_fixtures=$attach_fixtures" >> "$GITHUB_OUTPUT"
           echo "code_diff_fixtures=$code_diff_fixtures" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
+          echo "core_shared=$core_shared" >> "$GITHUB_OUTPUT"
           echo "installer=$installer" >> "$GITHUB_OUTPUT"
 
 
@@ -209,7 +244,7 @@ jobs:
           fetch-depth: 0
 
       - name: Node 24 (bootstrap if missing)
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.release_tooling == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true' || needs.changes.outputs.release_tooling == 'true')
         run: |
           node_dir="$HOME/.local/node-24"
           if { ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(`.`)[0]' 2>/dev/null)" != 24 ]; } \
@@ -233,9 +268,8 @@ jobs:
       # The desktop-only crates are kept free of Tauri on purpose: compiling the
       # tauri crate needs the GUI dev stack (webkit2gtk etc.) that only the
       # desktop-ci build VMs carry. The frontend tests and the structure smoke
-      # read the muniment-core checkout that Cargo resolves, so the toolchain
-      # comes first. The runner container persists, so the rustup bootstrap
-      # below is a one-time cost.
+      # read core/ in this checkout. The runner container persists, so the
+      # rustup bootstrap below is a one-time cost.
       - name: Rust toolchain (bootstrap if missing)
         if: needs.changes.outputs.reuse != 'true'
         run: |
@@ -257,7 +291,7 @@ jobs:
           npx vitest run --root . .github/lib/release-promotion.test.js .github/lib/update-feed.test.js .github/lib/winget-manifest.test.js
 
       - name: Frontend unit tests
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true')
         run: |
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends sudo passwd util-linux python3
@@ -266,11 +300,11 @@ jobs:
           npm test
 
       - name: Probe fixtures
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true')
         run: npm run probe:check
 
       - name: Browser control relay core
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true')
         run: npm ci --prefix browser-control --no-audit --no-fund && npm run browser-control
 
       - name: Structure smoke
@@ -281,31 +315,30 @@ jobs:
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_only != 'true')
         env:
           CARGO_INCREMENTAL: "0"
-        run: scripts/check-core-boundary.sh
+        run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; scripts/check-core-boundary.sh
 
       - name: Rust formatting
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true')
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --check
 
       - name: Integration and ACP lint
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true')
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --package muniment-acp --all-targets --locked --features muniment-desktop-integration/keyring -- -D warnings
 
-      # muniment-core runs the shared crate tests. These cover the desktop-only contracts.
+      # core.yml runs the shared crate tests. These cover the desktop-only contracts.
       - name: Integration tests
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true')
         # The shared runner can starve stub child processes under default test parallelism.
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked --features keyring -- --test-threads=1
 
       - name: Integration default-feature tests
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true')
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-desktop-integration --locked -- --test-threads=1
 
       - name: Rust shadow router Python contract
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true')
         run: |
-          core_root=$(scripts/muniment-core-root.sh)
-          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo build --manifest-path "$core_root/Cargo.toml" --locked --package muniment-router --bin muniment-router-shadow
+          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo build --manifest-path core/Cargo.toml --locked --package muniment-router --bin muniment-router-shadow
           python3 -B test/router_shadow_test.py
 
       - name: Companion formatting
@@ -329,8 +362,13 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-runtime --all-targets --locked -- -D warnings
 
       - name: Consecutive model submissions
-        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true' || github.event_name != 'pull_request')
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.companion == 'true')
         run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-runtime --locked --test run four_model_switches_complete_in_one_thread_with_compiled_task_paths
+
+      # A shared core change reaches the desktop through these crates.
+      - name: Shared core consumer tests
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.core_shared == 'true')
+        run: cargo test --manifest-path src-tauri/Cargo.toml --package muniment-cli --package muniment-runtime --locked -- --test-threads=1
 
       - name: Runtime dependency boundary
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.companion == 'true')
@@ -390,11 +428,10 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      # The desktop fixtures must match what the pinned muniment-core release exports.
+      # The checked-in fixtures must match what the core exporter writes.
       - name: Check canonical fixtures
         run: |
-          core_root=$(scripts/muniment-core-root.sh)
-          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo run --manifest-path "$core_root/Cargo.toml" --locked --package muniment-attach --bin export-attach-fixtures -- "$PWD/protocol-fixtures" --check
+          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo run --manifest-path core/Cargo.toml --locked --package muniment-attach --bin export-attach-fixtures -- "$PWD/core/protocol-fixtures" --check
 
   code-diff-fixtures-current:
     name: code-diff-fixtures-current
@@ -414,12 +451,11 @@ jobs:
 
       - name: Check canonical fixtures
         run: |
-          core_root=$(scripts/muniment-core-root.sh)
-          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo run --manifest-path "$core_root/Cargo.toml" --locked --package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/protocol-fixtures" --check
+          CARGO_TARGET_DIR=src-tauri/target/muniment-core cargo run --manifest-path core/Cargo.toml --locked --package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/core/protocol-fixtures" --check
 
   desktop-compile:
     name: Desktop compile preflight (${{ matrix.platform }})
-    if: needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'
     needs: changes
     runs-on: self-hosted
     # Budget both attempts, including each slot wait, guest, collection, and cleanup.
@@ -434,7 +470,9 @@ jobs:
       - name: Check out desktop-CI budget helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # A change to the shared core crates alone checks the Tauri crate on Linux only.
       - name: Check (${{ matrix.platform }}) via desktop-ci
+        if: needs.changes.outputs.desktop == 'true' || matrix.platform == 'linux'
         env:
           PLATFORM: ${{ matrix.platform }}
           INSTALLER: ${{ needs.changes.outputs.installer }}

@@ -1,0 +1,139 @@
+//! Pure backend logic for the Muniment desktop app.
+//!
+//! Nothing in this crate may depend on Tauri or any GUI toolkit: unit tests
+//! here run on the shared CI runner, which has no display stack. The Pi
+//! sidecar process manager and its RPC transport build on these pieces.
+
+pub mod account;
+pub mod active_run;
+pub mod asr;
+pub mod assistant_text;
+pub use muniment_atomic_file as atomic_file;
+pub mod attach;
+pub mod attachment;
+pub mod browser_agent;
+pub mod cas;
+pub mod chat_coordinate;
+pub mod chat_launch;
+pub mod chat_profile;
+pub mod chat_prompt;
+pub mod chat_resume;
+pub mod chat_view;
+pub mod checkpoint;
+pub mod child_fds;
+pub mod code_diff;
+pub mod code_diff_apply;
+pub mod code_diff_effect;
+pub mod code_diff_journal;
+pub mod code_diff_observe;
+pub mod code_diff_staging;
+pub mod creations;
+pub mod engine;
+pub use muniment_router::endpoint_models;
+pub mod extend;
+pub mod folder_access;
+pub mod form_factor;
+pub mod harness_scan;
+pub mod home;
+pub use muniment_router::http;
+pub mod import_preview;
+pub mod journal;
+pub mod kokoro;
+pub mod launch_facts;
+pub mod local_mode;
+pub mod memory_extract;
+pub mod memory_failure;
+pub mod memory_files;
+pub mod memory_index;
+pub mod memory_origin;
+pub mod memory_runtime;
+pub mod memory_secret;
+pub mod model_acquisition_transport;
+pub mod model_artifact;
+pub mod model_install;
+pub mod model_install_native;
+pub use muniment_models as models;
+pub use muniment_router as model_router;
+pub mod onnx_runtime;
+pub mod owned_threads;
+pub mod permission_gate;
+pub mod pi_execution;
+pub mod pi_launch;
+pub mod pi_packages;
+pub mod pi_settings;
+#[cfg(target_os = "linux")]
+pub mod process_reader;
+pub mod record;
+pub mod relay_encryption;
+pub mod relay_publisher;
+pub mod retention_record;
+pub mod router_classifier;
+pub mod run_events;
+pub mod run_preparation;
+pub mod run_start;
+pub mod runtime_diagnostics;
+pub mod search_settings;
+pub mod session_thread;
+pub mod settings_scope;
+pub mod shared_models;
+pub mod sidecar;
+pub mod state_root;
+pub mod thread_history;
+pub mod thread_ownership;
+pub mod tool_presentation;
+#[cfg(unix)]
+pub mod user_diagnostics;
+#[cfg(target_os = "windows")]
+pub mod windows_known_folders;
+pub mod windows_payload;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows_security;
+#[cfg(target_os = "windows")]
+pub mod windows_sid;
+pub mod windows_task;
+#[cfg(target_os = "windows")]
+pub mod windows_task_service;
+#[cfg(target_os = "windows")]
+pub mod windows_user_diagnostics;
+pub mod write_plan;
+
+/// The runtime crate carries no dependency of its own beyond the core and
+/// attach, so the JSON crate the record bodies use reaches it from here.
+/// The runtime depends on this crate and the attach crate alone, so the
+/// crates it derives and hashes with travel through here.
+pub use chrono;
+#[cfg(feature = "keyring")]
+pub use keyring;
+pub use serde;
+pub use serde_json;
+pub use sha2;
+
+pub use muniment_attach::{
+    ensure_cross_project_home, ensure_scaffold_directory, onboard_companion_workspace,
+    write_scaffold_file_if_missing,
+};
+
+pub mod agent_draft;
+pub mod agent_extract;
+pub mod agent_hooks;
+pub mod agent_poll;
+pub mod agent_replays;
+pub mod agent_routines;
+pub mod agent_runs;
+pub mod agent_templates;
+pub mod agents;
+pub mod fleet_sync;
+pub mod inherit;
+pub mod notifications;
+pub mod palette;
+pub mod preferences;
+pub mod project_context;
+pub mod projects;
+pub mod sidebar;
+pub mod swarm;
+pub mod thread_settings;
+pub mod time_display;
+pub mod usage_report;
+pub mod workspace_names;
+
+pub use muniment_router::provider_models;

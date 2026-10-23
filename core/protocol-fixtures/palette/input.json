@@ -1,0 +1,184 @@
+{
+  "needs_you": [
+    {
+      "thread_id": "t-clean",
+      "title": "Clean the build folder",
+      "project_name": "Muniment",
+      "status_label": "Approve",
+      "updated_at": "2026-10-18T12:58:00Z",
+      "shortcut": "mod+1"
+    },
+    {
+      "thread_id": "t-branch",
+      "title": "Release notes",
+      "project_name": "Homelab",
+      "status_label": "Answer",
+      "updated_at": "2026-10-18T12:40:00Z",
+      "shortcut": "mod+2"
+    }
+  ],
+  "threads": [
+    {
+      "thread_id": "t-sync",
+      "title": "Fix sync bug",
+      "project_name": "Muniment",
+      "status_label": "Working",
+      "updated_at": "2026-10-18T12:57:00Z",
+      "shortcut": "mod+3"
+    },
+    {
+      "thread_id": "t-index",
+      "title": "Reindex search",
+      "project_name": "Muniment",
+      "status_label": "Working",
+      "updated_at": "2026-10-18T12:55:00Z",
+      "shortcut": "mod+4"
+    },
+    {
+      "thread_id": "t-roadmap",
+      "title": "Roadmap",
+      "project_name": "Muniment",
+      "status_label": "",
+      "updated_at": "2026-10-18T09:10:00Z",
+      "shortcut": "mod+5"
+    },
+    {
+      "thread_id": "t-trip",
+      "title": "Trip ideas",
+      "project_name": "",
+      "status_label": "Done",
+      "updated_at": "2026-10-18T12:01:00Z",
+      "shortcut": "mod+6"
+    },
+    {
+      "thread_id": "t-dinner",
+      "title": "Dinner recipes",
+      "project_name": "",
+      "status_label": "",
+      "updated_at": "2026-10-18T11:30:00Z",
+      "shortcut": "mod+7"
+    },
+    {
+      "thread_id": "t-price",
+      "title": "Pricing watch",
+      "project_name": "Pricing watch",
+      "status_label": "Failed",
+      "updated_at": "2026-10-18T09:02:00Z",
+      "shortcut": "mod+8"
+    },
+    {
+      "thread_id": "t-deploy",
+      "title": "Deploy runs",
+      "project_name": "Homelab",
+      "status_label": "",
+      "updated_at": "2026-10-18T08:15:00Z"
+    },
+    {
+      "thread_id": "t-lease",
+      "title": "Lease renewal",
+      "project_name": "",
+      "status_label": "",
+      "updated_at": "2026-10-17T16:00:00Z"
+    },
+    {
+      "thread_id": "t-vendor",
+      "title": "Vendor audit",
+      "project_name": "Homelab",
+      "status_label": "",
+      "updated_at": "2026-10-16T10:00:00Z"
+    },
+    {
+      "thread_id": "t-budget",
+      "title": "Budget notes",
+      "project_name": "",
+      "status_label": "",
+      "updated_at": "2026-10-15T10:00:00Z"
+    },
+    {
+      "thread_id": "t-kitchen",
+      "title": "Kitchen quotes",
+      "project_name": "Garden",
+      "status_label": "",
+      "updated_at": "2026-10-12T10:00:00Z"
+    }
+  ],
+  "pages": [
+    {
+      "id": "models",
+      "title": "Models",
+      "detail": "Settings",
+      "keywords": [
+        "providers",
+        "routing",
+        "roles"
+      ],
+      "icon": "cpu"
+    },
+    {
+      "id": "tools",
+      "title": "Tools",
+      "detail": "Settings",
+      "keywords": [
+        "mcp",
+        "skills",
+        "plugins",
+        "search"
+      ],
+      "icon": "wrench"
+    },
+    {
+      "id": "machines",
+      "title": "Machines",
+      "detail": "Settings",
+      "keywords": [
+        "runtimes",
+        "pairing",
+        "fleet"
+      ],
+      "icon": "monitor"
+    },
+    {
+      "id": "permissions",
+      "title": "Permissions",
+      "detail": "Settings",
+      "keywords": [
+        "modes",
+        "bypass",
+        "rules"
+      ],
+      "icon": "shield-check"
+    },
+    {
+      "id": "data",
+      "title": "Data",
+      "detail": "Settings",
+      "keywords": [
+        "memory",
+        "storage",
+        "retention",
+        "context"
+      ],
+      "icon": "database"
+    },
+    {
+      "id": "general",
+      "title": "General",
+      "detail": "Settings",
+      "keywords": [
+        "appearance",
+        "theme",
+        "language",
+        "voice",
+        "notifications"
+      ],
+      "icon": "sliders-horizontal"
+    }
+  ],
+  "thread": {
+    "thread_id": "t-trip",
+    "pinned": false,
+    "movable": true
+  },
+  "machines": 2,
+  "modes": true
+}

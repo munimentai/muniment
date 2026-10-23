@@ -94,30 +94,33 @@
     finally { pending = false }
   }
 </script>
-<section aria-label="Decisions" class="decisions">
-  <Group heading="Model routing">
-    <Row title="Route each message" description="Let a decision model choose the model for each message.">
-      <Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!choices.length || !settings.options.length))} onchange={toggle} />
+<section aria-label="Roles" class="decisions">
+  <Group heading="Roles" info="The decision models that route each message and assist chats. The composer picks the model of one chat.">
+    <Row title="Route each message" info="A decision model chooses the model for each message.">
+      <Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!choices.length || !settings.options?.length))} onchange={toggle} />
     </Row>
     {#if automatic}
-      <Row title="Decision model" description="Account balancing stays on. Your message goes to this model to choose an answer model.">
+      <Row title="Routing model" info="Account balancing stays on. Your message goes to this model to choose an answer model.">
         <div class="choice"><ChoiceField label="Decision model" hideLabel value={active} options={choices} disabled={pending} onchange={select} /></div>
       </Row>
     {/if}
-    {#if !settings.options.length}<p>Connect an account to choose models automatically.</p>{/if}
-  </Group>
-  <Group heading="Assistance">
-    <Row title="Assist each message" description="Let a decision model pick the MCP servers and skills for each message, and drive the Browser tab for a chat, which sends it the page text.">
+    <Row title="Assist each message" description="Picks MCP servers and skills, and drives the Browser tab" info="A decision model picks the MCP servers and skills for each message, and drives the Browser tab for a chat, which sends it the page text.">
       <Toggle checked={assist.enabled} label="Use assistance" disabled={pending || (!assist.enabled && !choices.length)} onchange={enabled => setAssist(enabled, assist.connection)} />
     </Row>
     {#if assist.enabled}
-      <Row title="Decision model" description="The composer shows the decision model that assists, and you can turn it off for one message.">
+      <Row title="Assistance model" info="The composer shows the decision model that assists, and you can turn it off for one message.">
         <div class="choice"><ChoiceField label="Assistance decision model" hideLabel value={assist.connection} options={assistChoices} disabled={pending} onchange={id => setAssist(true, id)} /></div>
       </Row>
     {/if}
+    {#if !choices.length}
+      <Row title="No decision model" description="Needed for routing and assistance">
+        <Button variant="primary" onclick={onconnect}>Connect decision model</Button>
+      </Row>
+    {/if}
+    {#if !settings.options?.length}<p>Connect an account to route messages.</p>{/if}
   </Group>
   {#if statements.length}
-    <Group heading="Routing statements" description="Each statement tells the decision model when its model should answer.">
+    <Group heading="Routing statements" info="Each statement tells the decision model when its model should answer.">
       {#each statements as route (route.key)}
         <Row title={modelLabel(route.model)} description={editing === route.key ? '' : route.description} stacked={editing === route.key}>
           {#if editing === route.key}
@@ -132,13 +135,6 @@
     </Group>
   {/if}
   {#if pending}<p role="status">Testing the decision model…</p>{/if}
-  {#if !choices.length}
-    <Group heading="Decision model">
-      <Row title="No decision model" description="Connect a decision model in Model providers to use routing or assistance.">
-        <Button onclick={onconnect}>Connect decision model</Button>
-      </Row>
-    </Group>
-  {/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>

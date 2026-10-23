@@ -1,0 +1,1 @@
+{"protocol":"muniment.attach/1","request_id":"000000000000000000000000000000e4","operation":"usage.summary","capability":"fixture-capability","body":{"provider":"anthropic","range":"7d","utc_offset_minutes":-240}}

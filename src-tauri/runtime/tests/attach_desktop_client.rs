@@ -30,6 +30,7 @@ use muniment_runtime_core::{open_profile_storage, RuntimeAttachState};
 use muniment_runtime_core::{run_attach_listener, AttachListenerInputs};
 
 mod common;
+use common::CI_WAIT;
 use common::{credentials, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -102,12 +103,16 @@ fn shipped_desktop_client_completes_the_session() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -171,12 +176,16 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -202,7 +211,11 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let profile = TemporaryProfile::new("attach-desktop-submit-no-workspace", true);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
+    common::set_state_directory(&profile.profile);
     let descriptor = stage_pi_stub(&profile.root);
+    // One run place, so the busy run below fills the runtime's capacity.
+    let previous_limit = std::env::var_os(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV);
+    std::env::set_var(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV, "1");
     let state = Arc::new(
         RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap(),
     );
@@ -220,8 +233,17 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         spawn_server_sequence(vec![(200, session_body.into()), (201, grant_body)]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let (stop_tx, stop_rx) = mpsc::channel();
+    // Stops the listener when the scope ends, also on a failed assertion, so
+    // the scope joins it instead of waiting forever.
+    struct StopOnDrop(mpsc::Sender<()>);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
 
     thread::scope(|scope| {
+        let stop = StopOnDrop(stop_tx);
         let active_boundaries = state.boundaries();
         let service_state = Arc::clone(&state);
         let profile_directory = profile.profile.clone();
@@ -245,7 +267,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -267,20 +289,25 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
             })
             .unwrap();
         assert_eq!(
-            client.run_submit("hello", &[], None, None).unwrap_err(),
+            client
+                .run_submit("hello", &[], None, None, None)
+                .unwrap_err(),
             ClientError::RequestRejected
         );
         assert_eq!(
             client.last_request_error().unwrap().to_string(),
-            "code=\"invalid_request\" reason=\"A reply is already in progress.\""
+            format!(
+                "code=\"invalid_request\" reason={:?}",
+                muniment_core::active_run::capacity_message(1)
+            )
         );
         active_boundaries.clear_active_run("busy-run");
-        let accepted = client.run_submit("hello", &[], None, None).unwrap();
+        let accepted = client.run_submit("hello", &[], None, None, None).unwrap();
         assert!(!accepted.run_id.is_empty());
         assert_eq!(approval.approval().unwrap().workspace, "local");
 
         drop(client);
-        stop_tx.send(()).unwrap();
+        drop(stop);
         listener.join().unwrap();
     });
 
@@ -288,6 +315,10 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
     credential_store.clear_session().unwrap();
     std::env::remove_var("MUNIMENT_API_BASE_URL");
     std::env::remove_var("MUNIMENT_PI_ROOT");
+    match previous_limit {
+        Some(value) => std::env::set_var(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV, value),
+        None => std::env::remove_var(muniment_core::agent_runs::MAX_PARALLEL_RUNS_ENV),
+    }
 }
 
 #[test]
@@ -379,12 +410,16 @@ fn desktop_client_selects_only_an_owned_thread() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -511,12 +546,16 @@ fn desktop_client_recheck_applies_the_recorded_retention() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -613,7 +652,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             )
         });
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -623,10 +662,13 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             ) {
                 break;
             }
+            if Instant::now() >= deadline {
+                let _ = stop_tx.send(());
+            }
             assert!(Instant::now() < deadline, "presenter did not connect");
             thread::sleep(Duration::from_millis(10));
         }
-        presented_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        presented_rx.recv_timeout(CI_WAIT).unwrap();
 
         let mut client = connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1))
             .expect("desktop client did not connect");
@@ -646,7 +688,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             || {},
         )
         .expect("companion did not pair through the presenter");
-        let paired_challenge = presented_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let paired_challenge = presented_rx.recv_timeout(CI_WAIT).unwrap();
         assert!(!paired_challenge.is_empty());
         drop(companion);
 
@@ -660,10 +702,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             approval_request(final_challenge.into()),
             Duration::from_secs(1),
         ));
-        assert_eq!(
-            presented_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            final_challenge
-        );
+        assert_eq!(presented_rx.recv_timeout(CI_WAIT).unwrap(), final_challenge);
 
         presenter_stop.stop();
         presenter.join().unwrap();

@@ -75,6 +75,13 @@ describe('nightly macOS package build', () => {
     expect(result.stdout).toBe('750 4050\n')
   })
 
+  it('builds every guest from the one version in the source', () => {
+    const build = job('build', 'publish')
+    expect(build).toContain('"GH_TOKEN=$REPO_TOKEN" "MUNIMENT_PI_CANDIDATE=1"; if')
+    expect(build).not.toContain('MUNIMENT_CORE_VERSION')
+    expect(build).not.toContain('core-v')
+  })
+
   it('builds and publishes the package while signing stays disabled', () => {
     expect(workflow).toContain('node .github/build-macos-app.mjs')
     expect(workflow).toContain('node .github/lib/nightly-release.mjs finalize munimentai/muniment "$SOURCE_SHA"')

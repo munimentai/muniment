@@ -12,6 +12,8 @@ it('requests a short name separately and saves only the validated result', async
   await nameFirstThread({ model: { id: 'model' }, ui: { editor }, modelRegistry: { getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }) } }, complete)
   expect(complete.mock.calls[0][1].messages[0].content).toBe('Help me fix the report')
   expect(complete.mock.calls[0][2].maxTokens).toBe(256)
+  // A one-off request, so a session-bound provider answers it apart.
+  expect(complete.mock.calls[0][2].cacheRetention).toBe('none')
   expect(complete.mock.calls[0][2].headers).toBeUndefined()
   expect(JSON.parse(editor.mock.calls[1][1])).toEqual({ action: 'save', title: 'Report repair' })
 })
@@ -24,7 +26,8 @@ it('skips a named thread and lets a failed naming call leave the reply available
   context.ui.editor.mockResolvedValue('{"prompt":"First message"}')
   await expect(nameFirstThread(context, complete)).resolves.toBeUndefined()
   expect(context.ui.editor).toHaveBeenCalledTimes(2)
-  for (const name of ['', 'One two three four', 'Two\nlines']) expect(threadName(name)).toBeNull()
+  for (const name of ['', 'One two three four five six seven', 'Two\nlines']) expect(threadName(name)).toBeNull()
+  expect(threadName('Plan a weekend trip to Lisbon.')).toBe('Plan a weekend trip to Lisbon')
 })
 
 it('uses the current model registry completion boundary without reading credentials directly', async () => {

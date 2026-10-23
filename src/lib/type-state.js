@@ -61,6 +61,13 @@ export function sizeScale(step) {
 
 const roundPx = (value) => Math.round(value * 10) / 10
 
+// The terminal and the file editor draw code at 13px at the shipped step, and
+// they follow the step with the rest of the register.
+export const CODE_SIZE = 13
+export function codeFontSize(type = readStoredType()) {
+  return roundPx(CODE_SIZE * sizeScale(type.step))
+}
+
 // The body size the step yields, in pixels.
 export function bodySize(step) {
   return roundPx(BASE_TEXT_TOKENS[BODY_TOKEN] * sizeScale(step))

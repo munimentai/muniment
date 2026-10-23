@@ -1,0 +1,268 @@
+use crate::thread_ownership::{subject_owns_first_run, ThreadOwnershipError};
+use chrono::{SecondsFormat, Utc};
+
+use super::{JournalError, Provenance, RunJournal};
+
+pub fn create_thread_now(
+    journal: &mut RunJournal,
+    workspace: &str,
+    provenance: Provenance,
+) -> Result<String, JournalError> {
+    journal.create_thread(
+        workspace,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+        provenance,
+    )
+}
+
+#[derive(Debug)]
+pub enum ThreadMutationError {
+    Ownership(ThreadOwnershipError),
+    NotOwned,
+    Journal(JournalError),
+    /// The creation chat record could not be removed.
+    Creation(String),
+}
+
+fn check_ownership(
+    journal: &mut RunJournal,
+    thread_id: &str,
+    subject: Option<&str>,
+) -> Result<(), ThreadMutationError> {
+    if !subject_owns_first_run(journal, thread_id, subject)
+        .map_err(ThreadMutationError::Ownership)?
+    {
+        return Err(ThreadMutationError::NotOwned);
+    }
+    Ok(())
+}
+
+pub fn append_thread_rename(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    title: &str,
+    recorded_at: &str,
+    provenance: &Provenance,
+) -> Result<(), ThreadMutationError> {
+    check_ownership(journal, thread_id, subject)?;
+    let last_thread_seq = journal
+        .last_thread_seq(thread_id)
+        .map_err(ThreadMutationError::Journal)?;
+    journal
+        .append_thread_title_renamed(last_thread_seq, thread_id, title, recorded_at, provenance)
+        .map_err(ThreadMutationError::Journal)
+}
+
+pub fn append_thread_rename_now(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    title: &str,
+    provenance: &Provenance,
+) -> Result<(), ThreadMutationError> {
+    append_thread_rename(
+        journal,
+        subject,
+        thread_id,
+        title,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+        provenance,
+    )
+}
+
+pub fn append_thread_delete(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    recorded_at: &str,
+    provenance: &Provenance,
+) -> Result<(), ThreadMutationError> {
+    check_ownership(journal, thread_id, subject)?;
+    let last_thread_seq = journal
+        .last_thread_seq(thread_id)
+        .map_err(ThreadMutationError::Journal)?;
+    journal
+        .append_thread_deleted(last_thread_seq, thread_id, recorded_at, provenance)
+        .map_err(ThreadMutationError::Journal)
+}
+
+pub fn append_thread_delete_now(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    provenance: &Provenance,
+) -> Result<(), ThreadMutationError> {
+    append_thread_delete(
+        journal,
+        subject,
+        thread_id,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+        provenance,
+    )
+}
+
+/// Deletes a thread and its creation chat record in `profile`. An agent's
+/// creation chat holds its messages in that record and may hold no run, so
+/// the record alone is enough to delete it.
+pub fn delete_thread_with_creation_now(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+    subject: Option<&str>,
+    thread_id: &str,
+    provenance: &Provenance,
+) -> Result<(), ThreadMutationError> {
+    let creation = crate::creations::read(profile, thread_id)
+        .ok()
+        .flatten()
+        .is_some();
+    match append_thread_delete_now(journal, subject, thread_id, provenance) {
+        Ok(()) => {}
+        // The journal holds no run of the chat.
+        Err(ThreadMutationError::NotOwned | ThreadMutationError::Ownership(_)) if creation => {}
+        Err(error) => return Err(error),
+    }
+    if creation {
+        crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
+    }
+    Ok(())
+}
+
+/// Takes a run and every later run out of the thread's conversation.
+/// Answers the runs it took out.
+pub fn append_thread_rewind_now(
+    journal: &mut RunJournal,
+    subject: Option<&str>,
+    thread_id: &str,
+    run_id: &str,
+    provenance: &Provenance,
+) -> Result<Vec<String>, ThreadMutationError> {
+    check_ownership(journal, thread_id, subject)?;
+    if journal
+        .run_thread_id(run_id)
+        .map_err(ThreadMutationError::Journal)?
+        .as_deref()
+        != Some(thread_id)
+    {
+        return Err(ThreadMutationError::NotOwned);
+    }
+    let run_ids = journal
+        .thread_runs_from(run_id)
+        .map_err(ThreadMutationError::Journal)?;
+    if run_ids.is_empty() {
+        return Ok(run_ids);
+    }
+    let last_thread_seq = journal
+        .last_thread_seq(thread_id)
+        .map_err(ThreadMutationError::Journal)?;
+    journal
+        .append_thread_rewound(
+            last_thread_seq,
+            thread_id,
+            &run_ids,
+            &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            provenance,
+        )
+        .map_err(ThreadMutationError::Journal)?;
+    Ok(run_ids)
+}
+
+/// The most words a first-turn name holds, generated or taken from the prompt.
+pub const FIRST_NAME_WORDS: usize = 6;
+/// The most characters a prompt fallback keeps before its ellipsis.
+const FALLBACK_NAME_CHARS: usize = 48;
+
+/// The name a thread carries until the model names it: the first message
+/// whole when it is short, else its leading words cut at a word boundary
+/// with an ellipsis.
+pub fn fallback_thread_name(prompt: &str) -> String {
+    let words: Vec<&str> = prompt.split_whitespace().collect();
+    let mut name = String::new();
+    let mut kept = 0;
+    for word in &words {
+        let length = name.chars().count() + usize::from(!name.is_empty()) + word.chars().count();
+        if kept == FIRST_NAME_WORDS || length > FALLBACK_NAME_CHARS {
+            break;
+        }
+        if !name.is_empty() {
+            name.push(' ');
+        }
+        name.push_str(word);
+        kept += 1;
+    }
+    if kept == words.len() {
+        return name;
+    }
+    if name.is_empty() {
+        // A first word longer than the bound keeps its leading characters.
+        name = words[0].chars().take(FALLBACK_NAME_CHARS - 1).collect();
+    }
+    let name = name.trim_end_matches(|c: char| c.is_ascii_punctuation());
+    format!("{name}…")
+}
+
+/// A first-turn name may replace only its own temporary fallback, never a user's name.
+pub fn first_thread_needs_name(journal: &mut RunJournal, run_id: &str) -> Option<String> {
+    let thread_id = journal.run_thread_id(run_id).ok()??;
+    let runs = journal.thread_run_ids(&thread_id, 1, None).ok()?;
+    if runs.run_ids.first().map(String::as_str) != Some(run_id) {
+        return None;
+    }
+    let events = journal.thread_events(&thread_id).ok()?;
+    if events.iter().any(|event| {
+        event.event_type == "thread.deleted"
+            || (event.event_type == "thread.title.renamed"
+                && event.provenance.source != "thread-name-fallback")
+    }) {
+        return None;
+    }
+    Some(thread_id)
+}
+
+pub fn save_first_thread_name(
+    journal: &mut RunJournal,
+    run_id: &str,
+    title: &str,
+    generated: bool,
+) -> Result<bool, JournalError> {
+    let Some(thread_id) = first_thread_needs_name(journal, run_id) else {
+        return Ok(false);
+    };
+    let title = title.trim();
+    let title = if crate::memory_secret::reject_memory_secret(title).is_err() {
+        if generated {
+            return Ok(false);
+        }
+        "New conversation"
+    } else {
+        title
+    };
+    if title.is_empty()
+        || title.chars().count() > 80
+        || title.split_whitespace().count() > FIRST_NAME_WORDS
+        || title.chars().any(char::is_control)
+    {
+        return Ok(false);
+    }
+    let mut provenance = journal
+        .events(run_id)?
+        .first()
+        .ok_or_else(|| JournalError::InvalidEnvelope("The thread has no first message.".into()))?
+        .provenance
+        .clone();
+    provenance.source = if generated {
+        "thread-name-model"
+    } else {
+        "thread-name-fallback"
+    }
+    .into();
+    let seq = journal.last_thread_seq(&thread_id)?;
+    journal.append_thread_title_renamed(
+        seq,
+        &thread_id,
+        title,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+        &provenance,
+    )?;
+    Ok(true)
+}

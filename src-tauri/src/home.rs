@@ -114,38 +114,167 @@ pub(crate) fn default_home<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, St
     choose_default_home(app.path().document_dir().ok(), app.path().home_dir().ok())
 }
 
+/// Home sits in a folder macOS may hold behind a prompt, so every command
+/// that reads it runs off the main thread and the window keeps drawing.
 #[tauri::command]
-pub fn home_status(app: AppHandle) -> Result<HomeStatus, String> {
+pub async fn home_status(app: AppHandle) -> Result<HomeStatus, String> {
     let config = config_dir(&app)?;
-    let selected =
-        muniment_core::home::configured_home(&config).map_err(|error| error.to_string())?;
-    let configured = selected.is_some();
-    let home = match selected {
-        Some(home) => home,
-        None => default_home(&app)?,
-    };
-    Ok(HomeStatus {
-        configured,
-        home_path: home.to_string_lossy().into_owned(),
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected =
+            muniment_core::home::configured_home(&config).map_err(|error| error.to_string())?;
+        let configured = selected.is_some();
+        let home = match selected {
+            Some(home) => home,
+            None => default_home(&app)?,
+        };
+        Ok(HomeStatus {
+            configured,
+            home_path: home.to_string_lossy().into_owned(),
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, String> {
+pub async fn home_confirm(app: AppHandle, home_path: String) -> Result<HomeStatus, String> {
     let config = config_dir(&app)?;
     let home = PathBuf::from(home_path);
-    muniment_core::home::confirm_home(&config, &home).map_err(|error| {
-        eprintln!(
-            "home_confirm failed: config={} home={} error={error}",
-            config.display(),
-            home.display()
-        );
-        error.to_string()
-    })?;
-    Ok(HomeStatus {
-        configured: true,
-        home_path: home.to_string_lossy().into_owned(),
+    tauri::async_runtime::spawn_blocking(move || {
+        muniment_core::home::confirm_home(&config, &home).map_err(|error| {
+            eprintln!(
+                "home_confirm failed: config={} home={} error={error}",
+                config.display(),
+                home.display()
+            );
+            error.to_string()
+        })?;
+        Ok(HomeStatus {
+            configured: true,
+            home_path: home.to_string_lossy().into_owned(),
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// How long the first run waits for the answer to macOS's folder prompt.
+const FOLDER_ACCESS_BOUND: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether macOS lets Muniment's processes read Home: `open`, `denied` with
+/// the step to take, or `waiting` when no answer came within the bound. The
+/// first run asks here, while the user looks, so the prompt never stops a chat.
+#[tauri::command]
+pub async fn home_folder_access(
+    app: AppHandle,
+    home_path: String,
+) -> Result<serde_json::Value, String> {
+    let home = PathBuf::from(home_path);
+    let user_home = app.path().home_dir().ok();
+    let runtime_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // macOS answers one prompt for the app and the processes it starts.
+        // Reading Home and the folder that holds it now shows that prompt
+        // while the first run shows its hint, not at the first chat.
+        folder_access_answer(&home, user_home.as_deref(), FOLDER_ACCESS_BOUND, || {
+            ask_runtime(&runtime_app)
+        })
+    })
+    .await
+    .map_err(|_| "Muniment could not check folder access.".to_string())
+}
+
+/// How long a launch waits for Home before it names a pending folder prompt.
+const FOLDER_STATE_BOUND: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether Home opens for this app, answered within a short bound, or with
+/// `wait` within the first run's bound. A launch reads it beside the
+/// runtime's start, never on its path, so a pending or refused macOS folder
+/// prompt shows as its own state.
+#[tauri::command]
+pub async fn home_folder_state(
+    app: AppHandle,
+    home_path: String,
+    wait: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let home = PathBuf::from(home_path);
+    let user_home = app.path().home_dir().ok();
+    let bound = if wait == Some(true) {
+        FOLDER_ACCESS_BOUND
+    } else {
+        FOLDER_STATE_BOUND
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        folder_access_answer(&home, user_home.as_deref(), bound, || {})
+    })
+    .await
+    .map_err(|_| "Muniment could not check folder access.".to_string())
+}
+
+/// Opens Files & Folders in System Settings, where a refused folder is
+/// turned back on.
+#[tauri::command]
+pub fn home_folder_settings(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url(FILES_AND_FOLDERS, None::<String>)
+            .map_err(|_| "System Settings could not open.".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("This system has no folder access setting.".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+const FILES_AND_FOLDERS: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders";
+
+/// Opens Home within `bound`, then has `ask` run once it opens, and names
+/// the answer as `open`, `denied` or `waiting` with core's message and the
+/// protected folder that holds Home.
+fn folder_access_answer(
+    home: &Path,
+    user_home: Option<&Path>,
+    bound: std::time::Duration,
+    ask: impl FnOnce(),
+) -> serde_json::Value {
+    use muniment_core::folder_access::{
+        check, failure_reason, open_home, protected_folder, FolderAccess,
+    };
+    let mut access = open_home(home, bound);
+    if access == FolderAccess::Open {
+        ask();
+        access = check(home, bound, &std::sync::atomic::AtomicBool::new(false));
+    }
+    let folder = user_home.and_then(|user_home| protected_folder(home, user_home));
+    let state = match access {
+        FolderAccess::Open => "open",
+        FolderAccess::Denied => "denied",
+        FolderAccess::Waiting => "waiting",
+    };
+    let message = (access != FolderAccess::Open).then(|| failure_reason(access, folder));
+    serde_json::json!({ "state": state, "message": message, "folder": folder })
+}
+
+/// Has the runtime read Home too. macOS asks each process that reads a
+/// protected folder, and Pi runs under the runtime, so the runtime's prompt
+/// shows during the first run instead of holding the first chat.
+fn ask_runtime(app: &AppHandle) {
+    use crate::attach_service::{AttachCompanionState, DesktopClientSession};
+    let attach = app.state::<AttachCompanionState>();
+    if let DesktopClientSession::Connected(client) =
+        attach.local_client_session_within(std::time::Duration::from_secs(3))
+    {
+        let _ = client.request_with_error(
+            muniment_core::attach::Operation::HomeEnsure,
+            None,
+            serde_json::json!({}),
+        );
+    }
 }
 
 #[tauri::command]
@@ -330,13 +459,54 @@ mod tests {
     }
 
     #[test]
+    fn an_open_home_answers_open_and_asks_the_runtime_once() {
+        let root = TempRoot::new("folder-open");
+        let home = root.0.join("Documents").join("muniment");
+        let mut asked = 0;
+        let answer = folder_access_answer(
+            &home,
+            Some(&root.0),
+            std::time::Duration::from_secs(10),
+            || asked += 1,
+        );
+        assert_eq!(answer["state"], "open");
+        assert_eq!(answer["message"], serde_json::Value::Null);
+        assert_eq!(answer["folder"], "Documents");
+        assert_eq!(asked, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_home_names_the_folder_and_the_setting_without_asking_the_runtime() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = TempRoot::new("folder-denied");
+        let documents = root.0.join("Documents");
+        fs::create_dir(&documents).unwrap();
+        fs::set_permissions(&documents, fs::Permissions::from_mode(0o300)).unwrap();
+        let mut asked = false;
+        let answer = folder_access_answer(
+            &documents.join("muniment"),
+            Some(&root.0),
+            std::time::Duration::from_secs(10),
+            || asked = true,
+        );
+        fs::set_permissions(&documents, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(answer["state"], "denied");
+        assert_eq!(answer["folder"], "Documents");
+        let message = answer["message"].as_str().unwrap();
+        assert!(message.contains("your Documents folder"), "{message}");
+        assert!(message.contains("Files & Folders"), "{message}");
+        assert!(!asked);
+    }
+
+    #[test]
     fn confirmed_import_publishes_exact_bytes_before_configuring_home() {
         let root = TempRoot::new("success");
         let config = root.0.join("config");
         let home = root.0.join("home");
         let date = NaiveDate::from_ymd_opt(2026, 7, 24).unwrap();
         let entry = entry();
-        let expected = compile_onboarding_home_write_plan(&[entry.clone()], date).unwrap();
+        let expected = compile_onboarding_home_write_plan(std::slice::from_ref(&entry), date).unwrap();
         let destination = import_destination("export", &entry);
 
         let result = confirm_import(&config, &home, &[entry], date).unwrap();

@@ -1,0 +1,1427 @@
+use std::fmt;
+
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+use uuid::Uuid;
+
+pub const PROTOCOL: &str = "muniment.attach/1";
+pub const MAX_ID_LENGTH: usize = 64;
+pub const MAX_TEXT_LENGTH: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Protocol;
+
+impl Serialize for Protocol {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(PROTOCOL)
+    }
+}
+
+impl<'de> Deserialize<'de> for Protocol {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        (value == PROTOCOL)
+            .then_some(Self)
+            .ok_or_else(|| de::Error::custom("unsupported attach protocol"))
+    }
+}
+
+/// An opaque, UUID-shaped protocol identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Id(String);
+
+impl Id {
+    pub fn new(value: impl Into<String>) -> Result<Self, IdError> {
+        let value = value.into();
+        if value.len() > MAX_ID_LENGTH || Uuid::parse_str(&value).is_err() {
+            return Err(IdError);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdError;
+
+impl fmt::Display for IdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid protocol id")
+    }
+}
+impl std::error::Error for IdError {}
+
+impl Serialize for Id {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+impl<'de> Deserialize<'de> for Id {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(String::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct Request {
+    pub protocol: Protocol,
+    pub request_id: Id,
+    pub operation: Operation,
+    pub capability: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<Id>,
+    pub body: Value,
+}
+
+impl fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Request")
+            .field("protocol", &self.protocol)
+            .field("request_id", &self.request_id)
+            .field("operation", &self.operation)
+            .field("capability", &"[REDACTED]")
+            .field("idempotency_key", &self.idempotency_key)
+            .field("body", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Request {
+    /// Enforces the operation-level idempotency policy. A
+    /// `models.request` takes its policy from its action.
+    pub fn validate_idempotency_key(&self) -> Result<(), ProtocolError> {
+        let required = if self.operation == Operation::ModelsRequest {
+            crate::models::ModelRequest::from_body(&self.body)
+                .ok_or_else(ProtocolError::invalid_request)?
+                .action
+                .mutates()
+        } else {
+            self.operation.requires_idempotency_key()
+        };
+        match (required, self.idempotency_key.is_some()) {
+            (true, false) => Err(ProtocolError::idempotency_key_required()),
+            (false, true) => Err(ProtocolError::idempotency_key_forbidden()),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct Response {
+    pub protocol: Protocol,
+    pub request_id: Id,
+    pub ok: Success,
+    pub body: Value,
+}
+
+impl fmt::Debug for Response {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Response")
+            .field("protocol", &self.protocol)
+            .field("request_id", &self.request_id)
+            .field("ok", &self.ok)
+            .field("body", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ErrorEnvelope {
+    pub protocol: Protocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Id>,
+    pub ok: Failure,
+    pub error: ProtocolError,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Event {
+    pub protocol: Protocol,
+    pub subscription_id: Id,
+    pub event: EventName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_seq: Option<u64>,
+    pub body: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Envelope {
+    Response(Response),
+    Error(ErrorEnvelope),
+    Request(Request),
+    Event(Event),
+}
+
+impl<'de> Deserialize<'de> for Envelope {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| de::Error::custom("attach envelope must be an object"))?;
+        let has = |field: &str| object.contains_key(field);
+
+        let kind = if has("ok") {
+            if has("operation")
+                || has("capability")
+                || has("idempotency_key")
+                || has("subscription_id")
+                || has("event")
+                || has("run_id")
+                || has("run_seq")
+            {
+                return Err(de::Error::custom("conflicting attach envelope fields"));
+            }
+            match object.get("ok") {
+                Some(Value::Bool(true)) if !has("error") => 0,
+                Some(Value::Bool(false)) if has("error") && !has("body") => 1,
+                _ => return Err(de::Error::custom("invalid attach envelope discriminant")),
+            }
+        } else if has("operation") || has("capability") || has("idempotency_key") {
+            if has("error")
+                || has("subscription_id")
+                || has("event")
+                || has("run_id")
+                || has("run_seq")
+            {
+                return Err(de::Error::custom("conflicting attach envelope fields"));
+            }
+            2
+        } else if has("subscription_id") || has("event") || has("run_id") || has("run_seq") {
+            if has("error")
+                || has("request_id")
+                || has("operation")
+                || has("capability")
+                || has("idempotency_key")
+            {
+                return Err(de::Error::custom("conflicting attach envelope fields"));
+            }
+            3
+        } else {
+            return Err(de::Error::custom("unrecognized attach envelope shape"));
+        };
+
+        match kind {
+            0 => serde_json::from_value(value)
+                .map(Self::Response)
+                .map_err(de::Error::custom),
+            1 => serde_json::from_value(value)
+                .map(Self::Error)
+                .map_err(de::Error::custom),
+            2 => serde_json::from_value(value)
+                .map(Self::Request)
+                .map_err(de::Error::custom),
+            _ => serde_json::from_value(value)
+                .map(Self::Event)
+                .map_err(de::Error::custom),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    ProtocolIncompatible,
+    PayloadTooLarge,
+    MalformedFrame,
+    IdempotencyKeyRequired,
+    IdempotencyKeyForbidden,
+    IdempotencyConflict,
+    PersistenceFailed,
+    AuthorizationFailed,
+    DesktopBusy,
+    InvalidCursor,
+    InvalidArtifactCursor,
+    SlowConsumer,
+    InvalidRequest,
+    ThreadNotFound,
+    TransferNotFound,
+    Unauthorized,
+    UnsupportedOperation,
+    MigrationNotReady,
+    RuntimeDraining,
+    SubscriptionNotFound,
+    AlreadyCompleted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Operation {
+    #[serde(rename = "workspace.onboard")]
+    WorkspaceOnboard,
+    #[serde(rename = "home.ensure")]
+    HomeEnsure,
+    #[serde(rename = "thread.list")]
+    ThreadList,
+    #[serde(rename = "thread.open")]
+    ThreadOpen,
+    #[serde(rename = "thread.summaries")]
+    ThreadSummaries,
+    #[serde(rename = "thread.history")]
+    ThreadHistory,
+    #[serde(rename = "thread.create")]
+    ThreadCreate,
+    #[serde(rename = "thread.rename")]
+    ThreadRename,
+    #[serde(rename = "thread.select")]
+    ThreadSelect,
+    #[serde(rename = "thread.delete")]
+    ThreadDelete,
+    #[serde(rename = "session.status")]
+    SessionStatus,
+    #[serde(rename = "entitlement.snapshot")]
+    EntitlementSnapshot,
+    #[serde(rename = "device.list")]
+    DeviceList,
+    #[serde(rename = "session.sign_out")]
+    SessionSignOut,
+    #[serde(rename = "session.sign_in")]
+    SessionSignIn,
+    #[serde(rename = "companion.list")]
+    CompanionList,
+    #[serde(rename = "companion.revoke")]
+    CompanionRevoke,
+    #[serde(rename = "company.list")]
+    CompanyList,
+    #[serde(rename = "company.create")]
+    CompanyCreate,
+    #[serde(rename = "company.select")]
+    CompanySelect,
+    #[serde(rename = "company.rename")]
+    CompanyRename,
+    #[serde(rename = "company.delete")]
+    CompanyDelete,
+    #[serde(rename = "record.sql")]
+    RecordSql,
+    #[serde(rename = "record.propose")]
+    RecordPropose,
+    #[serde(rename = "record.commit")]
+    RecordCommit,
+    #[serde(rename = "record.kinds")]
+    RecordKinds,
+    #[serde(rename = "record.query")]
+    RecordQuery,
+    #[serde(rename = "record.entity")]
+    RecordEntity,
+    #[serde(rename = "record.report")]
+    RecordReport,
+    #[serde(rename = "reader.describe")]
+    ReaderDescribe,
+    #[serde(rename = "reader.run")]
+    ReaderRun,
+    #[serde(rename = "reader.queue")]
+    ReaderQueue,
+    #[serde(rename = "reader.objects")]
+    ReaderObjects,
+    #[serde(rename = "reader.connect")]
+    ReaderConnect,
+    #[serde(rename = "run.open")]
+    RunOpen,
+    #[serde(rename = "run.start")]
+    RunStart,
+    #[serde(rename = "run.submit")]
+    RunSubmit,
+    #[serde(rename = "run.resume")]
+    RunResume,
+    #[serde(rename = "run.permission_answer")]
+    RunPermissionAnswer,
+    #[serde(rename = "run.stream")]
+    RunStream,
+    #[serde(rename = "run.chat_events")]
+    RunChatEvents,
+    /// Reads one tool output or one applied diff that chat events leave out.
+    #[serde(rename = "run.detail")]
+    RunDetail,
+    #[serde(rename = "run.cursor_ack")]
+    RunCursorAck,
+    #[serde(rename = "run.steer")]
+    RunSteer,
+    #[serde(rename = "run.follow_up")]
+    RunFollowUp,
+    #[serde(rename = "run.cancel")]
+    RunCancel,
+    #[serde(rename = "permission.answer")]
+    PermissionAnswer,
+    #[serde(rename = "artifact.fetch")]
+    ArtifactFetch,
+    #[serde(rename = "artifact.window")]
+    ArtifactWindow,
+    #[serde(rename = "request.cancel")]
+    RequestCancel,
+    #[serde(rename = "migration.control")]
+    MigrationControl,
+    #[serde(rename = "approval.present")]
+    ApprovalPresent,
+    #[serde(rename = "retention.recheck")]
+    RetentionRecheck,
+    #[serde(rename = "pairing.challenge")]
+    PairingChallenge,
+    #[serde(rename = "pairing.status")]
+    PairingStatus,
+    #[serde(rename = "pairing.revoke")]
+    PairingRevoke,
+    #[serde(rename = "thread.context_usage")]
+    ThreadContextUsage,
+    #[serde(rename = "thread.compact")]
+    ThreadCompact,
+    #[serde(rename = "context.settings")]
+    ContextSettings,
+    #[serde(rename = "context.settings_save")]
+    ContextSettingsSave,
+    #[serde(rename = "models.request")]
+    ModelsRequest,
+    /// Creates a one-time pairing link for a remote client.
+    #[serde(rename = "remote.pairing_create")]
+    RemotePairingCreate,
+    /// Lists the paired remote devices.
+    #[serde(rename = "remote.device_list")]
+    RemoteDeviceList,
+    /// Revokes one paired remote device and closes its live sessions.
+    #[serde(rename = "remote.device_revoke")]
+    RemoteDeviceRevoke,
+    /// Reads the runtime's identity, version and install kind.
+    #[serde(rename = "runtime.info")]
+    RuntimeInfo,
+    /// Records a requested runtime version for the host's updater to apply.
+    #[serde(rename = "runtime.update")]
+    RuntimeUpdate,
+    /// Replaces the model connections the calling device shares with the
+    /// runtime. A paired device with the run scope only.
+    #[serde(rename = "models.share")]
+    ModelsShare,
+    /// Reads the model connections this runtime shares with the machines it
+    /// is paired with, secrets included. The local owner route only.
+    #[serde(rename = "models.share_bundle")]
+    ModelsShareBundle,
+    /// Uploads to, releases or issues machine tokens for the account's model
+    /// vault. The local owner route only.
+    #[serde(rename = "models.vault")]
+    ModelsVault,
+    /// Reads the remote access settings with the listener's live state. The
+    /// local owner route only.
+    #[serde(rename = "remote.settings")]
+    RemoteSettings,
+    /// Saves the remote access settings and starts or stops the listener to
+    /// match. The local owner route only.
+    #[serde(rename = "remote.settings_save")]
+    RemoteSettingsSave,
+    /// Lists the runtime's agents with their routines and latest runs.
+    #[serde(rename = "agent.list")]
+    AgentList,
+    /// Reads one agent.
+    #[serde(rename = "agent.read")]
+    AgentRead,
+    /// Creates or replaces one agent.
+    #[serde(rename = "agent.save")]
+    AgentSave,
+    /// Removes one agent, and its memory when the caller confirms it.
+    #[serde(rename = "agent.delete")]
+    AgentDelete,
+    /// Queues a manual run of one agent.
+    #[serde(rename = "agent.run_now")]
+    AgentRunNow,
+    /// Reads one page of agent run history, newest first.
+    #[serde(rename = "agent.runs")]
+    AgentRuns,
+    /// Lists one agent's routines.
+    #[serde(rename = "routine.list")]
+    RoutineList,
+    /// Adds or replaces one routine of an agent.
+    #[serde(rename = "routine.save")]
+    RoutineSave,
+    /// Removes one routine of an agent.
+    #[serde(rename = "routine.delete")]
+    RoutineDelete,
+    /// Issues a one-time `swarm.peer` pairing link that another runtime
+    /// redeems with `swarm.join`.
+    #[serde(rename = "swarm.invite")]
+    SwarmInvite,
+    /// Redeems another runtime's `swarm.invite` link and keeps the link to it.
+    #[serde(rename = "swarm.join")]
+    SwarmJoin,
+    /// Drops the link to one swarm member.
+    #[serde(rename = "swarm.leave")]
+    SwarmLeave,
+    /// Lists the swarm's members with their links.
+    #[serde(rename = "swarm.members")]
+    SwarmMembers,
+    /// Lists the swarm's agent directory.
+    #[serde(rename = "swarm.agents")]
+    SwarmAgents,
+    /// Trades replication state with a linked runtime. A `swarm.peer`
+    /// device on the remote route only.
+    #[serde(rename = "swarm.exchange")]
+    SwarmExchange,
+    /// Resumes the routines an absence paused.
+    #[serde(rename = "swarm.resume")]
+    SwarmResume,
+    /// Makes this runtime the one that refreshes a shared sign-in. The
+    /// member that holds it hands the refresh token over, sealed.
+    #[serde(rename = "fleet.hold_sign_in")]
+    FleetHoldSignIn,
+    /// Shows the fleet's sealed credentials and turns sharing this
+    /// runtime's model connections with the fleet on or off.
+    #[serde(rename = "fleet.credentials")]
+    FleetCredentials,
+    /// Shows this machine's pins, its offline settings for fleet blobs and
+    /// the bytes it keeps.
+    #[serde(rename = "fleet.pins")]
+    FleetPins,
+    /// Pins or unpins fleet items on this machine and changes its offline
+    /// settings for fleet blobs.
+    #[serde(rename = "fleet.pin_set")]
+    FleetPinSet,
+    /// Reads a slice of a blob a fleet record or thread names, fetching it
+    /// from the fleet when this machine lacks it.
+    #[serde(rename = "blob.read")]
+    BlobRead,
+    /// Gives a fleet member another role, `full` or `worker`, with a
+    /// signed roster entry.
+    #[serde(rename = "swarm.set_role")]
+    SwarmSetRole,
+    /// Reads the fleet's audit log, newest first.
+    #[serde(rename = "fleet.audit")]
+    FleetAudit,
+    /// Appends a user message to an agent, group or ordinary thread on any
+    /// member.
+    #[serde(rename = "thread.post")]
+    ThreadPost,
+    /// Answers how much of the fleet's records and thread history this
+    /// runtime holds, per class.
+    #[serde(rename = "fleet.sync_status")]
+    FleetSyncStatus,
+    /// Sets how many days of ordinary threads, and which attachments, this
+    /// machine keeps offline.
+    #[serde(rename = "fleet.offline_set")]
+    FleetOfflineSet,
+    /// Fetches an ordinary thread's history from its owner or any member
+    /// that holds it.
+    #[serde(rename = "thread.history_fetch")]
+    ThreadHistoryFetch,
+    /// Moves an agent to another primary runtime.
+    #[serde(rename = "agent.move")]
+    AgentMove,
+    /// Lists the swarm's pending agent approvals.
+    #[serde(rename = "agent.approvals")]
+    AgentApprovals,
+    /// Answers one pending agent approval. The first answer wins.
+    #[serde(rename = "agent.approval_answer")]
+    AgentApprovalAnswer,
+    /// Creates a group chat of two to six agents.
+    #[serde(rename = "group.create")]
+    GroupCreate,
+    /// Lists the swarm's group chats.
+    #[serde(rename = "group.list")]
+    GroupList,
+    /// Changes a group chat's name, members, lead or meeting mode.
+    #[serde(rename = "group.update")]
+    GroupUpdate,
+    /// Lists one agent's routine proposals: routines its instructions or an
+    /// import proposed, waiting to be accepted or dismissed.
+    #[serde(rename = "agent.routine_proposals")]
+    AgentRoutineProposals,
+    /// Accepts one routine proposal, which turns the routine on.
+    #[serde(rename = "agent.routine_proposal_accept")]
+    AgentRoutineProposalAccept,
+    /// Dismisses one routine proposal, so it is not proposed again.
+    #[serde(rename = "agent.routine_proposal_dismiss")]
+    AgentRoutineProposalDismiss,
+    /// Reads a template (a share link, JSON or Markdown) into an import preview.
+    #[serde(rename = "agent.import")]
+    AgentImport,
+    /// Saves an import preview as a new agent with its memories.
+    #[serde(rename = "agent.import_commit")]
+    AgentImportCommit,
+    /// Exports one agent as a Grok Bot setup or a Muniment agent file.
+    #[serde(rename = "agent.export")]
+    AgentExport,
+    /// Saves a webhook routine with a new secret, answered once.
+    #[serde(rename = "routine.webhook_create")]
+    RoutineWebhookCreate,
+    /// Replaces a webhook routine's secret, answered once.
+    #[serde(rename = "routine.webhook_rotate")]
+    RoutineWebhookRotate,
+    /// Reads where a webhook routine is reached.
+    #[serde(rename = "routine.webhook_info")]
+    RoutineWebhookInfo,
+    /// Lists every thread of one agent with its title and time.
+    #[serde(rename = "agent.threads")]
+    AgentThreads,
+    /// Lists the built-in tools, MCP servers and skills an agent on this
+    /// runtime can use.
+    #[serde(rename = "agent.tool_catalog")]
+    AgentToolCatalog,
+    /// Drafts an agent's settings from a description or a thread with one
+    /// model call. Nothing is saved.
+    #[serde(rename = "agent.draft")]
+    AgentDraft,
+    /// Lists the saved inputs of an agent's failed runs.
+    #[serde(rename = "agent.replays")]
+    AgentReplays,
+    /// Runs a failed run's saved inputs again against the agent's current
+    /// definition.
+    #[serde(rename = "agent.replay")]
+    AgentReplay,
+    /// Lists the permission modes, with which can be chosen now.
+    #[serde(rename = "permission.modes")]
+    PermissionModes,
+    /// Reads the runtime's permission settings: default modes, bypass and
+    /// the unattended wait.
+    #[serde(rename = "permission.settings")]
+    PermissionSettings,
+    /// Changes the runtime's permission settings.
+    #[serde(rename = "permission.settings_save")]
+    PermissionSettingsSave,
+    /// Reads where each Settings part keeps its values: shared across the
+    /// fleet, on each machine or on this computer, with the lines it shows.
+    #[serde(rename = "settings.scope")]
+    SettingsScope,
+    /// Reads the permission mode a thread runs in and where it comes from.
+    #[serde(rename = "thread.permission_mode")]
+    ThreadPermissionMode,
+    /// Sets the permission mode a thread runs in.
+    #[serde(rename = "thread.permission_mode_set")]
+    ThreadPermissionModeSet,
+    /// Reads the plan a thread's live run waits to have approved.
+    #[serde(rename = "thread.plan")]
+    ThreadPlan,
+    /// Approves a thread's waiting plan in a mode, or keeps planning.
+    #[serde(rename = "thread.plan_answer")]
+    ThreadPlanAnswer,
+    /// Reads the files one turn changed, by any tool, with their diff.
+    #[serde(rename = "run.changes")]
+    RunChanges,
+    /// Puts one file, or one hunk of it, back as it was before a turn.
+    #[serde(rename = "run.revert")]
+    RunRevert,
+    /// Reads what a rewind to before a turn restores and what it cannot.
+    #[serde(rename = "thread.rewind_preview")]
+    ThreadRewindPreview,
+    /// Rewinds a thread's conversation, and its files when asked, to before
+    /// a turn.
+    #[serde(rename = "thread.rewind")]
+    ThreadRewind,
+    /// Reads where an action forwarded to the swarm member that owns its
+    /// item stands.
+    #[serde(rename = "fleet.op_status")]
+    FleetOpStatus,
+    /// Reads the user's preferences, with which keys every swarm member
+    /// shares and which stay on this machine.
+    #[serde(rename = "preferences.get")]
+    PreferencesGet,
+    /// Sets or, with `null`, removes preferences by key.
+    #[serde(rename = "preferences.set")]
+    PreferencesSet,
+    /// Moves preferences a client kept in its own storage into the runtime
+    /// once. A key the runtime already holds keeps its value.
+    #[serde(rename = "preferences.import")]
+    PreferencesImport,
+    /// Sums what this runtime's runs used over a range, by provider, model,
+    /// agent and project, with each subscription window's allowance.
+    #[serde(rename = "usage.summary")]
+    UsageSummary,
+    /// Lists this runtime's agent runs, the approvals waiting in the swarm
+    /// and the next scheduled runs, for the notifications page.
+    #[serde(rename = "notifications.list")]
+    NotificationsList,
+    /// Cancels an action this member queued for another member before it
+    /// leaves this member.
+    #[serde(rename = "fleet.op_cancel")]
+    FleetOpCancel,
+    /// Lists the actions this member forwarded, newest first, optionally
+    /// by state.
+    #[serde(rename = "fleet.ops")]
+    FleetOps,
+}
+
+impl Operation {
+    /// Whether every request of the operation carries an idempotency key. A
+    /// `models.request` carries one when its action mutates, so this answers
+    /// false for it and `Request::validate_idempotency_key` reads the action.
+    pub fn requires_idempotency_key(self) -> bool {
+        matches!(
+            self,
+            Self::ThreadCreate
+                | Self::ThreadRename
+                | Self::ThreadDelete
+                | Self::SessionSignOut
+                | Self::SessionSignIn
+                | Self::CompanionRevoke
+                | Self::CompanyCreate
+                | Self::CompanySelect
+                | Self::CompanyRename
+                | Self::CompanyDelete
+                | Self::RecordCommit
+                | Self::ReaderRun
+                | Self::ReaderConnect
+                | Self::RunStart
+                | Self::RunSubmit
+                | Self::RunResume
+                | Self::RunPermissionAnswer
+                | Self::RunSteer
+                | Self::RunFollowUp
+                | Self::RunCancel
+                | Self::PermissionAnswer
+                | Self::PairingChallenge
+                | Self::PairingRevoke
+                | Self::ThreadCompact
+        )
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkspaceOnboard => "workspace.onboard",
+            Self::HomeEnsure => "home.ensure",
+            Self::ThreadList => "thread.list",
+            Self::ThreadOpen => "thread.open",
+            Self::ThreadSummaries => "thread.summaries",
+            Self::ThreadHistory => "thread.history",
+            Self::ThreadCreate => "thread.create",
+            Self::ThreadRename => "thread.rename",
+            Self::ThreadSelect => "thread.select",
+            Self::ThreadDelete => "thread.delete",
+            Self::SessionStatus => "session.status",
+            Self::EntitlementSnapshot => "entitlement.snapshot",
+            Self::DeviceList => "device.list",
+            Self::SessionSignOut => "session.sign_out",
+            Self::SessionSignIn => "session.sign_in",
+            Self::CompanionList => "companion.list",
+            Self::CompanionRevoke => "companion.revoke",
+            Self::CompanyList => "company.list",
+            Self::CompanyCreate => "company.create",
+            Self::CompanySelect => "company.select",
+            Self::CompanyRename => "company.rename",
+            Self::CompanyDelete => "company.delete",
+            Self::RecordSql => "record.sql",
+            Self::RecordPropose => "record.propose",
+            Self::RecordCommit => "record.commit",
+            Self::RecordKinds => "record.kinds",
+            Self::RecordQuery => "record.query",
+            Self::RecordEntity => "record.entity",
+            Self::RecordReport => "record.report",
+            Self::ReaderDescribe => "reader.describe",
+            Self::ReaderRun => "reader.run",
+            Self::ReaderQueue => "reader.queue",
+            Self::ReaderObjects => "reader.objects",
+            Self::ReaderConnect => "reader.connect",
+            Self::RunOpen => "run.open",
+            Self::RunStart => "run.start",
+            Self::RunSubmit => "run.submit",
+            Self::RunResume => "run.resume",
+            Self::RunPermissionAnswer => "run.permission_answer",
+            Self::RunStream => "run.stream",
+            Self::RunChatEvents => "run.chat_events",
+            Self::RunDetail => "run.detail",
+            Self::RunCursorAck => "run.cursor_ack",
+            Self::RunSteer => "run.steer",
+            Self::RunFollowUp => "run.follow_up",
+            Self::RunCancel => "run.cancel",
+            Self::PermissionAnswer => "permission.answer",
+            Self::ArtifactFetch => "artifact.fetch",
+            Self::ArtifactWindow => "artifact.window",
+            Self::RequestCancel => "request.cancel",
+            Self::MigrationControl => "migration.control",
+            Self::ApprovalPresent => "approval.present",
+            Self::RetentionRecheck => "retention.recheck",
+            Self::PairingChallenge => "pairing.challenge",
+            Self::PairingStatus => "pairing.status",
+            Self::PairingRevoke => "pairing.revoke",
+            Self::ThreadContextUsage => "thread.context_usage",
+            Self::ThreadCompact => "thread.compact",
+            Self::ContextSettings => "context.settings",
+            Self::ContextSettingsSave => "context.settings_save",
+            Self::ModelsRequest => "models.request",
+            Self::RemotePairingCreate => "remote.pairing_create",
+            Self::RemoteDeviceList => "remote.device_list",
+            Self::RemoteDeviceRevoke => "remote.device_revoke",
+            Self::RuntimeInfo => "runtime.info",
+            Self::RuntimeUpdate => "runtime.update",
+            Self::ModelsShare => "models.share",
+            Self::ModelsShareBundle => "models.share_bundle",
+            Self::ModelsVault => "models.vault",
+            Self::RemoteSettings => "remote.settings",
+            Self::RemoteSettingsSave => "remote.settings_save",
+            Self::AgentList => "agent.list",
+            Self::AgentRead => "agent.read",
+            Self::AgentSave => "agent.save",
+            Self::AgentDelete => "agent.delete",
+            Self::AgentRunNow => "agent.run_now",
+            Self::AgentRuns => "agent.runs",
+            Self::RoutineList => "routine.list",
+            Self::RoutineSave => "routine.save",
+            Self::RoutineDelete => "routine.delete",
+            Self::SwarmInvite => "swarm.invite",
+            Self::SwarmJoin => "swarm.join",
+            Self::SwarmLeave => "swarm.leave",
+            Self::SwarmMembers => "swarm.members",
+            Self::SwarmAgents => "swarm.agents",
+            Self::SwarmExchange => "swarm.exchange",
+            Self::SwarmResume => "swarm.resume",
+            Self::FleetHoldSignIn => "fleet.hold_sign_in",
+            Self::FleetCredentials => "fleet.credentials",
+            Self::FleetPins => "fleet.pins",
+            Self::FleetPinSet => "fleet.pin_set",
+            Self::BlobRead => "blob.read",
+            Self::SwarmSetRole => "swarm.set_role",
+            Self::FleetAudit => "fleet.audit",
+            Self::ThreadPost => "thread.post",
+            Self::FleetSyncStatus => "fleet.sync_status",
+            Self::FleetOfflineSet => "fleet.offline_set",
+            Self::ThreadHistoryFetch => "thread.history_fetch",
+            Self::AgentMove => "agent.move",
+            Self::AgentApprovals => "agent.approvals",
+            Self::AgentApprovalAnswer => "agent.approval_answer",
+            Self::GroupCreate => "group.create",
+            Self::GroupList => "group.list",
+            Self::GroupUpdate => "group.update",
+            Self::AgentRoutineProposals => "agent.routine_proposals",
+            Self::AgentRoutineProposalAccept => "agent.routine_proposal_accept",
+            Self::AgentRoutineProposalDismiss => "agent.routine_proposal_dismiss",
+            Self::AgentImport => "agent.import",
+            Self::AgentImportCommit => "agent.import_commit",
+            Self::AgentExport => "agent.export",
+            Self::RoutineWebhookCreate => "routine.webhook_create",
+            Self::RoutineWebhookRotate => "routine.webhook_rotate",
+            Self::RoutineWebhookInfo => "routine.webhook_info",
+            Self::AgentThreads => "agent.threads",
+            Self::AgentToolCatalog => "agent.tool_catalog",
+            Self::AgentDraft => "agent.draft",
+            Self::AgentReplays => "agent.replays",
+            Self::AgentReplay => "agent.replay",
+            Self::PermissionModes => "permission.modes",
+            Self::PermissionSettings => "permission.settings",
+            Self::PermissionSettingsSave => "permission.settings_save",
+            Self::SettingsScope => "settings.scope",
+            Self::ThreadPermissionMode => "thread.permission_mode",
+            Self::ThreadPermissionModeSet => "thread.permission_mode_set",
+            Self::ThreadPlan => "thread.plan",
+            Self::ThreadPlanAnswer => "thread.plan_answer",
+            Self::RunChanges => "run.changes",
+            Self::RunRevert => "run.revert",
+            Self::ThreadRewindPreview => "thread.rewind_preview",
+            Self::ThreadRewind => "thread.rewind",
+            Self::FleetOpStatus => "fleet.op_status",
+            Self::PreferencesGet => "preferences.get",
+            Self::PreferencesSet => "preferences.set",
+            Self::PreferencesImport => "preferences.import",
+            Self::UsageSummary => "usage.summary",
+            Self::NotificationsList => "notifications.list",
+            Self::FleetOpCancel => "fleet.op_cancel",
+            Self::FleetOps => "fleet.ops",
+        }
+    }
+
+    /// Whether the swarm answers the operation: links, the directory, thread
+    /// posts, moves, approvals, group chats and the fleet's sync status.
+    pub fn is_swarm_operation(self) -> bool {
+        matches!(
+            self,
+            Self::SwarmInvite
+                | Self::SwarmJoin
+                | Self::SwarmLeave
+                | Self::SwarmMembers
+                | Self::SwarmAgents
+                | Self::SwarmExchange
+                | Self::SwarmResume
+                | Self::FleetHoldSignIn
+                | Self::FleetCredentials
+                | Self::FleetPins
+                | Self::FleetPinSet
+                | Self::BlobRead
+                | Self::SwarmSetRole
+                | Self::FleetAudit
+                | Self::ThreadPost
+                | Self::FleetSyncStatus
+                | Self::FleetOfflineSet
+                | Self::ThreadHistoryFetch
+                | Self::AgentMove
+                | Self::AgentApprovals
+                | Self::AgentApprovalAnswer
+                | Self::GroupCreate
+                | Self::GroupList
+                | Self::GroupUpdate
+                | Self::FleetOpStatus
+                | Self::FleetOpCancel
+                | Self::FleetOps
+        )
+    }
+
+    /// Whether the operation manages agents: reads, changes or runs them.
+    pub fn is_agent_operation(self) -> bool {
+        matches!(
+            self,
+            Self::AgentList
+                | Self::AgentRead
+                | Self::AgentSave
+                | Self::AgentDelete
+                | Self::AgentRunNow
+                | Self::AgentRuns
+                | Self::RoutineList
+                | Self::RoutineSave
+                | Self::RoutineDelete
+                | Self::AgentRoutineProposals
+                | Self::AgentRoutineProposalAccept
+                | Self::AgentRoutineProposalDismiss
+                | Self::AgentImport
+                | Self::AgentImportCommit
+                | Self::AgentExport
+                | Self::RoutineWebhookCreate
+                | Self::RoutineWebhookRotate
+                | Self::RoutineWebhookInfo
+                | Self::AgentThreads
+                | Self::AgentToolCatalog
+                | Self::AgentDraft
+                | Self::AgentReplays
+                | Self::AgentReplay
+                | Self::PermissionModes
+                | Self::PermissionSettings
+                | Self::PermissionSettingsSave
+                | Self::SettingsScope
+                | Self::ThreadPermissionMode
+                | Self::ThreadPermissionModeSet
+                | Self::ThreadPlan
+                | Self::ThreadPlanAnswer
+                | Self::PreferencesGet
+                | Self::PreferencesSet
+                | Self::PreferencesImport
+                | Self::UsageSummary
+                | Self::NotificationsList
+                | Self::RunChanges
+                | Self::RunRevert
+                | Self::ThreadRewindPreview
+                | Self::ThreadRewind
+        )
+    }
+
+    /// Whether the operation reads a turn's checkpoints or writes one back.
+    /// Each is also an agent operation.
+    pub fn is_checkpoint_operation(self) -> bool {
+        matches!(
+            self,
+            Self::RunChanges | Self::RunRevert | Self::ThreadRewindPreview | Self::ThreadRewind
+        )
+    }
+
+    /// Whether the operation reads or changes the user's preferences. Each
+    /// is also an agent operation.
+    pub fn is_preferences_operation(self) -> bool {
+        matches!(
+            self,
+            Self::PreferencesGet | Self::PreferencesSet | Self::PreferencesImport
+        )
+    }
+
+    /// Whether the operation reads or changes permission modes, settings or
+    /// a thread's plan. Each is also an agent operation.
+    pub fn is_permission_operation(self) -> bool {
+        matches!(
+            self,
+            Self::PermissionModes
+                | Self::PermissionSettings
+                | Self::PermissionSettingsSave
+                | Self::ThreadPermissionMode
+                | Self::ThreadPermissionModeSet
+                | Self::ThreadPlan
+                | Self::ThreadPlanAnswer
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EventName {
+    #[serde(rename = "run.event")]
+    RunEvent,
+    #[serde(rename = "chat.event")]
+    ChatEvent,
+    #[serde(rename = "subscription.caught_up")]
+    SubscriptionCaughtUp,
+    #[serde(rename = "permission.pending")]
+    PermissionPending,
+    #[serde(rename = "artifact.chunk")]
+    ArtifactChunk,
+    #[serde(rename = "artifact.complete")]
+    ArtifactComplete,
+    #[serde(rename = "request.cancelled")]
+    RequestCancelled,
+    #[serde(rename = "capability.revoked")]
+    CapabilityRevoked,
+    #[serde(rename = "stream.closed")]
+    StreamClosed,
+    /// One step of a provider sign-in the model service runs, on the
+    /// chat-event subscription.
+    #[serde(rename = "models.login")]
+    ModelsLogin,
+    /// A client asked the host to update the runtime, on the local owner's
+    /// chat-event subscription.
+    #[serde(rename = "runtime.update_requested")]
+    RuntimeUpdateRequested,
+    /// The runtime's update moved to a new state, on a chat-event
+    /// subscription that asked for `update_status`.
+    #[serde(rename = "runtime.update_status")]
+    RuntimeUpdateStatus,
+    /// An agent run changed, on a chat-event subscription that asked for
+    /// `agent_runs`. The body is the run.
+    #[serde(rename = "agent.run_updated")]
+    AgentRunUpdated,
+    /// The swarm's members, links, agent directory, groups or absence pause
+    /// changed, on a chat-event subscription that asked for `swarm`.
+    #[serde(rename = "swarm.changed")]
+    SwarmChanged,
+    /// An agent run on any swarm member waits at an approval, on a
+    /// chat-event subscription that asked for `swarm`.
+    #[serde(rename = "agent.approval_pending")]
+    AgentApprovalPending,
+    /// A pending agent approval was answered or closed.
+    #[serde(rename = "agent.approval_resolved")]
+    AgentApprovalResolved,
+    /// An agent on any swarm member changed what it does: `{agent_id,
+    /// runtime_id, activity}`, on a chat-event subscription that asked for
+    /// `swarm_live`.
+    #[serde(rename = "agent.activity")]
+    AgentActivity,
+    /// A message was posted to a group thread on any swarm member:
+    /// `{group_id, thread_id, post}`, on a chat-event subscription that
+    /// asked for `swarm_live`.
+    #[serde(rename = "group.posted")]
+    GroupPosted,
+    /// This runtime's sync status changed while it caught up, with the
+    /// `fleet.sync_status` body, on a chat-event subscription that asked for
+    /// `swarm`.
+    #[serde(rename = "fleet.sync_changed")]
+    FleetSyncChanged,
+    /// An action this member forwarded to the member that owns its item
+    /// changed state: `queued`, `sent`, `applied` or `failed`, on a
+    /// chat-event subscription that asked for `fleet`.
+    #[serde(rename = "fleet.op_updated")]
+    FleetOpUpdated,
+    /// Preferences changed, here or on another swarm member: `{values,
+    /// source}`, where a removed key's value is `null` and `source` is
+    /// `local` or `fleet`, on a chat-event subscription that asked for
+    /// `fleet`.
+    #[serde(rename = "preferences.changed")]
+    PreferencesChanged,
+    #[serde(untagged)]
+    Unknown(BoundedEventName),
+}
+
+/// A future v1 event name retained so a receiver can safely ignore the event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedEventName(String);
+
+impl BoundedEventName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Serialize for BoundedEventName {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for BoundedEventName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty() || value.len() > MAX_TEXT_LENGTH {
+            return Err(de::Error::custom("invalid event name"));
+        }
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorAction {
+    UpgradeCompanion,
+    UpgradeDesktop,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Success;
+
+impl Serialize for Success {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+impl<'de> Deserialize<'de> for Success {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        bool::deserialize(deserializer)?
+            .then_some(Self)
+            .ok_or_else(|| de::Error::custom("ok must be true"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Failure;
+
+impl Serialize for Failure {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(false)
+    }
+}
+impl<'de> Deserialize<'de> for Failure {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        (!bool::deserialize(deserializer)?)
+            .then_some(Self)
+            .ok_or_else(|| de::Error::custom("ok must be false"))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorMessage {
+    #[serde(rename = "The companion and desktop protocol versions are incompatible.")]
+    ProtocolIncompatible,
+    #[serde(rename = "The payload exceeds the allowed size.")]
+    PayloadTooLarge,
+    #[serde(rename = "The frame is malformed.")]
+    MalformedFrame,
+    #[serde(rename = "An idempotency key is required for this operation.")]
+    IdempotencyKeyRequired,
+    #[serde(rename = "An idempotency key is not valid for this operation.")]
+    IdempotencyKeyForbidden,
+    #[serde(rename = "The idempotency key was already used for a different request.")]
+    IdempotencyConflict,
+    #[serde(rename = "The request could not be committed.")]
+    PersistenceFailed,
+    #[serde(rename = "Native authorization failed. Try sign-in again.")]
+    AuthorizationFailed,
+    #[serde(rename = "The desktop is busy with another request.")]
+    DesktopBusy,
+    #[serde(rename = "The stream cursor is invalid.")]
+    InvalidCursor,
+    #[serde(rename = "The artifact transfer cursor is invalid.")]
+    InvalidArtifactCursor,
+    #[serde(rename = "Artifact consumer is too slow.")]
+    SlowConsumer,
+    #[serde(rename = "The request is invalid.")]
+    InvalidRequest,
+    #[serde(rename = "The thread was not found.")]
+    ThreadNotFound,
+    #[serde(rename = "The artifact transfer was not found.")]
+    TransferNotFound,
+    #[serde(rename = "The capability is not authorized.")]
+    Unauthorized,
+    #[serde(rename = "The operation is not supported.")]
+    UnsupportedOperation,
+    #[serde(rename = "The desktop cannot hand off ownership yet.")]
+    MigrationNotReady,
+    #[serde(rename = "The runtime is draining and cannot accept new work.")]
+    RuntimeDraining,
+    #[serde(rename = "The subscription was not found.")]
+    SubscriptionNotFound,
+    #[serde(rename = "The target has already completed.")]
+    AlreadyCompleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProtocolError {
+    code: ErrorCode,
+    message: ErrorMessage,
+    retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action: Option<ErrorAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    details: Option<ErrorDetails>,
+}
+
+impl ProtocolError {
+    pub fn protocol_incompatible(supported: VersionRange, action: ErrorAction) -> Self {
+        Self {
+            code: ErrorCode::ProtocolIncompatible,
+            message: ErrorMessage::ProtocolIncompatible,
+            retryable: false,
+            action: Some(action),
+            details: Some(ErrorDetails::SupportedVersions { supported }),
+        }
+    }
+
+    pub fn payload_too_large() -> Self {
+        Self::simple(ErrorCode::PayloadTooLarge, ErrorMessage::PayloadTooLarge)
+    }
+
+    pub fn malformed_frame() -> Self {
+        Self::simple(ErrorCode::MalformedFrame, ErrorMessage::MalformedFrame)
+    }
+
+    pub fn idempotency_key_required() -> Self {
+        Self::simple(
+            ErrorCode::IdempotencyKeyRequired,
+            ErrorMessage::IdempotencyKeyRequired,
+        )
+    }
+    pub fn idempotency_key_forbidden() -> Self {
+        Self::simple(
+            ErrorCode::IdempotencyKeyForbidden,
+            ErrorMessage::IdempotencyKeyForbidden,
+        )
+    }
+    pub fn idempotency_conflict() -> Self {
+        Self::simple(
+            ErrorCode::IdempotencyConflict,
+            ErrorMessage::IdempotencyConflict,
+        )
+    }
+    pub fn persistence_failed() -> Self {
+        let mut error = Self::simple(
+            ErrorCode::PersistenceFailed,
+            ErrorMessage::PersistenceFailed,
+        );
+        error.retryable = true;
+        error
+    }
+
+    pub fn persistence_failed_with_reason(reason: impl Into<String>) -> Self {
+        let mut error = Self::persistence_failed();
+        error.details = Some(ErrorDetails::RequestReason {
+            reason: reason.into(),
+        });
+        error
+    }
+
+    pub fn authorization_failed(reason: impl Into<String>) -> Self {
+        let mut error = Self::simple(
+            ErrorCode::AuthorizationFailed,
+            ErrorMessage::AuthorizationFailed,
+        );
+        error.details = Some(ErrorDetails::RequestReason {
+            reason: reason.into(),
+        });
+        error
+    }
+
+    pub fn desktop_busy() -> Self {
+        let mut error = Self::simple(ErrorCode::DesktopBusy, ErrorMessage::DesktopBusy);
+        error.retryable = true;
+        error
+    }
+
+    pub fn invalid_cursor() -> Self {
+        Self::simple(ErrorCode::InvalidCursor, ErrorMessage::InvalidCursor)
+    }
+
+    pub fn invalid_artifact_cursor() -> Self {
+        Self::simple(
+            ErrorCode::InvalidArtifactCursor,
+            ErrorMessage::InvalidArtifactCursor,
+        )
+    }
+
+    pub fn slow_consumer() -> Self {
+        let mut error = Self::simple(ErrorCode::SlowConsumer, ErrorMessage::SlowConsumer);
+        error.retryable = true;
+        error
+    }
+
+    pub fn invalid_request() -> Self {
+        Self::simple(ErrorCode::InvalidRequest, ErrorMessage::InvalidRequest)
+    }
+
+    pub fn invalid_request_with_reason(reason: impl Into<String>) -> Self {
+        let mut error = Self::invalid_request();
+        error.details = Some(ErrorDetails::RequestReason {
+            reason: reason.into(),
+        });
+        error
+    }
+
+    pub fn thread_not_found() -> Self {
+        Self::simple(ErrorCode::ThreadNotFound, ErrorMessage::ThreadNotFound)
+    }
+
+    pub fn transfer_not_found() -> Self {
+        Self::simple(ErrorCode::TransferNotFound, ErrorMessage::TransferNotFound)
+    }
+
+    pub fn unauthorized() -> Self {
+        Self::simple(ErrorCode::Unauthorized, ErrorMessage::Unauthorized)
+    }
+
+    pub fn unauthorized_with_reason(reason: impl Into<String>) -> Self {
+        let mut error = Self::unauthorized();
+        error.details = Some(ErrorDetails::RequestReason {
+            reason: reason.into(),
+        });
+        error
+    }
+
+    pub fn unsupported_operation() -> Self {
+        Self::simple(
+            ErrorCode::UnsupportedOperation,
+            ErrorMessage::UnsupportedOperation,
+        )
+    }
+
+    pub fn migration_not_ready() -> Self {
+        let mut error = Self::simple(
+            ErrorCode::MigrationNotReady,
+            ErrorMessage::MigrationNotReady,
+        );
+        error.retryable = true;
+        error
+    }
+
+    pub fn runtime_draining() -> Self {
+        let mut error = Self::simple(ErrorCode::RuntimeDraining, ErrorMessage::RuntimeDraining);
+        error.retryable = true;
+        error
+    }
+
+    pub fn subscription_not_found() -> Self {
+        Self::simple(
+            ErrorCode::SubscriptionNotFound,
+            ErrorMessage::SubscriptionNotFound,
+        )
+    }
+
+    pub fn already_completed() -> Self {
+        Self::simple(ErrorCode::AlreadyCompleted, ErrorMessage::AlreadyCompleted)
+    }
+
+    fn simple(code: ErrorCode, message: ErrorMessage) -> Self {
+        Self {
+            code,
+            message,
+            retryable: false,
+            action: None,
+            details: None,
+        }
+    }
+
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+    pub fn message(&self) -> ErrorMessage {
+        self.message
+    }
+    pub fn retryable(&self) -> bool {
+        self.retryable
+    }
+    pub fn action(&self) -> Option<ErrorAction> {
+        self.action
+    }
+    pub fn details(&self) -> Option<&ErrorDetails> {
+        self.details.as_ref()
+    }
+}
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "code={} reason={}",
+            serde_json::to_value(self.code).map_err(|_| std::fmt::Error)?,
+            match &self.details {
+                Some(ErrorDetails::RequestReason { reason }) => serde_json::to_value(reason),
+                _ => serde_json::to_value(self.message),
+            }
+            .map_err(|_| std::fmt::Error)?,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for ProtocolError {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            code: ErrorCode,
+            message: ErrorMessage,
+            retryable: bool,
+            #[serde(default)]
+            action: Option<ErrorAction>,
+            #[serde(default)]
+            details: Option<ErrorDetails>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let mut expected = match (wire.code, wire.action, wire.details) {
+            (
+                ErrorCode::ProtocolIncompatible,
+                Some(action),
+                Some(ErrorDetails::SupportedVersions { supported }),
+            ) => Self::protocol_incompatible(supported, action),
+            (ErrorCode::PayloadTooLarge, None, None) => Self::payload_too_large(),
+            (ErrorCode::MalformedFrame, None, None) => Self::malformed_frame(),
+            (ErrorCode::IdempotencyKeyRequired, None, None) => Self::idempotency_key_required(),
+            (ErrorCode::IdempotencyKeyForbidden, None, None) => Self::idempotency_key_forbidden(),
+            (ErrorCode::IdempotencyConflict, None, None) => Self::idempotency_conflict(),
+            (ErrorCode::PersistenceFailed, None, None) => Self::persistence_failed(),
+            (ErrorCode::PersistenceFailed, None, Some(ErrorDetails::RequestReason { reason })) => {
+                Self::persistence_failed_with_reason(reason)
+            }
+            (
+                ErrorCode::AuthorizationFailed,
+                None,
+                Some(ErrorDetails::RequestReason { reason }),
+            ) => Self::authorization_failed(reason),
+            (ErrorCode::DesktopBusy, None, None) => Self::desktop_busy(),
+            (ErrorCode::InvalidCursor, None, None) => Self::invalid_cursor(),
+            (ErrorCode::InvalidArtifactCursor, None, None) => Self::invalid_artifact_cursor(),
+            (ErrorCode::SlowConsumer, None, None) => Self::slow_consumer(),
+            (ErrorCode::InvalidRequest, None, None) => Self::invalid_request(),
+            (ErrorCode::InvalidRequest, None, Some(ErrorDetails::RequestReason { reason })) => {
+                Self::invalid_request_with_reason(reason)
+            }
+            (ErrorCode::ThreadNotFound, None, None) => Self::thread_not_found(),
+            (ErrorCode::TransferNotFound, None, None) => Self::transfer_not_found(),
+            (ErrorCode::Unauthorized, None, None) => Self::unauthorized(),
+            (ErrorCode::Unauthorized, None, Some(ErrorDetails::RequestReason { reason })) => {
+                Self::unauthorized_with_reason(reason)
+            }
+            (ErrorCode::UnsupportedOperation, None, None) => Self::unsupported_operation(),
+            (ErrorCode::MigrationNotReady, None, None) => Self::migration_not_ready(),
+            (ErrorCode::RuntimeDraining, None, None) => Self::runtime_draining(),
+            (ErrorCode::SubscriptionNotFound, None, None) => Self::subscription_not_found(),
+            (ErrorCode::AlreadyCompleted, None, None) => Self::already_completed(),
+            _ => return Err(de::Error::custom("invalid error schema")),
+        };
+        if matches!(
+            wire.code,
+            ErrorCode::MigrationNotReady | ErrorCode::RuntimeDraining
+        ) {
+            expected.retryable = wire.retryable;
+        }
+        if wire.message != expected.message || wire.retryable != expected.retryable {
+            return Err(de::Error::custom("invalid error schema"));
+        }
+        Ok(expected)
+    }
+}
+
+/// Structured error details. Request reasons come from runtime validation.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ErrorDetails {
+    SupportedVersions { supported: VersionRange },
+    RequestReason { reason: String },
+}
+
+impl<'de> Deserialize<'de> for ErrorDetails {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[serde(untagged)]
+        enum Details {
+            SupportedVersions { supported: VersionRange },
+            RequestReason { reason: String },
+        }
+
+        match Details::deserialize(deserializer)? {
+            Details::SupportedVersions { supported } => Ok(Self::SupportedVersions { supported }),
+            Details::RequestReason { reason } => Ok(Self::RequestReason { reason }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionRange {
+    pub min: u32,
+    pub max: u32,
+}

@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import ModelPicker from './ModelPicker.svelte'
-import ProjectRow from './ProjectRow.svelte'
+import ProjectItem from '../sidebar/ProjectItem.svelte'
 
 afterEach(cleanup)
 
@@ -17,7 +17,7 @@ it('closes the model selector with its X or Escape outside the search field', as
 
 it('opens project actions during a reply while keeping new thread disabled', async () => {
   const onrename = vi.fn()
-  render(ProjectRow, { name: 'General', expanded: true, disabled: true, onrename, onopen: vi.fn() })
+  render(ProjectItem, { name: 'General', expanded: true, disabled: true, onrename, onopen: vi.fn() })
   await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project General' }))
   expect(screen.getByRole('menuitem', { name: 'New thread' })).toBeDisabled()
   await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))

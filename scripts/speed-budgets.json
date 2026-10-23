@@ -1,0 +1,10 @@
+{
+  "launchToComposerMs": 1000,
+  "pageToComposerMs": 1000,
+  "keystrokeP95Ms": 16,
+  "sendToFirstTokenMs": 3000,
+  "firstTokenEventToPaintMs": 50,
+  "idleCpuPercent": 0.5,
+  "idleFootprintMb": 300,
+  "idleRssMb": 600
+}

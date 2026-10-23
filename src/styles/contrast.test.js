@@ -65,16 +65,15 @@ describe('§1.3 text token contrast', () => {
       expect(source).toContain(`[data-swatch][data-theme="${name}"]`)
     }
     expect(themes).toHaveLength(24)
-    expect(palettes['moss-light']).toEqual(palettes['default light'])
-    expect(palettes['moss-dark']).toEqual(palettes['default dark'])
-    expect(palettes['moss-dark'].paper).toBe('#000000')
-    // Every high contrast set holds pure ink on pure paper.
+    expect(palettes['moss-vibrant-light']).toEqual(palettes['default light'])
+    expect(palettes['moss-vibrant-dark']).toEqual(palettes['default dark'])
+    // Every high contrast set holds pure ink on pure white paper in light and near-black paper in dark.
     for (const color of colors) {
       expect([palettes[`${color}-contrast-light`].ink, palettes[`${color}-contrast-light`].paper]).toEqual(['#000000', '#FFFFFF'])
-      expect([palettes[`${color}-contrast-dark`].ink, palettes[`${color}-contrast-dark`].paper]).toEqual(['#FFFFFF', '#000000'])
+      expect([palettes[`${color}-contrast-dark`].ink, palettes[`${color}-contrast-dark`].paper]).toEqual(['#FFFFFF', '#0A0A0A'])
     }
-    // Every vibrant set carries an accent, and every other set leaves it out.
-    for (const name of themes) expect(source.match(themeBlock(name))[1].includes('--accent:'), name).toBe(name.includes('-vibrant-'))
+    // Every set carries an accent for its primary actions.
+    for (const name of themes) for (const token of ['accent', 'accent-soft', 'on-accent']) expect(source.match(themeBlock(name))[1], `${name} --${token}`).toMatch(new RegExp(`--${token}:`))
   })
 
   it('detects a color below the contrast floor', () => {
@@ -83,10 +82,128 @@ describe('§1.3 text token contrast', () => {
   })
 })
 
-it('keeps vibrant accents readable on action surfaces and filled buttons', () => {
-  for (const name of themes.filter((theme) => theme.includes('-vibrant-'))) {
+it('keeps every accent readable on action surfaces and filled buttons', () => {
+  for (const name of [...themes, 'default light', 'default dark']) {
     const palette = palettes[name]
     expect(contrastRatio(palette.accent, palette['accent-soft'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(palette.accent, palette['on-accent'])).toBeGreaterThanOrEqual(4.5)
+    // Selection draws the accent on its soft fill over paper and surface.
+    for (const background of ['paper', 'surface']) expect(contrastRatio(palette.accent, palette[background]), `${name} accent on ${background}`).toBeGreaterThanOrEqual(4.5)
+    for (const foreground of ['ink', 'muted']) expect(contrastRatio(palette[foreground], palette['accent-soft']), `${name} ${foreground} on accent-soft`).toBeGreaterThanOrEqual(4.5)
+  }
+})
+
+// Each accent stays in its color's hue family, so selection, focus and primary
+// buttons sit in harmony with the surfaces the color tints.
+const hue = (hex) => {
+  const [r, g, b] = hex.match(/[\dA-F]{2}/gi).map((channel) => parseInt(channel, 16) / 255)
+  const [max, min] = [Math.max(r, g, b), Math.min(r, g, b)]
+  const delta = max - min
+  const sector = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4
+  return (sector * 60 + 360) % 360
+}
+const hueDistance = (first, second) => Math.min(Math.abs(first - second), 360 - Math.abs(first - second))
+
+it('keeps every accent in the hue family of its color', () => {
+  for (const name of [...themes, 'default light', 'default dark']) {
+    const palette = palettes[name]
+    expect(hueDistance(hue(palette.accent), hue(palette.signal)), `${name} accent hue`).toBeLessThanOrEqual(30)
+  }
+})
+
+// The state tokens hold a light and a dark value. Each clears 4.5:1 on the
+// paper, surface and faint of every theme in its scheme, on its own soft
+// fill, 14% of the state color over surface or faint, under chips and tinted
+// buttons, and on a tinted button's hover fill, 20% over surface.
+const states = Object.fromEntries([...source.matchAll(/--(success|active|danger|warning):\s*light-dark\((#[\dA-F]{6}),\s*(#[\dA-F]{6})\)/gi)]
+  .map(([, token, light, dark]) => [token, { light, dark }]))
+const mixed = (color, base, share) => `#${[0, 2, 4].map((at) => Math.round(parseInt(color.slice(1 + at, 3 + at), 16) * share + parseInt(base.slice(1 + at, 3 + at), 16) * (1 - share)).toString(16).padStart(2, '0')).join('')}`
+
+it('keeps every state color readable in every theme and on its chip', () => {
+  expect(Object.keys(states)).toEqual(['success', 'active', 'danger', 'warning'])
+  for (const [name, palette] of Object.entries(palettes)) {
+    const scheme = name.endsWith('dark') ? 'dark' : 'light'
+    for (const [token, values] of Object.entries(states)) {
+      const color = values[scheme]
+      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14), mixed(color, palette.faint, .14), mixed(color, palette.surface, .2)]) {
+        expect(contrastRatio(color, background), `${name} --${token} on ${background}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  }
+})
+
+// Starter tints are icon colors: each clears 3:1 on the paper, surface and
+// faint of every theme in its scheme, and on its own soft fill.
+const tints = Object.fromEntries([...source.matchAll(/--tint-([a-z]+):\s*light-dark\((#[\dA-F]{6}),\s*(#[\dA-F]{6})\)/gi)]
+  .map(([, token, light, dark]) => [token, { light, dark }]))
+
+it('keeps every starter tint visible in every theme', () => {
+  expect(Object.keys(tints)).toEqual(['green', 'blue', 'amber', 'rose', 'teal', 'orange'])
+  for (const [name, palette] of Object.entries(palettes)) {
+    const scheme = name.endsWith('dark') ? 'dark' : 'light'
+    for (const [token, values] of Object.entries(tints)) {
+      const color = values[scheme]
+      for (const background of [palette.paper, palette.surface, palette.faint, mixed(color, palette.surface, .14)]) {
+        expect(contrastRatio(color, background), `${name} --tint-${token} on ${background}`).toBeGreaterThanOrEqual(3)
+      }
+    }
+  }
+})
+
+// Secondary text keeps 4.5:1 wherever it lands, not only on the three base
+// surfaces: on the selection fill, and on the sidebar the frames derive from
+// the theme in src/styles/panels.css. Framed quiets the sidebar's ink toward
+// paper over a paper-based faint and keeps the theme's muted. Frameless sets the sidebar on a panel
+// a step from surface toward ink.
+const frames = (palette) => ({
+  framed: {
+    ink: mixed(palette.ink, palette.paper, .78),
+    muted: palette.muted,
+    backgrounds: [palette.paper, mixed(palette.ink, palette.paper, .07)],
+  },
+  frameless: {
+    ink: palette.ink,
+    muted: palette.muted,
+    backgrounds: [mixed(palette.ink, palette.surface, .05), mixed(palette.ink, palette.surface, .10)],
+  },
+})
+
+it('keeps secondary text at 4.5:1 on the selection fill and on both sidebar frames', () => {
+  for (const name of themes) {
+    const palette = palettes[name]
+    const selected = name.includes('-vibrant-') ? palette['accent-soft'] : palette.faint
+    expect(contrastRatio(palette.muted, selected), `${name} muted on the selection fill`).toBeGreaterThanOrEqual(4.5)
+    for (const [frame, { ink, muted, backgrounds }] of Object.entries(frames(palette))) {
+      for (const background of backgrounds) {
+        expect(contrastRatio(muted, background), `${name} ${frame} sidebar muted on ${background}`).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(ink, background), `${name} ${frame} sidebar ink on ${background}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  }
+})
+
+// The focus ring is the accent in every set. As a part of a control it
+// clears 3:1 on every surface it can sit on.
+it('keeps the focus ring at 3:1 on every surface', () => {
+  for (const name of themes) {
+    const palette = palettes[name]
+    const ring = palette.accent
+    for (const background of [palette.paper, palette.surface, palette.faint]) {
+      expect(contrastRatio(ring, background), `${name} focus ring on ${background}`).toBeGreaterThanOrEqual(3)
+    }
+  }
+})
+
+// No dark theme paints a surface pure black. High contrast keeps a near-black
+// paper, #0A0A0A, because its job is the widest step from white ink: white on
+// it stays above 19:1 where pure black gives 21:1. Every other dark set lifts
+// its paper to a dark gray.
+it('paints no dark surface pure black', () => {
+  for (const name of [...themes.filter((theme) => theme.endsWith('-dark')), 'default dark']) {
+    const palette = palettes[name]
+    for (const token of ['paper', 'surface', 'faint']) expect(palette[token].toUpperCase(), `${name} --${token}`).not.toBe('#000000')
+    const floor = name.includes('-contrast-') ? relativeLuminance('#0A0A0A') : relativeLuminance('#0E1010')
+    expect(relativeLuminance(palette.paper), `${name} --paper`).toBeGreaterThanOrEqual(floor)
+    if (name.includes('-contrast-')) expect(contrastRatio(palette.ink, palette.paper)).toBeGreaterThan(19)
   }
 })

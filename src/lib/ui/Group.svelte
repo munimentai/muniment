@@ -3,8 +3,13 @@
   // actions, then its rows in one bordered card. Every Settings page builds
   // its sections from Group and Row, so the pages share one design. A plain
   // group keeps the heading and drops the card, for a grid of cards.
-  // `trail` puts a control after the heading text, before the count.
-  let { heading = '', description = '', label = '', count = null, level = 4, plain = false, lead, trail, actions, children } = $props()
+  // `trail` puts a control after the heading text, before the count. `info`
+  // holds an explanation behind an info control beside the heading, where
+  // `description` stays visible under it.
+  // A group inside a part of a Settings page sits one heading level down.
+  import { getContext } from 'svelte'
+  import InfoTip from './InfoTip.svelte'
+  let { heading = '', description = '', info = '', label = '', count = null, level = getContext('page-part') ? 5 : 4, plain = false, lead, trail, actions, children } = $props()
   const id = $props.id()
 </script>
 
@@ -13,8 +18,9 @@
     <div class="group-head">
       {#if heading}
         <div class="group-title">
-          <svelte:element this={`h${level}`} id={`${id}-heading`} class="settings-heading group-heading">{@render lead?.()}{heading}{#if count !== null && !trail}<span class="group-count">{count}</span>{/if}</svelte:element>
+          <svelte:element this={`h${level}`} id={`${id}-heading`} class="settings-heading group-heading" aria-describedby={info ? `${id}-info` : undefined}>{@render lead?.()}{heading}{#if count !== null && !trail}<span class="group-count">{count}</span>{/if}</svelte:element>
           {#if trail}{@render trail()}{#if count !== null}<span class="group-count">{count}</span>{/if}{/if}
+          <InfoTip id={`${id}-info`} text={info} label={`About ${heading}`} />
         </div>
       {/if}
       {#if actions}<div class="group-actions">{@render actions()}</div>{/if}
@@ -27,7 +33,7 @@
 <style>
   .group { display: grid; gap: 10px; min-width: 0; }
   .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
-  .group-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .group-title { display: flex; align-items: center; gap: 4px 8px; min-width: 0; }
   .group-heading { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; }
   .group-count { color: var(--muted); font: var(--weight-regular) var(--text-12) var(--font-mono); }
   .group-actions { display: flex; flex: none; align-items: center; gap: 6px; }

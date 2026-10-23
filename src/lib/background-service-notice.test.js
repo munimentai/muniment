@@ -44,7 +44,7 @@ describe('runtime notice', () => {
     ['disconnected', 'The runtime connection closed.'],
     ['exited', 'The runtime exited.'],
     ['startFailed', 'The runtime start failed.'],
-    ['requiresApproval', 'The runtime registration needs approval.'],
+    ['requiresApproval', 'The runtime registration needs approval in System Settings > General > Login Items.'],
     ['approved', 'The runtime registration has approval.'],
     ['notFound', 'The runtime registration found no service.'],
     ['registrationFailed', 'The runtime registration failed.'],
@@ -126,6 +126,24 @@ describe('runtime notice', () => {
     expect(window.invoke.mock.calls.filter(([command]) => command === 'runtime_start')).toHaveLength(2)
     window.notice.cleanup()
     vi.restoreAllMocks()
+  })
+
+  it('names a foreground-only runtime once the workspace connects, with Open Login Items', async () => {
+    expect(runtimeNotice(snapshot(1, 'connected', false)).foregroundOnly).toBeNull()
+    const window = setup({ ...snapshot(1, 'connected', false), foregroundOnly: true })
+    await window.notice.start()
+    const notice = window.onChange.mock.lastCall[0]
+    expect(notice.visible).toBe(false)
+    expect(notice.foregroundOnly).toEqual({
+      text: 'Scheduled agents run only while Muniment is open.',
+      control: 'Open Login Items',
+      command: 'open_login_items',
+    })
+    await window.notice.openLoginItems()
+    expect(window.invoke).toHaveBeenCalledWith('open_login_items')
+    window.event({ ...snapshot(2, 'connected', false), foregroundOnly: false })
+    expect(window.onChange.mock.lastCall[0].foregroundOnly).toBeNull()
+    window.notice.cleanup()
   })
 
   it('keeps a contradictory connected snapshot hidden', () => {

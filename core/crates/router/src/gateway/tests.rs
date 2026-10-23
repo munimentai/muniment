@@ -1,0 +1,1124 @@
+use super::*;
+use crate::config::{Credential, RouterConfig};
+use crate::credentials::{CredentialStore, FileCredentialStore};
+use crate::store::{FileSecrets, FileStore, RouterStore, SecretSource, StoredSecrets};
+use std::io::{BufRead, Read};
+use std::sync::mpsc;
+
+const ADMIN: &str = "admin-token-for-tests";
+
+/// One answer of the stand-in provider.
+enum Answer {
+    /// A whole JSON body with this status.
+    Json(u16, String),
+    /// An event stream sent piece by piece, each after its delay.
+    Stream(Vec<(u64, String)>),
+}
+
+/// A stand-in OpenAI-compatible provider. Each connection takes the next
+/// answer, and the request body it read goes to the receiver.
+fn upstream(answers: Vec<Answer>) -> (String, mpsc::Receiver<Value>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, seen) = mpsc::channel();
+    std::thread::spawn(move || {
+        for answer in answers {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let line = line.trim_end().to_ascii_lowercase();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0; length];
+            let _ = reader.read_exact(&mut body);
+            let _ = sender.send(serde_json::from_slice(&body).unwrap_or(Value::Null));
+            match answer {
+                Answer::Json(status, payload) => {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                }
+                Answer::Stream(pieces) => {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n"
+                    );
+                    for (delay, piece) in pieces {
+                        std::thread::sleep(Duration::from_millis(delay));
+                        if stream.write_all(piece.as_bytes()).is_err() {
+                            break;
+                        }
+                        let _ = stream.flush();
+                    }
+                }
+            }
+        }
+    });
+    (format!("http://127.0.0.1:{port}/v1"), seen)
+}
+
+fn completion(text: &str, input: u64, output: u64) -> Answer {
+    Answer::Json(
+        200,
+        json!({
+            "id": "c1",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": text}}],
+            "usage": {"prompt_tokens": input, "completion_tokens": output}
+        })
+        .to_string(),
+    )
+}
+
+fn account(id: &str, url: &str, models: &[&str]) -> Account {
+    Account {
+        id: id.into(),
+        family: "openai".into(),
+        label: id.into(),
+        credential: Credential::ApiKey {
+            key: format!("sk-{id}"),
+        },
+        base_url: Some(url.into()),
+        models: models.iter().map(|m| m.to_string()).collect(),
+        enabled: true,
+        weight: 1,
+        overflow: false,
+    }
+}
+
+struct Fixture {
+    dir: PathBuf,
+    handle: Handle,
+}
+
+use std::path::PathBuf;
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn options(min_samples: f64) -> Options {
+    Options {
+        admin_token: ADMIN.into(),
+        signing_key: SigningKey::parse(&"5a".repeat(32)).unwrap(),
+        success: SuccessWindow {
+            half_life_ms: 86_400_000,
+            min_samples,
+        },
+        metrics: true,
+        otlp: None,
+    }
+}
+
+/// A server on a file store holding `accounts`.
+fn fixture(accounts: Vec<Account>, min_samples: f64) -> Fixture {
+    fixture_with(accounts, options(min_samples))
+}
+
+fn fixture_with(accounts: Vec<Account>, options: Options) -> Fixture {
+    let dir = std::env::temp_dir().join(format!("muniment-gateway-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    crate::config::save(
+        &dir,
+        &RouterConfig {
+            enabled: true,
+            accounts,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let handle = start("127.0.0.1:0", Backend::files(&dir), options).unwrap();
+    Fixture { dir, handle }
+}
+
+/// One request, answered whole: the status and the body.
+fn call(
+    address: SocketAddr,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<&Value>,
+    headers: &[(&str, &str)],
+) -> (u16, String) {
+    let mut stream = TcpStream::connect(address).unwrap();
+    let payload = body.map(Value::to_string).unwrap_or_default();
+    let extra: String = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nhost: router\r\nauthorization: Bearer {token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{extra}connection: close\r\n\r\n{payload}",
+        payload.len()
+    )
+    .unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).unwrap();
+    let status = answer
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    (
+        status,
+        answer
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_owned())
+            .unwrap_or_default(),
+    )
+}
+
+fn create_run(address: SocketAddr, run_id: &str, role: &str, budget: f64) -> String {
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/runs",
+        ADMIN,
+        Some(
+            &json!({"run_id": run_id, "task_id": "task-1", "repo": "acme/app", "role": role, "budget_usd": budget, "expires_in_s": 3600}),
+        ),
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    serde_json::from_str::<Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn turn(model: &str, stream: bool) -> Value {
+    json!({"model": model, "stream": stream, "messages": [{"role": "user", "content": "Fix the failing test"}]})
+}
+
+fn run_usage(address: SocketAddr, run_id: &str) -> Value {
+    let (status, body) = call(
+        address,
+        "GET",
+        &format!("/v1/runs/{run_id}"),
+        ADMIN,
+        None,
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    serde_json::from_str(&body).unwrap()
+}
+
+#[test]
+fn run_tokens_are_issued_bound_and_revoked() {
+    let fixture = fixture(
+        vec![account("a1", "http://127.0.0.1:9/v1", &["gpt-5.6-luna"])],
+        5.0,
+    );
+    let address = fixture.handle.address();
+    let new_run = json!({"run_id": "r1", "task_id": "t1", "repo": "acme/app", "role": "planner", "budget_usd": 1.0, "expires_in_s": 600});
+    assert_eq!(
+        call(address, "POST", "/v1/runs", "wrong", Some(&new_run), &[]).0,
+        401
+    );
+    let (status, body) = call(address, "POST", "/v1/runs", ADMIN, Some(&new_run), &[]);
+    assert_eq!(status, 200, "{body}");
+    let token = serde_json::from_str::<Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, models) = call(address, "GET", "/v1/models", &token, None, &[]);
+    assert_eq!(status, 200);
+    assert!(models.contains("\"auto\""));
+    assert_eq!(
+        call(address, "GET", "/v1/models", "mrt1.forged.token", None, &[]).0,
+        401
+    );
+    // An admin token does not route turns.
+    assert_eq!(
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            ADMIN,
+            Some(&turn("auto", false)),
+            &[]
+        )
+        .0,
+        401
+    );
+    // A retried create gets a token for the same run; a different run under
+    // the same id is refused.
+    let (status, again) = call(address, "POST", "/v1/runs", ADMIN, Some(&new_run), &[]);
+    assert_eq!(status, 200);
+    assert_ne!(again, body);
+    let mut other = new_run.clone();
+    other["budget_usd"] = json!(5.0);
+    assert_eq!(
+        call(address, "POST", "/v1/runs", ADMIN, Some(&other), &[]).0,
+        409
+    );
+    let mut bad = new_run.clone();
+    bad["expires_in_s"] = json!(0);
+    assert_eq!(
+        call(address, "POST", "/v1/runs", ADMIN, Some(&bad), &[]).0,
+        400
+    );
+    // A token signed with another key is refused.
+    let foreign = SigningKey::parse(&"7b".repeat(32)).unwrap().sign(&Claims {
+        run_id: "r1".into(),
+        task_id: "t1".into(),
+        repo: "acme/app".into(),
+        role: "planner".into(),
+        budget_usd: Some(1.0),
+        expires_ms: i64::MAX,
+        nonce: token::nonce(),
+    });
+    assert_eq!(
+        call(address, "GET", "/v1/models", &foreign, None, &[]).0,
+        401
+    );
+    // Revoking ends every token of the run and answers its final usage.
+    let (status, closed) = call(address, "DELETE", "/v1/runs/r1", ADMIN, None, &[]);
+    assert_eq!(status, 200);
+    let closed: Value = serde_json::from_str(&closed).unwrap();
+    assert_eq!(closed["revoked"], true);
+    assert_eq!(closed["spent_usd"], 0.0);
+    assert_eq!(call(address, "GET", "/v1/models", &token, None, &[]).0, 401);
+    assert_eq!(
+        call(address, "POST", "/v1/runs", ADMIN, Some(&new_run), &[]).0,
+        409
+    );
+    assert_eq!(
+        call(address, "GET", "/v1/runs/nope", ADMIN, None, &[]).0,
+        404
+    );
+    // A run token stops serving at its expiry.
+    let short = json!({"run_id": "r2", "task_id": "t1", "repo": "acme/app", "role": "planner", "budget_usd": 1.0, "expires_in_s": 1});
+    let (_, body) = call(address, "POST", "/v1/runs", ADMIN, Some(&short), &[]);
+    let token = serde_json::from_str::<Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(call(address, "GET", "/v1/models", &token, None, &[]).0, 200);
+    std::thread::sleep(Duration::from_millis(1_100));
+    let (status, body) = call(address, "GET", "/v1/models", &token, None, &[]);
+    assert_eq!(status, 401);
+    assert!(body.contains("expired"));
+}
+
+#[test]
+fn a_budget_is_reserved_settled_and_then_refused_with_402() {
+    // gpt-5.6-luna costs $0.20 per million in and $1.20 out, so each answer
+    // below costs $0.20 + $0.12.
+    let (url, seen) = upstream(vec![
+        completion("one", 1_000_000, 100_000),
+        completion("two", 1_000_000, 100_000),
+    ]);
+    let fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 0.5);
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&turn("auto", false)),
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    let usage = run_usage(address, "r1");
+    assert!((usage["spent_usd"].as_f64().unwrap() - 0.32).abs() < 1e-9);
+    assert_eq!(usage["requests"], 1);
+    assert_eq!(usage["input_tokens"], 1_000_000);
+    assert_eq!(usage["models"]["openai/gpt-5.6-luna"], 1);
+    assert_eq!(usage["reserved_usd"], 0.0);
+    // The second turn starts under budget and ends over it.
+    let (status, _) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&turn("auto", false)),
+        &[],
+    );
+    assert_eq!(status, 200);
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&turn("auto", false)),
+        &[],
+    );
+    assert_eq!(status, 402, "{body}");
+    let refusal: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(refusal["error"]["type"], "budget_exhausted");
+    assert!((refusal["error"]["spent_usd"].as_f64().unwrap() - 0.64).abs() < 1e-9);
+    assert_eq!(seen.try_iter().count(), 2);
+    let (_, metrics) = call(address, "GET", "/metrics", "", None, &[]);
+    assert!(metrics.contains("muniment_router_budget_rejections_total{role=\"implementer\"} 1"));
+}
+
+#[test]
+fn a_run_reports_the_status_type_and_time_of_its_last_request_when_it_failed() {
+    let (url, _seen) = upstream(vec![Answer::Json(
+        429,
+        json!({"error": {"message": "slow down"}}).to_string(),
+    )]);
+    let fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 0.5);
+    let usage = run_usage(address, "r1");
+    assert_eq!(usage["last_status"], Value::Null);
+    assert_eq!(usage["last_error_type"], Value::Null);
+    assert_eq!(usage["last_status_at"], Value::Null);
+    let send = |token: &str, body: &Value| {
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            token,
+            Some(body),
+            &[],
+        )
+    };
+    let (status, body) = send(&token, &turn("auto", false));
+    assert_eq!(status, 429, "{body}");
+    let usage = run_usage(address, "r1");
+    assert_eq!(usage["last_status"], 429);
+    assert_eq!(usage["last_error_type"], "rate_limited");
+    let at =
+        chrono::DateTime::parse_from_rfc3339(usage["last_status_at"].as_str().unwrap()).unwrap();
+    assert!((chrono::Utc::now() - at.to_utc()).num_seconds().abs() < 60);
+    // gpt-5.6-luna's estimate for 8,192 output tokens is about $0.0098.
+    let token = create_run(address, "r2", "implementer", 0.005);
+    assert_eq!(send(&token, &turn("auto", false)).0, 422);
+    assert_eq!(
+        run_usage(address, "r2")["last_error_type"],
+        "routing_constraints"
+    );
+
+    // Each answer below costs $0.20 + $0.12, so the second spends the budget.
+    let (url, _seen) = upstream(vec![
+        completion("one", 1_000_000, 100_000),
+        completion("two", 1_000_000, 100_000),
+    ]);
+    let fixture = self::fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r3", "implementer", 0.5);
+    let send = |body: &Value| {
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(body),
+            &[],
+        )
+    };
+    assert_eq!(send(&turn("no-such-model", false)).0, 404);
+    let usage = run_usage(address, "r3");
+    assert_eq!(usage["last_status"], 404);
+    assert_eq!(usage["last_error_type"], Value::Null);
+    // A served turn clears the failure.
+    assert_eq!(send(&turn("auto", false)).0, 200);
+    let usage = run_usage(address, "r3");
+    assert_eq!(usage["last_status"], Value::Null);
+    assert_eq!(usage["last_error_type"], Value::Null);
+    assert_eq!(usage["last_status_at"], Value::Null);
+    assert_eq!(send(&turn("auto", false)).0, 200);
+    let (status, body) = send(&turn("auto", false));
+    assert_eq!(status, 402, "{body}");
+    let (status, closed) = call(address, "DELETE", "/v1/runs/r3", ADMIN, None, &[]);
+    assert_eq!(status, 200);
+    let closed: Value = serde_json::from_str(&closed).unwrap();
+    assert_eq!(closed["last_status"], 402);
+    assert_eq!(closed["last_error_type"], "budget_exhausted");
+    let (_, metrics) = call(address, "GET", "/metrics", "", None, &[]);
+    assert!(
+        metrics.contains(
+            "muniment_router_run_errors_total{type=\"budget_exhausted\",status=\"402\"} 1"
+        ),
+        "{metrics}"
+    );
+    assert!(metrics.contains("muniment_router_run_errors_total{type=\"other\",status=\"404\"} 1"));
+}
+
+#[test]
+fn each_turn_becomes_one_otlp_span_in_its_trace() {
+    use otlp::tests::attribute;
+    let (base, seen) = otlp::tests::collector(200, "{}");
+    let exporter = otlp::Exporter::start(otlp::tests::settings(&base));
+    // The answer costs $0.20 + $0.12 on gpt-5.6-luna.
+    let (url, _seen) = upstream(vec![
+        completion("one", 1_000_000, 100_000),
+        completion("two", 10, 1),
+        Answer::Json(429, json!({"error": {"message": "slow down"}}).to_string()),
+    ]);
+    let mut options = options(5.0);
+    options.otlp = Some(exporter.clone());
+    let fixture = fixture_with(vec![account("a1", &url, &["gpt-5.6-luna"])], options);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 5.0);
+    let send = |headers: &[(&str, &str)]| {
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", false)),
+            headers,
+        )
+        .0
+    };
+    let caller_trace = "0af7651916cd43dd8448eb211c80319c";
+    assert_eq!(send(&[("x-muniment-trace", caller_trace)]), 200);
+    let traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    assert_eq!(send(&[("traceparent", traceparent)]), 200);
+    assert_eq!(send(&[]), 429);
+    assert!(exporter.flush(Duration::from_secs(5)));
+    let captured: Vec<otlp::tests::Captured> = seen.try_iter().collect();
+    assert!(!captured.is_empty());
+    for request in &captured {
+        assert_eq!(request.path, "/v1/traces");
+        assert_eq!(request.header("authorization"), Some("Basic cGstMTpzay0x"));
+        let resource = &request.body["resourceSpans"][0]["resource"];
+        assert_eq!(
+            resource["attributes"][0]["value"]["stringValue"],
+            "gateway-test"
+        );
+    }
+    let spans: Vec<Value> = captured
+        .iter()
+        .flat_map(|request| request.spans())
+        .collect();
+    assert_eq!(spans.len(), 3, "{spans:?}");
+    let served = &spans[0];
+    assert_eq!(served["traceId"], caller_trace);
+    assert!(served.get("parentSpanId").is_none());
+    assert_eq!(served["name"], "chat gpt-5.6-luna");
+    assert_eq!(served["kind"], 3);
+    assert_eq!(attribute(served, "gen_ai.operation.name"), "chat");
+    assert_eq!(attribute(served, "gen_ai.provider.name"), "openai");
+    assert_eq!(attribute(served, "gen_ai.request.model"), "gpt-5.6-luna");
+    assert_eq!(attribute(served, "gen_ai.response.model"), "gpt-5.6-luna");
+    assert_eq!(attribute(served, "gen_ai.usage.input_tokens"), "1000000");
+    assert_eq!(attribute(served, "gen_ai.usage.output_tokens"), "100000");
+    assert_eq!(
+        attribute(served, "gen_ai.usage.cache_read.input_tokens"),
+        "0"
+    );
+    assert!((attribute(served, "muniment.cost_usd").as_f64().unwrap() - 0.32).abs() < 1e-9);
+    assert_eq!(attribute(served, "muniment.run.id"), "r1");
+    assert_eq!(attribute(served, "muniment.task.id"), "task-1");
+    assert_eq!(attribute(served, "muniment.role"), "implementer");
+    assert_eq!(attribute(served, "muniment.repo"), "acme/app");
+    assert_eq!(attribute(served, "muniment.account"), "a1");
+    assert_eq!(attribute(served, "muniment.attempts"), "1");
+    assert_eq!(attribute(served, "http.response.status_code"), "200");
+    assert_eq!(attribute(served, "error.type"), Value::Null);
+    assert!(served.get("status").is_none());
+    let start: u128 = served["startTimeUnixNano"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let end: u128 = served["endTimeUnixNano"].as_str().unwrap().parse().unwrap();
+    assert!(start <= end);
+    // A W3C traceparent names both the trace and the parent span.
+    let child = &spans[1];
+    assert_eq!(child["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736");
+    assert_eq!(child["parentSpanId"], "00f067aa0ba902b7");
+    // A turn with no trace header goes to the task's own trace.
+    let failed = &spans[2];
+    assert_eq!(failed["traceId"], otlp::task_trace_id("task-1"));
+    assert_eq!(failed["status"]["code"], 2);
+    assert_eq!(failed["status"]["message"], "429 rate_limited");
+    assert_eq!(attribute(failed, "error.type"), "rate_limited");
+    assert_eq!(attribute(failed, "http.response.status_code"), "429");
+    assert_eq!(attribute(failed, "gen_ai.response.model"), Value::Null);
+    assert_eq!(exporter.failed(), 0);
+}
+
+#[test]
+fn failure_types_follow_the_error_type_then_the_status() {
+    for (status, kind, expected) in [
+        (402, Some("budget_exhausted"), Some("budget_exhausted")),
+        (
+            422,
+            Some("routing_constraints"),
+            Some("routing_constraints"),
+        ),
+        (422, Some("routing_capability"), Some("routing_constraints")),
+        (422, Some("routing_budget"), Some("routing_budget")),
+        (
+            400,
+            Some("context_length_exceeded"),
+            Some("context_length_exceeded"),
+        ),
+        (503, Some("routing_budget"), Some("routing_budget")),
+        (503, Some("router_error"), Some("upstream_unavailable")),
+        (502, None, Some("upstream_unavailable")),
+        (402, Some("router_error"), Some("upstream_unavailable")),
+        (429, Some("router_error"), Some("rate_limited")),
+        (401, Some("router_error"), Some("auth")),
+        (403, None, Some("auth")),
+        (400, Some("router_error"), None),
+        (409, Some("router_busy"), None),
+    ] {
+        assert_eq!(failure_type(status, kind), expected, "{status} {kind:?}");
+    }
+}
+
+#[test]
+fn a_run_budget_constrains_routing_before_any_upstream_call() {
+    let (url, seen) = upstream(vec![completion("one", 10, 2)]);
+    let fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    // gpt-5.6-luna's estimate for 8,192 output tokens is about $0.0098.
+    let token = create_run(address, "r1", "implementer", 0.005);
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&turn("auto", false)),
+        &[],
+    );
+    assert_eq!(status, 422, "{body}");
+    assert!(body.contains("routing_constraints"));
+    assert!(seen.try_recv().is_err());
+    // A turn whose estimate fits what the run has left goes out.
+    let mut small = turn("auto", false);
+    small["max_tokens"] = json!(100);
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&small),
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap()["model"],
+        "gpt-5.6-luna"
+    );
+}
+
+#[test]
+fn a_request_too_large_for_every_route_answers_a_context_overflow() {
+    let (url, seen) = upstream(vec![completion("one", 10, 2)]);
+    let fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 5.0);
+    // About 500K tokens against gpt-5.6-luna's 400K context.
+    let mut large = turn("auto", false);
+    large["messages"][0]["content"] = json!("abc".repeat(500_000));
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&large),
+        &[],
+    );
+    assert_eq!(status, 400, "{body}");
+    let error = &serde_json::from_str::<Value>(&body).unwrap()["error"];
+    assert_eq!(error["type"], "context_length_exceeded");
+    // Pi's overflow pattern is /maximum context length is \d+ tokens/i.
+    let message = error["message"].as_str().unwrap();
+    let (_, rest) = message.split_once("maximum context length is ").unwrap();
+    let (number, rest) = rest.split_once(' ').unwrap();
+    assert_eq!(number, "400000");
+    assert!(rest.starts_with("tokens"), "{message}");
+    assert!(seen.try_recv().is_err());
+    assert_eq!(
+        run_usage(address, "r1")["last_error_type"],
+        "context_length_exceeded"
+    );
+}
+
+#[test]
+fn a_run_without_a_budget_is_never_refused_on_spend() {
+    let (url, seen) = upstream(vec![
+        completion("one", 1_000_000, 100_000),
+        completion("two", 1_000_000, 100_000),
+        completion("three", 1_000_000, 100_000),
+    ]);
+    let fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let new_run = json!({"run_id": "r1", "task_id": "task-1", "repo": "acme/app", "role": "implementer", "expires_in_s": 3600});
+    let (status, body) = call(address, "POST", "/v1/runs", ADMIN, Some(&new_run), &[]);
+    assert_eq!(status, 200, "{body}");
+    let token = serde_json::from_str::<Value>(&body).unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for _ in 0..3 {
+        let (status, body) = call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", false)),
+            &[],
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    assert_eq!(seen.try_iter().count(), 3);
+    let usage = run_usage(address, "r1");
+    assert!(usage["budget_usd"].is_null());
+    assert!((usage["spent_usd"].as_f64().unwrap() - 0.96).abs() < 1e-9);
+    assert_eq!(usage["reserved_usd"], 0.0);
+    assert!(usage["last_error_type"].is_null());
+    // A retried create without a budget gets a token for the same run.
+    assert_eq!(
+        call(address, "POST", "/v1/runs", ADMIN, Some(&new_run), &[]).0,
+        200
+    );
+    let mut budgeted = new_run.clone();
+    budgeted["budget_usd"] = json!(1.0);
+    assert_eq!(
+        call(address, "POST", "/v1/runs", ADMIN, Some(&budgeted), &[]).0,
+        409
+    );
+    let (_, metrics) = call(address, "GET", "/metrics", "", None, &[]);
+    assert!(!metrics.contains("muniment_router_budget_rejections_total"));
+}
+
+#[test]
+fn a_reservation_holds_at_most_what_remains() {
+    let budgets = Budgets::default();
+    budgets.seed(&RunRecord {
+        run_id: "r".into(),
+        task_id: "t".into(),
+        repo: "p".into(),
+        role: "planner".into(),
+        budget_usd: Some(1.0),
+        created_ms: 0,
+        expires_ms: i64::MAX,
+        revoked_ms: None,
+        usage: store::RunUsage {
+            spent_usd: 0.25,
+            ..store::RunUsage::default()
+        },
+        last_failure: None,
+    });
+    assert_eq!(budgets.reserve("r", 0.5), Some(0.5));
+    // Two turns in flight: the second holds only what the first left.
+    assert_eq!(budgets.reserve("r", 0.5), Some(0.25));
+    assert_eq!(budgets.reserve("r", 0.1), None);
+    budgets.settle("r", 0.5, 0.1);
+    assert_eq!(budgets.reserve("r", 0.1), Some(0.1));
+    budgets.settle("r", 0.25, 0.25);
+    budgets.settle("r", 0.1, 0.0);
+    let budget = budgets.get("r").unwrap();
+    assert!((budget.spent - 0.6).abs() < 1e-9);
+    assert_eq!(budget.reserved, 0.0);
+    assert_eq!(budgets.reserve("unknown", 1.0), None);
+    budgets.seed(&RunRecord {
+        run_id: "open".into(),
+        task_id: "t".into(),
+        repo: "p".into(),
+        role: "planner".into(),
+        budget_usd: None,
+        created_ms: 0,
+        expires_ms: i64::MAX,
+        revoked_ms: None,
+        usage: store::RunUsage::default(),
+        last_failure: None,
+    });
+    assert_eq!(budgets.reserve("open", 1_000.0), Some(1_000.0));
+    budgets.settle("open", 1_000.0, 5.0);
+    assert!(!budgets.get("open").unwrap().exhausted());
+}
+
+#[test]
+fn outcomes_feed_measured_success_into_the_next_task() {
+    let (url, seen) = upstream(vec![
+        completion("first", 10, 2),
+        completion("second", 10, 2),
+    ]);
+    let fixture = fixture(
+        vec![account("a1", &url, &["gpt-5.6-luna", "gpt-5.6-sol"])],
+        2.0,
+    );
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 5.0);
+    assert_eq!(
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", false)),
+            &[]
+        )
+        .0,
+        200
+    );
+    // With nothing measured the cheapest capable model takes the task.
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap()["model"],
+        "gpt-5.6-luna"
+    );
+    for gate in ["build", "unit_tests", "lint"] {
+        let (status, body) = call(
+            address,
+            "POST",
+            "/v1/outcomes",
+            ADMIN,
+            Some(&json!({"run_id": "r1", "gate": gate, "passed": false})),
+            &[],
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["models"]["openai/gpt-5.6-luna"],
+            1.0
+        );
+    }
+    assert_eq!(
+        call(
+            address,
+            "POST",
+            "/v1/outcomes",
+            "wrong",
+            Some(&json!({"run_id": "r1", "gate": "x", "passed": true})),
+            &[]
+        )
+        .0,
+        401
+    );
+    assert_eq!(
+        call(
+            address,
+            "POST",
+            "/v1/outcomes",
+            ADMIN,
+            Some(&json!({"run_id": "nope", "gate": "x", "passed": true})),
+            &[]
+        )
+        .0,
+        404
+    );
+    let stats = fixture
+        .handle
+        .server
+        .state
+        .backend
+        .store
+        .success_stats("implementer", "acme/app")
+        .unwrap();
+    let global = stats[&(
+        "openai/gpt-5.6-luna".to_owned(),
+        "*".to_owned(),
+        "*".to_owned(),
+    )];
+    assert!((global.trials - 3.0).abs() < 1e-3);
+    assert_eq!(global.successes, 0.0);
+    // The next task of the same role and repository finds luna under the
+    // success floor and takes the next capable model.
+    let next = create_run(address, "r2", "implementer", 5.0);
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &next,
+        Some(&turn("auto", false)),
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap()["model"],
+        "gpt-5.6-sol"
+    );
+}
+
+#[test]
+fn task_and_validation_failure_headers_reach_policy() {
+    let (url, seen) = upstream(vec![
+        completion("first", 10, 2),
+        completion("second", 10, 2),
+        completion("third", 10, 2),
+    ]);
+    let fixture = fixture(
+        vec![account("a1", &url, &["gpt-5.6-luna", "gpt-5.6-sol"])],
+        5.0,
+    );
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 5.0);
+    let send = |headers: &[(&str, &str)]| {
+        let (status, body) = call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", false)),
+            headers,
+        );
+        assert_eq!(status, 200, "{body}");
+        seen.recv_timeout(Duration::from_secs(5)).unwrap()["model"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(
+        send(&[
+            ("x-muniment-task", "task-1"),
+            ("x-muniment-validation-failures", "0")
+        ]),
+        "gpt-5.6-luna"
+    );
+    // Repeated validation failures escalate past the current capability.
+    assert_eq!(
+        send(&[
+            ("x-muniment-task", "task-1"),
+            ("x-muniment-validation-failures", "2")
+        ]),
+        "gpt-5.6-sol"
+    );
+    // A new task is a boundary: the cost path picks the cheapest again.
+    assert_eq!(
+        send(&[
+            ("x-muniment-task", "task-2"),
+            ("x-muniment-validation-failures", "0")
+        ]),
+        "gpt-5.6-luna"
+    );
+}
+
+#[test]
+fn metrics_expose_requests_tokens_cost_decisions_and_accounts() {
+    let (url, _) = upstream(vec![completion("one", 1_000, 100)]);
+    let fixture = fixture(
+        vec![
+            account("a1", &url, &["gpt-5.6-luna"]),
+            account("a2", &url, &["gpt-5.6-luna"]),
+        ],
+        5.0,
+    );
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "reviewer", 1.0);
+    assert_eq!(
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", false)),
+            &[]
+        )
+        .0,
+        200
+    );
+    let (status, text) = call(address, "GET", "/metrics", "", None, &[]);
+    assert_eq!(status, 200);
+    for expected in [
+        "muniment_router_http_requests_total{route=\"chat_completions\",status=\"200\"} 1",
+        "muniment_router_http_requests_total{route=\"create_run\",status=\"200\"} 1",
+        "muniment_router_upstream_requests_total{model=\"openai/gpt-5.6-luna\",account=\"a1\",outcome=\"served\"} 1",
+        "muniment_router_tokens_total{model=\"openai/gpt-5.6-luna\",kind=\"input\"} 1000",
+        "muniment_router_tokens_total{model=\"openai/gpt-5.6-luna\",kind=\"output\"} 100",
+        "muniment_router_cost_usd_total{model=\"openai/gpt-5.6-luna\"}",
+        "muniment_router_upstream_duration_seconds_count{model=\"openai/gpt-5.6-luna\"} 1",
+        "role=\"reviewer\"",
+        "# TYPE muniment_router_routing_decisions_total counter",
+        "muniment_router_account_cooling{account=\"a2\"} 0",
+        "muniment_router_runs_active 1",
+        "muniment_router_draining 0",
+    ] {
+        assert!(text.contains(expected), "{expected} missing from:\n{text}");
+    }
+    let (status, health) = call(address, "GET", "/healthz", "", None, &[]);
+    assert_eq!(status, 200);
+    assert!(health.contains("true"));
+}
+
+#[test]
+fn draining_refuses_new_connections_and_finishes_open_streams() {
+    let chunk = |text: &str| {
+        format!(
+            "data: {}\n\n",
+            json!({"choices": [{"delta": {"content": text}}]})
+        )
+    };
+    let (url, seen) = upstream(vec![Answer::Stream(vec![
+        (0, chunk("be")),
+        (600, chunk("cause")),
+        (0, "data: [DONE]\n\n".into()),
+    ])]);
+    let mut fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 1.0);
+    let client = std::thread::spawn(move || {
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", true)),
+            &[],
+        )
+    });
+    seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let started = Instant::now();
+    assert!(fixture.handle.drain(Duration::from_secs(10)));
+    // The open stream finished before the drain did.
+    assert!(started.elapsed() >= Duration::from_millis(400));
+    let (status, body) = client.join().unwrap();
+    assert_eq!(status, 200);
+    assert!(body.contains("cause") && body.contains("[DONE]"));
+    assert!(TcpStream::connect(address).is_err());
+}
+
+#[test]
+fn a_drain_gives_up_at_its_deadline() {
+    let (url, seen) = upstream(vec![Answer::Stream(vec![
+        (
+            0,
+            format!(
+                "data: {}\n\n",
+                json!({"choices": [{"delta": {"content": "slow"}}]})
+            ),
+        ),
+        (3_000, "data: [DONE]\n\n".into()),
+    ])]);
+    let mut fixture = fixture(vec![account("a1", &url, &["gpt-5.6-luna"])], 5.0);
+    let address = fixture.handle.address();
+    let token = create_run(address, "r1", "implementer", 1.0);
+    let _client = std::thread::spawn(move || {
+        call(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            &token,
+            Some(&turn("auto", true)),
+            &[],
+        )
+    });
+    seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(!fixture.handle.drain(Duration::from_millis(200)));
+    assert_eq!(fixture.handle.connections(), 1);
+}
+
+/// The whole gateway path on Postgres and the file credential store: an
+/// account added through the account commands, a run, a routed turn and its
+/// usage.
+#[test]
+fn end_to_end_on_postgres_and_the_credential_store() {
+    let Some(scratch) = postgres::tests::scratch() else {
+        return;
+    };
+    let credentials = std::env::temp_dir().join(format!(
+        "muniment-gateway-credentials-{}",
+        uuid::Uuid::now_v7()
+    ));
+    let files = Arc::new(FileCredentialStore::new(&credentials));
+    let secrets = Arc::new(StoredSecrets::new(files.clone()));
+    let store = Arc::new(postgres::PgStore::connect(&scratch.url).unwrap());
+    let backend = Backend::new(store.clone(), secrets);
+    let (url, seen) = upstream(vec![completion("done", 1_000, 10)]);
+    let id = accounts::add_key(
+        &backend,
+        "openai",
+        "sk-live",
+        None,
+        Some(url),
+        vec!["gpt-5.6-luna".into()],
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        files.read(store::ACCOUNT_SERVICE, &id).as_deref(),
+        Some(r#"{"type":"api_key","key":"sk-live"}"#)
+    );
+    let handle = start("127.0.0.1:0", backend, options(5.0)).unwrap();
+    let address = handle.address();
+    let token = create_run(address, "r1", "implementer", 1.0);
+    let (status, body) = call(
+        address,
+        "POST",
+        "/v1/chat/completions",
+        &token,
+        Some(&turn("auto", false)),
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("done"));
+    assert_eq!(
+        seen.recv_timeout(Duration::from_secs(5)).unwrap()["model"],
+        "gpt-5.6-luna"
+    );
+    let usage = run_usage(address, "r1");
+    assert_eq!(usage["requests"], 1);
+    assert_eq!(usage["input_tokens"], 1_000);
+    assert_eq!(store.load_ledger().account(&id).unwrap().requests, 1);
+    assert_eq!(store.load_sessions().entries.len(), 1);
+    assert_eq!(
+        call(
+            address,
+            "POST",
+            "/v1/outcomes",
+            ADMIN,
+            Some(&json!({"run_id": "r1", "gate": "build", "passed": true})),
+            &[]
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        store
+            .success_stats("implementer", "acme/app")
+            .unwrap()
+            .len(),
+        3
+    );
+    std::fs::remove_dir_all(credentials).unwrap();
+}
+
+#[test]
+fn a_gateway_without_a_credential_directory_reads_only_the_environment() {
+    let dir = std::env::temp_dir().join(format!("muniment-gateway-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = FileStore::new(&dir);
+    store
+        .upsert_account(&account("a1", "http://127.0.0.1:9/v1", &["gpt-5.6-luna"]))
+        .unwrap();
+    let environment = Arc::new(StoredSecrets::new(Arc::new(
+        FileCredentialStore::environment_only(),
+    )));
+    let backend = Backend::new(Arc::new(store), environment.clone());
+    assert!(backend.config().unwrap().accounts.is_empty());
+    assert!(environment
+        .write("a1", &Credential::ApiKey { key: "k".into() })
+        .is_err());
+    let variable = crate::credentials::credential_variable(store::ACCOUNT_SERVICE, "a1");
+    std::env::set_var(&variable, r#"{"type":"api_key","key":"from-env"}"#);
+    let accounts = backend.config().unwrap().accounts;
+    std::env::remove_var(&variable);
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(
+        accounts[0].credential,
+        Credential::ApiKey {
+            key: "from-env".into()
+        }
+    );
+    let files = Backend::new(
+        Arc::new(FileStore::new(&dir)),
+        Arc::new(FileSecrets::new(&dir)),
+    );
+    assert_eq!(files.config().unwrap().accounts.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}

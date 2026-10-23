@@ -9,6 +9,8 @@ afterEach(() => {
   delete document.documentElement.dataset.theme
   delete document.documentElement.dataset.scheme
   delete document.documentElement.dataset.frame
+  delete document.documentElement.dataset.density
+  delete document.documentElement.dataset.motion
 })
 
 const stored = () => JSON.parse(localStorage.getItem('muniment.theme'))
@@ -50,9 +52,13 @@ describe('Appearance', () => {
     expect(stored()).toEqual({ mode: 'light', palette: 'iris-vibrant' })
     await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Moss' }))
     await fireEvent.click(within(modes).getByRole('button', { name: 'System' }))
-    expect(document.documentElement.dataset.theme).toBeUndefined()
+    expect(document.documentElement.dataset.theme).toBe('moss-light')
     expect(document.documentElement.dataset.scheme).toBeUndefined()
     expect(stored()).toEqual({ mode: 'system', palette: 'moss' })
+    // The default palette in System leaves the OS media query to choose.
+    await fireEvent.click(within(vibrant).getByRole('button', { name: 'Moss vibrant' }))
+    expect(document.documentElement.dataset.theme).toBeUndefined()
+    expect(stored()).toEqual({ mode: 'system', palette: 'moss-vibrant' })
   })
 
   it('swaps the thinking indicator preview in place, one indicator at a time', async () => {
@@ -77,5 +83,31 @@ describe('Appearance', () => {
     expect(pressed(frames)).toEqual(['Frameless'])
     await fireEvent.click(within(screen.getByRole('group', { name: 'Normal color schemes' })).getByRole('button', { name: 'Harbor' }))
     expect(document.documentElement.dataset).toMatchObject({ theme: 'harbor-dark', frame: 'frameless' })
+  })
+
+  it('sets zoom, density and motion apart from the text size, and keeps them on this device', async () => {
+    render(Appearance)
+    expect(screen.getByRole('group', { name: 'Text size' })).toBeTruthy()
+    const zoom = screen.getByRole('group', { name: 'Zoom' })
+    expect(within(zoom).getAllByRole('button').map((button) => button.textContent)).toEqual(['90%', '100%', '110%', '125%', '150%'])
+    expect(pressed(zoom)).toEqual(['100%'])
+    await fireEvent.click(within(zoom).getByRole('button', { name: '125%' }))
+    expect(pressed(zoom)).toEqual(['125%'])
+    // Zoom leaves the text register alone.
+    expect(document.documentElement.style.getPropertyValue('--text-15')).toBe('')
+
+    const density = screen.getByRole('group', { name: 'Density' })
+    await fireEvent.click(within(density).getByRole('button', { name: 'Compact' }))
+    expect(document.documentElement.dataset.density).toBe('compact')
+    await fireEvent.click(within(density).getByRole('button', { name: 'Comfortable' }))
+    expect(document.documentElement.dataset.density).toBeUndefined()
+
+    const motion = screen.getByRole('group', { name: 'Motion' })
+    expect(pressed(motion)).toEqual(['System'])
+    await fireEvent.click(within(motion).getByRole('button', { name: 'Reduce' }))
+    expect(document.documentElement.dataset.motion).toBe('reduce')
+    await fireEvent.click(within(motion).getByRole('button', { name: 'Full' }))
+    expect(document.documentElement.dataset.motion).toBeUndefined()
+    expect(JSON.parse(localStorage.getItem('muniment.display'))).toEqual({ zoom: 1.25, density: 'comfortable', motion: 'full' })
   })
 })

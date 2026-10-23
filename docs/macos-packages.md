@@ -21,8 +21,38 @@ An `enabled` status permits a kick-start in that user's `gui/<uid>` domain
 when the attach endpoint is absent. A `requiresApproval` status or registration
 denial leaves the runtime inactive. The app explains the required approval and
 opens System Settings > General > Login Items on request. A `notFound` status
-or another registration error also leaves the runtime inactive. No surface
-kick-starts or privately spawns a runtime without an `enabled` status.
+or another registration error also leaves the service inactive.
+
+`launchd` applies a launch constraint to the bundle's `BundleProgram`.
+Background Task Management keeps one login item per app and agent, and that
+item holds the constraint taken from the runtime's signature when the item was
+made. `unregister()` only disables the item, and a later `register()` reuses
+it with the same constraint. A runtime whose signature no longer matches,
+such as a rebuilt ad hoc signed local build or a Developer ID build after an
+ad hoc one, fails it: the kernel ends each spawn with `OS_REASON_CODESIGNING |
+Launch Constraint Violation`, error info `c[5]p[1]m[1]e[0]`, and `launchctl
+print` reports `last exit code = 78: EX_CONFIG` before the runtime runs at all.
+The unified log names the cause under `process == "launchd"`, and `smd` logs
+the item's disposition. `[enabled, disallowed]` means the user turned the item
+off in Login Items, and `SMAppService` then reports `requiresApproval`.
+`[disabled, allowed]` means the app unregistered it.
+
+The app records the runtime's team, signing identifier and code directory
+hash in `runtime-service-signature` in its profile directory once a start
+succeeds. An enabled registration recorded under another signature is
+unregistered and registered again before its start. A constraint failure of a
+registration an earlier launch made registers it once more and starts it
+again. A runtime signed by a team waits for `launchd`'s next spawn, which asks
+for the constraint again, before the app counts the job as down. When
+registration fails, or the job still does not stay running, the app
+unregisters the job, runs the bundled runtime as its own child and says that
+scheduled agents run only while it is open. That child stops when the app
+quits. The next launch registers the service again.
+
+An item that keeps a constraint the current runtime fails clears only when the
+system drops it: turn the app off under Allow in the Background in System
+Settings > General > Login Items, quit it, move it to the Trash and empty the
+Trash, reopen Login Items until the entry is gone, then install the app again.
 
 The runtime stays in the foreground. `launchd` spaces failed starts by five
 seconds, and the runtime stops after five failures within five minutes. It
@@ -96,3 +126,21 @@ spctl --assess --type execute --verbose=4 muniment.app
 ```
 
 All three must pass before distribution.
+
+## Local signed build
+
+`node scripts/build-macos-local.mjs` builds the Apple silicon app, signs it
+with the nightly's `codesign` arguments, and installs it in `~/Applications`.
+A Developer ID Application signature passes the launch constraint above, so
+the background service runs from a local build. An ad hoc signature does not.
+The certificate comes from the environment and never sits in the repository:
+
+| Variable | Value |
+| --- | --- |
+| `MUNIMENT_SIGNING_CERTIFICATE_FILE` | The path of the Developer ID `.p12`. |
+| `MUNIMENT_SIGNING_CERTIFICATE` | The `.p12` in base64, read when no file is named. |
+| `MUNIMENT_SIGNING_CERTIFICATE_PASSWORD` | The `.p12` password. |
+
+The script imports the identity into a throwaway keychain and deletes it on
+exit. It does not notarize. `--build-only` leaves the signed app in
+`src-tauri/target/release/bundle/macos/` and installs nothing.

@@ -14,7 +14,7 @@ it('opens the styled popup without suspending the browser and selects a tool', a
   const onselect=vi.fn(), onopenchange=vi.fn()
   render(WorkspaceMenu,{selected:'browser',onselect,onopenchange})
   await fireEvent.click(screen.getByRole('button',{name:'Workspace tools'}))
-  await waitFor(() => expect(popup.emit).toHaveBeenCalledWith('workspace-menu-open',{selected:'browser'}))
+  await waitFor(() => expect(popup.emit).toHaveBeenCalledWith('workspace-menu-open',{selected:'browser',pointer:false}))
   expect(onopenchange).not.toHaveBeenCalledWith(true)
   expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   const handler=listen.mock.calls.find(([name])=>name==='workspace-menu-select')[1]

@@ -4,13 +4,21 @@ const messages = {
   disconnected: 'The runtime connection closed.',
   exited: 'The runtime exited.',
   startFailed: 'The runtime start failed.',
-  requiresApproval: 'The runtime registration needs approval.',
+  requiresApproval: 'The runtime registration needs approval in System Settings > General > Login Items.',
   approved: 'The runtime registration has approval.',
   notFound: 'The runtime registration found no service.',
   registrationFailed: 'The runtime registration failed.',
   childStarted: 'The runtime service did not start, so the desktop runs the runtime itself.',
   stopped: 'The runtime stopped.',
   stopFailed: 'The runtime stop failed.',
+}
+
+// The runtime runs as the desktop's child because the background service could
+// not stay running, so it stops when the app quits.
+const foregroundOnly = {
+  text: 'Scheduled agents run only while Muniment is open.',
+  control: 'Open Login Items',
+  command: 'open_login_items',
 }
 
 export function runtimeNotice(state) {
@@ -22,6 +30,7 @@ export function runtimeNotice(state) {
     control: state.lastEvent === 'requiresApproval' ? 'Open Login Items' : 'Start runtime',
     command: state.lastEvent === 'requiresApproval' ? 'open_login_items' : 'runtime_start',
     busy: state.busy === true,
+    foregroundOnly: state.foregroundOnly === true ? foregroundOnly : null,
   }
 }
 
@@ -71,11 +80,15 @@ export function createBackgroundServiceNotice({ invoke, listen, onChange, setPol
     }
   }
 
+  async function openLoginItems() {
+    try { await invoke(foregroundOnly.command) } catch { console.error('The runtime control failed.') }
+  }
+
   function cleanup() {
     stopped = true
     clearPoll(poll)
     unlisten?.()
   }
 
-  return { start, retry, cleanup }
+  return { start, retry, openLoginItems, cleanup }
 }

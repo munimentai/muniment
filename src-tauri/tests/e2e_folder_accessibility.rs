@@ -2140,7 +2140,11 @@ fn final_confirmation_rejects_changes_after_a_host_sheet_lookup() {
         let cases = prompt
             .into_iter()
             .map(|change| (change, PromptNotFound))
-            .chain(owner.into_iter().map(|change| (change, WrongTopLevelElement)))
+            .chain(
+                owner
+                    .into_iter()
+                    .map(|change| (change, WrongTopLevelElement)),
+            )
             .chain(disabled.into_iter().map(|change| (change, ButtonDisabled)));
         for ((element, name, value), failure) in cases {
             let mut tree = host_sheet_tree(grouped);
@@ -2180,7 +2184,11 @@ fn final_confirmation_rejects_changes_after_a_host_sheet_lookup() {
         let target = host_sheet_target(&tree);
         let parent = if grouped { OTHER } else { PANEL };
         let siblings = tree.elements(&parent, "AXChildren").unwrap();
-        tree.set(parent, "AXChildren", Value::Elements([siblings, vec![5]].concat()));
+        tree.set(
+            parent,
+            "AXChildren",
+            Value::Elements([siblings, vec![5]].concat()),
+        );
         add_matching_button(&mut tree, 5, parent);
         assert_eq!(
             accessibility::confirm_owner(&tree, &APP, &target, IDENTIFIER, || Ok(())),
@@ -2530,7 +2538,10 @@ fn go_to_folder_commits_a_buttonless_sheet_through_the_field_confirm_action() {
     let confirm = vec!["AXConfirm".to_string()];
     tree.2.borrow_mut().actions.insert(6, confirm);
     assert_eq!(commit(&tree).0, Ok(()));
-    assert_eq!(tree.2.borrow().performed, vec![(6, "AXConfirm".to_string())]);
+    assert_eq!(
+        tree.2.borrow().performed,
+        vec![(6, "AXConfirm".to_string())]
+    );
 }
 
 #[test]
@@ -3054,5 +3065,8 @@ fn a_failed_return_press_still_releases_return_once() {
 fn a_successful_return_fallback_posts_one_press_and_one_release() {
     let tree = buttonless_tree();
     assert_eq!(commit(&tree).0, Ok(()));
-    assert_eq!(tree.2.borrow().keys, vec![(SERVICE_PID, true), (SERVICE_PID, false)]);
+    assert_eq!(
+        tree.2.borrow().keys,
+        vec![(SERVICE_PID, true), (SERVICE_PID, false)]
+    );
 }

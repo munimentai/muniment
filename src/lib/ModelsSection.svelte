@@ -1,4 +1,5 @@
 <script>
+  import FailureNote from './FailureNote.svelte'
   import './ui/settings-controls.css'
   import { accountCache } from './account-cache.js'
   import SearchToolbar from './ui/SearchToolbar.svelte'
@@ -6,57 +7,54 @@
   import PageHead from './ui/PageHead.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
-  // Settings → Models, one screen: every connection is a named account under
-  // its provider, key or subscription, with its allowance and usage on the
-  // card, the provider's models once, the connector that adds a provider, and
-  // routing controls. The composer's model picker shows and hides models.
-  import { onDestroy, onMount, tick, untrack } from 'svelte'
-  import SettingsTabs from './SettingsTabs.svelte'
+  // Settings → Models, one screen: the Roles that route and assist at the top,
+  // then every connection as a named account under its provider, key or
+  // subscription, the provider's models once, and the connector that adds a
+  // provider. What each account has left lives on the Usage page, which See
+  // usage opens. The composer's model picker shows and hides models.
+  import { onDestroy, onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
+  import HoldSignIn from './HoldSignIn.svelte'
+  import { otherSignIns, piHold, readFleetAccounts } from './fleet-accounts.js'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
   import ClassifierEdit from './ClassifierEdit.svelte'
   import { CLASSIFIERS, searchClassifiers } from './classifier-connections.js'
   import ProviderLogo from './ProviderLogo.svelte'
-  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, providerFamily, providerName, searchProviders } from './provider-catalog.js'
+  import { loginEvent, loginStart } from './account-login.js'
+  import { foundServers, foundServerAction } from './first-run-providers.js'
+  import { openUsagePage } from '../usage/usage.js'
+  import { catalogId, catalogProvider, familyName, familyProvider, methodLabel, modelCountLabel, providerFamily, providerName, refreshResult, searchProviders } from './provider-catalog.js'
 
   // `inventory` seeds the list from what the shell already holds, so the page
   // draws at once and the fresh read replaces it.
   // `connect` opens a connect view at once: a catalog id opens that provider's
   // sign-in, and an empty string opens the provider catalog.
-  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, initialTab = 'accounts', sidebarTab = null, ontab, connect = null } = $props()
+  // `focus` names the part a link opens: `roles` or `connections`.
+  // `runtime` names the machine the page shows, `local` for this computer.
+  // Its sign-ins start there, and its rows never show another machine's.
+  let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), oninventory, inventory: initial = null, focus = null, connect = null, runtime = 'local' } = $props()
 
   // svelte-ignore state_referenced_locally
   let inventory = $state(initial)
   let loadError = $state('')
   let status = $state('')
   let query = $state('')
-  // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row. A tab
-  // this section moves to itself reports through `ontab`.
-  // svelte-ignore state_referenced_locally
-  let tab = $state(sidebarTab ?? initialTab)
-  $effect(() => {
-    if (sidebarTab && sidebarTab !== untrack(() => tab)) { tab = sidebarTab; view = 'list' }
-  })
-  const INTROS = {
-    accounts: 'Connect the accounts, keys and local servers your models run on.',
-    routing: 'Decision models route each message to a model and assist chats with tools and the browser.',
-  }
-  function showTab(next) {
-    tab = next
-    ontab?.(next)
-  }
   let view = $state('list')
+  let connectionsPart = $state()
+  $effect(() => { if (focus === 'connections' && view === 'list' && connectionsPart) connectionsPart.scrollIntoView?.({ block: 'start' }) })
   // The router's settings: the accounts in every pool, the models in the
   // running and the classifier. One read feeds every card and the Routing foot.
   const accounts = accountCache(tauri)
+  // svelte-ignore state_referenced_locally
+  accounts.machine(runtime)
   let router = $state(accounts.current.settings)
   let routerError = $state('')
   // Where Back from a provider's view returns: the list or the connector.
   let origin = $state('list')
   let classifierId = $state('')
-  // The saved classifier connection whose form is open in Model providers.
+  // The saved classifier connection whose form is open in Models.
   let editingClassifier = $state('')
   const classifierEntry = $derived(CLASSIFIERS.find(entry => entry.id === classifierId))
   let providerId = $state('')
@@ -68,12 +66,22 @@
   let endpointModels = $state('')
   let pending = $state(false)
   let formError = $state('')
-  let claude = $state(null)
   let login = $state(null)
   let loginAnswer = $state('')
   let unlisten = null
 
   const provider = $derived(catalogProvider(providerId))
+  // The subscriptions the provider's family already holds on this machine. Its
+  // connect page lists each with Disconnect, and its sign-in adds another.
+  const signedIn = $derived((router?.accounts ?? []).filter((account) => account.source !== 'key' && account.family === providerFamily(providerId)))
+  async function removeAccount(account) {
+    try {
+      onRouterSettings(await tauri.invoke('model_router_remove_account', { id: account.id }))
+      status = `${account.label} is disconnected.`
+    } catch (error) {
+      formError = String(error?.message ?? error)
+    }
+  }
   const catalog = $derived(searchProviders(providerQuery))
   const shownProviders = $derived.by(() => {
     if (!inventory) return []
@@ -83,6 +91,7 @@
       .map((entry) => ({
         ...entry,
         family: providerFamily(entry.id),
+        count: entry.models.length,
         models: needle ? entry.models.filter((model) => model.id.toLowerCase().includes(needle)) : entry.models,
       })).filter((entry) => !needle || entry.models.length > 0 || entry.name.toLowerCase().includes(needle))
   })
@@ -97,15 +106,25 @@
       .filter((family) => !needle || familyName(family).toLowerCase().includes(needle))
   })
 
-  let refreshError = $state('')
+  // Who holds each shared sign-in in the fleet, or null when core lists none.
+  let fleet = $state(null)
+  const elsewhere = $derived(otherSignIns(fleet))
+  async function loadFleet() { fleet = await readFleetAccounts(tauri, runtime) }
+  // A requested move lands once the holder hands the sign-in over.
+  function onHeld(status) {
+    void loadFleet()
+    void loadRouter()
+    if (status === 'requested') setTimeout(() => { void loadFleet(); void loadRouter() }, 5000)
+  }
+
   onMount(() => {
     const unsubscribe = accounts.subscribe(value => {
       router = value.settings
       routerError = value.error
-      refreshError = value.refreshError
     })
     const stop = accounts.start()
     void load()
+    void loadFleet()
     if (connect === '') openConnector()
     else if (connect) chooseProvider(connect)
     return () => { unsubscribe(); stop() }
@@ -122,13 +141,22 @@
   onDestroy(() => { stopListening() })
 
   let discovering = $state(false)
+  // A page with no rows yet draws the stored rows core answers at once, and
+  // the full read, which can wait on discovery and Pi, replaces them.
   async function load(force = false) {
     void loadRouter()
     discovering = true
+    const full = tauri.invoke('local_mode_provider_inventory', { force })
+    if (!inventory) {
+      Promise.resolve(tauri.invoke('local_mode_provider_inventory', { cached: true }))
+        .then((rows) => { if (!inventory && Array.isArray(rows?.providers)) inventory = rows })
+        .catch(() => {})
+    }
     try {
-      inventory = await tauri.invoke('local_mode_provider_inventory', { force })
+      inventory = await full
       loadError = ''
       oninventory?.(inventory)
+      if (force) status = refreshResult(inventory)
 
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
@@ -158,6 +186,39 @@
   function openConnector() {
     providerQuery = ''
     view = 'connect'
+    void loadFound()
+  }
+
+  // The model servers the provider scan finds on this computer that no
+  // connection serves yet. Each connects in one step when it needs nothing,
+  // or with the key file it names; any other opens a filled endpoint form.
+  let found = $state([])
+  async function loadFound() {
+    try {
+      const scan = await tauri.invoke('onboarding_provider_scan')
+      found = foundServers(scan, inventory)
+    } catch (_) { found = [] }
+  }
+
+  async function connectFound(server) {
+    if (pending) return
+    const oneStep = server.state === 'ready' || (server.state === 'needs-key' && !!server.keyFile)
+    if (!oneStep) {
+      chooseProvider('custom')
+      endpointName = server.name
+      baseUrl = server.baseUrl
+      return
+    }
+    pending = true
+    formError = ''
+    try {
+      await tauri.invoke('onboarding_connect_server', { id: server.id, baseUrl: server.baseUrl, key: null, keyFromFile: server.state === 'needs-key' })
+      await finishConnect(`Muniment connected ${server.name}.`)
+    } catch (error) {
+      formError = String(error?.message ?? error) || `Muniment could not connect ${server.name}. Check the server and try again.`
+    } finally {
+      pending = false
+    }
   }
 
   // The connected endpoint whose form is open for an edit, empty for a new connection.
@@ -189,7 +250,6 @@
     formError = ''
     login = null
     view = 'method'
-    if (next === 'claude-code') void loadClaudeStatus()
   }
 
   function back() {
@@ -269,29 +329,6 @@
     }
   }
 
-  async function loadClaudeStatus() {
-    claude = null
-    try {
-      claude = await tauri.invoke('local_mode_claude_code_status')
-    } catch (_) {
-      claude = { installed: false, logged_in: false, path: null }
-    }
-  }
-
-  async function connectClaudeCode() {
-    if (pending || !claude?.path) return
-    pending = true
-    formError = ''
-    try {
-      await tauri.invoke('local_mode_connect_claude_code', { executable: claude.path })
-      await finishConnect('Anthropic is connected through Claude Code. Its models appear after the next message.')
-    } catch (error) {
-      formError = String(error?.message ?? error)
-    } finally {
-      pending = false
-    }
-  }
-
   function stopListening() {
     if (unlisten) {
       const stop = unlisten
@@ -306,11 +343,11 @@
     pending = true
     formError = ''
     loginAnswer = ''
-    login = { provider: account.provider, stage: 'start', message: 'Starting the sign-in…', url: '', code: '', prompt: null }
+    login = loginStart(account.provider)
     stopListening()
     unlisten = listen('local-mode-login', ({ payload }) => onLoginEvent(payload))
     try {
-      await tauri.invoke('local_mode_account_login_start', { provider: account.provider })
+      await tauri.invoke('local_mode_account_login_start', { provider: account.provider, runtime })
     } catch (error) {
       login = { ...login, stage: 'failed', message: String(error?.message ?? error) }
       stopListening()
@@ -320,50 +357,26 @@
   }
 
   function onLoginEvent(payload) {
-    if (!login || (payload.provider && payload.provider !== login.provider && payload.stage !== 'cancelled')) return
-    switch (payload.stage) {
-      case 'event': {
-        const event = payload.event ?? {}
-        if (event.type === 'auth_url') {
-          login = { ...login, stage: 'browser', url: event.url, message: event.instructions ?? 'Continue in your browser.' }
-          void tauri.invoke('local_mode_open_url', { url: event.url }).catch(() => {})
-        } else if (event.type === 'device_code') {
-          login = { ...login, stage: 'code', url: event.verificationUri ?? event.verificationUriComplete ?? '', code: event.userCode ?? '', message: 'Enter this code on the sign-in page.' }
-        } else if (event.message) {
-          login = { ...login, message: event.message }
-        }
-        break
-      }
-      case 'prompt':
-        login = { ...login, prompt: payload }
-        break
-      case 'done':
-        stopListening()
-        if (payload.pool) {
-          // The account joined the router's pool. The probe that names it runs
-          // after the sign-in, so the cards read now and once more after it.
-          void loadRouter()
-          setTimeout(() => { void loadRouter() }, 4000)
-        }
-        void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
-        break
-      case 'failed':
-        stopListening()
-        login = { ...login, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', prompt: null }
-        break
-      case 'cancelled':
-        stopListening()
-        login = { ...login, stage: 'cancelled', message: 'The sign-in was cancelled.', prompt: null }
-        break
-      case 'exit':
-        if (login.stage !== 'done' && login.stage !== 'failed' && login.stage !== 'cancelled') {
-          stopListening()
-          login = { ...login, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', prompt: null }
-        }
-        break
-      default:
-        if (payload.message) login = { ...login, message: payload.message }
+    const step = loginEvent(login, payload)
+    if (!step) return
+    login = step.login
+    if (step.open) void tauri.invoke('local_mode_open_url', { url: step.open }).catch(() => {})
+    if (step.stop) stopListening()
+    if (!step.done) return
+    if (step.pool) {
+      // The account joined the router's pool. The probe that names it runs
+      // after the sign-in, so the cards read now and once more after it.
+      void loadRouter()
+      setTimeout(() => { void loadRouter() }, 4000)
     }
+    void finishConnect(`${provider?.name ?? 'The provider'} account is connected.`)
+  }
+
+  // Opens the Anthropic sign-in and starts it, as a Claude Code connection
+  // from before becomes an account.
+  function signInAgain() {
+    chooseProvider('anthropic')
+    void startLogin()
   }
 
   async function answerPrompt(value) {
@@ -385,47 +398,55 @@
   function openUrl(url) {
     void tauri.invoke('local_mode_open_url', { url }).catch(() => { formError = 'The browser could not open. Copy the link instead.' })
   }
+
+  // The sign-in page's address stays off the page. Copy puts it on the clipboard.
+  let loginLinkCopied = $state(false)
+  async function copyLoginLink() {
+    try {
+      await navigator.clipboard.writeText(login.url)
+      loginLinkCopied = true
+      setTimeout(() => { loginLinkCopied = false }, 1500)
+    } catch {
+      formError = 'The link could not be copied.'
+    }
+  }
 </script>
 
-{#snippet tabAction()}
-  {#if tab === 'accounts'}<Button icon="plus" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
-  <Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>{/if}
+{#snippet pageActions()}
+  <Button icon="refresh-cw" aria-label={discovering ? 'Refreshing models…' : 'Refresh models'} disabled={discovering} onclick={() => load(true)}><span class="action-label">{discovering ? 'Refreshing models…' : 'Refresh models'}</span></Button>
+  <Button icon="plus" variant="primary" aria-label="Connect account" onclick={openConnector}><span class="action-label">Connect account</span></Button>
 {/snippet}
 
-<div class="models" data-settings-controls use:resetPageScroll={[view, tab, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
+<div class="models" data-settings-controls use:resetPageScroll={[view, providerId, classifierId].join(':')} class:connecting={view !== 'list'}>
   {#if view === 'list'}
     {#if loadError}<p class="support" role="alert">{loadError}</p>{/if}
     {#if status}<p class="support" role="status">{status}</p>{/if}
-    {#if sidebarTab}
-      <PageHead intro={INTROS[tab]} actions={tab === 'routing' ? undefined : tabAction} />
-    {:else}
-      <div class="tabs-row">
-        <SettingsTabs label="Model settings" value={tab} tabs={[{id:'accounts',label:'Accounts',icon:'user'},{id:'routing',label:'Decisions',icon:'route'}]} onchange={value => tab = value} />
-        {#if tab !== 'routing'}<div class="tab-action">{@render tabAction()}</div>{/if}
-      </div>
-    {/if}
-    {#if tab === 'routing'}
+    <PageHead intro="The accounts, keys and local servers your models run on, and the models that route and assist." actions={pageActions} />
     {#if routerError}
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection onconnect={() => { showTab('accounts'); openConnector() }} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={openConnector} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
 
-    {:else if tab === 'accounts'}
-    <section class="accounts-section" aria-label="Accounts">
+    <section class="accounts-section" aria-label="Connections" bind:this={connectionsPart}>
     
-    {#if refreshError}<p class="support" role="alert">{refreshError}</p>{/if}
+    <Group heading="Connections" label="Connected providers" plain>
+    {#snippet actions()}{#if router?.accounts?.some((account) => account.source !== 'key')}<Button icon="chart-column" onclick={openUsagePage}>See usage</Button>{/if}{/snippet}
+    {#if !inventory && !loadError}<p class="support empty" role="status">Reading connections…</p>{/if}
     {#if inventory && inventory.providers.length === 0 && !router?.accounts?.length}<p class="support empty">Connect an account to start.</p>{/if}
     {#if shownProviders.length || poolOnlyFamilies.length}
       <!-- Each provider is a heading over its own cards. A pooled subscription is a card and a pooled
            key a one-line card, each with its own controls. The provider's own connection, when it
            has no pooled account, is a one-line card with edit and disconnect icons at the far right. -->
-      <Group label="Connected providers" plain>
         {#each shownProviders as entry (entry.id)}
-          {@const pooled = !!entry.family && !!router?.accounts?.some((account) => account.family === entry.family)}
+          {@const bridgeAccounts = entry.id === 'claude-bridge' && entry.source === 'account'}
+          {@const pooled = bridgeAccounts || (!!entry.family && !!router?.accounts?.some((account) => account.family === entry.family && account.pi_provider !== 'claude-bridge'))}
+          {@const firstOfFamily = shownProviders.find((other) => other.family === entry.family) === entry}
           {@const endpoint = entry.source === 'local' || entry.source === 'custom'}
           <section class="provider-group" aria-label={entry.name}>
+            <!-- The bridge's Anthropic accounts are their own cards, so the bridge shows a row only for a
+                 Claude Code connection, and those accounts never hide another connection's row. -->
             <Row title={entry.name}>
               {#snippet icon()}<ProviderLogo color provider={entry.id} size={16} />{/snippet}
             </Row>
@@ -433,13 +454,18 @@
               <div class="line-card" data-testid="provider-connection">
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
-                {#if endpoint || catalogProvider(catalogId(entry.id))}
+                <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
+                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
+                {#if entry.source === 'claude-code'}
+                  <!-- A Claude Code connection from before signs in again as an account, whose row replaces it. -->
+                  <button type="button" class="quiet sign-in-again" onclick={signInAgain}>Sign in again</button>
+                {:else if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
             {/if}
-            {#if entry.family && router}<ModelAccounts {tauri} {listen} settings={router} family={entry.family} onsettings={onRouterSettings} />{/if}
+            {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
           </section>
         {/each}
         {#each poolOnlyFamilies as family (family)}
@@ -447,8 +473,17 @@
             <Row title={familyName(family)}>
               {#snippet icon()}<ProviderLogo color provider={familyProvider(family)} size={16} />{/snippet}
             </Row>
-            <ModelAccounts {tauri} {listen} settings={router} {family} onsettings={onRouterSettings} />
+            <ModelAccounts {tauri} {listen} {runtime} settings={router} {family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />
           </section>
+        {/each}
+    {/if}
+    </Group>
+    {#if elsewhere.length}
+      <Group heading="Signed in on other machines" description="A shared sign-in arrives here on its own.">
+        {#each elsewhere as signIn (signIn.id)}
+          <Row title={signIn.label} meta={signIn.line}>
+            {#snippet icon()}<ProviderLogo color provider={signIn.provider} size={16} />{/snippet}
+          </Row>
         {/each}
       </Group>
     {/if}
@@ -457,15 +492,14 @@
         {#each router.classifier_connections as connection (connection.id)}
           <Row title={connection.name} meta={connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}>
             {#snippet icon()}<ProviderLogo color provider={connection.catalog_id} size={16} />{/snippet}
-            {#if connection.connection.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
-            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another in Decisions.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            {#if connection.connection?.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
+            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another under Roles.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
           </Row>
           {#if editingClassifier === connection.id}<div class="classifier-edit"><ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} /></div>{/if}
         {/each}
       </Group>
     {/if}
     </section>
-    {/if}
   {:else}
     <header class="connect-head">
       <button type="button" class="quiet back" aria-label="Back" onclick={back}><LucideIcon name="arrow-left" variant="action" size={16} /></button>
@@ -481,6 +515,16 @@
     </header>
     {#if view === 'connect'}
       <SearchToolbar label="Search providers" placeholder="Search providers" bind:value={providerQuery} />
+      {#if found.length && !providerQuery.trim()}
+        <Group heading="Found on this computer" level={5}>
+        <ul class="provider-list">
+          {#each found as server (server.id)}
+            <li><button type="button" class="quiet provider-row" disabled={pending} onclick={() => connectFound(server)}><ProviderLogo color provider={server.id} size={18} /><span>{server.name}</span> <span class="tag">{foundServerAction(server)}</span></button></li>
+          {/each}
+        </ul>
+        </Group>
+        {#if formError}<p class="support" role="alert">{formError}</p>{/if}
+      {/if}
       {#each [['Popular & Subscriptions', catalog.popular], ['Decision models', searchClassifiers(providerQuery)], ['All providers', catalog.other]] as [group, entries]}
         {#if entries.length}
           <Group heading={group} level={5}>
@@ -493,7 +537,7 @@
         {/if}
       {/each}
     {:else if view === 'classifier' && classifierEntry}
-      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list'; showTab('accounts') }} />
+      <ClassifierConnection entry={classifierEntry} {tauri} ollama={inventory?.providers?.find(row => row.id === 'ollama') ?? null} onconnectollama={() => chooseProvider('ollama')} onconnected={next => { accounts.set(next); status = 'Decision model connected. Routing and chats can use it.'; view = 'list' }} />
     {:else if method === 'key'}
       <p class="support">Enter your {provider.name} API key. Muniment stores it on this device. API usage has separate billing from a chat subscription.</p>
       <Group label={`${provider.name} key`}>
@@ -503,7 +547,7 @@
       {/each}
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
+      <button type="button" data-variant="primary" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
@@ -511,7 +555,7 @@
       <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : 'For a server behind a key'} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
     {:else if method === 'endpoint'}
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       <Group label="Endpoint">
@@ -523,33 +567,30 @@
       <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
-    {:else if method === 'claude-code'}
-      <p class="support">Anthropic through your Claude Code sign-in. Muniment installs the bridge package and routes Claude models through it.</p>
-      {#if claude === null}
-        <p class="support" role="status">Checking Claude Code…</p>
-      {:else if !claude.installed}
-        <p class="support" role="status">Claude Code is not installed on this device. Install it, run <code>claude</code> once to sign in, then retry.</p>
-        <button type="button" onclick={loadClaudeStatus}>Check again</button>
-      {:else if !claude.logged_in}
-        <p class="support" role="status">Claude Code is installed but not signed in. Run <code>claude</code> in a terminal and sign in, then retry.</p>
-        <button type="button" onclick={loadClaudeStatus}>Check again</button>
-      {:else}
-        <p class="support" role="status">Claude Code is signed in.</p>
-        {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-        <button type="button" disabled={pending} onclick={connectClaudeCode}>Connect Claude Code</button>
-      {/if}
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
     {:else if method === 'account'}
-      <p class="support">Sign in with your {methodLabel(provider, 'account')}. The browser opens, and the token stays on this device.</p>
+      <p class="support">Sign in with your {methodLabel(provider, 'account')}. {provider.id === 'anthropic' ? 'The browser opens, and Claude Code keeps the token.' : 'The browser opens, and the token stays on this device.'}</p>
+      {#if signedIn.length}
+        <Group label={`${provider.name} accounts`}>
+          {#each signedIn as account (account.id)}
+            <Row title={account.label} meta={account.plan || 'Subscription'}>
+              {#snippet icon()}<LucideIcon name="credit-card" size={16} />{/snippet}
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => removeAccount(account)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            </Row>
+          {/each}
+        </Group>
+      {/if}
       {#if !login}
-        <button type="button" disabled={pending} onclick={startLogin}>Sign in</button>
+        <button type="button" data-variant="primary" disabled={pending} onclick={startLogin}>{signedIn.length ? 'Add another account' : 'Sign in'}</button>
       {:else}
         <div class="login" aria-live="polite">
-          <p class="support">{login.message}</p>
+          {#if login.stage === 'failed'}<FailureNote failure={login.message} detail={login.detail} />{:else}<p class="support">{login.message}</p>{/if}
           {#if login.code}<p class="login-code">{login.code}</p>{/if}
           {#if login.url}
-            <button type="button" onclick={() => openUrl(login.url)}>Open the sign-in page</button>
-            <p class="record login-url">{login.url}</p>
+            <div class="login-links">
+              <button type="button" data-variant={login.prompt?.kind === 'input' ? undefined : 'primary'} onclick={() => openUrl(login.url)}>{login.stage === 'browser' ? 'Open again' : 'Open the sign-in page'}</button>
+              <button type="button" class="quiet" onclick={copyLoginLink}>{loginLinkCopied ? 'Copied' : 'Copy sign-in link'}</button>
+            </div>
           {/if}
           {#if login.prompt?.kind === 'select'}
             <p class="support">{login.prompt.title}</p>
@@ -560,10 +601,10 @@
             </div>
           {:else if login.prompt?.kind === 'input'}
             <div class="connection-field"><label for="login-answer">{login.prompt.title}</label><input id="login-answer" type="text" placeholder={login.prompt.placeholder ?? ''} bind:value={loginAnswer}></div>
-            <button type="button" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
+            <button type="button" data-variant="primary" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
           {/if}
           {#if login.stage === 'failed' || login.stage === 'cancelled'}
-            <button type="button" onclick={startLogin}>Try again</button>
+            <button type="button" data-variant="primary" onclick={startLogin}>Try again</button>
           {:else}
             <button type="button" class="quiet" onclick={cancelLogin}>Cancel</button>
           {/if}
@@ -600,7 +641,8 @@
   .classifier-edit { padding: 10px 0; }
   .action-label { white-space: nowrap; }
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
-  .icon-action.critical { color: var(--oxide); }
+  .icon-action.critical { color: var(--danger); }
+  .sign-in-again { min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
   .connect-head h4, .models-head h4 { margin: 0; }
@@ -608,16 +650,15 @@
   .accounts-section { display: grid; gap: var(--page-gap); }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .support code { font: var(--text-12) var(--font-mono); }
   .empty { padding: 12px 0; }
   .connect { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px; white-space: nowrap; }
   .back { min-width: 28px; min-height: 28px; padding: 5px; line-height: 0; }
   .search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); }
   .search:focus-within { border-color: var(--muted); }
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
-  .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .tab-action { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .model-count { flex: none; white-space: nowrap; }
+  .model-count[data-tone="caution"] { color: var(--warning); }
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .provider-list li + li { border-top: 1px solid var(--border); }
@@ -632,7 +673,7 @@
   .models > button, .login > button { justify-self: start; min-height: 28px; padding: 4px 10px; }
   .login { display: grid; gap: 8px; justify-items: start; }
   .login-code { margin: 0; font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
-  .login-url { max-width: 100%; }
+  .login-links { display: flex; flex-wrap: wrap; gap: 8px; }
   .login-options { display: flex; flex-wrap: wrap; gap: 6px; }
   .method-switch { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0; }
   .method-switch button { min-height: 24px; padding: 2px 8px; color: var(--muted); font-size: var(--text-12); }

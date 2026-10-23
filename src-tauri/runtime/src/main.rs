@@ -39,6 +39,18 @@ Options:
   --version   Print version";
 
 fn main() {
+    // A desktop that started this runtime may have leaked descriptors from its
+    // browser engine, and Pi and every other program started here must not keep them.
+    muniment_core::child_fds::seal_inherited();
+    // A debug runtime that a test spawns with `MUNIMENT_TEST` keeps every
+    // secret in memory, so it never reaches the platform keychain. Release
+    // builds compile this out and always use the keychain.
+    #[cfg(debug_assertions)]
+    if std::env::var_os(muniment_core::state_root::TEST_RUN_VARIABLE)
+        .is_some_and(|value| !value.is_empty())
+    {
+        muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    }
     match handle_arguments() {
         Ok(true) => return,
         Ok(false) => {}
@@ -368,6 +380,15 @@ enum RuntimeDirectorySource {
 }
 
 fn handle_arguments() -> Result<bool, String> {
+    // Pi runs `secret get <provider>` for an endpoint key, which this binary
+    // reads from the keychain it stored the key in.
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(status) = muniment_runtime_core::models::endpoint_secrets::run_command(
+        &arguments,
+        muniment_runtime_core::host::platform_credentials,
+    ) {
+        std::process::exit(status);
+    }
     let mut args = std::env::args_os().skip(1);
     let Some(argument) = args.next() else {
         return Ok(false);

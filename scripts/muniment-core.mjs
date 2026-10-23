@@ -1,25 +1,15 @@
-// Locates the muniment-core checkout that Cargo resolves for the desktop and
-// reads its runtime pins. The shared crates and pins/pins.toml live there.
-import { execFileSync } from 'node:child_process'
+// Locates the core tree in this repository and reads its runtime pins. The
+// shared crates and pins/pins.toml live in core/.
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Test environments that replace the global URL still pass import.meta.url as a string.
 const repository = dirname(dirname(fileURLToPath(import.meta.url)))
-const manifest = join(repository, 'src-tauri', 'Cargo.toml')
-let root = process.env.MUNIMENT_CORE_ROOT
 
-// The muniment-pins manifest sits at crates/pins/Cargo.toml in the checkout.
+// MUNIMENT_CORE_ROOT names another core tree, such as a test fixture.
 export function coreRoot() {
-  if (root) return root
-  const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--manifest-path', manifest, '--locked', '--format-version', '1'],
-    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'] }))
-  const pins = metadata.packages.find(item => item.name === 'muniment-pins')
-  if (!pins) throw new Error('Cargo resolved no muniment-pins package')
-  root = dirname(dirname(dirname(pins.manifest_path)))
-  process.env.MUNIMENT_CORE_ROOT = root
-  return root
+  return process.env.MUNIMENT_CORE_ROOT || join(repository, 'core')
 }
 
 // The installed E2E runners export this path before they isolate the spec home.

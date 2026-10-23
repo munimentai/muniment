@@ -1,4 +1,5 @@
 import { applyChatEvent, historyMessages, settledPhases, unsettledRun, withFolders } from './chat-state.js'
+import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
 const historyPageCap = 100
 const historyPageLimit = 100
@@ -11,6 +12,9 @@ const desktopBusy = 'Muniment is busy with another request. Try again.'
 const replyInProgress = 'A reply is already in progress.'
 const replyInProgressRetryMs = 2_000
 const runElsewhere = 'Another reply is still running. Send again when it ends.'
+// The runtime refuses a run in a thread another fleet member runs with this
+// reason before it records anything (attach_boundaries.rs).
+const threadElsewhere = 'Another machine runs this thread. Send the message to that machine.'
 const terminalTypes = { completed: 'complete', cancelled: 'cancelled', failed: 'failed' }
 const eventSettles = (event) => settledPhases.has(event.phase ?? terminalTypes[event.type])
 const submissionSources = ['local-mode', 'auth', 'thread', 'submit']
@@ -36,8 +40,21 @@ export function createChatController({
   readFiles,
   // The thinking level a send carries, or null for the model's default.
   readThinkingLevel = () => null,
+  // The permission mode picked for a new thread before its first message, or
+  // null. Core sets it before the run starts, so it covers the first tool call.
+  readPermissionMode = () => null,
+  // The model the composer picked before any thread exists. The first
+  // message carries it to the thread it starts.
+  readPendingModel = () => null,
+  // The ids of the agents a prompt mentions. Core sends the prompt to each
+  // and answers what became of each one, which `onMentions` receives.
+  readMentions = () => [],
+  onMentions = () => {},
   readThreadId = () => null,
   readThreadSummaries = () => [],
+  // The machine the composer sends to. A run left running on one machine
+  // does not hold a send to another.
+  readRuntime = () => null,
   blocked = () => false,
   onMessages,
   onActive,
@@ -66,6 +83,11 @@ export function createChatController({
   onSubmission = () => {},
   onSignInLink = () => {},
   onBackgroundRun = () => {},
+  // The messages posted to a thread on swarm members, from its first page.
+  onPosted = () => {},
+  // Sends a message the runtime refused because another machine runs the
+  // thread to that machine, and answers whether it went.
+  postElsewhere = null,
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -190,8 +212,10 @@ export function createChatController({
       phase: event.phase,
       text,
       promptStorageNotice: run.promptStorageNotice,
+      resumeNotice: run.resumeNotice,
       turnStarted: run.turnStarted,
       failureReason: run.failureReason,
+      failureDetail: run.failureDetail,
       receipt: run.receipt,
       recalls: run.recalls,
       toolActivity: run.toolActivity,
@@ -245,8 +269,12 @@ export function createChatController({
       void refreshThreads()
       return
     }
-    publishBackground({ threadId: threadId ?? null, runId: run.id })
+    const runtime = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId ?? readRuntime() ?? LOCAL_RUNTIME_ID
+    publishBackground({ threadId: threadId ?? null, runId: run.id, runtime })
   }
+  // Whether the run left in the background runs on the machine the composer
+  // sends to, so a send there waits for it.
+  const backgroundHere = () => !!background && (background.runtime ?? LOCAL_RUNTIME_ID) === (readRuntime() ?? LOCAL_RUNTIME_ID)
   const publishMessages = (next) => {
     if (!destroyed) onMessages(next)
   }
@@ -500,16 +528,18 @@ export function createChatController({
     holdBuffer()
     try {
       if (select) {
-        await invoke('chat_select_thread', { threadId })
+        await invoke('chat_select_thread', selection(threadId))
         selected = true
       }
       const history = []
+      let posted = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
         const payload = { threadId, limit: historyPageLimit }
         if (cursor !== undefined) payload.cursor = cursor
         const result = await invoke('chat_thread_open', payload)
         if (destroyed) return
+        if (page === 0) posted = result.posted ?? []
         history.push(...result.entries)
         if (result.nextCursor == null) break
         cursor = result.nextCursor
@@ -517,7 +547,7 @@ export function createChatController({
       if (destroyed) return
       // Read first so a failed initial history read still permits a fresh thread.
       if (restoreSelection && !selected) {
-        await invoke('chat_select_thread', { threadId })
+        await invoke('chat_select_thread', selection(threadId))
         selected = true
         if (destroyed) return
       }
@@ -542,6 +572,7 @@ export function createChatController({
       publishMessages(rejoined
         ? published.map((message) => message.run?.id === rejoined.id ? { ...message, run: rejoined } : message)
         : published)
+      onPosted(threadId, posted)
       onActive(settled ? null : rejoined)
       if (rejoined) onAnnounce(rejoined)
       onHistoryLoaded()
@@ -625,11 +656,13 @@ export function createChatController({
     holdBuffer()
     try {
       const history = []
+      let posted = []
       let cursor
       for (let page = 0; page < historyPageCap; page += 1) {
         const payload = { threadId, limit: historyPageLimit }
         if (cursor !== undefined) payload.cursor = cursor
         const result = await invoke('chat_thread_open', payload)
+        if (page === 0) posted = result.posted ?? []
         // A thread switch can land while the pages load. The pages then describe
         // a thread the shell no longer shows, so this call drops them.
         if (destroyed || readThreadId() !== threadId) return
@@ -637,6 +670,7 @@ export function createChatController({
         if (result.nextCursor == null) break
         cursor = result.nextCursor
       }
+      onPosted(threadId, posted)
       // Another call published while the pages loaded, so the pages describe an
       // older transcript. That call owns the view now, and publishing the pages
       // would drop the message and the run it just added.
@@ -831,6 +865,13 @@ export function createChatController({
     }
   }
 
+  // A thread's selection names the machine its row lives on, so requests
+  // and the model list follow the machine the composer shows.
+  function selection(threadId) {
+    const runtimeId = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId
+    return runtimeId ? { threadId, runtimeId } : { threadId }
+  }
+
   async function sendNewThread(text) {
     const prompt = typeof text === 'string' ? text.trim() : ''
     if (!prompt) return false
@@ -839,7 +880,11 @@ export function createChatController({
 
   async function send() {
     const prompt = readDraft().trim()
-    if (!prompt || active() || background || switchingThread || switchBlocked || blocked()) return
+    if (!prompt || active() || switchingThread || switchBlocked || blocked()) return
+    if (backgroundHere()) {
+      onSubmitError(runElsewhere)
+      return
+    }
     const selected = readFiles()
     const folders = selected.filter(file => file.isDirectory).map(file => file.path)
     return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
@@ -888,9 +933,14 @@ export function createChatController({
       if (preparation) await preparation
       if (destroyed || submissionId !== submissionSequence) return
       const thinkingLevel = readThinkingLevel()
-      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}) })
+      // A launcher thread takes no mode from the main composer.
+      const permissionMode = preserveDraft ? null : readPermissionMode()
+      const model = preserveDraft ? null : readPendingModel()
+      const mentions = preserveDraft ? [] : readMentions(prompt)
+      const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}), ...(mentions.length ? { mentions } : {}) })
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
+      if (run.mentions?.length) onMentions(run.mentions)
       if (!preserveDraft) {
         onDraft('')
         onFiles([])
@@ -917,6 +967,18 @@ export function createChatController({
         onAnnounce(null)
         onActive(null)
         onSubmitError(runElsewhere)
+        return false
+      }
+      if (reason === threadElsewhere && postElsewhere && submissionId === submissionSequence) {
+        // The runtime recorded nothing; the message goes to the machine that
+        // runs the thread instead.
+        publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
+        onAnnounce(null)
+        onActive(null)
+        if (await postElsewhere(prompt)) {
+          if (!preserveDraft) { onDraft(''); onFiles([]) }
+          return true
+        }
         return false
       }
       if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {

@@ -8,12 +8,19 @@
   import Button from './ui/Button.svelte'
   import SegmentedField from './ui/SegmentedField.svelte'
   import LucideIcon from './LucideIcon.svelte'
+  import AgentAvatar from './AgentAvatar.svelte'
   import PopupClose from './PopupClose.svelte'
   import { dialogDismiss } from './dialog-dismiss.js'
   import MemoryImports from './MemoryImports.svelte'
   import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
+  import { formatDateTime } from './time-format.svelte.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
-  let { tauri, agentId = null, part = 'all' } = $props()
+  // `agent` is the agent whose memory shows from its profile: a new fact's
+  // source names it, and its avatar marks that source. `addInPlace` shows
+  // the Add memory form in place of the list, for a host that is already a
+  // dialog, and `onadding` tells the host when the form shows.
+  let { tauri, agentId = null, agent = null, part = 'all', addInPlace = false, onadding = () => {} } = $props()
+  const newSource = $derived(agent ? `Added by ${agent.name} agent` : 'Added in settings')
   const showProfile = $derived(!agentId && part !== 'memory')
   const showMemory = $derived(part !== 'profile')
   // New chats read these choices from the profile.
@@ -60,7 +67,7 @@
   let filter = $state('')
   let showDeleted = $state(false)
   let deletedFacts = $state([])
-  let draft = $state({ id: '', title: '', content: '', source: 'Added in settings' })
+  let draft = $state({ id: '', title: '', content: '', source: '' })
   let status = $state('')
   let busy = $state(true)
   let loaded = $state(false)
@@ -72,30 +79,36 @@
   const unconfirmed = $derived(facts.filter(f => f.trust === 'external').length)
   const shown = $derived(facts.filter(f => (trustFilter === 'all' || f.trust === trustFilter) && `${f.title} ${f.content} ${f.source}`.toLowerCase().includes(filter.toLowerCase())))
   function toggle(key) { expanded = expanded === key ? '' : key; deleting = ''; if (draft.id) clearDraft() }
-  function clearDraft() { draft = { id: '', title: '', content: '', source: 'Added in settings' } }
+  function clearDraft() { draft = { id: '', title: '', content: '', source: newSource } }
   async function editFact(fact) {
     draft = { ...fact }
     deleting = ''
     await tick()
     titleInput?.focus()
   }
-  // Add memory opens a modal form and returns focus to its opener on close.
+  // Add memory opens a modal form, or the form in place of the list, and
+  // returns focus to Add memory on close.
   let adding = $state(false)
   let addDialog = $state()
+  let section = $state()
   let opener = null
   async function openAdd(event) {
     opener = event?.currentTarget ?? document.activeElement
     clearDraft()
     adding = true
+    onadding(true)
     await tick()
-    if (!addDialog.open) addDialog.showModal()
+    if (!addInPlace && !addDialog.open) addDialog.showModal()
     titleInput?.focus()
   }
-  function closeAdd() {
+  export async function closeAdd() {
     if (addDialog?.open) addDialog.close()
     adding = false
+    onadding(false)
     clearDraft()
-    opener?.focus?.({ preventScroll: true })
+    if (addInPlace) await tick()
+    const button = addInPlace ? section?.querySelector('button[aria-label="Add memory"]') : opener
+    button?.focus?.({ preventScroll: true })
   }
   // A new fact opens in the list, on a page the list shows.
   async function reveal(id) {
@@ -109,7 +122,7 @@
   // Proposed changes from finished chats wait here until the user applies or
   // dismisses them. A runtime without the action leaves the list empty.
   const OP = { add: 'Add', update: 'Update', delete: 'Delete' }
-  const when = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  const when = { format: formatDateTime }
   let pending = $state([])
   let reviewing = $state(false)
   // A failed apply keeps its row and error until the user closes it, even
@@ -201,8 +214,9 @@
       if (adding) {
         filter = ''
         trustFilter = 'all'
-        closeAdd()
+        const closed = closeAdd()
         if (saved?.id) await reveal(saved.id)
+        await closed
       }
     } catch (e) { status = String(e) }
     finally { busy = false }
@@ -249,20 +263,23 @@
     finally { busy = false }
   }
 </script>
-<section class="memory" aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+<section class="memory" bind:this={section} aria-label={agentId ? "Agent memory" : part === 'profile' ? "Profile" : part === 'memory' ? "Saved memories" : "Profile and memory"}>
+  {#if addInPlace && adding}
+    <section aria-label="Add memory">{@render factForm('Cancel', closeAdd)}</section>
+  {:else}
   {#if showProfile}
     <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
       {#snippet actions()}
         <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
-        <Button disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
+        <Button variant="primary" disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
       {/snippet}
     </PageHead>
-    <Group heading="About you" description="Saved in memory/profile.md.">
+    <Group heading="About you" info="Saved in memory/profile.md.">
       <Row title="Name"><input class="row-input" aria-label="Name" bind:value={profile.name} disabled={!loaded || busy} autocomplete="name" /></Row>
-      <Row title="Preferred name" description="What replies call you."><input class="row-input" aria-label="Preferred name" bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></Row>
+      <Row title="Preferred name"><input class="row-input" aria-label="Preferred name" bind:value={profile.preferredName} disabled={!loaded || busy} autocomplete="nickname" /></Row>
       <Row title="Work"><input class="row-input" aria-label="Work" bind:value={profile.work} disabled={!loaded || busy} placeholder="What do you do?" /></Row>
     </Group>
-    <Group heading="Instructions" description="How Muniment should respond to you.">
+    <Group heading="Instructions">
       <div class="field"><textarea aria-label="Instructions" bind:value={profile.instructions} disabled={!loaded || busy} rows="5" placeholder="How should Muniment respond?"></textarea></div>
       {#if profile.extra}<label class="field">Other profile details<textarea bind:value={profile.extra} disabled={!loaded || busy} rows="4"></textarea></label>{/if}
     </Group>
@@ -278,7 +295,7 @@
     {#if part === 'memory'}
       <Group heading="Recall">
         {#each RECALL as [key, label, help] (key)}
-          <Row title={label} description={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
+          <Row title={label} info={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
         {/each}
       </Group>
       <MemoryImports {tauri} />
@@ -312,16 +329,19 @@
       {@render factList(shown, 'saved', limit, () => { limit += PAGE }, filter ? 'No matching memories.' : trustFilter === 'external' ? 'No unconfirmed memories.' : 'No saved memories yet.')}
     </Group>
     {#if showDeleted}
-      <Group heading="Deleted memories" description="Deleted memories stay out of recall. Restore one if it was removed by mistake." plain>
+      <Group heading="Deleted memories" info="Deleted memories stay out of recall. Restore one if it was removed by mistake." plain>
         {@render factList(deletedFacts, 'deleted', deletedLimit, () => { deletedLimit += PAGE }, 'No deleted memories.')}
       </Group>
     {/if}
-    <dialog class="memory-dialog" data-panel="memory-add" data-panel-variant="overlay" bind:this={addDialog} use:dialogDismiss={{ onclose: closeAdd, disabled: busy }} aria-labelledby={`${uid}-add`}>
-      {#if adding}
-        <div class="dialog-head"><h2 id={`${uid}-add`}>Add memory</h2><PopupClose label="Close" disabled={busy} onclick={closeAdd} /></div>
-        {@render factForm('Cancel', closeAdd)}
-      {/if}
-    </dialog>
+    {#if !addInPlace}
+      <dialog class="memory-dialog" data-panel="memory-add" data-panel-variant="overlay" bind:this={addDialog} use:dialogDismiss={{ onclose: closeAdd, disabled: busy }} aria-labelledby={`${uid}-add`}>
+        {#if adding}
+          <div class="dialog-head"><h2 id={`${uid}-add`}>Add memory</h2><PopupClose label="Close" disabled={busy} onclick={closeAdd} /></div>
+          {@render factForm('Cancel', closeAdd)}
+        {/if}
+      </dialog>
+    {/if}
+  {/if}
   {/if}
   {#if status}<p role="status">{status}</p>{/if}
 </section>
@@ -426,7 +446,7 @@
   <form class="fact-form" onsubmit={saveFact}>
     <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
     <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
-    <label class="field">Source<input bind:value={draft.source} required disabled={!loaded || busy} /></label>
+    <label class="field">Source<span class="source-value">{#if agent && draft.source === newSource}<AgentAvatar {agent} size={16} />{/if}<input bind:value={draft.source} required disabled={!loaded || busy} /></span></label>
     <div class="field-actions">
       <Button onclick={cancel}>{cancelLabel}</Button>
       <Button type="submit" disabled={!loaded || busy}>Save memory</Button>
@@ -446,9 +466,8 @@
   .search { flex: 1 1 200px; min-width: 0; }
   textarea { resize: vertical; line-height: 1.5; }
   .import { position: relative; overflow: hidden; display: inline-flex; align-items: center; min-height: 32px; box-sizing: border-box; padding: 6px 10px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
-  .import:hover { background: var(--border); }
+  .import:hover, .import:has(input:focus-visible) { background: var(--border); }
   .import input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-  .import:focus-within { outline: 2px solid var(--ink); }
   .disclosure { min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; }
   .disclosure:hover { background: var(--faint); color: var(--ink); }
   .disclosure { white-space: nowrap; }
@@ -461,7 +480,7 @@
   .fact { position: relative; min-width: 0; }
   .fact + .fact::before { content: ''; position: absolute; top: 0; left: 12px; right: 12px; border-top: 1px solid var(--border); }
   .fact-head { display: grid; grid-template-columns: 14px minmax(0, clamp(96px, 30%, 240px)) minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box; padding: 8px 12px; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); line-height: 20px; text-align: left; cursor: pointer; }
-  .fact-head:hover, .fact-head:focus-visible { outline: none; background: var(--faint); }
+  .fact-head:hover, .fact-head:focus-visible { background: var(--faint); }
   .chevron { display: inline-flex; color: var(--muted); }
   .chevron.open { transform: rotate(90deg); }
   .fact-title, .fact-preview { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -477,7 +496,7 @@
   .quick :global(button) { min-width: 24px; min-height: 24px; padding: 3px; color: var(--ink); }
   /* Each icon's border takes the icon's own color on hover and focus. */
   .quick :global(button:hover:not(:disabled)), .quick :global(button:focus-visible) { border-color: currentColor; }
-  .quick .danger :global(button) { color: var(--oxide); }
+  .quick .danger :global(button) { color: var(--danger); }
   /* Confirm takes the theme's accent, else its signal. Moss keeps its green
      signal even in the vibrant set, whose accent is not green. */
   .quick .confirm { --confirm: var(--accent, var(--signal)); }
@@ -495,6 +514,7 @@
   .fact-form { display: grid; gap: 12px; }
   .fact-form .field { padding: 0; }
   .fact-form .field-actions { padding: 0; }
+  .source-value { display: flex; align-items: center; gap: 8px; }
   .memory-dialog { position: fixed; inset: 0; margin: auto; width: min(520px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 20px 24px 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
   .memory-dialog::backdrop { background: var(--overlay-backdrop); }
   .memory-dialog[open] { display: grid; gap: 16px; }

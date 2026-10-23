@@ -10,6 +10,8 @@ pub(super) trait RunCommandClient {
         files: &[String],
         thread_id: Option<&str>,
         thinking_level: Option<&str>,
+        permission_mode: Option<&str>,
+        mentions: &[String],
     ) -> Result<RunSubmitAccepted, String>;
     fn run_resume(&self, run_id: &str) -> Result<RunResumeAccepted, ClientError>;
     fn run_steer(&self, run_id: &str, text: &str) -> Result<RunMessageAccepted, ClientError>;
@@ -31,12 +33,16 @@ impl RunCommandClient for DesktopClientHolder {
         files: &[String],
         thread_id: Option<&str>,
         thinking_level: Option<&str>,
+        permission_mode: Option<&str>,
+        mentions: &[String],
     ) -> Result<RunSubmitAccepted, String> {
         self.run_submit_with_reason(
             text,
             files,
             thread_id,
             thinking_level,
+            permission_mode,
+            mentions,
             crate::attach_service::runtime_version_compatible,
         )
         .map_err(|(error, response)| auth::desktop_request_error(error, response.as_ref()))
@@ -95,6 +101,7 @@ impl From<DesktopClientSession> for RunCommandSession<DesktopClientHolder> {
 }
 
 #[cfg(any(unix, target_os = "windows"))]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_run_submit<C: RunCommandClient>(
     session: RunCommandSession<C>,
     state: &ChatState,
@@ -102,6 +109,8 @@ pub(super) async fn handle_run_submit<C: RunCommandClient>(
     prompt: &str,
     files: Vec<SelectedFile>,
     thinking_level: Option<&str>,
+    permission_mode: Option<&str>,
+    mentions: &[String],
 ) -> Result<SubmitResult, String> {
     match session {
         RunCommandSession::Connected(client) => {
@@ -115,8 +124,14 @@ pub(super) async fn handle_run_submit<C: RunCommandClient>(
                         .ok_or_else(attachment_error)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let accepted =
-                client.run_submit(prompt, &file_paths, thread_id.as_deref(), thinking_level)?;
+            let accepted = client.run_submit(
+                prompt,
+                &file_paths,
+                thread_id.as_deref(),
+                thinking_level,
+                permission_mode,
+                mentions,
+            )?;
             state
                 .session_thread
                 .select(accepted.thread_id.clone(), subject);
@@ -155,10 +170,16 @@ pub(super) fn submit_result(accepted: RunSubmitAccepted) -> SubmitResult {
                 display_name: attachment.display_name,
                 byte_length: attachment.byte_length,
                 media_type: attachment.media_type,
+                sha256: attachment.sha256,
             })
             .collect(),
         committed_seq: accepted.committed_seq,
         accepted_at: accepted.accepted_at,
+        mentions: accepted
+            .mentions
+            .iter()
+            .filter_map(|outcome| serde_json::to_value(outcome).ok())
+            .collect(),
     }
 }
 
@@ -169,6 +190,7 @@ pub(super) fn resume_result(accepted: RunResumeAccepted) -> SubmitResult {
         attachments: Vec::new(),
         committed_seq: accepted.committed_seq,
         accepted_at: accepted.accepted_at,
+        mentions: Vec::new(),
     }
 }
 

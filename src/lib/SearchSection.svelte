@@ -1,5 +1,5 @@
 <script>
-  // Settings → Search: the searches agents try in the user's order, the
+  // Settings → Tools → Search: the searches agents try in the user's order, the
   // engines built-in search asks, the providers the user adds keys for, then
   // the Browser tab's engine. The runtime keeps the record, and every change
   // answers the settings it left, which replace the page's copy. A key goes
@@ -17,39 +17,40 @@
   import PocketFold from './PocketFold.svelte'
   import LucideIcon from './LucideIcon.svelte'
 
-  let { tauri } = $props()
+  // `embedded` drops the page head where Tools shows search under its own.
+  let { tauri, embedded = false } = $props()
 
   // Providers whose mark the model settings already ship keep that file.
   const SHARED_LOGOS = { mistral: 'mistral', ollama: 'ollama', openai: 'openai', xai: 'xai', kimi: 'kimi-coding', zai: 'zai', gemini: 'google' }
   const logo = id => SHARED_LOGOS[id] ?? `search-${id}`
 
   const ENGINES = [
-    { id: 'brave', name: 'Brave', note: 'Web results.' },
-    { id: 'duckduckgo', name: 'DuckDuckGo', note: 'Web results.' },
-    { id: 'wikipedia', name: 'Wikipedia', note: 'Encyclopedia articles.' },
-    { id: 'yahoo', name: 'Yahoo', note: 'Web results.' },
-    { id: 'bing', name: 'Bing', note: 'Web results.' },
+    { id: 'brave', name: 'Brave' },
+    { id: 'duckduckgo', name: 'DuckDuckGo' },
+    { id: 'wikipedia', name: 'Wikipedia', note: 'Encyclopedia articles' },
+    { id: 'yahoo', name: 'Yahoo' },
+    { id: 'bing', name: 'Bing' },
   ]
   // `url` shows the server URL field for a provider the user can host.
   const COMMON = [
-    { id: 'exa', name: 'Exa', note: 'Neural search with page highlights.' },
-    { id: 'tavily', name: 'Tavily', note: 'Search with a short answer and page text.' },
-    { id: 'firecrawl', name: 'Firecrawl', note: 'Search and page reading. Takes a server URL for a self-hosted Firecrawl.', url: true },
-    { id: 'brave', name: 'Brave Search API', note: 'Brave’s paid index.' },
-    { id: 'perplexity', name: 'Perplexity', note: 'Search with a written answer.' },
-    { id: 'serper', name: 'Serper', note: 'Google results.' },
-    { id: 'serpapi', name: 'SerpApi', note: 'Google and other engines.' },
-    { id: 'kagi', name: 'Kagi', note: 'Search and page summaries.' },
-    { id: 'jina', name: 'Jina', note: 'Search and page reading.' },
-    { id: 'parallel', name: 'Parallel', note: 'Search and page reading for agents.' },
-    { id: 'you', name: 'You.com', note: 'Web and news results.' },
+    { id: 'exa', name: 'Exa', note: 'Neural search with highlights' },
+    { id: 'tavily', name: 'Tavily', note: 'Short answer and page text' },
+    { id: 'firecrawl', name: 'Firecrawl', note: 'Page reading, self-hosted or cloud', url: true },
+    { id: 'brave', name: 'Brave Search API', note: 'Brave’s paid index' },
+    { id: 'perplexity', name: 'Perplexity', note: 'Written answer' },
+    { id: 'serper', name: 'Serper', note: 'Google results' },
+    { id: 'serpapi', name: 'SerpApi', note: 'Google and other engines' },
+    { id: 'kagi', name: 'Kagi', note: 'Page summaries' },
+    { id: 'jina', name: 'Jina', note: 'Page reading' },
+    { id: 'parallel', name: 'Parallel', note: 'Page reading for agents' },
+    { id: 'you', name: 'You.com', note: 'Web and news' },
   ]
   const MORE = [
     ['anysearch', 'AnySearch'], ['baizhi', '百智 Baizhi'], ['bocha', 'Bocha'], ['brightdata', 'Bright Data'], ['ceramic', 'Ceramic'], ['degoog', 'degoog', true],
     ['gemini', 'Gemini'], ['keenable', 'Keenable'], ['mistral', 'Mistral'], ['ollama', 'Ollama'], ['querit', 'Querit'], ['search1api', 'Search1API'], ['searchinfinity', 'SearchInfinity'],
     ['serpbase', 'SerpBase'], ['serpdive', 'SerpDive'], ['serply', 'Serply'], ['tinyfish', 'TinyFish'], ['valyu', 'Valyu'], ['xcrawl', 'xCrawl'], ['zai', 'Zhipu'],
   ].map(([id, name, url = false]) => ({ id, name, url }))
-  // OpenAI and xAI search with the account connected in Model providers.
+  // OpenAI and xAI search with the account connected in Models.
   const ACCOUNT_SEARCH = { openai: 'OpenAI', xai: 'xAI' }
   const FIELDS = { brightdataSerpZone: 'SERP zone', brightdataUnlockerZone: 'Unlocker zone' }
   const NAMES = Object.fromEntries([...COMMON, ...MORE].map(provider => [provider.id, provider.name]).concat(Object.entries(ACCOUNT_SEARCH)))
@@ -76,9 +77,9 @@
   const searching = $derived(order.some(item => item.enabled))
 
   function describe(item) {
-    if (item.id === 'muniment') return { name: 'Muniment search', note: 'Built in and free. Needs no key.' }
-    if (item.id === 'exa' && !item.has_key) return { name: 'Exa free', note: 'Keyless, with shared limits.' }
-    return { name: providerName(item.id), note: 'Your key.' }
+    if (item.id === 'muniment') return { name: 'Muniment search', note: 'Built in, free' }
+    if (item.id === 'exa' && !item.has_key) return { name: 'Exa free', note: 'Shared limits' }
+    return { name: providerName(item.id), note: '' }
   }
   const meta = item => item.has_key ? `••••${keys[item.id]?.last4 ?? ''}` : ''
 
@@ -234,16 +235,16 @@
       <input type="text" placeholder={FIELDS[field] ?? field} aria-label={`${provider.name} ${FIELDS[field] ?? field}`} autocomplete="off" bind:value={draftExtra[field]}>
     {/each}
     <input type="password" placeholder="API key" aria-label={`${provider.name} API key`} autocomplete="off" bind:value={draftKey} onkeydown={event => { if (event.key === 'Enter') saveKey(provider) }}>
-    <Button variant="outline" disabled={saving || !draftKey.trim()} onclick={() => saveKey(provider)}>Save</Button>
+    <Button variant="primary" disabled={saving || !draftKey.trim()} onclick={() => saveKey(provider)}>Save</Button>
     <Button onclick={cancelKey}>Cancel</Button>
     {#if error}<p role="alert">{error}</p>{/if}
   </div>
 {/snippet}
 
 <div class="search-preferences">
-  <PageHead intro="Choose how agents search the web, and the engine the Browser tab address bar uses." />
+  {#if !embedded}<PageHead intro="How agents search the web, and the engine the Browser tab address bar uses." />{/if}
 
-  <Group heading="Search order" description="Agents try each search that is on, top to bottom, and move to the next one when it fails or runs out of quota.">
+  <Group heading="Search order" info="Agents try each search that is on, top to bottom. A search that fails or runs out of quota passes to the next.">
     {#each order as item, index (item.id + (item.has_key ? '-key' : ''))}
       {@const shown = describe(item)}
       {@const provider = { id: item.id, name: shown.name, url: [...COMMON, ...MORE].some(entry => entry.id === item.id && entry.url) }}
@@ -262,12 +263,12 @@
       </Row>
       </div>
     {/each}
-    {#if settings && !searching}<p role="alert">Every search is off, so agents cannot search the web.</p>{/if}
-    {#if settings}<p class="applies">Changes apply to the next agent session.</p>{/if}
+    {#if settings && !searching}<p role="alert">Every search is off. Agents cannot search the web.</p>{/if}
+    {#if settings}<p class="applies">Applies from the next agent session.</p>{/if}
   </Group>
   {#if error && !adding}<p role="alert">{error}</p>{/if}
 
-  <Group heading="Muniment search engines" description="Muniment search asks these engines at once from this device and merges their results.">
+  <Group heading="Muniment search engines" info="Muniment search asks these engines at once from this device and merges the results.">
     {#each ENGINES as engine (engine.id)}
       <Row title={engine.name} description={engine.note}>
         {#snippet lead()}{@render mark(engine.id)}{/snippet}
@@ -276,7 +277,7 @@
     {/each}
   </Group>
 
-  <Group heading="Add a search provider" description="Use a provider you already pay for. Muniment keeps the key on this device.">
+  <div class="add-provider" data-search-add><Group heading="Add a search provider" info="Use a provider you already pay for. The key stays on this device.">
     {#each available as provider (provider.id)}
       <Row title={provider.name} description={provider.note} stacked={adding === provider.id}>
         {#snippet lead()}{@render mark(provider.id)}{/snippet}
@@ -293,13 +294,14 @@
         <ul>{#each more as provider (provider.id)}<li class:adding={adding === provider.id}><span class="more-name">{@render mark(provider.id, 16)}{provider.name}</span>{#if adding === provider.id}{@render keyForm(provider)}{:else}<Button icon="key-round" onclick={() => startKey(provider.id)}>Add key</Button>{/if}</li>{/each}</ul>
       </details>
     {/if}
-    <p>OpenAI and xAI search with the account you connected in Model providers, so they need no key here.</p>
-  </Group>
+    <p>OpenAI and xAI use the account connected in Models.</p>
+  </Group></div>
 
   <BrowserSearch />
 </div>
 
 <style>
+  .add-provider { display: grid; scroll-margin-top: var(--page-pad); }
   .search-preferences { display: grid; gap: var(--page-gap); }
   .grip { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: grab; touch-action: none; }
   .grip:hover, .grip:focus-visible { background: var(--faint); color: var(--ink); }

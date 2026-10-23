@@ -4,6 +4,9 @@
   import { listen } from '@tauri-apps/api/event'
   import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
   import LucideIcon from './LucideIcon.svelte'
+  import { currentZoom } from './display-state.js'
+  import { pointerLeads } from './floating-menu.js'
+  import { followPointer } from './menu-pointer.js'
   let { selected = null, onselect, onopenchange, label = 'Workspace tools', icon = 'ellipsis-vertical' } = $props()
   let expanded = $state(false)
   let element
@@ -22,8 +25,10 @@
         const [origin, scale] = await Promise.all([main.innerPosition(), main.scaleFactor()])
         const rect = trigger.getBoundingClientRect()
         await popupWindow.setSize(new LogicalSize(240, 140))
-        await popupWindow.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, rect.right - 232) * scale), Math.round(origin.y + (rect.bottom - 2) * scale)))
-        await popupWindow.emit('workspace-menu-open', {selected})
+        // The page measures CSS pixels, and the interface zoom scales them to window pixels.
+        const zoom = currentZoom()
+        await popupWindow.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, rect.right * zoom - 232) * scale), Math.round(origin.y + (rect.bottom * zoom - 2) * scale)))
+        await popupWindow.emit('workspace-menu-open', {selected, pointer: pointerLeads()})
         return
       } catch { /* Browser previews use the HTML menu. */ }
       finally { opening = false }
@@ -60,7 +65,7 @@
   <button class="trigger" type="button" aria-label={label} aria-haspopup="menu" aria-expanded={expanded} bind:this={trigger} onclick={toggle}><LucideIcon name={icon} variant="action" size={14} /></button>
   {#if expanded}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} onkeydown={keys}>
+    <div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} use:followPointer onkeydown={keys}>
       {#each items as item}
         <button type="button" role="menuitem" onclick={() => { close(true); onselect(selected === item.id ? null : item.id) }}><LucideIcon name={item.icon} /><span>{item.name}</span>{#if selected === item.id}<LucideIcon name="check" />{/if}</button>
       {/each}

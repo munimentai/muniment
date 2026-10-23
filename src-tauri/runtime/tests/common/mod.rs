@@ -22,6 +22,27 @@ use muniment_desktop_integration::chat_grant::ChatGrant;
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// The bound for a test that waits for a runtime to start, become ready,
+/// open or accept on an endpoint, or reach a state. A loaded CI host can take
+/// several seconds for each; a wait still returns as soon as its condition
+/// holds.
+pub const CI_WAIT: Duration = Duration::from_secs(30);
+
+/// A random id for this test process. Directory names carry it so a test
+/// process never removes or reuses the directory of another process that
+/// shares the system temp directory and the process id. Eight hex characters
+/// keep the attach socket path under the 108-byte `sun_path` limit.
+static PROCESS_TOKEN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut hasher = DefaultHasher::new();
+    std::process::id().hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut hasher);
+    format!("{:08x}", hasher.finish() as u32)
+});
+
 pub struct TemporaryProfile {
     pub root: PathBuf,
     pub profile: PathBuf,
@@ -32,8 +53,9 @@ impl TemporaryProfile {
     pub fn new(test_name: &str, scaffold_home: bool) -> Self {
         let sequence = TEMPORARY_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "muniment-runtime-{test_name}-{}-{sequence}",
-            std::process::id()
+            "muniment-runtime-{test_name}-{}-{}-{sequence}",
+            std::process::id(),
+            *PROCESS_TOKEN
         ));
         let _ = fs::remove_dir_all(&root);
         let profile = root.join("profile");
@@ -248,6 +270,7 @@ pub fn credentials_with_expiry(expires_at: u64) -> NativeCredentials {
 /// profile's own install root, so a run resolves it with or without the
 /// `MUNIMENT_PI_ROOT` override.
 pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
+    use_temporary_state_directory(temporary_root);
     let pi_root = muniment_core::chat_profile::ChatProfile::new(temporary_root).pi_install_root();
     let revision_root = pi_root.join("revisions").join(PI_SELECTED_ARTIFACT.version);
     let staged_stub = revision_root.join(PI_SELECTED_ARTIFACT.executable);
@@ -307,4 +330,26 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
         sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
         executable: PI_SELECTED_ARTIFACT.executable,
     }
+}
+
+/// Points the state root at the given test directory unless the test already
+/// chose an existing directory under the system temp dir, so the runtime never
+/// reads or writes the real `~/.muniment`.
+pub fn use_temporary_state_directory(temporary_root: &Path) {
+    let current = std::env::var_os(muniment_core::state_root::STATE_DIRECTORY_OVERRIDE);
+    let temporary = current
+        .as_deref()
+        .map(Path::new)
+        .is_some_and(|path| path.starts_with(std::env::temp_dir()) && path.exists());
+    if !temporary {
+        set_state_directory(temporary_root);
+    }
+}
+
+/// Points the state root at `directory` for the rest of the test process.
+pub fn set_state_directory(directory: &Path) {
+    std::env::set_var(
+        muniment_core::state_root::STATE_DIRECTORY_OVERRIDE,
+        directory,
+    );
 }

@@ -5,6 +5,7 @@
   import Button from './ui/Button.svelte'
   import { pairingRequests } from './pairing-requests.js'
   import { dialogDismiss } from './dialog-dismiss.js'
+  import { formatDateTime } from './time-format.svelte.js'
   import {
     challengeExpired,
     pairingChallengeState,
@@ -15,7 +16,10 @@
     replacementReady,
   } from './pairing-state.js'
 
-  let { tauri } = $props()
+  // `compact` keeps only the pairing dialog, for Settings → Machines, which
+  // lists the paired phone as a row, opens the dialog from Add machine and
+  // revokes through `revokePair`. `onpair` hears the paired phone, or null.
+  let { tauri, compact = false, onpair = null } = $props()
   let pairing = $state(pairingLoadingState())
   let challenge = $state(null)
   let dialog = $state(null)
@@ -57,12 +61,12 @@
         try {
           const status = await pairingRequests.status(tauri.invoke, controller.signal)
           if (controller.signal.aborted || !watching) return
-          pairing = pairingReadyState(status)
+          setPairing(pairingReadyState(status))
           revoking = status.pair ? revoking : false
           if (status.pair && open) dismissChallenge()
         } catch (_) {
           if (controller.signal.aborted || !watching) return
-          if (!pairing.pair) pairing = pairingErrorState()
+          if (!pairing.pair) setPairing(pairingErrorState())
         }
       } while (pairing.pair || finalRead || (challenge && !challengeExpired(challenge.expiresAt)))
     } finally {
@@ -70,7 +74,13 @@
     }
   }
 
-  async function requestChallenge() {
+  // Every change of the pairing passes the paired phone out.
+  function setPairing(next) {
+    pairing = next
+    onpair?.(next.pair ?? null)
+  }
+
+  export async function requestChallenge() {
     if (requesting || !watching) return
     requesting = true
     const generation = ++challengeGeneration
@@ -139,8 +149,8 @@
     stopStatusPoll()
   }
 
-  async function revokePair(pairId) {
-    if (revokePending) return
+  export async function revokePair(pairId) {
+    if (revokePending) return false
     revokePending = true
     stopStatusPoll()
     error = ''
@@ -148,9 +158,12 @@
       await tauri.invoke('auth_pairing_revoke', { pairId })
       if (!watching) return
       revoking = false
-      pairing = pairingReadyState({ pair: null })
+      setPairing(pairingReadyState({ pair: null }))
+      return true
     } catch (_) {
       if (watching) error = 'The phone could not be revoked.'
+      if (compact) throw new Error('The phone could not be revoked.')
+      return false
     } finally {
       revokePending = false
       if (watching && pairing.pair) void loadStatus()
@@ -164,7 +177,7 @@
   }
 
   function lastActive(value) {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+    return formatDateTime(value)
   }
 
   onMount(() => {
@@ -197,6 +210,7 @@
   })
 </script>
 
+{#if !compact}
 <section class="pairing-section" aria-labelledby="pairing-heading">
   <h3 id="pairing-heading" class="settings-heading">Phone pairing</h3>
   <div class="pairing-card">
@@ -223,12 +237,13 @@
     {/if}
   {:else}
     <Row title="Phone" description="No phone is paired.">
-      <Button disabled={requesting} onclick={requestChallenge}>Pair a phone</Button>
+      <Button variant="primary" disabled={requesting} onclick={requestChallenge}>Pair a phone</Button>
     </Row>
     {#if error && !open}<p class="revoke-error" role="alert">{error}</p>{/if}
   {/if}
   </div>
 </section>
+{/if}
 
 {#if open}
   <div class="dialog-backdrop" use:dialogDismiss={{onclose: closeChallenge}}>
@@ -242,10 +257,10 @@
       {#if requesting}
         <p role="status">The pairing request is in progress.</p>
       {:else if !challenge}
-        <button type="button" onclick={requestChallenge}>Try again</button>
+        <button type="button" data-variant="primary" onclick={requestChallenge}>Try again</button>
       {:else if challengeExpired(challenge.expiresAt, now)}
         <p class="access-status" role="status">The code expired.</p>
-        <button type="button" disabled={!replacementReady(challenge.requestedAt, now)} onclick={requestChallenge}>New code</button>
+        <button type="button" data-variant="primary" disabled={!replacementReady(challenge.requestedAt, now)} onclick={requestChallenge}>New code</button>
       {:else}
         <div class="pairing-qr">{@html challenge.qrSvg}</div>
         <p class="expiry">Code expires in {remainingLabel(challenge.expiresAt, now)}</p>

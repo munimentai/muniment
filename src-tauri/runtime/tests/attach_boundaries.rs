@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use muniment_core::active_run::ChatDelivery;
+use muniment_core::active_run::RunRegistry;
 use muniment_core::attach::linux::{
     CompanionProvenance, ThreadListRequest, ThreadListService, ThreadOpenRequest,
 };
@@ -18,7 +19,7 @@ use muniment_core::attach::{
 use muniment_core::journal::{CasReference, EventEnvelope, EventPayload, Provenance};
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::permission_gate::ChatPermissionAnswer;
-use muniment_core::pi_execution::PiRuntime;
+use muniment_core::pi_execution::PiProcesses;
 use muniment_core::run_preparation::{
     prepare_new_run_in_thread_after_validation, prepare_new_run_with_session_thread,
     SessionThreadStart,
@@ -33,6 +34,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 #[path = "../../src/linux_runtime_service/activation.rs"]
 mod desktop_activation;
 use common::{
@@ -224,6 +226,7 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
 
     let _guard = TEST_LOCK.lock().unwrap();
     let profile = TemporaryProfile::new("packaged-desktop-start", false);
+    common::set_state_directory(&profile.profile);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
     let resources = profile.root.join(resources);
@@ -246,11 +249,18 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
     )
     .unwrap();
     let _environment = Environment(
-        ["XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"]
-            .into_iter()
-            .map(|key| (key, std::env::var_os(key)))
-            .collect(),
+        [
+            "XDG_RUNTIME_DIR",
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            muniment_core::state_root::TEST_RUN_VARIABLE,
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect(),
     );
+    // The spawned runtime inherits this, so its debug build keeps secrets in memory.
+    std::env::set_var(muniment_core::state_root::TEST_RUN_VARIABLE, "1");
     std::env::set_var("XDG_RUNTIME_DIR", &profile.root);
     std::env::set_var("XDG_DATA_HOME", &profile.profile);
     std::env::set_var("XDG_CONFIG_HOME", &profile.config);
@@ -291,7 +301,7 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
                 });
                 client.is_some() && events.is_some()
             },
-            Duration::from_secs(5),
+            CI_WAIT,
         )
         .unwrap();
         let mut client = client.unwrap();
@@ -348,6 +358,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
     let store = KeyringNativeCredentialStore::new();
     store.clear_session().unwrap();
     let profile = TemporaryProfile::new("cold-desktop", true);
+    common::set_state_directory(&profile.profile);
     fs::set_permissions(&profile.root, fs::Permissions::from_mode(0o700)).unwrap();
     let filesystem = AttachFilesystem::from_runtime_directory(&profile.root).unwrap();
     let endpoint = filesystem.endpoint_path();
@@ -405,7 +416,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
                 client = connect_desktop_client_at(endpoint, "1.0.0", Duration::from_secs(1)).ok();
                 client.is_some()
             },
-            Duration::from_secs(5),
+            CI_WAIT,
         )
         .unwrap();
         let mut client = client.take().unwrap();
@@ -423,9 +434,9 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
                 .unwrap()
                 .is_empty());
             let accepted = client
-                .run_submit("cold local prompt", &[], None, None)
+                .run_submit("cold local prompt", &[], None, None, None)
                 .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + CI_WAIT;
             loop {
                 let events = storage
                     .lock()
@@ -497,6 +508,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
 #[test]
 fn sign_in_cannot_override_a_return_to_local_mode() {
     let profile = TemporaryProfile::new("sign-in-marker", false);
+    common::set_state_directory(&profile.profile);
     let state =
         RuntimeAttachState::open(desktop_host(), &profile.profile, &profile.config).unwrap();
     let marker = profile
@@ -520,6 +532,7 @@ fn runtime_boundaries_serve_sign_in_and_refuse_a_concurrent_attempt() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-sign-in", false);
+    common::set_state_directory(&temporary_profile.profile);
     let state = Arc::new(
         RuntimeAttachState::open(
             desktop_host(),
@@ -575,6 +588,7 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-session", false);
+    common::set_state_directory(&temporary_profile.profile);
     let state = RuntimeAttachState::open(
         desktop_host(),
         &temporary_profile.profile,
@@ -638,26 +652,33 @@ fn runtime_state_answers_entitlement_and_replays_sign_out() {
 fn runtime_boundaries_answer_all_attach_reads() {
     let _guard = TEST_LOCK.lock().unwrap();
     let temporary_profile = TemporaryProfile::new("attach-boundaries", false);
+    common::set_state_directory(&temporary_profile.profile);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let runtime_activity = RuntimeActivityRegistry::new();
     let permission_answers = Arc::new(Mutex::new(VecDeque::new()));
-    let active = Arc::new(Mutex::new(Some(ActiveRun {
-        id: "run-1".into(),
-        workspace: "workspace-a".into(),
-        cancelled: Arc::new(AtomicBool::new(false)),
-        transport: Arc::new(Mutex::new(None)),
-        adapter: Arc::new(Mutex::new(None)),
-        permission_answers: Arc::clone(&permission_answers),
-        _activity: runtime_activity.mark_active_run(),
-    })));
+    let active = RunRegistry::default();
+    active
+        .install(
+            ActiveRun {
+                id: "run-1".into(),
+                workspace: "workspace-a".into(),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                transport: Arc::new(Mutex::new(None)),
+                adapter: Arc::new(Mutex::new(None)),
+                permission_answers: Arc::clone(&permission_answers),
+                _activity: runtime_activity.mark_active_run(),
+            },
+            None,
+        )
+        .unwrap();
     let config = temporary_profile.config.clone();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
         active,
         profile.clone(),
         config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             config,
             profile.join("memory"),
@@ -1001,15 +1022,16 @@ fn runtime_boundaries_answer_all_attach_reads() {
 #[test]
 fn runtime_boundaries_fetch_only_readable_workspace_artifacts() {
     let temporary_profile = TemporaryProfile::new("attach-artifacts", false);
+    common::set_state_directory(&temporary_profile.profile);
     let profile = temporary_profile.profile.clone();
     let storage = open_profile_storage(&profile).unwrap();
     let config = temporary_profile.config.clone();
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.clone(),
         config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             config,
             profile.join("memory"),
@@ -1154,6 +1176,7 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
     let _guard = TEST_LOCK.lock().unwrap();
     muniment_core::chat_prompt::use_mock_keyring_for_tests();
     let temporary_profile = TemporaryProfile::new("attach-approval", false);
+    common::set_state_directory(&temporary_profile.profile);
     let profile = temporary_profile.profile.clone();
     let config = temporary_profile.config.clone();
     let storage = open_profile_storage(&profile).unwrap();
@@ -1161,10 +1184,10 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
     let session_thread = Arc::new(SessionThread::default());
     let boundaries = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.clone(),
         config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             config.clone(),
             profile.join("memory"),
@@ -1177,10 +1200,10 @@ fn runtime_boundaries_share_owner_approval_and_session_thread() {
     );
     let sibling = RuntimeAttachBoundaries::new(
         Arc::clone(&storage),
-        Arc::new(Mutex::new(None)),
+        RunRegistry::default(),
         profile.clone(),
         config.clone(),
-        Arc::new(Mutex::new(None::<PiRuntime>)),
+        PiProcesses::default(),
         Arc::new(ApplicationMemoryRuntime::new(
             config,
             profile.join("memory"),

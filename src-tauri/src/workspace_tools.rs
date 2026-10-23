@@ -15,8 +15,10 @@ pub struct Folder {
     label: String,
     path: PathBuf,
 }
+/// The folders a Files or Terminal view opens on. They live in Home, which
+/// macOS may hold behind a folder prompt, so the work runs off the main thread.
 #[tauri::command]
-pub fn workspace_folders(
+pub async fn workspace_folders(
     webview: tauri::Webview,
     thread_id: Option<String>,
     project_id: Option<String>,
@@ -26,6 +28,20 @@ pub fn workspace_folders(
     thread_title: Option<String>,
 ) -> Result<Vec<Folder>, String> {
     shell(&webview)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        folders(thread_id, project_id, agent_id, artifact_id, catalog, thread_title)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn folders(
+    thread_id: Option<String>,
+    project_id: Option<String>,
+    agent_id: Option<String>,
+    artifact_id: Option<String>,
+    catalog: Option<String>,
+    thread_title: Option<String>,
+) -> Result<Vec<Folder>, String> {
     let profile = muniment_runtime::profile_directory().map_err(|e| e.to_string())?;
     let home = muniment_core::home::configured_home(&profile)
         .map_err(|e| e.to_string())?
@@ -206,16 +222,20 @@ fn openable(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 #[tauri::command]
-pub fn workspace_open(
+pub async fn workspace_open(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     path: PathBuf,
 ) -> Result<(), String> {
     shell(&webview)?;
-    let path = openable(&path)?;
-    app.opener()
-        .open_path(path.to_string_lossy(), None::<String>)
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = openable(&path)?;
+        app.opener()
+            .open_path(path.to_string_lossy(), None::<String>)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

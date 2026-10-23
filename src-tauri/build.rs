@@ -59,10 +59,10 @@ const APP_COMMANDS: &[&str] = &[
     "local_mode_set_default_model",
     "local_mode_set_model_hidden",
     "local_mode_set_thinking_level",
+    "thread_settings",
+    "thread_settings_set",
     "local_mode_disconnect_provider",
     "local_mode_store_endpoint",
-    "local_mode_claude_code_status",
-    "local_mode_connect_claude_code",
     "model_registry",
     "model_router_settings",
     "model_router_set_enabled",
@@ -138,20 +138,20 @@ const APP_COMMANDS: &[&str] = &[
     "chat_pick_attachments",
     "app_update_prepare",
     "app_update_install",
+    "app_update_interruptions",
     "launcher_register",
     "launcher_start_failed",
     "launcher_open",
     "launcher_close",
     "launcher_is_visible",
     "launcher_present_main",
-    "agent_list",
+    "agent_request",
+    "fleet_thread_create",
     "agent_memory",
     "agent_export_template",
-    "agent_import_link",
-    "agent_save",
-    "agent_delete",
     "agent_open",
-    "agent_run",
+    "usage_summary",
+    "notifications_list",
     "memory_profile_read",
     "memory_profile_save",
     "memory_facts",
@@ -168,8 +168,16 @@ const APP_COMMANDS: &[&str] = &[
     "project_create",
     "project_rename",
     "project_open",
+    "project_settings",
+    "project_settings_save",
+    "project_move_thread",
+    "sidebar_arrange",
+    "palette_rank",
     "home_status",
     "home_confirm",
+    "home_folder_access",
+    "home_folder_state",
+    "home_folder_settings",
     "home_confirm_import",
     "onboarding_import_preview",
     "onboarding_import_extract",
@@ -223,25 +231,9 @@ fn app_version() -> String {
         .to_owned()
 }
 
-/// The core release `runtime/Cargo.toml` pins, without its `v`, which a
-/// paired server or container is asked to run.
-fn core_version() -> String {
-    let manifest =
-        std::fs::read_to_string("runtime/Cargo.toml").expect("runtime/Cargo.toml is readable");
-    manifest
-        .lines()
-        .find(|line| line.starts_with("muniment-core ="))
-        .and_then(|line| line.split_once("tag = \""))
-        .and_then(|(_, rest)| rest.split('"').next())
-        .map(|tag| tag.trim_start_matches('v').to_owned())
-        .expect("runtime/Cargo.toml pins muniment-core to a tag")
-}
-
 fn main() {
     println!("cargo:rerun-if-changed=../package.json");
     println!("cargo:rustc-env=MUNIMENT_APP_VERSION={}", app_version());
-    println!("cargo:rerun-if-changed=runtime/Cargo.toml");
-    println!("cargo:rustc-env=MUNIMENT_CORE_VERSION={}", core_version());
     // Bind installed diagnostics to the source that built the signed executable.
     let git = |args: &[&str]| {
         std::process::Command::new("git")

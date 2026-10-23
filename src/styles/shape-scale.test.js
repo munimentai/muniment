@@ -8,10 +8,17 @@ import path from 'node:path'
 const RADIUS_EXCEPTIONS = {
   'src/lib/AppUpdate.svelte': { 'button': ['var(--radius-pill)', 'Update control shares the settings pill shape.'] },
   'src/lib/SettingsTabs.svelte': { 'button': ['var(--radius-pill)', 'Shared settings pill tabs.'] },
+  'src/lib/Toggle.svelte': {
+    'button': ['var(--radius-pill)', 'A switch is a pill track.'],
+    'span': ['50%', 'A switch knob is round.'],
+  },
+  'src/usage/LimitCard.svelte': { '.meter i': ['var(--radius-pill)', 'A usage meter step is a pill.'] },
   'src/App.svelte': {
-    '.active-thread > span:not(.select-mark):not(.machine-badge)': ['50%', '§1.5 circular current-thread status dot'],
     '.artifact-divider': ['0', '§4 square divider reset'],
     '.sidebar-divider': ['0', '§4 square divider reset'],
+  },
+  'src/composer/ChatComposer.svelte': {
+    '.composer:global([data-voice-wave]):focus-within::before': ['calc(var(--radius-panel) + 1px)', 'The focused wave edge sits 1px outside the panel, so its outer radius is 1px larger.'],
   },
   'src/lib/Appearance.svelte': {
     '.theme-options button': ['0', '§4 square inner edges in the segmented control'],

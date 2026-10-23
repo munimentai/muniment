@@ -705,6 +705,8 @@ The path is unchanged. App logos come from [SVGL](https://svgl.app/) and the
 The colored provider marks in `src/lib/logos/*-color.svg` come from
 [LobeHub Icons](https://github.com/lobehub/lobe-icons) 1.95.1, licensed under the
 MIT License, Copyright (c) 2023 LobeHub. The paths are unchanged.
+The oMLX mark in `src/lib/logos/omlx.svg` is the site icon from
+[omlx.ai](https://omlx.ai/) without its drop shadow.
 Provider names and marks belong to their respective owners.
 
 The application license ships as `LICENSE.md`. It does not replace third-party licenses.

@@ -175,8 +175,8 @@
   .record-diff-body { display: grid; gap: 4px; }
   .record-diff-line, .record-diff-warning, .record-diff-error { margin: 0; font: var(--text-12) var(--font-mono); }
   .record-diff-line { color: var(--ink); }
-  .record-diff-warning { color: var(--ochre); }
-  .record-diff-error { color: var(--oxide); }
+  .record-diff-warning { color: var(--warning); }
+  .record-diff-error { color: var(--danger); }
   .record-diff-actions { display: flex; gap: 8px; margin-top: 4px; }
   .record-commit, .record-discard { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); font: var(--text-12) var(--font-human); cursor: pointer; }
   .record-commit { background: var(--ink); color: var(--paper); }

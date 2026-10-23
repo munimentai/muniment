@@ -7,7 +7,13 @@ use uuid::Uuid;
 #[cfg(any(unix, target_os = "windows"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RunClientCall {
-    Submit(String, Vec<String>, Option<String>, Option<String>),
+    Submit(
+        String,
+        Vec<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
     Resume(String),
     Steer(String, String),
     FollowUp(String, String),
@@ -38,6 +44,8 @@ impl RunCommandClient for FakeRunClient {
         files: &[String],
         thread_id: Option<&str>,
         thinking_level: Option<&str>,
+        permission_mode: Option<&str>,
+        _mentions: &[String],
     ) -> Result<RunSubmitAccepted, String> {
         if self.1 {
             return Err(auth::desktop_client_error(
@@ -49,6 +57,7 @@ impl RunCommandClient for FakeRunClient {
             files.to_vec(),
             thread_id.map(str::to_owned),
             thinking_level.map(str::to_owned),
+            permission_mode.map(str::to_owned),
         ));
         Ok(RunSubmitAccepted {
             run_id: "remote-run".to_string(),
@@ -56,6 +65,7 @@ impl RunCommandClient for FakeRunClient {
             attachments: Vec::new(),
             committed_seq: 7,
             accepted_at: "now".to_string(),
+            mentions: Vec::new(),
         })
     }
 
@@ -164,6 +174,8 @@ fn chat_submit_routes_all_desktop_client_states() {
         "prompt",
         vec![],
         None,
+        None,
+        &[],
     )));
 
     state
@@ -179,6 +191,8 @@ fn chat_submit_routes_all_desktop_client_states() {
             path: PathBuf::from("/tmp/a.txt"),
         }],
         Some("high"),
+        None,
+        &[],
     ));
     assert_eq!(connected.unwrap().run_id, "remote-run");
     assert_eq!(
@@ -191,20 +205,34 @@ fn chat_submit_routes_all_desktop_client_states() {
             "prompt".to_string(),
             vec!["/tmp/a.txt".to_string()],
             Some("selected-thread".to_string()),
-            Some("high".to_string())
+            Some("high".to_string()),
+            None
         )]
     );
 
+    // A new thread's first message carries the mode picked before it.
     let new_client = FakeRunClient::default();
     let created = tauri::async_runtime::block_on(handle_run_submit(
-        RunCommandSession::Connected(new_client),
+        RunCommandSession::Connected(new_client.clone()),
         &state,
         Some("subject-2"),
         "new prompt",
         vec![],
         None,
+        Some("plan"),
+        &[],
     ));
     assert!(created.is_ok());
+    assert_eq!(
+        new_client.calls(),
+        [RunClientCall::Submit(
+            "new prompt".to_string(),
+            vec![],
+            None,
+            None,
+            Some("plan".to_string())
+        )]
+    );
     assert_eq!(
         state.session_thread.current(Some("subject-2")),
         Some("accepted-thread".to_string())
@@ -216,6 +244,8 @@ fn chat_submit_routes_all_desktop_client_states() {
         "prompt",
         vec![],
         None,
+        None,
+        &[],
     )));
     assert_disconnected(tauri::async_runtime::block_on(handle_run_submit::<
         FakeRunClient,
@@ -226,6 +256,8 @@ fn chat_submit_routes_all_desktop_client_states() {
         "prompt",
         vec![],
         None,
+        None,
+        &[],
     )));
 }
 

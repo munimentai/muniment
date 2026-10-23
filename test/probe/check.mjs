@@ -4,6 +4,9 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { checkSpeedBudgets } from './speed.mjs'
+import { checkLayoutStability } from './stability.mjs'
+import { checkFocusRings } from './focus.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const probeDirectory = path.join(repositoryRoot, 'test/probe')
@@ -129,7 +132,8 @@ async function checkWindowChrome(browser, baseUrl) {
       assert.equal(await page.locator('.new-thread').count(), 0)
       await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
       await checkRow()
-      assert.equal(await page.locator('.new-thread').innerText(), platform.startsWith('Mac') ? 'New thread\n⌘ N' : 'New thread\nCtrl N')
+      assert.equal(await page.locator('.new-thread').innerText(), 'New')
+      assert.equal(await page.locator('.new-thread').getAttribute('aria-keyshortcuts'), platform.startsWith('Mac') ? 'Meta+N' : 'Control+N')
       await page.getByRole('button', { name: 'Artifacts', exact: true }).click()
       await checkArtifactCreation(page)
       await checkRow()
@@ -152,12 +156,14 @@ async function checkWindowChrome(browser, baseUrl) {
 async function checkArtifactCreation(page) {
   const panel = page.getByRole('region', { name: 'Artifacts', exact: true })
   await panel.getByRole('button', { name: 'New artifact', exact: true }).click()
-  const goal = page.getByRole('region', { name: 'Creation goal', exact: true })
-  await goal.waitFor()
-  assert.match(await page.locator('#composer-message').inputValue(), /artifact/i)
+  // The composer shows the template as a chip and keeps its own text empty.
+  const template = page.getByRole('group', { name: 'Template', exact: true })
+  await template.waitFor()
+  assert.match(await template.innerText(), /artifact/i)
+  assert.equal(await page.locator('#composer-message').inputValue(), '')
   assert.equal(await page.evaluate(() => window.__PROBE__.invokedCommands.filter(item => item.command === 'creation_save').length), 0)
-  await goal.getByRole('button', { name: 'Cancel creation', exact: true }).click()
-  assert.equal(await goal.count(), 0)
+  await template.getByRole('button', { name: 'Cancel creation', exact: true }).click()
+  assert.equal(await template.count(), 0)
   assert.equal(await page.locator('#composer-message').inputValue(), '')
 }
 
@@ -414,6 +420,175 @@ async function checkComposerActions(browser, baseUrl) {
   }
 }
 
+// Creation keeps to one model round trip before the user sees its result.
+// Each message of a new agent's chat starts one core draft, which is one
+// model call, before its reply shows, and asks at most one question. A page
+// starter sends one message, the user's own words, as a plain message does,
+// so the thread takes their title and no question loop runs first.
+async function checkCreationBudget(browser, baseUrl) {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
+  const commands = () => page.evaluate(() => window.__PROBE__.invokedCommands.map(({ command, payload }) => ({ command, operation: payload?.operation, body: payload?.body, prompt: payload?.prompt })))
+  const draftStarts = async () => (await commands()).filter(({ command, operation, body }) => command === 'agent_request' && operation === 'agent.draft' && !body?.draft_id)
+  const replies = (count) => page.waitForFunction((count) => document.querySelectorAll('.agent-chat article').length === count && !document.querySelector('.agent-chat [role="status"]'), count)
+  try {
+    await page.goto(`${baseUrl}/test/probe/agents.html?state=builder`)
+    await page.waitForSelector('[data-probe-ready]')
+    const first = await draftStarts()
+    assert.deepEqual(first.map(({ body }) => body.message), ['Every weekday at 9am, summarize my inbox and list what needs a reply.'])
+    assert.ok(first[0].body.chat_id)
+    const reply = page.getByRole('article', { name: 'Draft: Inbox brief' })
+    // The schedule shows in the viewer's time zone and clock.
+    assert.match(await reply.textContent(), /Weekdays at \d{1,2}:00( [AP]M)?/)
+    // A change is one more message and one more round trip, and its reply returns within the budget.
+    const started = Date.now()
+    await page.locator('#composer-message').fill('Group the summary by sender.')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await replies(2)
+    assert.ok(Date.now() - started < 3000, `the draft took ${Date.now() - started} ms`)
+    assert.deepEqual((await draftStarts()).map(({ body }) => body.chat_id), [first[0].body.chat_id, first[0].body.chat_id])
+    await page.getByRole('article').last().getByRole('button', { name: 'Save', exact: true }).click()
+    await page.getByText('Saved.', { exact: true }).waitFor()
+    const saves = (await commands()).filter(({ command, operation }) => command === 'agent_request' && operation === 'agent.save')
+    assert.equal(saves.length, 1)
+    assert.equal(saves[0].body.agent.routines[0].enabled, true)
+    assert.equal((await commands()).filter(({ command }) => command === 'chat_submit').length, 0)
+
+    await page.goto(`${baseUrl}/test/probe/agents.html?state=builder-question`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.equal((await draftStarts()).length, 1)
+    await page.getByRole('group', { name: 'Question' }).getByRole('button', { name: 'Research topics' }).click()
+    await replies(2)
+    assert.equal(await page.getByRole('article').last().getByRole('group', { name: 'Question' }).count(), 0)
+    assert.deepEqual((await draftStarts()).map(({ body }) => body.message), ['Make me an agent', 'Research topics'])
+
+    await page.goto(`${baseUrl}/test/probe/agents.html?state=builder-thread`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.equal((await draftStarts()).length, 1)
+    assert.ok((await draftStarts())[0].body.thread_id)
+
+    // A plain message and a page starter each send one message.
+    const words = 'A countdown to New Year with big colorful digits.'
+    const send = async (starter) => {
+      await page.goto(`${baseUrl}/test/probe/index.html`)
+      await page.waitForSelector('[data-probe-ready]')
+      if (starter) {
+        await page.getByRole('region', { name: 'Start with' }).getByRole('button', { name: 'Make a page' }).click()
+        await page.getByRole('group', { name: 'Template', exact: true }).waitFor()
+      }
+      await page.locator('#composer-message').fill(starter ? words : `Make a small HTML page: ${words}`)
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      await page.waitForFunction(() => window.__PROBE__.invokedCommands.some(({ command }) => command === 'chat_submit'))
+      return commands()
+    }
+    const plain = await send(false)
+    const fromStarter = await send(true)
+    const submits = fromStarter.filter(({ command }) => command === 'chat_submit')
+    assert.equal(plain.filter(({ command }) => command === 'chat_submit').length, 1)
+    assert.equal(submits.length, 1)
+    assert.equal(submits[0].prompt, words)
+    assert.equal(fromStarter.filter(({ command }) => command === 'creation_save').length, 1)
+    assert.equal(fromStarter.filter(({ operation }) => operation === 'agent.draft').length, 0)
+    // The thread's title is the user's words, never a scaffold.
+    await page.waitForFunction((words) => [...document.querySelectorAll('#sidebar .thread-row-title')].some((row) => row.textContent.trim() === words), words)
+    assert.equal(await page.locator('#sidebar .thread-row-title', { hasText: 'I want to create' }).count(), 0)
+    assert.deepEqual(await page.evaluate(() => window.__PROBE__.unknownCommands), [])
+    console.log('Creation budget checks passed.')
+  } finally {
+    await page.close()
+  }
+}
+
+// Every agent avatar is a square box its drawing fills, centered in its slot: across a row's
+// text, under a card's or header's center, and on its tile. Each surface shows one.
+async function checkAgentAvatars(browser, baseUrl) {
+  const surfaces = {
+    '': ['.agent-card .head-avatar', '.starter .thumb'],
+    profile: ['.titlebar .agent-chat-title', '.profile .avatar', '.profile .agent-chip'],
+    transcript: ['.agent-message header'],
+    meeting: ['.agent-post header', '#agent-mentions [role="option"]'],
+    approvals: ['.approval .who', '.running button'],
+    import: ['.body .profile'],
+    'group-create': ['.members .check'],
+    move: ['.profile .avatar'],
+    'approval-inline': ['.approval .who'],
+    preferences: ['.avatar-preview'],
+  }
+  for (const [colorScheme, avatars] of [['light', 'colorful'], ['dark', 'colorful'], ['light', 'muniment'], ['dark', 'muniment']]) {
+    for (const [state, slots] of Object.entries(surfaces)) {
+      const page = await browser.newPage({ viewport: { width: 1100, height: 720 }, colorScheme })
+      try {
+        await page.goto(`${baseUrl}/test/probe/agents.html?avatars=${avatars}&theme=${colorScheme}${state ? `&state=${state}` : ''}`)
+        await page.waitForSelector('[data-probe-ready]')
+        await page.evaluate(() => document.fonts.ready)
+        if (state === 'meeting') {
+          await page.locator('#composer-message').click()
+          await page.keyboard.type('@')
+          await page.waitForSelector('#agent-mentions [role="option"]')
+        }
+        const failures = await page.evaluate((slots) => {
+          const failures = []
+          const near = (a, b) => Math.abs(a - b) < 0.6
+          const content = (element) => {
+            const box = element.getBoundingClientRect()
+            const style = getComputedStyle(element)
+            const left = box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft)
+            const right = box.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight)
+            const top = box.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop)
+            const bottom = box.bottom - parseFloat(style.borderBottomWidth) - parseFloat(style.paddingBottom)
+            return { x: (left + right) / 2, y: (top + bottom) / 2 }
+          }
+          for (const slot of slots) {
+            const avatars = [...document.querySelectorAll(slot)].map((element) => element.querySelector(':scope > .agent-avatar')).filter(Boolean)
+            if (!avatars.length) failures.push(`${slot} shows no avatar.`)
+            for (const avatar of avatars) {
+              const box = avatar.getBoundingClientRect()
+              const drawing = avatar.querySelector('svg').getBoundingClientRect()
+              const parent = avatar.parentElement
+              const center = content(parent)
+              const name = `${slot} ${box.width}px`
+              if (box.width !== box.height || box.width < 16) failures.push(`${name} is not a square box.`)
+              if (!['left', 'top', 'width', 'height'].every((side) => near(drawing[side], box[side]))) failures.push(`${name}: the drawing does not fill its box.`)
+              const column = getComputedStyle(parent).flexDirection === 'column'
+              // A row centers the avatar across its text; a card or header column centers it under the middle.
+              if (column || slot === '.profile .avatar' || slot === '.starter .thumb') {
+                if (!near(box.left + box.width / 2, center.x)) failures.push(`${name} is off center by ${(box.left + box.width / 2 - center.x).toFixed(2)}px across.`)
+              }
+              if (!column) {
+                if (!near(box.top + box.height / 2, center.y)) failures.push(`${name} is off center by ${(box.top + box.height / 2 - center.y).toFixed(2)}px down.`)
+                const text = avatar.nextElementSibling
+                if (text && slot.includes('side-action')) {
+                  const line = text.getBoundingClientRect()
+                  if (!near(box.top + box.height / 2, line.top + line.height / 2)) failures.push(`${name} is off its row's text.`)
+                }
+              }
+            }
+          }
+          return failures
+        }, slots)
+        assert.deepEqual(failures, [], `agents.html?state=${state} in ${colorScheme} with ${avatars} avatars`)
+        // Each avatar draws the picked style in the theme's tone.
+        const drawn = await page.evaluate(() => [...new Set([...document.querySelectorAll('.agent-avatar svg')].map((svg) => `${svg.dataset.style}:${svg.dataset.tone}`))])
+        assert.deepEqual(drawn, [`${avatars}:${colorScheme}`], `agents.html?state=${state} draws ${drawn}`)
+      } finally {
+        await page.close()
+      }
+    }
+  }
+  const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
+  try {
+    await page.goto(`${baseUrl}/test/probe/avatars.html`)
+    await page.waitForSelector('[data-probe-ready]')
+    assert.equal(await page.getAttribute('body', 'data-seeds'), '48')
+    // Each head's own bounds center on its 92px box, within a pixel and a quarter. The box a
+    // browser measures leaves out strokes, and the generators center the painted head, so a
+    // head whose top piece is a thick stroke measures up to half that stroke off.
+    assert.ok(Number(await page.getAttribute('body', 'data-worst-offset')) < 1.25)
+  } finally {
+    await page.close()
+  }
+  console.log('Agent avatar checks passed.')
+}
+
 async function main() {
   const fixtures = (await readdir(probeDirectory))
     .filter((entry) => entry.endsWith('.html'))
@@ -429,7 +604,19 @@ async function main() {
     await checkWindowChrome(browser, baseUrl)
     await checkPaperFrame(browser, baseUrl)
     await checkComposerActions(browser, baseUrl)
-    for (const fixture of fixtures) {
+    await checkAgentAvatars(browser, baseUrl)
+    await checkCreationBudget(browser, baseUrl)
+    await checkSpeedBudgets(browser, baseUrl)
+    await checkLayoutStability(browser, baseUrl)
+    await checkFocusRings(browser, baseUrl)
+    // The projects fixture's states: the palette, Move to project, the
+    // thread's model with its source, and the project's settings.
+    const states = ['palette', 'palette-search', 'move', 'model', 'settings'].map((state) => `projects.html?state=${state}`)
+    // Every state of the Machines fixture still renders.
+    const runtimeStates = ['local', 'paired', 'scope', 'remote', 'switcher', 'pairing', 'failed', 'ssh', 'pairing-off', 'pairing-on', 'link', 'devices'].map((state) => `runtimes.html?state=${state}`)
+    // The gallery's gates as agent approvals.
+    const approvalStates = ['approvals', 'tool-approvals'].map((state) => `agents.html?state=${state}`)
+    for (const fixture of [...fixtures, ...states, ...runtimeStates, ...approvalStates]) {
       const errors = await checkFixture(browser, baseUrl, fixture)
       if (errors.length === 0) {
         console.log(`${fixture}: passed`)

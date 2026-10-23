@@ -131,7 +131,7 @@ impl InterruptibleConnectState for ChatEventStopState {
 
 #[cfg(unix)]
 impl ChatEventStopHandle {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn for_test() -> (Self, std::sync::mpsc::Receiver<()>) {
         let (connect_started, started) = std::sync::mpsc::channel();
         let stop = Self {
@@ -575,9 +575,13 @@ impl AttachCompanionState {
 
     /// Opens connections of their own to the active paired runtime.
     pub(crate) fn remote_connector(&self) -> Option<crate::runtimes::Connector> {
-        let id = self.remote_runtime_id()?;
+        self.paired_connector(&self.remote_runtime_id()?)
+    }
+
+    /// Opens connections of their own to the paired runtime `id`, active or not.
+    pub(crate) fn paired_connector(&self, id: &str) -> Option<crate::runtimes::Connector> {
         lock(&self.remotes)
-            .get(&id)
+            .get(id)
             .map(crate::runtimes::RemoteSupervisor::connector)
     }
 
@@ -591,12 +595,20 @@ impl AttachCompanionState {
         lock(&self.remotes).keys().cloned().collect()
     }
 
-    /// Keeps `next` connected and answers the connections it replaces.
-    pub(crate) fn insert_remote(
+    /// Keeps the connections `start` opens to the paired runtime `id` unless
+    /// it has some, and answers whether `start` ran. Callers that race for
+    /// one runtime start one set of connections between them.
+    pub(crate) fn insert_remote_once(
         &self,
-        next: crate::runtimes::RemoteSupervisor,
-    ) -> Option<crate::runtimes::RemoteSupervisor> {
-        lock(&self.remotes).insert(next.runtime_id.clone(), next)
+        id: &str,
+        start: impl FnOnce() -> crate::runtimes::RemoteSupervisor,
+    ) -> bool {
+        let mut remotes = lock(&self.remotes);
+        if remotes.contains_key(id) {
+            return false;
+        }
+        remotes.insert(id.to_owned(), start());
+        true
     }
 
     /// Takes the connections of the paired runtime `id`. An active runtime

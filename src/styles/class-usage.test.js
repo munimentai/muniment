@@ -6,11 +6,6 @@ import path from 'node:path'
 // non-CSS consumer. Each entry must explain that consumer; the stale-entry test
 // below keeps this from becoming a graveyard for removed markup.
 const EXCEPTIONS = {
-  'src/App.svelte': {
-    'new-thread': 'Probe layout checks and sidebar action tests select the new-thread button.',
-    'agent-roster': 'Sidebar tests check that agents appear outside project sections.',
-    'sidebar-collection': 'App tests select collection sections in the sidebar.',
-  },
   'src/composer/ComposerMenuButton.svelte': {
     'model-chip': 'End-to-end specs and the subscription probe select the model button.',
   },

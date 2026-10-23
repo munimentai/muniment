@@ -96,3 +96,9 @@ export function createChangedFiles() {
     return result
   }
 }
+
+// A command can write any file, so only the turn's checkpoint knows what a
+// turn that ran one changed.
+export function ranCommands(run) {
+  return (run?.toolActivity ?? []).some((action) => action.presentation?.kind === 'command' || /^(bash|powershell)$/i.test(action.displayName ?? ''))
+}

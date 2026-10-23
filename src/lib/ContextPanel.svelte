@@ -51,10 +51,10 @@
   .count small { margin-left: 1ch; color: var(--muted); font-size: var(--text-12); }
   .bar { position: relative; height: 6px; margin: 0 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); }
   .bar i { position: absolute; inset: 0 auto 0 0; border-radius: var(--radius-chip); background: var(--muted); }
-  .bar[data-level="caution"] i { background: var(--ochre); }
+  .bar[data-level="caution"] i { background: var(--warning); }
   .bar b { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ink); }
   p, .caption { margin: 6px 0; color: var(--muted); }
-  .caution { color: var(--ochre); }
+  .caution { color: var(--warning); }
   .error { color: var(--ink); font-family: var(--font-mono); }
   dl { display: grid; gap: 4px; margin: 10px 0; }
   dl div { display: flex; justify-content: space-between; gap: 12px; }
@@ -63,7 +63,7 @@
   footer { margin-top: 12px; }
   button { min-height: 24px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
   button:disabled { color: var(--muted); cursor: default; }
-  .primary { background: var(--accent, var(--ink)); border-color: var(--accent, var(--ink)); color: var(--on-accent, var(--paper)); }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .primary:disabled { background: var(--faint); border-color: var(--border); }
   .link { border: 0; padding: 0; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 </style>

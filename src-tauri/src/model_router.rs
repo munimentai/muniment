@@ -171,14 +171,15 @@ pub(crate) async fn model_router_test_route(
 pub(crate) async fn model_router_subscription_start(
     app: tauri::AppHandle,
     provider: String,
+    runtime: Option<String>,
 ) -> Result<(), String> {
-    model_service::request(
+    crate::account_login::start_sign_in(
         &app,
         ModelAction::RouterSubscriptionStart,
-        data([("provider", json!(provider))]),
+        provider,
+        runtime,
     )
     .await
-    .map(drop)
 }
 
 #[tauri::command]

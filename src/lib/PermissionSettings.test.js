@@ -1,0 +1,89 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { afterEach, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
+import PermissionSettings from './PermissionSettings.svelte'
+afterEach(cleanup)
+
+const fixture = (name) => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'core/protocol-fixtures/muniment.attach/1', name), 'utf8')).body
+
+// Answers the permission operations from one stored settings file, as core does.
+function runtime(refuse = null) {
+  let settings = structuredClone(fixture('response-permission-settings.json'))
+  const requests = []
+  const invoke = vi.fn(async (command, args) => {
+    requests.push(args)
+    if (args.operation === 'permission.settings') return structuredClone(settings)
+    if (args.operation === 'permission.modes') {
+      const modes = structuredClone(fixture('response-permission-modes.json'))
+      const off = { available: false, reason: "Bypass is off. Turn it on in the runtime's permission settings." }
+      return { ...modes, default_thread_mode: settings.default_thread_mode, default_agent_mode: settings.default_agent_mode, modes: modes.modes.map((mode) => mode.id === 'bypass' && !settings.bypass_enabled ? { ...mode, ...off } : mode) }
+    }
+    if (args.operation === 'permission.settings_save') {
+      if (refuse) throw refuse
+      settings = { ...settings, ...args.body }
+      // Turning bypass off moves a default that names it to manual.
+      if (args.body.bypass_enabled === false) {
+        for (const key of ['default_thread_mode', 'default_agent_mode']) if (settings[key] === 'bypass' && !(key in args.body)) settings[key] = 'manual'
+      }
+      return structuredClone(settings)
+    }
+    throw new Error('unknown')
+  })
+  return { tauri: { invoke }, requests, saves: () => requests.filter((request) => request.operation === 'permission.settings_save').map((request) => request.body) }
+}
+
+it('reads the runtime settings and saves each change on its own', async () => {
+  const machine = runtime()
+  const onsaved = vi.fn()
+  render(PermissionSettings, { tauri: machine.tauri, runtime: 'box', machineName: 'Build box', onsaved })
+  await screen.findByText('Default modes')
+  expect(machine.requests[0]).toEqual({ runtime: 'box', operation: 'permission.settings', body: {} })
+  expect(screen.getByRole('button', { name: /^Default thread mode:/ })).toHaveTextContent('Bypass permissions')
+  expect(screen.getByRole('button', { name: /^Default agent mode:/ })).toHaveTextContent('Bypass permissions')
+  expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).toBeChecked()
+  expect(screen.getByText(/Everything runs except critical commands/)).toBeInTheDocument()
+  expect(screen.queryByText('Rules for every thread')).not.toBeInTheDocument()
+  expect(screen.getByText(/Off, new threads and agents start in Ask before changes/)).toBeInTheDocument()
+
+  await fireEvent.click(screen.getByRole('button', { name: /^Default thread mode:/ }))
+  await fireEvent.click(within(screen.getByRole('menu', { name: 'Default thread mode' })).getByRole('menuitemradio', { name: 'Plan first' }))
+  await waitFor(() => expect(machine.saves()).toEqual([{ default_thread_mode: 'plan' }]))
+  expect(onsaved).toHaveBeenCalled()
+
+  // Turning bypass off moves the default agent mode, which names it, to manual.
+  await fireEvent.click(screen.getByRole('switch', { name: 'Allow bypass permissions' }))
+  await waitFor(() => expect(machine.saves().at(-1)).toEqual({ bypass_enabled: false }))
+  await waitFor(() => expect(screen.getByRole('button', { name: /^Default agent mode:/ })).toHaveTextContent('Ask before changes'))
+  expect(screen.getByRole('button', { name: /^Default thread mode:/ })).toHaveTextContent('Plan first')
+  expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).not.toBeChecked()
+
+  const wait = screen.getByRole('spinbutton', { name: 'Unattended wait (minutes)' })
+  await fireEvent.input(wait, { target: { value: '30' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save wait' }))
+  await waitFor(() => expect(machine.saves().at(-1)).toEqual({ unattended_timeout_seconds: 1800 }))
+})
+
+it('names the refusal core gives', async () => {
+  const machine = runtime('Choose an unattended wait between one minute and seven days.')
+  render(PermissionSettings, { tauri: machine.tauri })
+  const wait = await screen.findByRole('spinbutton', { name: 'Unattended wait (minutes)' })
+  await fireEvent.input(wait, { target: { value: '45' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save wait' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Choose an unattended wait between one minute and seven days.')
+})
+
+it('saves for every machine and keeps Allow bypass for one machine', async () => {
+  const machine = runtime()
+  // Core's `settings.scope` names the permission settings that stay on one machine.
+  const local = fixture('response-settings-scope.json').parts.find((part) => part.id === 'permissions').machine_local
+  render(PermissionSettings, { tauri: machine.tauri, machineName: 'every machine', all: true, local })
+  await screen.findByText('Default modes')
+  expect(screen.getByText('How agents and threads on every machine ask before they act.')).toBeInTheDocument()
+  expect(screen.getByRole('switch', { name: 'Allow bypass permissions' })).toBeDisabled()
+  expect(screen.getByText('Each machine keeps its own. Pick one machine to change it.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: /^Default thread mode:/ }))
+  await fireEvent.click(within(screen.getByRole('menu', { name: 'Default thread mode' })).getByRole('menuitemradio', { name: 'Plan first' }))
+  await waitFor(() => expect(machine.saves()).toEqual([{ default_thread_mode: 'plan', scope: 'all' }]))
+})

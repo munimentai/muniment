@@ -1,4 +1,4 @@
-import { modelLabel } from './model-label.js'
+import { modelLabel, modelName } from './model-label.js'
 import { newestFirst, pastModels } from './model-recency.js'
 import { currentGeneration } from './model-generation.js'
 import { isDecisionModel } from './classifier-connections.js'
@@ -6,9 +6,9 @@ import { registry } from './model-registry.js'
 // The provider catalog behind Settings → Models: Pi's built-in providers, the
 // method each one offers, and the helpers the section and the picker share.
 // The model registry supplies the providers and their names. `account` names
-// the Pi provider that signs in with an account and the label the method
-// shows. Anthropic's account is the Claude Code sign-in through the
-// pi-claude-bridge package, so it carries no Pi OAuth provider here.
+// the provider that signs in with an account and the label the method
+// shows. Anthropic's account sign-in runs Claude Code's own login, and its
+// chats run through the pi-claude-bridge package.
 
 export const PROVIDERS = registry.providers
 
@@ -133,7 +133,7 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       // An Ollama decision model answers only the router's choice, so it lists with the classifiers.
       models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
         .filter((model) => !isDecisionModel(provider, model.id))
-        .map((model) => ({ ...model, label: modelLabel(model.id), provider: provider.id, choice: model.id, accounts: 0, off: hidden.has(modelKey(provider.id, model.id)) })),
+        .map((model) => ({ ...model, label: rowLabel(provider, model.id, model.name), provider: provider.id, choice: model.id, accounts: 0, off: hidden.has(modelKey(provider.id, model.id)) })),
     }))
   if (router) {
     for (const entry of inventory.router_models ?? []) {
@@ -148,12 +148,14 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       if (existing) {
         existing.accounts = entry.accounts
         existing.off ||= off
+        if (entry.name && !existing.name) existing.label = entry.name
         if (entry.accounts > 0) {
           existing.provider = router.id
           existing.choice = entry.id
         }
       } else {
-        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off })
+        // A model every plan behind it refused shows as unavailable, with the reason.
+        group.models.push({ id: entry.model, context: '', contextWindow: entry.context_window ?? null, label: entry.name || modelLabel(entry.model), provider: router.id, choice: entry.id, accounts: entry.accounts, off, ...(entry.unavailable ? { unavailable: entry.unavailable } : {}) })
       }
     }
     // Automatic routes each message through a decision model, so its row
@@ -178,8 +180,11 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       group.models.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
     }
     const ids = group.models.map((model) => model.id)
-    const current = group.classifier ? null : currentGeneration(ids)
-    const past = group.classifier ? null : pastModels(groupCatalogId(group.id), ids)
+    // A local or custom server serves only the models the user installed on
+    // it, so none of them is legacy.
+    const installed = group.source === 'local' || group.source === 'custom'
+    const current = group.classifier || installed ? null : currentGeneration(ids)
+    const past = group.classifier || installed ? null : pastModels(groupCatalogId(group.id), ids)
     for (const model of group.models) {
       const saved = (inventory.default_provider === model.provider && inventory.default_model === model.choice)
         || (inventory.default_provider === group.id && inventory.default_model === model.id)
@@ -196,6 +201,15 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
     }))
     // The router heading stays in the picker for its Manage link while routing is off.
     .filter((group) => group.models.length > 0 || (group.manage && !needle))
+}
+
+// A picker row's name: the name the registry or the server gives, else the
+// id. A provider's catalog id reads well formatted, as `claude-opus-4-8` does
+// as Claude Opus 4.8. A local or custom server's id is a repository name the
+// formatter would mangle, so it shows as served.
+function rowLabel(provider, id, name) {
+  if (name && name !== id) return name
+  return provider.source === 'local' || provider.source === 'custom' ? modelName(id) : modelLabel(id)
 }
 
 // The router models the picker hides, as the router's sorted `family/model`
@@ -226,7 +240,8 @@ export function currentModel(inventory) {
     : null
   const sourceGroup = pickerGroups(inventory).find((group) => group.id === inventory.default_provider)
   const equivalent = sourceGroup?.models.find((row) => row.id === inventory.default_model)
-  const row = saved ?? equivalent ?? rows[0]
+  // With no saved row, the first row some account serves leads.
+  const row = saved ?? equivalent ?? rows.find((entry) => !entry.unavailable) ?? rows[0]
   return row ? { provider: row.provider, model: row.choice, label: row.label } : null
 }
 
@@ -247,4 +262,20 @@ export function modelChipLabel(inventory) {
   const current = currentModel(inventory)
   if (!current) return 'Connect a model'
   return current.label
+}
+
+// How many models one connected provider serves, as its card names it.
+export function modelCountLabel(count) {
+  if (!count) return 'No models'
+  return `${count} ${count === 1 ? 'model' : 'models'}`
+}
+
+// What a Refresh models read found: the models the picker can offer across
+// the connected providers, the router's pools included.
+export function refreshResult(inventory) {
+  const groups = pickerGroups(inventory, '', { all: true })
+  const models = groups.reduce((total, group) => total + group.models.filter((model) => model.id !== 'auto').length, 0)
+  const providers = groups.filter((group) => !group.classifier).length
+  if (!providers) return 'Models refreshed. No provider serves a model yet.'
+  return `Models refreshed. ${modelCountLabel(models)} from ${providers} ${providers === 1 ? 'provider' : 'providers'}.`
 }

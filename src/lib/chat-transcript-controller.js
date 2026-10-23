@@ -1,5 +1,6 @@
 import { COPY_CONFIRMATION_MS, copyResult } from './message-actions.js'
 import { scrollFollowState } from './scroll-follow.js'
+import { motionReduced } from './display-state.js'
 
 // Each transcript entry's key. A user message keys on its run id or its
 // submission, and a reply on its submission or its run id, so a pending reply
@@ -43,7 +44,7 @@ export function createChatTranscriptController({
     const thread = readThread()
     if (!thread) return
     onPinned(true)
-    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    const behavior = motionReduced() ? 'auto' : 'smooth'
     thread.scrollTo({ top: thread.scrollHeight, behavior })
     lastScrollTop = thread.scrollHeight - thread.clientHeight
     onContentBelow(false)

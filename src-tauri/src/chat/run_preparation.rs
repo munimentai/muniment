@@ -1,15 +1,24 @@
 use super::*;
 
+/// Checks a file or folder the composer attaches. A folder in Documents or
+/// another protected place can wait on a macOS prompt, so the check runs off
+/// the main thread.
 #[tauri::command]
-pub fn chat_file_metadata(path: PathBuf) -> Result<serde_json::Value, String> {
-    let metadata = std::fs::metadata(&path).map_err(|_| attachment_error())?;
+pub async fn chat_file_metadata(path: PathBuf) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || file_metadata(&path))
+        .await
+        .map_err(|_| attachment_error())?
+}
+
+fn file_metadata(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    let metadata = std::fs::metadata(path).map_err(|_| attachment_error())?;
     if !metadata.is_file() && !metadata.is_dir() {
         return Err(attachment_error());
     }
     if metadata.is_dir() {
-        std::fs::read_dir(&path).map_err(|_| attachment_error())?;
+        std::fs::read_dir(path).map_err(|_| attachment_error())?;
     } else {
-        std::fs::File::open(&path).map_err(|_| attachment_error())?;
+        std::fs::File::open(path).map_err(|_| attachment_error())?;
     }
     let display_name = path
         .file_name()
@@ -135,11 +144,12 @@ mod folder_selection_tests {
         std::fs::create_dir(&root).unwrap();
         let file = root.join("brief.txt");
         std::fs::write(&file, "brief").unwrap();
-        let folder = super::chat_file_metadata(root.clone()).unwrap();
+        let metadata = |path| tauri::async_runtime::block_on(super::chat_file_metadata(path));
+        let folder = metadata(root.clone()).unwrap();
         assert_eq!(folder["isDirectory"], true);
         assert_eq!(folder["byteLength"], 0);
-        assert_eq!(super::chat_file_metadata(file).unwrap()["isDirectory"], false);
-        assert!(super::chat_file_metadata(root.join("missing")).is_err());
+        assert_eq!(metadata(file).unwrap()["isDirectory"], false);
+        assert!(metadata(root.join("missing")).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

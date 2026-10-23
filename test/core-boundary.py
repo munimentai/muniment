@@ -2,32 +2,41 @@
 """Probe the public core boundary without downloads or build artifacts."""
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location("boundary", "scripts/check-core-boundary.py")
-boundary = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(boundary)
 
-TAG = "git+https://github.com/munimentai/muniment-core?tag=v1.2.3#" + "0" * 40
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+boundary = load("boundary", "scripts/check-core-boundary.py")
+core_boundary = load("core_boundary", "core/scripts/check-core-boundary.py")
+GIT = "git+https://example.invalid/muniment?tag=v1.2.3#" + "0" * 40
 
 
 class CoreBoundaryTests(unittest.TestCase):
     def test_inventory_reads_both_tables(self):
         tables = boundary.inventory(boundary.BOUNDARY.read_text())
-        self.assertIn("muniment-core", tables["Shared"])
-        self.assertIn("muniment-router", tables["Shared"])
+        self.assertIn("muniment-core", tables["Port"])
+        self.assertIn("muniment-router", tables["Port"])
+        self.assertNotIn("account", tables["Port"])
         self.assertIn("muniment-runtime", tables["Desktop"])
         self.assertIn("muniment-desktop-integration", tables["Desktop"])
 
     def test_inventory_rejects_empty_duplicate_and_invalid_rows(self):
         text = boundary.BOUNDARY.read_text()
         for invalid in (
-            "", text.replace("## Desktop", "## Other"),
-            text.replace("## Desktop", "| crate | muniment-core | It duplicates a crate. |\n\n## Desktop"),
-            text.replace("| crate | muniment-core |", "| module | muniment-core |"),
+            "", text.replace("## Desktop", "## Other"), text.replace("## Port", "## Other"),
+            text.replace("| crate | muniment-cli |",
+                         "| crate | muniment-core | It duplicates a port crate. |\n| crate | muniment-cli |"),
+            text.replace("| crate | muniment-cli |", "| module | muniment-cli |"),
             text.replace("muniment-core | It holds the local runtime logic and storage contracts.",
                          "muniment-core | "),
             text.replace("| crate | muniment-core |", "| crate | --all |"),
@@ -42,20 +51,62 @@ class CoreBoundaryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 boundary.check_workspace(tables, members)
 
-    def test_shared_crates_come_from_one_release_tag(self):
-        tables = {"Shared": {"muniment-core", "muniment-attach"}, "Desktop": set()}
-        packages = [{"name": "muniment-core", "source": TAG}, {"name": "muniment-attach", "source": TAG}]
-        self.assertEqual(boundary.check_sources(tables, packages), "v1.2.3")
+    def test_port_crates_come_from_core_crates_by_path(self):
+        root = Path("/repo")
+        tables = {"Port": {"muniment-core", "muniment-attach", "muniment-server"}, "Desktop": set()}
+
+        def package(name, manifest, source=None):
+            return {"name": name, "source": source, "manifest_path": str(root / manifest)}
+
+        core = package("muniment-core", "core/crates/core/Cargo.toml")
+        attach = package("muniment-attach", "core/crates/attach/Cargo.toml")
+        other = package("serde", "registry/serde/Cargo.toml", "registry+https://example.invalid")
+        self.assertEqual(boundary.check_sources(tables, [core, attach, other], root / "core/crates"),
+                         ["muniment-attach", "muniment-core"])
         for changed in (
-            [packages[0], {"name": "muniment-attach", "source": None}],
-            [packages[0], {"name": "muniment-attach", "source": TAG.replace("v1.2.3", "v1.2.4")}],
-            [packages[0], {"name": "muniment-attach", "source": TAG.replace("?tag=", "?branch=")}],
-            [packages[0], {"name": "muniment-attach",
-                           "source": "git+https://github.com/someone/muniment-core?tag=v1.2.3#" + "0" * 40}],
-            [packages[0]],
+            package("muniment-attach", "git/attach/Cargo.toml", GIT),
+            package("muniment-attach", "registry/attach/Cargo.toml", "registry+https://example.invalid"),
+            package("muniment-attach", "src-tauri/attach/Cargo.toml"),
+            package("muniment-attach", "core/crates/../../src-tauri/attach/Cargo.toml"),
+            package("muniment-attach", "core/attach/Cargo.toml"),
         ):
-            with self.subTest(changed=changed[-1]), self.assertRaises(ValueError):
-                boundary.check_sources(tables, changed)
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                boundary.check_sources(tables, [core, changed], root / "core/crates")
+        with self.assertRaises(ValueError):
+            boundary.check_sources(tables, [other], root / "core/crates")
+
+    def test_core_path_dependencies_stay_in_core(self):
+        root = Path("/repo/core")
+
+        def crate(*paths):
+            return {"muniment-core": {"name": "muniment-core", "dependencies": [
+                {"name": f"dep{index}", "path": path} for index, path in enumerate(paths)] + [
+                {"name": "serde", "source": "registry+https://example.invalid"}]}}
+
+        core_boundary.check_path_dependencies(crate("/repo/core/crates/attach"), root)
+        for outside in ("/repo/src-tauri/integration", "/repo/core/crates/../../src-tauri",
+                        "/repo/core-fork/crates/attach", "/elsewhere/attach"):
+            with self.subTest(outside=outside), self.assertRaisesRegex(ValueError, "outside the core"):
+                core_boundary.check_path_dependencies(crate("/repo/core/crates/attach", outside), root)
+
+    def test_core_files_must_not_name_the_shell_directory(self):
+        core_boundary.check_shell_references([])
+        with self.assertRaisesRegex(ValueError, "docs/x.md"):
+            core_boundary.check_shell_references(["docs/x.md"])
+        current = Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(["git", "init", "-q", temporary], check=True)
+            Path(temporary, "clean.md").write_text("crates/core\n")
+            Path(temporary, "tracked.md").write_text("see ../src-tauri/Cargo.toml\n")
+            subprocess.run(["git", "-C", temporary, "add", "clean.md", "tracked.md"], check=True)
+            Path(temporary, "untracked.rs").write_text('const SHELL: &str = "src-tauri";\n')
+            try:
+                os.chdir(temporary)
+                self.assertEqual(sorted(core_boundary.shell_references()), ["tracked.md", "untracked.rs"])
+                os.chdir(current / "core")
+                self.assertEqual(core_boundary.shell_references(), [])
+            finally:
+                os.chdir(current)
 
     def test_integration_declares_every_desktop_only_module(self):
         lib = "pub mod auth;\n#[cfg(unix)]\npub mod browser_control;\npub mod chat_grant;\n"

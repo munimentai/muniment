@@ -4,7 +4,7 @@ use muniment_core::retention_record::{
     read_retention_choice, write_retention_choice, RetentionChoice,
 };
 use std::path::Path;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[cfg(any(unix, target_os = "windows"))]
 use crate::attach_service::{AttachCompanionState, DesktopClientSession};

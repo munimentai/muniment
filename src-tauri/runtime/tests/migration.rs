@@ -11,7 +11,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+mod common;
+use common::CI_WAIT;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -44,7 +47,7 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
     let desktop_lock = filesystem.acquire_instance_lock().unwrap();
     let desktop = AttachTransport::bind(&filesystem).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
-    let test_timeout = Duration::from_secs(2);
+    let test_timeout = CI_WAIT;
 
     thread::scope(|scope| {
         let takeover = scope.spawn(|| {
@@ -57,7 +60,11 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
             )
             .unwrap()
         });
-        let (mut stream, _) = desktop.accept().unwrap();
+        let accepted = desktop.accept();
+        if accepted.is_err() {
+            let _ = stop_tx.send(());
+        }
+        let (mut stream, _) = accepted.unwrap();
         let request = complete_handshake(&mut stream);
         let nonce = request.body["handoff_nonce"].as_str().unwrap().to_owned();
         let response = format!(

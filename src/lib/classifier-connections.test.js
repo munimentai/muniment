@@ -66,6 +66,26 @@ it('connects Clef Flash or Clef by the id each way to connect uses', async () =>
   await fireEvent.click(screen.getByRole('button', { name: 'Test and connect' }))
   expect(tauri.invoke).toHaveBeenCalledWith('model_router_connect_classifier', { catalogId: 'clef', name: 'Clef Flash · Ollama server', model: 'clef-flash', baseUrl: 'https://ollama.example/v1/systemone', apiKey: null, keyProvider: 'ollama' })
 })
+it('opens each decision model on one primary action, even before an Ollama server connects', () => {
+  for (const entry of CLASSIFIERS) {
+    render(ClassifierConnection, { entry, tauri: { invoke: vi.fn() }, onconnected: vi.fn() })
+    const primary = screen.getAllByRole('button').filter(button => button.getAttribute('data-variant') === 'primary')
+    expect(primary, entry.name).toHaveLength(1)
+    cleanup()
+  }
+})
+it('sends Nimble to the Ollama server connect page while no Ollama server is connected', async () => {
+  const tauri = { invoke: vi.fn(async command => command === 'model_router_settings' ? settings : inventory) }
+  render(ModelsSection, { tauri, inventory })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }))
+  await fireEvent.click(screen.getByRole('button', { name: /^Nimble/ }))
+  const connect = screen.getByRole('button', { name: 'Connect Ollama server' })
+  expect(connect).toHaveAttribute('data-variant', 'primary')
+  await fireEvent.click(connect)
+  expect(screen.getByLabelText('Ollama server URL')).toBeVisible()
+  await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+  expect(screen.getByRole('heading', { name: 'Connect Nimble' })).toBeVisible()
+})
 it('combines Kimi methods and keeps classifier connections outside the chat catalog', () => {
   expect(catalogProvider('kimi')).toMatchObject({ keyProvider: 'kimi-coding', methods: ['account', 'key'] })
   expect(catalogProvider('kimi-coding')).toBeNull()
@@ -77,7 +97,7 @@ it('lists each connected classifier with its logo and edits it in place, keeping
   const connected = { ...settings, classifier_connections: [connection] }
   const renamed = { ...connected, classifier_connections: [{ ...connection, name: 'Kev 4B', connection: { ...connection.connection, model: 'kev-4b' } }] }
   const tauri = { invoke: vi.fn(async command => command === 'model_router_update_classifier' ? renamed : command === 'model_router_settings' ? connected : inventory) }
-  render(ModelsSection, { tauri, inventory, initialTab: 'accounts' })
+  render(ModelsSection, { tauri, inventory })
   const row = (await screen.findByText('Kev local')).closest('.row')
   expect(row.querySelector('.provider-logo, svg, img')).not.toBeNull()
   // The row's actions are icons with names, and no words.
@@ -97,7 +117,7 @@ it('lists each connected classifier with its logo and edits it in place, keeping
 it('edits a connected Ollama server through its own form, keeping the saved key when the field stays blank', async () => {
   const ollama = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'https://ollama.example/v1', models: [{ id: 'nimble:latest' }] }], hidden: [] }
   const tauri = { invoke: vi.fn(async command => command === 'model_router_settings' ? settings : ollama) }
-  render(ModelsSection, { tauri, inventory: ollama, initialTab: 'accounts' })
+  render(ModelsSection, { tauri, inventory: ollama })
   await fireEvent.click(await screen.findByRole('button', { name: 'Edit Ollama' }))
   expect(screen.getByRole('heading', { name: 'Edit Ollama' })).toBeVisible()
   expect(screen.getByLabelText('Ollama server URL')).toHaveValue('https://ollama.example/v1')

@@ -1,8 +1,10 @@
 //! Applies an update that a paired client requested on this computer's
-//! runtime: the app checks its release feed, downloads the verified update
-//! and installs it once no runtime work is active. The runtime keeps the
-//! request in `<state>/remote/runtime-update.json`, and the app removes it
-//! once it runs the requested version or a newer one.
+//! runtime, or that a newer paired desktop calls for: the app checks its
+//! release feed, downloads the verified update and installs it once the
+//! runtime's runs finish, waiting at most two minutes before it stops them
+//! for a resume after the restart. The runtime keeps a request in
+//! `<state>/remote/runtime-update.json`, and the app removes it once it runs
+//! the requested version or a newer one.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +14,8 @@ use serde_json::Value;
 use tauri::{Emitter, Manager};
 
 use super::version::{is_older, APP_VERSION};
-use crate::app_update::{AppUpdate, UpdateFailure};
+use crate::app_update::{report, AppUpdate, InstallMode, UpdateFailure};
+use muniment_core::attach::RuntimeUpdateState;
 
 const REQUEST_FILE: &str = "runtime-update.json";
 /// How long an install waits before it checks again for idle runtime work.
@@ -68,8 +71,15 @@ pub(crate) fn update_requested<R: tauri::Runtime>(app: &tauri::AppHandle<R>, req
     }
 }
 
-/// Applies a request the runtime saved while the app was closed, and clears
-/// one the app's own version already meets.
+/// Updates this app to `version`, which a paired desktop runs.
+pub(crate) fn follow<R: tauri::Runtime>(app: &tauri::AppHandle<R>, version: String) {
+    eprintln!("muniment-desktop: a paired desktop runs {version}, so the app updates to it");
+    apply(app, version);
+}
+
+/// Applies a request the runtime saved while the app was closed, or one the
+/// release feed did not offer yet, and clears one the app's own version
+/// already meets.
 pub(crate) fn check_saved_request<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(version) = request_path().as_deref().and_then(saved_version) {
         apply(app, version);
@@ -103,6 +113,12 @@ fn install_requested<R: tauri::Runtime>(app: &tauri::AppHandle<R>, requested: &s
         Ok(Some(found)) => found,
         Ok(None) => {
             eprintln!("muniment-desktop: runtime update to {requested} has no in-app update");
+            report(
+                app,
+                RuntimeUpdateState::Failed,
+                Some(requested),
+                Some("This install updates through its package manager."),
+            );
             return;
         }
         Err(error) => {
@@ -110,17 +126,32 @@ fn install_requested<R: tauri::Runtime>(app: &tauri::AppHandle<R>, requested: &s
                 "muniment-desktop: runtime update to {requested} failed code={}",
                 error.probe_code()
             );
+            if !matches!(error, UpdateFailure::Download) {
+                report(
+                    app,
+                    RuntimeUpdateState::Failed,
+                    Some(requested),
+                    Some(error.message()),
+                );
+            }
             return;
         }
     };
     if plan(requested, &found) == Plan::Update {
+        // A request waits for the feed. The next check or request applies it.
         eprintln!("muniment-desktop: the release feed does not offer {requested} yet");
         return;
     }
     // The window shows its update control for the downloaded version.
     let _ = app.emit("app-update-ready", &found);
     loop {
-        match tauri::async_runtime::block_on(crate::app_update::install(app, &activity, &state)) {
+        match tauri::async_runtime::block_on(crate::app_update::install(
+            app,
+            &activity,
+            &state,
+            InstallMode::Wait,
+        )) {
+            // The app's own sign-in work blocks an install until it ends.
             Err(UpdateFailure::Busy) => std::thread::sleep(IDLE_RETRY),
             Err(error) => {
                 eprintln!(

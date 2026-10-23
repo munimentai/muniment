@@ -6,6 +6,11 @@ fn runtime(argument: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
         .arg(argument)
         .env(INVALID_WAIT_TIMEOUT.0, INVALID_WAIT_TIMEOUT.1)
+        .env(muniment_core::state_root::TEST_RUN_VARIABLE, "1")
+        .env(
+            muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
+            muniment_core::state_root::test_log_directory(),
+        )
         .output()
         .unwrap()
 }
@@ -15,6 +20,7 @@ fn runtime(argument: &str) -> Output {
 fn windows_stops_before_runtime_admission() {
     let output = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
         .env(INVALID_WAIT_TIMEOUT.0, INVALID_WAIT_TIMEOUT.1)
+        .env(muniment_core::state_root::TEST_RUN_VARIABLE, "1")
         .output()
         .unwrap();
 

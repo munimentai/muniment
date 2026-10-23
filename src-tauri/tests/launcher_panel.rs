@@ -143,6 +143,7 @@ fn main() {
             launcher::launcher_is_visible,
             launcher::launcher_present_main,
             launcher::launcher_register,
+            launcher::launcher_start_failed,
         ])
         .on_window_event(launcher::window_event)
         .setup(|app| {

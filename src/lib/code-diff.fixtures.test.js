@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { codeDiffPresentation } from './code-diff.js'
 
-const fixtureDirectory = join(process.cwd(), 'protocol-fixtures/code-diff/1')
+const fixtureDirectory = join(process.cwd(), 'core/protocol-fixtures/code-diff/1')
 const fixtures = readdirSync(fixtureDirectory)
   .filter((name) => name.endsWith('.json'))
   .map((name) => [name, JSON.parse(readFileSync(join(fixtureDirectory, name), 'utf8'))])

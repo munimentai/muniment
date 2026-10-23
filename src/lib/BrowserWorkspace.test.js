@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import BrowserWorkspace from './BrowserWorkspace.svelte'
+import { coverBrowser } from './browser-cover.svelte.js'
 let invoke
 beforeEach(() => {
   localStorage.clear()
@@ -29,6 +30,14 @@ describe('shared browser', () => {
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('browser_view', expect.objectContaining({ label: 'browser' })))
     view.unmount()
     await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('browser_view', { label: null, bounds: null, artifactId: null }))
+  })
+  it('hides the native page while a dialog covers the window and shows it after', async () => {
+    render(BrowserWorkspace, { tauri: { invoke }, onclose: vi.fn() })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('browser_view', expect.objectContaining({ label: 'browser' })))
+    const release = coverBrowser()
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('browser_view', { label: null, bounds: null, artifactId: null }))
+    release()
+    await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('browser_view', expect.objectContaining({ label: 'browser' })))
   })
   it('moves the native page once per frame for a burst of resizes', async () => {
     let resize

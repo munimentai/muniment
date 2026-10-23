@@ -1,4 +1,5 @@
 export const THEME_STORAGE_KEY = 'muniment.theme'
+export const THEME_EVENT = 'muniment:theme'
 export const THEME_SYSTEM = 'system'
 export const THEME_LIGHT = 'light'
 export const THEME_DARK = 'dark'
@@ -9,7 +10,8 @@ export const THEME_DARK = 'dark'
 // `:root[data-theme]` block of the ten color tokens in src/styles/tokens.css.
 export const COLORS = [['moss', 'Moss'], ['harbor', 'Harbor'], ['clay', 'Clay'], ['iris', 'Iris']]
 export const STYLES = [['normal', 'Normal'], ['vibrant', 'Vibrant'], ['contrast', 'High contrast']]
-export const DEFAULT_PALETTE = 'moss'
+// A new install starts color forward: Moss vibrant, with its accent on actions.
+export const DEFAULT_PALETTE = 'moss-vibrant'
 
 export const paletteId = (color, style) => style === 'normal' ? color : `${color}-${style}`
 export const PALETTES = STYLES.flatMap(([style]) => COLORS.map(([color]) => paletteId(color, style)))
@@ -42,21 +44,25 @@ const EARLIER_DARK = new Set(['vault', 'moss', 'graphite', 'inkwell', 'fjord', '
 
 const modes = new Set([THEME_SYSTEM, THEME_LIGHT, THEME_DARK])
 const defaults = () => ({ mode: THEME_DARK, palette: DEFAULT_PALETTE })
+// A value saved before the default turned vibrant showed Moss, so a saved
+// value that names no palette keeps Moss.
+const SAVED_PALETTE = 'moss'
 
-// Missing or malformed values restore the documented OS default. A bare mode
-// keeps that mode with the default palette, and a bare theme name picks its
-// palette in its own mode.
+// Missing or malformed values restore the documented default. A bare mode
+// keeps that mode with Moss, and a bare theme name picks its palette in its
+// own mode.
 export function parseTheme(stored) {
   const state = defaults()
   if (stored && typeof stored === 'object') return parseTheme(JSON.stringify(stored))
   if (typeof stored !== 'string' || !stored) return state
-  if (modes.has(stored)) return { ...state, mode: stored }
+  if (modes.has(stored)) return { mode: stored, palette: SAVED_PALETTE }
   const scheme = themeScheme(stored)
   if (scheme) return { mode: scheme, palette: stored.slice(0, -scheme.length - 1) }
   if (EARLIER[stored]) return { mode: EARLIER_DARK.has(stored) ? THEME_DARK : THEME_LIGHT, palette: EARLIER[stored] }
   let parsed
   try { parsed = JSON.parse(stored) } catch (_) { return state }
-  if (!parsed || typeof parsed !== 'object') return state
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return state
+  state.palette = SAVED_PALETTE
   if (modes.has(parsed.mode)) state.mode = parsed.mode
   if (PALETTES.includes(parsed.palette)) state.palette = parsed.palette
   else {
@@ -98,4 +104,14 @@ export function readStoredTheme() {
   } catch (_) {
     return parseTheme(null)
   }
+}
+
+// Applies, stores and announces one change, so Preferences follows a change
+// that starts elsewhere.
+export function commitTheme(theme, root = document.documentElement) {
+  const next = parseTheme(theme)
+  applyTheme(root, next)
+  try { localStorage.setItem(THEME_STORAGE_KEY, serializeTheme(next)) } catch (_) {}
+  try { window.dispatchEvent(new CustomEvent(THEME_EVENT, { detail: next })) } catch (_) {}
+  return next
 }

@@ -1,9 +1,9 @@
 [package]
 name = "muniment-cli"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 
 [dependencies]
-muniment-attach = { git = "https://github.com/munimentai/muniment-core", tag = "v1.14.0", default-features = false, features = ["client"] }
-muniment-code-diff = { git = "https://github.com/munimentai/muniment-core", tag = "v1.14.0" }
+muniment-attach = { path = "../../core/crates/attach", default-features = false, features = ["client"] }
+muniment-code-diff = { path = "../../core/crates/code-diff" }
 serde_json = "1"

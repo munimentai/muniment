@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
+import { applyBufferedChatEvents, applyChatEvent, codeDiffPermissionAnswer, composerAction, historyMessages, modelLabel, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureDetails, runFailureMessage, runStage, withFolders, settledPhases, stageWord, toolName, toolStatus, toolVerb, unsettledRun } from './chat-state.js'
 
 describe('chat composer and projection', () => {
   it('chooses submit or steer from the active run', () => {
@@ -69,6 +69,16 @@ describe('chat composer and projection', () => {
     expect(applyChatEvent(initial, { ...entry, runId: 'other' })).toBe(initial)
   })
 
+  it('keeps the resume notice across live events and restored history', () => {
+    const resumeNotice = 'Muniment updated while this reply ran, so it resumed where it stopped.'
+    const initial = { id: 'r', phase: 'thinking', text: '' }
+    const live = applyChatEvent(initial, { runId: 'r', phase: 'streaming', text: 'Reply', resumeNotice })
+    expect(live.resumeNotice).toBe(resumeNotice)
+    expect(applyChatEvent(live, { runId: 'r', phase: 'complete', text: 'Reply' }).resumeNotice).toBe(resumeNotice)
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Reply', prompt: null, resumeNotice }])[0].run.resumeNotice).toBe(resumeNotice)
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Reply', prompt: null }])[0].run.resumeNotice).toBeNull()
+  })
+
   it('tracks the in-flight word from the projections: Routing, Thinking, the tool verb, Writing', () => {
     let run = { id: 'r', phase: 'thinking', text: '' }
     expect(stageWord(run.stage)).toBe('Routing')
@@ -84,8 +94,21 @@ describe('chat composer and projection', () => {
     expect(stageWord(run.stage)).toBe('Writing')
     run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'completed' }, { effectId: 'e2', displayName: 'mcp__linear__list_issues', status: 'running' }] })
     expect(stageWord(run.stage)).toBe('Calling linear')
+    // Core's words for the running call lead when the record carries them.
+    run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, toolActivity: [{ effectId: 'e3', displayName: 'mcp__linear__list_issues', status: 'running', presentation: { headline: 'Ask Linear: list issues', progress: 'Asking Linear' } }] })
+    expect(stageWord(run.stage)).toBe('Asking Linear')
     expect(runStage(null, { phase: 'streaming', text: 'Restored', toolActivity: [] })).toBe('writing')
     expect(historyMessages([{ runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] }])[0].run.stage).toBe('thinking')
+  })
+
+  it('names the macOS folder prompt a run waits on until the answer clears it', () => {
+    let run = { id: 'r', phase: 'acquiring-pi', text: '' }
+    run = applyChatEvent(run, { runId: 'r', phase: 'acquiring-pi', text: '', routingStage: 'folder-access:Documents', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('macOS is asking for access to Documents. Choose Allow.')
+    run = applyChatEvent(run, { runId: 'r', phase: 'acquiring-pi', text: '', routingStage: 'folder-access', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('macOS is asking for access to this folder. Choose Allow.')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', routingStage: null, toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Routing')
   })
 
   it('names every tool by a plain verb and never by a vendor, a model or a harness', () => {
@@ -137,6 +160,16 @@ describe('chat composer and projection', () => {
       expect(runFailureMessage({ failureReason })).toBe('Reply failed.')
     },
   )
+
+  it('maps a raw runtime record to a sentence and keeps the record and the provider reason under Details', () => {
+    const failureReason = 'muniment-runtime: desktop request rejected operation="run.submit" code="invalid_request" reason="The prompt is empty."'
+    expect(runFailureMessage({ failureReason })).toBe('The runtime rejected the request.')
+    expect(runFailureDetails({ failureReason })).toEqual([failureReason])
+    const run = applyChatEvent({ id: 'r', phase: 'streaming', text: '' }, { runId: 'r', type: 'failed', failureReason: 'The model could not complete this reply.', failureDetail: 'Rate limit reached for requests.' })
+    expect(runFailureMessage(run)).toBe('The model could not complete this reply.')
+    expect(runFailureDetails(run)).toEqual(['Rate limit reached for requests.'])
+    expect(runFailureDetails({ failureReason: 'Reply failed.' })).toEqual([])
+  })
 
   it('keeps cause punctuation and folds line breaks without changing addresses or decimals', () => {
     expect(runFailureMessage({ failureReason: '  Cannot reach\nhttps://example.com after 1.5 seconds  ' }))
@@ -481,4 +514,12 @@ describe('promptFolders', () => {
     expect(promptFolders('plain')).toEqual({ text: 'plain', folders: [] })
     expect(promptFolders('quoted\n\nAttached folders (local paths):\nnot json\nUse the local file tools to inspect these folders and their subfolders as needed. Folder contents are not embedded in this message.').folders).toEqual([])
   })
+})
+
+it('names the receipt model\'s provider for its mark', () => {
+  expect(receiptProvider({ model: 'openai/gpt-6-astra' })).toBe('openai')
+  expect(receiptProvider({ model: 'custom-omlx/qwen3-8b' })).toBe('custom-omlx')
+  expect(receiptProvider({ model: 'pi-2' })).toBe(null)
+  expect(receiptProvider({})).toBe(null)
+  expect(receiptProvider(null)).toBe(null)
 })

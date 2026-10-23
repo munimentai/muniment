@@ -1,4 +1,19 @@
+import { probeApprovalItems, probeNotifications, probeUsage } from './usage-fixture.js'
+import { GROUP_THREAD, handleAgentRequest, probeAgentHistory, probeAgentStores, probeCreations, probeExtensions, probePosts } from './agents-fixture.js'
+import { arrangeStandIn } from '../sidebar-standin.js'
+import { advanceProjects, projectsAgents, projectsArrangement, projectsCatalog, projectsPalette, projectsRendered, projectsSettings, projectsSummaries, projectsThreadSettings } from './projects-fixture.js'
+import { advanceTrust, trustAnswer, trustHistory, trustRendered } from './trust-fixture.js'
+import { longThreadHistory } from './long-thread-fixture.js'
+import { presentActivities } from './presentations.js'
+import { advanceTools, toolApprovalItems, toolsHistory, toolsRendered } from './tools-fixture.js'
+import { advanceFleetSync, fleetSyncAnswer, fleetSyncHistory, fleetSyncProjects, fleetSyncRendered, fleetSyncSummaries, fleetSyncThread } from './fleet-fixture.js'
+
 export const historyFixtures = {
+  'run-trust': trustHistory,
+  tools: toolsHistory(),
+  agents: [],
+  projects: [],
+  'fleet-sync': [],
   'signed-out': [],
   'runtime-exit': [],
   runtimes: [],
@@ -6,6 +21,8 @@ export const historyFixtures = {
   scan: [],
   access: [],
   empty: [],
+  // Generated when the page loads, so other fixtures never copy it.
+  'long-thread': [],
   'prompt-storage': [
     {
       runId: 'probe-prompt-storage',
@@ -37,7 +54,7 @@ export const historyFixtures = {
       text: 'The lease renews for one year unless either party gives 60 days notice.',
       receipt: {
         route: 'analysis/high',
-        model: 'pi-2',
+        model: 'openai/gpt-5.5',
         cost: '$0.014',
         time: '6.2s',
         capabilities: [{ name: 'files', version: '2' }],
@@ -111,6 +128,28 @@ export const historyFixtures = {
       ].join('\n'),
       receipt: null,
       toolActivity: [],
+      resumable: false,
+    },
+  ],
+  // A composer thread in Ask before changes, paused on core's gate for a
+  // command. `?state=menu` opens the composer's Modes menu, `?state=new`
+  // opens it on a new thread, which starts in Bypass permissions,
+  // `?state=plan` pauses it on a plan instead, and `?state=settings` opens
+  // Settings → Permissions.
+  'permission-modes': [
+    {
+      runId: 'probe-mode-gate',
+      prompt: 'Clear out last year\'s exports.',
+      phase: 'pending-permission',
+      text: 'I will remove the exports from last year.',
+      receipt: null,
+      toolActivity: [],
+      pendingPermission: {
+        gateId: 'probe-mode-gate',
+        kind: 'select',
+        title: 'Allow bash `rm exports/2025-*.csv` in /Users/alice/Documents/muniment? This thread asks before it changes anything.',
+        options: ['Allow once', 'Deny'],
+      },
       resumable: false,
     },
   ],
@@ -253,10 +292,40 @@ function probeAccounts() {
     subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }],
     accounts: [
       { ...base, id: 'team', label: 'team', source: 'subscription', windows: windows(89) },
-      { ...base, id: 'personal', label: 'personal', source: 'subscription', windows: windows(100) },
+      { ...base, id: FLEET_PROBE ? `shared:swarm:${FLEET_STUDIO}:personal` : 'personal', label: 'personal', source: 'subscription', windows: windows(100) },
       { ...base, id: 'work', label: 'Work', source: 'key', overflow: false, allowance_readable: false, windows: [] },
     ],
   }
+}
+
+// ?accounts&fleet opens Settings → Models on a fleet: this machine
+// holds the team sign-in and Studio holds the personal one, which offers Hold
+// sign-in here. Studio also holds a Codex sign-in it shares, still on its
+// way, and Pod a Claude sign-in it keeps to itself. Core answers
+// `fleet.credentials` and `fleet.hold_sign_in`.
+const FLEET_PROBE = new URLSearchParams(location.search).has('fleet')
+const FLEET_LAPTOP = '018f0000-0000-7000-8000-000000000041'
+const FLEET_STUDIO = '018f0000-0000-7000-8000-000000000042'
+const FLEET_POD = '018f0000-0000-7000-8000-000000000046'
+const fleetAccount = (name, label, holder, holderName, extra = {}) => ({ name, provider: 'anthropic', family: 'anthropic', kind: 'subscription', label, refresher: true, enabled: true, holder, holder_name: holderName, shared: true, this_machine: holder === FLEET_LAPTOP, usable_here: true, ...extra })
+function fleetAnswer({ operation }) {
+  if (operation === 'fleet.hold_sign_in') return { status: 'requested', holder: FLEET_STUDIO }
+  return {
+    share_models: true, use_vault: false, role: 'full', removed: false, secrets: [], audit: [], vault: [],
+    accounts: [
+      fleetAccount('router:team', 'team', FLEET_LAPTOP, 'Laptop'),
+      fleetAccount('pi:anthropic', 'anthropic', FLEET_POD, 'Pod', { kind: 'oauth', shared: false, usable_here: false }),
+      fleetAccount('router:personal', 'personal', FLEET_STUDIO, 'Studio'),
+      fleetAccount('pi:openai-codex', 'openai-codex', FLEET_STUDIO, 'Studio', { provider: 'openai-codex', family: undefined, kind: 'oauth', usable_here: false }),
+    ],
+  }
+}
+const fleetRendered = () => document.querySelectorAll('[data-hold]').length === 2 && !!document.querySelector('[data-hold] button') && document.body.textContent.includes('Signed in on Studio, arriving')
+function advanceFleetFixture() {
+  if (!FLEET_PROBE || fleetRendered()) return
+  if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
+  const providers = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Models')
+  if (providers && providers.getAttribute('aria-current') !== 'true') providers.click()
 }
 
 const providerScanFixtures = {
@@ -350,25 +419,63 @@ function diffSummary(diff) {
 export function buildProbeCommandTable(fixtureName) {
   const fixtureHistory = historyFixtures[fixtureName]
   if (!fixtureHistory) throw new Error(`Unknown probe history fixture: ${fixtureName}`)
-  const history = structuredClone(fixtureHistory)
+  // The permission-modes fixture's `?state=new` starts on a new thread.
+  const newThread = fixtureName === 'permission-modes' && new URLSearchParams(location.search).get('state') === 'new'
+  const history = newThread ? [] : fixtureName === 'long-thread' ? longThreadHistory() : structuredClone(fixtureHistory)
   // The bodies the stub answers through chat_run_detail.
   const runDetails = { appliedDiff: null }
   if (fixtureName === 'applied-diff') history[0].toolActivity = [{ effectId: 'preview-read', displayName: 'read', status: 'completed', input: JSON.stringify({ path: 'src/welcome.js' }) }]
+  // Each call carries core's presentation, as the runtime sends it.
+  for (const entry of history) presentActivities(entry.toolActivity)
   const onboardingFixture = fixtureName === 'onboarding'
   const scanFixture = fixtureName === 'scan'
   const accessFixture = fixtureName === 'access'
   const signedOutFixture = fixtureName === 'signed-out'
   // `runtimes.html?state=` picks local, paired, remote, switcher, pairing,
-  // failed or ssh. Every other fixture holds this computer's runtime alone.
+  // failed, ssh, pairing-off, pairing-on, link or devices. Every other
+  // fixture holds this computer's runtime alone.
   const runtimesFixture = fixtureName === 'runtimes'
   const runtimesState = runtimesFixture ? new URLSearchParams(location.search).get('state') ?? 'paired' : 'local'
-  let runtimeList = probeRuntimes(runtimesState)
+  // `agents.html?state=` picks list, profile, cron, webhook, mcp, proposals,
+  // notifications, machines, move, transcript, group-create, meeting, approvals,
+  // approval-inline, replays, import, absence, preferences, time, voice, empty,
+  // notifications-empty, usage, usage-tokens, usage-cost, usage-partial or
+  // composer-limit, with agents on three machines that all answer and a
+  // synced copy from a fourth. `cards` opens the catalog's action cards, and
+  // `cards-offline` the same with the Studio machine offline, which
+  // `&studio-offline` adds to any state.
+  // `fleet-sync.html?state=` shows a fleet this laptop reaches only through
+  // the swarm: owners, a queued post, a replica's history, a new thread on a
+  // container, the offline scope, the bootstrap on Machines and the log.
+  const fleetSyncFixture = fixtureName === 'fleet-sync'
+  if (fleetSyncFixture && fleetSyncThread()) history.push(...fleetSyncHistory())
+  const agentsFixture = fixtureName === 'agents'
+  const projectsFixture = fixtureName === 'projects'
+  const trustFixture = fixtureName === 'run-trust'
+  const toolsFixture = fixtureName === 'tools'
+  const agentsState = agentsFixture ? new URLSearchParams(location.search).get('state') ?? 'list' : null
+  let runtimeList = probeRuntimes(agentsFixture ? (agentsState === 'cards-offline' || new URLSearchParams(location.search).has('studio-offline') ? 'agents-offline' : 'agents') : projectsFixture && new URLSearchParams(location.search).has('machines') ? 'paired' : runtimesState)
   let localAccess = probeLocalAccess(['pairing-on', 'link', 'devices'].includes(runtimesState))
   let localDevices = runtimesState === 'devices' ? probeDevices() : []
   const onboardingHomePath = '/Users/alice/Documents/muniment'
   // The runtimes fixture lists a thread on each machine, so the sidebar
   // shows the machine badges.
-  const threadSummaries = runtimesFixture
+  const threadSummaries = fleetSyncFixture
+    ? fleetSyncSummaries()
+    : projectsFixture
+    ? projectsSummaries()
+    : agentsFixture
+    ? [
+        { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a2', title: 'Inbox triage', updatedAt: '2026-07-28T11:00:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a2b', title: 'Vendor follow-up', updatedAt: '2026-07-27T11:00:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a3', title: 'Release editor', updatedAt: '2026-07-28T10:30:00Z', runtimeId: '018f0000-0000-7000-8000-000000000042' },
+        { threadId: 'thread-a4', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
+        { threadId: 'probe-box', title: 'Nightly test notes', updatedAt: '2026-07-27T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
+        { threadId: GROUP_THREAD, title: 'Launch room', updatedAt: '2026-07-28T11:30:00Z', runtimeId: 'local' },
+        { threadId: 'thread-a5', title: 'Front desk', updatedAt: '2026-07-26T10:00:00Z', runtimeId: 'local' },
+      ]
+    : runtimesFixture
     ? [
         { threadId: 'probe-local', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
         { threadId: 'probe-box', title: 'Nightly test triage', updatedAt: '2026-07-28T10:00:00Z', runtimeId: '018f0000-0000-7000-8000-000000000043' },
@@ -398,7 +505,19 @@ export function buildProbeCommandTable(fixtureName) {
   ] : []
   let deletedFacts = memoryCount ? probeFacts(4, 'd').map((fact) => ({ ...fact, title: `Old ${fact.title.toLowerCase()}` })) : []
   let pendingChanges = memorySeed ? probePending(savedFacts) : []
-  const agentData = { agents: [], state: { runs: {}, threads: {}, primaryThreads: {}, history: {} } }
+  const agentStores = probeAgentStores(agentsFixture, agentsState)
+  if (projectsFixture) Object.assign(agentStores.local, projectsAgents())
+  const modesFixture = fixtureName === 'permission-modes'
+  const modesState = modesFixture ? new URLSearchParams(location.search).get('state') ?? 'gate' : null
+  // The gate thread was set to Ask before changes; new threads start in
+  // the default, Bypass permissions.
+  if (modesFixture) agentStores.local.threadModes = { 'probe-thread': 'manual' }
+  if (modesState === 'plan') {
+    const plan = ['1. List the exports in exports/ by year.', '2. Move the 2025 files to archive/2025/ instead of deleting them.', '3. Report the files moved and the space freed.'].join('\n')
+    history[0] = { ...history[0], prompt: 'Plan how to clear out last year\'s exports.', text: 'Here is the plan.', pendingPermission: { gateId: 'probe-plan-gate', kind: 'select', title: 'Approve this plan?', options: ['Approve, then ask before changes', 'Approve and edit automatically', 'Approve with auto review', 'Keep planning'] } }
+    agentStores.local.threadModes = { 'probe-thread': 'plan' }
+    agentStores.local.plans = { 'probe-thread': { run_id: 'probe-mode-gate', gate_id: 'probe-plan-gate', approval_id: 'probe-mode-gate:probe-plan-gate', summary: '1. List the exports in exports/ by year.', plan, answers: ['plan_manual', 'plan_edit_auto', 'plan_auto', 'plan_keep'] } }
+  }
   const agentMemory = {}
   const projects = { 'project-lease': 'Lease renewal', 'project-research': 'Research' }
   const projectThreads = { 'probe-thread': 'project-lease', 'probe-archive': 'project-lease', 'probe-notes': 'project-research' }
@@ -406,7 +525,7 @@ export function buildProbeCommandTable(fixtureName) {
   const eventListeners = []
   const invokedCommands = []
   const unknownCommands = []
-  let currentThreadId = history.length ? 'probe-thread' : null
+  let currentThreadId = fleetSyncFixture ? fleetSyncThread() : history.length ? 'probe-thread' : null
   let retentionChoice = null
   let runtimeState = fixtureName === 'runtime-exit'
     ? { revision: 1, lastEvent: 'exited', visible: true, busy: false }
@@ -424,6 +543,7 @@ export function buildProbeCommandTable(fixtureName) {
   async function invoke(command, payload) {
     // `?update=0.3.0` offers that version as a ready update.
     if (command === 'app_update_prepare') return new URLSearchParams(location.search).get('update')
+    if (command === 'app_update_interruptions') return 0
     if (command === 'thread_context_usage') {
       const usage = contextUsage()
       return usage && { ...usage, provider: probeContext === 'unknown' ? 'ollama' : 'anthropic', model: probeContext === 'unknown' ? 'qwen3:8b' : 'claude-sonnet', autoCompact: true, compactAt: usage.contextWindow - 16384, compacting: false }
@@ -434,8 +554,17 @@ export function buildProbeCommandTable(fixtureName) {
       return { tokensBefore: 152400, estimatedTokensAfter: 31900 }
     }
     if (command === 'launcher_register') return null
-    if (command === 'artifact_list' || command === 'creation_list') return []
-    if (command === 'extend_command' && payload?.action === 'read') return { items: [] }
+    if (command === 'artifact_list') return []
+    if (command === 'creation_list') return JSON.parse(JSON.stringify(probeCreations))
+    // The plan arrives as the app's live state, which only serializes as JSON.
+    if (command === 'creation_save') {
+      const plan = JSON.parse(JSON.stringify(payload.creation))
+      const kept = probeCreations.find((item) => item.threadId === plan.threadId)
+      if (!plan.turns?.length && kept?.turns) plan.turns = kept.turns
+      probeCreations.splice(0, probeCreations.length, ...probeCreations.filter((item) => item.threadId !== plan.threadId), plan)
+      return plan
+    }
+    if (command === 'extend_command' && payload?.action === 'read') return agentsFixture ? structuredClone(probeExtensions) : { items: [] }
     if (command === 'browser_view') return null
     if (command === 'runtime_state') return runtimeState
     if (command === 'runtime_start') {
@@ -445,7 +574,8 @@ export function buildProbeCommandTable(fixtureName) {
       }
       return null
     }
-    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage'].includes(fixtureName)
+    // `?models` starts in local mode, which loads the providers below into the model pickers.
+    if (command === 'local_mode_status') return ['local-mode', 'prompt-storage', 'projects'].includes(fixtureName) || new URLSearchParams(location.search).has('models')
     if (command === 'local_mode_enter') return null
     if (command === 'local_mode_leave') return null
     if (command === 'local_mode_provider_inventory') return {
@@ -459,10 +589,9 @@ export function buildProbeCommandTable(fixtureName) {
       default_model: new URLSearchParams(location.search).has('thinking') ? 'qwen3:8b' : 'llama3.2:3b',
       hidden: [],
     }
-    if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_set_thinking_level', 'local_mode_disconnect_provider', 'local_mode_connect_claude_code', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
+    if (['local_mode_store_provider_key', 'local_mode_set_default_model', 'local_mode_set_model_hidden', 'local_mode_set_thinking_level', 'local_mode_disconnect_provider', 'local_mode_account_login_start', 'local_mode_account_login_answer', 'local_mode_account_login_cancel', 'local_mode_open_url'].includes(command)) return null
     if (command === 'local_mode_store_endpoint') return 'custom-endpoint'
     if (command === 'model_registry') return (await fetch('./fixtures/model-registry.json')).json()
-    if (command === 'local_mode_claude_code_status') return { installed: true, logged_in: true, path: '/usr/local/bin/claude' }
     if (command === 'context_settings') return { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 }
     if (command === 'context_settings_save') return payload
     if (command === 'chat_search_files') return [{ path: '/Documents/muniment/ISSUES.md', relativePath: 'ISSUES.md', displayName: 'ISSUES.md' }].filter((file) => file.relativePath.toLowerCase().includes(payload.query.toLowerCase()))
@@ -562,18 +691,50 @@ export function buildProbeCommandTable(fixtureName) {
       if (payload.action === 'memory_fact_delete') { data.deleted.push(...data.facts.filter(item => item.id === payload.factId)); data.facts = data.facts.filter(item => item.id !== payload.factId); return null }
       if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
     }
-    if (command === 'agent_import_link') return { url: payload.url, html: await (await fetch('./fixtures/grok-template.html')).text() }
     if (command === 'agent_export_template') return true
-    if (command === 'agent_list') return structuredClone(agentData)
-    if (command === 'agent_save') {
-      const agent = JSON.parse(JSON.stringify({ ...payload.agent, id: payload.agent.id || crypto.randomUUID() }))
-      agentData.agents = [...agentData.agents.filter(a => a.id !== agent.id), agent]
-      agentData.state.runs[agent.id] ||= { status: 'Ready' }
-      return structuredClone(agent)
+    // Core's `settings.scope` answers from its protocol fixture on every page.
+    if (command === 'agent_request' && payload?.operation === 'settings.scope') {
+      return fetch('/core/protocol-fixtures/muniment.attach/1/response-settings-scope.json').then((response) => response.json()).then((fixture) => fixture.body)
     }
-    if (command === 'agent_delete') { agentData.agents = agentData.agents.filter(a => a.id !== payload.id); delete agentData.state.runs[payload.id]; return null }
+    if (FLEET_PROBE && command === 'agent_request' && payload?.operation?.startsWith('fleet.')) return fleetAnswer(payload)
+    if (fleetSyncFixture && command === 'agent_request') {
+      const answer = fleetSyncAnswer(payload)
+      if (answer !== undefined) return answer
+    }
+    if (trustFixture && command === 'agent_request') {
+      const answer = trustAnswer(payload, history)
+      if (answer !== undefined) return answer
+    }
+    if (command === 'agent_request') return handleAgentRequest(agentStores, payload)
+    // Usage and Notifications answer from the agents fixture's states; every
+    // other page reads a quiet fleet, so the composer shows no limit.
+    if (command === 'usage_summary') {
+      const usage = probeUsage(payload, agentsState)
+      return agentsState?.startsWith('usage') || agentsState === 'composer-limit' ? usage : { ...usage, accounts: [], unmetered: [] }
+    }
+    if (command === 'notifications_list') {
+      const page = probeNotifications(payload, agentsState)
+      if (agentsState === 'approvals') return { ...page, needs_you: [...probeApprovalItems(), ...page.needs_you.filter((item) => item.kind !== 'approval')] }
+      if (agentsState === 'tool-approvals') return { ...page, needs_you: toolApprovalItems(probeApprovalItems()[0].approval) }
+      return agentsFixture ? page : { ...page, needs_you: [], running: [], days: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 } }
+    }
     if (command === 'agent_open') return null
-    if (command === 'agent_run') { agentData.state.runs[payload.id] = { status: 'queued' }; return null }
+    if (command === 'sidebar_arrange') return projectsFixture ? projectsArrangement(payload.input) : arrangeStandIn(payload.input)
+    // The palette answers core's ranking of the projects fixture.
+    if (command === 'palette_rank') return projectsPalette(payload.input)
+    if (command === 'project_move_thread') {
+      const catalog = projectsFixture ? projectsCatalog : { threads: projectThreads }
+      if (!payload.projectId) delete catalog.threads[payload.threadId]
+      else catalog.threads[payload.threadId] = payload.projectId
+      return null
+    }
+    // Each thread keeps its own model; the default model never changes.
+    if (command === 'thread_settings') return projectsThreadSettings(payload.threadId)
+    if (command === 'thread_settings_set') return projectsThreadSettings(payload.threadId, payload)
+    if (command === 'project_settings') return projectsFixture ? projectsSettings(payload.projectId) : { instructions: '' }
+    if (command === 'project_settings_save') return null
+    if (command === 'project_list' && projectsFixture) return structuredClone(projectsCatalog)
+    if (command === 'project_list' && fleetSyncFixture) return structuredClone(fleetSyncProjects)
     if (command === 'project_list') return { projects: { ...projects }, threads: { ...projectThreads } }
     if (command === 'project_create') {
       if (Object.values(projects).includes(payload.name)) throw new Error('A project with that name already exists.')
@@ -582,11 +743,12 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'project_rename') { projects[payload.projectId] = payload.name; return null }
     if (command === 'project_open') return null
     if (command === 'chat_new_thread') {
-      if (payload?.agentId && agentData.state.primaryThreads[payload.agentId]) { currentThreadId = agentData.state.primaryThreads[payload.agentId]; return currentThreadId }
+      const local = agentStores.local
+      if (payload?.agentId && local.primaryThreads[payload.agentId]) { currentThreadId = local.primaryThreads[payload.agentId]; return currentThreadId }
       currentThreadId = crypto.randomUUID()
-      const projectId = payload?.projectId || agentData.agents.find(a => a.id === payload?.agentId)?.projectId
+      const projectId = payload?.projectId || local.agents.find(a => a.id === payload?.agentId)?.projectId
       if (projectId) projectThreads[currentThreadId] = projectId
-      if (payload?.agentId) { agentData.state.threads[currentThreadId] = payload.agentId; agentData.state.primaryThreads[payload.agentId] = currentThreadId }
+      if (payload?.agentId) local.primaryThreads[payload.agentId] = currentThreadId
       threadSummaries.unshift({ threadId: currentThreadId, title: 'New thread', updatedAt: new Date().toISOString() })
       return currentThreadId
     }
@@ -604,6 +766,10 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'chat_submit') {
       const runId = 'probe-new-run'
       currentThreadId = 'probe-new-thread'
+      // Core sets the new thread's mode before the run starts: the picked
+      // one, else the default.
+      const modes = handleAgentRequest(agentStores, { runtime: 'local', operation: 'permission.modes' })
+      agentStores.local.threadModes = { ...agentStores.local.threadModes, [currentThreadId]: payload.permissionMode ?? modes.default_thread_mode }
       threadSummaries.unshift({
         threadId: currentThreadId,
         title: payload.prompt,
@@ -623,7 +789,13 @@ export function buildProbeCommandTable(fixtureName) {
       }
     }
     if (command === 'chat_answer_permission') return null
-    if (command === 'chat_thread_open') return { entries: structuredClone(history), nextCursor: null }
+    if (command === 'chat_thread_open' && agentsFixture) return { entries: probeAgentHistory(payload.threadId), posted: probePosts(agentStores, payload.threadId), nextCursor: null }
+    // Pages follow the runtime's: oldest first, `limit` entries each, and a cursor while more remain.
+    if (command === 'chat_thread_open') {
+      const from = Number(payload?.cursor ?? 0)
+      const until = payload?.limit ? from + payload.limit : history.length
+      return { entries: structuredClone(history.slice(from, until)), nextCursor: until < history.length ? String(until) : null }
+    }
     // Chat events leave out tool output bodies and applied diffs. These come from the run's record.
     if (command === 'chat_run_detail') {
       if (payload.kind === 'code_diff' && payload.effectId === 'probe-applied-effect' && runDetails.appliedDiff) return { kind: 'code_diff', diff: structuredClone(runDetails.appliedDiff) }
@@ -730,8 +902,13 @@ export function buildProbeCommandTable(fixtureName) {
       return { id: payload.id, name: runtime?.name ?? '', ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` }
     }
     if (command === 'runtime_update_all') {
-      return runtimeList.runtimes.filter((runtime) => runtime.updateOffered).map((runtime) => ({ id: runtime.id, name: runtime.name, ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` }))
+      const paired = runtimeList.runtimes.filter((runtime) => !runtime.local)
+      return {
+        results: paired.filter((runtime) => runtime.updateOffered && runtime.status === 'online').map((runtime) => ({ id: runtime.id, name: runtime.name, ok: true, version: runtimeList.appVersion, message: `Update to ${runtimeList.appVersion} requested.` })),
+        skipped: paired.filter((runtime) => !(runtime.updateOffered && runtime.status === 'online')).map((runtime) => ({ id: runtime.id, name: runtime.name, reason: runtime.status === 'online' ? 'current' : 'offline' })),
+      }
     }
+    if (command === 'home_folder_state') return { state: 'open' }
     if (command === 'voice_input_devices') return ['MacBook Pro Microphone', 'USB Audio Device']
     if (command === 'parakeet_install_facts') return { totalDownloadBytes: 482_000_000, requiredFreeBytes: 1_100_000_000 }
     if (command === 'parakeet_install_status') return { state: 'installed' }
@@ -743,8 +920,16 @@ export function buildProbeCommandTable(fixtureName) {
 
   return {
     invoke,
+    fleetSyncFixture,
     history,
     runDetails,
+    agentsFixture,
+    agentsState,
+    projectsFixture,
+    trustFixture,
+    toolsFixture,
+    modesFixture,
+    modesState,
     onboardingFixture,
     scanFixture,
     accessFixture,
@@ -812,8 +997,9 @@ function probeQrSvg() {
 function probeRuntimes(state) {
   const local = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const paired = [
-    { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.2.0', status: 'offline', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null },
-    { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'runtime.admin', 'thread.read'], admin: true, updateOffered: true, sshHost: 'build-box' },
+    { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', version: '0.2.0', status: state === 'agents' ? 'online' : 'offline', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null },
+    // The container reports the update it installs.
+    { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'runtime.admin', 'thread.read'], admin: true, behind: true, mayUpdate: true, updateOffered: true, updateTarget: '0.2.0', updateCapability: 'launcher', updateStatus: { state: 'installing', targetVersion: '0.2.0', blockers: [] }, sshHost: 'build-box' },
   ]
   const selected = state === 'remote' ? paired[1].id : 'local'
   return {
@@ -832,8 +1018,16 @@ const fixtureName = browserFixtureScript.dataset.history
 const probeTable = buildProbeCommandTable(fixtureName)
 let callbackId = 0
 const {
+  fleetSyncFixture,
   history,
   runDetails,
+  agentsFixture,
+  agentsState,
+  projectsFixture,
+  trustFixture,
+  toolsFixture,
+  modesFixture,
+  modesState,
   onboardingFixture,
   scanFixture,
   accessFixture,
@@ -855,21 +1049,33 @@ function recordInvoke(surface, command, payload) {
 }
 
 function runtimesRendered() {
+  // Each row's meta line names the machine its thread lives on. A thread on
+  // a paired runtime names it in its title row, and a new thread's machine
+  // menu lists every machine.
   if (runtimesState === 'remote' || runtimesState === 'switcher') {
-    const chip = document.querySelector('.machine-chip')
-    if (!chip?.textContent.includes(runtimesState === 'remote' ? 'Build box' : 'This computer')) return false
-    if (!document.querySelector('#sidebar .machine-badge')) return false
-    return runtimesState === 'remote' ? !!document.querySelector('[aria-label="Agents group"]') : !!document.querySelector('[data-fresh-thread]') && !!document.querySelector('.machine-menu')
+    const machines = Array.from(document.querySelectorAll('#sidebar .thread-row-meta .machine-name')).map((name) => name.textContent)
+    if (!machines.includes('Build box')) return false
+    if (runtimesState === 'remote') return !!document.querySelector('.thread-title-heading')?.textContent.includes('Nightly test triage') && !!document.querySelector('header .machine-badge')?.textContent.includes('Build box')
+    const menu = document.querySelector('.machine-menu')
+    return !!menu?.textContent.includes('Build box') && document.querySelector('button[data-menu="machine"]')?.getAttribute('aria-label') === 'Machine: This computer. Choose a machine'
+  }
+  // Settings opens on all machines, with the foot row on its side and
+  // Settings marked as the current page there.
+  if (runtimesState === 'scope') {
+    return document.querySelector('#settings-machine')?.value === 'all'
+      && !!document.querySelector('.machine-scope .scope-note')
+      && !!document.querySelector('#sidebar nav[aria-label="Settings sections"]')
+      && !!document.querySelector('#sidebar .sidebar-actions button[aria-label="Settings"][aria-current="page"]')
   }
   const page = document.querySelector('.settings-runtimes')
   if (!page) return false
   const accept = page.querySelector('[role="switch"][aria-label="Accept connections"]')
-  const show = Array.from(page.querySelectorAll('button')).some((button) => button.textContent.trim() === 'Show pairing code')
-  if (runtimesState === 'pairing-off') return accept?.getAttribute('aria-checked') === 'false' && !accept.disabled && show && !page.textContent.includes('Devices using this computer')
+  const show = Array.from(page.querySelectorAll('.add-machine button')).some((button) => button.textContent.trim() === 'Show code')
+  if (runtimesState === 'pairing-off') return accept?.getAttribute('aria-checked') === 'false' && !accept.disabled && show
   if (runtimesState === 'pairing-on') return page.textContent.includes('Private overlay network')
-  if (runtimesState === 'link') return !!page.querySelector('.pairing-qr svg') && page.textContent.includes('expires in')
-  if (runtimesState === 'devices') return !!page.querySelector('[aria-label="Revoke Build box"]')
-  const rows = page.querySelectorAll('.group-card [role="group"]').length
+  if (runtimesState === 'link') return !!page.querySelector('.add-machine .qr svg') && page.textContent.includes('expires in')
+  const rows = page.querySelectorAll('.group-card > [role="group"]').length
+  if (runtimesState === 'devices') return rows === 3 && !!page.querySelector('[aria-label="More for Build box"]') && page.textContent.includes('Limited')
   if (runtimesState === 'local') return rows === 1
   if (runtimesState === 'paired') return rows === 3 && page.textContent.includes('Offline') && page.textContent.includes('Updating to v0.2.0')
   if (runtimesState === 'pairing') return page.textContent.includes('Connecting…')
@@ -878,7 +1084,331 @@ function runtimesRendered() {
   return false
 }
 
+// The agents fixture opens the catalog, an agent's profile, one routine's
+// editor, Notifications, Usage, Settings → Machines, a dialog or a conversation, as its
+// state names.
+const AGENT_STATES = {
+  list: { agent: null },
+  profile: { agent: 'Lead scout' },
+  cron: { agent: 'Lead scout', routine: 'Weekday briefing' },
+  webhook: { agent: 'Lead scout', routine: 'Build finished' },
+  mcp: { agent: 'Lead scout', routine: 'New leads' },
+  proposals: { agent: 'Inbox triage' },
+  move: { agent: 'Front desk' },
+  transcript: { agent: 'Inbox triage' },
+  notifications: { agent: null },
+  approvals: { agent: null },
+  'tool-approvals': { agent: null },
+  usage: { agent: null },
+  'usage-tokens': { agent: null },
+  'usage-cost': { agent: null },
+  'usage-partial': { agent: null },
+  'composer-limit': { agent: 'Lead scout' },
+  machines: { agent: null },
+  'group-create': { agent: null },
+  meeting: { agent: null },
+  import: { agent: null },
+  absence: { agent: null },
+  replays: { agent: 'Lead scout' },
+  'approval-inline': { agent: 'Inbox triage' },
+  preferences: { agent: null },
+  time: { agent: null },
+  voice: { agent: null },
+  cards: { agent: null },
+  'cards-offline': { agent: null },
+  empty: { agent: null },
+  'notifications-empty': { agent: null },
+  builder: { agent: null },
+  'builder-question': { agent: null },
+  'builder-thread': { agent: null },
+}
+
+const AGENT_SCREENS = {
+  list: () => document.querySelectorAll('[data-panel="agents"] .agent-card .signal:is([aria-label="Online"], [aria-label="Offline"])').length === 5 && document.querySelectorAll('#sidebar .thread-row .row-agent').length >= 4 && ['running', 'waiting', 'idle', 'error'].every((state) => document.querySelector(`[data-panel="agents"] .agent-avatar[data-activity="${state}"]`)),
+  notifications: () => document.querySelectorAll('[data-panel="notifications"] .notification-row').length >= 8 && document.querySelectorAll('[data-panel="notifications"] .approval').length === 3 && !!document.querySelector('[data-panel="notifications"] .needs[data-kind="limit"]'),
+  approvals: () => document.querySelectorAll('[data-panel="notifications"] .approval').length === 5,
+  'tool-approvals': () => document.querySelectorAll('[data-panel="notifications"] .approval .tool-call-card').length === 4,
+  'notifications-empty': () => document.querySelector('[data-panel="notifications"]')?.textContent.includes('Nothing needs you') && document.querySelectorAll('[data-panel="notifications"] .upcoming li').length === 3,
+  usage: () => document.querySelectorAll('[data-panel="usage"] .limit-card').length === 9 && document.querySelectorAll('[data-panel="usage"] .limit-card .meter').length === 11 && !!document.querySelector('[data-panel="usage"] .limit-card .tokens'),
+  'usage-tokens': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7 && document.querySelectorAll('[data-panel="usage"] .breakdown li').length === 5,
+  'usage-cost': () => document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 30 && document.querySelector('[data-panel="usage"] .tiles')?.textContent.includes('API estimate'),
+  'usage-partial': () => document.querySelector('[data-panel="usage"]')?.textContent.includes('Build box did not answer') && document.querySelectorAll('[data-panel="usage"] .usage-chart .column').length === 7,
+  'composer-limit': () => !!document.querySelector('.limit-banner') && document.querySelector('.titlebar')?.textContent.includes('Lead scout'),
+  'approval-inline': () => !!document.querySelector('.thread .approval.inline') && !!document.querySelector('.thread .silent-note'),
+  replays: () => document.querySelectorAll('aside[aria-label="Agent profile"] [aria-label="History"] .retry').length === 2,
+  preferences: () => !!document.querySelector('[aria-label="Agent avatars"]') && document.querySelectorAll('[aria-label="Agent avatar preview"] .agent-avatar svg').length === 4,
+  time: () => !!document.querySelector('[role="listbox"][aria-label="Time zones"] button[aria-selected="true"]') && document.querySelector('[role="radiogroup"][aria-label="Clock"] [aria-checked="true"]')?.textContent.trim() === '24-hour',
+  voice: () => !!document.querySelector('.settings-layout')?.textContent.includes('Dictation shortcut') && document.querySelector('#sidebar nav[aria-label="Settings sections"] button[aria-current="true"]')?.textContent.trim() === 'Voice',
+  empty: () => !!document.querySelector('[data-panel="agents"] .starter') && !document.querySelector('[data-panel="agents"] .agent-card'),
+  cards: () => cardsRendered(5),
+  'cards-offline': () => cardsRendered(5) && !!document.querySelector('[data-agent-card="018f0000-0000-4000-8000-0000000000a3"].read-only [role="note"]'),
+  machines: () => !!document.querySelector('.settings-runtimes [aria-label="Office mini"]') && document.querySelector('.settings-runtimes [aria-label="Office mini"]')?.textContent.includes('Offline'),
+  'group-create': () => document.querySelector('[data-panel="group"]')?.querySelectorAll('input[type="checkbox"]:checked').length === 3,
+  meeting: () => document.querySelector('.thread')?.textContent.includes('Debate round 1') && document.querySelectorAll('.thread .round').length === 3,
+  import: () => !!document.querySelector('[data-panel="import"] [aria-label="Skills"]'),
+  absence: () => !!document.querySelector('#sidebar [aria-label="Routines paused"]'),
+  transcript: () => !!document.querySelector('.thread [aria-label="Message from Lead scout"]') && !!document.querySelector('.thread .silent-note'),
+  move: () => !!document.querySelector('[data-panel="move"] [role="note"]') && !!document.querySelector('[data-panel="move"] input:checked'),
+  builder: () => !!document.querySelector('.thread [aria-label="Draft: Inbox brief"]') && !document.querySelector('.agent-chat [role="status"]'),
+  'builder-question': () => !!document.querySelector('.thread [aria-label="Draft: Helper"] [aria-label="Question"]'),
+  'builder-thread': () => !!document.querySelector('.thread [aria-label="Draft: Release notes"]'),
+}
+
+// The builder states open a new agent chat and describe an agent in one
+// message, or vaguely, or make one from a thread.
+const BUILDER_WORDS = { builder: 'Every weekday at 9am, summarize my inbox and list what needs a reply.', 'builder-question': 'Make me an agent' }
+const probeBuildersTyped = new WeakSet()
+let probeBuilderOpened = 0
+
+// `&panel=overview|model|permissions|routines|history` opens that panel on
+// every card, and `&edit=name` opens the first card's name field.
+const cardOptions = new URLSearchParams(location.search)
+const CARD_PANEL = cardOptions.get('panel')
+const CARD_EDIT = cardOptions.get('edit') === 'name'
+
+function cardsRendered(count) {
+  const cards = Array.from(document.querySelectorAll('[data-panel="agents"] .agent-card'))
+  if (cards.length !== count) return false
+  if (CARD_PANEL && !cards.every((card) => card.querySelector(`[role="tabpanel"][data-panel-id="${CARD_PANEL}"]`))) return false
+  if (CARD_PANEL === 'history' && cards.some((card) => card.textContent.includes('Loading runs'))) return false
+  if (CARD_EDIT && !cards[0].querySelector('input[aria-label="Agent name"]')) return false
+  return cards.every((card) => card.querySelector('.agent-avatar svg'))
+}
+
+function agentsRendered() {
+  // A state that opens an agent's chat waits for the Agents page to give way to it.
+  const agent = AGENT_STATES[agentsState]?.agent
+  if (agent && (document.querySelector('[data-panel="agents"]') || !document.querySelector('aside[aria-label="Agent profile"]')?.textContent.includes(agent))) return false
+  if (AGENT_SCREENS[agentsState]) return AGENT_SCREENS[agentsState]()
+  const profile = document.querySelector('aside[aria-label="Agent profile"]')
+  if (!profile?.textContent.includes(AGENT_STATES[agentsState].agent) || !profile.querySelector('[aria-label="Permissions"]')) return false
+  if (agentsState === 'proposals') return profile.querySelectorAll('.proposal').length === 2
+  const routine = AGENT_STATES[agentsState].routine
+  if (!routine) return !!profile.querySelector('[aria-label="History"] .run')
+  const editor = document.querySelector('[data-panel="routine"]')
+  if (!editor?.querySelector('input')?.value.includes(routine)) return false
+  if (agentsState === 'mcp') return editor.querySelectorAll('[aria-label^="Check"]').length >= 2
+  if (agentsState === 'webhook') return !!editor.querySelector('[aria-label="Webhook address"] .secret code')
+  return true
+}
+
+const buttonNamed = (root, name) => Array.from(root?.querySelectorAll('button') ?? []).find((button) => button.textContent.trim() === name || button.getAttribute('aria-label') === name)
+// Opens a page through the sidebar's Search, one step per render: the words,
+// then the page, once, since the page loads before it shows.
+const probePagesOpened = new Set()
+function openPage(label) {
+  if (probePagesOpened.has(label)) return
+  const search = document.querySelector('#sidebar input[aria-label="Search threads"]')
+  if (!search) return
+  if (search.value !== label) return typeInto(search, label)
+  const page = buttonNamed(document.querySelector('#sidebar [aria-label="Search results"]'), label)
+  if (!page) return
+  probePagesOpened.add(label)
+  page.click()
+}
+const probeImportRead = new WeakSet()
+let probeHistoryLoaded = false
+let probeGroupPicked = false
+let probeCardsOpened = false
+let probeChatOpened = false
+
+function advanceAgentsFixture() {
+  if (!agentsFixture || fixtureRendered()) return
+  // The first history load selects a thread, so the driver waits for it.
+  probeHistoryLoaded ||= !!document.querySelector('#sidebar .thread-row-title')
+  if (!probeHistoryLoaded) return
+  const target = AGENT_STATES[agentsState] ?? AGENT_STATES.list
+  if (agentsState === 'absence') return
+  if (agentsState === 'preferences') {
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
+    const appearance = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'General')
+    if (appearance && appearance.getAttribute('aria-current') !== 'true') return appearance.click()
+    document.querySelector('[aria-label="Agent avatars"]')?.scrollIntoView({ block: 'center' })
+    return
+  }
+  // General's Time part with Asia/Tokyo picked on a 24-hour clock, and the Voice page.
+  if (agentsState === 'time' || agentsState === 'voice') {
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
+    const label = agentsState === 'time' ? 'General' : 'Voice'
+    const page = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === label)
+    if (page && page.getAttribute('aria-current') !== 'true') return page.click()
+    if (agentsState === 'voice') return
+    const part = document.querySelector('[data-settings-part="time"]')
+    if (!part) return
+    part.scrollIntoView({ block: 'start' })
+    const zoneGroup = part.querySelector('[role="radiogroup"][aria-label="Time zone"]')
+    if (zoneGroup?.querySelector('[role="radio"][aria-checked="true"]')?.textContent.trim() === 'Match this computer') return zoneGroup.querySelectorAll('[role="radio"]')[1]?.click()
+    const search = part.querySelector('input[type="search"]')
+    if (search && search.value !== 'tokyo') return typeInto(search, 'tokyo')
+    const tokyo = Array.from(part.querySelectorAll('[role="option"]')).find((option) => option.textContent.trim() === 'Asia/Tokyo')
+    if (tokyo && tokyo.getAttribute('aria-selected') !== 'true') return tokyo.click()
+    const clock = Array.from(part.querySelectorAll('[role="radiogroup"][aria-label="Clock"] [role="radio"]')).find((radio) => radio.textContent.trim() === '24-hour')
+    if (clock && clock.getAttribute('aria-checked') !== 'true') clock.click()
+    return
+  }
+  if (agentsState === 'empty') {
+    if (!document.querySelector('[data-panel="agents"]')) openPage('Agents')
+    return
+  }
+  if (agentsState === 'machines') {
+    if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
+    const machines = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Machines')
+    if (machines && machines.getAttribute('aria-current') !== 'true') machines.click()
+    return
+  }
+  if (agentsState === 'group-create' || agentsState === 'meeting') {
+    const dialog = document.querySelector('[data-panel="group"]')
+    if (dialog) {
+      if (probeGroupPicked) return
+      probeGroupPicked = true
+      const name = dialog.querySelector('input:not([type="checkbox"])')
+      typeInto(name, 'Pricing review')
+      for (const box of Array.from(dialog.querySelectorAll('input[type="checkbox"]')).slice(0, 3)) box.click()
+      return
+    }
+    if (agentsState === 'group-create') return openPage('New group chat')
+    return Array.from(document.querySelectorAll('#sidebar .thread-row')).find((row) => row.querySelector('.thread-row-title')?.textContent.trim() === 'Launch room')?.click()
+  }
+  if (agentsState.startsWith('builder')) {
+    const chat = document.querySelector('#composer-message[placeholder^="Describe your agent"]')
+    if (agentsState === 'builder-thread') {
+      if (document.querySelector('.agent-chat')) return
+      const menuItem = Array.from(document.querySelectorAll('.thread-menu [role="menuitem"]')).find((item) => item.textContent.trim() === 'Make this an agent')
+      if (Date.now() - probeBuilderOpened < 1500) return
+      probeBuilderOpened = Date.now()
+      setTimeout(advanceAgentsFixture, 1600)
+      if (menuItem) return menuItem.click()
+      return document.querySelector('#sidebar button[aria-label^="Actions for"]')?.click()
+    }
+    // A press while the chat opens would open another, so the driver presses
+    // again only after a pause, and sends into each chat once.
+    if (!chat) {
+      if (document.querySelector('.agent-chat article') || Date.now() - probeBuilderOpened < 1500) return
+      const catalog = document.querySelector('[data-panel="agents"]')
+      if (!catalog) return openPage('Agents')
+      const create = buttonNamed(catalog, 'New agent')
+      if (create && !create.disabled) { probeBuilderOpened = Date.now(); setTimeout(advanceAgentsFixture, 1600); create.click() }
+      return
+    }
+    if (probeBuildersTyped.has(chat)) return
+    probeBuildersTyped.add(chat)
+    setTimeout(() => {
+      typeInto(chat, BUILDER_WORDS[agentsState])
+      setTimeout(() => buttonNamed(document, 'Send')?.click(), 50)
+    }, 300)
+    return
+  }
+  if (agentsState === 'cards' || agentsState === 'cards-offline') {
+    // Agents opens once: a second click would mount the catalog again and reset its cards.
+    const catalog = document.querySelector('[data-panel="agents"]')
+    if (!catalog) {
+      if (!probeCardsOpened) openPage('Agents')
+      probeCardsOpened ||= document.querySelector('#sidebar input[aria-label="Search threads"]')?.value === 'Agents' && !!buttonNamed(document.querySelector('#sidebar [aria-label="Search results"]'), 'Agents')
+      return
+    }
+    const cards = Array.from(catalog.querySelectorAll('.agent-card'))
+    if (CARD_PANEL) for (const card of cards) {
+      const tab = Array.from(card.querySelectorAll('[role="tab"]')).find((button) => button.getAttribute('aria-label').toLowerCase() === CARD_PANEL)
+      if (tab?.getAttribute('aria-selected') === 'false') tab.click()
+    }
+    if (CARD_EDIT && cards.length && !cards[0].querySelector('input[aria-label="Agent name"]')) cards[0].querySelector('.head-name button')?.click()
+    return
+  }
+  if (agentsState === 'list' || agentsState === 'import') {
+    const catalog = document.querySelector('[data-panel="agents"]')
+    if (!catalog) return openPage('Agents')
+    if (agentsState !== 'import') return
+    const dialog = document.querySelector('[data-panel="import"]')
+    if (!dialog) return buttonNamed(catalog, 'Import agent')?.click()
+    // The dialog binds its fields once it mounts, so the link goes in a beat
+    // later. A catalog that mounts again opens a new dialog.
+    if (probeImportRead.has(dialog)) return
+    probeImportRead.add(dialog)
+    setTimeout(() => {
+      const current = document.querySelector('[data-panel="import"]')
+      const link = current?.querySelector('input.mono')
+      if (!link) return
+      typeInto(link, 'https://x.ai/bot/rfAHsaFrz6xHBMtUpxDi5')
+      setTimeout(() => buttonNamed(current, 'Preview')?.click(), 50)
+    }, 100)
+    return
+  }
+  if (agentsState === 'notifications' || agentsState === 'approvals' || agentsState === 'tool-approvals' || agentsState === 'notifications-empty') {
+    if (!document.querySelector('[data-panel="notifications"]')) document.querySelector('#sidebar .sidebar-actions button[aria-label^="Notifications"]')?.click()
+    return
+  }
+  if (agentsState.startsWith('usage')) {
+    const usage = document.querySelector('[data-panel="usage"]')
+    if (!usage) return document.querySelector('#sidebar .sidebar-actions button[aria-label="Usage"]')?.click()
+    const pick = (group, label) => { const button = Array.from(usage.querySelectorAll(`[role="radiogroup"][aria-label="${group}"] button`)).find((entry) => entry.textContent.trim() === label); if (button?.getAttribute('aria-checked') === 'false') button.click() }
+    if (agentsState === 'usage-tokens' || agentsState === 'usage-partial') pick('Usage view', 'Tokens')
+    if (agentsState === 'usage-cost') { pick('Usage view', 'Cost'); pick('Range', '30d') }
+    return
+  }
+  const profile = document.querySelector('aside[aria-label="Agent profile"]')
+  if (!profile?.textContent.includes(target.agent)) {
+    // An agent opens from its card in Agents, with its chat and its profile.
+    const catalog = document.querySelector('[data-panel="agents"]')
+    if (!catalog) return probeChatOpened ? undefined : openPage('Agents')
+    const card = Array.from(catalog.querySelectorAll('.agent-card')).find((entry) => entry.getAttribute('aria-label') === target.agent)
+    // A thread switch can drop the click, so the driver looks again shortly.
+    const open = buttonNamed(card, 'Open chat')
+    if (open && !open.disabled) { open.click(); probeChatOpened = true }
+    setTimeout(advanceAgentsFixture, 400)
+    return
+  }
+  if (agentsState === 'move') {
+    const dialog = document.querySelector('[data-panel="move"]')
+    if (!dialog) {
+      const row = profile.querySelector('[aria-label="Primary machine"]')
+      const menu = row?.querySelector('[role="menu"]')
+      if (!menu) return row?.querySelector('[data-menu="agent-machine"]')?.click()
+      return Array.from(menu.querySelectorAll('[role="menuitemradio"]')).find((item) => item.getAttribute('aria-checked') !== 'true')?.click()
+    }
+    const force = Array.from(dialog.querySelectorAll('label')).find((label) => label.textContent.trim() === 'Force the move')?.querySelector('input')
+    if (force && !force.checked) force.click()
+    return
+  }
+  if (agentsState === 'replays') return profile.querySelector('[aria-label="History"]')?.scrollIntoView({ block: 'start' })
+  const editor = document.querySelector('[data-panel="routine"]')
+  if (target.routine && !editor) {
+    Array.from(profile.querySelectorAll('.routine button')).find((button) => button.textContent.trim() === target.routine)?.click()
+  }
+  // The webhook editor rotates the secret once, so it shows.
+  const rotate = agentsState === 'webhook' && buttonNamed(editor?.querySelector('[aria-label="Webhook address"]'), 'Rotate secret')
+  if (rotate && !rotate.disabled) rotate.click()
+}
+
+// The permission-modes fixture shows the composer's gate, opens the Modes
+// menu, shows a plan gate, or opens Settings → Permissions.
+function modesRendered() {
+  if (modesState === 'settings') return !!document.querySelector('.permission-settings .group') && !!document.querySelector('.permission-settings [role="switch"]')
+  if (modesState === 'new') return !!document.querySelector('[data-panel="mode-picker"] [data-mode="bypass"][aria-checked="true"]')
+  const workspace = document.querySelector('.workspace')
+  if (!workspace?.querySelector('.permission-card') || !document.querySelector('[data-menu="mode"]')) return false
+  if (modesState === 'menu') return !!document.querySelector('[data-panel="mode-picker"]')
+  if (modesState === 'plan') return !!workspace.querySelector('.permission-plan')
+  return true
+}
+
+function advanceModesFixture() {
+  if (!modesFixture || fixtureRendered()) return
+  if (modesState === 'menu') return document.querySelector('[data-menu="mode"][aria-expanded="false"]')?.click()
+  if (modesState === 'new') return document.querySelector('[data-menu="mode"][aria-label="Permission mode: Bypass permissions"][aria-expanded="false"]')?.click()
+  if (modesState !== 'settings') return
+  if (!document.querySelector('.settings-layout')) return document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
+  const page = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button')).find((button) => button.textContent.trim() === 'Permissions')
+  if (page && page.getAttribute('aria-current') !== 'true') page.click()
+}
+
 function fixtureRendered() {
+  if (FLEET_PROBE) return fleetRendered()
+  if (fleetSyncFixture) return fleetSyncRendered()
+  if (agentsFixture) return agentsRendered()
+  if (projectsFixture) return projectsRendered()
+  if (trustFixture) return trustRendered()
+  if (toolsFixture) return toolsRendered()
+  if (modesFixture) return modesRendered()
   if (runtimesFixture) return runtimesRendered()
   if (fixtureName === 'runtime-exit') {
     const notice = document.querySelector('[data-testid="runtime-notice"]')
@@ -889,36 +1419,38 @@ function fixtureRendered() {
   if (signedOutFixture) {
     // Signed out is the local workspace with its empty thread and the sidebar's cloud sign-in control.
     const signIn = [...document.querySelectorAll('.workspace button')].find((button) => button.textContent.trim() === 'Sign in to cloud')
-    return document.querySelector('.workspace .empty') !== null && signIn !== undefined
+    return document.querySelector('.workspace .empty, .workspace .thread-starters') !== null && signIn !== undefined
   }
   if (onboardingFixture) {
     const homePath = document.querySelector('[data-testid="onboarding-home-path"]')
     return homePath?.dataset.homePath === onboardingHomePath
       && document.querySelectorAll('.connect button.option').length >= 9
-      && document.querySelector('.connect .action[data-tone="ochre"]')?.textContent.trim() === 'Add key'
+      && document.querySelector('.connect .action[data-tone="warning"]')?.textContent.trim() === 'Add key'
   }
   if (scanFixture) {
-    // Settings → Memory lists the assistant memory found on this computer.
-    const imports = [...document.querySelectorAll('.memory .group')].find((group) => group.querySelector('h4')?.textContent === 'Imports')
+    // Settings → Data → Memory lists the assistant memory found on this computer.
+    const imports = [...document.querySelectorAll('.memory .group')].find((group) => group.querySelector('.settings-heading')?.textContent === 'Imports')
     return imports?.querySelectorAll('.row').length === 2
   }
   if (accessFixture) {
     const sections = document.querySelector('.account-sections')
     const headings = Array.from(sections?.querySelectorAll('.settings-heading') ?? [], (heading) => heading.textContent)
-    return ['Plan', 'Devices', 'Phone pairing', 'Connected programs', 'Your access', 'Thread retention']
-      .every((heading) => headings.includes(heading))
-      && sections.querySelector('.current-device')?.textContent === 'This device'
-      && sections.querySelector('.revoked .device-state')?.textContent === 'Revoked'
+    // The account's devices and phone list on Machines, and retention is on Data.
+    return ['Plan', 'Connected programs', 'Your access'].every((heading) => headings.includes(heading))
+      && !['Devices', 'Phone pairing', 'Thread retention'].some((heading) => headings.includes(heading))
   }
   const workspace = document.querySelector('.workspace')
   if (!workspace) return false
-  if (history.length === 0) return workspace.querySelector('.empty') !== null
+  // An empty thread shows its one line or, once a model is ready, its starter cards.
+  if (history.length === 0) return workspace.querySelector('.empty, .thread-starters') !== null
   if (fixtureName === 'markdown') {
     return workspace.querySelector('.assistant-markdown h3')?.textContent === 'Release notes'
       && workspace.querySelector('.assistant-markdown pre code')
       && workspace.querySelector('.assistant-markdown table')
       && workspace.querySelector('.assistant-markdown a')?.textContent.startsWith('Ready')
   }
+  // A long thread renders its newest turns, so the newest reply marks it ready.
+  if (fixtureName === 'long-thread') return workspace.querySelector('.thread')?.textContent.includes(history.at(-1).text.split('\n').at(-1))
   const renderedText = workspace.textContent.replaceAll(/\s/g, '')
   return history.every((run) => renderedText.includes((run.prompt ?? '').replaceAll(/\s/g, ''))
     && renderedText.includes(run.text.replaceAll(/\s/g, '')))
@@ -927,11 +1459,11 @@ function fixtureRendered() {
 function advanceScanFixture() {
   if (!scanFixture || fixtureRendered()) return
   if (!document.querySelector('.settings-layout')) {
-    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
   const memory = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
-    .find((button) => button.textContent.trim() === 'Memory')
+    .find((button) => button.textContent.trim() === 'Data')
   if (memory && memory.getAttribute('aria-current') !== 'true') return memory.click()
   Array.from(document.querySelectorAll('.memory button')).find((button) => button.textContent.trim() === 'Look for memory')?.click()
 }
@@ -941,7 +1473,7 @@ function advanceAccessFixture() {
   if (!accessFixture || fixtureRendered()) return
   const panel = document.querySelector('.settings-layout')
   if (!panel) {
-    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
   const account = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
@@ -958,25 +1490,37 @@ function typeInto(input, value) {
 // state pastes a link and presses Pair.
 function advanceRuntimesFixture() {
   if (!runtimesFixture || fixtureRendered()) return
-  // An open thread keeps its machine, so the picker opens on a new thread.
+  // An open thread keeps its machine, so the switcher opens a new thread's
+  // menu, and the remote state opens the thread that lives on Build box.
   if (runtimesState === 'switcher') {
-    const chip = document.querySelector('button.machine-chip[aria-expanded="false"]')
-    if (chip) return chip.click()
-    if (document.querySelector('span.machine-chip.locked')) document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
-    return
+    if (document.querySelector('button[data-menu="machine"][aria-label$="This thread stays on it"]')) return document.querySelector('.side-action.new-thread:not(:disabled)')?.click()
+    return document.querySelector('button[data-menu="machine"][aria-expanded="false"]')?.click()
   }
-  if (runtimesState === 'remote') return
+  if (runtimesState === 'remote') {
+    if (document.querySelector('.thread-title-heading')?.textContent.includes('Nightly test triage')) return
+    return Array.from(document.querySelectorAll('#sidebar .thread-row-title')).find((title) => title.textContent.includes('Nightly test triage'))?.closest('button')?.click()
+  }
   if (!document.querySelector('.settings-layout')) {
-    document.querySelector('.side-action[aria-haspopup="dialog"][aria-expanded="false"]')?.click()
+    document.querySelector('.sidebar-actions button[aria-label="Settings"][aria-expanded="false"]')?.click()
     return
   }
+  // The scope state stays on Models, the page Settings opens on.
+  if (runtimesState === 'scope') return
   const runtimes = Array.from(document.querySelectorAll('#sidebar nav[aria-label="Settings sections"] button'))
     .find((button) => button.textContent.trim() === 'Machines')
   if (runtimes && runtimes.getAttribute('aria-current') !== 'true') return runtimes.click()
   const page = document.querySelector('.settings-runtimes')
   if (!page) return
+  // This computer's row opens its network settings, and Add machine its panel.
+  if (['pairing-off', 'pairing-on'].includes(runtimesState)) {
+    const details = page.querySelector('[aria-label="Settings for This computer"][aria-expanded="false"]')
+    if (details) return details.click()
+  }
+  if (['pairing-off', 'link', 'pairing', 'failed', 'ssh'].includes(runtimesState) && !page.querySelector('.add-machine')) {
+    return Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Add machine')?.click()
+  }
   if (runtimesState === 'pairing' || runtimesState === 'failed') {
-    const link = page.querySelector('input[placeholder="Paste a pairing link"]')
+    const link = page.querySelector('input[placeholder="Paste its link"]')
     if (link && !link.value) return typeInto(link, PROBE_PAIRING_LINK)
     const pair = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Add')
     if (pair && !pair.disabled && !probePairClicked) {
@@ -986,7 +1530,7 @@ function advanceRuntimesFixture() {
     return
   }
   if (runtimesState === 'link') {
-    const create = Array.from(page.querySelectorAll('button')).find((button) => button.textContent.trim() === 'Show pairing code')
+    const create = Array.from(page.querySelectorAll('.add-machine button')).find((button) => button.textContent.trim() === 'Show code')
     if (create && !create.disabled && !probePairClicked) {
       probePairClicked = true
       create.click()
@@ -1008,24 +1552,39 @@ async function markProbeReady() {
 }
 
 function markReadyAfterFixtureRender() {
+  advanceModesFixture()
   advanceScanFixture()
   advanceAccessFixture()
   advanceRuntimesFixture()
+  advanceAgentsFixture()
+  advanceFleetFixture()
+  if (fleetSyncFixture) advanceFleetSync()
+  if (projectsFixture) advanceProjects()
+  if (trustFixture) advanceTrust()
+  if (toolsFixture) advanceTools()
   if (fixtureRendered()) {
     void markProbeReady()
     return
   }
   const observer = new MutationObserver(() => {
+    advanceModesFixture()
     advanceScanFixture()
     advanceAccessFixture()
     advanceRuntimesFixture()
+    advanceAgentsFixture()
+    advanceFleetFixture()
+    if (fleetSyncFixture) advanceFleetSync()
+    if (projectsFixture) advanceProjects()
+    if (trustFixture) advanceTrust()
+    if (toolsFixture) advanceTools()
     if (!fixtureRendered()) return
     observer.disconnect()
     void markProbeReady()
   })
   // A fixture can finish on a text change, such as a path or a scan count, or
-  // on a control that turns on once its settings load.
-  observer.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
+  // on a control that turns on once its settings load. Agent dialogs mount
+  // on the page body, so the agents fixture watches the whole body.
+  observer.observe(agentsFixture || fleetSyncFixture || projectsFixture || trustFixture || toolsFixture ? document.body : document.getElementById('app'), { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'aria-checked'] })
 }
 
 window.__PROBE__ = {
@@ -1037,9 +1596,14 @@ window.__PROBE__ = {
       entry.listener({ event, payload })
     }
   },
+  // A page that draws itself without the app, such as the avatar gallery, renders here.
+  async loadPage(render) {
+    await render()
+    await markProbeReady()
+  },
   async loadBundle() {
     if (fixtureName === 'code-diff' || fixtureName === 'applied-diff') {
-      const response = await fetch('/protocol-fixtures/code-diff/1/modified.json')
+      const response = await fetch('/core/protocol-fixtures/code-diff/1/modified.json')
       if (!response.ok) throw new Error(`Could not load the code diff fixture: ${response.status}`)
       const diff = await response.json()
       if (fixtureName === 'code-diff') history[0].pendingPermission.diff = diff
@@ -1048,6 +1612,14 @@ window.__PROBE__ = {
         history[0].appliedDiffs[0].summary = diffSummary(diff)
       }
     }
+    // `?avatars=colorful|muniment` picks the agent avatar style and `?theme=light|dark`
+    // the mode, or a theme id such as `harbor-vibrant-dark` the color scheme, as
+    // Appearance would store them, before the app reads them.
+    const pick = new URLSearchParams(location.search)
+    try {
+      if (['colorful', 'muniment'].includes(pick.get('avatars'))) localStorage.setItem('muniment.agent-avatars', pick.get('avatars'))
+      if (/^(light|dark|(moss|harbor|clay|iris)(-vibrant|-contrast)?-(light|dark))$/.test(pick.get('theme') ?? '')) localStorage.setItem('muniment.theme', pick.get('theme'))
+    } catch (_) {}
     const response = await fetch('/dist/index.html')
     if (!response.ok) throw new Error(`Could not load the built bundle: ${response.status}`)
     const builtPage = new DOMParser().parseFromString(await response.text(), 'text/html')
@@ -1083,6 +1655,9 @@ window.__TAURI__ = {
     },
   },
 }
+
+// The event plugin's half of an unlisten, for listeners the Tauri API registers.
+window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
 
 window.__TAURI_INTERNALS__ = {
   metadata: {

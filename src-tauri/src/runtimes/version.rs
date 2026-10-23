@@ -5,19 +5,16 @@ use std::collections::BTreeSet;
 
 use muniment_core::attach::{SCOPE_RUNTIME_ADMIN, SCOPE_RUNTIME_UPDATE};
 
-/// This app's version from `package.json`, which a paired desktop updates to.
+/// This app's version from `package.json`. The app, the CLI, the server and
+/// the container release together under it, so every paired runtime updates
+/// to it.
 pub(crate) const APP_VERSION: &str = env!("MUNIMENT_APP_VERSION");
-
-/// The core release this app bundles, which a paired server or container
-/// updates to. Those announce core's version, not the app's.
-pub(crate) const CORE_VERSION: &str = env!("MUNIMENT_CORE_VERSION");
 
 /// The version a runtime of `kind` updates to, or none for a kind the app
 /// does not know.
 pub(crate) fn target_version(kind: Option<&str>) -> Option<&'static str> {
     match kind? {
-        "desktop" => Some(APP_VERSION),
-        "server" | "container" => Some(CORE_VERSION),
+        "desktop" | "server" | "container" => Some(APP_VERSION),
         _ => None,
     }
 }
@@ -39,23 +36,15 @@ pub(crate) fn may_update(scopes: &BTreeSet<String>) -> bool {
     scopes.contains(SCOPE_RUNTIME_UPDATE) || scopes.contains(SCOPE_RUNTIME_ADMIN)
 }
 
-/// Whether the app asks a runtime to update: it runs an older version than
-/// `target` and this device may ask.
-pub(crate) fn update_offered(
-    runtime_version: Option<&str>,
-    scopes: &BTreeSet<String>,
-    target: Option<&str>,
-) -> bool {
-    may_update(scopes)
-        && runtime_version
-            .zip(target)
-            .and_then(|(version, target)| is_older(version, target))
-            == Some(true)
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The next minor version after `version`.
+    pub(crate) fn bump(version: &str) -> String {
+        let parsed = parse(version).unwrap();
+        format!("{}.{}.0", parsed.major, parsed.minor + 1)
+    }
 
     #[test]
     fn versions_compare_as_semver() {
@@ -69,28 +58,22 @@ mod tests {
     }
 
     #[test]
-    fn an_update_needs_an_older_version_and_the_update_or_admin_scope() {
+    fn an_update_needs_the_update_or_admin_scope() {
         let admin = BTreeSet::from(["thread.read".to_owned(), "runtime.admin".to_owned()]);
         let reader = BTreeSet::from(["thread.read".to_owned(), "run.write".to_owned()]);
         let updater = BTreeSet::from(["thread.read".to_owned(), "runtime.update".to_owned()]);
-        assert!(update_offered(Some("0.1.0"), &updater, Some("0.2.0")));
-        assert!(!update_offered(Some("0.2.0"), &updater, Some("0.2.0")));
-        assert!(update_offered(Some("0.1.0"), &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("0.1.0"), &reader, Some("0.2.0")));
-        assert!(!update_offered(Some("0.2.0"), &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("0.3.0"), &admin, Some("0.2.0")));
-        assert!(!update_offered(None, &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("unknown"), &admin, Some("0.2.0")));
-        assert!(!update_offered(Some("0.1.0"), &admin, None));
+        assert!(may_update(&updater));
+        assert!(may_update(&admin));
+        assert!(!may_update(&reader));
     }
 
     #[test]
-    fn a_desktop_follows_the_app_and_a_server_follows_the_bundled_core() {
+    fn every_runtime_kind_follows_the_app_version() {
         assert_eq!(target_version(Some("desktop")), Some(APP_VERSION));
-        assert_eq!(target_version(Some("container")), Some(CORE_VERSION));
-        assert_eq!(target_version(Some("server")), Some(CORE_VERSION));
+        assert_eq!(target_version(Some("container")), Some(APP_VERSION));
+        assert_eq!(target_version(Some("server")), Some(APP_VERSION));
         assert_eq!(target_version(Some("toaster")), None);
         assert_eq!(target_version(None), None);
-        assert!(parse(CORE_VERSION).is_some());
+        assert!(parse(APP_VERSION).is_some());
     }
 }

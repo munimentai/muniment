@@ -1,0 +1,3560 @@
+mod delta_batch;
+mod diagnostics;
+
+use crate::runtime_eprintln as eprintln;
+use delta_batch::HeldDeltas;
+use diagnostics::RunDiagnostics;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crate::attach::{RuntimeActivityGuard, RuntimeActivityRegistry};
+use crate::chat_launch::ChatGrant;
+use crate::chat_resume::ResumeContext;
+use crate::code_diff_effect::apply_code_diff_approval;
+use crate::code_diff_journal::{load_applied_code_diffs, CodeDiffPermissionAnswer};
+use crate::engine::{
+    AgentEngine, CompactionOutcome, OpenError, OpenStage, PiOpen, PiRpcEngine, Submission, Thinking,
+};
+use crate::journal::pi_translation::{model_stream_delta_payload, tool_journal_entry};
+use crate::journal::reducer::ChatProjector;
+use crate::journal::split_model_stream_delta;
+use crate::memory_failure::{MemoryFailure, MemoryFailureAnswer};
+use crate::memory_runtime::ApplicationMemoryRuntime;
+use crate::permission_gate::{
+    coordinate_extension_ui_request, coordinate_permission_answer, open_waiting_request,
+    ChatPermissionAnswer, PendingPermissionAnswer,
+};
+use crate::pi_execution::{
+    coordinate_prepared_prompt, prepared_pi_prompt, PiRuntime, PreparedPromptError, ResumeAttempt,
+};
+use crate::pi_launch::{pi_launch_config, PiLaunchBoundaries, PiLaunchError};
+use crate::run_events::{
+    append_emit, append_terminal as core_append_terminal, chat_event, fail, fail_start,
+    fail_with_open_effects as core_fail_with_open_effects, ChatEventSink, SharedStorage,
+};
+use crate::sidecar::pi_chat::{
+    ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiRunAdapter,
+    FIRST_EVENT_TIMEOUT_REASON,
+};
+use crate::sidecar::{PiRpcTransport, SidecarStatus};
+use serde_json::{json, Value};
+
+/// Pairs one coordinate-loop state value with the runtime activity mark that
+/// follows it. Every mutation runs through `with`, so the mark cannot drift
+/// from the value. The mark is a drop guard, so a break out of the loop, an
+/// early return, or a panic clears it.
+struct MarkedState<T> {
+    value: T,
+    registry: Option<RuntimeActivityRegistry>,
+    mark: Option<RuntimeActivityGuard>,
+    marked: fn(&T) -> bool,
+    start_mark: fn(&RuntimeActivityRegistry) -> RuntimeActivityGuard,
+}
+
+type MarkedEffects = MarkedState<BTreeSet<String>>;
+type MarkedGate = MarkedState<Option<ExtensionUiRequest>>;
+
+#[allow(clippy::too_many_arguments)]
+fn coordinate_code_diff_answer(
+    sink: &impl ChatEventSink,
+    storage: &SharedStorage,
+    projector: &mut ChatProjector,
+    seq: &mut u64,
+    workspace_root: &std::path::Path,
+    run_id: &str,
+    queued: PendingPermissionAnswer,
+) -> Result<(), ()> {
+    let resolved = queued.resolved;
+    let Some(gate) = projector
+        .projection()
+        .map_err(|_| ())?
+        .pending_permission
+        .filter(|gate| gate.gate_id == queued.gate_id)
+    else {
+        if let Some(resolved) = resolved {
+            let _ = resolved.send(None);
+        }
+        return Ok(());
+    };
+    let ChatPermissionAnswer::CodeDiff {
+        gate_id,
+        effect_id,
+        code_diff_id,
+        diff_sha256,
+        write_plan_sha256,
+    } = queued.answer
+    else {
+        if let Some(resolved) = resolved {
+            let _ = resolved.send(None);
+        }
+        return Ok(());
+    };
+
+    let appended = {
+        let mut storage = storage.lock().map_err(|_| ())?;
+        let crate::run_events::ChatStorage { journal, cas } = &mut *storage;
+        if apply_code_diff_approval(
+            journal,
+            cas,
+            workspace_root,
+            run_id,
+            &gate,
+            CodeDiffPermissionAnswer {
+                gate_id: &gate_id,
+                effect_id: &effect_id,
+                code_diff_id: &code_diff_id,
+                diff_sha256: &diff_sha256,
+                write_plan_sha256: &write_plan_sha256,
+            },
+        )
+        .is_err()
+        {
+            if let Some(resolved) = resolved {
+                let _ = resolved.send(None);
+            }
+            return Ok(());
+        }
+        journal
+            .events(run_id)
+            .map_err(|_| ())?
+            .into_iter()
+            .filter(|event| event.run_seq > *seq)
+            .collect::<Vec<_>>()
+    };
+    if appended.len() != 2
+        || appended[0].run_seq != seq.checked_add(1).ok_or(())?
+        || appended[1].run_seq != seq.checked_add(2).ok_or(())?
+    {
+        if let Some(resolved) = resolved {
+            let _ = resolved.send(None);
+        }
+        return Err(());
+    }
+    for event in &appended {
+        projector.apply(event).map_err(|_| ())?;
+    }
+    *seq = appended[1].run_seq;
+    let projection = projector.projection().map_err(|_| ())?;
+    let applied_diffs = {
+        let mut storage = storage.lock().map_err(|_| ())?;
+        let crate::run_events::ChatStorage { journal, cas } = &mut *storage;
+        load_applied_code_diffs(journal, cas, run_id, projection.applied_diffs.clone())
+    };
+    sink.deliver(chat_event(run_id, projection, None, applied_diffs))?;
+    if let Some(resolved) = resolved {
+        let _ = resolved.send(Some(*seq));
+    }
+    Ok(())
+}
+
+impl<T> MarkedState<T> {
+    fn new(
+        value: T,
+        registry: Option<RuntimeActivityRegistry>,
+        marked: fn(&T) -> bool,
+        start_mark: fn(&RuntimeActivityRegistry) -> RuntimeActivityGuard,
+    ) -> Self {
+        let mut state = Self {
+            value,
+            registry,
+            mark: None,
+            marked,
+            start_mark,
+        };
+        state.follow_value();
+        state
+    }
+
+    fn with<O>(&mut self, step: impl FnOnce(&mut T) -> O) -> O {
+        let outcome = step(&mut self.value);
+        self.follow_value();
+        outcome
+    }
+
+    fn follow_value(&mut self) {
+        if !(self.marked)(&self.value) {
+            self.mark = None;
+        } else if self.mark.is_none() {
+            self.mark = self.registry.as_ref().map(self.start_mark);
+        }
+    }
+}
+
+impl MarkedEffects {
+    fn open_effects(registry: Option<RuntimeActivityRegistry>) -> Self {
+        Self::new(
+            BTreeSet::new(),
+            registry,
+            |open_effects| !open_effects.is_empty(),
+            RuntimeActivityRegistry::mark_in_flight_external_effect,
+        )
+    }
+}
+
+impl MarkedGate {
+    fn pending_permission(registry: Option<RuntimeActivityRegistry>) -> Self {
+        Self::new(
+            None,
+            registry,
+            |pending| pending.is_some(),
+            RuntimeActivityRegistry::mark_pending_permission_gate,
+        )
+    }
+}
+
+/// What a local run records for its receipt while it runs: the model Pi
+/// reports, the usage and catalog cost of each turn, and every tool call.
+#[derive(Default)]
+struct LocalRunLedger {
+    model: Option<String>,
+    provider_name: Option<String>,
+    tokens: Option<crate::sidecar::pi_chat::TokenUsage>,
+    cost: Option<f64>,
+    cost_incomplete: bool,
+    classifiers: Vec<crate::model_router::wire::ClassifierUsage>,
+    routing: Vec<crate::model_router::wire::RoutingEvidence>,
+    turns: u32,
+    tool_names: std::collections::HashMap<String, String>,
+    tools: std::collections::BTreeMap<String, (u32, u32)>,
+}
+
+impl LocalRunLedger {
+    fn record(&mut self, event: &PiChatEvent) {
+        match event {
+            PiChatEvent::ModelReported {
+                routing,
+                classifier,
+                provider,
+                model,
+                usage,
+                cost,
+            } => {
+                if let Some(routing) = routing {
+                    self.routing.push((**routing).clone());
+                }
+                if let Some(classifier) = classifier {
+                    if let Some(held) = self
+                        .classifiers
+                        .iter_mut()
+                        .find(|held| held.model == classifier.model)
+                    {
+                        held.tokens = held.tokens.zip(classifier.tokens).map(|(left, right)| {
+                            crate::model_router::wire::Tokens {
+                                input: left.input.saturating_add(right.input),
+                                output: left.output.saturating_add(right.output),
+                                ..Default::default()
+                            }
+                        });
+                        held.cost = held
+                            .cost
+                            .zip(classifier.cost)
+                            .map(|(left, right)| left + right);
+                    } else {
+                        self.classifiers.push(classifier.clone());
+                    }
+                }
+                self.model = Some(format!("{provider}/{model}"));
+                self.provider_name =
+                    crate::models::registry::display_name(provider).map(str::to_owned);
+                self.turns += 1;
+                if let Some(usage) = usage {
+                    self.tokens.get_or_insert_with(Default::default).add(usage);
+                }
+                if let Some(cost) = cost {
+                    *self.cost.get_or_insert(0.0) += cost;
+                } else {
+                    self.cost_incomplete = true;
+                }
+            }
+            PiChatEvent::ToolStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
+                self.tool_names
+                    .insert(tool_call_id.clone(), tool_name.clone());
+                self.tools.entry(tool_name.clone()).or_default().0 += 1;
+            }
+            PiChatEvent::ToolFinished {
+                tool_call_id,
+                failed: true,
+                ..
+            } => {
+                if let Some(name) = self.tool_names.get(tool_call_id) {
+                    self.tools.entry(name.clone()).or_default().1 += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A local receipt preserves the model, routing evidence, usage and tools
+/// recorded by the run. The cost is a catalog estimate, never a bill.
+fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::pi_chat::Receipt {
+    crate::sidecar::pi_chat::Receipt {
+        model: ledger.model.clone(),
+        provider_name: ledger.provider_name.clone(),
+        classifiers: ledger.classifiers.clone(),
+        routing: ledger.routing.clone(),
+        cost: ledger
+            .cost
+            .filter(|_| !ledger.cost_incomplete)
+            .map(|cost| format!("${cost:.3} est.")),
+        cost_usd: ledger.cost.filter(|_| !ledger.cost_incomplete),
+        time: Some(format!("{:.1}s", elapsed.as_secs_f64())),
+        tokens: ledger.tokens,
+        turns: (ledger.turns > 0).then_some(ledger.turns),
+        tools: ledger
+            .tools
+            .iter()
+            .map(
+                |(name, (calls, failed))| crate::sidecar::pi_chat::ToolReceipt {
+                    name: name.clone(),
+                    calls: *calls,
+                    failed: *failed,
+                },
+            )
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// The permission mode a run ended in: the thread's journaled mode under
+/// the run's gate.
+fn run_mode(
+    journal: &SharedStorage,
+    run_id: &str,
+    permissions: Option<&crate::permission_gate::RunPermissions>,
+) -> Option<String> {
+    let permissions = permissions?;
+    let mut storage = journal.lock().ok()?;
+    let thread_mode = storage
+        .journal
+        .run_thread_id(run_id)
+        .ok()
+        .flatten()
+        .and_then(|thread| {
+            storage
+                .journal
+                .thread_permission_mode(&thread)
+                .ok()
+                .flatten()
+        })
+        .map(|set| set.mode);
+    Some(permissions.mode_for(thread_mode).id().to_owned())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn coordinate(
+    app: impl ChatEventSink + PiLaunchBoundaries,
+    journal: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: RuntimeActivityRegistry,
+    memory_runtime: Arc<ApplicationMemoryRuntime>,
+    run_id: String,
+    prompt: String,
+    thinking_level: Option<String>,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    cancelled: Arc<AtomicBool>,
+    active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
+    resume: Option<ResumeContext>,
+    resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+    prepared: Option<(u64, ChatProjector)>,
+) {
+    coordinate_work(
+        app,
+        journal,
+        runtime,
+        runtime_activity,
+        memory_runtime,
+        run_id,
+        prompt,
+        thinking_level,
+        None,
+        access_token,
+        subject,
+        grant,
+        cancelled,
+        active_transport,
+        active_adapter,
+        permission_answers,
+        resume,
+        resume_result,
+        prepared,
+    )
+}
+
+/// Compacts a thread's conversation as one run. The run opens the thread's
+/// saved conversation like a reply, journals the compaction's activity and
+/// ends when the engine answers. `outcome` receives the token counts, or the
+/// reason the compaction did not finish.
+#[allow(clippy::too_many_arguments)]
+pub fn coordinate_compaction(
+    app: impl ChatEventSink + PiLaunchBoundaries,
+    journal: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: RuntimeActivityRegistry,
+    memory_runtime: Arc<ApplicationMemoryRuntime>,
+    run_id: String,
+    instructions: Option<String>,
+    access_token: String,
+    subject: Option<String>,
+    grant: ChatGrant,
+    cancelled: Arc<AtomicBool>,
+    active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
+    prepared: Option<(u64, ChatProjector)>,
+    outcome: std::sync::mpsc::Sender<Result<CompactionOutcome, String>>,
+) {
+    coordinate_work(
+        app,
+        journal,
+        runtime,
+        runtime_activity,
+        memory_runtime,
+        run_id,
+        String::new(),
+        None,
+        Some(CompactionAttempt {
+            instructions,
+            outcome: Some(outcome),
+        }),
+        access_token,
+        subject,
+        grant,
+        cancelled,
+        active_transport,
+        active_adapter,
+        permission_answers,
+        None,
+        None,
+        prepared,
+    )
+}
+
+/// The manual compaction one run performs. Every early return reports that
+/// the compaction did not finish.
+struct CompactionAttempt {
+    instructions: Option<String>,
+    outcome: Option<std::sync::mpsc::Sender<Result<CompactionOutcome, String>>>,
+}
+
+impl CompactionAttempt {
+    fn finish(&mut self, result: Result<CompactionOutcome, String>) {
+        if let Some(outcome) = self.outcome.take() {
+            let _ = outcome.send(result);
+        }
+    }
+}
+
+impl Drop for CompactionAttempt {
+    fn drop(&mut self) {
+        self.finish(Err("Context compaction did not finish. Try again.".into()));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn coordinate_work(
+    app: impl ChatEventSink + PiLaunchBoundaries,
+    journal: SharedStorage,
+    runtime: Arc<Mutex<Option<PiRuntime>>>,
+    runtime_activity: RuntimeActivityRegistry,
+    memory_runtime: Arc<ApplicationMemoryRuntime>,
+    run_id: String,
+    prompt: String,
+    thinking_level: Option<String>,
+    mut compaction: Option<CompactionAttempt>,
+    mut access_token: String,
+    subject: Option<String>,
+    mut grant: ChatGrant,
+    cancelled: Arc<AtomicBool>,
+    active_transport: Arc<Mutex<Option<Arc<PiRpcTransport>>>>,
+    active_adapter: Arc<Mutex<Option<Arc<PiRunAdapter>>>>,
+    permission_answers: Arc<Mutex<VecDeque<PendingPermissionAnswer>>>,
+    resume: Option<ResumeContext>,
+    resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
+    prepared: Option<(u64, ChatProjector)>,
+) {
+    let engine = PiRpcEngine::new(app.pi_session_root().ok());
+    if let Some(token) = grant.native_access_token.take() {
+        access_token = token;
+    }
+    // An agent's thread runs at the agent's thinking level unless the run asks for one.
+    let agent_launch = app.agent_launch();
+    let thinking_level = thinking_level.or_else(|| {
+        agent_launch
+            .as_ref()
+            .and_then(|agent| agent.model.as_ref())
+            .and_then(|model| model.thinking.clone())
+    });
+    let mut agent_permissions = app.run_permissions();
+    if let Some(permissions) = agent_permissions.as_mut() {
+        permissions.working_directories = app
+            .project_directory()
+            .ok()
+            .flatten()
+            .or_else(|| app.home_directory())
+            .into_iter()
+            .collect();
+        permissions.protected_roots = app
+            .pi_session_root()
+            .ok()
+            .and_then(|root| root.parent().map(std::path::Path::to_path_buf))
+            .into_iter()
+            .chain(crate::state_root::state_directory())
+            .collect();
+        permissions.home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(std::path::PathBuf::from)
+            .filter(|home| home.is_absolute());
+    }
+    // The auto reviewer reads the run's request; an outside event's request
+    // is untrusted.
+    let mut auto_review = crate::permission_gate::AutoReview::new(
+        memory_runtime.review_model(),
+        &prompt,
+        agent_permissions
+            .as_ref()
+            .is_some_and(|permissions| permissions.event_triggered),
+    );
+    // The policy request of each agent gate the permission check opened, by
+    // the gate's title, until the gate is journaled.
+    let mut asked_policies: BTreeMap<String, crate::journal::reducer::GatePolicy> = BTreeMap::new();
+    let run_started = Instant::now();
+    let mut diagnostics = RunDiagnostics::new(&run_id);
+    let mut resume_attempt = ResumeAttempt::new(resume_result);
+    let (mut seq, mut projector) = prepared.unwrap_or_else(|| {
+        (
+            resume.as_ref().map_or(0, |resume| {
+                resume.events.last().map_or(0, |event| event.run_seq)
+            }),
+            ChatProjector::new(),
+        )
+    });
+    diagnostics.startup_stage(if resume.is_some() {
+        "resume_projection"
+    } else {
+        "run_started"
+    });
+    if let Some(resume) = &resume {
+        for event in &resume.events {
+            if projector.apply(event).is_err() {
+                return;
+            }
+        }
+    } else if seq == 0
+        && append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.started",
+            json!({}),
+            subject.as_deref(),
+        )
+        .is_err()
+    {
+        return;
+    }
+    if cancelled.load(Ordering::SeqCst) {
+        diagnostics.startup_stage("cancelled");
+        if resume.is_none() {
+            let _ = append_emit(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                "run.cancelled",
+                json!({}),
+                subject.as_deref(),
+            );
+        }
+        return;
+    }
+    diagnostics.startup_stage("thread_name");
+    if resume.is_none() && compaction.is_none() {
+        let fallback = crate::journal::thread_mutation::fallback_thread_name(&prompt);
+        if let Ok(mut storage) = journal.lock() {
+            let _ = crate::journal::thread_mutation::save_first_thread_name(
+                &mut storage.journal,
+                &run_id,
+                &fallback,
+                false,
+            );
+        }
+    }
+    // The model reads the clock from the message, so each one opens with its time.
+    let stamped_prompt = crate::launch_facts::stamp_message(&prompt);
+    diagnostics.startup_stage("prepared_prompt");
+    let prepared_prompt = if resume.is_some() || compaction.is_some() {
+        None
+    } else {
+        let prepared_prompt = match prepared_pi_prompt(&journal, &run_id, &stamped_prompt) {
+            Ok(prepared_prompt) => prepared_prompt,
+            Err(message) => {
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &message,
+                    subject.as_deref(),
+                    false,
+                );
+                return;
+            }
+        };
+        Some(prepared_prompt)
+    };
+    if compaction.is_some()
+        && !app.pi_session_root().is_ok_and(|root| {
+            matches!(
+                crate::pi_execution::previous_thread_session(
+                    &journal,
+                    &run_id,
+                    subject.as_deref(),
+                    &root
+                ),
+                Ok(Some(_))
+            )
+        })
+    {
+        fail_start(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "This thread has no conversation to compact yet.",
+            subject.as_deref(),
+            false,
+        );
+        return;
+    }
+    diagnostics.startup_stage("runtime_lock");
+    let mut runtime = runtime
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Each run owns its process. Reopen only its own thread's saved conversation.
+    diagnostics.startup_stage("runtime_reset");
+    *runtime = None;
+    let opening = {
+        diagnostics.startup_stage("grant_renewal");
+        if let Err(error) = crate::chat_launch::renew_grant_if_needed(&mut grant, || {
+            app.renew_chat_grant(&access_token)
+        }) {
+            let message = error.into_message();
+            fail_start(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                &message,
+                subject.as_deref(),
+                resume.is_some(),
+            );
+            return;
+        }
+        if let Some(token) = grant.native_access_token.take() {
+            access_token = token;
+        }
+        let config = (|| {
+            diagnostics.startup_stage("install_root");
+            let root = app.pi_install_root()?;
+            if crate::sidecar::pi_install::resolve_current_for(&root, app.pi_artifact()).is_err() {
+                diagnostics.startup_stage("pi_acquire");
+                eprintln!("muniment-runtime: run_id={run_id} pi_acquire started");
+                crate::run_events::append_emit_detailed(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "runtime.pi_acquire.started",
+                    json!({}),
+                    subject.as_deref(),
+                )
+                .map_err(|error| PiLaunchError::rejected("pi_acquire_started_append", error))?;
+                let result = app.acquire_pi(&root, &cancelled);
+                match &result {
+                    Ok(_) => eprintln!("muniment-runtime: run_id={run_id} pi_acquire completed"),
+                    Err(_) if cancelled.load(Ordering::SeqCst) => {
+                        eprintln!("muniment-runtime: run_id={run_id} pi_acquire cancelled");
+                    }
+                    Err(error) => eprintln!(
+                        "muniment-runtime: run_id={run_id} pi_acquire failed error={error:?}"
+                    ),
+                }
+                result?;
+            }
+            if cancelled.load(Ordering::SeqCst) {
+                return Err(PiLaunchError::Acquisition(
+                    crate::model_install::ModelInstallError::Cancelled,
+                ));
+            }
+            diagnostics.startup_stage("thread_session");
+            let previous_session = if resume.is_none() {
+                crate::pi_execution::previous_thread_session(
+                    &journal,
+                    &run_id,
+                    subject.as_deref(),
+                    &app.pi_session_root()?,
+                )
+                .map_err(|error| PiLaunchError::rejected("thread_session", error))?
+            } else {
+                None
+            };
+            diagnostics.startup_stage("pi_config");
+            let config = pi_launch_config(
+                &app,
+                Some(&root),
+                &grant,
+                resume
+                    .as_ref()
+                    .map(|resume| &resume.locator)
+                    .or(previous_session.as_ref()),
+            )?;
+            if let Some(directory) = config.working_directory.as_deref() {
+                diagnostics.startup_stage("folder_access");
+                // The run names the wait while macOS asks, so the window can
+                // say which prompt to answer.
+                let mut name_wait = |stage: &str| {
+                    crate::run_events::append_emit_detailed(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "model.routing.stage",
+                        json!({ "stage": stage }),
+                        subject.as_deref(),
+                    )
+                    .map_err(|error| PiLaunchError::rejected("folder_access_stage_append", error))
+                };
+                await_folder_access(
+                    &app,
+                    &run_id,
+                    directory,
+                    config.startup_timeout,
+                    &cancelled,
+                    &mut name_wait,
+                )?;
+            }
+            diagnostics.startup_stage("acquire_completed");
+            if matches!(
+                projector
+                    .projection()
+                    .map_err(|error| PiLaunchError::rejected(
+                        "pi_acquire_completed_projection",
+                        format!("{error:?}")
+                    ))?
+                    .status,
+                Some(crate::journal::reducer::RunStatus::AcquiringPi { .. })
+            ) {
+                crate::run_events::append_emit_detailed(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "runtime.pi_acquire.completed",
+                    json!({}),
+                    subject.as_deref(),
+                )
+                .map_err(|error| PiLaunchError::rejected("pi_acquire_completed_append", error))?;
+            }
+            Ok(config)
+        })();
+        if cancelled.load(Ordering::SeqCst) {
+            eprintln!("muniment-runtime: run_id={run_id} pi_spawn cancelled");
+            let (kind, payload) = if resume.is_some() {
+                (
+                    "run.needs_attention",
+                    json!({"reason": "Reply setup stopped. Resume the reply to try again."}),
+                )
+            } else {
+                ("run.cancelled", json!({}))
+            };
+            let _ = append_emit(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                kind,
+                payload,
+                subject.as_deref(),
+            );
+            return;
+        }
+        let config = match config {
+            Ok(config) => config,
+            Err(PiLaunchError::MissingRoot) => {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn missing_root");
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The agent runtime is not installed.",
+                    subject.as_deref(),
+                    resume.is_some(),
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!("{}", diagnostics::config_error_line(&run_id, &error));
+                let message = match error {
+                    PiLaunchError::Acquisition(_) => {
+                        "Reply setup failed. Check your connection and storage, then retry.".into()
+                    }
+                    PiLaunchError::FolderAccess { access, folder } => {
+                        crate::folder_access::failure_reason(access, folder)
+                    }
+                    _ => "The agent runtime is unavailable.".to_owned(),
+                };
+                let message = message.as_str();
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    message,
+                    subject.as_deref(),
+                    resume.is_some(),
+                );
+                return;
+            }
+        };
+        let startup_timeout = config.startup_timeout;
+        let working_directory = config.working_directory.clone();
+        diagnostics.startup_stage("pi_spawn");
+        let opened = engine.open(PiOpen {
+            config,
+            cancelled: &cancelled,
+            observe: &mut |stage| match stage {
+                OpenStage::Spawned(supervisor) => diagnostics.spawned(supervisor),
+                OpenStage::Waiting => diagnostics.log_lifecycle(),
+            },
+        });
+        let (process, opened) = match opened {
+            Ok((process, transport)) => (process, Ok(transport)),
+            Err(OpenError::Spawn(error)) => {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn error={error}");
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The agent runtime could not start.",
+                    subject.as_deref(),
+                    resume.is_some(),
+                );
+                return;
+            }
+            Err(OpenError::Cancelled(process)) => (process, Err(OpenError::Cancelled(()))),
+            Err(OpenError::NotReady(process, status)) => {
+                (process, Err(OpenError::NotReady((), status)))
+            }
+            Err(OpenError::Unavailable(process)) => (process, Err(OpenError::Unavailable(()))),
+        };
+        *runtime = Some(process);
+        (startup_timeout, working_directory, opened)
+    };
+    let (startup_timeout, working_directory, opened) = opening;
+    // A reply records its folder and conversation before its prompt goes,
+    // and its folder again when it ends, so a rewind can return to them.
+    let _checkpoints = if compaction.is_some() {
+        None
+    } else if resume.is_some() {
+        crate::checkpoint::RunCheckpoints::resume(&app, &run_id, working_directory.as_deref())
+    } else {
+        crate::checkpoint::RunCheckpoints::begin(
+            &app,
+            &journal,
+            &run_id,
+            subject.as_deref(),
+            working_directory.as_deref(),
+        )
+    };
+    let runtime = runtime.as_mut().expect("runtime was initialized");
+    let transport = match opened {
+        Ok(transport) => {
+            eprintln!("muniment-runtime: run_id={run_id} pi_spawn started");
+            transport
+        }
+        Err(OpenError::Cancelled(())) => {
+            if resume.is_none() {
+                let _ = append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "run.cancelled",
+                    json!({}),
+                    subject.as_deref(),
+                );
+            }
+            return;
+        }
+        Err(OpenError::NotReady((), readiness_status)) => {
+            let waiting_on = startup_waiting_on(
+                &app,
+                &runtime.wiring,
+                working_directory.as_deref(),
+                &cancelled,
+            );
+            diagnostics.readiness_failed(readiness_status, startup_timeout, &waiting_on);
+            let detail = readiness_detail(
+                startup_timeout,
+                readiness_status,
+                &waiting_on,
+                diagnostics.stderr_error(),
+            );
+            let reason = if let StartupWait::Folder { access, folder } = waiting_on {
+                crate::folder_access::failure_reason(access, folder)
+            } else if grant.is_local() {
+                match diagnostics.stderr_error() {
+                    Some(error) => format!("Reply setup failed. {error}"),
+                    None => "Reply setup timed out. Try again.".to_owned(),
+                }
+            } else if readiness_status != SidecarStatus::Starting {
+                "Reply setup stopped before it became ready. Try again.".to_owned()
+            } else {
+                format!(
+                    "Reply setup did not become ready within {} seconds. Try again.",
+                    startup_timeout.as_secs()
+                )
+            };
+            crate::run_events::fail_start_with_detail(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                &reason,
+                Some(&detail),
+                subject.as_deref(),
+                resume.is_some(),
+            );
+            engine.stop(runtime);
+            return;
+        }
+        Err(_) => {
+            eprintln!("muniment-runtime: run_id={run_id} pi_spawn started");
+            fail_start(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                "The agent runtime did not become ready.",
+                subject.as_deref(),
+                resume.is_some(),
+            );
+            return;
+        }
+    };
+    *active_transport
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&transport));
+    if cancelled.load(Ordering::SeqCst) {
+        if resume.is_none() {
+            let _ = append_emit(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                "run.cancelled",
+                json!({}),
+                subject.as_deref(),
+            );
+        }
+        return;
+    }
+    diagnostics.prompt_submitted = true;
+    let mut gateway_failure = None;
+    let (adapter, buffered_events) = if let Some(resume) = &resume {
+        let resumed = engine.resume(
+            &transport,
+            &run_id,
+            &resume.locator,
+            &prompt,
+            &mut |adapter, event| {
+                answer_thread_title(&journal, adapter, &transport, &run_id, &prompt, event)
+                    || answer_gateway_boundary(
+                        &app,
+                        adapter,
+                        &transport,
+                        &mut grant,
+                        &mut access_token,
+                        &mut gateway_failure,
+                        event,
+                    )
+                    || coordinate_agent_permission(
+                        &app,
+                        &journal,
+                        adapter,
+                        &transport,
+                        &agent_permissions,
+                        &mut auto_review,
+                        &mut asked_policies,
+                        &run_id,
+                        subject.as_deref(),
+                        event,
+                    )
+            },
+        );
+        let adapter = match resumed {
+            Ok(value) => value,
+            Err(error) => {
+                diagnostics.prompt_failed(&error);
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The reply did not start. Try again.",
+                    subject.as_deref(),
+                    true,
+                );
+                engine.stop(runtime);
+                return;
+            }
+        };
+        let adapter = Arc::new(adapter);
+        *active_adapter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
+        if append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "run.resumed",
+            resume
+                .notice
+                .as_ref()
+                .map_or_else(|| json!({}), |notice| json!({"notice": notice})),
+            subject.as_deref(),
+        )
+        .is_err()
+        {
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            return;
+        }
+        // Prompt acknowledgement only proves that Pi accepted work. Report a
+        // successful resume after the transition is durable so callers never
+        // observe an active continuation that the journal still calls
+        // interrupted.
+        resume_attempt.accepted();
+        if append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "model.prompt.accepted",
+            json!({}),
+            subject.as_deref(),
+        )
+        .is_err()
+        {
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            return;
+        }
+        (adapter, Vec::new())
+    } else if let Some(attempt) = &compaction {
+        let started = app
+            .pi_session_root()
+            .ok()
+            .and_then(|root| {
+                crate::pi_execution::previous_thread_session(
+                    &journal,
+                    &run_id,
+                    subject.as_deref(),
+                    &root,
+                )
+                .ok()
+                .flatten()
+            })
+            .ok_or_else(|| "The thread's conversation is unavailable.".to_owned())
+            .and_then(|locator| {
+                engine
+                    .compact(
+                        &transport,
+                        &run_id,
+                        &locator,
+                        attempt.instructions.as_deref(),
+                    )
+                    .map(|adapter| (adapter, locator))
+            });
+        let (adapter, locator) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                diagnostics.prompt_failed(&error);
+                fail_start(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "Context compaction did not start. Try again.",
+                    subject.as_deref(),
+                    false,
+                );
+                engine.stop(runtime);
+                return;
+            }
+        };
+        let adapter = Arc::new(adapter);
+        *active_adapter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&adapter));
+        if append_emit(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "runtime.pi_session.bound",
+            json!({"run_id": run_id, "locator": locator.as_str()}),
+            subject.as_deref(),
+        )
+        .is_err()
+        {
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            return;
+        }
+        (adapter, Vec::new())
+    } else {
+        // An absent level runs the model at the level Pi starts it at, even
+        // when the thread's saved conversation restored another one.
+        let thinking = thinking_level
+            .as_deref()
+            .map_or(Thinking::Default, Thinking::Level);
+        let result = coordinate_prepared_prompt(
+            &app,
+            &journal,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            subject.as_deref(),
+            |emit| {
+                let prepared_prompt = prepared_prompt.expect("new runs prepare a Pi prompt");
+                let adapter = engine
+                    .submit(
+                        &transport,
+                        &run_id,
+                        Submission {
+                            message: prepared_prompt.message,
+                            images: prepared_prompt.images,
+                            thinking: Some(thinking),
+                        },
+                        &mut |adapter, event| {
+                            answer_thread_title(
+                                &journal, adapter, &transport, &run_id, &prompt, event,
+                            ) || answer_gateway_boundary(
+                                &app,
+                                adapter,
+                                &transport,
+                                &mut grant,
+                                &mut access_token,
+                                &mut gateway_failure,
+                                event,
+                            ) || coordinate_agent_permission(
+                                &app,
+                                &journal,
+                                adapter,
+                                &transport,
+                                &agent_permissions,
+                                &mut auto_review,
+                                &mut asked_policies,
+                                &run_id,
+                                subject.as_deref(),
+                                event,
+                            )
+                        },
+                    )
+                    .map_err(|error| {
+                        diagnostics.prompt_failed(&error);
+                        PreparedPromptError::Start
+                    })?;
+                let adapter = Arc::new(adapter);
+                *active_adapter
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(Arc::clone(&adapter));
+                emit(&PiChatEvent::PromptAccepted)?;
+                let mut journal_failed = false;
+                app.pi_session_root()
+                    .map_err(|_| PreparedPromptError::SessionRoot)?;
+                let (locator, events) = engine
+                    .bind(&transport, &adapter, &mut |event| {
+                        if emit(event).map_err(|_| {
+                            journal_failed = true;
+                            "The reply could not be saved.".to_owned()
+                        })? {
+                            return Ok(true);
+                        }
+                        if answer_thread_title(
+                            &journal, &adapter, &transport, &run_id, &prompt, event,
+                        ) {
+                            return Ok(true);
+                        }
+                        Ok(answer_gateway_boundary(
+                            &app,
+                            &adapter,
+                            &transport,
+                            &mut grant,
+                            &mut access_token,
+                            &mut gateway_failure,
+                            event,
+                        ))
+                    })
+                    .map_err(|error| {
+                        if journal_failed {
+                            PreparedPromptError::Journal
+                        } else if error == FIRST_EVENT_TIMEOUT_REASON {
+                            PreparedPromptError::FirstEventTimeout
+                        } else {
+                            PreparedPromptError::Binding
+                        }
+                    })?;
+                Ok((adapter, locator, events))
+            },
+        );
+        match result {
+            Ok(value) => value,
+            Err(error @ (PreparedPromptError::Journal | PreparedPromptError::SessionRoot)) => {
+                let adapter = active_adapter
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if adapter.is_some_and(|adapter| {
+                    engine
+                        .cancel(&transport, &adapter, Duration::from_secs(2))
+                        .is_err()
+                }) {
+                    engine.stop(runtime);
+                }
+                if matches!(error, PreparedPromptError::SessionRoot) {
+                    fail(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "The reply could not be started.",
+                        subject.as_deref(),
+                    );
+                }
+                return;
+            }
+            Err(PreparedPromptError::FirstEventTimeout) => {
+                diagnostics.outcome = "unknown_no_first_event";
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    FIRST_EVENT_TIMEOUT_REASON,
+                    subject.as_deref(),
+                );
+                engine.stop(runtime);
+                return;
+            }
+            Err(PreparedPromptError::Binding) => {
+                diagnostics.outcome = "unknown_session_binding_failed";
+                // `await_session_binding` aborts and drains first. Reaping the
+                // supervised child is the final containment boundary if Pi did
+                // not acknowledge cancellation.
+                engine.stop(runtime);
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The reply could not be started.",
+                    subject.as_deref(),
+                );
+                return;
+            }
+            Err(PreparedPromptError::Start) => {
+                diagnostics.outcome = "unknown_prompt_not_acknowledged";
+                fail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "The reply did not start. Try again.",
+                    subject.as_deref(),
+                );
+                engine.stop(runtime);
+                return;
+            }
+        }
+    };
+    let mut buffered_events = buffered_events.into_iter();
+    let mut ledger = LocalRunLedger::default();
+    let mut open_effects = MarkedEffects::open_effects(Some(runtime_activity.clone()));
+    let mut pending_permission = MarkedGate::pending_permission(Some(runtime_activity));
+    // Requests that arrived while a gate was open, each waiting its turn.
+    let mut waiting_permissions: VecDeque<crate::sidecar::pi_chat::ExtensionUiRequest> =
+        VecDeque::new();
+    // Text deltas wait here for one batched commit. Every other append below
+    // flushes them first, so the journal keeps stream order.
+    let mut held_deltas = HeldDeltas::default();
+    'coordinate: loop {
+        diagnostics.log_lifecycle();
+        if let Some(error) = gateway_failure
+            .as_ref()
+            .filter(|_| buffered_events.len() == 0)
+        {
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            let _ = held_deltas.flush(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                subject.as_deref(),
+            );
+            fail_with_open_effects(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                &mut open_effects,
+                &crate::chat_launch::grant_error_message(error.clone()),
+                subject.as_deref(),
+            );
+            break;
+        }
+        if cancelled.swap(false, Ordering::SeqCst) {
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            diagnostics.outcome = "cancelled";
+            let _ = held_deltas.flush(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                subject.as_deref(),
+            );
+            let _ = append_terminal(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                &mut open_effects,
+                "run.cancelled",
+                json!({}),
+                subject.as_deref(),
+            );
+            break;
+        }
+        let answers: Vec<_> = permission_answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect();
+        if (!answers.is_empty() || !waiting_permissions.is_empty())
+            && held_deltas
+                .flush(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    subject.as_deref(),
+                )
+                .is_err()
+        {
+            break 'coordinate;
+        }
+        for answer in answers {
+            if matches!(&answer.answer, ChatPermissionAnswer::CodeDiff { .. }) {
+                if coordinate_code_diff_answer(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &mut seq,
+                    std::path::Path::new(&grant.workspace),
+                    &run_id,
+                    answer,
+                )
+                .is_err()
+                {
+                    break 'coordinate;
+                }
+                continue;
+            }
+            if pending_permission
+                .with(|pending| {
+                    coordinate_permission_answer(
+                        pending,
+                        answer,
+                        |request, answer| engine.answer(&transport, &adapter, request, answer),
+                        |kind, payload| {
+                            append_emit(
+                                &app,
+                                &journal,
+                                &mut projector,
+                                &run_id,
+                                &mut seq,
+                                kind,
+                                payload,
+                                subject.as_deref(),
+                            )?;
+                            Ok(seq)
+                        },
+                    )
+                })
+                .is_err()
+            {
+                break 'coordinate;
+            }
+        }
+        if pending_permission
+            .with(|pending| {
+                open_waiting_request(pending, &mut waiting_permissions, |kind, payload| {
+                    append_emit(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        kind,
+                        with_gate_policy(&mut asked_policies, kind, payload),
+                        subject.as_deref(),
+                    )
+                })
+            })
+            .is_err()
+        {
+            break 'coordinate;
+        }
+        let event = buffered_events.next().map(Ok).unwrap_or_else(|| {
+            engine.next_event(
+                &transport,
+                &adapter,
+                held_deltas.wait_bound(Duration::from_millis(100)),
+            )
+        });
+        if let Ok(event) = &event {
+            ledger.record(event);
+        }
+        // Any event but text, and the idle poll that ends a window, commits
+        // the held text before the event's own append.
+        if !matches!(event, Ok(PiChatEvent::TextDelta(_)))
+            && held_deltas
+                .flush(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    subject.as_deref(),
+                )
+                .is_err()
+        {
+            break 'coordinate;
+        }
+        match event {
+            Ok(PiChatEvent::TextDelta(text)) => {
+                for slice in split_model_stream_delta(&text) {
+                    held_deltas.push(model_stream_delta_payload(slice));
+                }
+                if held_deltas.due()
+                    && held_deltas
+                        .flush(
+                            &app,
+                            &journal,
+                            &mut projector,
+                            &run_id,
+                            &mut seq,
+                            subject.as_deref(),
+                        )
+                        .is_err()
+                {
+                    break 'coordinate;
+                }
+            }
+            Ok(PiChatEvent::Completed | PiChatEvent::Failed(_) | PiChatEvent::UsageLimit)
+                if gateway_failure.is_some() => {}
+            Ok(PiChatEvent::Compacted(result)) => {
+                let Some(attempt) = compaction.as_mut() else {
+                    continue;
+                };
+                match result {
+                    Ok(outcome) => {
+                        diagnostics.outcome = "completed";
+                        diagnostics.failed = append_terminal(
+                            &app,
+                            &journal,
+                            &mut projector,
+                            &run_id,
+                            &mut seq,
+                            &mut open_effects,
+                            "run.completed",
+                            json!({"receipt": local_receipt(run_started.elapsed(), &ledger)}),
+                            subject.as_deref(),
+                        )
+                        .is_err();
+                        attempt.finish(if diagnostics.failed {
+                            Err("The compaction could not be saved.".into())
+                        } else {
+                            Ok(outcome)
+                        });
+                    }
+                    Err(reason) => {
+                        diagnostics.outcome = "failed";
+                        fail_with_open_effects(
+                            &app,
+                            &journal,
+                            &mut projector,
+                            &run_id,
+                            &mut seq,
+                            &mut open_effects,
+                            &reason,
+                            subject.as_deref(),
+                        );
+                        attempt.finish(Err(reason));
+                    }
+                }
+                break;
+            }
+            Ok(PiChatEvent::Completed) => {
+                diagnostics.outcome = "completed";
+                let receipt = if grant.is_local() {
+                    Ok(local_receipt(run_started.elapsed(), &ledger))
+                } else {
+                    app.fetch_receipt(&grant, &access_token, &run_id)
+                }
+                .map(|mut receipt| {
+                    receipt.permission_mode = receipt
+                        .permission_mode
+                        .or_else(|| run_mode(&journal, &run_id, agent_permissions.as_ref()));
+                    receipt
+                });
+                match receipt {
+                    Ok(receipt) => {
+                        diagnostics.failed = append_terminal(
+                            &app,
+                            &journal,
+                            &mut projector,
+                            &run_id,
+                            &mut seq,
+                            &mut open_effects,
+                            "run.completed",
+                            json!({"receipt": receipt}),
+                            subject.as_deref(),
+                        )
+                        .is_err();
+                        break;
+                    }
+                    Err(_) => {
+                        fail_with_open_effects(
+                            &app,
+                            &journal,
+                            &mut projector,
+                            &run_id,
+                            &mut seq,
+                            &mut open_effects,
+                            "The reply finished, but its receipt was unavailable.",
+                            subject.as_deref(),
+                        );
+                        break;
+                    }
+                }
+            }
+            Ok(PiChatEvent::Cancelled) => {
+                diagnostics.outcome = "cancelled";
+                let _ = append_terminal(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &mut open_effects,
+                    "run.cancelled",
+                    json!({}),
+                    subject.as_deref(),
+                );
+                break;
+            }
+            Ok(event @ (PiChatEvent::Failed(_) | PiChatEvent::UsageLimit)) => {
+                diagnostics.outcome = "failed";
+                let detail = match &event {
+                    PiChatEvent::Failed(detail) => detail.clone(),
+                    _ => None,
+                };
+                if let Some(detail) = &detail {
+                    diagnostics.provider_error = Some(detail.clone());
+                }
+                let reason = if event == PiChatEvent::UsageLimit {
+                    crate::model_router::balance::PickError::UsageLimit.message()
+                } else {
+                    failure_reason(detail.as_deref())
+                };
+                fail_with_detail(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &mut open_effects,
+                    &reason,
+                    detail.as_deref(),
+                    subject.as_deref(),
+                );
+                break;
+            }
+            Ok(event @ (PiChatEvent::ToolStarted { .. } | PiChatEvent::ToolFinished { .. })) => {
+                if let Some((kind, payload)) =
+                    open_effects.with(|open_effects| tool_journal_entry(&event, open_effects))
+                {
+                    if append_emit(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        kind,
+                        payload,
+                        subject.as_deref(),
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+            Ok(event @ PiChatEvent::ExtensionUiRequest(_)) => {
+                if answer_thread_title(&journal, &adapter, &transport, &run_id, &prompt, &event) {
+                    continue;
+                }
+                if answer_gateway_boundary(
+                    &app,
+                    &adapter,
+                    &transport,
+                    &mut grant,
+                    &mut access_token,
+                    &mut gateway_failure,
+                    &event,
+                ) {
+                    continue;
+                }
+                if coordinate_browser(&app, &adapter, &transport, &cancelled, &event) {
+                    continue;
+                }
+                if coordinate_agent_permission(
+                    &app,
+                    &journal,
+                    &adapter,
+                    &transport,
+                    &agent_permissions,
+                    &mut auto_review,
+                    &mut asked_policies,
+                    &run_id,
+                    subject.as_deref(),
+                    &event,
+                ) {
+                    continue;
+                }
+                if coordinate_memory_search(
+                    &app,
+                    &memory_runtime,
+                    &journal,
+                    &mut projector,
+                    &adapter,
+                    &transport,
+                    &run_id,
+                    &mut seq,
+                    subject.as_deref(),
+                    &event,
+                ) {
+                    continue;
+                }
+                if pending_permission
+                    .with(|pending| {
+                        coordinate_extension_ui_request(
+                            event,
+                            pending,
+                            &mut waiting_permissions,
+                            |kind, payload| {
+                                append_emit(
+                                    &app,
+                                    &journal,
+                                    &mut projector,
+                                    &run_id,
+                                    &mut seq,
+                                    kind,
+                                    with_gate_policy(&mut asked_policies, kind, payload),
+                                    subject.as_deref(),
+                                )
+                            },
+                        )
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(PiChatEvent::ModelReported { .. }) => {}
+            Ok(PiChatEvent::RoutingStage(stage)) => {
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "model.routing.stage",
+                    json!({"stage": stage}),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(PiChatEvent::TurnStarted) => {
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "model.turn.started",
+                    json!({}),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
+            Err(error) if error == FIRST_EVENT_TIMEOUT_REASON => {
+                diagnostics.outcome = "unknown_no_first_event";
+                fail_with_open_effects(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &mut open_effects,
+                    FIRST_EVENT_TIMEOUT_REASON,
+                    subject.as_deref(),
+                );
+                engine.stop(runtime);
+                break;
+            }
+            Err(error) if error == "timed out waiting for Pi stream" => {
+                if engine.stopped(runtime) {
+                    fail_with_open_effects(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        &mut open_effects,
+                        "The agent runtime stopped unexpectedly.",
+                        subject.as_deref(),
+                    );
+                    break;
+                }
+            }
+            Err(_) => {
+                fail_with_open_effects(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    &mut open_effects,
+                    "The agent runtime stopped unexpectedly.",
+                    subject.as_deref(),
+                );
+                break;
+            }
+        }
+    }
+    if compaction.is_none()
+        && matches!(
+            projector.status(),
+            Some(crate::journal::reducer::RunStatus::Completed)
+        )
+    {
+        // A resumed run carries a continuation note, so its user prompt
+        // comes from the prompt store.
+        let messages = if resume.is_none() {
+            vec![prompt]
+        } else {
+            stored_prompt(&run_id, subject.as_deref())
+        };
+        memory_runtime.extract_after_run(&run_id, messages);
+    }
+}
+
+fn stored_prompt(run_id: &str, subject: Option<&str>) -> Vec<String> {
+    crate::chat_prompt::load_prompt(run_id, subject)
+        .ok()
+        .flatten()
+        .into_iter()
+        .collect()
+}
+
+fn answer_thread_title(
+    storage: &SharedStorage,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    run_id: &str,
+    prompt: &str,
+    event: &PiChatEvent,
+) -> bool {
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    let ExtensionUiDialog::Editor { title, prefill } = &request.dialog else {
+        return false;
+    };
+    if title != "muniment:thread-title" {
+        return false;
+    }
+    let response = (|| {
+        let args: Value = serde_json::from_str(prefill.as_deref()?).ok()?;
+        let mut storage = storage.lock().ok()?;
+        match args["action"].as_str()? {
+            "request" => {
+                crate::journal::thread_mutation::first_thread_needs_name(
+                    &mut storage.journal,
+                    run_id,
+                )?;
+                Some(json!({"prompt": prompt.chars().take(8000).collect::<String>()}))
+            }
+            "save" => {
+                let saved = crate::journal::thread_mutation::save_first_thread_name(
+                    &mut storage.journal,
+                    run_id,
+                    args["title"].as_str()?,
+                    true,
+                )
+                .ok()?;
+                Some(json!({"saved": saved}))
+            }
+            _ => None,
+        }
+    })()
+    .unwrap_or_else(|| json!({}));
+    let _ = adapter.answer_extension_ui(
+        transport,
+        request,
+        ExtensionUiAnswer::Editor(response.to_string()),
+    );
+    true
+}
+
+fn answer_gateway_boundary(
+    boundaries: &impl PiLaunchBoundaries,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    grant: &mut ChatGrant,
+    access_token: &mut String,
+    failure: &mut Option<crate::chat_launch::FetchGrantError>,
+    event: &PiChatEvent,
+) -> bool {
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    if let Some(error) = failure.as_ref() {
+        if !matches!(&request.dialog, ExtensionUiDialog::Editor { title, .. } if title == "muniment:chat-grant")
+        {
+            return false;
+        }
+        let answer = ExtensionUiAnswer::Editor(
+            json!({"error": crate::chat_launch::grant_error_message(error.clone())}).to_string(),
+        );
+        let _ = adapter.answer_extension_ui(transport, request, answer);
+        return true;
+    }
+    let Some((answer, error)) =
+        crate::chat_launch::answer_grant_request(boundaries, grant, access_token, request)
+    else {
+        return false;
+    };
+    *failure = error;
+    let _ = adapter.answer_extension_ui(transport, request, answer);
+    true
+}
+
+/// Answers the `browser` tool in a host that has a browser. The loop runs
+/// while Pi waits for the answer, and a cancelled run stops it between steps.
+fn coordinate_browser(
+    boundaries: &impl PiLaunchBoundaries,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    cancelled: &AtomicBool,
+    event: &PiChatEvent,
+) -> bool {
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    let ExtensionUiDialog::Editor { title, prefill } = &request.dialog else {
+        return false;
+    };
+    if title != "muniment:browser" {
+        return false;
+    }
+    // A host without a browser, such as the background runtime, lets the
+    // request become a gate that the app answers from its Browser tab.
+    let Some(host) = boundaries.browser_host() else {
+        return false;
+    };
+    let value = crate::browser_agent::answer(host.as_ref(), prefill.as_deref(), cancelled);
+    let _ = adapter.answer_extension_ui(
+        transport,
+        request,
+        ExtensionUiAnswer::Editor(value.to_string()),
+    );
+    true
+}
+
+/// Adds the exact policy request an agent gate asked about to the gate's
+/// `permission.requested` payload, matched by the title the check gave it.
+fn with_gate_policy(
+    asked: &mut BTreeMap<String, crate::journal::reducer::GatePolicy>,
+    kind: &str,
+    mut payload: serde_json::Value,
+) -> serde_json::Value {
+    if kind != "permission.requested" || payload["kind"] != "select" {
+        return payload;
+    }
+    if let Some(policy) = payload["title"]
+        .as_str()
+        .and_then(|title| asked.remove(title))
+    {
+        if let Ok(policy) = serde_json::to_value(policy) {
+            payload["policy"] = policy;
+        }
+    }
+    payload
+}
+
+/// Answers the permission gate's questions. A check decides one tool call
+/// from the thread's permission mode. A call the mode does not settle asks
+/// the user through the ordinary gate the extension opens, with the title,
+/// options and exact policy request the check answers. A `plan` run's plan
+/// opens a gate whose approval journals the mode the thread continues in.
+#[allow(clippy::too_many_arguments)]
+fn coordinate_agent_permission(
+    app: &(impl ChatEventSink + PiLaunchBoundaries),
+    journal: &SharedStorage,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    permissions: &Option<crate::permission_gate::RunPermissions>,
+    review: &mut crate::permission_gate::AutoReview,
+    asked: &mut BTreeMap<String, crate::journal::reducer::GatePolicy>,
+    run_id: &str,
+    subject: Option<&str>,
+    event: &PiChatEvent,
+) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Call {
+        tool: String,
+        #[serde(default)]
+        input: serde_json::Value,
+        #[serde(default)]
+        read_only: bool,
+    }
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    let ExtensionUiDialog::Editor { title, prefill } = &request.dialog else {
+        return false;
+    };
+    if !matches!(
+        title.as_str(),
+        "muniment:permission-check"
+            | "muniment:permission-mode"
+            | "muniment:plan-check"
+            | "muniment:plan-approve"
+    ) {
+        return false;
+    }
+    let working_directory = app
+        .project_directory()
+        .ok()
+        .flatten()
+        .or_else(|| app.home_directory())
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let prefill = prefill.as_deref().unwrap_or_default();
+    // The title names a gate's request until it is journaled, so two
+    // waiting gates never share one.
+    let unique_title = |asked: &BTreeMap<String, crate::journal::reducer::GatePolicy>,
+                        first: String| {
+        let mut gate_title = first.clone();
+        let mut copy = 2;
+        while asked.contains_key(&gate_title) {
+            gate_title = format!("{first} ({copy})");
+            copy += 1;
+        }
+        gate_title
+    };
+    let answer = (|| {
+        let Some(permissions) = permissions else {
+            return Ok(json!({"decision": "allow"}));
+        };
+        let mut storage = journal
+            .lock()
+            .map_err(|_| "Conversation history is busy.".to_string())?;
+        let thread = storage
+            .journal
+            .run_thread_id(run_id)
+            .map_err(|error| error.to_string())?
+            .ok_or("The run has no thread.")?;
+        // A mode that cannot be read leaves the launch mode in force.
+        let thread_mode = storage
+            .journal
+            .thread_permission_mode(&thread)
+            .ok()
+            .flatten()
+            .map(|set| set.mode);
+        let mode = permissions.mode_for(thread_mode);
+        if title == "muniment:permission-mode" {
+            if let Ok(report) = serde_json::from_str::<serde_json::Value>(prefill) {
+                crate::tool_presentation::remember_catalog(&report["tools"]);
+            }
+            return Ok(json!({"mode": mode.id(), "title": mode.title()}));
+        }
+        if title == "muniment:plan-check" {
+            #[derive(serde::Deserialize)]
+            struct Plan {
+                plan: String,
+            }
+            let plan: Plan =
+                serde_json::from_str(prefill).map_err(|_| "The plan is invalid.".to_string())?;
+            let plan: String = plan.plan.trim().chars().take(MAX_PLAN_CHARS).collect();
+            if plan.is_empty() {
+                return Err("Write the plan before you submit it.".into());
+            }
+            if mode != crate::permission_gate::PermissionMode::Plan {
+                return Ok(json!({
+                    "decision": "allow",
+                    "reason": "This thread is not in plan mode, so the plan needs no approval. Carry on.",
+                }));
+            }
+            let summary: String = plan
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(240)
+                .collect();
+            let gate_title = unique_title(
+                asked,
+                crate::permission_gate::PLAN_GATE_TITLE.to_owned(),
+            );
+            asked.insert(
+                gate_title.clone(),
+                crate::journal::reducer::GatePolicy {
+                    request_kind: crate::journal::ThreadPermissionRequestKind::Tool,
+                    resource: crate::journal::ThreadPermissionResource::Tool {
+                        name: crate::permission_gate::PLAN_TOOL.into(),
+                        input: json!({}),
+                    },
+                    summary: summary.clone(),
+                    reason: None,
+                    plan: Some(plan),
+                },
+            );
+            return Ok(json!({
+                "decision": "ask",
+                "title": gate_title,
+                "options": crate::permission_gate::plan_options(),
+                "summary": summary,
+            }));
+        }
+        if title == "muniment:plan-approve" {
+            #[derive(serde::Deserialize)]
+            struct Choice {
+                choice: String,
+            }
+            let choice: Choice =
+                serde_json::from_str(prefill).map_err(|_| "The answer is invalid.".to_string())?;
+            let chosen = crate::permission_gate::plan_choice(&choice.choice)
+                .ok_or("That answer approves no mode.")?;
+            let provenance = gate_provenance(app, subject);
+            crate::permission_gate::set_thread_mode(
+                &mut storage.journal,
+                &thread,
+                chosen,
+                "plan",
+                subject.unwrap_or("owner"),
+                &provenance,
+            )?;
+            return Ok(json!({"saved": true, "mode": chosen.id(), "title": chosen.title()}));
+        }
+        let call: Call = serde_json::from_str(prefill)
+            .map_err(|_| "The permission check is invalid.".to_string())?;
+        let policy_request =
+            crate::permission_gate::tool_request(&call.tool, &call.input, &working_directory);
+        drop(storage);
+        let decision = crate::permission_gate::decide_tool_call(
+            permissions,
+            mode,
+            &policy_request,
+            &call.tool,
+            call.read_only,
+            review,
+        );
+        let mut verdict = serde_json::to_value(&decision)
+            .map_err(|_| "The permission check failed.".to_string())?;
+        if let crate::permission_gate::GateDecision::Ask { reason } = &decision {
+            let summary = crate::permission_gate::summary(&policy_request);
+            let gate_title = unique_title(asked, format!("{summary}? {reason}"));
+            asked.insert(
+                gate_title.clone(),
+                crate::journal::reducer::GatePolicy {
+                    request_kind: policy_request.request_kind.clone(),
+                    resource: policy_request.resource.clone(),
+                    summary: summary.clone(),
+                    reason: Some(reason.clone()),
+                    plan: None,
+                },
+            );
+            verdict["title"] = json!(gate_title);
+            verdict["options"] = json!(crate::permission_gate::gate_options());
+            verdict["summary"] = json!(summary);
+            verdict["request"] = json!(policy_request);
+        }
+        verdict["mode"] = json!(mode.id());
+        Ok(verdict)
+    })()
+    .unwrap_or_else(|error: String| json!({"error": error}));
+    let _ = adapter.answer_extension_ui(
+        transport,
+        request,
+        ExtensionUiAnswer::Editor(answer.to_string()),
+    );
+    true
+}
+
+/// The most characters of a submitted plan the gate keeps.
+const MAX_PLAN_CHARS: usize = 16 * 1024;
+
+/// The provenance of a journal entry the permission gate writes for a run.
+fn gate_provenance(app: &impl ChatEventSink, subject: Option<&str>) -> crate::journal::Provenance {
+    let (source, version) = app.provenance();
+    crate::journal::Provenance {
+        source: source.to_owned(),
+        source_version: version.to_owned(),
+        actor_id: subject.map(str::to_owned),
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: Default::default(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn coordinate_memory_search(
+    sink: &impl ChatEventSink,
+    memory_runtime: &ApplicationMemoryRuntime,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    adapter: &PiRunAdapter,
+    transport: &PiRpcTransport,
+    run_id: &str,
+    seq: &mut u64,
+    subject: Option<&str>,
+    event: &PiChatEvent,
+) -> bool {
+    if let PiChatEvent::ExtensionUiRequest(request) = event {
+        if let ExtensionUiDialog::Editor { title, prefill } = &request.dialog {
+            if let Some(tool) = title.strip_prefix("muniment:").filter(|tool| {
+                [
+                    "memory-delete",
+                    "memory-profile-read",
+                    "memory-profile-save",
+                ]
+                .contains(tool)
+            }) {
+                let result = prefill
+                    .as_deref()
+                    .ok_or_else(|| "The memory arguments are missing.".to_owned())
+                    .and_then(|arguments| memory_runtime.maintain_memory(run_id, tool, arguments));
+                let value = result.unwrap_or_else(|error| json!({"error": error}));
+                let _ = adapter.answer_extension_ui(
+                    transport,
+                    request,
+                    ExtensionUiAnswer::Editor(value.to_string()),
+                );
+                return true;
+            }
+            if let Some(tool) = title.strip_prefix("muniment:").filter(|tool| {
+                [
+                    "agent-list",
+                    "agent-read",
+                    "agent-save",
+                    "agent-run",
+                    "routine-list",
+                    "routine-save",
+                    "routine-delete",
+                    "agent-message",
+                    "agent-handoff",
+                    "creation-plan",
+                    "artifact-publish",
+                ]
+                .contains(tool)
+            }) {
+                let result = prefill
+                    .as_deref()
+                    .ok_or_else(|| "The agent arguments are missing.".to_owned())
+                    .and_then(|arguments| memory_runtime.agent_tool(run_id, tool, arguments));
+                let value = result.unwrap_or_else(|error| json!({"error": error}));
+                let _ = adapter.answer_extension_ui(
+                    transport,
+                    request,
+                    ExtensionUiAnswer::Editor(value.to_string()),
+                );
+                return true;
+            }
+            if title == "muniment:memory-save" {
+                let result = prefill
+                    .as_deref()
+                    .ok_or_else(|| "The memory arguments are missing.".to_owned())
+                    .and_then(|arguments| {
+                        let trust = crate::memory_files::Trust::after_tools(projector.tool_names());
+                        memory_runtime.capture_fact(run_id, arguments, trust)
+                    });
+                let value = match result {
+                    Ok(fact) => json!({"saved": true, "fact": fact}),
+                    Err(error) => json!({"error": error}),
+                };
+                let _ = adapter.answer_extension_ui(
+                    transport,
+                    request,
+                    ExtensionUiAnswer::Editor(value.to_string()),
+                );
+                return true;
+            }
+        }
+    }
+    coordinate_memory_search_with(
+        sink,
+        journal,
+        projector,
+        run_id,
+        seq,
+        subject,
+        event,
+        |arguments| dispatch_memory_search(memory_runtime, run_id, arguments),
+        |request, answer| {
+            let _ = adapter.answer_extension_ui(transport, request, answer);
+        },
+    )
+}
+
+fn dispatch_memory_search(
+    memory_runtime: &ApplicationMemoryRuntime,
+    run_id: &str,
+    arguments: &str,
+) -> Result<crate::memory_index::MemorySearchResult, MemoryFailure> {
+    memory_runtime
+        .dispatch_tool_call(run_id, "memory-search", arguments.as_bytes())
+        .map_err(MemoryFailure::from_index_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn coordinate_memory_search_with(
+    sink: &impl ChatEventSink,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    subject: Option<&str>,
+    event: &PiChatEvent,
+    dispatch: impl FnOnce(&str) -> Result<crate::memory_index::MemorySearchResult, MemoryFailure>,
+    respond: impl FnOnce(&ExtensionUiRequest, ExtensionUiAnswer),
+) -> bool {
+    let PiChatEvent::ExtensionUiRequest(request) = event else {
+        return false;
+    };
+    let ExtensionUiDialog::Editor { title, prefill } = &request.dialog else {
+        return false;
+    };
+    if title != "muniment:memory-search" {
+        return false;
+    }
+    let result = prefill
+        .as_deref()
+        .ok_or_else(MemoryFailure::missing_prefill)
+        .and_then(dispatch);
+    let answer = match result {
+        Ok(result) => {
+            if append_emit(
+                sink,
+                journal,
+                projector,
+                run_id,
+                seq,
+                "memory.recalled",
+                serde_json::to_value(&result.recall).unwrap_or_else(|_| json!({})),
+                subject,
+            )
+            .is_err()
+            {
+                ExtensionUiAnswer::Cancelled
+            } else {
+                ExtensionUiAnswer::Editor(
+                    serde_json::to_string(&result).expect("memory search result serializes"),
+                )
+            }
+        }
+        Err(error) => ExtensionUiAnswer::Editor(
+            serde_json::to_string(&MemoryFailureAnswer::from(error))
+                .expect("memory search failure serializes"),
+        ),
+    };
+    respond(request, answer);
+    true
+}
+
+#[allow(clippy::result_unit_err, clippy::too_many_arguments)]
+fn append_terminal(
+    sink: &impl ChatEventSink,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut MarkedEffects,
+    kind: &str,
+    payload: Value,
+    subject: Option<&str>,
+) -> Result<(), ()> {
+    open_effects.with(|open_effects| {
+        core_append_terminal(
+            sink,
+            journal,
+            projector,
+            run_id,
+            seq,
+            open_effects,
+            kind,
+            payload,
+            subject,
+        )
+    })
+}
+
+/// How long a folder read may take before the run logs that it waits on the
+/// operating system's consent prompt.
+const FOLDER_ACCESS_GRACE: Duration = Duration::from_secs(2);
+
+/// How long a run waits for the answer to the operating system's consent
+/// prompt once it shows. The user reads the prompt and answers it, so the
+/// wait outlasts Pi's own startup bound; Stop ends it sooner.
+const FOLDER_PROMPT_BOUND: Duration = Duration::from_secs(600);
+
+/// The routing stage a run reports while the operating system asks about
+/// its folder: `folder-access`, with the protected folder's name after a
+/// colon when it is one.
+fn folder_wait_stage(folder: Option<&str>) -> String {
+    folder.map_or_else(
+        || "folder-access".to_owned(),
+        |folder| format!("folder-access:{folder}"),
+    )
+}
+
+/// Waits until the operating system lets Pi read `directory`. Pi reads its
+/// working folder before it answers its first command, so a consent prompt
+/// nobody answers would otherwise hold Pi silent until its readiness bound.
+/// Once the read waits past a short grace, `name_wait` reports the wait as a
+/// routing stage, and the run waits [`FOLDER_PROMPT_BOUND`] or `bound`,
+/// whichever is longer, for the answer. An answer clears the stage.
+fn await_folder_access(
+    app: &impl PiLaunchBoundaries,
+    run_id: &str,
+    directory: &std::path::Path,
+    bound: Duration,
+    cancelled: &AtomicBool,
+    name_wait: &mut dyn FnMut(&str) -> Result<(), PiLaunchError>,
+) -> Result<(), PiLaunchError> {
+    use crate::folder_access::FolderAccess;
+    let folder = crate::state_root::home_directory_value().and_then(|home| {
+        crate::folder_access::protected_folder(directory, std::path::Path::new(&home))
+    });
+    let mut access = app.folder_access(directory, FOLDER_ACCESS_GRACE.min(bound), cancelled);
+    if access == FolderAccess::Waiting && !cancelled.load(Ordering::SeqCst) {
+        let prompt_bound = bound.max(FOLDER_PROMPT_BOUND);
+        eprintln!(
+            "muniment-runtime: run_id={run_id} pi_spawn waiting_on=folder_access folder={} bound_ms={}",
+            folder.unwrap_or("other"),
+            prompt_bound.as_millis()
+        );
+        name_wait(&folder_wait_stage(folder))?;
+        access = app.folder_access(directory, prompt_bound, cancelled);
+        if access == FolderAccess::Open {
+            name_wait("routing")?;
+        }
+    }
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(PiLaunchError::Acquisition(
+            crate::model_install::ModelInstallError::Cancelled,
+        ));
+    }
+    match access {
+        FolderAccess::Open => Ok(()),
+        access => Err(PiLaunchError::FolderAccess { access, folder }),
+    }
+}
+
+/// What Pi waited on when it missed its readiness bound, as far as the
+/// runtime can tell.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StartupWait {
+    /// The operating system still holds or refuses Pi's working folder.
+    Folder {
+        access: crate::folder_access::FolderAccess,
+        folder: Option<&'static str>,
+    },
+    /// Pi asked a question through an extension and has no answer yet.
+    Dialog(String),
+    Unknown,
+}
+
+impl std::fmt::Display for StartupWait {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Folder { access, folder } => write!(
+                formatter,
+                "folder_access access={access:?} folder={}",
+                folder.unwrap_or("other")
+            ),
+            Self::Dialog(request) => write!(formatter, "extension_request {request}"),
+            Self::Unknown => formatter.write_str("unknown"),
+        }
+    }
+}
+
+fn startup_waiting_on(
+    app: &impl PiLaunchBoundaries,
+    wiring: &crate::sidecar::PiRpcWiring,
+    directory: Option<&std::path::Path>,
+    cancelled: &AtomicBool,
+) -> StartupWait {
+    use crate::folder_access::FolderAccess;
+    if let Some(directory) = directory {
+        let access = app.folder_access(directory, Duration::from_millis(500), cancelled);
+        if access != FolderAccess::Open {
+            let folder = crate::state_root::home_directory_value().and_then(|home| {
+                crate::folder_access::protected_folder(directory, std::path::Path::new(&home))
+            });
+            return StartupWait::Folder { access, folder };
+        }
+    }
+    wiring
+        .pending_request()
+        .map_or(StartupWait::Unknown, StartupWait::Dialog)
+}
+
+/// What a reply that never became ready keeps as its detail: the bound, the
+/// state Pi reached, what it waited on and the first error it wrote.
+fn readiness_detail(
+    bound: Duration,
+    status: SidecarStatus,
+    waiting_on: &StartupWait,
+    stderr_error: Option<String>,
+) -> String {
+    let mut detail = format!(
+        "The agent runtime did not report ready within {} seconds. Status: {status:?}. Waiting on: {waiting_on}.",
+        bound.as_secs()
+    );
+    if let Some(error) = stderr_error {
+        detail.push(' ');
+        detail.push_str(&error);
+    }
+    detail
+}
+
+/// The line a failed reply shows: the provider's own sentence after ours,
+/// when it gave one.
+fn failure_reason(detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) => format!("The model could not complete this reply. {detail}"),
+        None => "The model could not complete this reply.".into(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fail_with_detail(
+    sink: &impl ChatEventSink,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut MarkedEffects,
+    reason: &str,
+    detail: Option<&str>,
+    subject: Option<&str>,
+) {
+    open_effects.with(|open_effects| {
+        crate::run_events::fail_with_detail(
+            sink,
+            journal,
+            projector,
+            run_id,
+            seq,
+            open_effects,
+            reason,
+            detail,
+            subject,
+        )
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fail_with_open_effects(
+    sink: &impl ChatEventSink,
+    journal: &SharedStorage,
+    projector: &mut ChatProjector,
+    run_id: &str,
+    seq: &mut u64,
+    open_effects: &mut MarkedEffects,
+    reason: &str,
+    subject: Option<&str>,
+) {
+    open_effects.with(|open_effects| {
+        core_fail_with_open_effects(
+            sink,
+            journal,
+            projector,
+            run_id,
+            seq,
+            open_effects,
+            reason,
+            subject,
+        )
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::code_diff_journal::{
+        append_code_diff_permission_request, compose_code_diff_proposal,
+    };
+    use crate::code_diff_observe::observe_workspace_write_plan;
+    use crate::code_diff_staging::ProposedOperation;
+    use crate::journal::pi_translation::close_open_effects;
+    use crate::journal::reducer::{ChatProjection, PermissionRequest, ProjectedRecall};
+    use crate::journal::RunJournal;
+    use crate::memory_index::MemoryIndexError;
+    use crate::sidecar::{PiRpcWiring, SidecarSupervisor};
+    use std::cell::RefCell;
+    use std::io;
+    use uuid::Uuid;
+
+    fn ledger_of_one_run() -> LocalRunLedger {
+        let mut ledger = LocalRunLedger::default();
+        let usage = crate::sidecar::pi_chat::TokenUsage {
+            input: 100,
+            output: 10,
+            cache_read: 5,
+            cache_write: 0,
+            reasoning: 2,
+            total: 117,
+        };
+        let reported = |cost: f64| PiChatEvent::ModelReported {
+            routing: None,
+            classifier: None,
+            provider: "ollama".into(),
+            model: "llama3.2:3b".into(),
+            usage: Some(usage),
+            cost: Some(cost),
+        };
+        let started = |id: &str, name: &str| PiChatEvent::ToolStarted {
+            tool_call_id: id.into(),
+            tool_name: name.into(),
+            input: None,
+            parent_tool_call_id: None,
+        };
+        let finished = |id: &str, failed: bool| PiChatEvent::ToolFinished {
+            tool_call_id: id.into(),
+            failed,
+            output: None,
+        };
+        for event in [
+            started("c1", "read"),
+            finished("c1", false),
+            started("c2", "bash"),
+            finished("c2", true),
+            started("c3", "read"),
+            reported(0.01),
+            reported(0.0025),
+            PiChatEvent::TextDelta("hi".into()),
+        ] {
+            ledger.record(&event);
+        }
+        ledger
+    }
+
+    #[test]
+    fn routed_receipt_preserves_account_decision_and_exclusions() {
+        let evidence = crate::model_router::wire::RoutingEvidence {
+            account: "Work".into(),
+            selected_model: "openai/gpt-5.6-mini".into(),
+            decision: "Classifier selected the model".into(),
+            confidence: Some(0.8),
+            classification_ms: 42,
+            exclusions: vec!["anthropic/claude: Account is turned off.".into()],
+            fallback_causes: vec!["Personal answered 429.".into()],
+        };
+        let id = crate::model_router::wire::evidenced_response_id(
+            "openai",
+            "gpt-5.6-mini",
+            None,
+            evidence.clone(),
+        );
+        let event = crate::sidecar::pi_chat::parse_frame(&serde_json::json!({
+            "type": "message_end", "message": {"role": "assistant", "provider": "muniment-router", "model": "auto", "responseId": id}
+        })).unwrap();
+        let mut ledger = LocalRunLedger::default();
+        ledger.record(&event);
+        let receipt = local_receipt(Duration::from_secs(1), &ledger);
+        let restored: crate::sidecar::pi_chat::Receipt =
+            serde_json::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert_eq!(restored.routing, vec![evidence]);
+        assert_eq!(restored.model.as_deref(), Some("openai/gpt-5.6-mini"));
+    }
+
+    #[test]
+    fn classifier_usage_sums_without_changing_model_usage() {
+        let mut ledger = LocalRunLedger::default();
+        let event = PiChatEvent::ModelReported {
+            routing: None,
+            classifier: Some(crate::model_router::wire::ClassifierUsage {
+                model: "typesafe/jev-latest".into(),
+                tokens: Some(crate::model_router::wire::Tokens {
+                    input: 1000,
+                    output: 0,
+                    ..Default::default()
+                }),
+                cost: Some(0.000042),
+            }),
+            provider: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+            usage: Some(crate::sidecar::pi_chat::TokenUsage {
+                input: 10,
+                output: 2,
+                ..Default::default()
+            }),
+            cost: Some(0.01),
+        };
+        ledger.record(&event);
+        ledger.record(&event);
+        let receipt = local_receipt(Duration::ZERO, &ledger);
+        assert_eq!(receipt.cost.as_deref(), Some("$0.020 est."));
+        assert_eq!(receipt.tokens.unwrap().input, 20);
+        assert_eq!(receipt.classifiers.len(), 1);
+        assert_eq!(receipt.classifiers[0].tokens.unwrap().input, 2000);
+        assert_eq!(receipt.classifiers[0].cost, Some(0.000084));
+        let restored: crate::sidecar::pi_chat::Receipt =
+            serde_json::from_value(serde_json::to_value(&receipt).unwrap()).unwrap();
+        assert_eq!(restored, receipt);
+    }
+
+    #[test]
+    fn a_run_with_an_unpriced_turn_does_not_show_a_partial_cost() {
+        let mut ledger = ledger_of_one_run();
+        ledger.record(&PiChatEvent::ModelReported {
+            routing: None,
+            classifier: None,
+            provider: "muniment-router".into(),
+            model: "private-model".into(),
+            usage: None,
+            cost: None,
+        });
+        assert_eq!(local_receipt(Duration::ZERO, &ledger).cost, None);
+    }
+
+    #[test]
+    fn a_receipt_names_the_provider_as_the_models_page_does() {
+        let mut ledger = LocalRunLedger::default();
+        ledger.record(&PiChatEvent::ModelReported {
+            routing: None,
+            classifier: None,
+            provider: "claude-bridge".into(),
+            model: "claude-sonnet-5".into(),
+            usage: None,
+            cost: None,
+        });
+        let receipt = local_receipt(Duration::ZERO, &ledger);
+        assert_eq!(
+            receipt.model.as_deref(),
+            Some("claude-bridge/claude-sonnet-5")
+        );
+        assert_eq!(receipt.provider_name.as_deref(), Some("Anthropic"));
+        // An unpriced subscription turn shows no cost, never $0.00.
+        assert_eq!(receipt.cost_usd, None);
+        assert_eq!(receipt.cost, None);
+    }
+
+    fn assert_local_receipt(duration: Duration, expected_range: std::ops::Range<f64>) {
+        let receipt = local_receipt(duration, &ledger_of_one_run());
+        let time = receipt.time.as_deref().expect("local receipt records time");
+        let seconds = time
+            .strip_suffix('s')
+            .expect("local receipt time ends in seconds");
+        let (whole, tenths) = seconds
+            .split_once('.')
+            .expect("local receipt time has a decimal point");
+        assert!(!whole.is_empty() && whole.chars().all(|character| character.is_ascii_digit()));
+        assert_eq!(tenths.len(), 1);
+        assert!(tenths.chars().all(|character| character.is_ascii_digit()));
+        assert!(expected_range.contains(&seconds.parse::<f64>().unwrap()));
+        assert_eq!(receipt.route, None);
+        assert_eq!(receipt.model.as_deref(), Some("ollama/llama3.2:3b"));
+        assert_eq!(receipt.cost.as_deref(), Some("$0.013 est."));
+        assert_eq!(receipt.turns, Some(2));
+        let tokens = receipt.tokens.unwrap();
+        assert_eq!(
+            (
+                tokens.input,
+                tokens.output,
+                tokens.cache_read,
+                tokens.reasoning,
+                tokens.total
+            ),
+            (200, 20, 10, 4, 234)
+        );
+        assert_eq!(
+            receipt
+                .tools
+                .iter()
+                .map(|tool| (tool.name.as_str(), tool.calls, tool.failed))
+                .collect::<Vec<_>>(),
+            [("bash", 1, 1), ("read", 2, 0)]
+        );
+        assert!(receipt.capabilities.is_empty());
+        // A run Pi never reported on records the time alone.
+        let bare = local_receipt(duration, &LocalRunLedger::default());
+        assert_eq!(bare.model, None);
+        assert_eq!(bare.cost, None);
+        assert_eq!(bare.turns, None);
+        assert_eq!(bare.tokens, None);
+        assert!(bare.tools.is_empty());
+    }
+
+    #[test]
+    fn local_receipt_records_sub_second_time_without_a_route() {
+        assert_local_receipt(Duration::from_millis(200), 0.0..1.0);
+    }
+
+    #[test]
+    fn local_receipt_records_multi_second_time_without_a_route() {
+        assert_local_receipt(Duration::from_millis(6_200), 6.0..7.0);
+    }
+
+    #[derive(Default)]
+    struct FakeChatEventSink;
+
+    impl ChatEventSink for FakeChatEventSink {
+        fn provenance(&self) -> (&str, &str) {
+            ("test", "0.0.0")
+        }
+
+        fn deliver(&self, _event: crate::run_events::ChatEvent) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingChatEventSink(Mutex<Vec<crate::run_events::ChatEvent>>);
+
+    impl ChatEventSink for RecordingChatEventSink {
+        fn provenance(&self) -> (&str, &str) {
+            ("test", "0.0.0")
+        }
+
+        fn deliver(&self, event: crate::run_events::ChatEvent) -> Result<(), ()> {
+            self.0.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    fn code_diff_fixture() -> (
+        std::path::PathBuf,
+        SharedStorage,
+        ChatProjector,
+        u64,
+        String,
+        crate::journal::reducer::PermissionGate,
+    ) {
+        let root =
+            std::env::temp_dir().join(format!("muniment-coordinate-diff-{}", Uuid::now_v7()));
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let mut journal = RunJournal::open(root.join("runs.sqlite3")).unwrap();
+        let cas = crate::cas::LocalCas::open(&root.join("cas")).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        let (plan, current) = observe_workspace_write_plan(
+            &workspace,
+            &[ProposedOperation::Write {
+                path: "approved.txt".into(),
+                output: b"approved\n".to_vec(),
+            }],
+        )
+        .unwrap();
+        compose_code_diff_proposal(&plan, &current, &mut journal, &cas, &run_id, "effect-1")
+            .unwrap();
+        let gate =
+            append_code_diff_permission_request(&mut journal, &cas, &run_id, "effect-1").unwrap();
+        let events = journal.events(&run_id).unwrap();
+        let mut projector = ChatProjector::new();
+        for event in &events {
+            projector.apply(event).unwrap();
+        }
+        let seq = events.last().unwrap().run_seq;
+        (
+            root,
+            Arc::new(Mutex::new(crate::run_events::ChatStorage { journal, cas })),
+            projector,
+            seq,
+            run_id,
+            gate,
+        )
+    }
+
+    fn code_diff_answer(
+        queued_gate_id: &str,
+        gate: &crate::journal::reducer::PermissionGate,
+        resolved: std::sync::mpsc::SyncSender<Option<u64>>,
+    ) -> PendingPermissionAnswer {
+        let PermissionRequest::CodeDiff {
+            effect_id,
+            code_diff_id,
+            diff_sha256,
+            write_plan_sha256,
+        } = &gate.request
+        else {
+            unreachable!()
+        };
+        PendingPermissionAnswer {
+            gate_id: queued_gate_id.into(),
+            answer: ChatPermissionAnswer::CodeDiff {
+                gate_id: gate.gate_id.clone(),
+                effect_id: effect_id.clone(),
+                code_diff_id: code_diff_id.clone(),
+                diff_sha256: diff_sha256.clone(),
+                write_plan_sha256: write_plan_sha256.clone(),
+            },
+            resolved: Some(resolved),
+        }
+    }
+
+    #[test]
+    fn code_diff_answer_applies_and_projects_both_events() {
+        let (root, storage, mut projector, mut seq, run_id, gate) = code_diff_fixture();
+        let workspace = root.join("workspace");
+        let initial_seq = seq;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let sink = RecordingChatEventSink::default();
+
+        coordinate_code_diff_answer(
+            &sink,
+            &storage,
+            &mut projector,
+            &mut seq,
+            &workspace,
+            &run_id,
+            code_diff_answer(&gate.gate_id, &gate, sender),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(workspace.join("approved.txt")).unwrap(),
+            b"approved\n"
+        );
+        assert_eq!(seq, initial_seq + 2);
+        assert_eq!(receiver.recv().unwrap(), Some(seq));
+        assert!(projector.projection().unwrap().pending_permission.is_none());
+        let delivered = sink.0.lock().unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert!(delivered[0].pending_permission.is_none());
+        let events = storage.lock().unwrap().journal.events(&run_id).unwrap();
+        assert_eq!(events[events.len() - 2].event_type, "permission.resolved");
+        assert_eq!(events.last().unwrap().event_type, "code.diff.applied");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn code_diff_answer_for_another_gate_applies_nothing() {
+        let (root, storage, mut projector, mut seq, run_id, gate) = code_diff_fixture();
+        let workspace = root.join("workspace");
+        let initial_seq = seq;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+
+        coordinate_code_diff_answer(
+            &FakeChatEventSink,
+            &storage,
+            &mut projector,
+            &mut seq,
+            &workspace,
+            &run_id,
+            code_diff_answer("another-gate", &gate, sender),
+        )
+        .unwrap();
+
+        assert_eq!(receiver.recv().unwrap(), None);
+        assert_eq!(seq, initial_seq);
+        assert!(!workspace.join("approved.txt").exists());
+        assert_eq!(
+            projector.projection().unwrap().pending_permission,
+            Some(gate)
+        );
+        assert_eq!(
+            storage
+                .lock()
+                .unwrap()
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .len(),
+            4
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn code_diff_apply_failure_keeps_the_gate_and_sequence() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-coordinate-diff-failure-{}",
+            Uuid::now_v7()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = std::path::Path::new("/sys/kernel");
+        let mut journal = RunJournal::open(root.join("runs.sqlite3")).unwrap();
+        let cas = crate::cas::LocalCas::open(&root.join("cas")).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        let (plan, current) = observe_workspace_write_plan(
+            workspace,
+            &[ProposedOperation::Delete {
+                path: "notes".into(),
+            }],
+        )
+        .unwrap();
+        compose_code_diff_proposal(&plan, &current, &mut journal, &cas, &run_id, "effect-1")
+            .unwrap();
+        let gate =
+            append_code_diff_permission_request(&mut journal, &cas, &run_id, "effect-1").unwrap();
+        let events = journal.events(&run_id).unwrap();
+        let mut projector = ChatProjector::new();
+        for event in &events {
+            projector.apply(event).unwrap();
+        }
+        let mut seq = events.last().unwrap().run_seq;
+        let initial_seq = seq;
+        let initial_event_count = events.len();
+        let storage = Arc::new(Mutex::new(crate::run_events::ChatStorage { journal, cas }));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+
+        coordinate_code_diff_answer(
+            &FakeChatEventSink,
+            &storage,
+            &mut projector,
+            &mut seq,
+            workspace,
+            &run_id,
+            code_diff_answer(&gate.gate_id, &gate, sender),
+        )
+        .unwrap();
+
+        assert_eq!(receiver.recv().unwrap(), None);
+        assert_eq!(seq, initial_seq);
+        assert_eq!(
+            projector.projection().unwrap().pending_permission,
+            Some(gate.clone())
+        );
+        let mut storage_guard = storage.lock().unwrap();
+        let events = storage_guard.journal.events(&run_id).unwrap();
+        assert_eq!(events.len(), initial_event_count);
+        assert!(!events.iter().any(|event| matches!(
+            event.event_type.as_str(),
+            "permission.resolved" | "code.diff.applied"
+        )));
+        drop(storage_guard);
+
+        append_emit(
+            &FakeChatEventSink,
+            &storage,
+            &mut projector,
+            &run_id,
+            &mut seq,
+            "test.continued",
+            json!({}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(seq, initial_seq + 1);
+        assert_eq!(
+            projector.projection().unwrap().pending_permission,
+            Some(gate)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn append_test_event(
+        journal: &mut RunJournal,
+        run_id: &str,
+        seq: u64,
+        kind: &str,
+        payload: Value,
+        subject: Option<&str>,
+    ) {
+        journal
+            .append(
+                seq - 1,
+                &crate::run_events::event_envelope(
+                    &FakeChatEventSink,
+                    run_id,
+                    seq,
+                    kind,
+                    payload,
+                    subject,
+                ),
+            )
+            .unwrap();
+    }
+
+    fn failed_memory_search_answer(
+        prefill: Option<&str>,
+        failure: Option<MemoryFailure>,
+    ) -> ExtensionUiAnswer {
+        let root = std::env::temp_dir().join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&root).unwrap();
+        let sink = FakeChatEventSink;
+        let shared = Arc::new(Mutex::new(crate::run_events::ChatStorage {
+            journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),
+            cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
+        }));
+        let event = PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+            id: "memory-failure".into(),
+            dialog: ExtensionUiDialog::Editor {
+                title: "muniment:memory-search".into(),
+                prefill: prefill.map(str::to_owned),
+            },
+            timeout: None,
+        });
+        let captured = RefCell::new(None);
+
+        assert!(coordinate_memory_search_with(
+            &sink,
+            &shared,
+            &mut ChatProjector::new(),
+            "run-1",
+            &mut 0,
+            None,
+            &event,
+            |arguments| match failure {
+                Some(failure) => Err(failure),
+                None => {
+                    let _ = arguments;
+                    Err(MemoryFailure::runtime_unavailable())
+                }
+            },
+            |_, answer| *captured.borrow_mut() = Some(answer),
+        ));
+
+        captured.into_inner().unwrap()
+    }
+
+    #[test]
+    fn failed_memory_search_calls_answer_with_each_typed_error() {
+        let cases = [
+            (
+                MemoryIndexError::InvalidToolArguments,
+                "invalid_tool_arguments",
+                "The memory search arguments are invalid.",
+            ),
+            (
+                MemoryIndexError::LimitRaised,
+                "limit_raised",
+                "The memory search requested a limit above the configured limit.",
+            ),
+            (
+                MemoryIndexError::QueryTooLong,
+                "query_too_long",
+                "The memory search query is too long.",
+            ),
+            (
+                MemoryIndexError::TimedOut,
+                "timed_out",
+                "The memory search timed out.",
+            ),
+            (
+                MemoryIndexError::SecretRejected,
+                "secret_rejected",
+                "The memory search rejected content that contains a secret.",
+            ),
+            (
+                MemoryIndexError::InvalidPath,
+                "invalid_path",
+                "The memory search found an invalid path.",
+            ),
+            (
+                MemoryIndexError::Sqlite(rusqlite::Error::InvalidQuery),
+                "sqlite",
+                "The memory search database failed.",
+            ),
+            (
+                MemoryIndexError::Io(io::Error::other("test")),
+                "io",
+                "The memory search input or output operation failed.",
+            ),
+        ];
+
+        for (error, kind, message) in cases {
+            assert_eq!(
+                failed_memory_search_answer(
+                    Some(r#"{"query":"records"}"#),
+                    Some(MemoryFailure::from_index_error(error)),
+                ),
+                ExtensionUiAnswer::Editor(
+                    json!({"error": {"kind": kind, "message": message}}).to_string()
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn failed_memory_search_calls_answer_for_missing_inputs_and_runtime() {
+        assert_eq!(
+            failed_memory_search_answer(None, None),
+            ExtensionUiAnswer::Editor(
+                json!({
+                    "error": {
+                        "kind": "missing_prefill",
+                        "message": "The memory search arguments are missing."
+                    }
+                })
+                .to_string()
+            ),
+        );
+        assert_eq!(
+            failed_memory_search_answer(Some(r#"{"query":"records"}"#), None),
+            ExtensionUiAnswer::Editor(
+                json!({
+                    "error": {
+                        "kind": "runtime_unavailable",
+                        "message": "The memory search runtime is unavailable."
+                    }
+                })
+                .to_string()
+            ),
+        );
+    }
+
+    #[test]
+    fn live_chat_event_carries_projected_recalls() {
+        let event = crate::run_events::chat_event(
+            "run-1",
+            ChatProjection {
+                recalls: vec![ProjectedRecall {
+                    query: "lease terms".into(),
+                    files: vec!["memory/lease.md".into()],
+                }],
+                ..ChatProjection::default()
+            },
+            None,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap()["recalls"],
+            json!([{"query": "lease terms", "files": ["memory/lease.md"]}])
+        );
+    }
+
+    #[test]
+    fn an_agent_gate_journals_the_policy_request_its_check_named() {
+        let mut asked = BTreeMap::new();
+        let policy = crate::journal::reducer::GatePolicy {
+            request_kind: crate::journal::ThreadPermissionRequestKind::Tool,
+            resource: crate::journal::ThreadPermissionResource::Tool {
+                name: "mcp__crm__delete".into(),
+                input: json!({"id": 7}),
+            },
+            summary: "mcp__crm__delete {\"id\":7}".into(),
+            reason: Some("This thread asks before MCP calls.".into()),
+            plan: None,
+        };
+        asked.insert("Allow it? Ask.".to_owned(), policy.clone());
+        let gate = |title: &str, kind: &str| json!({"gate_id": "gate-1", "kind": kind, "title": title, "options": ["Allow once", "Deny"]});
+        // Other gates and other events pass unchanged.
+        assert_eq!(
+            with_gate_policy(&mut asked, "permission.requested", gate("Other?", "select")),
+            gate("Other?", "select")
+        );
+        assert_eq!(
+            with_gate_policy(
+                &mut asked,
+                "permission.requested",
+                gate("Allow it? Ask.", "confirm")
+            ),
+            gate("Allow it? Ask.", "confirm")
+        );
+        let journaled = with_gate_policy(
+            &mut asked,
+            "permission.requested",
+            gate("Allow it? Ask.", "select"),
+        );
+        let parsed: crate::journal::reducer::PermissionGate =
+            serde_json::from_value(journaled).unwrap();
+        assert_eq!(parsed.policy, Some(Box::new(policy)));
+        assert!(asked.is_empty());
+    }
+
+    fn confirm_request(gate_id: &str) -> ExtensionUiRequest {
+        ExtensionUiRequest {
+            id: gate_id.into(),
+            dialog: ExtensionUiDialog::Confirm {
+                title: "Run the command?".into(),
+                message: "The agent wants to run a command.".into(),
+            },
+            timeout: None,
+        }
+    }
+
+    fn open_gate(gate: &mut MarkedGate, gate_id: &str) {
+        gate.with(|pending| {
+            coordinate_extension_ui_request(
+                PiChatEvent::ExtensionUiRequest(confirm_request(gate_id)),
+                pending,
+                &mut VecDeque::new(),
+                |_, _| Ok(()),
+            )
+        })
+        .unwrap();
+    }
+
+    fn answer_gate(gate: &mut MarkedGate, gate_id: &str) {
+        gate.with(|pending| {
+            coordinate_permission_answer(
+                pending,
+                PendingPermissionAnswer {
+                    gate_id: gate_id.into(),
+                    answer: ChatPermissionAnswer::Confirm(true),
+                    resolved: None,
+                },
+                |_, _| Ok(()),
+                |_, _| Ok(7),
+            )
+        })
+        .unwrap();
+    }
+
+    fn start_effect(effects: &mut MarkedEffects, effect_id: &str) {
+        let started = PiChatEvent::ToolStarted {
+            tool_call_id: effect_id.into(),
+            tool_name: "Read file".into(),
+            input: None,
+            parent_tool_call_id: None,
+        };
+        assert!(effects
+            .with(|open_effects| tool_journal_entry(&started, open_effects))
+            .is_some());
+    }
+
+    #[test]
+    fn an_open_permission_gate_marks_runtime_activity_until_the_answer_lands() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut gate = MarkedGate::pending_permission(Some(registry.clone()));
+        assert!(!registry.snapshot().pending_permission_gate);
+
+        open_gate(&mut gate, "gate-1");
+        assert!(registry.snapshot().pending_permission_gate);
+
+        answer_gate(&mut gate, "gate-1");
+        assert!(!registry.snapshot().pending_permission_gate);
+    }
+
+    #[test]
+    fn an_answer_for_another_gate_leaves_the_permission_mark_set() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut gate = MarkedGate::pending_permission(Some(registry.clone()));
+        open_gate(&mut gate, "gate-1");
+        assert!(registry.snapshot().pending_permission_gate);
+
+        answer_gate(&mut gate, "gate-2");
+        assert!(registry.snapshot().pending_permission_gate);
+    }
+
+    #[test]
+    fn an_open_external_effect_marks_runtime_activity_until_the_last_one_closes() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut effects = MarkedEffects::open_effects(Some(registry.clone()));
+        assert!(!registry.snapshot().in_flight_external_effect);
+
+        start_effect(&mut effects, "effect-1");
+        assert!(registry.snapshot().in_flight_external_effect);
+        start_effect(&mut effects, "effect-2");
+        assert!(registry.snapshot().in_flight_external_effect);
+
+        let finished = PiChatEvent::ToolFinished {
+            tool_call_id: "effect-1".into(),
+            failed: false,
+            output: None,
+        };
+        assert!(effects
+            .with(|open_effects| tool_journal_entry(&finished, open_effects))
+            .is_some());
+        assert!(registry.snapshot().in_flight_external_effect);
+
+        let finished = PiChatEvent::ToolFinished {
+            tool_call_id: "effect-2".into(),
+            failed: false,
+            output: None,
+        };
+        assert!(effects
+            .with(|open_effects| tool_journal_entry(&finished, open_effects))
+            .is_some());
+        assert!(!registry.snapshot().in_flight_external_effect);
+    }
+
+    #[test]
+    fn closing_the_open_effects_at_a_terminal_event_clears_the_effect_mark() {
+        let registry = RuntimeActivityRegistry::new();
+        let mut effects = MarkedEffects::open_effects(Some(registry.clone()));
+        start_effect(&mut effects, "effect-1");
+        start_effect(&mut effects, "effect-2");
+        assert!(registry.snapshot().in_flight_external_effect);
+
+        let mut closed = Vec::new();
+        effects
+            .with(|open_effects| {
+                close_open_effects(open_effects, |kind, payload| {
+                    closed.push((kind.to_owned(), payload));
+                    Ok::<(), ()>(())
+                })
+            })
+            .unwrap();
+        assert_eq!(closed.len(), 2);
+        assert!(!registry.snapshot().in_flight_external_effect);
+    }
+
+    #[test]
+    fn a_run_that_ends_with_an_open_gate_and_an_open_effect_clears_both_marks() {
+        let registry = RuntimeActivityRegistry::new();
+        {
+            let mut gate = MarkedGate::pending_permission(Some(registry.clone()));
+            let mut effects = MarkedEffects::open_effects(Some(registry.clone()));
+            open_gate(&mut gate, "gate-1");
+            start_effect(&mut effects, "effect-1");
+            assert!(registry.snapshot().pending_permission_gate);
+            assert!(registry.snapshot().in_flight_external_effect);
+        }
+        // The coordinate loop drops both values when it returns, whether the run
+        // failed or ended.
+        assert!(!registry.snapshot().pending_permission_gate);
+        assert!(!registry.snapshot().in_flight_external_effect);
+    }
+
+    #[test]
+    fn application_chat_session_dispatches_two_memory_turns_and_persists_recalls() {
+        let root = std::env::temp_dir().join(format!("muniment-memory-chat-{}", Uuid::now_v7()));
+        let home = root.join("home");
+        std::fs::create_dir_all(home.join("memory")).unwrap();
+        std::fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
+        let runtime = Arc::new(crate::memory_runtime::ApplicationMemoryRuntime::new(
+            root.join("config"),
+            root.join("cache"),
+        ));
+        let database = root.join("cache/index.sqlite3");
+        crate::memory_index::MemoryIndex::new(&home, &database)
+            .reindex_with_deadline(std::time::Instant::now() + Duration::from_secs(30))
+            .unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        runtime.open_session_for_home(
+            &run_id,
+            "thread-1",
+            crate::memory_index::ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: 100,
+            },
+            &home,
+            database,
+        );
+        let first_definition = runtime.tool_definition_for_turn(&run_id).unwrap();
+        let second_definition = runtime.tool_definition_for_turn(&run_id).unwrap();
+        assert_eq!(first_definition, second_definition);
+
+        let sink = FakeChatEventSink;
+        let mut journal = RunJournal::open(root.join("runs.sqlite3")).unwrap();
+        append_test_event(&mut journal, &run_id, 1, "run.started", json!({}), None);
+        let mut projector = ChatProjector::new();
+        projector
+            .apply(&journal.events(&run_id).unwrap()[0])
+            .unwrap();
+        let shared = Arc::new(Mutex::new(crate::run_events::ChatStorage {
+            journal,
+            cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
+        }));
+
+        let executable_name = if cfg!(windows) {
+            "sidecar-test-stub.exe"
+        } else {
+            "sidecar-test-stub"
+        };
+        let test_executable = std::env::current_exe().unwrap();
+        let stub = test_executable
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(executable_name);
+        assert!(stub.is_file(), "sidecar test stub was not built");
+        let capture = root.join("answers.jsonl");
+        let mut config = crate::sidecar::SidecarConfig::new(stub.to_string_lossy());
+        config.args = vec![
+            "pi-chat-extension-ui".into(),
+            capture.to_string_lossy().into_owned(),
+        ];
+        config.health_interval = Duration::from_secs(60);
+        let wiring = PiRpcWiring::new();
+        let mut supervisor =
+            SidecarSupervisor::spawn(config, wiring.readiness_probe(Duration::from_millis(100)))
+                .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while supervisor.status() != SidecarStatus::Healthy && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let transport = wiring.transport().unwrap();
+        let (adapter, _) =
+            PiRunAdapter::start(&run_id, &transport, "start", Duration::from_secs(1)).unwrap();
+        let mut seq = 1;
+        for turn in 1..=2 {
+            let event = PiChatEvent::ExtensionUiRequest(ExtensionUiRequest {
+                id: format!("memory-{turn}"),
+                dialog: ExtensionUiDialog::Editor {
+                    title: "muniment:memory-search".into(),
+                    prefill: Some(r#"{"query":"saffron"}"#.into()),
+                },
+                timeout: None,
+            });
+            assert!(coordinate_memory_search(
+                &sink,
+                &runtime,
+                &shared,
+                &mut projector,
+                &adapter,
+                &transport,
+                &run_id,
+                &mut seq,
+                None,
+                &event,
+            ));
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let answers = loop {
+            let answers: Vec<serde_json::Value> = std::fs::read_to_string(&capture)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            if answers.len() == 2 || std::time::Instant::now() >= deadline {
+                break answers;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(answers.len(), 2);
+        for answer in answers {
+            let result: serde_json::Value =
+                serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
+            assert_eq!(result["items"][0]["path"], "memory/fact.md");
+        }
+
+        let events = shared.lock().unwrap().journal.events(&run_id).unwrap();
+        let recalls: Vec<_> = events
+            .iter()
+            .filter(|event| event.event_type == "memory.recalled")
+            .collect();
+        assert_eq!(recalls.len(), 2);
+        for recall in recalls {
+            let crate::journal::EventPayload::Inline { payload_json } = &recall.payload else {
+                panic!("memory recall must use an inline payload");
+            };
+            assert_eq!(payload_json["files"], json!(["memory/fact.md"]));
+        }
+        runtime.close_session(&run_id);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .journal
+                .events(&run_id)
+                .unwrap()
+                .iter()
+                .filter(|event| event.event_type == "memory.recalled")
+                .count(),
+            2
+        );
+        supervisor.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

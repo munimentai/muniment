@@ -1,12 +1,15 @@
 <script>
+  import FailureNote from './FailureNote.svelte'
   import ProviderLogo from './ProviderLogo.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import { SERVER_STATES, connectOptions } from './first-run-providers.js'
 
   // The first run's one question. Every option is a one-line button, found
   // ones first. More providers and Explore without connecting end the list. A
-  // server that needs a step opens that step in place.
-  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, busy = false, onconnect, onmore, onexplore, onrescan } = $props()
+  // server that needs a step opens that step in place, and a subscription's
+  // sign-in runs in place under its card.
+  let { scan = null, scanning = false, scanError = '', homePath = '', homeLoading = false, folderAsking = false, busy = false, signIn = null, onconnect, onmore, onexplore, onrescan, onsigninanswer, onsignincancel, onsigninopen } = $props()
+  let answer = $state('')
   let open = $state(null)
   let key = $state('')
   const options = $derived(connectOptions(scan))
@@ -31,18 +34,39 @@
   {#if scanning}
     <p class="state" role="status">Looking for models on this computer…</p>
   {:else if scanError}
-    <p class="state" role="alert">{scanError} <button type="button" class="link" onclick={onrescan}>Look again</button></p>
+    <p class="state" role="alert">{scanError} <button type="button" class="link" onclick={onrescan}>Scan again</button></p>
   {/if}
 
   {#snippet card(option)}
     {@const server = option.kind === 'server' ? option.server : null}
     {@const state = server ? SERVER_STATES[server.state] : null}
-    <li class:expanded={open === option.id}>
+    <li class:expanded={open === option.id || signIn?.option === option.id}>
       <button type="button" class="option" disabled={busy} aria-expanded={server && server.state !== 'ready' ? open === option.id : undefined} onclick={() => choose(option)}>
         <ProviderLogo color provider={option.logo} size={20} />
         <strong>{option.name}</strong>
-        <span class="action" data-tone={state?.tone}>{state ? state.action : option.hint ? 'Connect' : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
+        <span class="action" data-tone={state?.tone}>{state ? state.action : 'Sign in'}<LucideIcon name="chevron-right" size={14} /></span>
       </button>
+      {#if signIn?.option === option.id}
+        <div class="step" aria-live="polite">
+          {#if signIn.stage === 'failed'}<FailureNote failure={signIn.message} detail={signIn.detail} />{:else}<p>{signIn.message}</p>{/if}
+          {#if signIn.code}<p class="code">{signIn.code}</p>{/if}
+          {#if signIn.url}<button type="button" data-variant={signIn.prompt?.kind === 'input' ? undefined : 'primary'} onclick={() => onsigninopen?.(signIn.url)}>Open the sign-in page</button>{/if}
+          {#if signIn.prompt?.kind === 'select'}
+            <p>{signIn.prompt.title}</p>
+            <div class="choices">{#each signIn.prompt.options as choice}<button type="button" onclick={() => onsigninanswer?.(choice)}>{choice}</button>{/each}</div>
+          {:else if signIn.prompt?.kind === 'input'}
+            <form onsubmit={(event) => { event.preventDefault(); if (answer.trim()) { onsigninanswer?.(answer.trim()); answer = '' } }}>
+              <input type="text" bind:value={answer} placeholder={signIn.prompt.placeholder ?? ''} aria-label={signIn.prompt.title} autocomplete="off" />
+              <button type="submit" data-variant="primary" disabled={!answer.trim()}>Continue</button>
+            </form>
+          {/if}
+          {#if signIn.stage === 'failed' || signIn.stage === 'cancelled'}
+            <button type="button" data-variant="primary" onclick={() => onconnect?.(option)}>Try again</button>
+          {:else}
+            <button type="button" onclick={() => onsignincancel?.()}>Cancel</button>
+          {/if}
+        </div>
+      {/if}
       {#if open === option.id && server?.state === 'needs-key'}
         <div class="step">
           <p>{server.name} asks for an API key.</p>
@@ -52,13 +76,13 @@
           {/if}
           <form onsubmit={(event) => { event.preventDefault(); if (key.trim()) onconnect?.(option, { key: key.trim() }) }}>
             <input type="password" bind:value={key} placeholder="API key" aria-label={`${server.name} API key`} autocomplete="off" />
-            <button type="submit" disabled={!key.trim()}>Connect</button>
+            <button type="submit" data-variant="primary" disabled={!key.trim()}>Connect</button>
           </form>
         </div>
       {:else if open === option.id && server?.state === 'not-running'}
         <div class="step">
           <p>Open {server.name} and start its local server.</p>
-          <button type="button" onclick={onrescan}>Look again</button>
+          <button type="button" data-variant="primary" onclick={onrescan}>Scan again</button>
         </div>
       {/if}
     </li>
@@ -78,6 +102,7 @@
 
   <p class="home">
     {#if home}{'Your files go to '}{/if}<span class:mono={!!home} data-testid="onboarding-home-path" data-home-path={homePath}>{home || (homeLoading ? 'Finding Home…' : 'Home is unavailable.')}</span>{#if home}.{/if}
+    {#if folderAsking}<span class="asking" role="status">If macOS asks about this folder, choose Allow.</span>{/if}
   </p>
 </section>
 
@@ -97,19 +122,22 @@
   .mono { font-family: var(--font-mono); }
   .action { justify-self: end; display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: var(--text-12); white-space: nowrap; }
   .option:hover .action { color: var(--ink); }
-  .action[data-tone="ochre"] { color: var(--ochre); }
+  .action[data-tone="warning"] { color: var(--warning); }
   .step { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 0 12px 12px 42px; }
   .step p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .step .or { margin-top: 4px; }
+  .step .code { color: var(--ink); font: var(--text-22) var(--font-mono); letter-spacing: .08em; }
+  .choices { display: flex; flex-wrap: wrap; gap: 6px; }
   form { display: flex; gap: 8px; width: 100%; }
   input { flex: 1; min-width: 0; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: var(--text-13) var(--font-mono); }
   .step button, .more { min-height: 30px; padding: 5px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
   .step button:hover:not(:disabled), .more:hover { background: var(--faint); }
   .step button:disabled { color: var(--muted); cursor: default; }
-  .step .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .step .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .ends { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
   .more { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border-style: dashed; border-radius: var(--radius-panel); background: none; color: var(--muted); }
   .more:hover { color: var(--ink); }
   .home { margin: 24px 0 0; color: var(--muted); font-size: var(--text-12); }
+  .asking { margin-left: 8px; color: var(--ink); }
   .link { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 </style>

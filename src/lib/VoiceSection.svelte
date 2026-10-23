@@ -11,6 +11,7 @@
   import Button from './ui/Button.svelte'
   import { shortcutFromKeyboardEvent } from './dictation-state.js'
   import { formatBytes, installStateWords } from './speech-install.js'
+  import { installSpeechModel } from './large-downloads.js'
   import { readVoiceSettings, saveVoiceSettings } from './voice-settings.js'
 
   let { tauri, voiceShortcut = '', voiceShortcutChanging = false, onVoiceShortcutChange = async () => true, defaultVoiceShortcut = '' } = $props()
@@ -82,7 +83,7 @@
   }
   async function startInstall() {
     installError = ''
-    try { await tauri.invoke('parakeet_install_start'); await readInstall() } catch (failure) { installError = String(failure?.message ?? failure) }
+    try { await installSpeechModel(tauri); await readInstall() } catch (failure) { installError = String(failure?.message ?? failure) }
   }
   async function cancelInstall() {
     try { await tauri.invoke('parakeet_install_cancel') } catch (_) {}
@@ -101,7 +102,7 @@
   <PageHead intro="Dictate into any chat. Speech stays on this device." />
 
   <Group heading="Shortcut">
-    <Row title="Dictation shortcut" description="Works from anywhere, even when Muniment is in the background.">
+    <Row title="Dictation shortcut" info="Works from any app, even with Muniment in the background.">
       <button class="shortcut-capture" aria-label={capturingShortcut ? 'Record voice shortcut' : `Change voice shortcut, current ${voiceShortcut}`} onclick={() => { capturingShortcut = true; pendingShortcut = ''; shortcutStatus = '' }} onkeydown={captureShortcut} disabled={voiceShortcutChanging}>
         <span>{capturingShortcut ? pendingShortcut || 'Press a shortcut…' : voiceShortcut}</span><small>{capturingShortcut ? 'Modifier + key' : 'Change'}</small>
       </button>
@@ -112,28 +113,28 @@
       <button class="restore-shortcut" onclick={() => applyShortcut(defaultVoiceShortcut)} disabled={voiceShortcut === defaultVoiceShortcut || voiceShortcutChanging}>Restore default</button>
     </Row>
     {#if shortcutStatus}<p class="shortcut-error" role="alert">{shortcutStatus}</p>{/if}
-    <Row title="Shortcut behavior" description="How a press starts and ends dictation.">
+    <Row title="Shortcut behavior">
       <div class="choice"><ChoiceField label="Shortcut behavior" hideLabel value={voice.behavior} options={behaviors} onchange={(behavior) => remember({ behavior })} /></div>
     </Row>
-    <Row title="Cancel dictation" description="Stops without inserting the words, from any app."><kbd>Escape</kbd></Row>
+    <Row title="Cancel dictation" info="Stops without inserting the words, from any app."><kbd>Escape</kbd></Row>
   </Group>
 
   <Group heading="Microphone">
-    <Row title="Input" description="The microphone dictation listens to.">
+    <Row title="Input">
       <div class="choice"><ChoiceField label="Microphone" hideLabel value={voice.microphone} options={microphones} onchange={(microphone) => remember({ microphone })} /></div>
     </Row>
     {#if canMute}
-      <Row title="Mute other audio while dictating" description="This computer's sound mutes while you speak.">
+      <Row title="Mute other audio while dictating">
         <Toggle checked={voice.mute} label="Mute other audio while dictating" onchange={(mute) => remember({ mute })} />
       </Row>
     {/if}
-    <Row title="Start and stop sounds" description="A short tone marks each end of a dictation.">
+    <Row title="Start and stop sounds">
       <Toggle checked={voice.sound} label="Start and stop sounds" onchange={(sound) => remember({ sound })} />
     </Row>
   </Group>
 
   <Group heading="Speech model">
-    <Row title="Parakeet" meta={install?.state === 'installed' ? 'Active' : 'On this device'} description="Fast, accurate English dictation, with a voice activity model that hears when you stop.">
+    <Row title="Parakeet" meta={install?.state === 'installed' ? 'Active' : 'On this device'} description="English" info="Fast, accurate English dictation, with a voice activity model that hears when you stop.">
       {#snippet detail()}
         <dl>
           <div><dt>Download</dt><dd>{facts ? formatBytes(facts.totalDownloadBytes) : 'Unknown size'}</dd></div>
@@ -144,20 +145,20 @@
       {#if install?.state === 'installing'}
         <Button onclick={cancelInstall}>Cancel install</Button>
       {:else if install?.state !== 'installed'}
-        <Button onclick={startInstall}>Install</Button>
+        <Button variant="primary" onclick={startInstall}>Install</Button>
       {/if}
     </Row>
     {#if installError}<p role="alert">{installError}</p>{/if}
   </Group>
 
   <Group heading="Transcription">
-    <Row title="Remove filler words" description="Drops um, uh and similar fillers from the transcript.">
+    <Row title="Remove filler words" info="Drops um, uh and similar fillers from the transcript.">
       <Toggle checked={voice.fillers} label="Remove filler words" onchange={(fillers) => remember({ fillers })} />
     </Row>
-    <Row title="Send when dictation stops" description="The chat sends the transcript without a press of Enter.">
+    <Row title="Send when dictation stops">
       <Toggle checked={voice.send} label="Send when dictation stops" onchange={(send) => remember({ send })} />
     </Row>
-    <Row title="Custom words" description="Names and terms the transcript spells your way.">
+    <Row title="Custom words" info="Names and terms the transcript spells your way.">
       {#snippet detail()}
         {#if voice.words.length}
           <ul class="word-list" aria-label="Custom words">
@@ -181,7 +182,7 @@
   .restore-shortcut { min-height: 32px; padding: 6px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-13) var(--font-human); cursor: pointer; }
   .restore-shortcut:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .restore-shortcut:disabled { opacity: .5; cursor: default; }
-  .shortcut-error { color: var(--oxide) !important; }
+  .shortcut-error { color: var(--danger) !important; }
   kbd { padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); font: var(--text-12) var(--font-mono); }
   dl { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 6px 0 0; }
   dt { color: var(--muted); font-size: var(--text-12); }

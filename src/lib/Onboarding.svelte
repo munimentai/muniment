@@ -4,13 +4,20 @@
   import { onboardingCancelSettingsState, onboardingStatusState } from './onboarding-state.js'
   import { firstRunError } from './onboarding-diagnostics.js'
   import FirstRunConnect from './FirstRunConnect.svelte'
+  import { scanProviders } from './first-run-providers.js'
+  import { loginEvent, loginStart } from './account-login.js'
 
   // The first run asks one question, which model to connect, and Home settings
   // reuse this screen to change the Home folder.
-  let { tauri, onboarding = $bindable(), onready } = $props()
+  // `onready` answers `{ signIn }` with the account to sign in to when a
+  // subscription signs in here, and `onsignedin` leaves the first run after it.
+  let { tauri, onboarding = $bindable(), onready, onsignedin = async () => {}, listen = (...args) => window.__TAURI__?.event?.listen(...args) } = $props()
+  let signIn = $state(null)
+  let unlistenSignIn = null
   let modelError = $state('')
   let modelOpening = $state(false)
   let busy = $state(false)
+  let folderAsking = $state(false)
   let picking = $state(false)
   let pickerOutcome = $state({ status: 'not-started' })
   let homeRequest = 0
@@ -31,16 +38,21 @@
   }
 
   // The provider scan probes loopback model servers and looks for signed-in
-  // assistant CLIs. It reads no file body and no credential.
+  // assistant CLIs. It reads no file body and no credential. At first launch
+  // the runtime may still be starting, so a failed scan runs again before the
+  // error shows.
+  let scanRequest = 0
   async function loadProviderScan() {
+    const request = ++scanRequest
     providerScanning = true
     providerScanError = ''
     try {
-      providerScan = await tauri.invoke('onboarding_provider_scan')
+      const scan = await scanProviders((command) => tauri.invoke(command))
+      if (request === scanRequest) providerScan = scan
     } catch (_) {
-      providerScanError = 'Muniment could not look for local models.'
+      if (request === scanRequest) providerScanError = 'The scan for local models failed.'
     } finally {
-      providerScanning = false
+      if (request === scanRequest) providerScanning = false
     }
   }
 
@@ -60,18 +72,94 @@
       onboarding = { ...onboarding, configured: true, error: undefined }
     } catch (_) {
       onboarding = { ...onboarding, error: firstRunError(tauri, 'homeConfirm').message }
+      busy = false
       return
+    }
+    try {
+      if (!await folderAccess()) return
     } finally {
       busy = false
     }
     modelOpening = true
     try {
-      await onready(option, input)
+      const answer = await onready(option, input)
+      if (answer?.signIn) await startSignIn(option, answer.signIn)
     } catch (error) {
       modelError = error instanceof Error ? error.message : String(error)
     } finally {
       modelOpening = false
     }
+  }
+
+  // macOS asks before Muniment reads a folder in Documents, Desktop or
+  // Downloads. Asking while the user looks at the first run keeps the prompt
+  // from holding the first chat. A refusal stays on screen with its next step.
+  async function folderAccess() {
+    folderAsking = true
+    try {
+      const access = await tauri.invoke('home_folder_access', { homePath: onboarding.homePath })
+      if (access?.state !== 'denied') return true
+      onboarding = { ...onboarding, error: access.message }
+      return false
+    } catch (_) {
+      return true
+    } finally {
+      folderAsking = false
+    }
+  }
+
+  // A subscription signs in from the first run: the browser opens, and its
+  // card shows the progress, a code or a question until the account connects.
+  function stopSignIn() {
+    const stop = unlistenSignIn
+    unlistenSignIn = null
+    if (stop) void Promise.resolve(stop).then((fn) => fn?.())
+  }
+
+  async function startSignIn(option, account) {
+    stopSignIn()
+    signIn = { ...loginStart(account.provider, option.name), option: option.id }
+    unlistenSignIn = listen('local-mode-login', ({ payload }) => onSignInEvent(payload))
+    try {
+      await tauri.invoke('local_mode_account_login_start', { provider: account.provider })
+    } catch (error) {
+      stopSignIn()
+      signIn = { ...signIn, stage: 'failed', message: String(error?.message ?? error) || 'The sign-in did not start. Try again.' }
+    }
+  }
+
+  function onSignInEvent(payload) {
+    const step = loginEvent(signIn, payload)
+    if (!step) return
+    signIn = { ...step.login, option: signIn.option }
+    if (step.open) void tauri.invoke('local_mode_open_url', { url: step.open }).catch(() => {})
+    if (step.stop) stopSignIn()
+    if (step.done) void finishSignIn()
+  }
+
+  async function finishSignIn() {
+    signIn = { ...signIn, message: 'Signed in. Loading its models…' }
+    try {
+      await onsignedin()
+      signIn = null
+    } catch (error) {
+      signIn = { ...signIn, stage: 'failed', message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async function answerSignIn(value) {
+    const prompt = signIn?.prompt
+    if (!prompt) return
+    try {
+      await tauri.invoke('local_mode_account_login_answer', { id: prompt.id, value, confirmed: null })
+      signIn = { ...signIn, prompt: null }
+    } catch (error) {
+      modelError = String(error?.message ?? error)
+    }
+  }
+
+  async function cancelSignIn() {
+    try { await tauri.invoke('local_mode_account_login_cancel') } catch (_) {}
   }
 
   async function chooseHome() {
@@ -102,6 +190,7 @@
     onboarding = { ...onboarding, error: undefined }
     try {
       await tauri.invoke('home_confirm', { homePath: onboarding.homePath })
+      if (!await folderAccess()) return
       onboarding = { name: 'complete', homePath: onboarding.homePath }
     } catch (_) {
       onboarding = { ...onboarding, error: 'Muniment could not save Home. Check folder access and try Save Home again.' }
@@ -124,7 +213,7 @@
     }
     document.addEventListener('keydown', leave)
     cleanupKeydown = () => document.removeEventListener('keydown', leave)
-    return () => { cleanupKeydown?.(); homeRequest += 1 }
+    return () => { cleanupKeydown?.(); homeRequest += 1; stopSignIn() }
   })
 </script>
 
@@ -139,7 +228,7 @@
         <button class="primary" onclick={saveHome} disabled={busy || picking}>Save Home</button>
       </div>
     {:else}
-      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} busy={busy || modelOpening || onboarding.name === 'loading'} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} />
+      <FirstRunConnect scan={providerScan} scanning={providerScanning} scanError={providerScanError} homePath={onboarding.homePath} homeLoading={onboarding.name === 'loading'} {folderAsking} busy={busy || modelOpening || onboarding.name === 'loading' || (!!signIn && signIn.stage !== 'failed' && signIn.stage !== 'cancelled')} {signIn} onconnect={connect} onmore={() => connect(null)} onexplore={() => connect({ kind: 'explore' })} onrescan={loadProviderScan} onsigninanswer={answerSignIn} onsignincancel={cancelSignIn} onsigninopen={(url) => tauri.invoke('local_mode_open_url', { url }).catch(() => {})} />
       {#if modelError}<p class="error" role="alert">{modelError}</p>{/if}
     {/if}
     {#if onboarding.error}<p class="error" role="alert">{onboarding.error}</p>{/if}
@@ -152,11 +241,11 @@
   .actions .primary { margin-left: auto; }
   h1 { font-size: var(--text-22); }
   p { margin: 8px 0; font-size: var(--text-13); overflow-wrap: anywhere; }
-  .path, .error { font: var(--text-12) var(--font-mono); }
-  .error { color: var(--muted); }
+  .path { font: var(--text-12) var(--font-mono); }
+  .error { color: var(--muted); font: var(--text-12) var(--font-human); }
   button { min-height: 28px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-13); cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
   button:disabled { color: var(--muted); cursor: default; }
-  .primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   @media (max-height: 600px) { section.onboarding { margin-top: 12px; max-height: calc(100% - 12px); } }
 </style>

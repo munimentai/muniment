@@ -38,3 +38,12 @@ export function appendTranscript(draft, text) {
   if (!draft || /\s$/.test(draft) || /^\s/.test(text)) return `${draft}${text}`
   return `${draft} ${text}`
 }
+
+// The draft while dictation runs: the text before it, the final transcript so
+// far and the partial text of the utterance in progress. `pending` counts the
+// trailing characters that are partial and change until the utterance ends.
+export function dictationDraft(draft, transcript, partial = '') {
+  const settled = appendTranscript(draft, transcript)
+  const text = appendTranscript(settled, partial)
+  return { text, pending: text.length - settled.length }
+}

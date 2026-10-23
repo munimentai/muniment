@@ -343,7 +343,7 @@ The contract accepts trusted scheduler metadata, not provider credentials or unt
 
 The Rust types live in `muniment_core::model_router::headless`.
 The reusable Python client lives in `scripts/router_shadow.py`.
-The executable and classifier fixtures live in `protocol-fixtures/muniment-routing-shadow/1/`.
+The executable and classifier fixtures live in `core/protocol-fixtures/muniment-routing-shadow/1/`.
 Both client tests and Rust conformance tests consume these fixtures.
 Unknown fields and unsupported versions fail closed.
 

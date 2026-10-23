@@ -1,6 +1,7 @@
 // The runtimes this app attaches to: labels, states and the Settings pages
 // that change while a paired runtime is selected. `runtime_list` answers
 // { appVersion, deviceName, selected, runtimes }, this computer first.
+import { formatDate } from '../lib/time-format.svelte.js'
 
 export const LOCAL_RUNTIME_ID = 'local'
 export const DEFAULT_SSH_COMMAND = 'muniment-server'
@@ -22,6 +23,19 @@ export function kindLabel(runtime) {
   return KINDS[runtime?.kind]?.[0] ?? 'Runtime'
 }
 
+// The name core gives a runtime that announces no name of its own.
+const GENERIC_NAMES = new Set(['Muniment runtime'])
+
+// The one name the app shows for a machine: This computer for the local one,
+// else the machine's own name, or its kind while it announces only the
+// generic runtime name.
+export function machineName(runtime) {
+  if (!runtime) return 'Machine'
+  if (runtime.local || runtime.id === LOCAL_RUNTIME_ID) return 'This computer'
+  const name = String(runtime.name ?? '').trim()
+  return name && !GENERIC_NAMES.has(name) ? name : kindLabel(runtime)
+}
+
 export function kindIcon(runtime) {
   const kind = runtime?.kind
   if (kind === 'container') return 'container'
@@ -29,16 +43,28 @@ export function kindIcon(runtime) {
   return SHAPES[runtime?.formFactor] ?? KINDS[kind]?.[1] ?? 'server'
 }
 
-// [label, next step, tone]. The tone picks ink, ochre for caution or oxide for a refusal.
+// [label, next step, tone]. The tone picks ink, warning for caution or danger for a refusal.
 const STATES = {
   unknown: ['Not checked', '', 'quiet'],
   connecting: ['Connecting', '', 'quiet'],
   online: ['Online', '', 'ink'],
   offline: ['Offline', 'Check that it is running and reachable.', 'caution'],
-  certificate_changed: ['Certificate changed', 'Pair it again to trust its new certificate.', 'critical'],
-  revoked: ['Access revoked', 'Pair it again with a new link.', 'critical'],
+  certificate_changed: ['Certificate changed', 'Add it again to trust its new certificate.', 'critical'],
+  revoked: ['Access revoked', 'Add it again with a new code.', 'critical'],
   version_mismatch: ['Version mismatch', 'Update the app or the runtime.', 'caution'],
-  runtime_mismatch: ['Different runtime', 'Another runtime answers at its address. Pair it again.', 'critical'],
+  runtime_mismatch: ['Different runtime', 'Another runtime answers at its address. Add it again.', 'critical'],
+}
+
+// The runtime a machine reference names, such as a notification's
+// `{ id, name }`: this computer for the local id, else the paired runtime.
+export function runtimeFor(runtimeList, ref) {
+  return (runtimeList?.runtimes ?? []).find((runtime) => (runtime.local ? LOCAL_RUNTIME_ID : runtime.id) === ref?.id) ?? null
+}
+
+// The state word a machine shows beside its stoplight: Online for this
+// computer, else the state its runtime reports.
+export function machineState(runtime) {
+  return runtime?.local ? 'Online' : statusLabel(runtime)
 }
 
 export function statusLabel(runtime) {
@@ -71,23 +97,143 @@ export function updatableRuntimes(list) {
 
 // The version a row shows: mono, with the leading v.
 export function versionLabel(runtime) {
-  if (!runtime?.version) return ''
-  return runtime.version.startsWith('v') ? runtime.version : `v${runtime.version}`
+  return withV(runtime?.version)
 }
 
-// Settings pages a paired runtime refuses: the cloud account and phone pairing
-// belong to this computer. They hide while a paired runtime is selected.
-export const REMOTE_HIDDEN_PAGES = ['account']
+function withV(version) {
+  if (!version) return ''
+  return version.startsWith('v') ? version : `v${version}`
+}
 
-// Settings pages that keep this computer's data while a paired runtime is
-// selected. Each says so in one line.
-export const LOCAL_PAGES = ['mcp', 'skills', 'plugins', 'home']
+// Whether version `a` is older than `b`, as semver orders them, or null when
+// either is not a version.
+export function olderVersion(a, b) {
+  const parse = (version) => String(version ?? '').trim().replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+.*)?$/)
+  const left = parse(a)
+  const right = parse(b)
+  if (!left || !right) return null
+  for (const index of [1, 2, 3]) {
+    if (Number(left[index]) !== Number(right[index])) return Number(left[index]) < Number(right[index])
+  }
+  if (!left[4] !== !right[4]) return !!left[4]
+  return (left[4] ?? '') < (right[4] ?? '')
+}
+
+// The work a draining runtime waits for, in plain words.
+const BLOCKERS = {
+  active_run: 'a reply in progress',
+  pending_permission_gate: 'a permission request',
+  authentication_operation: 'a sign-in',
+  session_refresh: 'a session refresh',
+  in_flight_external_effect: 'an action in progress',
+}
+
+export function blockersLine(blockers = []) {
+  const words = blockers.map((blocker) => BLOCKERS[blocker] ?? 'other work')
+  if (!words.length) return ''
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+  return `Waiting for ${list}.`
+}
+
+const PENDING = ['queued', 'downloading', 'draining', 'installing', 'restarting']
+
+// The update line of a machine row, from the state the runtime reports:
+// { text, tooltip } or null for a machine that shows only its version. The
+// app never says a machine updates unless the machine says so.
+export function updateLabel(runtime) {
+  const status = runtime?.updateStatus
+  const target = status?.targetVersion
+  // A status for a version the machine already runs is over.
+  const reached = !!target && olderVersion(runtime?.version, target) === false
+  if (status && !reached) {
+    switch (status.state) {
+      case 'queued': return { text: 'Update queued', tooltip: '' }
+      case 'downloading': return { text: target ? `Downloading ${withV(target)}` : 'Downloading update', tooltip: '' }
+      case 'draining': return { text: 'Finishing current work', tooltip: blockersLine(status.blockers) }
+      case 'installing':
+      case 'restarting': return { text: target ? `Updating to ${withV(target)}` : 'Updating', tooltip: '' }
+      case 'failed': return { text: 'Update failed', tooltip: status.error ?? '' }
+    }
+  }
+  if (runtime?.updateRequested) return { text: 'Update requested', tooltip: '' }
+  if (runtime?.behind && runtime?.updateCapability === 'manual' && runtime?.updateTarget) {
+    return { text: `${withV(runtime.updateTarget)} available, update manually`, tooltip: '' }
+  }
+  return null
+}
+
+// Whether the row menu offers Update: the machine is behind, answers, takes
+// requests from this device and installs releases itself, and no update for
+// it is on the way.
+export function canRequestUpdate(runtime) {
+  return !runtime?.local && !!runtime?.updateOffered && runtime?.status === 'online'
+    && !PENDING.includes(runtime?.updateStatus?.state)
+}
+
+// Why Update all left a machine alone.
+const SKIPS = {
+  offline: 'offline',
+  no_permission: 'no permission',
+  manual: 'manual install',
+  current: 'already current',
+}
+
+export function skipLabel(skip) {
+  return `${skip.name} (${SKIPS[skip.reason] ?? skip.reason})`
+}
+
+// Settings pages that read and change the selected machine, in whole or in
+// part. Once another machine answers, each names its scope at its top:
+// All machines, or one machine.
+export const MACHINE_PAGES = ['account', 'models', 'tools', 'permissions', 'data']
+
+// The scope that changes every machine at once. Fleet sync carries each
+// shared setting from the machine that saves it to every other one.
+export const ALL_MACHINES = 'all'
+
+// The machine scope a Settings page shows: the selected machine and the
+// machines it can switch to, or null for a page without a choice or while
+// no other machine answers.
+export function settingsMachine(list, page) {
+  if (!MACHINE_PAGES.includes(page)) return null
+  const selected = activeRuntime(list)
+  const choices = (list?.runtimes ?? []).filter((runtime) => runtime.local || runtime.status === 'online' || runtime.id === selected?.id)
+  return selected && choices.some((runtime) => !runtime.local) ? { selected, choices } : null
+}
+
+// Where each Settings part keeps its values, from core's `settings.scope`:
+// shared across the fleet, kept on each machine, or kept on this computer.
+// `scope` is that answer, or null before it arrives.
+function scopePart(scope, part) {
+  return scope?.parts?.find((entry) => entry.id === part) ?? null
+}
+
+// The line core gives a part: `all` while Settings changes all machines,
+// else the one for another picked machine. `machine` names the machine the
+// change reaches.
+export function scopeNote(scope, part, { all = false, machine = 'this computer' } = {}) {
+  const notes = scopePart(scope, part)?.notes
+  return String((all ? notes?.all : notes?.one) ?? '').replaceAll('{machine}', machine)
+}
+
+// The settings of a part that stay on one machine, each with its field and
+// line, while Settings changes all machines.
+export function machineLocal(scope, part) {
+  return scopePart(scope, part)?.machine_local ?? []
+}
 
 // One sentence from a command failure, ending in a period.
 export function errorLine(failure, fallback = 'The runtime did not answer.') {
   const text = typeof failure === 'string' ? failure : failure?.message ?? String(failure ?? '')
   const line = text.trim().split('\n')[0]?.trim() || fallback
   return /[.!?]$/.test(line) ? line : `${line}.`
+}
+
+// A failure's whole text, which a failure note shows as its first line with
+// the rest behind Show log.
+export function errorText(failure, fallback = 'The runtime did not answer.') {
+  const text = typeof failure === 'string' ? failure : failure?.message ?? String(failure ?? '')
+  return text.trim() || fallback
 }
 
 // A pasted link that looks like a pairing link. The runtime checks the rest.
@@ -108,14 +254,6 @@ export function endpointKindLabel(kind) {
   return ENDPOINT_KINDS[kind] ?? 'Address'
 }
 
-const SCOPES = [['thread.read', 'Read'], ['run.write', 'Run'], ['runtime.admin', 'Updates and pairing']]
-
-// The scopes a paired device holds, in plain words.
-export function scopeLabels(scopes = []) {
-  const labels = SCOPES.filter(([scope]) => scopes.includes(scope)).map(([, label]) => label)
-  return labels.length ? labels.join(', ') : 'No access'
-}
-
 // The port the settings name, else the port the listener bound.
 export function listenPort(access) {
   const address = access?.settings?.listen ?? access?.listening
@@ -125,11 +263,11 @@ export function listenPort(access) {
 
 export function seenLabel(value, now = Date.now()) {
   const date = value ? new Date(value) : null
-  if (!date || Number.isNaN(date.getTime())) return 'Not seen yet'
+  if (!date || Number.isNaN(date.getTime())) return 'Never seen'
   const minutes = Math.round((now - date.getTime()) / 60000)
-  if (minutes < 2) return 'Seen just now'
-  if (minutes < 60) return `Seen ${minutes} minutes ago`
+  if (minutes < 2) return 'Now'
+  if (minutes < 60) return `${minutes}m ago`
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `Seen ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`
-  return `Seen ${date.toLocaleDateString()}`
+  if (hours < 24) return `${hours}h ago`
+  return formatDate(date, { month: 'short', day: 'numeric', year: 'numeric' })
 }

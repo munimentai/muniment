@@ -8,6 +8,10 @@ use crate::linux_runtime_service::RuntimeChild;
 use std::process::Child as RuntimeChild;
 
 const DWELL: Duration = Duration::from_secs(2);
+/// The wait before the first automatic start after a failed one. Each
+/// further failure doubles it up to [`RETRY_LIMIT`].
+const RETRY_FIRST: Duration = Duration::from_secs(2);
+const RETRY_LIMIT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,11 +29,11 @@ pub(crate) enum RuntimeEvent {
     Approved,
     #[cfg(target_os = "macos")]
     NotFound,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     RegistrationFailed,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     ServiceInactive,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(test, target_os = "macos"))]
     ChildStarted,
     Stopped,
     StopFailed,
@@ -43,6 +47,9 @@ pub(crate) struct Snapshot {
     visible: bool,
     busy: bool,
     cause: Option<String>,
+    /// The background service could not stay running, so the runtime runs as
+    /// the desktop's child and stops when the desktop quits.
+    foreground_only: bool,
 }
 
 #[derive(Default)]
@@ -60,10 +67,62 @@ struct Lifecycle {
     #[cfg(any(test, target_os = "macos"))]
     startup_attempt: Option<Instant>,
     awaiting_disconnect: bool,
+    /// Automatic starts since the runtime last connected.
+    retries: u32,
+    /// When the owner starts the runtime again after a failed start.
+    retry_at: Option<Instant>,
+    /// Set while an automatic start runs, so its request keeps the failure on screen.
+    retrying: bool,
+}
+
+/// How long the owner waits before its automatic start after `retries` earlier ones.
+fn retry_delay(retries: u32) -> Duration {
+    RETRY_FIRST
+        .saturating_mul(2u32.saturating_pow(retries))
+        .min(RETRY_LIMIT)
+}
+
+/// Whether a start reports only that its request went out, and the clients
+/// still have to connect.
+fn start_requested(event: RuntimeEvent) -> bool {
+    #[cfg(any(test, target_os = "macos"))]
+    if event == RuntimeEvent::ChildStarted {
+        return true;
+    }
+    event == RuntimeEvent::Starting
+}
+
+/// Starts the runtime through the background service, and runs it as the
+/// desktop's child when the service never registers or never stays running.
+/// The flag is true when that child started, since the runtime then stops
+/// with the desktop.
+#[cfg(any(test, all(target_os = "macos", not(feature = "local-runtime"))))]
+fn start_with_fallback(
+    service: impl FnOnce() -> RuntimeEvent,
+    child: impl FnOnce() -> RuntimeEvent,
+) -> (RuntimeEvent, bool) {
+    match service() {
+        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
+            let event = child();
+            (event, event == RuntimeEvent::ChildStarted)
+        }
+        event => (event, false),
+    }
 }
 
 impl Lifecycle {
+    /// Records a start and whether its runtime lives only as long as the desktop.
+    #[cfg(any(test, target_os = "macos"))]
+    fn service_started(&mut self, event: RuntimeEvent, foreground_only: bool) {
+        self.snapshot.foreground_only = foreground_only;
+        self.started(event);
+    }
+
     fn change(&mut self, event: RuntimeEvent, visible: bool) {
+        if event == RuntimeEvent::Connected {
+            self.retries = 0;
+            self.retry_at = None;
+        }
         self.snapshot.last_event = event;
         self.snapshot.visible = visible;
         self.snapshot.cause = None;
@@ -220,6 +279,7 @@ impl Lifecycle {
         if !self.start() {
             return false;
         }
+        self.retry_at = None;
         #[cfg(any(test, target_os = "macos"))]
         {
             self.startup_attempt = Some(Instant::now());
@@ -227,7 +287,32 @@ impl Lifecycle {
         true
     }
 
+    /// Claims an automatic start once a failed start has waited out its
+    /// backoff. The runtime can fail to answer for a while, for example while
+    /// a macOS folder prompt holds it, and it must not stay down until the
+    /// user starts it by hand.
+    fn retry_due(&mut self, now: Instant) -> bool {
+        if self.snapshot.last_event != RuntimeEvent::StartFailed || self.snapshot.busy {
+            return false;
+        }
+        let at = *self
+            .retry_at
+            .get_or_insert_with(|| now + retry_delay(self.retries));
+        if now < at || !self.start_attempt() {
+            return false;
+        }
+        self.retries = self.retries.saturating_add(1);
+        self.retrying = true;
+        true
+    }
+
     fn started(&mut self, event: RuntimeEvent) {
+        if std::mem::take(&mut self.retrying) && start_requested(event) {
+            // The failure stays on screen until the clients connect, and the
+            // next automatic start waits out a longer backoff.
+            self.snapshot.busy = false;
+            return;
+        }
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
         self.snapshot.busy = self.awaiting_disconnect;
         self.outage = None;
@@ -367,15 +452,13 @@ fn finish_start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let owner = app.state::<RuntimeOwner>();
     #[cfg(all(target_os = "macos", feature = "local-runtime"))]
     let event = crate::macos_runtime_service::start_child(&owner);
+    #[cfg(all(target_os = "macos", feature = "local-runtime"))]
+    let event = (event, false);
     #[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
-    // A service that never registers, or registers and never runs, yields to
-    // the bundled runtime as the desktop's child.
-    let event = match crate::macos_runtime_service::start(&owner) {
-        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
-            crate::macos_runtime_service::start_child(&owner)
-        }
-        event => event,
-    };
+    let event = start_with_fallback(
+        || crate::macos_runtime_service::start(&owner),
+        || crate::macos_runtime_service::start_child(&owner),
+    );
     #[cfg(target_os = "windows")]
     {
         // The runner owns the disposable runtime, including recovery after MSI file replacement.
@@ -402,7 +485,7 @@ fn finish_start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         owner.update(app, |state| state.activation_finished(result, clients));
     }
     #[cfg(target_os = "macos")]
-    owner.update(app, |state| state.started(event));
+    owner.update(app, |state| state.service_started(event.0, event.1));
 }
 
 // Closing a window does not stop the runtime. Only an explicit stop does.
@@ -521,8 +604,105 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             #[cfg(target_os = "windows")]
             state.observe(connected, disconnected, Instant::now());
         });
+        let mut retry = false;
+        owner.update(&app, |state| retry = state.retry_due(Instant::now()));
+        if retry {
+            let retry_app = app.clone();
+            std::thread::spawn(move || finish_start(&retry_app));
+        }
         std::thread::sleep(Duration::from_millis(100));
     });
+}
+
+/// How far ahead a routine counts as due when the desktop quits, in seconds.
+#[cfg(any(test, target_os = "macos"))]
+const QUIT_ROUTINE_WINDOW: i64 = 60 * 60;
+
+/// The menu item that quits through [`quit`] in place of the system's Quit.
+#[cfg(target_os = "macos")]
+pub(crate) const QUIT_MENU_ID: &str = "muniment-quit";
+
+/// The line a quit confirmation shows when quitting stops agent work: a run in
+/// progress, or a routine due within the hour, from core's agent state.
+#[cfg(any(test, target_os = "macos"))]
+fn quit_warning(state: &muniment_core::agents::State, now: i64) -> Option<&'static str> {
+    if state
+        .runs
+        .values()
+        .any(|run| matches!(run.status.as_str(), "running" | "queued"))
+    {
+        return Some("An agent is running. Quitting Muniment stops it.");
+    }
+    state
+        .routines
+        .values()
+        .flat_map(|routines| routines.values())
+        .filter_map(|routine| routine.next_fire_at)
+        .any(|at| (now..=now.saturating_add(QUIT_ROUTINE_WINDOW)).contains(&at))
+        .then_some("A scheduled agent is due within the hour. It runs only while Muniment is open.")
+}
+
+/// Puts [`QUIT_MENU_ID`] in place of the app menu's system Quit, which ends
+/// the app without a request the desktop could answer.
+#[cfg(target_os = "macos")]
+pub(crate) fn replace_quit_menu_item<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<()> {
+    use tauri::menu::{MenuItem, MenuItemKind};
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() else {
+        return Ok(());
+    };
+    let Some(MenuItemKind::Predefined(quit)) = app_menu.items()?.into_iter().last() else {
+        return Ok(());
+    };
+    let text = quit.text()?;
+    if !text.starts_with("Quit") {
+        return Ok(());
+    }
+    app_menu.remove(&quit)?;
+    app_menu.append(&MenuItem::with_id(
+        app,
+        QUIT_MENU_ID,
+        text,
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?)
+}
+
+/// Quits the app, and first asks when the runtime is the desktop's child and
+/// quitting would stop a run or a routine due soon.
+#[cfg(target_os = "macos")]
+pub(crate) fn quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let warning = app
+        .state::<RuntimeOwner>()
+        .child_running()
+        .then(muniment_runtime::profile_directory)
+        .and_then(Result::ok)
+        .and_then(|profile| muniment_core::agents::state(&profile).ok())
+        .and_then(|state| quit_warning(&state, muniment_core::agents::now()));
+    let Some(warning) = warning else {
+        app.exit(0);
+        return;
+    };
+    let quitting = app.clone();
+    // The first button is the default, so Enter keeps the app open.
+    app.dialog()
+        .message(warning)
+        .title("Quit Muniment?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Keep open".into(),
+            "Quit".into(),
+        ))
+        .show(move |keep_open| {
+            if !keep_open {
+                quitting.exit(0);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1013,6 +1193,83 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_start_retries_with_backoff_until_the_clients_connect() {
+        let now = Instant::now();
+        let cause = "The runtime clients did not connect within 10 seconds.";
+        let mut state = Lifecycle::default();
+        assert!(state.start());
+        state.windows_start_finished(Err(cause.into()));
+        let failure = state.snapshot.clone();
+        assert_eq!(failure.last_event, RuntimeEvent::StartFailed);
+        let mut at = now;
+        for seconds in [2, 4, 8, 16, 32, 60, 60] {
+            let delay = Duration::from_secs(seconds);
+            assert!(!state.retry_due(at));
+            assert!(!state.retry_due(at + delay - Duration::from_millis(1)));
+            assert!(state.retry_due(at + delay));
+            assert!(state.snapshot.busy);
+            assert!(!state.retry_due(at + delay + RETRY_LIMIT));
+            // The injected start sends its request, and the clients stay away.
+            state.windows_start_finished(Ok(()));
+            assert!(!state.snapshot.busy);
+            assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+            assert!(state.snapshot.visible);
+            assert_eq!(state.snapshot.cause, failure.cause);
+            at += delay;
+            state.observe(false, true, at);
+            assert_eq!(state.snapshot.cause, failure.cause);
+        }
+        // An injected start that fails outright waits out the next backoff too.
+        assert!(!state.retry_due(at));
+        assert!(state.retry_due(at + RETRY_LIMIT));
+        state.windows_start_finished(Err(cause.into()));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        assert!(!state.snapshot.busy);
+        at += RETRY_LIMIT;
+        assert!(!state.retry_due(at));
+        assert!(!state.retry_due(at + RETRY_LIMIT - Duration::from_millis(1)));
+        assert!(state.retry_due(at + RETRY_LIMIT));
+        state.windows_start_finished(Ok(()));
+
+        state.observe(true, false, at + Duration::from_secs(1));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert!(!state.snapshot.visible);
+        assert!(!state.retry_due(at + Duration::from_secs(600)));
+
+        // A later failure starts again from the first delay.
+        assert!(state.start());
+        state.windows_start_finished(Err(cause.into()));
+        let later = at + Duration::from_secs(700);
+        assert!(!state.retry_due(later));
+        assert!(state.retry_due(later + RETRY_FIRST));
+    }
+
+    #[test]
+    fn a_retry_that_reports_a_state_for_the_user_stops_retrying() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        state.observe(false, true, now);
+        state.observe(false, true, now + Duration::from_secs(10));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        let due = now + Duration::from_secs(10);
+        assert!(!state.retry_due(due));
+        assert!(state.retry_due(due + RETRY_FIRST));
+        state.started(RuntimeEvent::RequiresApproval);
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::RequiresApproval);
+        assert!(state.snapshot.visible);
+        assert!(!state.retry_due(due + RETRY_LIMIT + RETRY_LIMIT));
+    }
+
+    #[test]
+    fn retry_delays_double_up_to_the_limit() {
+        assert_eq!(retry_delay(0), RETRY_FIRST);
+        assert_eq!(retry_delay(1), RETRY_FIRST * 2);
+        assert_eq!(retry_delay(4), Duration::from_secs(32));
+        assert_eq!(retry_delay(5), RETRY_LIMIT);
+        assert_eq!(retry_delay(u32::MAX), RETRY_LIMIT);
+    }
+
+    #[test]
     fn exit_restart_and_shared_dwell() {
         let now = Instant::now();
         let mut state = Lifecycle::default();
@@ -1277,5 +1534,106 @@ mod tests {
         state.observe(true, false, now + Duration::from_millis(250));
         state.observe(true, false, now + DWELL);
         assert!(!state.snapshot.visible);
+    }
+
+    #[test]
+    fn an_inactive_service_starts_the_child_and_flags_a_foreground_only_runtime() {
+        let child_calls = std::cell::Cell::new(0);
+        for service in [
+            RuntimeEvent::ServiceInactive,
+            RuntimeEvent::RegistrationFailed,
+        ] {
+            let started = start_with_fallback(
+                || service,
+                || {
+                    child_calls.set(child_calls.get() + 1);
+                    RuntimeEvent::ChildStarted
+                },
+            );
+            assert_eq!(started, (RuntimeEvent::ChildStarted, true));
+        }
+        assert_eq!(child_calls.get(), 2);
+        let mut state = Lifecycle::default();
+        state.service_started(RuntimeEvent::ChildStarted, true);
+        state.observe(true, false, Instant::now());
+        // The connected workspace stays on screen and the flag outlives the connection.
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
+        assert!(!state.snapshot.visible);
+        assert_eq!(
+            serde_json::to_value(&state.snapshot).unwrap()["foregroundOnly"],
+            true
+        );
+        // A later start that the service takes clears the flag.
+        let (event, foreground_only) = start_with_fallback(
+            || RuntimeEvent::Starting,
+            || panic!("A running service must not start a child."),
+        );
+        state.service_started(event, foreground_only);
+        assert!(!state.snapshot.foreground_only);
+        // A child that does not start leaves the failure, not the flag.
+        assert_eq!(
+            start_with_fallback(
+                || RuntimeEvent::ServiceInactive,
+                || RuntimeEvent::RegistrationFailed
+            ),
+            (RuntimeEvent::RegistrationFailed, false)
+        );
+    }
+
+    #[test]
+    fn quit_warns_for_a_run_in_progress_or_a_routine_due_within_the_hour() {
+        use muniment_core::agents::{RoutineState, RunState, State};
+        let now = 1_900_000_000;
+        let mut state = State::default();
+        assert_eq!(quit_warning(&state, now), None);
+        let routine = |at| RoutineState {
+            next_fire_at: Some(at),
+            ..RoutineState::default()
+        };
+        state
+            .routines
+            .entry("agent".into())
+            .or_default()
+            .insert("later".into(), routine(now + QUIT_ROUTINE_WINDOW + 1));
+        // A fire time already past is stale state, not a routine about to run.
+        state
+            .routines
+            .entry("agent".into())
+            .or_default()
+            .insert("past".into(), routine(now - 1));
+        assert_eq!(quit_warning(&state, now), None);
+        state
+            .routines
+            .entry("agent".into())
+            .or_default()
+            .insert("soon".into(), routine(now + QUIT_ROUTINE_WINDOW));
+        assert_eq!(
+            quit_warning(&state, now),
+            Some("A scheduled agent is due within the hour. It runs only while Muniment is open.")
+        );
+        state.routines.clear();
+        for status in ["completed", "failed", "waiting"] {
+            state.runs.insert(
+                "agent".into(),
+                RunState {
+                    status: status.into(),
+                    ..RunState::default()
+                },
+            );
+            assert_eq!(quit_warning(&state, now), None);
+        }
+        for status in ["running", "queued"] {
+            state.runs.insert(
+                "agent".into(),
+                RunState {
+                    status: status.into(),
+                    ..RunState::default()
+                },
+            );
+            assert_eq!(
+                quit_warning(&state, now),
+                Some("An agent is running. Quitting Muniment stops it.")
+            );
+        }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "muniment-desktop-integration"
-version = "0.0.1"
+version.workspace = true
 edition = "2021"
 
 # Desktop-only contracts: cloud sign-in, cloud chat grants and browser control.
@@ -16,7 +16,7 @@ ed25519-dalek = "3"
 fs2 = "0.4"
 getrandom = "0.4"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "linux-native"], optional = true }
-muniment-core = { git = "https://github.com/munimentai/muniment-core", tag = "v1.14.0" }
+muniment-core = { path = "../../core/crates/core" }
 qrcode = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

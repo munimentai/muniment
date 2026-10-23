@@ -84,7 +84,8 @@
 </script>
 <svelte:window onkeydown={event => { if (open) keys(event) }} onpointerdown={event => { if (open && !rootElement?.contains(event.target)) close() }} />
 <div class="extensions" bind:this={rootElement} role="group" aria-label="Turn extensions">
-  {#if !active}<button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="plus" variant="action" size={14} /></button>{/if}
+  <!-- A run disables the plus in place, so the band's chips never move when it ends. -->
+  <button type="button" class="trigger" bind:this={trigger} aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} disabled={active} onclick={() => openComposerPanel(open ? null : 'extend')}><LucideIcon name="plus" variant="action" size={14} /></button>
   {#if open}
     <div data-composer-panel data-panel="extend" data-panel-variant="overlay" class="menu" role="dialog" tabindex="-1" aria-label="Extensions for this turn">
       <button type="button" class="files" disabled={!!filesNote} onclick={() => { close(); onfiles?.() }}><LucideIcon name="paperclip" variant="action" size={16} /><span>Add files and folders</span>{#if filesNote}<small class="files-note">{filesNote}</small>{/if}</button>
@@ -105,7 +106,7 @@
         </div>{/if}
       </div>
       {#if state.assist}<div class="automatic"><span>{state.assist.name} assists</span><Toggle checked={automatic} label={`${state.assist.name} assists`} onchange={checked => selection.automatic = checked} /></div>{/if}
-      <button type="button" class="manage" onclick={() => { close(); onmanage() }}>Manage extensions</button>
+      <button type="button" class="manage" onclick={() => { close(); onmanage() }}>Manage tools</button>
     </div>
   {:else if command !== null && shown.length && !active}
     <section data-composer-panel data-panel="extend" data-panel-variant="overlay" class="commands" aria-label="Slash commands">
@@ -120,7 +121,8 @@
   button { font: inherit; font-size: var(--text-13); color: var(--ink); cursor: pointer; border: 0; border-radius: var(--radius-control); background: transparent; padding: 7px 9px; }
   button:hover, button:focus-visible, .highlighted { background: var(--faint); }
   .trigger { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; font: var(--text-12) var(--font-mono); background: transparent; }
-  .trigger:hover { background: var(--faint); }
+  .trigger:hover:not(:disabled) { background: var(--faint); }
+  .trigger:disabled { color: var(--muted); cursor: default; }
   .menu { width: min(520px, 100%); padding: 6px; }
   .menu:has(.tree:not(.expanded)) { width: min(240px, 100%); }
   .tree { display: grid; grid-template-columns: 1fr; }

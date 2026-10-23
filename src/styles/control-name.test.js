@@ -61,7 +61,8 @@ describe('control names', () => {
   it('names the first-run key field without a consent exception', () => {
     const source = read('src/lib/FirstRunConnect.svelte')
     expect(source).toMatch(/<input type="password"[^>]*aria-label=/)
-    expect(controls(markup(source))).toHaveLength(1)
+    // The key field and the answer a subscription sign-in asks for.
+    expect(controls(markup(source))).toHaveLength(2)
     expect(unnamedControls(source)).toEqual([])
     expect(unnamedControls('<input type="checkbox">')).toEqual(['<input type="checkbox">'])
   })

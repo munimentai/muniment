@@ -219,6 +219,12 @@ time.sleep(10)
   assert.equal(fs.readFileSync(escalation, 'utf8'), 'SIGALRM')
 }))
 
+// The sudoers fixtures add a user and a sudoers rule, so they need root or
+// passwordless sudo. CI always runs them. A local run without either skips
+// them and says why.
+const passwordlessSudo = process.getuid?.() === 0 || spawnSync('sudo', ['-n', 'true'], { stdio: 'ignore', timeout: 10_000 }).status === 0
+const sudoGated = !process.env.CI && !passwordlessSudo ? 'needs root or passwordless sudo, which CI provides' : false
+
 function sudoFixture(remote, output, privilegedWrapper = false, input = 'private-stdin\n') {
   const config = { encoding: 'utf8', timeout: 10_000, input }
   if (process.getuid() !== 0) return spawnSync('sh', ['-c', remote], {
@@ -269,7 +275,7 @@ function sudoFixture(remote, output, privilegedWrapper = false, input = 'private
 }
 
 for (const mode of ['success', 'cleanup', 'escalation']) {
-  test(`the unprivileged wrapper runs with desktop-ci-only sudoers during ${mode}`, () => temporary(output => {
+  test(`the unprivileged wrapper runs with desktop-ci-only sudoers during ${mode}`, { skip: sudoGated }, () => temporary(output => {
     fs.writeFileSync(path.join(output, 'desktop-ci'), `#!/usr/bin/python3
 import os, signal, sys, time
 assert os.geteuid() == 0
@@ -312,7 +318,7 @@ print("driver survived", flush=True)
 }
 
 for (const parentExits of [false, true]) {
-  test(`direct privileged cleanup stops the root driver and its child when the driver ${parentExits ? 'exits' : 'ignores SIGTERM'}`, () => temporary(output => {
+  test(`direct privileged cleanup stops the root driver and its child when the driver ${parentExits ? 'exits' : 'ignores SIGTERM'}`, { skip: sudoGated }, () => temporary(output => {
     const script = `import os, signal, sys, time
 assert os.geteuid() == 0
 assert int(os.environ["SUDO_UID"]) != 0

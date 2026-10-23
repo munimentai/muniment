@@ -1,7 +1,9 @@
 <script>
+  import { toWindowPixels } from './display-state.js'
   import { onMount } from 'svelte'
   import { readHomepage, saveHomepage, addressFor, DEFAULT_HOMEPAGE } from './browser-settings.js'
   import LucideIcon from './LucideIcon.svelte'
+  import { browserCovered } from './browser-cover.svelte.js'
   let { tauri, artifacts = false, requestedArtifact = null, suspended = false, navigation = null, onnavigationhandled, onurl, onartifact } = $props()
   let homepage = $state(readHomepage())
   let homepageDraft = $state(homepage)
@@ -18,14 +20,15 @@
   let displayedArtifact = null
   $effect(() => { if (artifacts) onartifact?.(items.find(item => item.id === selected)?.name || '') })
   const view = $derived(artifacts ? 'artifact' : 'browser')
-  const visible = $derived(!suspended && (!artifacts || !!selected))
+  const visible = $derived(!suspended && !browserCovered() && (!artifacts || !!selected))
   function layout() {
     queue = queue.catch(() => {}).then(async () => {
       if (!active || !visible || !host) return tauri.invoke('browser_view', { label: null, bounds: null, artifactId: null })
       const r = host.getBoundingClientRect()
       if (r.width < 1 || r.height < 1) return
       const artifactId = artifacts && selected !== displayedArtifact ? selected : null
-      await tauri.invoke('browser_view', { label: view, bounds: { x: r.x, y: r.y, width: r.width, height: r.height }, artifactId, homepage })
+      // The native view sits in window pixels, which the interface zoom scales from the page's CSS pixels.
+      await tauri.invoke('browser_view', { label: view, bounds: { x: toWindowPixels(r.x), y: toWindowPixels(r.y), width: toWindowPixels(r.width), height: toWindowPixels(r.height) }, artifactId, homepage })
       if (artifactId) displayedArtifact = artifactId
     }).catch(e => { if (active) status = String(e) })
     return queue

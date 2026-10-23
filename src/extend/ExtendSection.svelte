@@ -15,15 +15,27 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import McpIcon from './McpIcon.svelte'
   import ProviderIcon from './ProviderIcon.svelte'
-  // `sidebarTab` lets the Settings sidebar pick the tab and hides the tab row.
-  let { tauri, oncreate, sidebarTab = null } = $props()
-  const intros = { mcp: 'MCP servers connect your models to apps and services.', skill: 'Skills give your models instructions and scripts for one kind of task.', plugin: 'Plugins package skills, MCP servers and code into one install.' }
+  import SearchSection from '../lib/SearchSection.svelte'
+  // Settings → Tools: MCP servers, skills, plugins and web search in one page,
+  // with a type filter and one Add. `focus` picks the type a link or a
+  // search result names. `localNote` is core's line on where the extensions
+  // keep their settings when that differs from the machine Settings names,
+  // and `searchNote` its line on where search keeps its provider keys.
+  let { tauri, oncreate, focus = null, localNote = '', searchNote = '' } = $props()
+  const TYPES = ['mcp', 'skill', 'plugin', 'search']
+  // A card names its publisher only when the server's name does not already.
+  const distinctPublisher = entry => {
+    const publisher = entry.publisher?.toLowerCase().trim()
+    const name = entry.name.toLowerCase()
+    return !!publisher && !name.includes(publisher.split(/[\s(,]/)[0]) && !publisher.includes(name.split(/[\s.-]/)[0])
+  }
+  const intros = { mcp: 'MCP servers connect your models to apps and services.', skill: 'Skills give your models instructions and scripts for one kind of task.', plugin: 'Plugins package skills, MCP servers and code into one install.', search: 'How agents search the web, and the engine the Browser tab address bar uses.' }
   // svelte-ignore state_referenced_locally
-  let state = $state({ items: [], threads: {} }), tab = $state(sidebarTab ?? 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
+  let state = $state({ items: [], threads: {} }), tab = $state(TYPES.includes(focus) ? focus : 'mcp'), query = $state(''), category = $state(''), scope = $state('all'), page = $state(0), sort = $state('popular')
   let filtersOpen = $state(false), formDialog = $state()
   function showTab(id) { tab = id; resetSearch(); form = null; preview = null }
   $effect(() => {
-    if (sidebarTab && sidebarTab !== untrack(() => tab)) showTab(sidebarTab)
+    if (TYPES.includes(focus) && focus !== untrack(() => tab)) showTab(focus)
   })
   $effect(() => { if (form && formDialog && !formDialog.open) formDialog.showModal() })
   let details = $state(null), detailsDialog
@@ -84,14 +96,24 @@
   async function install() { await work(async () => { state = await call('install', { previewId: preview.id, skills: selected, replaceId }); preview = null; form = null; status = 'Installed. Use the composer to select it.' }) }
   async function mutate(action, data) { await work(async () => { state = await call(action, data) }) }
   async function connection(item, action) { await work(async () => { const result = await call(action, { id: item.id }); status = `${item.name}: ${result.status}. ${result.tools.length} tools available.`; await refresh() }) }
+  // The one Add opens the form for the picked type. Search adds a provider
+  // in its own list, so Add moves to that list.
+  function addForType() {
+    if (tab === 'search') document.querySelector('[data-search-add]')?.scrollIntoView?.({ block: 'start' })
+    else add()
+  }
   function closeForm() { if (!busy) { form = null; preview = null; token = '' } }
   function update(item) { form = {}; source = item.source; replaceId = item.id; preview = null; error = '' }
 </script>
-<section class="extend" aria-label="Extend">
+<section class="extend" aria-label="Tools">
   <PageHead intro={intros[tab] ?? intros.mcp}>
-    {#snippet actions()}<Button disabled={busy} onclick={() => add()}>{tab === 'mcp' ? 'Custom' : 'Install'}</Button>{#if tab !== 'mcp'}{#if oncreate}<Button onclick={() => oncreate(tab)}>Create from chat</Button>{/if}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}{/snippet}
+    {#snippet actions()}{#if tab === 'skill' || tab === 'plugin'}<Button disabled={busy} onclick={() => work(() => call('open_folder'))}>Open folder</Button>{/if}<Button icon="plus" variant="primary" disabled={busy} onclick={addForType}>Add</Button>{/snippet}
   </PageHead>
-  {#if !sidebarTab}<SettingsTabs label="Extension types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin}]} onchange={showTab} />{/if}
+  <SettingsTabs label="Tool types" value={tab} tabs={[{id:'mcp',label:'MCP servers',icon:'mcp',count:counts.mcp},{id:'skill',label:'Skills',icon:'pencil-sparkles',count:counts.skill},{id:'plugin',label:'Plugins',icon:'plug-zap',count:counts.plugin},{id:'search',label:'Search',icon:'search'}]} onchange={showTab} />
+  {#if tab === 'search' ? searchNote : localNote}<p class="note" role="note">{tab === 'search' ? searchNote : localNote}</p>{/if}
+  {#if tab === 'search'}
+    <SearchSection {tauri} embedded />
+  {:else}
   <SearchToolbar bind:value={query} label={`Search ${tab === 'mcp' ? 'MCP servers' : tab === 'skill' ? 'skills' : 'plugins'}`} placeholder="Search names, descriptions, or categories" filters={tab === 'mcp'} expanded={filtersOpen} controls="mcp-filters" ontoggle={() => filtersOpen = !filtersOpen} oninput={() => page = 0} />
   {#if tab === 'mcp' && filtersOpen}
     <div class="filters" id="mcp-filters">
@@ -117,7 +139,7 @@
       {:else}
         <label>GitHub repository, local folder, or archive<input bind:value={source} placeholder="https://github.com/owner/repository" /></label>
         <p>Use a GitHub URL, a local folder, or a ZIP or TAR archive. GitHub URLs can include a branch and subfolder. Files stay pinned until you install an update.</p>
-        {#if !preview}<button type="button" disabled={busy || !source.trim()} onclick={inspect}>Review package</button>{/if}
+        {#if !preview}<button type="button" disabled={busy || !source.trim()} onclick={inspect}>Review package</button>{#if oncreate && !replaceId}<button type="button" disabled={busy} onclick={() => { const kind = tab; closeForm(); oncreate(kind) }}>Create one in a chat</button>{/if}{/if}
         {#if preview}
           <h4>{preview.name}</h4><p>{preview.description}</p><p>Version {preview.version.slice(0, 12)}</p>
           {#each preview.skills as skill}<label class="check"><input type="checkbox" value={skill.path} bind:group={selected} />{skill.name}<span>{skill.description}</span></label>{/each}
@@ -145,7 +167,7 @@
           <Toggle checked={item.enabled !== false} label={`Use ${item.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: item.id, enabled })} />
         </Row>
       {:else}
-        <p>No {tab === 'skill' ? 'skills' : 'plugins'} installed. Add a GitHub repository, local folder, or archive to get started.</p>
+        <p>No {tab === 'skill' ? 'skills' : 'plugins'} installed.</p>
       {/each}
     </Group>
   {/if}
@@ -153,9 +175,9 @@
     {#snippet cards(entries, label)}
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
-        {#if entry.publisher && entry.publisher.toLowerCase() !== entry.name.toLowerCase()}<p class="publisher">{entry.publisher}</p>{/if}
-        <p class="category">{entry.categories.map(categoryLabel).join(' · ')}</p>
-        <div class="actions"><button type="button" class="details-link" onclick={() => showDetails(entry)}>Details</button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
+        {#if distinctPublisher(entry)}<p class="publisher">{entry.publisher}</p>{/if}
+        {#if entry.categories.length}<p class="category">{categoryLabel(entry.categories[0])}{#if entry.categories.length > 1}<span class="more-categories"> +{entry.categories.length - 1}<span class="visually-hidden">: {entry.categories.slice(1).map(categoryLabel).join(', ')}</span></span>{/if}</p>{/if}
+        <div class="actions"><button type="button" class="details-link" aria-label="Details" onclick={() => showDetails(entry)}><LucideIcon name="info" size={16} variant="action" /></button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
@@ -166,6 +188,7 @@
       {#if !filtered.length}<p>No servers match these filters.</p>{/if}
     </Group>
     {#if remaining.length > 30}<nav class="pages" aria-label="Catalog pages"><button type="button" disabled={page === 0} onclick={() => page--}>Previous</button><span>Page {page + 1} of {Math.ceil(remaining.length / 30)}</span><button type="button" disabled={(page + 1) * 30 >= remaining.length} onclick={() => page++}>Next</button></nav>{/if}
+  {/if}
   {/if}
 </section>
 <dialog data-panel="mcp-details" data-panel-variant="overlay" class="server-details" bind:this={detailsDialog} use:dialogDismiss={{onclose: () => detailsDialog.close()}} aria-labelledby="server-details-title" onclose={() => details = null}>
@@ -192,7 +215,7 @@
       </div>
       <div class="detail-actions actions">
         <button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'test')}>Test connection</button>
-        {#if detailsInstalled.definition.url}<button type="button" disabled={busy} onclick={() => connection(detailsInstalled, 'auth')}>Sign in</button>{/if}
+        {#if detailsInstalled.definition.url}<button type="button" data-variant="primary" disabled={busy} onclick={() => connection(detailsInstalled, 'auth')}>Sign in</button>{/if}
         <button type="button" disabled={busy} onclick={() => { const item = detailsInstalled; detailsDialog.close(); add(item); config = JSON.stringify(item.definition, null, 2) }}>Configure</button>
         <button type="button" disabled={busy} onclick={() => { const id = detailsInstalled.id; detailsDialog.close(); void mutate('remove', { id }) }}>Uninstall</button>
       </div>
@@ -200,7 +223,7 @@
       {#if status}<p role="status">{status}</p>{/if}
     {:else}
       <p class="requirements">The provider may require an account or subscription. Configure authentication when you add the server.</p>
-      <div class="detail-actions"><button type="button" disabled={busy} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>Connect</button></div>
+      <div class="detail-actions"><button type="button" data-variant="primary" disabled={busy} onclick={() => { const entry = details; detailsDialog.close(); void connectCatalog(entry) }}>Connect</button></div>
     {/if}
   {/if}
 </dialog>
@@ -219,7 +242,8 @@
   .server-details a { color: var(--ink); text-decoration: underline; }
   .requirements { margin-top: 20px; font-size: var(--text-13); line-height: var(--leading-body); }
   .detail-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
-  button.details-link { padding: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+  button.details-link { display: inline-grid; place-items: center; min-width: 28px; min-height: 28px; padding: 0; background: transparent; color: var(--muted); }
+  button.details-link:hover { color: var(--ink); }
 
   .extend { display: grid; gap: var(--page-gap); min-width: 0; } .note { margin: 4px 0 0; color: var(--muted); font-size: var(--text-12); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }  .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
   .extend { container-type: inline-size; }
@@ -227,12 +251,13 @@
   button:disabled { opacity: .5; cursor: default; }
   /* The catalog fills the page width and wraps to as many columns as fit. */
   .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; }
-  .catalog-card.connected { background: var(--signal-soft); border-color: var(--signal); }
-  .catalog-card.connected strong { color: var(--signal); }
+  .catalog-card.connected { background: var(--success-soft); border-color: var(--success-edge); }
+  .catalog-card.connected strong { color: var(--success); }
   .catalog-card { min-width: 0; gap: 5px; align-content: start; }
   .card-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
   .card-title strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-13); }
   .publisher { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-12); }
   .category { font-size: var(--text-provenance); min-height: 2.8em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .more-categories { color: var(--muted); }
   .catalog-card .actions { justify-content: space-between; gap: 8px; margin-top: 5px; }
 </style>

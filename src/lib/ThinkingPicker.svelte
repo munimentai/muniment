@@ -4,6 +4,7 @@
   import { onMount, tick } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import { thinkingLabel } from './thinking-level.js'
+  import { followPointer } from './menu-pointer.js'
 
   let { levels, current, onchoose, onclose } = $props()
   let menu = $state()
@@ -36,7 +37,7 @@
 
 <svelte:window onkeydown={windowKeydown} />
 
-<div data-panel="thinking-picker" data-panel-variant="overlay" data-composer-panel class="thinking-picker" role="menu" tabindex="-1" aria-label="Thinking level" bind:this={menu} onkeydown={menuKeydown}>
+<div data-panel="thinking-picker" data-panel-variant="overlay" data-composer-panel class="thinking-picker" role="menu" tabindex="-1" aria-label="Thinking level" bind:this={menu} use:followPointer onkeydown={menuKeydown}>
   {#each levels as level (level)}
     <button type="button" role="menuitemradio" class="thinking-row" aria-checked={level === current} data-level={level} onclick={() => onchoose(level)}>
       <span>{thinkingLabel(level)}</span>

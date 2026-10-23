@@ -62,7 +62,7 @@ fn wait_for_retry(deadline: Instant, error: &str) -> Result<(), String> {
 }
 
 pub(crate) fn spawn_runtime(executable: &Path) -> Result<Child, String> {
-    Command::new(executable)
+    muniment_core::child_fds::stdio_only(&mut Command::new(executable))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .spawn()

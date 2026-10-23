@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # M0 structure smoke (runs on the shared runners — no GUI/build here).
 set -eu
-# The shared crates and their pins live in the muniment-core checkout Cargo resolves.
+# The shared crates and their pins live in core/.
 core_root=$(scripts/muniment-core-root.sh)
 grep -q '"identifier": "ai.muniment.desktop"' src-tauri/tauri.conf.json
 grep -q 'tauri_build::try_build' src-tauri/build.rs
@@ -109,16 +109,18 @@ test -z "$(grep -rilw 'chat mode' SPEC.md)"
 test -z "$(grep -rl 'muniment-resident-gemma' docs/)"
 test -z "$(grep -ril 'resident local gemma' docs/)"
 # The public core boundary names both sets and runs in the smoke job.
-boundary_doc=docs/core-boundary.md
+boundary_doc=core/docs/core-boundary.md
 test -f "$boundary_doc"
-grep -Fxq '## Shared' "$boundary_doc"
+grep -Fxq '## Port' "$boundary_doc"
 grep -Fxq '## Desktop' "$boundary_doc"
 grep -Fq '| crate | muniment-core |' "$boundary_doc"
 grep -Fq '| crate | muniment-desktop |' "$boundary_doc"
 grep -Fq '| crate | muniment-desktop-integration |' "$boundary_doc"
 test -x scripts/check-core-boundary.sh
-grep -Fq 'run: scripts/check-core-boundary.sh' "$ci"
+grep -Fq 'run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; scripts/check-core-boundary.sh' "$ci"
 python3 -B test/core-boundary.py
+# core/Cargo.toml names the one release version, and every copy matches it.
+python3 -B scripts/version.py check >/dev/null
 # companion workspace and its path-scoped CI lane
 grep -Fq 'members = [".", "integration", "cli", "acp", "runtime"]' src-tauri/Cargo.toml
 grep -Fq 'resolver = "2"' src-tauri/Cargo.toml
@@ -126,10 +128,10 @@ test -f src-tauri/integration/Cargo.toml
 test -f src-tauri/integration/src/lib.rs
 test -f src-tauri/cli/Cargo.toml
 test -f src-tauri/cli/src/main.rs
-grep -Eq '^muniment-attach = \{ git = "https://github.com/munimentai/muniment-core", tag = "v[0-9]+\.[0-9]+\.[0-9]+", default-features = false, features = \["client"\] \}$' src-tauri/cli/Cargo.toml
+grep -Fxq 'muniment-attach = { path = "../../core/crates/attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
 grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
 grep -Fq 'src-tauri/integration/*|src-tauri/integration/**)' "$ci"
-grep -Fq 'protocol-fixtures/*|protocol-fixtures/**)' "$ci"
+grep -Fq 'core/protocol-fixtures/*|core/protocol-fixtures/**)' "$ci"
 grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
 grep -Fq "needs.changes.outputs.companion == 'true'" "$ci"
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-cli --package muniment-acp --check' "$ci"
@@ -141,14 +143,14 @@ grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-runt
 grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-runtime --all-targets --locked -- -D warnings' "$ci"
 # Public core boundary runs the runtime tests with the same feature set.
 grep -Fq 'run: test/runtime-dependency-boundary.sh' "$ci"
-test -d protocol-fixtures/muniment.attach/1
+test -d core/protocol-fixtures/muniment.attach/1
 grep -Fq 'name: attach-fixtures-current' "$ci"
-grep -Fq -- '--package muniment-attach --bin export-attach-fixtures -- "$PWD/protocol-fixtures" --check' "$ci"
+grep -Fq -- '--package muniment-attach --bin export-attach-fixtures -- "$PWD/core/protocol-fixtures" --check' "$ci"
 grep -Fq 'attach-fixtures-current:' "$ci"
-test -d protocol-fixtures/code-diff/1
+test -d core/protocol-fixtures/code-diff/1
 grep -Fq 'name: code-diff-fixtures-current' "$ci"
-grep -Fq -- '--package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/protocol-fixtures" --check' "$ci"
-test -f protocol-fixtures/muniment.attach/1/negotiation-hello.json
+grep -Fq -- '--package muniment-code-diff --bin export-code-diff-fixtures -- "$PWD/core/protocol-fixtures" --check' "$ci"
+test -f core/protocol-fixtures/muniment.attach/1/negotiation-hello.json
 test -x test/cli-dependency-boundary.sh
 grep -Fq -- '--locked --target all --prefix none' test/cli-dependency-boundary.sh
 # The allowlist rejects representatives of every forbidden runtime class,
@@ -213,6 +215,6 @@ grep -Fq 'build-windows-installers.mjs' .github/workflows/nightly.yml
 grep -Fq 'windows-installers.ps1' .github/workflows/nightly.yml
 test -f docs/windows-installers.md
 grep -Fq 'cmd="$preflight_cmd && $cmd"' "$ci"
-test "$(grep -Fc "if: needs.changes.outputs.desktop == 'true'" "$ci")" -eq 1
-test -z "$(git ls-files 'protocol-fixtures/muniment.attach/**' | grep -v '^protocol-fixtures/muniment.attach/1/')"
+test "$(grep -Fxc "    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'" "$ci")" -eq 1
+test -z "$(git ls-files 'core/protocol-fixtures/muniment.attach/**' | grep -v '^core/protocol-fixtures/muniment.attach/1/')"
 echo "smoke OK"

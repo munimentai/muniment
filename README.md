@@ -26,11 +26,13 @@
 
 ## Features
 
-- **Your models, together.** Connect provider accounts, API keys, or local models. Choose a model or let Jev route each request.
-- **One workspace.** Keep projects, chats, files, a terminal, and a browser together.
-- **Tools that fit your work.** Add MCP servers, skills, and plugins. Choose what each turn can use.
-- **Agents and artifacts.** Create reusable agents and interactive outputs beside the conversation.
-- **Memory and voice.** Keep context across chats and use on-device voice.
+- **Your models, together.** Connect provider accounts, API keys, or local models. Choose a model or let Jev route each request. Usage shows what each subscription window has left.
+- **One workspace.** Keep projects, threads, files, a terminal, and a browser together.
+- **Tools that fit your work.** Add MCP servers, skills, and plugins. Pick extra ones for a single turn.
+- **Permission modes.** Each thread and agent runs in one of six modes, from Ask before changes to Bypass permissions. An approval is Allow once or Deny.
+- **Agents and artifacts.** Create agents that run on a schedule, a webhook, or a tool check, and interactive outputs beside the conversation.
+- **Your machines.** Pair other desktops, servers, and containers, and run a thread or an agent on any of them.
+- **Memory and voice.** Keep context across threads, see where each memory came from, and dictate on-device with live words.
 
 ## Start
 
@@ -91,16 +93,30 @@ Once Homebrew accepts the cask, install with:
 brew install --cask muniment
 ```
 
+## Repository layout
+
+- `core/` is the shared Rust core: runtime, model router, pins, protocols and the
+  headless servers. [core/README.md](core/README.md) describes its crates.
+- `src-tauri/` is the desktop's Rust workspace. It builds the core crates by path.
+- `src/` is the desktop UI. `scripts/` and `test/` hold the desktop's tooling and tests.
+
+Core holds the logic that every host shares. The desktop is the UI layer on top of it.
+
 ## Releases
 
-GitHub Releases on `munimentai/muniment` host every download. The CI workflows in `.forgejo/workflows/` build and publish them.
+GitHub Releases on `munimentai/muniment` host every download. One `vX.Y.Z` tag
+releases the desktop app, the CLI, the server and the runtime image together.
+`core/Cargo.toml` names the version, and `scripts/version.py` keeps the desktop
+copies in step. The CI workflows in `.forgejo/workflows/` build and publish them.
 Only a maintainer dispatch of `main` runs a release job. Each job checks this in its first step and fails before any credential is read.
 
-1. Dispatch `nightly.yml` on `main`. It signs the three platform builds, uploads them to the `nightly` pre-release, and runs the installed checks.
-2. Dispatch `subscriptions.yml` on GitHub with the nightly source SHA. Its native runners are on GitHub.
-3. Dispatch `release.yml` on `main` with the source SHA, the version, and `dry_run` set. The dry run runs every check and creates nothing.
-4. Dispatch `release.yml` again without `dry_run`. It creates the version tag in the source repository, and the mirror carries it to GitHub.
+1. Set the version with `python3 scripts/version.py set X.Y.Z` and land it on `main`. `core/scripts/release.py` prints the next version.
+2. Dispatch `nightly.yml` on `main`. It signs the three platform builds, uploads them to the `nightly` pre-release, and runs the installed checks.
+3. Dispatch `subscriptions.yml` on GitHub with the nightly source SHA. Its native runners are on GitHub.
+4. Dispatch `release.yml` on `main` with the source SHA, the version, and `dry_run` set. The dry run runs every check and creates nothing.
+5. Dispatch `release.yml` again without `dry_run`. It creates the version tag in the source repository, and the mirror carries it to GitHub.
    The job then publishes the verified nightly bytes, `latest.json`, and `SHA256SUMS` as the stable release.
+   Later jobs add the pins and the signed server archives, sign `SHA256SUMS` over every file, and push the runtime image.
 
 The `GH_RELEASE_TOKEN` secret holds a fine-grained GitHub token with Contents write on `munimentai/muniment`.
 Every GitHub Releases call uses it. The CI job token reaches only the source repository.
@@ -118,4 +134,4 @@ Third-party components retain their own licenses.
 `npm run check:agent-dependencies` checks Claude Code, Pi, and extension pins against current releases and Pi peer ranges.
 Updates require the focused regression tests and the native CI and installed nightly checks.
 `npm run test:agent-runtime` checks extension loading, selected models, streamed completion, and cache usage against a local fixture.
-Set `PI_TEST_BINARY` to the verified Pi executable and `PI_TEST_PACKAGES` to an isolated frozen install of `pins/packages.bun.lock` from the `muniment-core` release tag.
+Set `PI_TEST_BINARY` to the verified Pi executable and `PI_TEST_PACKAGES` to an isolated frozen install of `core/pins/packages.bun.lock`.

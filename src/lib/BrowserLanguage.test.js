@@ -16,7 +16,7 @@ describe('BrowserLanguage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Language: Match system' }))
     expect(screen.getByRole('menuitemradio', { name: 'français (French)' })).toBeTruthy()
     expect(screen.getByRole('menuitemradio', { name: 'Nederlands (Dutch) · Download' })).toBeTruthy()
-    expect(screen.getByText('Languages marked Download fetch about 9 MB once.')).toBeTruthy()
+    expect(screen.getByText('Download fetches about 9 MB once')).toBeTruthy()
   })
 
   it('downloads a missing language and asks for a restart', async () => {

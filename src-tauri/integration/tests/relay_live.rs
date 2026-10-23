@@ -371,7 +371,9 @@ fn run_event(run_id: &str, phase: &str, text: &str) -> ChatEvent {
         turn_started: true,
         routing_stage: None,
         prompt_storage_notice: None,
+        resume_notice: None,
         failure_reason: None,
+        failure_detail: None,
         receipt: None,
         tool_activity: Vec::new(),
         attachments: Vec::new(),
@@ -716,6 +718,9 @@ fn a_paired_phone_follows_and_steers_a_desktop_run_through_the_relay() {
             timeout: None,
         },
         diff: None,
+        presentation: None,
+        rule: None,
+        reason: None,
     });
     runtime.emit(asking);
     let (header, content) = phone.event();
@@ -862,6 +867,9 @@ impl RelayRuntime for ReactiveRuntime {
                     timeout: None,
                 },
                 diff: None,
+                presentation: None,
+                rule: None,
+                reason: None,
             });
             self.react(asking);
         }

@@ -1,0 +1,107 @@
+<script>
+  // One project row of the sidebar's Projects list: the project's name, the
+  // most urgent status of its threads in words, the triggers of its agents in
+  // words, such as `every day 9:00` or `webhook`, and the pencil that starts
+  // a thread in it. The menu holds Settings, Rename,
+  // Open folder and New group chat where the project has each. A thread row
+  // dropped on it moves the thread into the project.
+  import { floatingMenu } from '../lib/floating-menu.js'
+  import { tick } from 'svelte'
+  import LucideIcon from '../lib/LucideIcon.svelte'
+  import OwnerChip from '../runtimes/OwnerChip.svelte'
+  import StatusChip from '../lib/ui/StatusChip.svelte'
+  import { statusTone } from './sidebar-model.js'
+  // `owner` names the fleet member that holds a shared project's files.
+  // `ondropthread` makes the row a drop target for a thread row dragged as `dragType`.
+  let { owner = null, name, triggers = '', status = 'read', statusLabel = '', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondropthread } = $props()
+  let open = $state(false)
+  let dropping = $state(false)
+  const carries = (event) => !!ondropthread && !!dragType && [...(event.dataTransfer?.types ?? [])].includes(dragType)
+  function dragOver(event) {
+    if (!carries(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    dropping = true
+  }
+  function drop(event) {
+    dropping = false
+    if (!carries(event)) return
+    event.preventDefault()
+    const threadId = event.dataTransfer.getData(dragType)
+    if (threadId) ondropthread(threadId)
+  }
+  let row = $state()
+  let trigger = $state()
+  let menu = $state()
+  const icon = $derived(expanded ? 'folder-open' : 'folder')
+  // Core words more than one trigger as the first one and `+N`, which the row drops first when it runs short.
+  const triggerParts = $derived(/^(.*\S) (\+\d+)$/.exec(triggers)?.slice(1) ?? [triggers, ''])
+  const actions = $derived([
+    onsettings && { id: 'settings', label: 'Settings', icon: 'settings', run: onsettings },
+    onrename && { id: 'rename', label: 'Rename', icon: 'pencil', run: onrename },
+    onopen && { id: 'open', label: 'Open folder', icon: 'folder-open', run: onopen },
+    ongroup && { id: 'group', label: 'New group chat', icon: 'users', run: ongroup },
+  ].filter(Boolean))
+  $effect(() => {
+    if (!open) return
+    const outside = event => { if (!row?.contains(event.target)) open = false }
+    document.addEventListener('pointerdown', outside, true)
+    return () => document.removeEventListener('pointerdown', outside, true)
+  })
+  async function toggleMenu() {
+    open = !open
+    if (open) { await tick(); menu?.querySelector('button:not(:disabled)')?.focus() }
+  }
+  function contextMenu(event) { if (!actions.length) return; event.preventDefault(); void toggleMenu() }
+  function contextKey(event) { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) contextMenu(event) }
+  function choose(action) { open = false; trigger?.focus(); action() }
+  function menuKey(event) {
+    if (event.key === 'Escape') { event.preventDefault(); open = false; trigger?.focus(); return }
+    const items = [...menu.querySelectorAll('button:not(:disabled)')]
+    const index = items.indexOf(document.activeElement)
+    const next = event.key === 'ArrowDown' ? (index + 1) % items.length : event.key === 'ArrowUp' ? (index + items.length - 1) % items.length : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1
+    if (next >= 0) { event.preventDefault(); items[next].focus() }
+    if (event.key === 'Tab') open = false
+  }
+</script>
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="project-row" class:dropping style:--controls-width={`${(actions.length ? 2 : 1) * 24}px`} bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
+  <button class="project-title" aria-label={[`Project ${name}`, statusLabel, triggers].filter(Boolean).join(', ')} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if statusLabel}<StatusChip tone={statusTone(status)}>{statusLabel}</StatusChip>{/if}{#if triggers}<em class="triggers"><span class="trigger-words">{triggerParts[0]}</span>{#if triggerParts[1]}<span class="trigger-more">{triggerParts[1]}</span>{/if}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix="files on" compact />{/if}</button>
+  <!-- The controls sit over the row's right end and show on hover or focus. The title then leaves their width free, so they never cover the triggers. -->
+  <span class="project-controls" class:visible={open}>
+    <button class="project-control" aria-label={`New thread in ${name}`} {disabled} onclick={onnew}><LucideIcon name="square-pen" size={14} /></button>
+    {#if actions.length}<button class="project-control" aria-label={`${name} actions`} aria-haspopup="menu" aria-expanded={open} bind:this={trigger} onclick={toggleMenu}><LucideIcon name="ellipsis-vertical" size={14} /></button>{/if}
+  </span>
+  {#if open}
+    <div class="project-menu" use:floatingMenu role="menu" tabindex="-1" aria-label={`${name} actions`} bind:this={menu} onkeydown={menuKey}>
+      <button role="menuitem" {disabled} onclick={() => choose(onnew)}><LucideIcon name="square-pen" size={14} />New thread</button>
+      {#each actions as action (action.id)}<button role="menuitem" onclick={() => choose(action.run)}><LucideIcon name={action.icon} size={14} />{action.label}</button>{/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .project-row { display: flex; align-items: center; position: relative; border-radius: var(--radius-control); }
+  .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: var(--row-height); padding: var(--row-pad) 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
+  /* The name takes only the width the chips leave, so it clips before any of them. */
+  .project-title > span { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .project-title :global(span[data-overflow="true"]) { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .project-title :global(.lucide) { flex: none; width: 16px; height: 16px; color: var(--muted); }
+  /* The triggers show in full up to most of the row. Short of room, `+N` wraps onto the hidden second line before the words clip. */
+  .triggers { display: flex; flex-wrap: wrap; column-gap: .25em; flex: 0 1 auto; min-width: 0; max-width: 70%; height: 1lh; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); font-style: normal; white-space: nowrap; }
+  .trigger-words { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .trigger-more { flex: none; }
+  .project-title:hover { background: var(--faint); }
+  .dropping .project-title { background: var(--selected); color: var(--on-selected); }
+  .project-controls { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; border-radius: var(--radius-control); background: var(--faint); opacity: 0; pointer-events: none; }
+  .project-row:hover .project-controls, .project-row:focus-within .project-controls, .project-controls.visible { opacity: 1; pointer-events: auto; }
+  @media (hover: hover) { .project-row:hover .project-title, .project-row:focus-within .project-title, .project-row:has(.project-controls.visible) .project-title { padding-right: calc(8px + var(--controls-width)); } }
+  .project-control { flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: var(--row-height); padding: 4px; border-radius: var(--radius-control); border: 0; background: transparent; color: var(--muted); }
+  .project-control:hover:not(:disabled), .project-control:focus-visible { background: color-mix(in srgb, var(--ink) 8%, var(--faint)); color: var(--ink); }
+  @media (hover: none) { .project-controls { position: static; opacity: 1; pointer-events: auto; background: transparent; } }
+  .project-menu { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 160px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+  .project-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
+  .project-menu button:disabled { opacity: .55; cursor: default; }
+  .project-menu button:hover:not(:disabled) { background: var(--faint); }
+</style>

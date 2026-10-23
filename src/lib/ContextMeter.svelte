@@ -23,12 +23,12 @@
   circle { fill: none; stroke-width: 2; }
   .track { stroke: var(--border); }
   .fill { stroke: var(--muted); }
-  [data-level="caution"] { color: var(--ochre); }
-  [data-level="caution"] .fill { stroke: var(--ochre); }
+  [data-level="caution"] { color: var(--warning); }
+  [data-level="caution"] .fill { stroke: var(--warning); }
   [data-level="unknown"] .track { stroke: var(--muted); stroke-dasharray: 2 2; }
   .compacting .ring { animation: turn 1.1s linear infinite; }
   @keyframes turn { to { transform: rotate(270deg); } }
-  @media (prefers-reduced-motion: reduce) { .compacting .ring { animation: none; } }
+  :global(:root[data-motion="reduce"]) .compacting .ring { animation: none; }
   .context-trigger[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: 0; bottom: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .context-trigger[data-tooltip]:hover::after, .context-trigger[data-tooltip]:focus-visible::after { opacity: 1; transition-delay: 350ms; }
   .context-trigger[aria-expanded="true"]::after { display: none; }

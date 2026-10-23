@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import MemorySection from './MemorySection.svelte'
 import AgentManager from './AgentManager.svelte'
@@ -45,6 +45,6 @@ it('opens an existing agent dedicated chat', async () => {
   const invoke=vi.fn(async()=>({agents:[{id:'scout',name:'Scout',instructions:'Find sources.'}],state:{runs:{},threads:{}}}))
   const onselect=vi.fn()
   render(AgentManager,{tauri:{invoke},onselect,oncreate:vi.fn(),onclose:vi.fn()})
-  await fireEvent.click(await screen.findByRole('button',{name:/^Scout/}))
+  await fireEvent.click(within(await screen.findByRole('article',{name:'Scout'})).getByRole('button',{name:'Open chat'}))
   expect(onselect).toHaveBeenCalledWith(expect.objectContaining({id:'scout'}))
 })

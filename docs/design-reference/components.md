@@ -11,12 +11,25 @@ listed as written.
 
 ## Shared component library
 
-`src/lib/ui/` owns reusable settings controls. Models and Extend share
+`src/lib/ui/` owns reusable settings controls. Models and Tools share
 `SearchToolbar`: the filter icon comes first, search fills the row, and actions
 sit at the right. Filters expand below the toolbar. `Button` supplies compact
 32px controls, icon-only accessible names, disabled states and focus backgrounds.
-Its primary variant uses the optional accent and accent-soft tokens. The vibrant
-sets give it their accent. Other themes keep their neutral actions.
+Its primary variant fills with `--accent` and draws `--on-accent` text, and a
+submit `Button` is primary unless it names another variant. Its danger variant,
+for an action that removes something, draws `--danger` text on a `--danger-soft`
+fill with a `--danger-edge` border. Every theme carries
+an accent. A raw button takes the same fill with `data-variant="primary"`, and
+`settings-controls.css` fills raw submit buttons in Settings. Hover and focus mix
+the accent 86% with `--ink`. A pressed button reads `--selected`, `--on-selected`
+and `--selected-edge`. `StatusChip` draws one reported state at `--text-12`
+semibold with a 6px dot, in `--success`, `--active`, `--danger`, `--warning` or
+`--muted` over a 14% fill of the same color. `dot` keeps the mark alone and gives
+the words to screen readers. `status-tone.js` maps run, machine and update states
+to those tones. `Toggle` is a 40 by 24 pill track with an 18px round knob: off is
+`--faint` with a `--muted` knob at the left, on is `--accent` with an
+`--on-accent` knob at the right. `size="small"` draws it 28 by 16 with a 12px
+knob, as on the agent profile's routine rows.
 `SegmentedField` supplies square, two-sided choices with pointer and arrow-key selection.
 `ChoiceField` supplies labeled choices with optional provider marks, keyboard
 navigation, Escape dismissal and focus return. It uses the overlay shadow token.
@@ -27,15 +40,21 @@ connection sections use 16px gaps. `SettingsTabs`, `Toggle` and `ProviderLogo` r
 Every full panel builds from five layout components. `PanelPage` is the
 scrolling body of Settings and the Agents, Artifacts and Projects catalogs, with
 `--page-pad` 24px and `--page-gap` 28px from `panels.css`. Settings pages set
-`measure` for a 760px width. `PageHead` is the first row: the muted 15px intro
-at the left and the page actions at the right, icon-only below 560px. `Group`
-is one section: a semibold heading, an optional support line and actions, and
-its rows in one bordered card with hairlines between them. `plain` keeps the
-heading and drops the card for a grid of cards. `Row` is one card row: the
-title, a mono meta note, a muted support line, and the control at the right.
-`CardGrid` and `CatalogCard` lay out catalog cards with the item menu in the
-corner. A panel names no section after its sidebar row. Its title stays as a
-visually hidden heading.
+`measure` for a 760px width. `PageHead` is the first row: the page title in
+semibold `--text-22` with its explanation behind an `InfoTip` at the left, and
+the page actions at the right, icon-only below 560px. Settings passes the
+sidebar label as the title through the `page-title` context. `InfoTip` is a
+24px `info` icon button in `--muted`, `--ink` on the `--faint` hover fill, whose
+tooltip is a `--surface` card with a `--border` hairline and
+`--shadow-overlay`. Hover and keyboard focus show it, a click pins it until
+Escape or blur, and the owner names it with `aria-describedby`. `Group`
+is one section: a semibold heading with an optional `info` tip, an optional
+support line and actions, and its rows in one bordered card with hairlines
+between them. `plain` keeps the heading and drops the card for a grid of cards.
+`Row` is one card row: the title with an optional `info` tip, a mono meta note,
+a muted support line, and the control at the right. `CardGrid` and
+`CatalogCard` lay out catalog cards with the item menu in the corner. A panel
+names no section after its title.
 
 Screens own layout and data. They import these controls instead of copying their
 CSS. Colors, fonts, radii and shadows come from `src/styles/tokens.css`.
@@ -61,7 +80,7 @@ them.
 | Reduced motion | `@media (prefers-reduced-motion: reduce)` in `base.css` | Every animation and transition collapses to 0.001ms |
 | Shell button | `button` in `App.svelte` | `font: inherit` at `--text-13`, `--ink` on `--surface`, 1px `--border`, `--radius-control`, padding 5px 12px. Hover: border `--muted`. Disabled or `aria-disabled` with `.inactive`: `--muted` color |
 | Quiet button | `.quiet` in `App.svelte` and `AccountSettings.svelte` | Transparent background and border over the shell button |
-| Primary button | `.primary` in `App.svelte` and `Onboarding.svelte` | `--ink` background and border, `--paper` color. Inactive `.composer-actions .primary[aria-disabled="true"]`: `--faint` background, `--border` border, `--muted` color |
+| Primary button | `.primary` in `App.svelte` and `Onboarding.svelte` | `--accent` background and border, `--on-accent` color. Hover: the accent mixed 86% with `--ink`. Inactive `.composer-actions .primary[aria-disabled="true"]`: `--faint` background, `--border` border, `--muted` color |
 | Account settings button | `button` in `AccountSettings.svelte` | Same as the shell button. Hover: border `--muted` |
 | Onboarding button | `button` in `Onboarding.svelte` | Same as the shell button with min-height 28px and padding 5px 10px. Disabled: `--muted` color |
 
@@ -81,13 +100,13 @@ them.
 | Thread title input | `input.thread-title` | Renames the thread | Title bar control register, no border, transparent, `--ink`, `font-weight: 600`, ellipsis, flex basis 320px, text selectable | Focus-visible: global ring |
 | Update slot | `.update-slot` | Reserved 24px slot for the update control | 24px by 24px, empty | None |
 | Artifacts toggle | `.row-control.artifacts-toggle` | Opens the rail | Row control, label and `kbd` chip, no wrap, `order: 2` on macOS | `aria-expanded` follows the rail |
-| Record toggle | `.row-control.record-toggle` | Opens the record panel, flush right of Artifacts | Row control, label and `kbd` chip (`⌘ K`), no wrap, `order: 3` on macOS | `aria-expanded` follows the panel. Opening it closes the artifact rail |
+| Record toggle | `.row-control.record-toggle` | Opens the record panel, flush right of Artifacts | Row control, label and `kbd` chip (`⌘ ⇧ K`), no wrap, `order: 3` on macOS | `aria-expanded` follows the panel. Opening it closes the artifact rail |
 | Record panel | `.record-panel` | The rail column's second occupant, 480px minimum | Panel surface, grid of header, kind list and detail, padding 14px 16px 16px | `.workspace.record-maximized` gives it the whole frame and hides the sidebar and thread |
 | Record header | `.record-header` | `Record`, the company picker, Maximize | One mono row (`--text-13 --font-mono`), `h2` in body type at `--text-15`, hairline below | Maximize is a quiet control with `aria-pressed`; the picker is a native `select` at 24px |
 | Kind list | `.record-kinds .record-kind` | One row per kind, name left and summary right | 28px rows, hairlines between, name in body type, summary in `--text-12 --font-mono --muted`; an own kind reads `(own)` | Hover and `aria-pressed`: `--faint` background |
 | Record state line | `.record-state` | One line: empty, reading, or the first sentence of a failure | `--muted --text-13 --font-mono` | A failure is `role="alert"` |
 | Record table | `.record-grid` in `RecordTable.svelte` | One kind's rows, columns generated from the kind | 28px rows, hairlines, sticky mono headers in `--muted`; typed cells `--text-12 --font-mono`, title and free text in body type; header click sorts and reads `^` or `v` | Row hover `--faint`. A double-click on a typed cell edits it inline with the composer's muted hairline |
-| Proposed change | `.record-diff` | The diff under an edited row, one mono line per change, then Commit and Discard | `--text-12 --font-mono`; a warning in `--ochre`, a failure in `--oxide`; Commit is ink on paper | Enter on Commit applies; Escape discards |
+| Proposed change | `.record-diff` | The diff under an edited row, one mono line per change, then Commit and Discard | `--text-12 --font-mono`; a warning in `--warning`, a failure in `--danger`; Commit is ink on paper | Enter on Commit applies; Escape discards |
 | Record view | `.record-view` in `RecordView.svelte` | One record: prose, fields, identities, relations, history | Title `--text-17` 600, prose `--text-15`, section heads and values in mono, a closed relation in `--muted` | A relation's other end is a quiet link that opens that record |
 | Kind toolbar | `.record-toolbar` in `RecordPanel.svelte` | Layout switch, state filter, saved-view picker, Save view, Ask | One mono row, `--text-12 --font-mono`; `.record-layout` pair inside one hairline at `--radius-control`, pressed reads `--faint` and `--ink`; selects 24px | Save view opens one input and Propose, then the diff with Commit and Discard |
 | Record board | `.record-board` in `RecordBoard.svelte` | One column per state, cards as titles with one mono line | Columns `paper` with hairlines, cards `surface` at `--radius-control`, a column under a drag lifts its hairline to `--muted`, a card in flight fades to 50% | A drop proposes the state change and the diff shows above the columns with Commit and Discard |
@@ -104,7 +123,8 @@ them.
 | --- | --- | --- | --- | --- |
 | Sidebar | `.sidebar` | Thread list and settings foot | Panel surface, padding 14px 10px 10px | Collapsed: gone. Zero width, no padding, no hairline, nothing inside |
 | Section label | `.side-label` | Heads the thread list | `--muted`, `--text-12 --font-mono`, margin 2px 8px 5px | None |
-| Thread row | `.thread-row` | Opens a thread | Transparent, 1px transparent border, `--radius-control`, `--text-13`, `--ink`, padding 7px 8px, gap 9px | Hover: `--faint`. `aria-disabled` while a run is active: opacity .55 |
+| Thread row | `.thread-row` | Opens a thread | Transparent, 1px transparent border, `--radius-control`, `--text-13`, `--ink`, padding 7px 8px, gap 9px. With one machine the row is one line, `data-layout="single"`: the lead slot, the title and the time, whose 24px room (`--row-actions-room`) the actions control takes on hover. Once a machine is paired, a meta line over the title names the machine by its shape icon, or the agent by its avatar, with the time at its right end, and the hovered title's box ends 24px short so its fade stops before the control. An agent's thread shows the agent's avatar in the lead. `StatusRing.svelte` takes the leading icon's place while core reports a status: `circle-dashed` at 2.4 stroke, one dash lit after another every 150ms on a 1.2s cycle in `--success` for working and `--warning` for needs you, or every dash lit for 4s in `--success` for done and `--danger` for failed, with `status_label` as visually hidden text. It animates under every Motion setting. An unread done or failed title: `--weight-semibold` | Hover: `--faint`. Open: `--selected` with the accent edge in the agent's color or `--accent`, and no dot. `aria-disabled` while a run is active: opacity .55 |
+| Accent edge | `[data-accent-edge]` in `base.css` | Marks the open sidebar row, the title pill and the agent profile's header | A 2px line down the left edge in `--edge-color`, `--accent` by default, fading to transparent toward the top and the bottom, straight inside the box | None |
 | Current thread | `.thread-row.active-thread` | Marks the open thread | `--faint` background, 5px round `--ink` dot (allowed 50% radius exception) | None |
 | Row time | `.thread-row time` | Relative age, never pushed out of the row | `--muted`, `--text-provenance --font-mono`, `flex: none` | None |
 | Row title | `.thread-row-title` | The thread name, faded over its last 28px instead of clipped with an ellipsis | `mask-image` gradient to transparent | None |
@@ -112,7 +132,17 @@ them.
 | Thread menu item | `.thread-menu button` | Delete, opens the delete confirm | Quiet, 24px floor, `--ink`, `--text-13`, padding 3px 8px | Hover: `--faint`. Disabled while a run is active. Focus-visible: `outline-color: var(--ink)` |
 | Delete confirm group | `.thread-delete-confirm` | Inline Delete and Cancel | `--surface`, `--radius-control`, `--ink`, `--text-12 --font-mono`, padding 5px 7px | Buttons: quiet, 24px floor, `font: inherit`. Hover: `--faint`. Disabled while `deletePending` |
 | Older threads | `.older-threads` | Loads the next page | Quiet, full width, `--muted`, margin-top 4px | Disabled while loading |
-| Settings control | `.side-action` | Foot control that expands the menu | Transparent, gap 9px, padding 7px 8px, `settings` icon at 18px in `--muted`, `--text-13`, `aria-keyshortcuts` and tooltip carry ⌘, or Ctrl+, | Hidden with the collapsed sidebar. The shortcut expands the sidebar with the menu open, and toggles the menu when the sidebar shows |
+| Library rows | `.library-entry` | Agents and Artifacts over Projects, each opening its dashboard | Quiet `.side-action` rows, `bot` and `file-code` icons, Artifacts with its mono ⌘J chip | Open: `aria-current` with the selection fill |
+| Projects list | `aria-label="Projects list"` in `SidebarSections.svelte` | Every project and every thread in no project, pinned first, then newest activity | A thread in no project is a thread row. An agent's thread is a thread row too, with no agent row. A project row is `.project-title` with its folder icon, name, a `StatusChip` for its most urgent thread and its agents' triggers in `--muted` | Open: its threads indented 16px under it. A dragged thread over it: the selection fill. Show archived (n) folds the archive at the end |
+| Agent chat | `.agent-chat` in `AgentDraftChat.svelte` | A new agent's transcript: each message and the draft core answered | User messages in `--faint` bubbles. Each reply is an `article` named `Draft: <name>`: the name at `--text-17`, the job title in `--muted`, then What it does, When, Tools and Model | The newest reply holds Save, primary, and Test run with the test run's line. Drafting: one `--muted` status line |
+| Foot row | `.sidebar-actions` in `SidebarActions.svelte` | Settings, Usage and Notifications at the sidebar's foot | Three 32px icon buttons, `settings`, `chart-column` and `bell` at 18px in `--muted`, `aria-keyshortcuts` and a `data-tooltip` hover label carry ⌘, ⌘⇧U and ⌘⇧A or their Ctrl forms | Hover, open or pressed: `--faint` fill in `--ink`. The bell's `.badge` is a mono 10px count on `--warning` of the items that need the user. Hidden with the collapsed sidebar |
+| Usage page | `[data-panel="usage"]` in `src/usage/` | The thread's place: Limits, Tokens or Cost | Title, `›` and two `ChoiceField` filters, `SegmentedField` views and ranges; `.limit-card` on `--surface` with one line per window: name and reset, a four-step `.meter` in `--meter-4` to `--meter-1` over `--meter-off`, and the percent left in tabular figures; an unmetered card with its reason and the range's token total at `--text-22`; `.tiles`, `.usage-chart` stacked bars, `.breakdown` rows with inline bars | Fewer lit steps as the share falls. Spent: no lit step and Limit in `--meter-1`. A machine that gave no answer is a `--muted` note |
+| Notifications page | `[data-panel="notifications"]` in `src/notifications/` | The thread's place: Needs you, Running, then days | Needs you holds approval cards, `.needs` rows with a reply box or Run again, and offline machines; `.running` chips; `.notification-row` with a status icon, agent, trigger and machine chips, one line and the time | Status icon: `--active` running, `--success` done, `--warning` needs you, `--danger` failed. Unread: an `--ink` dot after the name |
+| Limit banner | `.limit-banner` in `LimitBanner.svelte` | Over the composer band at or near a subscription limit | `--surface`, 1px `--border`, `--radius-control`, `--text-12`, icon in `--warning` or `--danger`, View usage | Shows only for a spent window or one under a tenth left |
+| Machine mark | `.machine-mark` in `MachineMark.svelte` | The machine an agent or run lives on | Shape icon at 12px and the name in `--muted`, `--text-12 --font-mono`. Icon only in a sidebar agent row | None |
+| Agent row marks | `.agent-offline`, `.agent-synced` | An agent whose primary machine does not answer, and a synced copy | `globe-off` at 12px in `--warning`, `refresh-cw` at 12px in `--muted`, each with a visually hidden word | None |
+| Groups row | `aria-label="Groups group"` | Group chats, shown once a machine is in a fleet | Collection row with the `users` icon and a plus that opens New group | Each group row opens its thread |
+| Absence prompt | `.absence` in `AbsencePrompt.svelte` | Routines paused after 14 days without a client | `--surface`, 1px `--warning`, `--radius-control`, `--text-12`, Resume routines and Not now | Busy while the resume runs. Not now hides it for the session |
 | Settings block | `.settings-block` | Foot of the sidebar | 1px `--border` top, padding-top 8px, `margin-top: auto` | None |
 
 ## Settings menu
@@ -143,12 +173,12 @@ them.
 | Caret | `.caret` | Caret on the active line | 2px right border `--signal`, `blink 800ms step-end infinite` | Allowed signal use |
 | Thinking | `.thinking` | The mark in its thinking state with the word Routing | `--muted`, `--text-12 --font-mono`, gap 9px, 17px mark | `.thinking path`: `--signal` fill, `breathe 1.8s ease-in-out infinite`. Reduced motion: none |
 | Assistant markdown | `AssistantMarkdown.svelte` | Rendered complete reply | See the assistant markdown table | None |
-| Provenance | `.provenance` | Receipt line under a reply, toggles the record when it holds a second row | Transparent button, 24px floor, `--muted`, `--text-provenance` at line-height 1.45 (no token) in `--font-mono`, tabular figures, wraps anywhere | Hover: `--ink`. `.route-segment`: `--signal` (allowed). Unavailable: a `p.provenance` with the same register |
+| Provenance | `.provenance` | Receipt line under a reply, toggles the record when it holds a second row | Transparent button, 24px floor, `--muted`, `--text-provenance` at line-height 1.45 (no token) in `--font-human`, proportional figures, wraps anywhere | Hover: `--ink`. `.route-segment`: `--signal` (allowed). Unavailable: a `p.provenance` with the same register |
 | Receipt marker | `.receipt-marker` | Chevron on the provenance line. A one-row receipt shows a 12px `clock` icon in its place on a plain `p.provenance` that never expands | 5px box, 1px `currentColor` edges, rotated -45deg, transition `transform 120ms ease` (raw, `--motion-popover` exists) | `.expanded`: 45deg. Reduced motion: no transition |
 | Receipt record | `.receipt-record` | Expanded receipt list, plain under the provenance line | 329px, no border, no padding, `--muted`, `--text-12 --font-mono`, 88px label column | `.route-value`: `--signal` (allowed). `dd` wraps anywhere |
 | Message actions | `.message-actions` | Copy row under a complete reply | opacity 0, transition `opacity 120ms ease` (raw, `--motion-popover` exists), gap 2px | Response hover or focus-within: opacity 1 |
 | Copy | `.message-actions button` | Copies the reply | Quiet, `--muted`, `--text-12`, gap 5px, 14px `action` icon | Hover: `--faint`, `--ink`. Focus-visible: `outline-color: var(--ink)`. Disabled: opacity .45 |
-| Run error | `.run-error` | Failure, stop, or interruption line | `--muted`, `--text-12 --font-mono`, wraps anywhere | `.copy-failure` adds margin-top 4px |
+| Run error | `.run-error` | Failure, stop, or interruption line | `--muted`, `--text-12 --font-mono`, wraps anywhere | `.copy-failure` adds margin-top 4px. A failure's `.run-error-details` disclosure holds the provider's reason and any raw runtime record |
 | Run error retry | `.run-error button` | Try again or Resume beside the line | Transparent background, 24px floor, padding 2px 6px, `font: inherit` | Disabled while a run is active, dictation is busy, or an upgrade is pending |
 | History error | `.history-error` | Failed history load | `--muted`, `--text-12 --font-mono`, wraps anywhere | Retry uses the shell button |
 
@@ -157,7 +187,7 @@ them.
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
 | Tool card | `.tool-card` | Inline mono record of tool activity | 1px `--border`, `--radius-control`, `--surface`, `--muted`, `--text-13 --font-mono`, padding 8px 12px | None |
-| Tool row | `.tool-row` | One tool | 20px min height, gap 8px, 7px round dot in `currentColor` (allowed 50% radius exception) | `.tool-running`: `--signal` (allowed), dot `tool-pulse 1.4s ease-in-out infinite`. `.tool-failed .tool-status`: `--oxide` |
+| Tool row | `.tool-row` | One tool | 20px min height, gap 8px, 7px round dot in `currentColor` (allowed 50% radius exception) | `.tool-running`: `--signal` (allowed), dot `tool-pulse 1.4s ease-in-out infinite`. `.tool-failed .tool-status`: `--danger` |
 | Tool name | `.tool-name` | External tool name | Wraps anywhere | None |
 | Parallel group | `.tool-card.tool-group` | Grouped rows under a title | Tool card with `.tool-group-title` in `--muted`, rows 4px apart | None |
 | Permission card | `.permission-card.tool-card` | Confirm, select, input, editor, or code-diff request | Tool card in `--ink`, `strong` at `font-weight: 600` (raw, `--weight-semibold` exists), `p` in `--muted` with pre-wrap and wraps anywhere | Error: `.run-error` with `role="alert"` under the actions |
@@ -175,9 +205,10 @@ them.
 | Composer textarea | `textarea` in `App.svelte` | Draft text | Transparent, no border or outline, `--ink`, `font: inherit` at body size | Disabled while resuming or switching threads. Placeholder changes to the resuming line |
 | Selected files | `.attachments li` | Files chosen before Send | 1px `--border`, `--radius-chip`, `--muted`, `--text-12 --font-mono`, padding 4px 6px 4px 9px | Remove button: no border, transparent, inherits color, `--text-12` |
 | Composer row | `.composer-row` | Band under the input | `--muted`, `--text-12`, gap 8px, margin-top 8px | None |
-| Composer hint | `#composer-hint` | One status line in the band, absent in flight | Inherits the row register | Thread switching and dictation replace the hint |
+| Composer hint | `#composer-hint` | One status line in the band, absent in flight | Inherits the row register | Thread switching replaces the hint. Dictation adds no line |
 | Model chip | `.quiet.model-chip` | Model source chip, opens the model panel | 1px `--border`, `--radius-chip`, `--ink`, `--text-12 --font-mono`, 24px floor, padding 2px 8px | Hover: `--faint`. `aria-expanded` follows the panel |
-| Voice | `.composer-actions .quiet` | Hold or toggle dictation | Quiet button | `aria-pressed` while dictating. Disabled while a run is active or dictation finishes |
+| Mode menu | `.mode-picker` in `ModePicker.svelte` | The composer's permission modes, opened from the `mode` composer menu button | Overlay panel, 360px, a mono `--muted` Modes heading, rows of a 16px icon, the title in `--text-13` over one `--text-12` `--muted` line clipped with an ellipsis, a check on the thread's mode, and a `Shift+Tab` mono chip on `--faint` under a 1px `--border` | Hover and the current mode take `--faint`. A mode core marks unavailable is disabled, `--muted`, and shows its reason |
+| Voice | `.composer-actions .quiet` | Hold or toggle dictation | Quiet button, 16px `mic` icon | While dictating: `aria-pressed`, named Stop dictation, and the icon is the voice wave. Disabled while a run is active or dictation finishes |
 | Add files | `.composer-actions .quiet` | Opens the file picker | Quiet button | Hidden while a run is active |
 | Composer action | `.composer-action` | The band's one action control at its right end, absent while the draft is empty | 24px floor, padding 4px, one `action` icon | `.primary` with `arrow-up` once the draft has text: sends, tooltip `Send (⏎)`. Inactive: `--faint`, `--border`, `--muted`. `.stop` with `square` while a reply is in flight: transparent, 1px `--border`, `--muted`, cancels the run, tooltip `Stop the reply`. `aria-disabled` with a transparent border while the run is pending or resuming. Disabled while switching threads |
 | Cancel error | `.cancel-error` | Submit, cancel, or queue failure | `--muted`, `--text-12 --font-mono`, margin-bottom 8px | None |
@@ -198,20 +229,20 @@ them.
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Capture status | `.capture-status` | Listening line in the band | `--font-mono`, gap 8px | None |
-| Capture meter | `.capture-meter i` | Five 2px bars | `--muted`, heights 6, 10, 14, 10, 6px, `capture 900ms ease-in-out infinite alternate` | Reduced motion: no animation, bars rest at full height |
-| Dictation error | `.dictation-error` | Dictation failure line | `--muted`, `--text-12 --font-mono`, margin-top 7px | None |
-| Speech install card | `.speech-install-card` | Install facts and progress | 1px `--border`, `--radius-control`, `--surface`, `--ink`, `--text-12 --font-mono`, padding 10px 12px, `strong` at `font-weight: 600` (raw, `--weight-semibold` exists) | `dt` in `--muted`, `dd` wraps anywhere. Error `.speech-install-error`: `--oxide` |
-| Install progress | `.speech-install-progress progress` | Download bar | 6px, `accent-color: var(--muted)` | None |
-| Install buttons | `.speech-install-card button` | Install, Cancel install, Try again | Shell button, padding 4px 8px, `font: inherit`, margin-top 7px | Disabled while pending |
+| Voice wave | `.voice-wave i` | The Voice button's icon while dictating | Five 2px bars in `currentColor` in a 16px box, gap 1px, heights 6, 10, 14, 10, 6px, `voice-wave 900ms ease-in-out infinite alternate` | `.starting` at opacity .5 while the microphone opens. Reduced motion: no animation, bars rest at full height |
+| Voice wave line | `.voice-wave-line` in `VoiceWave.svelte` | The composer's top border follows the speaker's voice while dictating | A 48px canvas centered on the top border, the straight edge between the corners. 1px stroke from the border color into `--accent` over min(140px, 18% of the edge), a 2px `--accent` stroke with transparent ends and a glow. Ripples under a drifting envelope, 0.6px idle to 8px at full loudness. The middle blends 55% toward `#F2E36B` as the voice rises | Levels arrive about 30 a second from the native capture. Fades out after dictation stops, then clears. Animates under reduced motion |
+| Partial text | `.reference-overlay .pending` | The words of the utterance in progress | `--muted` in the composer text | Turns final and takes `--ink` when the utterance ends |
+| Dictation error | `.composer-notice.end` | Dictation failure | Composer notice at the composer's right edge, `role="alert"` | Leaves after 6s |
+| Speech install card | `.speech-install-card` | Install facts and progress | 1px `--border`, `--radius-control`, `--surface`, `--ink`, `--text-12 --font-mono`, padding 10px 12px, `strong` at `font-weight: 600` (raw, `--weight-semibold` exists) | `dt` in `--muted`, `dd` wraps anywhere. Error `.speech-install-error`: `--danger` |
+| Install download | `.composer-notice.end` | Download progress while the model downloads | Composer notice at the composer's right edge: a 96px 6px bar at `accent-color: var(--muted)`, the bytes in `--muted` `--text-12 --font-mono`, and Cancel | Stays until the download ends, then turns into Installed. Press Voice again to dictate. A failed download offers Try again. No total yet: an indeterminate bar |
+| Install buttons | `.speech-install-card button` | Install, Try again | Shell button, padding 4px 8px, `font: inherit`, margin-top 7px | Disabled while pending. The card hides while the download runs |
 | Close card | `.speech-install-card .close-card` | Dismisses the card | Quiet, 24px floor, `--muted`, 14px `x` icon | Hover: `--ink` |
-| Speech install notice | `.speech-install-notice` | One line after dismiss | `--muted`, `--text-12 --font-mono`, padding 0 12px | None |
 
 ## Toasts and notices
 
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
-| Entitlement toast | `.entitlement-toast` | Access change notice | Fixed bottom 24px, `--surface`, 1px `--border`, `--radius-control`, `--ink`, `--shadow-overlay`, `toast-enter` at `--motion-popover --ease-out` | None |
+| Composer notice | `.composer-notice` | Short notices over the composer: background service, access change, thread move, speech model installed, voice shortcut unavailable | `[data-composer-panel]` anchor, overlay `[data-panel]`: `--surface`, 1px `--border`, `--radius-panel`, `--shadow-overlay`. `--ink` at `--text-13 --font-human`, padding 6px 6px 6px 12px, gap 8px, `composer-notice-enter` at `--motion-popover --ease-out` | Leaves after 6s, or stays while `persistent`. Pointer or keyboard focus holds it. Hidden while another composer panel is open. `.end` sets it at the composer's right edge, over the Voice button: the speech model install and dictation errors. An optional 6px progress bar. Action: shell button, hover `--faint` |
 | Auth state | `.auth-state` | Sign-in, error, and background service notices | Centered column, gap 12px, max-width 420px, margin-top 34px | None |
 | Support line | `.support` | Secondary sentence | `--muted` | None |
 | Record line | `.record` | Mono notice or error | `--font-mono`, `--text-12`, `--muted`. `.error-record` adds `--leading-body` | None |
@@ -246,7 +277,7 @@ signing out.
 | Grant toggle | `.group-toggle` | Expands a grant | Transparent, no border, `--ink`, `--text-12 --font-mono`, padding 9px 2px, 1px `--border` top on `.access-group` | `aria-expanded` swaps the + and - glyph |
 | Grant grid | `.grant-grid` | Grant details | Grid, gap 10px, `h3` in `--muted`, values at `--text-12 --font-mono`, wraps anywhere | None |
 | Access note | `.access-note` | Closing sentence | `--muted`, `--text-12` | None |
-| Device row | `.device-list li` | One device | padding 9px 2px, 1px `--border` top after the first, `strong` at `font-weight: 600` (raw, `--weight-semibold` exists) | `.revoked strong`: `--oxide`, `font-weight: 400` (raw, `--weight-regular` exists), line-through |
+| Device row | `.device-list li` | One device | padding 9px 2px, 1px `--border` top after the first, `strong` at `font-weight: 600` (raw, `--weight-semibold` exists) | `.revoked strong`: `--danger`, `font-weight: 400` (raw, `--weight-regular` exists), line-through |
 | Current device chip | `.current-device` | This device | 1px `--border`, `--radius-chip`, `--faint`, `--muted`, `--text-12 --font-mono`, padding 1px 5px | None |
 | Device state | `.device-state` | Active or Revoked | `--muted`, `--text-12 --font-mono`, flush right | The word carries the state |
 | Device time | `.device-list time` | Last active | `--muted`, `--text-12 --font-mono` | None |
@@ -259,7 +290,7 @@ signing out.
 | Shortcut capture | `.shortcut-capture` | Shows and records the voice shortcut | Panel button, full width, `--font-mono`, `small` in `--muted` `--text-12 --font-human`, padding 8px 9px | Capturing: label reads the pending shortcut. Disabled while changing |
 | Shortcut actions | `.shortcut-actions button` | Cancel and Apply | Panel buttons, gap 6px | Apply disabled without a pending shortcut |
 | Restore default | `.quiet.restore-shortcut` | Resets the shortcut | Quiet, `--muted`, padding 3px 0 | Disabled at the default |
-| Shortcut error | `.shortcut-error` | Capture failure | `--oxide`, `--text-12` | None |
+| Shortcut error | `.shortcut-error` | Capture failure | `--danger`, `--text-12` | None |
 
 ## Appearance
 
@@ -314,7 +345,7 @@ signing out.
 | Component | Selector | Purpose | Rest | States |
 | --- | --- | --- | --- | --- |
 | Code diff section | `.code-diff` | Stored diff, sized by its own width | `--ink`, `--text-13 --font-mono`, container query root | Under 480px wide: sides stack |
-| Warning | `.code-diff-warning` | Truncation notice | 1px `--border`, 3px `--ochre` left border, `--radius-control`, `--surface`, `--ink`, padding 10px 12px | None |
+| Warning | `.code-diff-warning` | Truncation notice | 1px `--border`, 3px `--warning` left border, `--radius-control`, `--surface`, `--ink`, padding 10px 12px | None |
 | Empty and binary | `.code-diff-empty, .code-diff-binary` | Empty message or binary file record | 1px `--border`, `--radius-control`, `--surface`, padding 10px 12px | Binary path in `--ink`, message in `--muted` |
 | File wrapper | `.code-diff .d2h-file-wrapper` in `code-diff.css` | diff2html file frame | `--border`, `--radius-control`, `--surface` | None |
 | Header and gutters | `.d2h-file-header, .d2h-code-linenumber, .d2h-info` | File name row and line numbers | `--faint`, `--border`, `--muted` | None |
@@ -354,12 +385,34 @@ label tracking, the 1.45 provenance line height, and every opacity.
 
 | Test | Rule |
 | --- | --- |
-| `signal-allowlist.test.js` | `--signal` appears only on the listed App selectors, never in markup, every component focus ring is 2px `--ink` at offset 2, and base.css collapses all motion under reduced motion |
+| `signal-allowlist.test.js` | `--signal` appears only on the listed App selectors, never in markup, one global rule draws every 2px `--focus-ring` focus ring and no component redraws or clears it, base.css collapses all motion under `data-motion="reduce"`, which every component reads in place of a media query, a rule whose selector names a state reads no accent, signal, selection, focus, `--oxide` or `--ochre` color, `--oxide` and `--ochre` stay on the listed diff and syntax rules, and the state tokens are set once on the root and in no theme |
 | `target-size.test.js` | `.thread-menu button`, the delete confirm buttons, `.run-error button`, `.provenance`, `.companion-revoke`, `.profile-menu button`, and the retention radios hold a 24 by 24 minimum |
 | `control-name.test.js` | Every input and textarea in App and Onboarding carries `aria-label`, `aria-labelledby`, or a `label for` |
 | `shape-scale.test.js` | Every radius is one of the three radius tokens and every shadow one of the two depth tokens, except the listed dots, the divider reset, and the segmented control corners |
 | `type-scale.test.js` | Every `font-size` and `font` shorthand resolves through a `--text-*` token, with `font: inherit` the one size-free form |
-| `record-font.test.js` | `.record`, `.tool-card`, `.provenance`, `.receipt-record`, the onboarding chips, and the onboarding path rows read `--font-mono` |
-| `contrast.test.js` | `--ink`, `--muted`, and `--signal` clear 4.5:1 on `--paper`, `--surface`, and `--faint` in all four palettes |
+| `record-font.test.js` | `.record`, `.tool-card`, `.receipt-record`, the onboarding chips, and the onboarding path rows read `--font-mono`; `.provenance` and `.response-meta` read `--font-human` |
+| `contrast.test.js` | `--ink`, `--muted`, and `--signal` clear 4.5:1 on `--paper`, `--surface`, and `--faint` in all 24 themes, `--muted` also on the selection fill and both sidebar frames, the focus ring 3:1, and no dark surface is pure black |
+| `icon-button-name.test.js` | Every button whose content is only an icon carries `aria-label` or `aria-labelledby` |
 | `text-wrap.test.js` | `.provenance`, `.user-message`, `.response-prose`, `.tool-name`, `.permission-card p`, `.receipt-record dd`, and `.assistant-markdown` set `overflow-wrap: anywhere` |
 | `class-usage.test.js` | Every class in markup has a rule in its component or in base.css, and class expressions stay literal |
+
+## Agent fleet
+
+| Component | Selector | Purpose | Rest | States |
+| --- | --- | --- | --- | --- |
+| Agent avatar | `.agent-avatar` in `AgentAvatar.svelte` | Every agent avatar: sidebar, title, catalog, profile, transcript, group posts, mentions, Notifications, approvals, New group, import, Appearance | The head alone from `agent-avatar.js` in the Appearance style (Colorful or Muniment) and the theme's tone, square at the size given, no tile, `align-self: center`, decorative | `data-activity` outlines the head with `drop-shadow` in `--signal` (running, breathing; reduced motion stills it), `--warning` (waiting) or `--danger` (error); `data-tooltip` names the action on hover |
+| Agent action card | `.agent-card` in `AgentCard.svelte` | Each agent on the Agents page, in a `CardGrid` of 340px columns and 300px rows | `--surface`, 1px `--border`, `--radius-panel`. Top row: avatar at 28px in a 46px cell, the name, the card menu, a 1px `--border` under it. Left: the panel rail, 34px icon marks with 6px padding and a 1px `--border` at its right. Right: the panel, 6px padding, mono `--text-12` `--muted` heading, 30px rows. Model holds the embedded `ModelPicker` edge to edge, Permissions the `ModePicker` button, Routines `RoutineRow`s and History an embedded `RunHistory` | Picked mark: `--faint` with a 2px `--ink` edge. Each mark's name shows in a hover label outside the card, left of the rail, or right of the card at the window's edge, never over the panel's labels. Overview states: words at the left, a 14px signal at the row's end in `--success`, `--warning` or `--danger` with its state as its label and tooltip. The mode menu opens on the page under its button. Read only (synced copy or offline machine): a `--faint` note with `globe-off` in `--warning` and disabled controls. Panels scroll inside |
+| Inline edit | `.inline-edit` in `InlineEdit.svelte` | The card's name and job title | Quiet control at 28px, the text clipped with an ellipsis | Hover or focus: `--faint` and a pencil over the text's end. Editing: an input with a 1px `--border`; Enter or blur saves, Escape cancels, a refusal shows in `--danger` under it |
+| Agent dialog | `AgentDialog.svelte` | Shared shell of Move agent, New group and Import agent | Overlay panel, `PopupClose`, scrolling body, actions under a 1px `--border` | Escape, X and a click outside close it unless busy |
+| Agent message | `.agent-message` in `AgentMessage.svelte` | Another agent's message in a transcript | `--surface` card, 1px `--border`, `--radius-panel`, sender avatar at 20px, mono intent chip at `--radius-chip`, hop count in `--muted` mono | A handoff is a `.system-note` line with its context folded |
+| Silent run | `.silent-note` | A routine run that had nothing to say | `--muted`, `--text-12 --font-mono` | None |
+| Thread post | `.post` in `ThreadPost.svelte` | A group reply, a user post or a note from Muniment | Agent replies: avatar, name and time over plain text. User posts: the `faint` bubble. Notes: `--muted` `--text-13` | A meeting round opens with `.round`, a mono `--muted` label over a 1px `--border` |
+| Agent mentions | `#agent-mentions` in `AgentMentions.svelte`, and in `FileMentions.svelte` outside a group | The @ list: in a group thread its members, elsewhere every agent under Agents above the files | Same panel as the file list, avatars at 16px, `@everyone` first with the `users` icon | Selected: `--faint` |
+| Approval | `.approval` in `ApprovalCard.svelte` | A gate waiting on any member, in Notifications and inline in the agent's thread (`.inline`, a hairline `--surface` card) | Agent with its activity, machine mark and age, core's summary in mono, the operation's inputs as mono rows in a `--faint` block, core's reason in `--text-12` `--muted`, a plan in a 1px `--border` block in the human face, then unified `Button`s for each answer core lists | Long inputs fold behind Show all. Deny uses the outline variant. An already-answered or refused answer shows its line in the card |
+| Run history | `.run` in `RunHistory.svelte` | Agent profile, and the agent card's History panel with no heading or rule | One 36px row per run: a 14px status icon in `--success`, `--warning` or `--danger`, the title in `--text-13`, the local start time and any state in `--text-12` `--muted` | Hover: `--faint`. A failed run core kept shows a 24px Retry icon at the row's end |
+| Profile menu | `.choice-menu` in `ChoiceMenu.svelte` | The agent profile's project, machine and agent menus, opened from a `ComposerMenuButton` | 30px rows with an icon or 16px avatar, `--text-13`, a check on the chosen row, a foot note in `--text-12` `--muted` | Several agents check as menu checkboxes and the menu stays open |
+| Group members | `.group-members` in `GroupMembers.svelte` | A group's composer band, in place of the model chip | Up to four 16px avatars and the count in mono `--muted` | Hover names every member |
+| Machine row | `MachineRow.svelte` | One machine or device on Settings → Machines | 32px shape mark, name, mono version, hairline `--radius-chip` kind chip, one `StatusChip`, neutral Limited chip, last-seen line in `--muted` `--text-12` | Menu with Update, Rename and Remove in `--danger`. This computer's chevron opens its settings under the row |
+| Add machine | `.add-machine` in `AddMachine.svelte` | Settings → Machines, under the head | 1px `--border` panel at `--radius-panel`, 132px QR, mono link field with Copy, timer in `--muted` | Show code while connections are off, Use SSH instead, Close |
+| Move warning | `.warning` in `MoveDialog.svelte` | A forced move off a primary that does not answer | 1px `--warning`, `--radius-control`, `--text-13` | The move stays off until the confirm box is checked |
+| Webhook address | `WebhookPanel.svelte` | A webhook routine's URLs, certificate fingerprint and secret | Mono values on `--faint`, Copy buttons, the secret in a 1px `--warning` box | A `.warning` names a machine that does not accept connections |

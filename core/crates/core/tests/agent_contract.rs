@@ -1,0 +1,244 @@
+//! The agent operations' canonical fixtures are the core's own wire shapes:
+//! each body decodes into the core type and encodes back unchanged.
+
+use std::path::PathBuf;
+
+use muniment_core::agent_runs::{Activity, ActivityState, Run, RunStatus, TriggerKind};
+use muniment_core::agents::{
+    Agent, Condition, ConditionOp, MessagingAllow, PermissionMode, Routine, Trigger, WebhookPreset,
+};
+use serde_json::Value;
+
+fn fixture(name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../protocol-fixtures/muniment.attach/1")
+        .join(name);
+    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()
+}
+
+fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) -> T {
+    let decoded: T = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(&serde_json::to_value(&decoded).unwrap(), value);
+    decoded
+}
+
+#[test]
+fn the_agent_fixture_is_an_agent_v2() {
+    let body = fixture("response-agent-read.json")["body"].clone();
+    let agent: Agent = round_trip(&body["agent"]);
+    assert_eq!(
+        agent.model.as_ref().unwrap().thinking.as_deref(),
+        Some("medium")
+    );
+    assert_eq!(
+        agent.permissions.as_ref().unwrap().mode,
+        Some(PermissionMode::Manual)
+    );
+    assert_eq!(agent.messaging.as_ref().unwrap().allow, MessagingAllow::Any);
+    assert!(agent.primary_runtime.is_none() && agent.paused_reason.is_none());
+    assert_eq!(agent.routines.len(), 2);
+    assert!(matches!(
+        &agent.routines[1].trigger,
+        Trigger::Webhook(hook) if hook.preset == WebhookPreset::Forgejo
+    ));
+    // The request to save carries the same agent.
+    let request = fixture("request-agent-save.json");
+    assert_eq!(request["operation"], "agent.save");
+    round_trip::<Agent>(&request["body"]["agent"]);
+    let mut listing = fixture("response-agent-list.json")["body"].clone();
+    // `agent.list` adds each agent's activity and whether the swarm offers
+    // to move it here to the agent.
+    let listed = listing["agents"][0].as_object_mut().unwrap();
+    let activity = listed.remove("activity").unwrap();
+    assert_eq!(listed.remove("move_suggested"), Some(Value::Bool(false)));
+    round_trip::<Activity>(&activity);
+    round_trip::<Agent>(&listing["agents"][0]);
+    round_trip::<Run>(&listing["latest_runs"]["018f0000-0000-4000-8000-0000000000a1"]);
+}
+
+#[test]
+fn the_routine_fixture_is_an_mcp_routine_with_a_condition() {
+    let body = fixture("response-routine-save.json")["body"].clone();
+    let routine: Routine = round_trip(&body["routine"]);
+    muniment_core::agent_routines::validate_routine(&routine).unwrap();
+    let Trigger::Mcp(mcp) = &routine.trigger else {
+        panic!("an mcp trigger");
+    };
+    assert_eq!(mcp.every.tz, "America/New_York");
+    let Condition::All(all) = &mcp.condition else {
+        panic!("an all group");
+    };
+    assert!(matches!(&all.all[0], Condition::Leaf(leaf) if leaf.op == ConditionOp::Gt));
+    assert!(matches!(&all.all[1], Condition::Any(any) if any.any.len() == 2));
+    for routine in fixture("response-routine-list.json")["body"]["routines"]
+        .as_array()
+        .unwrap()
+    {
+        round_trip::<Routine>(routine);
+    }
+}
+
+#[test]
+fn the_run_fixtures_are_runs() {
+    let run: Run = round_trip(&fixture("response-agent-run-now.json")["body"]["run"]);
+    assert_eq!(run.trigger.kind, TriggerKind::Cron);
+    assert_eq!(run.status, RunStatus::Completed);
+    let page = fixture("response-agent-runs.json")["body"].clone();
+    round_trip::<Run>(&page["runs"][0]);
+    assert!(page["next_cursor"].is_string());
+    let mut event = fixture("event-agent-run-updated.json");
+    assert_eq!(event["event"], "agent.run_updated");
+    // The event adds whether the change warrants a notification to the run.
+    let notify = event["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("notify")
+        .unwrap();
+    assert_eq!(notify, true);
+    let waiting: Run = round_trip(&event["body"]);
+    assert_eq!(waiting.status, RunStatus::WaitingInput);
+    assert!(waiting.waiting_since.is_some());
+    assert_eq!(
+        fixture("request-run-chat-events-agent-runs.json")["body"]["agent_runs"],
+        true
+    );
+}
+
+#[test]
+fn the_polish_fixtures_are_core_shapes() {
+    use muniment_core::swarm::{Approval, DirectoryEntry};
+    // An approval carries the exact request its gate asks about, and is
+    // allowed once or denied.
+    let pending: Approval = round_trip(&fixture("event-agent-approval-pending.json")["body"]);
+    let rule = pending.rule.clone().unwrap();
+    assert_eq!(pending.answers, ["allow_once", "deny"]);
+    let gate: muniment_core::journal::reducer::PermissionGate =
+        serde_json::from_value(pending.request.clone()).unwrap();
+    assert_eq!(
+        gate.policy.unwrap().summary,
+        pending.summary.clone().unwrap()
+    );
+    // The approval's presentation is the one core makes for its rule.
+    assert_eq!(
+        pending.presentation,
+        Some(muniment_core::tool_presentation::describe_request(&rule))
+    );
+    assert_eq!(
+        pending.summary,
+        pending.presentation.map(|shown| shown.headline)
+    );
+    assert_eq!(
+        fixture("request-agent-approval-answer-once.json")["body"]["answer"],
+        "allow_once"
+    );
+    // The directory and the activity event carry the same activity.
+    let entry: DirectoryEntry =
+        round_trip(&fixture("response-swarm-agents.json")["body"]["agents"][0]);
+    let event = fixture("event-agent-activity.json");
+    let activity: Activity = round_trip(&event["body"]["activity"]);
+    assert_eq!(activity.state, ActivityState::Waiting);
+    assert_eq!(entry.activity, Some(activity));
+    assert_eq!(
+        fixture("request-run-chat-events-swarm-live.json")["body"]["swarm_live"],
+        true
+    );
+    // A replay is the saved inputs plus a listing's preview fields.
+    let mut listed = fixture("response-agent-replays.json")["body"]["replays"][0].clone();
+    let object = listed.as_object_mut().unwrap();
+    let preview = object.remove("prompt_preview").unwrap();
+    assert_eq!(
+        object.remove("prompt_bytes").unwrap().as_u64().unwrap() as usize,
+        preview.as_str().unwrap().len()
+    );
+    assert_eq!(object.remove("definition_changed").unwrap(), true);
+    object.insert("prompt".into(), preview);
+    let replay: muniment_core::agent_replays::Replay = round_trip(&listed);
+    assert_eq!(replay.trigger.kind, TriggerKind::Webhook);
+    assert!(replay.prompt.contains("<webhook_payload"));
+    let replayed = fixture("response-agent-replay.json")["body"].clone();
+    let run: Run = round_trip(&replayed["run"]);
+    assert_eq!(
+        run.origin_run_id.as_deref(),
+        Some(replay.replay_id.as_str())
+    );
+    assert_eq!(replayed["replay"]["replayed_by"][0], run.id.as_str());
+    // A group post names its meeting round and phase.
+    let posted = fixture("event-group-posted.json")["body"].clone();
+    assert_eq!(posted["post"]["author"]["phase"], "debate");
+    assert_eq!(posted["post"]["author"]["round"], 2);
+}
+
+#[test]
+fn the_settings_scope_fixture_is_the_cores_answer() {
+    // Clients read the fixture as core's description of each Settings part.
+    assert_eq!(
+        fixture("response-settings-scope.json")["body"],
+        muniment_core::settings_scope::view()
+    );
+    assert_eq!(
+        fixture("request-settings-scope.json")["operation"],
+        "settings.scope"
+    );
+}
+
+#[test]
+fn the_permission_fixtures_are_the_cores_own_shapes() {
+    use muniment_core::permission_gate::settings::{self, PermissionSettings};
+    // `permission.modes` with the default settings is exactly the fixture.
+    let modes = fixture("response-permission-modes.json")["body"].clone();
+    assert_eq!(settings::modes(&PermissionSettings::default()), modes);
+    for name in [
+        "response-permission-settings.json",
+        "response-permission-settings-save.json",
+    ] {
+        round_trip::<PermissionSettings>(&fixture(name)["body"]);
+    }
+    // A plan approval carries the plan and the mode answers the gate offers.
+    let plan = fixture("event-agent-approval-pending-plan.json")["body"].clone();
+    let approval: muniment_core::swarm::Approval = round_trip(&plan);
+    assert!(approval.rule.is_none());
+    assert_eq!(
+        approval.answers,
+        muniment_core::permission_gate::PLAN_ANSWERS
+            .iter()
+            .map(|(id, _, _)| id.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        plan["request"]["options"],
+        serde_json::json!(muniment_core::permission_gate::plan_options())
+    );
+    assert_eq!(
+        plan["request"]["title"],
+        muniment_core::permission_gate::PLAN_GATE_TITLE
+    );
+    let pending = fixture("event-agent-approval-pending.json")["body"].clone();
+    let approval: muniment_core::swarm::Approval = round_trip(&pending);
+    assert!(approval
+        .reason
+        .unwrap()
+        .starts_with("Auto review paused this"));
+    let answer = fixture("request-agent-approval-answer-plan.json");
+    assert!(muniment_core::permission_gate::gate_option(
+        answer["body"]["answer"].as_str().unwrap()
+    )
+    .is_some());
+}
+
+#[test]
+fn the_exchange_fixture_is_the_cores_store_exchange() {
+    use muniment_core::swarm::{Exchange, STORE_CAPABILITY};
+    let exchange: Exchange = round_trip(&fixture("request-swarm-exchange.json")["body"]);
+    assert!(exchange
+        .from
+        .capabilities
+        .iter()
+        .any(|capability| capability == STORE_CAPABILITY));
+    let entry = &exchange.records[0];
+    assert_eq!((entry.class.as_str(), entry.rank), ("agent", 2));
+    assert_eq!(entry.clock.to_string(), "019b79dbb3000002");
+    assert!(exchange.records[1].deleted && exchange.records[1].field.is_empty());
+    let watermarks = exchange.watermarks.unwrap();
+    assert!(watermarks.base <= watermarks.mark && watermarks.complete);
+    assert_eq!(exchange.record_vv.unwrap()[&entry.origin], entry.seq,);
+}

@@ -1,10 +1,16 @@
 import { Window, getCurrentWindow } from '@tauri-apps/api/window'
 import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { listen } from '@tauri-apps/api/event'
+import { currentZoom } from './display-state.js'
+import { followPointer } from './menu-pointer.js'
+
+// Whether a pointer press opened the menu, so the popup marks focus as this window does.
+export const pointerLeads = () => document.documentElement.hasAttribute('data-pointer')
 
 // Keep action handlers in the main window; render their menu above native webviews.
 export function floatingMenu(node) {
-  if (!window.__TAURI_INTERNALS__) return {}
+  const pointer = followPointer(node)
+  if (!window.__TAURI_INTERNALS__) return pointer
   const id = crypto.randomUUID()
   let popup, disposed = false, floating = false
   const stops = []
@@ -26,15 +32,17 @@ export function floatingMenu(node) {
       const rect = node.getBoundingClientRect()
       const items = buttons().map((button, index) => ({ id: index, name: button.textContent.trim(), disabled: button.disabled, icon: button.querySelector('svg')?.getAttribute('data-icon') }))
       const width = Math.min(320, Math.max(180, rect.width + 16))
-      const height = Math.min(innerHeight, items.length * 36 + 30)
+      // The page measures CSS pixels, and the interface zoom scales them to window pixels.
+      const zoom = currentZoom()
+      const height = Math.min(innerHeight * zoom, items.length * 36 + 30)
       await popup.setSize(new LogicalSize(width, height))
-      await popup.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, Math.min(rect.left - 8, innerWidth - width)) * scale), Math.round(origin.y + Math.max(0, Math.min(rect.top - 8, innerHeight - height)) * scale)))
+      await popup.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, Math.min(rect.left * zoom - 8, innerWidth * zoom - width)) * scale), Math.round(origin.y + Math.max(0, Math.min(rect.top * zoom - 8, innerHeight * zoom - height)) * scale)))
       if (disposed) return
       floating = true
       node.dataset.floatingMenu = 'true'
       node.style.opacity = '0'
       node.style.pointerEvents = 'none'
-      await popup.emit('action-menu-open', { id, label: node.getAttribute('aria-label'), items })
+      await popup.emit('action-menu-open', { id, label: node.getAttribute('aria-label'), items, pointer: pointerLeads() })
     } catch { restore() }
   }
   function restore() { floating = false; delete node.dataset.floatingMenu; node.style.removeProperty('opacity'); node.style.removeProperty('pointer-events') }
@@ -48,8 +56,10 @@ export function floatingMenu(node) {
       restore()
       buttons()[payload.item]?.click()
     }))
-    retain(await listen('action-menu-closed', ({ payload }) => { if (payload === id && !disposed) { restore(); dismiss() } }))
+    // A menu that became its own dialog, such as a delete confirmation, stays
+    // when the popup it left closes.
+    retain(await listen('action-menu-closed', ({ payload }) => { if (payload === id && !disposed) { restore(); if (node.getAttribute('role') === 'menu') dismiss() } }))
     if (!disposed) await open()
   })().catch(() => restore())
-  return { destroy() { disposed = true; observer.disconnect(); stops.forEach(off => off()); if (floating) void popup?.hide(); restore() } }
+  return { destroy() { pointer.destroy(); disposed = true; observer.disconnect(); stops.forEach(off => off()); if (floating) void popup?.hide(); restore() } }
 }

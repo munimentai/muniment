@@ -52,11 +52,33 @@ a:hover {
   border-color: var(--muted);
 }
 
-/* State is background, never a border: no control shows a focus ring. The
-   composer and the rename control alone show focus as their muted hairline.
+/* Every control shows a 1px ring on keyboard focus, in --focus-ring, the
+   theme's accent, inside its own box so a scroller never clips it. It
+   outranks a component's own outline, so no component can drop it. A text
+   field marked data-focus-frame leaves the ring to its frame, which shows
+   focus itself: the composer and the command palette. Menu items and options
+   mark keyboard focus with the hover fill, and focus follows the pointer in a
+   menu (menu-pointer.js), so while the keys lead a hovered item that lost
+   focus to them drops its fill and one item shows it. While the pointer leads, as
+   data-pointer on the root says, a control draws no ring, since the pointer
+   shows where it is. A text field keeps its ring.
    Declared once here because Svelte <style> blocks are component-scoped. */
 :focus-visible {
-  outline: 0;
+  outline: 1px solid var(--focus-ring) !important;
+  outline-offset: -1px !important;
+}
+[data-focus-frame]:focus-visible {
+  outline: 0 !important;
+}
+:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible,
+:root[data-pointer] :focus-visible:not(input, textarea, select, [contenteditable]) {
+  outline: 0 !important;
+}
+:root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible:not([aria-checked="true"], [aria-selected="true"]) {
+  background-color: var(--faint);
+}
+:root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):hover:not(:focus, [aria-checked="true"], [aria-selected="true"]) {
+  background-color: transparent !important;
 }
 
 
@@ -81,23 +103,45 @@ pre {
   white-space: nowrap;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
+/* Reduced motion: the root carries data-motion="reduce" while the OS asks for
+   it under Appearance's System pick, or while the pick is Reduce. */
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
 }
+
+/* A raw button marked primary outside Settings matches ui/Button's primary:
+   the scheme accent with its own text color. The :root prefix outranks a
+   component's own button rule. */
+:root button[data-variant="primary"]:not([data-ui-button]) { color: var(--on-accent); background: var(--accent); border-color: var(--accent); font-weight: var(--weight-semibold); }
+:root button[data-variant="primary"]:not([data-ui-button]):is(:hover:not(:disabled), :focus-visible) { color: var(--on-accent); background: color-mix(in srgb, var(--accent) 86%, var(--ink)); border-color: color-mix(in srgb, var(--accent) 86%, var(--ink)); }
 
 /* All composer panels anchor to the full composer, above its top edge. */
 [data-composer-panel] { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); max-height: 60vh; }
 
-/* Panel pages read the same: an intro line with the page's actions at its
-   right, then sections under semibold sentence-case headings with their rows
+/* Panel pages read the same: a title with its info control and the page's
+   actions at its right, then sections under semibold sentence-case headings with their rows
    in bordered cards, and support text in muted 13px. A page names no section
    after itself. ui/PageHead, ui/Group and ui/Row draw this. */
 .panel-page .settings-intro { color: var(--muted); font: var(--text-15) / var(--leading-body) var(--font-human); }
 .panel-page .settings-heading { color: var(--ink); font: var(--weight-semibold) var(--text-15) / var(--leading-heading) var(--font-heading); letter-spacing: 0; text-transform: none; }
 .panel-page .settings-subheading { color: var(--ink); font: var(--weight-semibold) var(--text-13) / var(--leading-heading) var(--font-human); letter-spacing: 0; text-transform: none; }
+
+/* The accent edge marks what is open: the open sidebar row and the title
+   pill. It is a solid 2px line down the left edge in --edge-color, an
+   agent's color or the theme accent by default. It runs straight inside the
+   box, so it never follows a rounded corner. --edge-inset moves it in from
+   the edge, for a box whose panel clips that edge. The "top" edge is a 3px
+   line across the top instead, like the agent card's, for the agent
+   profile's header. */
+[data-accent-edge] { position: relative; }
+[data-accent-edge]::before { content: ''; position: absolute; top: 0; bottom: 0; left: var(--edge-inset, 0px); width: 2px; background: var(--edge-color, var(--accent)); pointer-events: none; }
+[data-accent-edge="top"]::before { top: var(--edge-inset, 0px); right: 0; bottom: auto; left: 0; width: auto; height: 3px; }
+/* A framed window rounds the left edge with its box's corners. A frameless
+   one keeps the edge straight, and the title bar's controls square their
+   left corners so their clipping does not round it. */
+:root[data-frame="framed"] [data-accent-edge]:not([data-accent-edge="top"])::before { right: 0; width: auto; border-left: 2px solid var(--edge-color, var(--accent)); border-radius: inherit; background: none; }
+:root[data-frame="frameless"] .titlebar [data-accent-edge]:not([data-accent-edge="top"]) { border-top-left-radius: 0; border-bottom-left-radius: 0; }

@@ -12,7 +12,7 @@ const ALLOWED = {
   'test/ci-artifacts.test.js:39:27': "it.skipIf(process.platform === 'win32') on the artifact publisher test",
   'test/macos-local-mode-config.test.js:19:29': "The fixture shell runs only through it.skipIf(process.platform === 'win32').",
   'test/linux-sign-in-state.test.js:19:20': "describe.skipIf(process.platform === 'win32')('Linux sign-in state cleanup')",
-  'test/e2e-core-pins.test.js:92:22': "describe.skipIf(process.platform === 'win32')('Installed E2E core pins')",
+  'test/e2e-core-pins.test.js:91:22': "describe.skipIf(process.platform === 'win32')('Installed E2E core pins')",
   'test/linux-build-download.test.js:35:35': "describe.skipIf(process.platform === 'win32')('Linux build downloads')",
   'test/desktop-e2e-harness.test.js:377:20': "it.skipIf(process.platform === 'win32')('Keeps distinct captures after two failed spec runs.')",
   'test/desktop-e2e-harness.test.js:478:20': "describe.skipIf(process.platform === 'win32')('Linux spec process isolation')",
@@ -51,7 +51,7 @@ const ALLOWED = {
   'test/desktop-e2e-harness.test.js:2749:24': "describe.skipIf(process.platform === 'win32')('cleanup failure accounting')",
   'test/nightly-workflow.test.js:13:18': "it.skipIf(process.platform === 'win32') on every runReportFallback caller",
   'test/nightly-workflow.test.js:50:20': "it.skipIf(process.platform === 'win32')('passes the remaining full build budget after Git and dependency setup')",
-  'test/nightly-workflow.test.js:431:22': "it.skipIf(process.platform === 'win32').each(...)('fails closed for %j')",
+  'test/nightly-workflow.test.js:438:22': "it.skipIf(process.platform === 'win32').each(...)('fails closed for %j')",
 }
 
 const root = process.cwd()

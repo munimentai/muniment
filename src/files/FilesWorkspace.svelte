@@ -16,7 +16,8 @@
   const storageKey = `muniment.files:${contextKey}`
   let folders = $state([])
   let listing = $state(null)
-  let loading = $state(false)
+  // The view reads its folders as it opens, so it starts in the reading state.
+  let loading = $state(true)
   let error = $state('')
   let selected = $state(null)
   let selection = $state(new Set())
@@ -189,7 +190,8 @@
           try { children = {...children, [entry]:(await tauri.invoke('workspace_list',{path:entry})).entries}; expanded = new Set([...expanded,entry]) } catch { /* A removed folder stays closed. */ }
         }
       })
-    }).catch(e => { error = String(e) })
+      loading = false
+    }).catch(e => { error = String(e); loading = false })
     return () => { if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
   })
 </script>
@@ -255,7 +257,7 @@
   .name-head { display:flex; align-items:start; justify-content:space-between; gap:12px; }
   .filter-row { display:flex; align-items:center; gap:4px; margin-bottom:8px; } .filter-row input { min-width:0; flex:1; margin:0; } .filter-row button { padding:6px; }
   .file-menu { position:fixed; z-index:12; width:240px; max-height:calc(100vh - 16px); overflow:auto; background:var(--surface); padding:5px; border:1px solid var(--border); border-radius:var(--radius-panel); box-shadow:var(--shadow-overlay); }
-  .file-menu button { border:0; width:100%; min-height:32px; font-family:var(--font-human); } .file-menu .delete { color:light-dark(#b42318,#ff7676); } hr { border:0; border-top:1px solid var(--border); margin:5px; }
+  .file-menu button { border:0; width:100%; min-height:32px; font-family:var(--font-human); } .file-menu .delete { color:var(--danger); } hr { border:0; border-top:1px solid var(--border); margin:5px; }
   .name-backdrop { position:fixed; inset:0; z-index:13; display:grid; place-items:center; background:var(--overlay-backdrop); } form { width:min(400px,90vw); padding:20px; border:1px solid var(--border); border-radius:var(--radius-panel); background:var(--surface); } label { display:block; margin-bottom:12px; } .name-actions { display:flex; gap:8px; justify-content:flex-end; }
   .files-workspace { flex:1; display:flex; flex-direction:column; min-height:0; min-width:0; background:var(--surface); overflow:hidden; }
   header { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid var(--border); }

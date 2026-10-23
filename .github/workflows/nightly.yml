@@ -141,7 +141,6 @@ jobs:
           trap 'rm -f "$key" "$known_hosts"' EXIT
           printf '%s\n' "${DESKTOP_CI_KNOWN_HOSTS:?set the DESKTOP_CI_KNOWN_HOSTS variable to the desktop-ci host keys}" > "$known_hosts"
           : "${DESKTOP_CI_HOST:?set the DESKTOP_CI_HOST variable to the desktop-ci host as user@address}"
-
           # Build VMs install packages without install scripts, and no step
           # before signing sees a signing secret. The updater key never enters
           # a VM: the next step signs the uploaded update bundles on the runner.

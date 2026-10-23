@@ -26,7 +26,7 @@ const installerPaths = [
   'test/windows-installers.ps1',
 ]
 
-function classify(paths, event = 'pull_request') {
+function classify(paths, event = 'pull_request', base = 'base') {
   const script = changes.split('        run: |\n')[1].replace(/^ {10}/gm, '')
   const output = execFileSync('bash', ['-eu', '-c', `
     git() { printf '%s' "$CHANGED_PATHS"; }
@@ -40,7 +40,7 @@ function classify(paths, event = 'pull_request') {
     env: {
       ...process.env,
       GITHUB_EVENT_NAME: event,
-      BASE_SHA: 'base',
+      BASE_SHA: base,
       HEAD_SHA: 'head',
       CHANGED_PATHS: paths.length ? `${paths.join('\n')}\n` : '',
     },
@@ -125,9 +125,20 @@ describe('PR gate shape', () => {
       desktop: 'false', installer: 'false', docs_only: 'false' })
   })
 
-  it('runs every lane for an unproven direct push', () => {
-    expect(classify([], 'push')).toMatchObject({ desktop: 'true', installer: 'true',
-      companion: 'true', attach_fixtures: 'true', code_diff_fixtures: 'true', release_only: 'false' })
+  it.each([
+    ['push', '0'.repeat(40)],
+    ['push', ''],
+    ['workflow_dispatch', 'base'],
+  ])('runs every lane for a %s with no base to diff (%s)', (event, base) => {
+    expect(classify(['core/docs/a.md'], event, base)).toMatchObject({ desktop: 'true', installer: 'true',
+      companion: 'true', attach_fixtures: 'true', code_diff_fixtures: 'true', core_shared: 'true', release_only: 'false' })
+  })
+
+  it('classifies a push against its base like a pull request', () => {
+    expect(classify(['core/docs/a.md'], 'push')).toMatchObject({ desktop: 'false', installer: 'false',
+      core_shared: 'false', companion: 'false' })
+    expect(classify(['src/App.svelte'], 'push')).toMatchObject({ desktop: 'true', installer: 'false', core_shared: 'false' })
+    expect(changes).toContain('BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}')
   })
 
   it('preserves native and documentation gates in mixed changes', () => {
@@ -142,6 +153,58 @@ describe('PR gate shape', () => {
     expect(smoke).toContain("if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_tooling == 'true' && needs.changes.outputs.desktop != 'true')")
     expect(smoke).toContain('- name: Rust toolchain (bootstrap if missing)\n        if: needs.changes.outputs.reuse != \'true\'\n        run: |')
     expect(smoke).toContain("- name: Public core boundary\n        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_only != 'true')")
+  })
+})
+
+describe('Core path tiers', () => {
+  const none = { desktop: 'false', installer: 'false', core_shared: 'false', companion: 'false',
+    attach_fixtures: 'false', code_diff_fixtures: 'false' }
+
+  it.each([
+    'core/docs/core-boundary.md', 'core/README.md', 'core/deploy/runtime/publish.sh', 'core/deploy/runtime/Containerfile',
+    'core/scripts/release.py', 'core/ci/postgres.sh', 'core/test_support/socket_path.rs', 'core/Cargo.lock',
+    '.forgejo/workflows/core.yml', '.forgejo/workflows/core-pins-update.yml',
+  ])('runs no desktop lane for %s alone', (file) => {
+    expect(classify([file])).toMatchObject(none)
+  })
+
+  it.each([
+    'core/crates/server/src/release.rs', 'core/crates/core/Cargo.toml', 'core/Cargo.toml', 'core/pins/pins.toml',
+    'core/third-party/sherpa-onnx-v1.13.2/link/libonnxruntime.so',
+  ])('runs the shared core lane without the preflight matrix for %s', (file) => {
+    expect(classify([file])).toMatchObject({ ...none, core_shared: 'true', companion: 'true', docs_only: 'false' })
+  })
+
+  it('adds the matching fixture job for a fixture change', () => {
+    expect(classify(['core/protocol-fixtures/muniment-attach/1/hello.json'])).toMatchObject({
+      ...none, core_shared: 'true', companion: 'true', attach_fixtures: 'true' })
+    expect(classify(['core/protocol-fixtures/code-diff/1/basic.json'])).toMatchObject({
+      ...none, core_shared: 'true', companion: 'true', code_diff_fixtures: 'true' })
+  })
+
+  it('keeps the desktop lanes for a desktop change beside a core change', () => {
+    for (const paths of [['core/docs/a.md', 'src/App.svelte'], ['src/App.svelte', 'core/crates/core/src/lib.rs']]) {
+      expect(classify(paths)).toMatchObject({ desktop: 'true' })
+    }
+    expect(classify(['src/App.svelte', 'core/crates/core/src/lib.rs'])).toMatchObject({ core_shared: 'true' })
+  })
+
+  it('runs the shared core checks and only the Linux preflight for core_shared', () => {
+    expect(changes).toContain('core_shared: ${{ steps.changes.outputs.core_shared }}')
+    expect(smoke).toContain("- name: Frontend unit tests\n        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true')")
+    expect(smoke).toContain("- name: Shared core consumer tests\n        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.core_shared == 'true')")
+    expect(smoke).toContain('--package muniment-cli --package muniment-runtime')
+    expect(desktopCompile).toContain("    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'\n")
+    expect(desktopCompile).toContain("        if: needs.changes.outputs.desktop == 'true' || matrix.platform == 'linux'\n")
+  })
+
+  it('checks the fixtures against the core exporters in core/', () => {
+    for (const name of ['attach-fixtures-current', 'code-diff-fixtures-current']) {
+      const fixtures = workflow.slice(workflow.indexOf(`  ${name}:\n`))
+      expect(fixtures).toMatch(/cargo run --manifest-path core\/Cargo.toml --locked .* -- "\$PWD\/core\/protocol-fixtures" --check/)
+    }
+    expect(workflow).not.toContain('"$PWD/protocol-fixtures"')
+    expect(smoke).toContain('cargo build --manifest-path core/Cargo.toml --locked --package muniment-router --bin muniment-router-shadow')
   })
 })
 
@@ -180,6 +243,23 @@ it.each(remoteSteps.map((script, index) => [index, script]))('keeps clone creden
       expect(actual).toBe(status)
     } finally { fs.rmSync(directory, { recursive: true, force: true }) }
   }
+})
+
+it('passes no separate core version to the guest', () => {
+  expect(changes).not.toContain('core-v')
+  const script = remoteSteps[0]
+  const directory = fs.mkdtempSync(path.join(tmpdir(), 'muniment-ci-core-version-'))
+  try {
+    const capture = path.join(directory, 'stdin')
+    execFileSync('bash', ['-c', `
+      ssh() { cat > "$CAPTURE"; }
+      ${script}
+    `], { env: { ...process.env, SERVER_URL: 'http://forgejo.test', REPO_TOKEN: 'fixture-token', REPOSITORY: 'owner/repo',
+      SOURCE_SHA: 'a'.repeat(40), REF: 'test-branch', PLATFORM: 'linux', INSTALLER: 'true', RUNNER_TEMP: directory,
+      DESKTOP_CI_SSH_KEY: 'fixture-key', DESKTOP_CI_SLOT_SECONDS: '7200', CAPTURE: capture,
+      DESKTOP_CI_KNOWN_HOSTS: '192.0.2.10 ssh-ed25519 fixture', DESKTOP_CI_HOST: 'ci@192.0.2.10' }, stdio: 'pipe', timeout: 10000 })
+    expect(fs.readFileSync(capture, 'utf8').trimEnd().split('\n')).toEqual(['GH_TOKEN=fixture-token', 'GITHUB_API_TOKEN='])
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
 it('covers the native CI command step', () => {
