@@ -307,8 +307,12 @@ fn options() -> RemoteClientOptions {
     }
 }
 
+/// Bound for each `wait` in these scenarios. A loaded CI host can run the
+/// relay and replication several times slower than a developer machine.
+const WAIT_BOUND: Duration = Duration::from_secs(120);
+
 fn wait(mut condition: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(40);
+    let deadline = Instant::now() + WAIT_BOUND;
     while Instant::now() < deadline {
         if condition() {
             return true;

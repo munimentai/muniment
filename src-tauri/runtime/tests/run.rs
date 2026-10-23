@@ -525,10 +525,12 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 Some(descriptor),
             )
         });
-        assert_eq!(
-            events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
-            "thinking"
-        );
+        let first = events.recv_timeout(Duration::from_secs(5));
+        if first.is_err() {
+            // Cancel the held run so the scope joins before the failure.
+            let _ = cancel_active_run(&active, run_id, Some("workspace-a"));
+        }
+        assert_eq!(first.unwrap().phase, "thinking");
         cancel_active_run(&active, run_id, Some("workspace-a")).unwrap();
         run.join().unwrap().unwrap();
     });

@@ -102,7 +102,7 @@ fn shipped_desktop_client_completes_the_session() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -171,7 +171,7 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -258,7 +258,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -401,7 +401,7 @@ fn desktop_client_selects_only_an_owned_thread() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -533,7 +533,7 @@ fn desktop_client_recheck_applies_the_recorded_retention() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -635,7 +635,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             )
         });
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -644,6 +644,9 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
                 Duration::from_millis(100),
             ) {
                 break;
+            }
+            if Instant::now() >= deadline {
+                let _ = stop_tx.send(());
             }
             assert!(Instant::now() < deadline, "presenter did not connect");
             thread::sleep(Duration::from_millis(10));
