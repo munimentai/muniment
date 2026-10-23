@@ -117,7 +117,7 @@ grep -Fq '| crate | muniment-core |' "$boundary_doc"
 grep -Fq '| crate | muniment-desktop |' "$boundary_doc"
 grep -Fq '| crate | muniment-desktop-integration |' "$boundary_doc"
 test -x scripts/check-core-boundary.sh
-grep -Fq 'run: scripts/check-core-boundary.sh' "$ci"
+grep -Fq 'run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; scripts/check-core-boundary.sh' "$ci"
 python3 -B test/core-boundary.py
 # core/Cargo.toml names the one release version, and every copy matches it.
 python3 -B scripts/version.py check >/dev/null
