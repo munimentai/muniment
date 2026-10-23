@@ -1042,6 +1042,16 @@ fn store_sealed(inner: &Inner, view: &View, secret: SealedSecret) -> Result<bool
     if owner.role != Role::Full {
         return Ok(false);
     }
+    // A worker holds only the lease its owner sealed to it. A full member
+    // that has not yet seen this runtime's demotion may still relay a
+    // version sealed while it was full, which must not come back.
+    if view.role(&view.self_id) == Some(Role::Worker)
+        && (secret.class != "lease"
+            || secret.secret_id != format!("lease:{}:{}", secret.owner, view.self_id)
+            || !secret.recipients.contains_key(&view.self_id))
+    {
+        return Ok(false);
+    }
     let signed = decode(&secret.sig).is_some_and(|sig| {
         verify_identity_signature(&owner.identity, secret_statement(&secret).as_bytes(), &sig)
     });
