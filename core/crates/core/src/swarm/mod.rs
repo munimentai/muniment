@@ -457,7 +457,7 @@ impl Swarm {
     /// MCP tokens to the fleet's full members, and the model vault tokens
     /// it issues. The worker does this about once a minute.
     pub fn fleet_pass(&self) -> Result<(), String> {
-        credentials::pass(&self.inner)
+        credentials::pass_now(&self.inner)
     }
 
     /// Sets how long the worker waits between reseal passes.

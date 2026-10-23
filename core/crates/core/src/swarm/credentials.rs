@@ -114,6 +114,27 @@ pub(super) fn maybe_pass(inner: &Arc<Inner>) {
     });
 }
 
+/// Runs a reseal pass now and counts it as the worker's latest one, so the
+/// worker waits a full interval before its next pass. A worker pass that
+/// already started finishes first, so none runs after this one returns.
+pub(super) fn pass_now(inner: &Inner) -> Result<(), String> {
+    loop {
+        let mut clock = lock(&inner.fleet.pass);
+        if !clock.running {
+            clock.running = true;
+            clock.dirty = false;
+            break;
+        }
+        drop(clock);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let result = pass(inner);
+    let mut clock = lock(&inner.fleet.pass);
+    clock.running = false;
+    clock.last = Some(Instant::now());
+    result
+}
+
 fn fleet_pub(view: &View, runtime_id: &str) -> Option<(String, String)> {
     view.members
         .get(runtime_id)
