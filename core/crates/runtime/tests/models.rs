@@ -14,6 +14,7 @@ use muniment_runtime_core::{
 
 mod common;
 use common::TemporaryProfile;
+use common::CI_WAIT;
 
 /// Every test opens the state with the same provider clients, because the
 /// runtime registers them for the whole process.
@@ -64,7 +65,7 @@ fn the_runtime_starts_the_router_its_record_turns_on_and_stops_it_with_the_sched
         command_rx,
         None,
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     let endpoint = loop {
         // The endpoint file comes before models.json names the router.
         if let Some(endpoint) = server::read_endpoint(&agent) {
@@ -132,7 +133,7 @@ fn a_sign_in_step_reaches_every_attach_subscriber_and_the_host_supplies_provider
         .unwrap();
     for events in [first_events, second_events] {
         assert_eq!(
-            events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            events.recv_timeout(CI_WAIT).unwrap(),
             muniment_core::serde_json::json!({"stage": "cancelled"})
         );
     }
@@ -175,7 +176,7 @@ fn the_runtime_runs_the_search_server_and_applies_search_settings_without_a_rest
         command_rx,
         None,
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CI_WAIT;
     let endpoint = loop {
         if let Some(endpoint) = muniment_search::server::read_endpoint(&endpoint_file) {
             if agent.join("web-search.json").exists() {

@@ -34,6 +34,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 #[path = "../../src/linux_runtime_service/activation.rs"]
 mod desktop_activation;
 use common::{
@@ -300,7 +301,7 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
                 });
                 client.is_some() && events.is_some()
             },
-            Duration::from_secs(5),
+            CI_WAIT,
         )
         .unwrap();
         let mut client = client.unwrap();
@@ -415,7 +416,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
                 client = connect_desktop_client_at(endpoint, "1.0.0", Duration::from_secs(1)).ok();
                 client.is_some()
             },
-            Duration::from_secs(5),
+            CI_WAIT,
         )
         .unwrap();
         let mut client = client.take().unwrap();
@@ -435,7 +436,7 @@ fn cold_desktop_start_serves_sign_in_local_chat_history_and_retention() {
             let accepted = client
                 .run_submit("cold local prompt", &[], None, None, None)
                 .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + CI_WAIT;
             loop {
                 let events = storage
                     .lock()

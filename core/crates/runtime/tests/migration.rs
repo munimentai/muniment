@@ -19,6 +19,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod common;
+use common::CI_WAIT;
+
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
@@ -191,7 +194,7 @@ fn retries_migration_not_ready_before_acceptance() {
     let desktop = AttachTransport::bind(&filesystem).unwrap();
     let (stop_tx, stop_rx) = mpsc::channel();
     let (registry, approval, approvals) = listener_state(&runtime);
-    let test_timeout = Duration::from_secs(2);
+    let test_timeout = CI_WAIT;
 
     thread::scope(|scope| {
         let takeover = scope.spawn(|| {
@@ -278,7 +281,7 @@ fn maps_unauthorized_control_answer_to_a_typed_error() {
                 &runtime.0,
                 inputs(&registry, &approval, &approvals),
                 || Ok::<_, ()>(TestService),
-                Instant::now() + Duration::from_secs(2),
+                Instant::now() + CI_WAIT,
                 stop_rx,
             )
         });

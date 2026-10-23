@@ -1,6 +1,5 @@
 use std::fs;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 use muniment_core::active_run::ChatDelivery;
 use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
@@ -13,6 +12,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -78,10 +78,7 @@ fn queued_message_reaches_a_live_runtime_run(
                 Some(descriptor),
             )
         });
-        assert_eq!(
-            events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
-            "thinking"
-        );
+        assert_eq!(events.recv_timeout(CI_WAIT).unwrap().phase, "thinking");
         boundaries
             .queue_attach_message("workspace-a", run_id, delivery, message)
             .unwrap();

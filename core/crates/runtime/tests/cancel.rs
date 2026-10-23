@@ -1,6 +1,5 @@
 use std::fs;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 use muniment_core::attach::RuntimeActivityRegistry;
 use muniment_runtime_core::{
@@ -8,6 +7,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -54,10 +54,7 @@ fn cancelling_a_live_run_sends_abort_to_pi() {
                 Some(descriptor),
             )
         });
-        assert_eq!(
-            events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
-            "thinking"
-        );
+        assert_eq!(events.recv_timeout(CI_WAIT).unwrap().phase, "thinking");
         cancel_run(active.clone(), "workspace-a".into(), run_id.into()).unwrap();
         run.join().unwrap().unwrap();
     });

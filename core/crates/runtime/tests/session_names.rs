@@ -1,7 +1,7 @@
 use muniment_runtime_core::{RuntimeAttachState, RuntimeHost};
 use std::sync::mpsc;
-use std::time::Duration;
 mod common;
+use common::CI_WAIT;
 
 #[test]
 fn opening_the_runtime_names_legacy_session_folders() {
@@ -55,7 +55,7 @@ fn a_session_folder_read_that_waits_does_not_hold_the_runtime_start() {
     });
 
     let (state, service) = opened
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(CI_WAIT)
         .expect("the runtime opens while the session folder read waits")
         .unwrap();
     assert!(service, "a companion connection gets a service at once");

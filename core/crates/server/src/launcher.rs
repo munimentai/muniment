@@ -205,13 +205,14 @@ pub struct ServerProcess {
 impl ServerProcess {
     fn spawn(binary: &Path, state: &Path, capability: UpdateCapability) -> std::io::Result<Self> {
         use std::os::unix::process::CommandExt;
-        let child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg("serve")
             .env("MUNIMENT_STATE_DIR", state)
             .env(CAPABILITY_VARIABLE, capability.as_str())
             .stdin(Stdio::null())
-            .process_group(0)
-            .spawn()?;
+            .process_group(0);
+        let child = spawn_executable(&mut command)?;
         Ok(Self {
             child,
             binary: binary.to_path_buf(),
@@ -816,15 +817,38 @@ impl Launcher {
     }
 }
 
+/// How long a spawn retries an executable that another process still holds
+/// open for writing.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Spawns `command`, retrying while the kernel reports the executable busy.
+/// A binary written moments ago can stay open for writing in a child that
+/// another thread forked before it closed the file, until that child execs,
+/// and exec refuses such a file with `ETXTBSY`.
+fn spawn_executable(command: &mut Command) -> std::io::Result<Child> {
+    let deadline = Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Runs the new binary's `--version` and checks that it names `target`.
 fn preflight(binary: &Path, target: &str) -> Result<(), String> {
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("did not start: {error}"))?;
+        .stderr(Stdio::null());
+    let mut child =
+        spawn_executable(&mut command).map_err(|error| format!("did not start: {error}"))?;
     let deadline = Instant::now() + PREFLIGHT_TIMEOUT;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -1130,6 +1154,15 @@ esac
         }
     }
 
+    /// A test that panics before `launcher.stop()` still ends its stand-in
+    /// server and the server's process group, so no orphan keeps the test
+    /// runner's output open.
+    impl Drop for Launcher {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.directory);
@@ -1203,7 +1236,8 @@ esac
         let outcome = launcher.apply(&request, &AtomicBool::new(false));
 
         assert!(
-            matches!(outcome, UpdateOutcome::Failed(ref error) if error.contains("reports version 0.9.0"))
+            matches!(outcome, UpdateOutcome::Failed(ref error) if error.contains("reports version 0.9.0")),
+            "{outcome:?}"
         );
         assert_eq!(launcher.child().unwrap().id(), pid);
         assert!(launcher.exited().is_none());
@@ -1431,7 +1465,7 @@ esac
     #[test]
     fn a_launcher_without_a_key_installs_nothing() {
         let fixture = Fixture::new("manual");
-        let mut settings = fixture.launcher().settings;
+        let mut settings = fixture.launcher().settings.clone();
         settings.public_key = None;
         let mut launcher = Launcher::new(
             &fixture.state,

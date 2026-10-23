@@ -70,7 +70,11 @@ fn start(root: &Root) -> Child {
         if let Some(status) = child.try_wait().unwrap() {
             panic!("the server exited before it answered: {status}");
         }
-        assert!(Instant::now() < deadline, "the server never answered");
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the server never answered");
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
     child

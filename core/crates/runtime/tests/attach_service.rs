@@ -25,6 +25,7 @@ use muniment_runtime_core::{
 
 mod common;
 use common::TemporaryProfile;
+use common::CI_WAIT;
 
 const THREAD: &str = "01900000-0000-7000-8000-000000000001";
 
@@ -157,7 +158,7 @@ fn check_history_failures(poisoned: bool) {
             )
             .unwrap();
         });
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,

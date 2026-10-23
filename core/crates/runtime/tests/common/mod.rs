@@ -6,11 +6,18 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use muniment_core::chat_launch::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The bound for a test that waits for a runtime to start, become ready,
+/// open or accept on an endpoint, or reach a state. A loaded CI host can take
+/// several seconds for each; a wait still returns as soon as its condition
+/// holds.
+pub const CI_WAIT: Duration = Duration::from_secs(30);
 
 /// A random id for this test process. Temporary paths carry it so a test
 /// process never removes or reuses the directory of another process that

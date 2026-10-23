@@ -30,6 +30,7 @@ use muniment_runtime_core::{open_profile_storage, RuntimeAttachState};
 use muniment_runtime_core::{run_attach_listener, AttachListenerInputs};
 
 mod common;
+use common::CI_WAIT;
 use common::{credentials, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -102,12 +103,16 @@ fn shipped_desktop_client_completes_the_session() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -171,12 +176,16 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -258,7 +267,7 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -401,12 +410,16 @@ fn desktop_client_selects_only_an_owned_thread() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -533,12 +546,16 @@ fn desktop_client_recheck_applies_the_recorded_retention() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not accept the desktop client: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not accept the desktop client: {error}");
+                }
             }
         };
 
@@ -635,7 +652,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             )
         });
 
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -651,7 +668,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             assert!(Instant::now() < deadline, "presenter did not connect");
             thread::sleep(Duration::from_millis(10));
         }
-        presented_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        presented_rx.recv_timeout(CI_WAIT).unwrap();
 
         let mut client = connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1))
             .expect("desktop client did not connect");
@@ -671,7 +688,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             || {},
         )
         .expect("companion did not pair through the presenter");
-        let paired_challenge = presented_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let paired_challenge = presented_rx.recv_timeout(CI_WAIT).unwrap();
         assert!(!paired_challenge.is_empty());
         drop(companion);
 
@@ -685,10 +702,7 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
             approval_request(final_challenge.into()),
             Duration::from_secs(1),
         ));
-        assert_eq!(
-            presented_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            final_challenge
-        );
+        assert_eq!(presented_rx.recv_timeout(CI_WAIT).unwrap(), final_challenge);
 
         presenter_stop.stop();
         presenter.join().unwrap();

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 mod common;
 use common::TemporaryProfile;
+use common::CI_WAIT;
 
 #[test]
 fn executable_replacement_requests_an_upgrade_refresh_exit() {
@@ -39,7 +40,7 @@ fn executable_replacement_requests_an_upgrade_refresh_exit() {
                 &profile.root,
                 &profile.profile,
                 &profile.config,
-                Instant::now() + Duration::from_secs(10),
+                Instant::now() + CI_WAIT,
                 Some(UpgradeWatchTestControl {
                     path: watched_executable,
                     poll_interval: Duration::from_millis(5),
@@ -49,7 +50,7 @@ fn executable_replacement_requests_an_upgrade_refresh_exit() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         while !endpoint.exists() {
             if Instant::now() >= deadline {
                 // Stop the activation so the scope can join it before the failure.
@@ -112,13 +113,13 @@ fn fresh_profile_serves_session_status_and_releases_the_endpoint() {
                 &profile.root,
                 &profile.profile,
                 &profile.config,
-                Instant::now() + Duration::from_secs(10),
+                Instant::now() + CI_WAIT,
                 Some(std::env::current_exe().unwrap()),
                 stop_rx,
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         let mut client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
@@ -198,7 +199,7 @@ fn retention_trigger_deletes_only_expired_terminal_runs() {
                 &profile.root,
                 &profile.profile,
                 &profile.config,
-                Instant::now() + Duration::from_secs(10),
+                Instant::now() + CI_WAIT,
                 Some(std::env::current_exe().unwrap()),
                 Some(RetentionScheduleTestControl {
                     trigger: trigger_rx,
@@ -210,19 +211,19 @@ fn retention_trigger_deletes_only_expired_terminal_runs() {
         });
         // Stop the activation before any wait or assert below can panic, so
         // the scope joins instead of hanging.
-        let checked = checked_rx.recv_timeout(Duration::from_secs(10));
+        let checked = checked_rx.recv_timeout(CI_WAIT);
         if checked.is_err() {
             let _ = stop_tx.send(());
         }
         checked.unwrap();
         write_retention_choice(&profile.config, RetentionChoice::DeleteAfter30Days).unwrap();
         trigger_tx.send(()).unwrap();
-        let checked = checked_rx.recv_timeout(Duration::from_secs(10));
+        let checked = checked_rx.recv_timeout(CI_WAIT);
         if checked.is_err() {
             let _ = stop_tx.send(());
         }
         checked.unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + CI_WAIT;
         loop {
             let mut storage = storage.lock().unwrap();
             if storage.journal.events(expired).unwrap().is_empty() {

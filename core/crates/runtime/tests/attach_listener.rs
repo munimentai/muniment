@@ -27,6 +27,7 @@ use muniment_runtime_core::{
 
 mod common;
 use common::TemporaryProfile;
+use common::CI_WAIT;
 
 #[derive(Default)]
 struct TestService;
@@ -94,12 +95,16 @@ fn handshake(
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let stream = loop {
             match UnixStream::connect(&endpoint) {
                 Ok(stream) => break stream,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not start: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not start: {error}");
+                }
             }
         };
         let result = handshake_stream(
@@ -146,12 +151,8 @@ fn probe(handoff_nonce: Option<String>) -> Result<(), HandoffProbeError> {
             )
             .unwrap()
         });
-        let result = probe_handoff(
-            &endpoint,
-            "prepared-nonce",
-            Instant::now() + Duration::from_secs(2),
-        )
-        .map(|_| ());
+        let result =
+            probe_handoff(&endpoint, "prepared-nonce", Instant::now() + CI_WAIT).map(|_| ());
         stop_tx.send(()).unwrap();
         listener.join().unwrap();
         result
@@ -246,12 +247,16 @@ fn desktop_client_lists_threads_without_a_presenter() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut stream = loop {
             match UnixStream::connect(&endpoint) {
                 Ok(stream) => break stream,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not start: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not start: {error}");
+                }
             }
         };
         stream
@@ -326,12 +331,16 @@ fn desktop_client_without_a_workspace_receives_an_empty_workspace_grant() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let client = loop {
             match connect_desktop_client_at(&endpoint, "1.0.0", Duration::from_secs(1)) {
                 Ok(client) => break client,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not start: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not start: {error}");
+                }
             }
         };
         assert!(client.workspace_scopes().is_empty());
@@ -508,7 +517,7 @@ fn desktop_presenter_answers_an_approval_request() {
             )
         });
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut attempt = 0;
         let challenge = loop {
             attempt += 1;
@@ -525,13 +534,15 @@ fn desktop_presenter_answers_an_approval_request() {
             ) {
                 break challenge;
             }
+            if Instant::now() >= deadline {
+                // Stop both threads so the scope joins before the failure.
+                presenter_stop.stop();
+                let _ = stop_tx.send(());
+            }
             assert!(Instant::now() < deadline, "presenter did not connect");
             thread::sleep(Duration::from_millis(10));
         };
-        assert_eq!(
-            presented_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            challenge
-        );
+        assert_eq!(presented_rx.recv_timeout(CI_WAIT).unwrap(), challenge);
 
         presenter_stop.stop();
         presenter.join().unwrap();
@@ -601,7 +612,7 @@ fn companion_pairs_through_the_desktop_presenter() {
                 )
             });
 
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + CI_WAIT;
             let mut attempt = 0;
             let connected = loop {
                 attempt += 1;
@@ -622,7 +633,7 @@ fn companion_pairs_through_the_desktop_presenter() {
                 }
                 thread::sleep(Duration::from_millis(10));
             };
-            let _readiness_request = presented_rx.recv_timeout(Duration::from_secs(1));
+            let _readiness_request = presented_rx.recv_timeout(CI_WAIT);
 
             let previous_runtime_directory = std::env::var_os("XDG_RUNTIME_DIR");
             std::env::set_var("XDG_RUNTIME_DIR", &profile.root);
@@ -631,7 +642,7 @@ fn companion_pairs_through_the_desktop_presenter() {
                 Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
                 None => std::env::remove_var("XDG_RUNTIME_DIR"),
             }
-            let presented = presented_rx.recv_timeout(Duration::from_secs(1));
+            let presented = presented_rx.recv_timeout(CI_WAIT);
 
             presenter_stop.stop();
             presenter.join().unwrap();
@@ -684,12 +695,16 @@ fn the_listener_announces_the_host_runtime_version() {
             )
             .unwrap()
         });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + CI_WAIT;
         let mut stream = loop {
             match UnixStream::connect(&endpoint) {
                 Ok(stream) => break stream,
                 Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-                Err(error) => panic!("attach listener did not start: {error}"),
+                Err(error) => {
+                    // Stop the listener so the scope joins before the failure.
+                    let _ = stop_tx.send(());
+                    panic!("attach listener did not start: {error}");
+                }
             }
         };
         stream

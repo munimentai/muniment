@@ -5,7 +5,6 @@ use std::collections::VecDeque;
 use std::fs;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 use muniment_core::active_run::{cancel_active_run, capacity_message, RunRegistry};
 use muniment_core::attach::linux::{CompanionProvenance, RunResumeRequest, ThreadListService};
@@ -27,6 +26,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 use common::{credentials, fixture_grant, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -525,7 +525,7 @@ fn runs_two_prompts_in_one_named_thread_and_rejects_an_unknown_thread() {
                 Some(descriptor),
             )
         });
-        let first = events.recv_timeout(Duration::from_secs(5));
+        let first = events.recv_timeout(CI_WAIT);
         if first.is_err() {
             // Cancel the held run so the scope joins before the failure.
             let _ = cancel_active_run(&active, run_id, Some("workspace-a"));
@@ -773,7 +773,7 @@ fn resumes_an_interrupted_run_to_a_terminal_event() {
     assert_eq!(accepted.run_id, run_id);
     assert!(!accepted.thread_id.is_empty());
     assert!(accepted.committed_seq > 0);
-    let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+    let event = events.recv_timeout(CI_WAIT).unwrap();
     assert_eq!(event.run_id, run_id);
     assert_eq!(
         event.thread_id.as_deref(),

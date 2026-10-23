@@ -14,6 +14,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 use common::{local_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -174,7 +175,7 @@ fn attach_submit_sends_without_a_default_keychain() {
     assert_eq!(accepted.committed_seq, 1);
     let mut saw_reply = false;
     loop {
-        let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+        let event = events.recv_timeout(CI_WAIT).unwrap();
         assert_eq!(event.run_id, accepted.run_id);
         saw_reply |= !event.text.is_empty();
         // A text delta carries only the appended text. Every whole state carries the notice.
@@ -190,7 +191,7 @@ fn attach_submit_sends_without_a_default_keychain() {
         }
     }
     assert!(saw_reply);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + CI_WAIT;
     while boundaries.active_run_exists() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));

@@ -3,10 +3,10 @@
 //! MCP polls, each queuing an event-triggered agent run.
 
 mod common;
+use common::CI_WAIT;
 
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 use muniment_core::agent_hooks::HookEndpoints;
 use muniment_core::agent_runs::{RunStore, TriggerKind};
@@ -26,12 +26,8 @@ fn post(
     fingerprint: muniment_core::attach::CertificateFingerprint,
     request: &[u8],
 ) -> (u16, Value) {
-    let mut stream = muniment_core::attach::connect_pinned(
-        &[address.to_owned()],
-        fingerprint,
-        Duration::from_secs(5),
-    )
-    .unwrap();
+    let mut stream =
+        muniment_core::attach::connect_pinned(&[address.to_owned()], fingerprint, CI_WAIT).unwrap();
     stream.write_all(request).unwrap();
     let mut answer = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -188,7 +184,7 @@ fn a_signed_delivery_over_the_remote_listener_queues_a_webhook_run() {
     assert!(muniment_core::attach::connect_pinned(
         std::slice::from_ref(&address),
         fingerprint,
-        Duration::from_secs(5)
+        CI_WAIT
     )
     .is_ok());
     drop(stop);

@@ -16,6 +16,7 @@ use muniment_runtime_core::{
 };
 
 mod common;
+use common::CI_WAIT;
 use common::{fixture_grant, stage_pi_stub, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -143,10 +144,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 Some(descriptor),
             )
         });
-        assert_eq!(
-            events.recv_timeout(Duration::from_secs(5)).unwrap().phase,
-            "thinking"
-        );
+        assert_eq!(events.recv_timeout(CI_WAIT).unwrap().phase, "thinking");
         boundaries
             .queue_attach_message(
                 "workspace-a",
@@ -156,7 +154,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
             )
             .unwrap();
         let gate_id = loop {
-            let event = events.recv_timeout(Duration::from_secs(5)).unwrap();
+            let event = events.recv_timeout(CI_WAIT).unwrap();
             if let Some(permission) = event.pending_permission {
                 break permission.gate_id;
             }
@@ -169,7 +167,7 @@ fn a_queued_permission_answer_reaches_a_live_runtime_run() {
                 ChatPermissionAnswer::Confirm(true),
             )
             .unwrap()
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(CI_WAIT)
             .unwrap()
             .unwrap();
         run.join().unwrap().unwrap();

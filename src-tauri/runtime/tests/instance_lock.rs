@@ -7,6 +7,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod common;
+use common::CI_WAIT;
+
 const WAIT_TIMEOUT_ENV: &str = "MUNIMENT_RUNTIME_TEST_WAIT_TIMEOUT_MS";
 const EXIT_AFTER_LOCK_ENV: &str = "MUNIMENT_RUNTIME_TEST_EXIT_AFTER_LOCK";
 
@@ -82,7 +85,7 @@ fn wait_for_endpoint(child: &mut Child, endpoint: &Path) {
             child.try_wait().unwrap().is_none(),
             "runtime exited before the endpoint opened"
         );
-        if started.elapsed() >= Duration::from_secs(3) {
+        if started.elapsed() >= CI_WAIT {
             child.kill().unwrap();
             child.wait().unwrap();
             panic!("runtime endpoint did not open");
@@ -144,7 +147,7 @@ fn waits_for_the_instance_lock_then_acquires_it_after_release() {
     assert!(child.try_wait().unwrap().is_none());
     drop(lock);
 
-    let output = wait_for_exit(child, Duration::from_secs(3));
+    let output = wait_for_exit(child, CI_WAIT);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
@@ -197,7 +200,7 @@ fn logs_version_state_directory_and_served_endpoint_at_startup() {
         .output()
         .unwrap();
     assert!(signal.status.success());
-    let output = wait_for_exit(child, Duration::from_secs(3));
+    let output = wait_for_exit(child, CI_WAIT);
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
@@ -229,7 +232,7 @@ fn sigterm_releases_the_instance_lock_and_exits_successfully() {
         .output()
         .unwrap();
     assert!(signal.status.success());
-    let output = wait_for_exit(child, Duration::from_secs(3));
+    let output = wait_for_exit(child, CI_WAIT);
     assert!(output.status.success());
 
     let second = runtime.exit_after_lock_command(2_000).output().unwrap();

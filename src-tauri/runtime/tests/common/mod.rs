@@ -22,6 +22,12 @@ use muniment_desktop_integration::chat_grant::ChatGrant;
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// The bound for a test that waits for a runtime to start, become ready,
+/// open or accept on an endpoint, or reach a state. A loaded CI host can take
+/// several seconds for each; a wait still returns as soon as its condition
+/// holds.
+pub const CI_WAIT: Duration = Duration::from_secs(30);
+
 /// A random id for this test process. Directory names carry it so a test
 /// process never removes or reuses the directory of another process that
 /// shares the system temp directory and the process id. Eight hex characters

@@ -21,6 +21,7 @@ use muniment_runtime_core::{
 
 mod common;
 use common::TemporaryProfile;
+use common::CI_WAIT;
 
 type ServiceFactory = Arc<
     dyn Fn() -> Result<DesktopAttachService<RuntimeAttachBoundaries>, ProtocolError> + Send + Sync,
@@ -355,7 +356,7 @@ fn companion_pairing_uses_the_activation_presenter_and_live_registry() {
 
     client.write_all(&hello_frame()).unwrap();
     // Keep service setup outside the socket read timeout.
-    ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    ready_rx.recv_timeout(CI_WAIT).unwrap();
     let _: Welcome = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
     let authorized: Authorized = decode_frame(&read_frame(&mut client)).unwrap().unwrap().0;
     state

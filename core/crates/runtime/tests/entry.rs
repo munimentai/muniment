@@ -13,6 +13,7 @@ use muniment_runtime_core::{
 
 mod common;
 use common::TemporaryProfile;
+use common::CI_WAIT;
 
 #[test]
 fn serves_the_endpoint_until_stop_and_refuses_a_second_runtime() {
@@ -32,8 +33,12 @@ fn serves_the_endpoint_until_stop_and_refuses_a_second_runtime() {
     thread::scope(|scope| {
         let runtime =
             scope.spawn(|| run_runtime(RuntimeHost::default(), &directories, None, stop_rx));
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CI_WAIT;
         while !endpoint.exists() {
+            if Instant::now() >= deadline {
+                // Stop the runtime so the scope joins before the failure.
+                let _ = stop_tx.send(());
+            }
             assert!(Instant::now() < deadline, "the runtime binds its endpoint");
             thread::sleep(Duration::from_millis(10));
         }
