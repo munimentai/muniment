@@ -52,7 +52,7 @@ jobs:
           node-version: 22
       - run: bash ci/rust-toolchain.sh rustfmt clippy
       - run: cargo fmt --all --check
-      - run: scripts/check-core-boundary.sh
+      - run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; scripts/check-core-boundary.sh
       # The version in Cargo.toml is the release version, and the desktop
       # copies of it must match.
       - run: python3 -B ../scripts/version.py check
@@ -64,7 +64,7 @@ jobs:
       # Stub child processes starve under default test parallelism. The runner
       # puts the Forgejo job token in the environment, and muniment-pins would
       # send it to the GitHub API, so the network tests run without it.
-      - run: env -u GITHUB_TOKEN -u GH_TOKEN cargo test --workspace --locked --features muniment-core/network-tests,muniment-pins/cli -- --test-threads=1
+      - run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; env -u GITHUB_TOKEN -u GH_TOKEN cargo test --workspace --locked --features muniment-core/network-tests,muniment-pins/cli -- --test-threads=1
       - run: python3 -B scripts/test_release.py
       - run: python3 -B scripts/pins/test_update.py
       - run: python3 -B scripts/test_desktop_ci.py

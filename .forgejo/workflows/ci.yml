@@ -315,7 +315,7 @@ jobs:
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.release_only != 'true')
         env:
           CARGO_INCREMENTAL: "0"
-        run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; scripts/check-core-boundary.sh
+        run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; scripts/check-core-boundary.sh
 
       - name: Rust formatting
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true')

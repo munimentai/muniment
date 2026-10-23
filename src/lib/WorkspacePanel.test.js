@@ -17,8 +17,10 @@ it('keeps each context shell alive and restores it without restarting', async ()
     if (command === 'terminal_start') return args.path
     if (command === 'terminal_read') return {bytes: [], exited: false}
   })
+  // The panel imports the terminal lazily; loading it first keeps the start wait off the module transform time.
+  await import('./TerminalWorkspace.svelte')
   const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'terminal', context: {projectId: 'project'}, onselect: vi.fn()}})
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('terminal_start', expect.objectContaining({path: '/work/project'})))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('terminal_start', expect.objectContaining({path: '/work/project'})), {timeout: 10000})
   await view.rerender({props: {context: {agentId: 'agent'}}})
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('terminal_start', expect.objectContaining({path: '/work/agent'})))
   expect(screen.getByRole('tab', {name: 'agent'})).toHaveAttribute('aria-selected', 'true')
