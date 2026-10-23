@@ -1009,7 +1009,7 @@ mod tests {
             assert_eq!(origin.run_id.as_deref(), Some(run));
             assert_eq!(fact.origin_label, "Added in a chat");
         }
-        fs::remove_dir_all(root).unwrap();
+        remove_test_root(&root);
     }
 
     struct NoHost;
@@ -1099,7 +1099,18 @@ mod tests {
         .unwrap();
         assert_eq!(handed["message_id"], "handoff:run-two");
         drop(swarm);
-        fs::remove_dir_all(root).unwrap();
+        remove_test_root(&root);
+    }
+
+    /// Removes a test root that a session's index build thread may still be
+    /// writing into, retrying for up to ten seconds before the check.
+    fn remove_test_root(root: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while root.exists() && std::time::Instant::now() < deadline {
+            let _ = fs::remove_dir_all(root);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!root.exists());
     }
 
     #[test]

@@ -163,12 +163,19 @@ impl Store {
         };
         let connection = Connection::open(&store.path)
             .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+        // The schema and the backfill commit together, so a failed open leaves
+        // the store as it was.
         connection
+            .execute_batch("BEGIN")
+            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+        let migrated = connection
             .execute_batch(SCHEMA)
-            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
-        connection
-            .execute_batch(BACKFILL_THREAD_VERSIONS)
-            .map_err(|error| format!("The swarm store could not be opened: {error}"))?;
+            .and_then(|()| connection.execute_batch(BACKFILL_THREAD_VERSIONS))
+            .and_then(|()| connection.execute_batch("COMMIT"));
+        if let Err(error) = migrated {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(format!("The swarm store could not be opened: {error}"));
+        }
         Ok(store)
     }
 

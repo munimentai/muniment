@@ -22,6 +22,21 @@ use muniment_desktop_integration::chat_grant::ChatGrant;
 const DEVICE_ID: &str = "10000000-0000-4000-8000-000000000001";
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// A random id for this test process. Directory names carry it so a test
+/// process never removes or reuses the directory of another process that
+/// shares the system temp directory and the process id. Eight hex characters
+/// keep the attach socket path under the 108-byte `sun_path` limit.
+static PROCESS_TOKEN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut hasher = DefaultHasher::new();
+    std::process::id().hash(&mut hasher);
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut hasher);
+    format!("{:08x}", hasher.finish() as u32)
+});
+
 pub struct TemporaryProfile {
     pub root: PathBuf,
     pub profile: PathBuf,
@@ -32,8 +47,9 @@ impl TemporaryProfile {
     pub fn new(test_name: &str, scaffold_home: bool) -> Self {
         let sequence = TEMPORARY_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "muniment-runtime-{test_name}-{}-{sequence}",
-            std::process::id()
+            "muniment-runtime-{test_name}-{}-{}-{sequence}",
+            std::process::id(),
+            *PROCESS_TOKEN
         ));
         let _ = fs::remove_dir_all(&root);
         let profile = root.join("profile");

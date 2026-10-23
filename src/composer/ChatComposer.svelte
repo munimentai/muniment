@@ -26,5 +26,5 @@
     mask-repeat: no-repeat;
   }
   /* Focused, the overlay is the 2px edge the border and outline make. */
-  .composer:global([data-voice-wave]):focus-within::before { --corner: calc(var(--radius-panel) + 1px); inset: -2px; border-width: 2px; border-radius: calc(var(--radius-panel) + 1px); }
+  .composer:global([data-voice-wave]):focus-within::before { inset: -2px; border-width: 2px; border-radius: var(--radius-panel); }
 </style>
