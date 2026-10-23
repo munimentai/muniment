@@ -42,6 +42,15 @@ fn main() {
     // A desktop that started this runtime may have leaked descriptors from its
     // browser engine, and Pi and every other program started here must not keep them.
     muniment_core::child_fds::seal_inherited();
+    // A debug runtime that a test spawns with `MUNIMENT_TEST` keeps every
+    // secret in memory, so it never reaches the platform keychain. Release
+    // builds compile this out and always use the keychain.
+    #[cfg(debug_assertions)]
+    if std::env::var_os(muniment_core::state_root::TEST_RUN_VARIABLE)
+        .is_some_and(|value| !value.is_empty())
+    {
+        muniment_core::chat_prompt::use_mock_keyring_for_tests();
+    }
     match handle_arguments() {
         Ok(true) => return,
         Ok(false) => {}

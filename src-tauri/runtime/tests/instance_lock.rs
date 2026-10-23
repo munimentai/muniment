@@ -49,6 +49,8 @@ impl RuntimeDirectory {
                 self.state_directory(),
             )
             .env(WAIT_TIMEOUT_ENV, timeout_ms.to_string())
+            // A debug runtime marked as a test run keeps its secrets in memory.
+            .env(muniment_core::state_root::TEST_RUN_VARIABLE, "1")
             .env(
                 muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
                 muniment_core::state_root::test_log_directory(),

@@ -248,11 +248,18 @@ fn desktop_starts_runtime_in_layout(resources: &str, bin: &str, deb_alias: bool)
     )
     .unwrap();
     let _environment = Environment(
-        ["XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME"]
-            .into_iter()
-            .map(|key| (key, std::env::var_os(key)))
-            .collect(),
+        [
+            "XDG_RUNTIME_DIR",
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            muniment_core::state_root::TEST_RUN_VARIABLE,
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect(),
     );
+    // The spawned runtime inherits this, so its debug build keeps secrets in memory.
+    std::env::set_var(muniment_core::state_root::TEST_RUN_VARIABLE, "1");
     std::env::set_var("XDG_RUNTIME_DIR", &profile.root);
     std::env::set_var("XDG_DATA_HOME", &profile.profile);
     std::env::set_var("XDG_CONFIG_HOME", &profile.config);

@@ -446,15 +446,18 @@ mod tests {
 /// desktop's keychain tests, which CI runs on its own machines, set it.
 pub const KEYCHAIN_TESTS_VARIABLE: &str = "MUNIMENT_KEYCHAIN_TESTS";
 /// The variable that marks a process as a test run, for a test binary
-/// Cargo did not build into its `deps` folder.
+/// Cargo did not build into its `deps` folder, such as a runtime binary a
+/// test spawns. Only debug builds honor it, so a release build never trades
+/// the platform keychain for a file store.
 pub const TEST_RUN_VARIABLE: &str = "MUNIMENT_TEST";
 
 /// Whether this process is a test run: a crate's own unit tests, a binary
 /// Cargo built into its `deps` folder, as every unit and integration test
-/// binary is, or a process with `MUNIMENT_TEST` set.
+/// binary is, or a debug build with `MUNIMENT_TEST` set.
 pub fn is_test_run() -> bool {
     cfg!(test)
-        || std::env::var_os(TEST_RUN_VARIABLE).is_some_and(|value| !value.is_empty())
+        || (cfg!(debug_assertions)
+            && std::env::var_os(TEST_RUN_VARIABLE).is_some_and(|value| !value.is_empty()))
         || std::env::current_exe().ok().is_some_and(|executable| {
             executable
                 .parent()

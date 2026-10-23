@@ -57,7 +57,9 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
         // Model launchd with the login home and no variable from the runner.
         .env_clear()
         .env("HOME", &login_home)
-        // The child is no test run, so it logs where this test reads.
+        // A debug runtime marked as a test run keeps its secrets in memory.
+        .env(muniment_core::state_root::TEST_RUN_VARIABLE, "1")
+        // The child logs where this test reads.
         .env(
             muniment_core::state_root::LOG_DIRECTORY_VARIABLE,
             log.parent().unwrap(),
