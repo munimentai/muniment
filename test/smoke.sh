@@ -220,7 +220,14 @@ test -z "$(git ls-files 'core/protocol-fixtures/muniment.attach/**' | grep -v '^
 # The aarch64 server archive cross-links for real through the pinned zig
 # toolchain, the aarch64 speech runtime libraries and the release packaging
 # checks, unsigned. A link failure or a file for another machine fails smoke.
+# GitHub and Forgejo runners set GITHUB_ACTIONS, so the PR smoke always runs
+# it. A local checkout runs it with MUNIMENT_SERVER_CROSS_BUILD=1, since the
+# build downloads the pinned zig and speech libraries.
 python3 -B core/deploy/runtime/test_package.py
-echo "smoke: aarch64 server cross-build"
-core/ci/server-cross-build.sh
+if [ -n "${GITHUB_ACTIONS:-}" ] || [ "${MUNIMENT_SERVER_CROSS_BUILD:-}" = 1 ]; then
+  echo "smoke: aarch64 server cross-build"
+  core/ci/server-cross-build.sh
+else
+  echo "smoke: aarch64 server cross-build runs on CI or with MUNIMENT_SERVER_CROSS_BUILD=1"
+fi
 echo "smoke OK"

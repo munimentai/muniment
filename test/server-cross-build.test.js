@@ -12,8 +12,14 @@ const releaseAssets = read('core/deploy/runtime/release-assets.sh')
 
 describe('aarch64 server cross-build in PR smoke', () => {
   it('runs the cross-build once, unguarded, in the structure smoke', () => {
-    const calls = smoke.split('\n').filter((line) => line.includes('server-cross-build.sh'))
+    const calls = smoke
+      .split('\n')
+      .filter((line) => line.includes('server-cross-build.sh'))
+      .map((line) => line.trim())
     expect(calls).toEqual(['core/ci/server-cross-build.sh'])
+    expect(smoke).toContain(
+      'if [ -n "${GITHUB_ACTIONS:-}" ] || [ "${MUNIMENT_SERVER_CROSS_BUILD:-}" = 1 ]; then'
+    )
     expect(smoke).toContain('python3 -B core/deploy/runtime/test_package.py')
   })
 
