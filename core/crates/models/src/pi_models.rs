@@ -145,7 +145,10 @@ pub fn decision_models(record: &Map<String, Value>, provider: &str) -> Vec<Strin
 /// model. Ollama refuses a chat turn to a decision model, so neither becomes
 /// the composer's model.
 pub fn chat_model(record: &Map<String, Value>, provider: &str, id: &str) -> bool {
-    if decision_models(record, provider).iter().any(|known| known == id) {
+    if decision_models(record, provider)
+        .iter()
+        .any(|known| known == id)
+    {
         return false;
     }
     provider != OLLAMA_PROVIDER || !ollama_decision_name(id)
