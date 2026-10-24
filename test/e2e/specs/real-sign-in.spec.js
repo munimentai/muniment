@@ -4,7 +4,7 @@ import { access, appendFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { remote } from 'webdriverio'
 import { withAuthDiagnostics } from '../support/auth-diagnostics.mjs'
-import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { closeSettings, expandSidebar, openFirstRunModelSettings, openSettings, openSettingsPage } from '../support/first-run.mjs'
 
 const rawDir = process.env.MUNIMENT_E2E_RAW_DIR
 
@@ -119,14 +119,11 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
       await openFirstRunModelSettings()
     }
     await localMode.waitForDisplayed({ timeout: 120000 })
-    const settings = await $('[role="dialog"][aria-label="Settings"]')
-    if (!(await settings.isDisplayed())) {
-      await expandSidebar()
-      await (await $('button=Settings')).click()
-    }
-    await settings.waitForDisplayed()
+    // More providers leaves Settings open. Otherwise the sidebar's gear opens it.
+    const settings = await openSettings()
     const sections = await $('nav[aria-label="Settings sections"]')
     expect(await (await sections.$('button=Models')).isExisting()).toBe(true)
+    expect(await (await settings.$('button=Sign in for cloud features')).isExisting()).toBe(false)
     expect(await (await $('button=Sign in for cloud features')).isExisting()).toBe(false)
     // More providers opens the provider catalog. The sidebar's Settings opens the Models page.
     await (await settings.$(firstRun ? 'h4=Connect account' : 'button=Connect account')).waitForDisplayed()
@@ -171,17 +168,11 @@ const cloudEnabled = process.env.MUNIMENT_E2E_CLOUD === 'true'
     if (inLocalMode) await expandSidebar()
     let signIn = signedOut
     if (inLocalMode) {
-      // The cloud sign-in sits in the Settings menu at the foot of the sidebar.
-      await expandSidebar()
-      // More providers leaves Settings open, and open Settings replaces the sidebar's Settings control.
-      if (!(await (await $('[role="dialog"][aria-label="Settings"]')).isDisplayed())) {
-        await (await $('button=Settings')).click()
-      }
-      // Settings opens on Models; the cloud sign-in is the Account section's one action.
-      const sections = await $('nav[aria-label="Settings sections"]')
-      await sections.waitForDisplayed()
-      await (await sections.$('button=Account')).click()
-      signIn = await $('button=Sign in for cloud features')
+      // The cloud sign-in is the Account section's one action in Settings,
+      // which the gear at the foot of the sidebar opens. More providers leaves
+      // Settings open.
+      const settings = await openSettingsPage('Account')
+      signIn = await settings.$('button=Sign in for cloud features')
       await signIn.waitForDisplayed()
     }
     await signIn.waitForDisplayed()
