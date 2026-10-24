@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { expandSidebar, openFirstRunModelSettings, openSettings, openSettingsPage } from './e2e/support/first-run.mjs'
+import { expandSidebar, firstRunState, openFirstRunModelSettings, openSettings, openSettingsPage } from './e2e/support/first-run.mjs'
 import { replySnapshot, waitForReply } from './e2e/support/chat-reply.mjs'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -139,6 +139,21 @@ describe('The first-run helper observes the real transition.', () => {
     await openSettings()
 
     expect(clicked).toEqual(['gear', 'button=Data'])
+  })
+})
+
+describe('The first-run state reads the commands as the app answers them.', () => {
+  it('reports a Home path from the camelCase home_status answer without the path itself', async () => {
+    const answers = {
+      home_status: { configured: true, homePath: 'C:\\Users\\runner\\Documents\\Muniment' },
+      local_mode_status: true,
+      attach_listener_status: { connected: true, supervisor_running: true },
+    }
+    vi.stubGlobal('window', { ...window, __TAURI__: { core: { invoke: async (command) => answers[command] } } })
+    vi.stubGlobal('browser', { execute: async (fn) => fn() })
+    const state = await firstRunState()
+    expect(state).toContain('"home":{"configured":true,"path":true}')
+    expect(state).not.toContain('Users')
   })
 })
 

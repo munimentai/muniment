@@ -2995,7 +2995,10 @@
       await tauri.invoke('local_mode_enter')
       markerStartupLocalMode = true
       auth = { name: 'local', subject: null }
-      await refreshInventory()
+      // The inventory reads again while a provider lists no chat model yet,
+      // and each read runs Pi's model list. The workspace and the first run's
+      // Settings open without waiting for those reads; the chip follows them.
+      void refreshInventory()
       await chatController.loadHistory()
       return true
     } catch (_) {

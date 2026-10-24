@@ -42,7 +42,7 @@ export async function firstRunState() {
       ]).then((result) => ({ result }), (error) => ({ error: String(error?.message ?? error) }))
       const home = await ask('home_status')
       return {
-        home: home.result ? { configured: home.result.configured, path: !!home.result.home_path } : home,
+        home: home.result ? { configured: home.result.configured, path: !!home.result.homePath } : home,
         localMode: await ask('local_mode_status'),
         desktopClient: await ask('attach_listener_status'),
         settingsDialog: !!document.querySelector('[role="dialog"][aria-label="Settings"]'),
