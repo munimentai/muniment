@@ -1522,7 +1522,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-atomic-file"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "uuid",
  "windows-sys 0.61.2",
@@ -1530,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-attach"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "getrandom 0.4.3",
  "rustls",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-code-diff"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "cap-fs-ext",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-models"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "muniment-atomic-file",
  "muniment-pins",
@@ -1620,7 +1620,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-pins"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "hex",
  "serde",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-router"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1659,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-runtime-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "muniment-attach",
@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-search"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "muniment-server"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "flate2",
  "libc",
