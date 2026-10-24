@@ -5,6 +5,13 @@
 # archive holds only regular files in its root, which is the layout the
 # launcher unpacks.
 #
+# server-libraries.sh fetches the pinned sherpa-onnx libraries for the target
+# and points this one Cargo invocation at them, above the desktop's forced
+# SHERPA_ONNX_LIB_DIR in the repository's .cargo/config.toml. The packed
+# libraries are the binary's shared-library closure, each checked to be built
+# for the target. MUNIMENT_SERVER_LIBRARY_CACHE names the library cache, by
+# default server-libraries under the Cargo target directory.
+#
 # cargo-zigbuild links against glibc 2.36, so the archive runs on Debian 12
 # and later, the runtime image among them. ci/zig-toolchain.sh installs
 # zig, cargo-zigbuild and both Rust targets.
@@ -32,24 +39,35 @@ if [ "$version" != "$source_version" ]; then
 fi
 target="$arch-unknown-linux-gnu"
 target_dir=${CARGO_TARGET_DIR:-$context/target}
+libraries="$context/deploy/runtime/server-libraries.sh"
+
+# Each target fetches its own pinned speech runtime libraries into its own
+# directory, so builds for both targets can share one workspace in turn.
+cache=${MUNIMENT_SERVER_LIBRARY_CACHE:-$target_dir/server-libraries}
+lib_dir=$("$libraries" fetch "$target" "$cache")
+lib_dir=$(cd "$lib_dir" && pwd)
+library_args_text=$("$libraries" cargo-args "$lib_dir")
+mapfile -t library_args <<<"$library_args_text"
+echo "package.sh: linking $target against the speech runtime libraries in $lib_dir"
 
 (
   cd "$context"
   CARGO_PROFILE_RELEASE_STRIP=symbols \
-    cargo zigbuild --release --locked -p muniment-server --bin muniment-server \
+    cargo zigbuild "${library_args[@]}" --release --locked -p muniment-server --bin muniment-server \
     --target "$target.2.36"
 )
 
 built="$target_dir/$target/release"
-files=("$built/muniment-server")
-for library in "$built"/*.so*; do
-  [ -e "$library" ] && files+=("$library")
-done
+# The packed libraries are the ones the binary needs, read from the target's
+# own library directory, never whatever else sits in the shared output.
+closure=$("$libraries" closure "$target" "$lib_dir" "$built/muniment-server")
+mapfile -t files <<<"$closure"
 if [ ${#files[@]} -lt 2 ]; then
-  echo "package.sh: no speech runtime library sits beside the binary in $built" >&2
+  echo "package.sh: muniment-server for $target needs no speech runtime library" >&2
   exit 1
 fi
 mkdir -p "$out"
 archive="$out/muniment-server-$version-linux-$arch.tar.gz"
 python3 -B "$context/deploy/runtime/pack.py" "$archive" "${files[@]}"
+"$libraries" check-archive "$target" "$archive"
 echo "Packed $archive."

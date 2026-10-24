@@ -25,6 +25,10 @@ if [ ! -x "$zig_home/zig" ]; then
   printf '%s  %s\n' "$zig_sha256" "$archive" | sha256sum --check --quiet
   mkdir -p "$zig_home"
   tar -xJf "$archive" -C "$zig_home" --strip-components=1
+  # A script that sources this one may set its own EXIT trap, so the archive
+  # goes now rather than at exit.
+  rm -f "$archive"
+  trap - EXIT
 fi
 export PATH="$zig_home:$HOME/.cargo/bin:$PATH"
 

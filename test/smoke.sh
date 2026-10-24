@@ -217,4 +217,10 @@ test -f docs/windows-installers.md
 grep -Fq 'cmd="$preflight_cmd && $cmd"' "$ci"
 test "$(grep -Fxc "    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'" "$ci")" -eq 1
 test -z "$(git ls-files 'core/protocol-fixtures/muniment.attach/**' | grep -v '^core/protocol-fixtures/muniment.attach/1/')"
+# The aarch64 server archive cross-links for real through the pinned zig
+# toolchain, the aarch64 speech runtime libraries and the release packaging
+# checks, unsigned. A link failure or a file for another machine fails smoke.
+python3 -B core/deploy/runtime/test_package.py
+echo "smoke: aarch64 server cross-build"
+core/ci/server-cross-build.sh
 echo "smoke OK"
