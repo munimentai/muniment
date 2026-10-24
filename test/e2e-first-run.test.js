@@ -226,3 +226,20 @@ describe('The local-mode spec reads the reply of its own prompt.', () => {
     await expect(waitForReply(response, 'p')).rejects.toThrow('The local-mode chat response failed: chat_not_entitled: No model.')
   })
 })
+
+describe('The local-mode spec asks for a plain reply.', () => {
+  it('does not count tool activity or a question card as a reply', () => {
+    document.body.innerHTML = '<div class="response"><div class="tool-card"><p>ls</p></div><div class="question-card"><p>Which folder?</p></div></div>'
+    expect(replySnapshot(document.querySelector('.response')).text).toBe('')
+  })
+
+  it('names its prompt with a unique marker and asks for text without tools', () => {
+    const spec = readFileSync('test/e2e/specs/local-mode-chat.spec.js', 'utf8')
+    const prompt = spec.match(/const prompt = `([^`]*)`/)[1]
+    expect(prompt).toContain('Muniment local E2E chat ${Date.now()}')
+    expect(prompt).toContain('plain-text')
+    expect(prompt).toContain('Do not use any tools')
+    expect(spec).toContain('waitForReply(response, prompt)')
+    expect(spec).toContain('timeout: 180000')
+  })
+})

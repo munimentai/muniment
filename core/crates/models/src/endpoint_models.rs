@@ -64,11 +64,26 @@ fn embedding_only(value: &Value) -> bool {
         && !capabilities.iter().any(|value| value == "completion")
 }
 
-/// What Ollama's `/api/show` says about one model: whether it only embeds, the
-/// context it was trained for, and the `num_ctx` its Modelfile sets.
+/// Whether Ollama's `/api/show` names capabilities without `completion` for
+/// a model that is not an embedding model, as it does for a decision model.
+/// Ollama refuses a chat turn to such a model, so it never lists as a chat
+/// model. A model whose capabilities are unknown stays a chat model.
+fn decision_only(value: &Value) -> bool {
+    let Some(capabilities) = value.get("capabilities").and_then(Value::as_array) else {
+        return false;
+    };
+    !capabilities.is_empty()
+        && !capabilities.iter().any(|value| value == "completion")
+        && !capabilities.iter().any(|value| value == "embedding")
+}
+
+/// What Ollama's `/api/show` says about one model: whether it only embeds or
+/// only decides, the context it was trained for, and the `num_ctx` its
+/// Modelfile sets.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct OllamaShow {
     embedding_only: bool,
+    decision_only: bool,
     trained: Option<u64>,
     num_ctx: Option<u64>,
 }
@@ -94,6 +109,7 @@ fn ollama_show(value: &Value) -> OllamaShow {
         .filter(|tokens| *tokens > 0);
     OllamaShow {
         embedding_only: embedding_only(value),
+        decision_only: decision_only(value),
         trained,
         num_ctx,
     }
@@ -112,13 +128,15 @@ fn smaller(trained: Option<u64>, served: Option<u64>) -> Option<u64> {
     }
 }
 
+/// Ollama's models by kind: the chat models with their windows and the
+/// decision models. Embedding models are in neither list.
 fn chat_models(
     agent: &ureq::Agent,
     origin: &mut url::Url,
     models: Vec<String>,
     deadline: Instant,
     key: Option<&str>,
-) -> (Vec<String>, BTreeMap<String, Limits>) {
+) -> EndpointModels {
     origin.set_path("/api/show");
     let url = origin.as_str();
     let next = AtomicUsize::new(0);
@@ -147,11 +165,18 @@ fn chat_models(
         }
     });
     let shown = shown.into_inner().unwrap();
-    let chat: Vec<(String, OllamaShow)> = models
-        .into_iter()
-        .zip(shown)
-        .filter(|(_, show)| !show.embedding_only)
-        .collect();
+    let mut decisions = Vec::new();
+    let mut chat: Vec<(String, OllamaShow)> = Vec::new();
+    for (model, show) in models.into_iter().zip(shown) {
+        if show.embedding_only {
+            continue;
+        }
+        if show.decision_only {
+            decisions.push(model);
+        } else {
+            chat.push((model, show));
+        }
+    }
     // A loaded model reports the context it runs with.
     let mut loaded = BTreeMap::new();
     if !chat.is_empty() {
@@ -181,7 +206,11 @@ fn chat_models(
             windows.insert(model.clone(), Limits::context(context));
         }
     }
-    (chat.into_iter().map(|(model, _)| model).collect(), windows)
+    EndpointModels {
+        chat: chat.into_iter().map(|(model, _)| model).collect(),
+        decisions,
+        windows,
+    }
 }
 
 /// One GET within what is left of the discovery budget. `None` when no time
@@ -408,13 +437,13 @@ pub fn discover_endpoint_models(
     origin.set_fragment(None);
     match fetch(&agent, origin.as_str(), key) {
         Ok(Some(tags)) if tags.get("models").is_some_and(Value::is_array) => {
-            let (chat, windows) =
-                chat_models(&agent, &mut origin, parse_ollama_tags(&tags), deadline, key);
-            return Some(EndpointModels {
-                chat,
-                decisions: Vec::new(),
-                windows,
-            });
+            return Some(chat_models(
+                &agent,
+                &mut origin,
+                parse_ollama_tags(&tags),
+                deadline,
+                key,
+            ));
         }
         Ok(_) => {}
         Err(()) => return None,
@@ -484,6 +513,42 @@ mod tests {
             &json!({"capabilities":["completion", "vision"]})
         ));
         assert!(!embedding_only(&json!({})));
+    }
+
+    #[test]
+    fn only_ollama_models_without_completion_that_do_not_embed_are_decision_only() {
+        assert!(decision_only(&json!({"capabilities":["tools"]})));
+        assert!(!decision_only(&json!({"capabilities":["completion"]})));
+        assert!(!decision_only(&json!({"capabilities":["embedding"]})));
+        assert!(!decision_only(&json!({"capabilities":[]})));
+        assert!(!decision_only(&json!({})));
+    }
+
+    #[test]
+    fn ollama_lists_completion_models_as_chat_and_keeps_decision_models_apart() {
+        let url = serve_routes(vec![
+            (
+                "GET /api/tags",
+                json!({"models": [{"name": "clef-flash:latest"}, {"name": "gpt-oss:latest"}, {"name": "nomic-embed-text"}, {"name": "unknown"}]}),
+            ),
+            (
+                "POST /api/show clef-flash:latest",
+                json!({"capabilities": ["decisions"]}),
+            ),
+            (
+                "POST /api/show gpt-oss:latest",
+                json!({"capabilities": ["completion", "tools", "thinking"]}),
+            ),
+            (
+                "POST /api/show nomic-embed-text",
+                json!({"capabilities": ["embedding"]}),
+            ),
+            ("POST /api/show unknown", json!({})),
+            ("GET /api/ps", json!({"models": []})),
+        ]);
+        let found = discover_endpoint_models(&url, None, Duration::from_secs(3)).unwrap();
+        assert_eq!(found.chat, ["gpt-oss:latest", "unknown"]);
+        assert_eq!(found.decisions, ["clef-flash:latest"]);
     }
 
     #[test]

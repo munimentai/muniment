@@ -16,8 +16,8 @@ use serde_json::{json, Map, Value};
 
 use crate::endpoint_models::discover_endpoint_models;
 use crate::registry::{
-    key_providers, CUSTOM_PROVIDER_PREFIX, LM_STUDIO_PROVIDER, OLLAMA_MODEL, OLLAMA_PROVIDER,
-    ROUTER_PROVIDER,
+    key_providers, CUSTOM_PROVIDER_PREFIX, LM_STUDIO_PROVIDER, OLLAMA_DECISIONS, OLLAMA_MODEL,
+    OLLAMA_PROVIDER, ROUTER_PROVIDER,
 };
 use crate::window::Limits;
 
@@ -138,6 +138,24 @@ pub fn decision_models(record: &Map<String, Value>, provider: &str) -> Vec<Strin
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect()
+}
+
+/// Whether a provider's model answers a chat turn: not a decision model the
+/// record keeps for it and, on Ollama, not one Ollama names as a decision
+/// model. Ollama refuses a chat turn to a decision model, so neither becomes
+/// the composer's model.
+pub fn chat_model(record: &Map<String, Value>, provider: &str, id: &str) -> bool {
+    if decision_models(record, provider).iter().any(|known| known == id) {
+        return false;
+    }
+    provider != OLLAMA_PROVIDER || !ollama_decision_name(id)
+}
+
+/// Whether Ollama names the model as one of its decision models, by the name
+/// before the tag.
+pub fn ollama_decision_name(id: &str) -> bool {
+    let name = id.split(':').next().unwrap_or(id);
+    OLLAMA_DECISIONS.iter().any(|(known, _)| *known == name)
 }
 
 pub fn store_decision_models(agent: &Path, provider: &str, ids: &[String]) -> Result<(), String> {
@@ -345,10 +363,16 @@ pub fn store_ollama(
     if model_ids.is_empty() {
         return Err("The server has no chat models. Add a chat model, then try again.".into());
     }
+    // A decision model Ollama lists beside its chat models never becomes the
+    // default, so the first chat turn reaches a model that answers it.
     let default_model = if model_ids.iter().any(|id| id == OLLAMA_MODEL) {
         OLLAMA_MODEL
     } else {
-        model_ids[0].as_str()
+        model_ids
+            .iter()
+            .find(|id| !ollama_decision_name(id))
+            .unwrap_or(&model_ids[0])
+            .as_str()
     };
     providers.insert(
         OLLAMA_PROVIDER.to_owned(),
@@ -646,6 +670,43 @@ mod tests {
     }
 
     #[test]
+    fn an_ollama_server_routes_to_a_chat_model_and_keeps_its_decision_models_apart() {
+        let agent = temporary_directory();
+        let url = serve_routes(vec![
+            (
+                "GET /api/tags",
+                json!({"models": [{"name": "clef-flash:latest"}, {"name": "nimble:latest"}, {"name": "gpt-oss:latest"}]}),
+            ),
+            (
+                "POST /api/show clef-flash:latest",
+                json!({"capabilities": ["decisions"]}),
+            ),
+            ("POST /api/show nimble:latest", json!({})),
+            (
+                "POST /api/show gpt-oss:latest",
+                json!({"capabilities": ["completion", "tools"]}),
+            ),
+            ("GET /api/ps", json!({"models": []})),
+        ]);
+        let mut routed = None;
+        store_ollama(&agent, &url, "", |model| {
+            routed = Some(model.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(routed.as_deref(), Some("gpt-oss:latest"));
+        assert_eq!(
+            models(&agent)["providers"]["ollama"]["models"],
+            json!([{"id": "nimble:latest"}, {"id": "gpt-oss:latest"}])
+        );
+        assert_eq!(
+            decision_models(&read_record(&agent).unwrap(), OLLAMA_PROVIDER),
+            ["clef-flash:latest"]
+        );
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
     fn a_discovered_endpoint_carries_its_windows_and_a_named_one_none() {
         let agent = temporary_directory();
         let url = serve_routes(vec![(
@@ -738,6 +799,21 @@ mod tests {
         assert_eq!(root["providers"]["xai"]["models"][1]["id"], "grok-new");
         assert_eq!(root["registered"], true);
         assert!(!merge_discovered(&agent, &discovered, |_| false).unwrap());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_decision_model_never_reads_as_a_chat_model() {
+        let agent = temporary_directory();
+        store_decision_models(&agent, "llama", &["kev-4b".to_owned()]).unwrap();
+        let record = read_record(&agent).unwrap();
+        assert!(!chat_model(&record, "llama", "kev-4b"));
+        assert!(chat_model(&record, "llama", "qwen3"));
+        assert!(!chat_model(&record, OLLAMA_PROVIDER, "clef-flash:latest"));
+        assert!(!chat_model(&record, OLLAMA_PROVIDER, "nimble"));
+        assert!(chat_model(&record, OLLAMA_PROVIDER, "gpt-oss:latest"));
+        // Another server may name a chat model like an Ollama decision model.
+        assert!(chat_model(&record, "custom-x", "clef-flash"));
         fs::remove_dir_all(agent).unwrap();
     }
 

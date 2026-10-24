@@ -100,7 +100,10 @@ describe('installed local-mode chat', () => {
       timeoutMsg: 'empty chat did not show its starters after connecting a model',
     })
     await waitForDesktopClient()
-    const prompt = `Muniment local E2E chat ${Date.now()}`
+    // An explicit instruction keeps a local model from exploring with tools or
+    // asking a question before it writes text. The marker names this prompt's
+    // user turn, so only its own response is read.
+    const prompt = `Muniment local E2E chat ${Date.now()}: reply with one short plain-text sentence that says hello. Do not use any tools and do not ask a question.`
     await composer.setValue(prompt)
     const launchStarted = Date.now()
     await (await $('button[aria-label="Send"]')).click()
