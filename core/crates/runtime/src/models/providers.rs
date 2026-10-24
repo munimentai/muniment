@@ -17,8 +17,8 @@ use muniment_core::engine::{
 use muniment_core::model_router::config::ROUTER_PROVIDER;
 use muniment_core::models::claude_accounts;
 use muniment_core::models::pi_models::{
-    self, decision_models, read_record as read_models_record, saved_endpoint_key, valid_identifier,
-    write_record as write_models_record,
+    self, chat_model, decision_models, read_record as read_models_record, saved_endpoint_key,
+    valid_identifier, write_record as write_models_record,
 };
 use muniment_core::models::registry::{
     self, CLAUDE_BRIDGE_PROVIDER, LM_STUDIO_PROVIDER, OLLAMA_PROVIDER, STATUS_PROVIDERS,
@@ -1003,11 +1003,16 @@ fn context_tokens(context: &str) -> u64 {
 
 /// The models a just-connected provider may start on, largest context first and
 /// list order on a tie. The list is Pi's, so a narrow tuned variant that leads
-/// it alphabetically never wins over the provider's general model.
-fn adoption_candidates<'a>(models: &'a [PiModelRow], provider: &str) -> Vec<&'a str> {
+/// it alphabetically never wins over the provider's general model. A decision
+/// model answers no chat turn, so it is never a candidate.
+fn adoption_candidates<'a>(
+    models: &'a [PiModelRow],
+    record: &serde_json::Map<String, serde_json::Value>,
+    provider: &str,
+) -> Vec<&'a str> {
     let mut candidates: Vec<&PiModelRow> = models
         .iter()
-        .filter(|row| row.provider == provider)
+        .filter(|row| row.provider == provider && chat_model(record, provider, &row.id))
         .collect();
     candidates.sort_by_key(|model| std::cmp::Reverse(context_tokens(&model.context)));
     candidates
@@ -1026,7 +1031,8 @@ pub(super) fn adopt_provider_default(
     probe: bool,
 ) -> Result<(), String> {
     let models = engine.list_models();
-    let candidates = adoption_candidates(&models, provider);
+    let record = read_models_record(agent).unwrap_or_default();
+    let candidates = adoption_candidates(&models, &record, provider);
     let Some(first) = candidates.first() else {
         return Err("No model answers for this provider yet.".into());
     };
@@ -1046,12 +1052,15 @@ pub(super) fn adopt_provider_default(
 /// model. Pi picks its own fallback when its settings name none, so a run could
 /// answer from a model the chip never named. The first shown model becomes the
 /// saved default here, so the chip and the run agree.
+/// A decision model answers no chat turn, so it is never the chip's model.
 fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
+    let record = read_models_record(agent).unwrap_or_default();
     let hidden = |provider: &str, model: &str| {
         inventory
             .hidden
             .iter()
             .any(|key| key == &format!("{provider}/{model}"))
+            || !chat_model(&record, provider, model)
     };
     let saved_shown =
         match (&inventory.default_provider, &inventory.default_model) {
@@ -1229,18 +1238,58 @@ ollama        gemma4:12b           128K  16.4K  no   no\n\
 ollama        llama3.2:3b          128K  16.4K  no   no\n\
 google        gemini-3-pro         1M    64K    yes  yes\n";
         let models = muniment_core::engine::parse_model_table(table);
+        let record = serde_json::Map::new();
         assert_eq!(
-            adoption_candidates(&models, "openai-codex"),
+            adoption_candidates(&models, &record, "openai-codex"),
             ["gpt-5.4", "gpt-6-astra", "gpt-5.3-codex-spark"]
         );
         assert_eq!(
-            adoption_candidates(&models, "ollama"),
+            adoption_candidates(&models, &record, "ollama"),
             ["gemma4:12b", "llama3.2:3b"]
         );
-        assert_eq!(adoption_candidates(&models, "google"), ["gemini-3-pro"]);
-        assert!(adoption_candidates(&models, "xai").is_empty());
+        assert_eq!(
+            adoption_candidates(&models, &record, "google"),
+            ["gemini-3-pro"]
+        );
+        assert!(adoption_candidates(&models, &record, "xai").is_empty());
         assert_eq!(context_tokens("1M"), 1_000_000);
         assert_eq!(context_tokens("16.4K"), 16_400);
+    }
+
+    #[test]
+    fn a_decision_model_is_never_a_chat_default() {
+        let table = "provider  model              context  max-out  thinking  images\n\
+ollama    clef-flash:latest  1M       16.4K    no        no\n\
+ollama    gpt-oss:latest     128K     16.4K    yes       no\n\
+llama     kev-4b             1M       16.4K    no        no\n\
+llama     qwen3              32K      16.4K    yes       no\n";
+        let models = muniment_core::engine::parse_model_table(table);
+        let mut record = serde_json::Map::new();
+        record.insert(
+            "decisionModels".into(),
+            serde_json::json!({"llama": ["kev-4b"]}),
+        );
+        assert_eq!(
+            adoption_candidates(&models, &record, "ollama"),
+            ["gpt-oss:latest"]
+        );
+        assert_eq!(adoption_candidates(&models, &record, "llama"), ["qwen3"]);
+
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"ollama":{"baseUrl":"http://127.0.0.1:11434/v1","models":[{"id":"clef-flash:latest"},{"id":"gpt-oss:latest"}]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            agent.join("settings.json"),
+            r#"{"defaultProvider":"ollama","defaultModel":"clef-flash:latest"}"#,
+        )
+        .unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
+        assert_eq!(inventory.default_model.as_deref(), Some("gpt-oss:latest"));
     }
 
     fn temporary_directory() -> std::path::PathBuf {

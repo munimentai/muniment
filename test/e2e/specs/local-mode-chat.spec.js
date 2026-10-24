@@ -3,6 +3,7 @@ import { access, readFile } from 'node:fs/promises'
 import { OLLAMA_BASE_URL } from '../support/local-provider.mjs'
 import { piAgentDirectory } from '../support/pi-agent-directory.mjs'
 import { closeSettings, expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { waitForReply } from '../support/chat-reply.mjs'
 import { readPins } from '../../../scripts/check-agent-dependencies.mjs'
 
 async function checkCandidatePackages() {
@@ -99,7 +100,10 @@ describe('installed local-mode chat', () => {
       timeoutMsg: 'empty chat did not show its starters after connecting a model',
     })
     await waitForDesktopClient()
-    const prompt = `Muniment local E2E chat ${Date.now()}`
+    // An explicit instruction keeps a local model from exploring with tools or
+    // asking a question before it writes text. The marker names this prompt's
+    // user turn, so only its own response is read.
+    const prompt = `Muniment local E2E chat ${Date.now()}: reply with one short plain-text sentence that says hello. Do not use any tools and do not ask a question.`
     await composer.setValue(prompt)
     const launchStarted = Date.now()
     await (await $('button[aria-label="Send"]')).click()
@@ -107,14 +111,13 @@ describe('installed local-mode chat', () => {
     const userMessage = await $(`//div[contains(concat(' ', normalize-space(@class), ' '), ' user-turn ')]//p[normalize-space()="${prompt}"]`)
     await userMessage.waitForDisplayed()
     const response = await userMessage.$('./ancestor::div[contains(concat(" ", normalize-space(@class), " "), " user-turn ")]/following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " response ")][1]')
-    await browser.waitUntil(async () => {
-      const streaming = await response.$('.streaming .assistant-markdown')
-      if (await streaming.isDisplayed() && (await streaming.getText()).trim()) return true
-      return await (await response.$('button.provenance')).isDisplayed()
-    }, {
-      timeout: 180000,
-      timeoutMsg: `local-mode chat did not render its first reply for prompt: ${prompt}`,
-    })
+    // A reply is nonempty assistant text in this prompt's response, streaming
+    // or completed. A completed reply's receipt is a button only when it has
+    // details, so the receipt does not mark a reply.
+    const reply = await waitForReply(response, prompt)
+    expect(reply.text).not.toBe('')
+    const streaming = await response.$('.streaming .assistant-markdown')
+    console.log(`The first local-mode reply was ${await streaming.isExisting() ? 'streaming' : 'complete'} when read.`)
     console.log(`The first local-mode reply took ${((Date.now() - launchStarted) / 1000).toFixed(1)} seconds.`)
     await checkCandidatePackages()
 

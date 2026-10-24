@@ -1525,6 +1525,28 @@ describe('workspace composer entry', () => {
     expect(document.querySelector('.lockup')).not.toBeInTheDocument()
   })
 
+  it('opens local mode before its first model inventory read answers', async () => {
+    const inventoryRead = deferred()
+    invoke.mockImplementation(async (command) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_enter') return undefined
+      if (command === 'local_mode_provider_inventory') return inventoryRead.promise
+      if (command === 'chat_thread_open') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+
+    expect(await screen.findByTestId('local-mode')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('local_mode_provider_inventory')
+    expect(screen.getByText('Checking available models…')).toBeInTheDocument()
+    // The thread history loads while the inventory read is still open.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_select_thread', expect.anything()))
+    inventoryRead.resolve({ providers: [], hidden: [] })
+    expect(await screen.findByText('Connect a model in the composer to start chatting.')).toBeInTheDocument()
+  })
+
   it('opens Settings in the sidebar column with Models, Preferences, Home, Companies and Account sections', async () => {
     localModeStatus = true
     render(App)

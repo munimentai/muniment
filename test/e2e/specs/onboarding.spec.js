@@ -2,7 +2,7 @@ import path from 'node:path'
 import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
 import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
-import { expandSidebar, openFirstRunModelSettings } from '../support/first-run.mjs'
+import { expandSidebar, openFirstRunModelSettings, openSettingsPage } from '../support/first-run.mjs'
 
 const FOLDER_DIALOG_WAIT_SECONDS = 30
 const FOLDER_DIALOG_TITLE = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -119,13 +119,12 @@ describe('installed nightly model-ready onboarding', () => {
     await settings.waitForDisplayed()
     expect(await (await settings.$('h4=Connect account')).isDisplayed()).toBe(true)
 
-    // The first run shows Home with no control. Settings → Storage changes it,
-    // and Home settings closes Settings.
-    await expandSidebar()
-    const storage = await (await $('#sidebar')).$('button.side-action=Storage')
-    await storage.waitForDisplayed()
-    await storage.click()
-    const change = await $('button=Change workspace folder…')
+    // The first run shows Home with no control. Settings → Data → Storage
+    // changes it, and Home settings closes Settings.
+    await openSettingsPage('Data')
+    const storage = await settings.$('[data-settings-part="storage"]')
+    await storage.waitForDisplayed({ timeoutMsg: 'Settings → Data did not show Storage.' })
+    const change = await storage.$('button=Change workspace folder…')
     await change.waitForDisplayed()
     await change.click()
     const homeSettings = await $('section[aria-label="Home settings"]')

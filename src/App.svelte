@@ -2995,7 +2995,10 @@
       await tauri.invoke('local_mode_enter')
       markerStartupLocalMode = true
       auth = { name: 'local', subject: null }
-      await refreshInventory()
+      // The inventory read can wait on Pi's first start and endpoint
+      // discovery, so local mode opens without it and the composer fills in
+      // when it lands, as a saved local session does at startup.
+      void refreshInventory()
       await chatController.loadHistory()
       return true
     } catch (_) {
