@@ -64,23 +64,11 @@ fn embedding_only(value: &Value) -> bool {
         && !capabilities.iter().any(|value| value == "completion")
 }
 
-/// Whether Ollama lists the model as a decision model that does not complete
-/// a chat turn. A model with no capabilities list is not one.
-fn decision_only(value: &Value) -> bool {
-    let Some(capabilities) = value.get("capabilities").and_then(Value::as_array) else {
-        return false;
-    };
-    capabilities.iter().any(|value| value == "decision")
-        && !capabilities.iter().any(|value| value == "completion")
-}
-
-/// What Ollama's `/api/show` says about one model: whether it only embeds,
-/// whether it only decides, the context it was trained for, and the `num_ctx`
-/// its Modelfile sets.
+/// What Ollama's `/api/show` says about one model: whether it only embeds, the
+/// context it was trained for, and the `num_ctx` its Modelfile sets.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct OllamaShow {
     embedding_only: bool,
-    decision_only: bool,
     trained: Option<u64>,
     num_ctx: Option<u64>,
 }
@@ -106,7 +94,6 @@ fn ollama_show(value: &Value) -> OllamaShow {
         .filter(|tokens| *tokens > 0);
     OllamaShow {
         embedding_only: embedding_only(value),
-        decision_only: decision_only(value),
         trained,
         num_ctx,
     }
@@ -125,17 +112,13 @@ fn smaller(trained: Option<u64>, served: Option<u64>) -> Option<u64> {
     }
 }
 
-/// The models an Ollama server lists, each but an embedding-only one, with
-/// the decision models among them and each model's window. A decision model
-/// stays in the list, so discovery keeps naming it, and the decision list
-/// tells a chat pick to pass over it.
 fn chat_models(
     agent: &ureq::Agent,
     origin: &mut url::Url,
     models: Vec<String>,
     deadline: Instant,
     key: Option<&str>,
-) -> EndpointModels {
+) -> (Vec<String>, BTreeMap<String, Limits>) {
     origin.set_path("/api/show");
     let url = origin.as_str();
     let next = AtomicUsize::new(0);
@@ -198,16 +181,7 @@ fn chat_models(
             windows.insert(model.clone(), Limits::context(context));
         }
     }
-    let decisions = chat
-        .iter()
-        .filter(|(_, show)| show.decision_only)
-        .map(|(model, _)| model.clone())
-        .collect();
-    EndpointModels {
-        chat: chat.into_iter().map(|(model, _)| model).collect(),
-        decisions,
-        windows,
-    }
+    (chat.into_iter().map(|(model, _)| model).collect(), windows)
 }
 
 /// One GET within what is left of the discovery budget. `None` when no time
@@ -434,13 +408,13 @@ pub fn discover_endpoint_models(
     origin.set_fragment(None);
     match fetch(&agent, origin.as_str(), key) {
         Ok(Some(tags)) if tags.get("models").is_some_and(Value::is_array) => {
-            return Some(chat_models(
-                &agent,
-                &mut origin,
-                parse_ollama_tags(&tags),
-                deadline,
-                key,
-            ));
+            let (chat, windows) =
+                chat_models(&agent, &mut origin, parse_ollama_tags(&tags), deadline, key);
+            return Some(EndpointModels {
+                chat,
+                decisions: Vec::new(),
+                windows,
+            });
         }
         Ok(_) => {}
         Err(()) => return None,
@@ -510,46 +484,6 @@ mod tests {
             &json!({"capabilities":["completion", "vision"]})
         ));
         assert!(!embedding_only(&json!({})));
-    }
-
-    #[test]
-    fn only_a_model_without_completion_that_decides_is_a_decision_model() {
-        assert!(decision_only(
-            &json!({"capabilities":["decision", "vision"]})
-        ));
-        assert!(!decision_only(
-            &json!({"capabilities":["completion", "decision"]})
-        ));
-        assert!(!decision_only(&json!({"capabilities":["embedding"]})));
-        assert!(!decision_only(&json!({})));
-    }
-
-    #[test]
-    fn ollama_decision_models_stay_listed_and_are_named_as_decisions() {
-        let url = serve_routes(vec![
-            (
-                "GET /api/tags",
-                json!({"models": [{"name": "clef-flash:latest"}, {"name": "qwen3:8b"}, {"name": "bare"}, {"name": "nomic-embed-text"}]}),
-            ),
-            (
-                "POST /api/show clef-flash:latest",
-                json!({"capabilities": ["decision", "vision"]}),
-            ),
-            (
-                "POST /api/show qwen3:8b",
-                json!({"capabilities": ["completion", "vision"]}),
-            ),
-            ("POST /api/show bare", json!({})),
-            (
-                "POST /api/show nomic-embed-text",
-                json!({"capabilities": ["embedding"]}),
-            ),
-            ("GET /api/ps", json!({"models": []})),
-        ]);
-        let found = discover_endpoint_models(&url, None, Duration::from_secs(3)).unwrap();
-        // The shared list keeps the decision model and drops only the embedder.
-        assert_eq!(found.chat, ["clef-flash:latest", "qwen3:8b", "bare"]);
-        assert_eq!(found.decisions, ["clef-flash:latest"]);
     }
 
     #[test]

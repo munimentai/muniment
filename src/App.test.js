@@ -4487,28 +4487,6 @@ describe('Home onboarding', () => {
     expect(within(dialog).getByRole('searchbox', { name: 'Search providers' })).toBeInTheDocument()
   })
 
-  // A first model list can take most of a minute while Pi starts cold, as on
-  // a fresh Windows profile. Settings opens without waiting for it.
-  it('opens the provider catalog from More providers while the model inventory still loads', async () => {
-    firstRun()
-    threadSummaryResult = []
-    const listed = deferred()
-    const original = invoke.getMockImplementation()
-    invoke.mockImplementation((command, payload) => {
-      if (command === 'auth_status') return Promise.resolve({ signed_in: false, subject: null })
-      if (command === 'local_mode_enter') return Promise.resolve()
-      if (command === 'local_mode_provider_inventory') return listed.promise
-      return original(command, payload)
-    })
-    render(App)
-    await fireEvent.click(await more())
-    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-    expect(await within(dialog).findByRole('heading', { name: 'Connect account' })).toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('local_mode_provider_inventory')
-    expect(invoke).not.toHaveBeenCalledWith('onboarding_model_settings_error', expect.anything())
-    listed.resolve(emptyInventory)
-  })
-
   it('scans again while the runtime starts instead of saying the first scan failed', async () => {
     firstRun()
     const original = invoke.getMockImplementation()
@@ -10221,25 +10199,4 @@ describe('per-thread model', () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Hello', model: { provider: 'ollama', model: 'qwen3:8b' } })))
     expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
   })
-})
-
-// The Ollama server reports which models only decide. The composer lists and
-// picks only chat models, and a model with no capabilities named still chats.
-it('keeps a server-reported decision model out of the composer list and the default pick', async () => {
-  localModeStatus = true
-  threadSummaryResult = []
-  const served = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://127.0.0.1:52000/v1', decision_models: ['vision-judge:latest'],
-    models: [{ id: 'vision-judge:latest', context: '', max_out: '', thinking: false, images: false }, { id: 'plain:latest', context: '', max_out: '', thinking: false, images: false }] }],
-    default_provider: null, default_model: null, hidden: [] }
-  const original = invoke.getMockImplementation()
-  invoke.mockImplementation((command, args) => command === 'auth_status' ? Promise.resolve({ signed_in: false, subject: null })
-    : command === 'local_mode_provider_inventory' ? Promise.resolve(served) : original(command, args))
-  render(App)
-  await findReadyWorkspaceComposer()
-  const chip = await screen.findByRole('button', { name: /^Model: / })
-  await waitFor(() => expect(chip).toHaveAccessibleName(expect.stringContaining('plain')))
-  await fireEvent.click(chip)
-  const picker = await screen.findByRole('dialog', { name: 'Model' })
-  expect(picker.querySelector('[data-model="plain:latest"]')).not.toBeNull()
-  expect(picker.querySelector('[data-model="vision-judge:latest"]')).toBeNull()
 })

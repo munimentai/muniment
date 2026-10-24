@@ -342,19 +342,13 @@ pub fn store_ollama(
         Some(found) => (found.chat, found.decisions, found.windows),
         None => (vec![OLLAMA_MODEL.to_owned()], Vec::new(), BTreeMap::new()),
     };
-    // A decision model stays in the saved list for the classifiers, and the
-    // chat default comes from the models that answer a chat turn.
-    let chat_ids: Vec<&String> = model_ids
-        .iter()
-        .filter(|id| !decisions.contains(id))
-        .collect();
-    let Some(first_chat) = chat_ids.first() else {
+    if model_ids.is_empty() {
         return Err("The server has no chat models. Add a chat model, then try again.".into());
-    };
-    let default_model = if chat_ids.iter().any(|id| *id == OLLAMA_MODEL) {
+    }
+    let default_model = if model_ids.iter().any(|id| id == OLLAMA_MODEL) {
         OLLAMA_MODEL
     } else {
-        first_chat.as_str()
+        model_ids[0].as_str()
     };
     providers.insert(
         OLLAMA_PROVIDER.to_owned(),
@@ -648,72 +642,6 @@ mod tests {
         assert!(store_ollama(&agent, &url, "sk-new", |_| Err(SAVE_ERROR.into())).is_err());
         assert_eq!(fs::read(models_file(&agent)).unwrap(), before);
         assert!(!lock_path(&models_file(&agent)).exists());
-        fs::remove_dir_all(agent).unwrap();
-    }
-
-    #[test]
-    fn an_ollama_server_routes_a_chat_model_ahead_of_a_decision_model() {
-        let agent = temporary_directory();
-        let url = serve_routes(vec![
-            (
-                "GET /api/tags",
-                json!({"models": [{"name": "clef-flash:latest"}, {"name": "bare"}, {"name": "qwen3:8b"}]}),
-            ),
-            (
-                "POST /api/show clef-flash:latest",
-                json!({"capabilities": ["decision", "vision"]}),
-            ),
-            ("POST /api/show bare", json!({})),
-            (
-                "POST /api/show qwen3:8b",
-                json!({"capabilities": ["completion"]}),
-            ),
-            ("GET /api/ps", json!({"models": []})),
-        ]);
-        let mut routed = None;
-        store_ollama(&agent, &url, "", |model| {
-            routed = Some(model.to_owned());
-            Ok(())
-        })
-        .unwrap();
-        // A model with no capabilities list chats as before, so it leads.
-        assert_eq!(routed.as_deref(), Some("bare"));
-        // The decision model stays in the saved list and on the decision list.
-        assert_eq!(
-            models(&agent)["providers"]["ollama"]["models"],
-            json!([{"id": "clef-flash:latest"}, {"id": "bare"}, {"id": "qwen3:8b"}])
-        );
-        assert_eq!(
-            decision_models(&read_record(&agent).unwrap(), "ollama"),
-            ["clef-flash:latest"]
-        );
-        fs::remove_dir_all(agent).unwrap();
-    }
-
-    #[test]
-    fn an_ollama_server_with_only_decision_models_has_no_chat_default() {
-        let agent = temporary_directory();
-        let url = serve_routes(vec![
-            (
-                "GET /api/tags",
-                json!({"models": [{"name": "clef-flash:latest"}]}),
-            ),
-            (
-                "POST /api/show clef-flash:latest",
-                json!({"capabilities": ["decision", "vision"]}),
-            ),
-            ("GET /api/ps", json!({"models": []})),
-        ]);
-        let mut routed = None;
-        let answer = store_ollama(&agent, &url, "", |model| {
-            routed = Some(model.to_owned());
-            Ok(())
-        });
-        assert_eq!(
-            answer,
-            Err("The server has no chat models. Add a chat model, then try again.".into())
-        );
-        assert_eq!(routed, None);
         fs::remove_dir_all(agent).unwrap();
     }
 

@@ -1047,16 +1047,11 @@ pub(super) fn adopt_provider_default(
 /// answer from a model the chip never named. The first shown model becomes the
 /// saved default here, so the chip and the run agree.
 fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
-    // A decision model answers no chat turn, so the picker never shows it and
-    // it never becomes the chat default.
     let hidden = |provider: &str, model: &str| {
         inventory
             .hidden
             .iter()
             .any(|key| key == &format!("{provider}/{model}"))
-            || inventory.providers.iter().any(|group| {
-                group.id == provider && group.decision_models.iter().any(|m| m == model)
-            })
     };
     let saved_shown =
         match (&inventory.default_provider, &inventory.default_model) {
@@ -1470,53 +1465,6 @@ google        gemini-3-pro         1M    64K    yes  yes\n";
         store_decision_models(&agent, "llama", &[]).unwrap();
         let inventory = provider_inventory(&agent, &[], &[]).unwrap();
         assert!(inventory.providers[0].decision_models.is_empty());
-    }
-
-    #[test]
-    fn a_decision_model_never_becomes_the_chat_default() {
-        let agent = temporary_directory();
-        fs::write(
-            agent.join("models.json"),
-            serde_json::json!({"providers": {"ollama": {
-                "baseUrl": "http://127.0.0.1:11434/v1",
-                "models": [{"id": "clef-flash:latest"}, {"id": "bare"}, {"id": "qwen3:8b"}]
-            }}})
-            .to_string(),
-        )
-        .unwrap();
-        fs::write(
-            agent.join("settings.json"),
-            r#"{"defaultProvider":"ollama","defaultModel":"clef-flash:latest"}"#,
-        )
-        .unwrap();
-        store_decision_models(&agent, "ollama", &["clef-flash:latest".to_owned()]).unwrap();
-        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
-        // The decision model stays in the provider's list for the classifiers.
-        assert_eq!(inventory.providers[0].models.len(), 3);
-        adopt_shown_default(&agent, &mut inventory);
-        // A model with no capabilities named chats, so the first one leads.
-        assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
-        assert_eq!(inventory.default_model.as_deref(), Some("bare"));
-        let settings: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(agent.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(settings["defaultModel"], "bare");
-
-        // A server with only decision models leaves the default unset.
-        let agent = temporary_directory();
-        fs::write(
-            agent.join("models.json"),
-            serde_json::json!({"providers": {"ollama": {
-                "baseUrl": "http://127.0.0.1:11434/v1",
-                "models": [{"id": "clef-flash:latest"}]
-            }}})
-            .to_string(),
-        )
-        .unwrap();
-        store_decision_models(&agent, "ollama", &["clef-flash:latest".to_owned()]).unwrap();
-        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
-        adopt_shown_default(&agent, &mut inventory);
-        assert_eq!(inventory.default_model, None);
     }
 
     #[test]
