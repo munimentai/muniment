@@ -32,7 +32,7 @@ if [ ! -x "$zig_home/zig" ]; then
 fi
 export PATH="$zig_home:$HOME/.cargo/bin:$PATH"
 
-if [ "$(cargo zigbuild --version 2>/dev/null | awk '{print $2}')" != "$zigbuild_version" ]; then
+if [ "$(cargo-zigbuild --version 2>/dev/null | awk '{print $2}')" != "$zigbuild_version" ]; then
   cargo install --locked cargo-zigbuild --version "$zigbuild_version"
 fi
 rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu

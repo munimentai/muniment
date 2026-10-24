@@ -6,8 +6,9 @@
 # launcher unpacks.
 #
 # server-libraries.sh fetches the pinned sherpa-onnx libraries for the target
-# and points this one Cargo invocation at them, above the desktop's forced
-# SHERPA_ONNX_LIB_DIR in the repository's .cargo/config.toml. The packed
+# and points this one Cargo invocation at them through a --config file, above
+# the desktop's forced SHERPA_ONNX_LIB_DIR in the repository's
+# .cargo/config.toml, which stays untouched. The packed
 # libraries are the binary's shared-library closure, each checked to be built
 # for the target. MUNIMENT_SERVER_LIBRARY_CACHE names the library cache, by
 # default server-libraries under the Cargo target directory.
@@ -46,7 +47,9 @@ libraries="$context/deploy/runtime/server-libraries.sh"
 cache=${MUNIMENT_SERVER_LIBRARY_CACHE:-$target_dir/server-libraries}
 lib_dir=$("$libraries" fetch "$target" "$cache")
 lib_dir=$(cd "$lib_dir" && pwd)
-library_args_text=$("$libraries" cargo-args "$lib_dir")
+# The config file sits beside the target's libraries, so each target keeps
+# its own and a later build for the other target leaves it alone.
+library_args_text=$("$libraries" cargo-args "$lib_dir" "$(dirname "$lib_dir")/cargo-env.toml")
 mapfile -t library_args <<<"$library_args_text"
 echo "package.sh: linking $target against the speech runtime libraries in $lib_dir"
 

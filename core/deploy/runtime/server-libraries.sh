@@ -13,11 +13,16 @@
 #     Print the directory that holds the target's checked libraries.
 #   server-libraries.sh pin-sha256 <target>
 #     Print the pinned SHA-256 of the target's sherpa-onnx archive.
-#   server-libraries.sh cargo-args <lib-dir>
-#     Print, one per line, the Cargo arguments that point sherpa-onnx-sys at
-#     <lib-dir>. A forced [env] entry in a parent .cargo/config.toml outranks
-#     the process environment, so only a --config entry, which Cargo ranks
-#     above every config file, replaces it for one invocation.
+#   server-libraries.sh cargo-args <lib-dir> <config>
+#     Write <config>, a Cargo config file whose forced [env] entry points
+#     sherpa-onnx-sys at <lib-dir>, and print, one per line, the Cargo
+#     arguments that load it. A forced [env] entry in a parent
+#     .cargo/config.toml outranks the process environment, so only a --config
+#     argument, which Cargo ranks above every discovered config file, replaces
+#     it for one invocation. The argument names a file ending in .toml rather
+#     than a dotted KEY=VALUE, because cargo zigbuild parses each --config
+#     KEY=VALUE as a whole TOML document and rejects dotted keys, while Cargo
+#     rejects an inline table there.
 #   server-libraries.sh closure <target> <lib-dir> <binary>
 #     Check the binary, the speech runtime libraries and every shared library
 #     they need from <lib-dir> against the target, and print the files to
@@ -275,16 +280,22 @@ case "${1:-}" in
     pinned=$(pin "$2")
     echo "${pinned#* }" ;;
   cargo-args)
-    [ $# -eq 2 ] || { echo "usage: server-libraries.sh cargo-args <lib-dir>" >&2; exit 2; }
-    case "$2" in
-      *[\"\\]*) echo "server-libraries.sh: $2 holds a quote or a backslash" >&2; exit 2 ;;
-      /*) ;;
-      *) echo "server-libraries.sh: $2 is not an absolute path" >&2; exit 2 ;;
+    [ $# -eq 3 ] || { echo "usage: server-libraries.sh cargo-args <lib-dir> <config>" >&2; exit 2; }
+    for path in "$2" "$3"; do
+      case "$path" in
+        *[\"\\]* | *$'\n'*) echo "server-libraries.sh: $path holds a quote, a backslash or a newline" >&2; exit 2 ;;
+        /*) ;;
+        *) echo "server-libraries.sh: $path is not an absolute path" >&2; exit 2 ;;
+      esac
+    done
+    case "$3" in
+      *.toml) ;;
+      *) echo "server-libraries.sh: $3 does not end in .toml, so Cargo would not read it as a file" >&2; exit 2 ;;
     esac
-    printf '%s\n' \
-      --config "env.SHERPA_ONNX_LIB_DIR.value=\"$2\"" \
-      --config env.SHERPA_ONNX_LIB_DIR.force=true \
-      --config env.SHERPA_ONNX_LIB_DIR.relative=false ;;
+    # The path holds no quote, backslash or newline, so a TOML basic string
+    # holds it as written.
+    printf '[env]\nSHERPA_ONNX_LIB_DIR = { value = "%s", force = true, relative = false }\n' "$2" > "$3"
+    printf '%s\n' --config "$3" ;;
   closure)
     [ $# -eq 4 ] || { echo "usage: server-libraries.sh closure <target> <lib-dir> <binary>" >&2; exit 2; }
     pin "$2" >/dev/null

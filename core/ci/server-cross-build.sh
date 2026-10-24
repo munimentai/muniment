@@ -27,6 +27,12 @@ source "$context/ci/zig-toolchain.sh"
 # zig-toolchain.sh sets its own EXIT trap, so this one goes after it.
 trap 'rm -rf "${cleanup[@]}"' EXIT
 
+# cargo zigbuild parses each --config argument itself, so the arguments
+# package.sh passes must first get through the installed cargo zigbuild. A
+# missing cargo-zigbuild fails here rather than skipping.
+echo "server-cross-build.sh: checking the package arguments with $(cargo-zigbuild --version)"
+MUNIMENT_REQUIRE_ZIGBUILD=1 python3 -B "$context/deploy/runtime/test_package.py" ZigbuildPrecedence
+
 "$context/deploy/runtime/package.sh" "$version" aarch64 "$out"
 archive="$out/muniment-server-$version-linux-aarch64.tar.gz"
 tar -xzf "$archive" -C "$unpacked"

@@ -6,6 +6,8 @@ network or a cross toolchain. The fake cargo build writes small ELF files for
 the machine its --target names. One test runs the real Cargo against a
 throwaway crate whose .cargo/config.toml forces SHERPA_ONNX_LIB_DIR, as the
 repository's does, to show that the arguments package.sh passes outrank it.
+The same tests run the real cargo zigbuild where it is on PATH, since cargo
+zigbuild parses those arguments itself before it calls Cargo.
 
 Run: python3 -B core/deploy/runtime/test_package.py
 """
@@ -81,13 +83,14 @@ FAKE_CARGO = textwrap.dedent('''\
         sys.exit(101)
     assert args[0] == "zigbuild", args
     assert "--locked" in args and "--release" in args, args
-    settings = {}
-    for index, arg in enumerate(args):
-        if arg == "--config":
-            key, _, value = args[index + 1].partition("=")
-            settings[key] = value.strip('"')
-    assert settings.get("env.SHERPA_ONNX_LIB_DIR.force") == "true", settings
-    lib_dir = settings["env.SHERPA_ONNX_LIB_DIR.value"]
+    configs = [args[index + 1] for index, arg in enumerate(args) if arg == "--config"]
+    assert len(configs) == 1 and configs[0].endswith(".toml"), configs
+    with open(configs[0]) as file:
+        text = file.read()
+    prefix = '[env]\\nSHERPA_ONNX_LIB_DIR = { value = "'
+    suffix = '", force = true, relative = false }\\n'
+    assert text.startswith(prefix) and text.endswith(suffix), text
+    lib_dir = text[len(prefix):-len(suffix)]
     target = args[args.index("--target") + 1]
     assert target.endswith(".2.36"), target
     target = target[:-len(".2.36")]
@@ -191,7 +194,9 @@ class Package(Tree):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assert_target_archive(arch)
                 last = self.log.read_text().splitlines()[-1]
-                self.assertIn(f'env.SHERPA_ONNX_LIB_DIR.value="{lib}"', last)
+                config = lib.parent / "cargo-env.toml"
+                self.assertIn(f"--config {config}", last)
+                self.assertIn(f'value = "{lib}"', config.read_text())
                 self.assertIn(f"--target {arch}-unknown-linux-gnu.2.36", last)
 
     def test_sequential_builds_share_a_workspace_without_mixing_targets(self):
@@ -204,9 +209,11 @@ class Package(Tree):
         self.assert_target_archive("x86_64")
         self.assert_target_archive("aarch64")
         lines = self.log.read_text().splitlines()
-        self.assertIn(str(x86), lines[0])
-        self.assertIn(str(arm), lines[1])
-        self.assertNotIn(str(x86), lines[1])
+        self.assertIn(str(x86.parent), lines[0])
+        self.assertIn(str(arm.parent), lines[1])
+        self.assertNotIn(str(x86.parent), lines[1])
+        self.assertIn(f'value = "{x86}"', (x86.parent / "cargo-env.toml").read_text())
+        self.assertIn(f'value = "{arm}"', (arm.parent / "cargo-env.toml").read_text())
 
     def test_stale_libraries_in_the_shared_output_stay_out(self):
         self.cached("aarch64")
@@ -343,11 +350,12 @@ class CargoPrecedence(unittest.TestCase):
         (self.root / "desktop").mkdir()
         (self.root / ".cargo/config.toml").write_text(
             '[env]\nSHERPA_ONNX_LIB_DIR = { value = "desktop", relative = true, force = true }\n')
+        # A library crate, so a cross build compiles it without a link step.
         (self.root / "Cargo.toml").write_text(
             '[package]\nname = "probe"\nversion = "0.0.0"\nedition = "2021"\n'
             'build = "build.rs"\n\n[workspace]\n')
         (self.root / "src").mkdir()
-        (self.root / "src/main.rs").write_text('fn main() {}\n')
+        (self.root / "src/lib.rs").write_text('')
         # The build script sees what sherpa-onnx-sys's build script sees.
         (self.root / "build.rs").write_text(textwrap.dedent('''\
             fn main() {
@@ -359,14 +367,25 @@ class CargoPrecedence(unittest.TestCase):
         '''))
         self.server = self.root / "server libraries"
         self.server.mkdir()
+        self.env = {**os.environ, "CARGO_TARGET_DIR": str(self.root / "target")}
+
+    # The command under test; ZigbuildPrecedence swaps in cargo zigbuild.
+    command = ("cargo", "build")
+
+    def package_args(self):
+        """The arguments, and the config file, that package.sh hands Cargo."""
+        config = self.root / "server libraries.cargo-env.toml"
+        return subprocess.run(["bash", str(LIBRARIES), "cargo-args", str(self.server), str(config)],
+                              capture_output=True, text=True, check=True).stdout.splitlines()
+
+    def build(self, *args, **env):
+        return subprocess.run([*self.command, "--offline", "--quiet", *args], cwd=self.root,
+                              capture_output=True, text=True, env={**self.env, **env})
 
     def seen(self, *args, **env):
-        result = subprocess.run(
-            ["cargo", "build", "--offline", "--quiet", *args], cwd=self.root,
-            capture_output=True, text=True, env={**os.environ, **env,
-                                                 "CARGO_TARGET_DIR": str(self.root / "target")})
+        result = self.build(*args, **env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        outputs = list((self.root / "target/debug/build").glob("probe-*/out/seen"))
+        outputs = list((self.root / "target").glob("**/build/probe-*/out/seen"))
         self.assertEqual(len(outputs), 1)
         return outputs[0].read_text()
 
@@ -375,14 +394,65 @@ class CargoPrecedence(unittest.TestCase):
                          str(self.root / "desktop"))
 
     def test_the_package_arguments_outrank_a_forced_entry(self):
-        args = subprocess.run(["bash", str(LIBRARIES), "cargo-args", str(self.server)],
-                              capture_output=True, text=True, check=True).stdout.splitlines()
+        args = self.package_args()
+        self.assertEqual(args[0], "--config")
         self.assertEqual(self.seen(*args), str(self.server))
 
     def test_the_arguments_reject_a_relative_directory(self):
-        result = subprocess.run(["bash", str(LIBRARIES), "cargo-args", "server"],
+        config = str(self.root / "cargo-env.toml")
+        result = subprocess.run(["bash", str(LIBRARIES), "cargo-args", "server", config],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
+
+    def test_the_arguments_need_a_toml_config_path(self):
+        result = subprocess.run(["bash", str(LIBRARIES), "cargo-args", str(self.server),
+                                 str(self.root / "cargo-env")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+
+
+# The cargo-zigbuild version that ci/zig-toolchain.sh installs.
+ZIGBUILD_VERSION = "0.23.4"
+# Enough of `zig version` and `zig cc -v` for cargo zigbuild to set up a
+# build that compiles no C and links nothing.
+FAKE_ZIG = textwrap.dedent('''\
+    #!/bin/sh
+    if [ "$1" = version ]; then echo 0.14.1; exit 0; fi
+    printf '%s\\n' '#include <...> search starts here:' 'End of search list.' >&2
+''')
+
+
+class ZigbuildPrecedence(CargoPrecedence):
+    """The real cargo zigbuild, which parses each --config argument itself
+    before it calls Cargo, so an argument plain Cargo takes can still fail.
+
+    Without cargo-zigbuild on PATH these tests skip, unless
+    MUNIMENT_REQUIRE_ZIGBUILD=1, which ci/server-cross-build.sh sets before
+    its release build.
+    """
+
+    command = ("cargo", "zigbuild", "--target", "x86_64-unknown-linux-gnu.2.36")
+
+    def setUp(self):
+        zigbuild = shutil.which("cargo-zigbuild")
+        if zigbuild is None:
+            if os.environ.get("MUNIMENT_REQUIRE_ZIGBUILD") == "1":
+                self.fail("cargo-zigbuild is not on PATH")
+            self.skipTest("cargo-zigbuild is not on PATH")
+        super().setUp()
+        version = subprocess.run([zigbuild, "--version"], capture_output=True, text=True,
+                                 check=True).stdout.split()
+        self.assertEqual(version[-1], ZIGBUILD_VERSION)
+        if shutil.which("zig") is None:
+            fake = self.root / "zig-bin"
+            fake.mkdir()
+            (fake / "zig").write_text(FAKE_ZIG)
+            (fake / "zig").chmod(0o755)
+            self.env["PATH"] = f"{fake}{os.pathsep}{self.env['PATH']}"
+
+    def test_dotted_config_keys_fail_to_parse(self):
+        result = self.build("--config", "env.SHERPA_ONNX_LIB_DIR.force=true")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed to parse --config argument", result.stderr)
 
 
 if __name__ == "__main__":

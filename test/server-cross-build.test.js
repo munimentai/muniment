@@ -36,10 +36,24 @@ describe('aarch64 server cross-build in PR smoke', () => {
     expect(packageScript).toContain('--target "$target.2.36"')
     expect(packageScript).toContain('"$libraries" check-archive "$target" "$archive"')
     expect(packageScript).not.toContain('"$built"/*.so*')
-    expect(libraries).toContain('--config "env.SHERPA_ONNX_LIB_DIR.value=')
-    expect(libraries).toContain('--config env.SHERPA_ONNX_LIB_DIR.force=true')
+    expect(libraries).toContain(
+      'SHERPA_ONNX_LIB_DIR = { value = "%s", force = true, relative = false }'
+    )
+    expect(libraries).toContain("printf '%s\\n' --config \"$3\"")
+    expect(libraries).not.toContain('--config env.')
     expect(libraries).not.toContain('src-tauri')
     expect(packageScript).not.toContain('src-tauri')
+  })
+
+  it('checks the package arguments with the installed cargo zigbuild before the link', () => {
+    const check = crossBuild.indexOf(
+      'MUNIMENT_REQUIRE_ZIGBUILD=1 python3 -B "$context/deploy/runtime/test_package.py" ZigbuildPrecedence'
+    )
+    const toolchain = crossBuild.indexOf('source "$context/ci/zig-toolchain.sh"')
+    const link = crossBuild.indexOf('"$context/deploy/runtime/package.sh"')
+    expect(toolchain).toBeGreaterThan(0)
+    expect(check).toBeGreaterThan(toolchain)
+    expect(link).toBeGreaterThan(check)
   })
 
   it('builds both release archives before the signing step', () => {
