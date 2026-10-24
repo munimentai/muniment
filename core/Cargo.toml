@@ -17,4 +17,4 @@ resolver = "2"
 # runtime image all release as it under one vX.Y.Z tag. scripts/version.py at
 # the repository root checks every other copy against it.
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
