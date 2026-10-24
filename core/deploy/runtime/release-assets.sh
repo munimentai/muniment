@@ -5,7 +5,8 @@
 # calls it after it publishes the desktop files of the same version.
 #
 # It installs the Rust and zig toolchains and minisign when they are missing,
-# empties <dir>, then runs package.sh for each architecture and
+# empties <dir>, then runs package.sh for each architecture, each with its own
+# pinned speech runtime libraries, and only when both archives exist
 # sign-release.sh, which needs MUNIMENT_RELEASE_SIGNING_KEY and merges
 # [release-sums], the release's SHA256SUMS, into the signed list.
 #
@@ -24,7 +25,15 @@ source "$context/ci/zig-toolchain.sh"
 command -v minisign >/dev/null || { apt-get update && apt-get install -y --no-install-recommends minisign; }
 
 rm -rf "$directory"
+# Both archives must build before anything is signed. package.sh exits
+# nonzero on any failure, which ends this script before the signing step.
 for arch in x86_64 aarch64; do
   "$context/deploy/runtime/package.sh" "$version" "$arch" "$directory"
+done
+for arch in x86_64 aarch64; do
+  if [ ! -f "$directory/muniment-server-$version-linux-$arch.tar.gz" ]; then
+    echo "release-assets.sh: package.sh built no $arch archive, so nothing is signed" >&2
+    exit 1
+  fi
 done
 "$context/deploy/runtime/sign-release.sh" "$version" "$directory" ${release_sums:+"$release_sums"}
