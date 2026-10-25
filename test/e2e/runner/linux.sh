@@ -125,13 +125,44 @@ run_e2e() {
     trap cleanup_session EXIT
     timeout 30 gdbus wait --session --activate org.freedesktop.portal.Documents org.freedesktop.portal.Documents || { echo "xdg-document-portal did not start" >&2; exit 1; }
     timeout 30 gdbus wait --session org.freedesktop.portal.Desktop || exit 1
-    /usr/lib/muniment/muniment-runtime >>"$2" 2>&1 &
+    # The runtime log is append-only across sessions, so the panic scan reads
+    # only the bytes this session adds.
+    runtime_log=$2
+    runtime_log_start=0
+    if [[ -f $runtime_log ]]; then runtime_log_start=$(wc -c <"$runtime_log") || runtime_log_start=0; fi
+    /usr/lib/muniment/muniment-runtime >>"$runtime_log" 2>&1 &
     runtime_pid=$!
     shift 2
     "$@"
     run_status=$?
-    if ! kill -0 "$runtime_pid" 2>/dev/null; then
-      echo "installed runtime stopped before the E2E run ended" >&2
+    # A runtime that is still running when WDIO ends stays for cleanup. An
+    # exited one is reaped here so its status survives the cleanup trap. An
+    # exited child that bash has not reaped yet still answers kill -0, so its
+    # zombie state counts as exited.
+    runtime_status=running
+    if ! kill -0 "$runtime_pid" 2>/dev/null || [[ $(ps -o stat= -p "$runtime_pid" 2>/dev/null) == Z* ]]; then
+      wait "$runtime_pid"
+      runtime_status=$?
+      runtime_pid=
+    fi
+    # The Linux runtime exits 0 after an orderly stop: a termination signal
+    # or the end of its attach listener, as when the desktop stops it or
+    # another activation takes over the endpoint, such as the restart after
+    # the onboarding Home switch. It exits 75 to ask its activation manager for
+    # a restart after an upgrade. Any other status, or a panic in any of its
+    # threads, is a crash.
+    runtime_failure=
+    case $runtime_status in
+      running|0|75) ;;
+      *)
+        runtime_failure="exit status $runtime_status"
+        if (( runtime_status > 128 )); then runtime_failure+=" (signal $((runtime_status - 128)))"; fi
+        ;;
+    esac
+    runtime_panic=$(tail -c "+$((runtime_log_start + 1))" "$runtime_log" 2>/dev/null | grep -m 1 -A 1 "^thread .* panicked at" | tr "\n" " ")
+    if [[ -n $runtime_panic ]]; then runtime_failure+="${runtime_failure:+, }panic: ${runtime_panic% }"; fi
+    if [[ -n $runtime_failure ]]; then
+      echo "installed runtime failed during the E2E run: $runtime_failure. See muniment-runtime.log." >&2
       run_status=1
     fi
     exit "$run_status"

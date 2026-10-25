@@ -101,9 +101,9 @@ describe('installed production chat contract', () => {
 
   it('runs and stops the installed runtime inside each Linux E2E session', () => {
     const linux = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
-    expect(linux).toContain('/usr/lib/muniment/muniment-runtime >>"$2" 2>&1 &')
+    expect(linux).toContain('/usr/lib/muniment/muniment-runtime >>"$runtime_log" 2>&1 &')
     expect(linux).toContain('kill "$runtime_pid" 2>/dev/null || true')
-    expect(linux).toContain('if ! kill -0 "$runtime_pid" 2>/dev/null; then')
+    expect(linux).toContain('if ! kill -0 "$runtime_pid" 2>/dev/null || [[ $(ps -o stat= -p "$runtime_pid" 2>/dev/null) == Z* ]]; then')
     expect(linux).toContain('pkill -"$signal" -f \'^/usr/lib/muniment/muniment-runtime( |$)\'')
     expect(linux).toContain("! pgrep -f '^/usr/lib/muniment/muniment-runtime( |$)'")
   })
@@ -4608,5 +4608,153 @@ describe('Candidate runners source mode', () => {
   it.each(['linux.sh', 'windows.ps1', 'macos-wdio.sh'])('%s never publishes, signs for release or touches the update feed.', (name) => {
     const runner = source(name)
     expect(runner).not.toMatch(/notarytool|stapler|upload-nightly-assets|publish-ci-artifacts|latest\.json|gh release/)
+  })
+})
+
+// The fixture runs the runner's own run_e2e and its session script. Only the
+// processes the session starts are stand-ins: the portal, gdbus, the installed
+// runtime and WDIO.
+describe.skipIf(process.platform === 'win32')('Linux E2E session runtime outcome', () => {
+  const runner = fs.readFileSync(path.join(root, 'test/e2e/runner/linux.sh'), 'utf8')
+  const runE2e = runner.slice(runner.indexOf('run_e2e() {'), runner.indexOf('\nrun_cleanup_e2e()'))
+  // Each runtime mode writes its PID first and a ready marker once its stop
+  // handler is in place. Exiting modes leave without the marker.
+  const runtimeScript = `
+const fs = require('node:fs')
+const [directory, mode] = process.argv.slice(2)
+fs.writeFileSync(directory + '/runtime.pid', String(process.pid))
+const panic = () => process.stderr.write("thread 'main' panicked at core/src/fixture.rs:7:9:\\nfixture runtime invariant broke\\n")
+if (mode === 'restart') process.exit(0)
+if (mode === 'upgrade') process.exit(75)
+if (mode === 'crash') process.exit(3)
+if (mode === 'killed') process.kill(process.pid, 'SIGKILL')
+if (mode === 'panic-exit') { panic(); process.exitCode = 101 } else {
+  if (mode === 'panic-live') panic()
+  process.on('SIGTERM', () => process.exit(0))
+  setInterval(() => {}, 1000)
+  fs.writeFileSync(directory + '/runtime.ready', '')
+}
+`
+  const live = ['live', 'orderly', 'panic-live']
+  const runSession = (mode, wdioStatus = 0, priorLog = '') => {
+    const directory = temp()
+    const raw = path.join(directory, 'raw')
+    fs.mkdirSync(raw)
+    if (priorLog) fs.writeFileSync(path.join(raw, 'muniment-runtime.log'), priorLog)
+    fs.writeFileSync(path.join(directory, 'runtime.js'), runtimeScript)
+    // The session runs gdbus through timeout, which needs an executable.
+    const bin = path.join(directory, 'bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(bin, 'gdbus'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+    const script = path.join(directory, 'session.sh')
+    fs.writeFileSync(script, `#!/usr/bin/env bash
+set -uo pipefail
+raw="$FIXTURE_DIR/raw"
+cleanup_log="$FIXTURE_DIR/cleanup.log"
+source test/e2e/support/cleanup-ledger.sh
+source test/e2e/support/runner-failure.sh
+stop_app() { :; }
+read -r -d '' session_fixtures <<'FIXTURES'
+xdg-desktop-portal() { exec sleep 30; }
+/usr/lib/muniment/muniment-runtime() { exec node "$FIXTURE_DIR/runtime.js" "$FIXTURE_DIR" "$FIXTURE_RUNTIME"; }
+# Wait on the runtime's observed state, never on elapsed time alone.
+fixture_until() {
+  local attempt
+  for attempt in {1..1000}; do "$@" && return 0; sleep 0.01; done
+  echo "fixture condition did not hold: $*" >&2
+  return 1
+}
+runtime_exited() {
+  local state
+  state=$(ps -o stat= -p "$runtime_pid" 2>/dev/null)
+  [[ -z $state || $state == Z* ]]
+}
+npm() {
+  case $FIXTURE_RUNTIME in
+    live|panic-live) fixture_until test -e "$FIXTURE_DIR/runtime.ready" || return 1 ;;
+    orderly)
+      # The desktop stops the runtime it replaces with a termination signal.
+      fixture_until test -e "$FIXTURE_DIR/runtime.ready" || return 1
+      kill -TERM "$runtime_pid"
+      fixture_until runtime_exited || return 1
+      ;;
+    *) fixture_until runtime_exited || return 1 ;;
+  esac
+  echo "wdio finished: $*"
+  return "$FIXTURE_WDIO_STATUS"
+}
+FIXTURES
+dbus-run-session() {
+  local session_script=$6
+  shift 6
+  bash -c "$session_fixtures
+$session_script" "$@"
+}
+${runE2e}
+run_e2e "$raw/wdio.log"
+`, { mode: 0o700 })
+    const result = spawnFixture(script, [], {
+      cwd: root, timeout: 20_000,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURE_DIR: directory, FIXTURE_RUNTIME: mode, FIXTURE_WDIO_STATUS: String(wdioStatus) },
+    })
+    const pid = Number(fs.readFileSync(path.join(directory, 'runtime.pid'), 'utf8'))
+    let running = true
+    try { process.kill(pid, 0) } catch { running = false }
+    if (running) process.kill(pid, 'SIGKILL')
+    const read = (name) => fs.readFileSync(path.join(raw, name), 'utf8')
+    return { result, running, driver: read('driver-app.log'), wdio: read('wdio.log'), ready: fs.existsSync(path.join(directory, 'runtime.ready')) }
+  }
+
+  it.each([
+    ['live', 'a runtime still running when WDIO ends'],
+    ['orderly', 'a runtime the desktop stopped with a termination signal'],
+    ['restart', 'a runtime that exited 0 after the Home switch handed off its endpoint'],
+    ['upgrade', 'a runtime that asked for an upgrade restart'],
+  ])('Keeps green WDIO green with %s runtime outcome: %s.', (mode) => {
+    const { result, running, driver, wdio, ready } = runSession(mode)
+    expect(result.status, driver).toBe(0)
+    expect(ready).toBe(live.includes(mode))
+    expect(wdio).toContain('wdio finished: run test:e2e')
+    expect(driver).not.toContain('installed runtime failed')
+    expect(running).toBe(false)
+  })
+
+  it.each([
+    ['crash', 'exit status 3'],
+    ['killed', 'exit status 137 (signal 9)'],
+  ])('Fails green WDIO when the runtime %s exits unexpectedly.', (mode, reason) => {
+    const { result, running, driver } = runSession(mode)
+    expect(result.status).toBe(1)
+    expect(driver).toContain(`installed runtime failed during the E2E run: ${reason}. See muniment-runtime.log.`)
+    expect(running).toBe(false)
+  })
+
+  it('Fails green WDIO and names the panic when the runtime panics and exits.', () => {
+    const { result, running, driver } = runSession('panic-exit')
+    expect(result.status).toBe(1)
+    expect(driver).toContain("installed runtime failed during the E2E run: exit status 101, panic: thread 'main' panicked at core/src/fixture.rs:7:9: fixture runtime invariant broke. See muniment-runtime.log.")
+    expect(running).toBe(false)
+  })
+
+  it('Fails green WDIO when a runtime thread panics and the runtime keeps running.', () => {
+    const { result, running, driver, ready } = runSession('panic-live')
+    expect(ready).toBe(true)
+    expect(result.status).toBe(1)
+    expect(driver).toContain("installed runtime failed during the E2E run: panic: thread 'main' panicked at core/src/fixture.rs:7:9: fixture runtime invariant broke.")
+    expect(running).toBe(false)
+  })
+
+  it('Reads only this session runtime output when it scans for a panic.', () => {
+    const earlier = "thread 'main' panicked at core/src/earlier.rs:1:1:\nan earlier session panicked\n"
+    const { result, driver } = runSession('restart', 0, earlier)
+    expect(result.status, driver).toBe(0)
+    expect(driver).not.toContain('panicked')
+  })
+
+  it.each(['live', 'restart'])('Keeps a failing WDIO status with an expected %s runtime outcome.', (mode) => {
+    const { result, running, driver } = runSession(mode, 1)
+    expect(result.status).toBe(1)
+    expect(driver).not.toContain('installed runtime failed')
+    expect(running).toBe(false)
   })
 })
