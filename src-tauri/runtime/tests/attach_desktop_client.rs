@@ -31,7 +31,7 @@ use muniment_runtime_core::{run_attach_listener, AttachListenerInputs};
 
 mod common;
 use common::CI_WAIT;
-use common::{credentials, spawn_server_sequence, stage_pi_stub, TemporaryProfile};
+use common::{credentials, spawn_server_sequence, stage_pi_stub, StopOnDrop, TemporaryProfile};
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
@@ -87,6 +87,7 @@ fn shipped_desktop_client_completes_the_session() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     let (profile_id, workspace_scopes, summary, response) = thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let listener = scope.spawn(|| {
             run_attach_listener(
                 &profile.root,
@@ -160,6 +161,7 @@ fn desktop_client_gets_session_status_without_a_recorded_workspace() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let listener = scope.spawn(|| {
             run_attach_listener(
                 &profile.root,
@@ -233,16 +235,10 @@ fn workspace_less_desktop_client_submit_records_the_grant_workspace() {
         spawn_server_sequence(vec![(200, session_body.into()), (201, grant_body)]);
     std::env::set_var("MUNIMENT_API_BASE_URL", base_url);
     let (stop_tx, stop_rx) = mpsc::channel();
-    // Stops the listener when the scope ends, also on a failed assertion, so
-    // the scope joins it instead of waiting forever.
-    struct StopOnDrop(mpsc::Sender<()>);
-    impl Drop for StopOnDrop {
-        fn drop(&mut self) {
-            let _ = self.0.send(());
-        }
-    }
 
     thread::scope(|scope| {
+        // Stops the listener when the scope ends, also on a failed assertion,
+        // so the scope joins it instead of waiting forever.
         let stop = StopOnDrop(stop_tx);
         let active_boundaries = state.boundaries();
         let service_state = Arc::clone(&state);
@@ -397,6 +393,7 @@ fn desktop_client_selects_only_an_owned_thread() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let service_state = Arc::clone(&state);
         let listener = scope.spawn(move || {
             let mut inputs = state.attach_listener_inputs();
@@ -533,6 +530,7 @@ fn desktop_client_recheck_applies_the_recorded_retention() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let service_state = Arc::clone(&state);
         let listener = scope.spawn(move || {
             let mut inputs = state.attach_listener_inputs();
@@ -619,8 +617,18 @@ fn presenter_and_desktop_client_serve_concurrent_sessions() {
     let presenter_stop = ApprovalPresenterStopHandle::new();
     let worker_stop = presenter_stop.clone();
     let (presented_tx, presented_rx) = mpsc::channel();
+    // Stops the presenter while the scope unwinds, so the scope's join of the
+    // presenter thread returns after a failed assertion.
+    struct StopPresenterOnDrop(ApprovalPresenterStopHandle);
+    impl Drop for StopPresenterOnDrop {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
+        let _presenter_stop = StopPresenterOnDrop(presenter_stop.clone());
         let listener = scope.spawn(|| {
             run_attach_listener(
                 &profile.root,

@@ -8,6 +8,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -42,6 +43,19 @@ static PROCESS_TOKEN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| 
         .hash(&mut hasher);
     format!("{:08x}", hasher.finish() as u32)
 });
+
+/// Sends a stop request when dropped. A test creates one inside a
+/// `thread::scope` closure before it spawns a stoppable listener or activation,
+/// so a failed assertion or panic in the closure stops that thread while the
+/// closure unwinds, before the scope's implicit join waits on it. The send is
+/// best-effort: a receiver that already stopped is not an error.
+pub struct StopOnDrop(pub mpsc::Sender<()>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
 
 pub struct TemporaryProfile {
     pub root: PathBuf,

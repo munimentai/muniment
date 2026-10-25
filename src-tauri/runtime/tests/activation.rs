@@ -18,8 +18,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod common;
-use common::TemporaryProfile;
 use common::CI_WAIT;
+use common::{StopOnDrop, TemporaryProfile};
 
 #[test]
 fn executable_replacement_requests_an_upgrade_refresh_exit() {
@@ -34,6 +34,7 @@ fn executable_replacement_requests_an_upgrade_refresh_exit() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let watched_executable = executable.clone();
         let activation = scope.spawn(|| {
             run_runtime_activation_with_upgrade_watch(
@@ -108,6 +109,7 @@ fn fresh_profile_serves_session_status_and_releases_the_endpoint() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let activation = scope.spawn(|| {
             run_runtime_activation_with_desktop_executable(
                 &profile.root,
@@ -194,6 +196,7 @@ fn retention_trigger_deletes_only_expired_terminal_runs() {
     let (stop_tx, stop_rx) = mpsc::channel();
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let activation = scope.spawn(|| {
             run_runtime_activation_with_retention_trigger(
                 &profile.root,
@@ -366,4 +369,35 @@ fn listener_failure_stops_the_coordinator_and_returns_the_error() {
     );
 
     assert!(matches!(result, Err(RuntimeActivationError::Migration(_))));
+}
+
+#[test]
+fn stop_on_drop_stops_a_scoped_receiver_while_the_scope_unwinds() {
+    let (outcome_tx, outcome_rx) = mpsc::channel();
+    // The scope runs on its own thread so a guard that never sends leaves that
+    // thread blocked in the scope's join, and this test fails at the timeout
+    // below instead of hanging.
+    thread::spawn(move || {
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let (received_tx, received_rx) = mpsc::channel();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            thread::scope(|scope| {
+                let _stop = StopOnDrop(stop_tx.clone());
+                scope.spawn(move || {
+                    let _ = received_tx.send(stop_rx.recv().is_ok());
+                });
+                panic!("a failure inside the scope");
+            })
+        }))
+        .is_err();
+        // The original sender is still alive here, so the receiver ended on
+        // the guard's stop request and not on a disconnected channel.
+        drop(stop_tx);
+        let _ = outcome_tx.send((unwound, received_rx.try_recv()));
+    });
+    let (unwound, received) = outcome_rx
+        .recv_timeout(CI_WAIT)
+        .expect("the scope did not finish unwinding");
+    assert!(unwound, "the scope did not propagate the panic");
+    assert_eq!(received, Ok(true));
 }
