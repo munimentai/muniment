@@ -134,7 +134,8 @@ test('Core runs on Forgejo only, in core/, off the desktop runners, and tags no 
   for (const event of ['push', 'pull_request']) {
     const filter = core.match(new RegExp(`^  ${event}:\\n(?:    branches: .*\\n)?    paths:\\n((?:      - .*\\n)+)`, 'm'))[1]
     assert.deepEqual(filter.trim().split('\n').map(line => line.trim()),
-      ['- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"', '- ".forgejo/workflows/core*.yml"'])
+      ['- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"', '- ".forgejo/workflows/core*.yml"',
+        '- "scripts/version.py"', '- "src-tauri/Cargo.toml"', '- "src-tauri/Cargo.lock"'])
   }
   const runners = Object.fromEntries(Object.entries(jobs(core))
     .map(([name, body]) => [name, body.match(/^    runs-on: (.+)$/m)[1]]))
