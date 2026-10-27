@@ -1,7 +1,7 @@
 # muniment desktop implementer notes
 
 - Run commands from the repo root. `npm ci` already ran.
-- The sandbox has no GTK, WebKit, rustfmt, clippy, Windows or macOS. Do not run `npm test`, `npm run tauri`, a full `cargo build` of the desktop shell, or the e2e suites. CI runs them.
+- The sandbox has no GTK, WebKit, Windows or macOS. Setup adds rustfmt and clippy to the core toolchain under HOME. Do not run `npm test`, `npm run tauri`, a full `cargo build` of the desktop shell, or the e2e suites. CI runs them.
 - Run focused checks only: a single vitest file with `npx vitest run --root . <file>`, or a focused `cargo test --manifest-path src-tauri/Cargo.toml --package <name>` when the crate builds without GTK.
 - Edit test files in place. Never reformat a whole file: `test/posix-shell-gate.test.js` pins every POSIX shell call in the test files by `file:line:column`, and `test/windows-pr-gate.test.js` counts the Windows-only declarations, so moved lines fail CI smoke. Add a new test below the last pinned line of its file, as a plain `it` with no new shell call, unless the slice allowlist includes `test/posix-shell-gate.test.js`. Run `npx vitest run --root . test/posix-shell-gate.test.js test/windows-pr-gate.test.js` after every test change.
 - Re-read every changed `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` path by hand. No local build covers that code.

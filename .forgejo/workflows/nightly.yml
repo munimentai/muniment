@@ -8,8 +8,11 @@ name: Nightly desktop release
 # the finalized source SHA, because its native runners are there.
 
 on:
-  # Release candidates run on demand so repairs do not compete with a daily
-  # full matrix. Keep the workflow name used by stable promotion proofs.
+  # The schedule builds the full matrix. A dispatch builds all platforms or
+  # one, for a repair that must not wait for the next schedule. Keep the
+  # workflow name used by stable promotion proofs.
+  schedule:
+    - cron: "0 5 * * *"
   workflow_dispatch:
     inputs:
       platform:
@@ -33,8 +36,10 @@ jobs:
       source_sha: ${{ steps.source.outputs.sha }}
     steps:
       # Forgejo runners have no job-started hook, so the first step admits only
-      # an owner dispatch of main before any later step reads a credential.
-      - name: Admit only an owner dispatch of main
+      # the schedule or an owner dispatch of main before any later step reads a
+      # credential. A schedule runs only from main of the repository itself, so
+      # it needs no actor check.
+      - name: Admit only the schedule or an owner dispatch of main
         env:
           REPOSITORY: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
@@ -43,8 +48,15 @@ jobs:
           RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
           RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
-          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
-            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
+          admitted=false
+          if [ -n "$RELEASE_REPOSITORY" ] && [ "$REPOSITORY" = "$RELEASE_REPOSITORY" ] && [ "$REF" = refs/heads/main ]; then
+            case "$EVENT" in
+              schedule) admitted=true ;;
+              workflow_dispatch) if [ -n "$ACTOR" ] && [[ " $RELEASE_ACTORS " == *" $ACTOR "* ]]; then admitted=true; fi ;;
+            esac
+          fi
+          if [ "$admitted" != true ]; then
+            echo '::error::Release jobs run only on schedule or from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
 
@@ -84,8 +96,10 @@ jobs:
         platform: ${{ fromJSON((github.event.inputs.platform == '' || github.event.inputs.platform == 'all') && '["linux","windows","macos"]' || format('["{0}"]', github.event.inputs.platform)) }}
     steps:
       # Forgejo runners have no job-started hook, so the first step admits only
-      # an owner dispatch of main before any later step reads a credential.
-      - name: Admit only an owner dispatch of main
+      # the schedule or an owner dispatch of main before any later step reads a
+      # credential. A schedule runs only from main of the repository itself, so
+      # it needs no actor check.
+      - name: Admit only the schedule or an owner dispatch of main
         env:
           REPOSITORY: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
@@ -94,8 +108,15 @@ jobs:
           RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}
           RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
-          if [ -z "$RELEASE_REPOSITORY" ] || [ "$REPOSITORY" != "$RELEASE_REPOSITORY" ] || [ "$EVENT" != workflow_dispatch ] || [ "$REF" != refs/heads/main ] || [ -z "$ACTOR" ] || [[ " $RELEASE_ACTORS " != *" $ACTOR "* ]]; then
-            echo '::error::Release jobs run only from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
+          admitted=false
+          if [ -n "$RELEASE_REPOSITORY" ] && [ "$REPOSITORY" = "$RELEASE_REPOSITORY" ] && [ "$REF" = refs/heads/main ]; then
+            case "$EVENT" in
+              schedule) admitted=true ;;
+              workflow_dispatch) if [ -n "$ACTOR" ] && [[ " $RELEASE_ACTORS " == *" $ACTOR "* ]]; then admitted=true; fi ;;
+            esac
+          fi
+          if [ "$admitted" != true ]; then
+            echo '::error::Release jobs run only on schedule or from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
 

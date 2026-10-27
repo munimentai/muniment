@@ -5,6 +5,10 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
+// The factory sandbox and the CI runners cap CPUs with a cgroup quota that
+// Node's os.availableParallelism() does not see.
+const maxWorkers = process.env.FACTORY_CPUS ? { maxWorkers: Number.parseInt(process.env.FACTORY_CPUS, 10) } : {}
+
 // Frontend lives in src/ (index.html is the Vite entry; test/smoke.sh asserts it).
 // Output goes to dist/ at the repo root, which tauri.conf.json points at via
 // build.frontendDist.
@@ -37,5 +41,6 @@ export default defineConfig({
     exclude: [...configDefaults.exclude, 'core/**', '**/*.browser.test.js'],
     // Lazy component compilation and process fixtures share the CI worker budget.
     testTimeout: 30_000,
+    ...maxWorkers,
   },
 })

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Install the stable Rust toolchain with the named components on a runner, and
-# put cargo on PATH for the later steps of the job.
+# Install the Rust toolchain that rust-toolchain.toml at the repo root pins,
+# with the named components, on a runner, and put cargo on PATH for the later
+# steps of the job.
 # Usage: ci/rust-toolchain.sh [component...]
 #
 # The runner container keeps /root between jobs, so rustup installs once.
@@ -26,6 +27,7 @@ components=()
 for component in "$@"; do
   components+=(--component "$component")
 done
-"$rustup" toolchain install stable --profile minimal "${components[@]}"
-"$rustup" default stable
+toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$(dirname "$0")/../../rust-toolchain.toml")
+"$rustup" toolchain install "$toolchain" --profile minimal "${components[@]}"
+"$rustup" default "$toolchain"
 echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

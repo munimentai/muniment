@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 
 const workflows = Object.fromEntries(readdirSync('.github/workflows')
@@ -134,7 +134,8 @@ test('Core runs on Forgejo only, in core/, off the desktop runners, and tags no 
   for (const event of ['push', 'pull_request']) {
     const filter = core.match(new RegExp(`^  ${event}:\\n(?:    branches: .*\\n)?    paths:\\n((?:      - .*\\n)+)`, 'm'))[1]
     assert.deepEqual(filter.trim().split('\n').map(line => line.trim()),
-      ['- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"', '- ".forgejo/workflows/core*.yml"'])
+      ['- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"', '- ".forgejo/workflows/core*.yml"',
+        '- "scripts/version.py"', '- "src-tauri/Cargo.toml"', '- "src-tauri/Cargo.lock"'])
   }
   const runners = Object.fromEntries(Object.entries(jobs(core))
     .map(([name, body]) => [name, body.match(/^    runs-on: (.+)$/m)[1]]))
@@ -168,3 +169,117 @@ test('One vX.Y.Z release carries the desktop, the server files and the runtime i
   assert.match(release['runtime-image'], /deploy\/runtime\/publish.sh "\$VERSION" "\$SOURCE_SHA"/)
   assert.doesNotMatch(workflows['release.yml'], /core-v|--latest=false/)
 })
+
+const routing = await import('./ci-workflow.mjs')
+const coreSupportPaths = [
+  'core/docs/core-boundary.md', 'core/docs/tool-presentation.md', 'core/deploy/runtime/Containerfile',
+  'core/scripts/check-core-boundary.sh', 'core/scripts/check-core-boundary.py', 'core/scripts/release.py',
+  'core/ci/desktop-ci.sh', 'core/ci/postgres.sh', 'core/ci/rust-toolchain.sh', 'core/ci/server-cross-build.sh',
+  'core/ci/zig-toolchain.sh', 'core/test_support/socket_path.rs', 'core/Cargo.lock',
+  '.forgejo/workflows/core.yml', '.forgejo/workflows/core-pins-update.yml',
+]
+const pushScenarios = [
+  ['a pull request', {}],
+  ['a job-token push with a known base', { event: 'push', base: 'a'.repeat(40) }],
+]
+const workspaceTest = ({ command }) => /--workspace\b|--all\b/.test(command) || !/(?:^|\s)(?:-p|--package)\b/.test(command)
+
+test('The routed support paths cover every core CI helper.', () => {
+  for (const name of readdirSync('core/ci')) assert.ok(coreSupportPaths.includes(`core/ci/${name}`), name)
+  for (const path of coreSupportPaths) assert.ok(existsSync(path), path)
+})
+
+for (const file of routing.mirrors) {
+  test(`${file}: a core boundary inventory change runs the boundary checker, not the Markdown shortcut.`, () => {
+    for (const [, options] of pushScenarios) {
+      const { outputs, scheduled } = routing.route(file, ['core/docs/core-boundary.md'], { ...options, reuse: 'false' })
+      assert.equal(outputs.docs_only, 'false')
+      assert.equal(outputs.desktop, 'false')
+      assert.equal(outputs.installer, 'false')
+      const [boundary] = routing.boundaryChecks(scheduled)
+      assert.ok(boundary, 'Public core boundary is scheduled')
+      assert.equal(boundary.name, 'Public core boundary')
+      assert.match(boundary.run, /scripts\/check-core-boundary\.sh/)
+      assert.equal(routing.boundaryChecks(routing.route(file, ['core/docs/core-boundary.md'], { ...options, reuse: 'true' }).scheduled).length, 0)
+    }
+    // The scheduled checker reads the inventory this path names.
+    assert.match(readFileSync('scripts/check-core-boundary.sh', 'utf8'), /core\/scripts\/check-core-boundary\.sh/)
+    assert.match(readFileSync('core/scripts/check-core-boundary.sh', 'utf8'), /scripts\/check-core-boundary\.py/)
+    assert.match(readFileSync('core/scripts/check-core-boundary.py', 'utf8'), /Path\("docs\/core-boundary\.md"\)/)
+  })
+
+  test(`${file}: a core lockfile change runs a locked core workspace test.`, () => {
+    for (const [scenario, options] of pushScenarios) {
+      const { outputs, scheduled } = routing.route(file, ['core/Cargo.lock'], { ...options, reuse: 'false' })
+      assert.equal(outputs.docs_only, 'false', scenario)
+      const tests = routing.coreWorkspaceTests(scheduled).filter(workspaceTest)
+      assert.ok(tests.length > 0, `${scenario}: a cargo test resolves core/Cargo.lock with --locked`)
+      for (const { lockfile, locked } of tests) {
+        assert.equal(lockfile, 'core/Cargo.lock')
+        assert.equal(locked, true)
+      }
+    }
+  })
+
+  for (const path of coreSupportPaths) {
+    test(`${file}: ${path} alone runs the core boundary and workspace tests without the desktop matrix.`, () => {
+      for (const [scenario, options] of pushScenarios) {
+        const { outputs, scheduled } = routing.route(file, [path], { ...options, reuse: 'false' })
+        assert.equal(outputs.docs_only, 'false', scenario)
+        assert.equal(outputs.desktop, 'false', scenario)
+        assert.equal(outputs.installer, 'false', scenario)
+        assert.equal(outputs.release_only, 'false', scenario)
+        assert.ok(routing.boundaryChecks(scheduled).length > 0, `${scenario}: boundary check`)
+        assert.ok(routing.coreWorkspaceTests(scheduled).filter(workspaceTest).length > 0, `${scenario}: core workspace test`)
+        assert.deepEqual(routing.desktopPlatforms(scheduled).filter(platform => platform !== 'linux'), [], scenario)
+      }
+    })
+  }
+
+  test(`${file}: core and unrelated Markdown stay documentation-only.`, () => {
+    for (const paths of [['core/README.md'], ['README.md'], ['docs/core-boundary.md'], ['README.md', 'core/README.md']]) {
+      const { outputs, scheduled } = routing.route(file, paths, { reuse: 'false' })
+      assert.deepEqual([outputs.docs_only, outputs.desktop, outputs.installer, outputs.core_shared, outputs.companion],
+        ['true', 'false', 'false', 'false', 'false'], paths.join(' '))
+      assert.deepEqual(routing.coreWorkspaceTests(scheduled), [], paths.join(' '))
+      assert.deepEqual(routing.desktopPlatforms(scheduled), [], paths.join(' '))
+    }
+  })
+
+  test(`${file}: mixed, fixture, installer and fallback routes keep their lanes.`, () => {
+    for (const paths of [['src/App.svelte', 'core/Cargo.lock'], ['core/docs/core-boundary.md', 'src/App.svelte']]) {
+      const { outputs, scheduled } = routing.route(file, paths)
+      assert.equal(outputs.desktop, 'true')
+      assert.deepEqual(routing.desktopPlatforms(scheduled), ['linux', 'macos', 'windows'])
+      assert.ok(routing.coreWorkspaceTests(scheduled).filter(workspaceTest).length > 0, paths.join(' '))
+    }
+    const shared = routing.route(file, ['core/crates/core/src/lib.rs'])
+    assert.equal(shared.outputs.core_shared, 'true')
+    assert.deepEqual(routing.desktopPlatforms(shared.scheduled), ['linux'])
+    const jobsFor = paths => new Set(routing.route(file, paths).scheduled.map(step => step.job))
+    assert.ok(jobsFor(['core/protocol-fixtures/muniment-attach/1/hello.json']).has('attach-fixtures-current'))
+    assert.ok(!jobsFor(['core/protocol-fixtures/muniment-attach/1/hello.json']).has('code-diff-fixtures-current'))
+    assert.ok(jobsFor(['core/protocol-fixtures/code-diff/1/basic.json']).has('code-diff-fixtures-current'))
+    assert.ok(!jobsFor(['core/Cargo.lock']).has('attach-fixtures-current'))
+    assert.equal(routing.route(file, ['.github/build-linux.sh']).outputs.installer, 'true')
+    assert.equal(routing.route(file, ['core/Cargo.lock']).outputs.installer, 'false')
+    for (const options of [
+      { event: 'push', base: '0'.repeat(40) }, { event: 'push', base: '' },
+      { event: 'push', base: 'b'.repeat(40), knownBase: false }, { event: 'workflow_dispatch' },
+    ]) {
+      const { outputs, scheduled } = routing.route(file, ['core/README.md'], options)
+      assert.deepEqual([outputs.desktop, outputs.installer, outputs.core_shared, outputs.attach_fixtures, outputs.code_diff_fixtures],
+        ['true', 'true', 'true', 'true', 'true'], JSON.stringify(options))
+      assert.deepEqual(routing.desktopPlatforms(scheduled), ['linux', 'macos', 'windows'])
+      assert.ok(routing.boundaryChecks(scheduled).length > 0)
+      assert.ok(routing.coreWorkspaceTests(scheduled).filter(workspaceTest).length > 0, JSON.stringify(options))
+    }
+  })
+
+  test(`${file}: a reused tree schedules no boundary, core test or desktop work.`, () => {
+    const { scheduled } = routing.route(file, ['core/Cargo.lock', 'src/App.svelte'], { event: 'push', reuse: 'true' })
+    assert.deepEqual(routing.boundaryChecks(scheduled), [])
+    assert.deepEqual(routing.cargoTests(scheduled), [])
+    assert.deepEqual(routing.desktopPlatforms(scheduled), [])
+  })
+}

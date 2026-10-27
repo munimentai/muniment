@@ -77,8 +77,10 @@ gates:
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy --workspace --all-targets --locked --features muniment-pins/cli -- -D warnings"
       - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo clippy -p muniment-router --all-targets --features server --locked -- -D warnings"
       # The core boundary check runs the port tests. One test thread keeps the
-      # router's timing tests stable on the sandbox's four CPUs.
-      - "cd core && RUST_TEST_THREADS=1 RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo scripts/check-core-boundary.sh"
+      # router's timing tests stable on the sandbox's four CPUs. /tmp is the
+      # sandbox's tmpfs, as /ci-tmpfs is CI's: the attach tests bind Unix
+      # sockets under TMPDIR, and the image's own TMPDIR is too long for one.
+      - "cd core && TMPDIR=/tmp RUST_TEST_THREADS=1 RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo scripts/check-core-boundary.sh"
     timeout_s: 5400
   # The sandbox has no GTK, WebKit, browser, rustfmt, clippy or desktop-ci
   # access. The gate runs the main vitest suite, the CI routing tests, the
@@ -103,11 +105,11 @@ gates:
       # The sandbox kernel has no inet_diag, so the test that reads real socket
       # owners through NETLINK_SOCK_DIAG runs only in CI.
       - >-
-        CARGO_HOME=$HOME/.cargo cargo test --manifest-path src-tauri/Cargo.toml --locked
+        TMPDIR=/tmp CARGO_HOME=$HOME/.cargo cargo test --manifest-path src-tauri/Cargo.toml --locked
         --package muniment-desktop-integration --package muniment-cli --package muniment-acp
         --package muniment-runtime --features muniment-desktop-integration/keyring
         -- --test-threads=1 --skip real_diagnostic_selects_the_browser_client_half
-      - "cd core && RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo test --workspace --locked --features muniment-pins/cli -- --test-threads=1"
+      - "cd core && TMPDIR=/tmp RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo test --workspace --locked --features muniment-pins/cli -- --test-threads=1"
       - "cd core && python3 -B scripts/test_release.py"
       - "cd core && python3 -B scripts/pins/test_update.py"
       - "cd core && python3 -B scripts/test_desktop_ci.py"
@@ -134,8 +136,10 @@ gates:
     timeout_s: 14400
 
 budgets:
-  # Two long CI runs never compete for the desktop-ci slot.
-  concurrent_runs: 1
+  # Two sandboxes, so a gate run lands beside a long implement run. CI runs
+  # queue on the shared desktop-ci slot, and the lane serves every other
+  # task in turn, so no more than two.
+  concurrent_runs: 2
 
 sandbox:
   # The factory's desktop lane image holds the locked crates, the npm cache and

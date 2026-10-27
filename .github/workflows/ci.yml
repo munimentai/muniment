@@ -76,6 +76,7 @@ jobs:
       code_diff_fixtures: ${{ steps.changes.outputs.code_diff_fixtures }}
       desktop: ${{ steps.changes.outputs.desktop }}
       core_shared: ${{ steps.changes.outputs.core_shared }}
+      core_support: ${{ steps.changes.outputs.core_support }}
       installer: ${{ steps.changes.outputs.installer }}
       release_tooling: ${{ steps.changes.outputs.release_tooling }}
       release_only: ${{ steps.changes.outputs.release_only }}
@@ -115,6 +116,7 @@ jobs:
           code_diff_fixtures=false
           desktop=false
           core_shared=false
+          core_support=false
           installer=false
           release_tooling=false
           release_only=true
@@ -137,6 +139,7 @@ jobs:
             code_diff_fixtures=true
             desktop=true
             core_shared=true
+            core_support=true
             installer=true
             release_only=false
           fi
@@ -152,6 +155,14 @@ jobs:
             esac
             release_only=false
             case "$path" in
+              core/docs/*|core/docs/**|core/deploy/*|core/deploy/**|core/scripts/*|core/scripts/**|core/ci/*|core/ci/**|core/test_support/*|core/test_support/**|core/Cargo.lock|.forgejo/workflows/core*.yml)
+                # Before *.md, so a core document is never documentation-only:
+                # core/docs/core-boundary.md is an input of the boundary check.
+                # No desktop build reads these, but core.yml does not run for a
+                # push made with the job token, so the core workspace runs here.
+                docs_only=false
+                core_support=true
+                ;;
               *.md) ;;
               src-tauri/cli/*|src-tauri/cli/**|src-tauri/runtime/*|src-tauri/runtime/**)
                 docs_only=false
@@ -162,10 +173,6 @@ jobs:
                 docs_only=false
                 companion=true
                 desktop=true
-                ;;
-              core/docs/*|core/docs/**|core/deploy/*|core/deploy/**|core/scripts/*|core/scripts/**|core/ci/*|core/ci/**|core/test_support/*|core/test_support/**|core/Cargo.lock|.forgejo/workflows/core*.yml)
-                # core.yml checks these. No desktop build reads them.
-                docs_only=false
                 ;;
               core/protocol-fixtures/code-diff/*|core/protocol-fixtures/code-diff/**)
                 docs_only=false
@@ -225,6 +232,7 @@ jobs:
           echo "code_diff_fixtures=$code_diff_fixtures" >> "$GITHUB_OUTPUT"
           echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
           echo "core_shared=$core_shared" >> "$GITHUB_OUTPUT"
+          echo "core_support=$core_support" >> "$GITHUB_OUTPUT"
           echo "installer=$installer" >> "$GITHUB_OUTPUT"
 
 
@@ -316,6 +324,14 @@ jobs:
         env:
           CARGO_INCREMENTAL: "0"
         run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; scripts/check-core-boundary.sh
+
+      # The same workspace test core.yml runs, for the support paths that
+      # workflow would otherwise be the only check of.
+      - name: Core workspace tests
+        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.core_support == 'true')
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: if [ -d /ci-tmpfs ] && [ -w /ci-tmpfs ]; then export TMPDIR=/ci-tmpfs; fi; echo "TMPDIR=$TMPDIR"; env -u GITHUB_TOKEN -u GH_TOKEN cargo test --manifest-path core/Cargo.toml --workspace --locked --features muniment-core/network-tests,muniment-pins/cli -- --test-threads=1
 
       - name: Rust formatting
         if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.desktop == 'true')

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the Rust toolchain on a runner that has none.
+# Install the Rust toolchain that rust-toolchain.toml pins on a runner that
+# has none.
 #
 # rustup-init is pinned by version and checked against the SHA-256 that
 # static.rust-lang.org publishes beside it, instead of piping sh.rustup.rs into
@@ -31,4 +32,5 @@ curl --proto '=https' --tlsv1.2 -sSfL -o "$installer" \
   "https://static.rust-lang.org/rustup/archive/${rustup_version}/${target}/rustup-init"
 printf '%s  %s\n' "$sha256" "$installer" | sha256sum --check --quiet
 chmod +x "$installer"
-"$installer" -y --profile minimal --default-toolchain stable
+toolchain=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$(dirname "$0")/../rust-toolchain.toml")
+"$installer" -y --profile minimal --default-toolchain "$toolchain"

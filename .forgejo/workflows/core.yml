@@ -19,12 +19,18 @@ on:
       - ".cargo/**"
       - "src-tauri/third-party/**"
       - ".forgejo/workflows/core*.yml"
+      - "scripts/version.py"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
   pull_request:
     paths:
       - "core/**"
       - ".cargo/**"
       - "src-tauri/third-party/**"
       - ".forgejo/workflows/core*.yml"
+      - "scripts/version.py"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
   workflow_dispatch:
 
 env:

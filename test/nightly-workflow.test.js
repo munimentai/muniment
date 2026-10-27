@@ -396,15 +396,16 @@ it('runs every installed lane even when the scheduled nightly reuses builds', ()
 describe('release job gate', () => {
   const read = (file) => fs.readFileSync(`.github/workflows/${file}`, 'utf8')
   const jobText = (text, name) => text.slice(text.indexOf('\njobs:\n')).match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:\\n|$(?![\\s\\S]))`, 'm'))[1]
-  const gates = [['nightly.yml', 'prepare'], ['nightly.yml', 'build'], ['release.yml', 'promote'], ['release.yml', 'draft-winget-pr']]
+  const nightlyGate = 'Admit only the schedule or an owner dispatch of main', releaseGate = 'Admit only an owner dispatch of main'
+  const gates = [['nightly.yml', 'prepare', nightlyGate], ['nightly.yml', 'build', nightlyGate], ['release.yml', 'promote', releaseGate], ['release.yml', 'draft-winget-pr', releaseGate]]
   const owner = { REPOSITORY: 'example/muniment', EVENT: 'workflow_dispatch', REF: 'refs/heads/main', ACTOR: 'owner',
     RELEASE_REPOSITORY: 'example/muniment', RELEASE_ACTORS: 'owner' }
 
-  it.each(gates)('%s %s admits the dispatch in its first step, before any secret', (file, name) => {
+  it.each(gates)('%s %s admits the dispatch in its first step, before any secret', (file, name, gate) => {
     const text = jobText(read(file), name)
     const steps = text.slice(text.indexOf('    steps:\n'))
-    expect(steps.match(/^      - .+$/m)[0]).toBe('      - name: Admit only an owner dispatch of main')
-    expect(text.slice(0, text.indexOf('      - name: Admit only an owner dispatch of main'))).not.toContain('secrets.')
+    expect(steps.match(/^      - .+$/m)[0]).toBe(`      - name: ${gate}`)
+    expect(text.slice(0, text.indexOf(`      - name: ${gate}`))).not.toContain('secrets.')
     expect(steps).toContain('RELEASE_REPOSITORY: ${{ vars.CI_REPOSITORY }}')
     expect(steps).toContain('RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}')
   })
@@ -431,12 +432,37 @@ describe('release job gate', () => {
     [{ REPOSITORY: 'munimentai/muniment' }, 1],
     [{ ACTOR: '' }, 1],
   ])('fails closed for %j', (change, status) => {
-    for (const [file, name] of gates) {
+    for (const [file, name, gate] of gates) {
       const text = jobText(read(file), name)
-      const step = text.slice(text.indexOf('      - name: Admit only an owner dispatch of main'))
+      const step = text.slice(text.indexOf(`      - name: ${gate}`))
       const script = step.split('        run: |\n')[1].split(/\n(?!          )/)[0].replace(/^          /gm, '')
       const result = spawnSync('bash', ['-e', '-c', script], { env: { PATH: process.env.PATH, ...owner, ...change }, encoding: 'utf8' })
       expect(result.status, `${file} ${name}`).toBe(status)
     }
   })
+
+  it.skipIf(process.platform === 'win32')('admits the nightly schedule on main without an actor', () => {
+    for (const [file, name, gate] of gates.filter(([file]) => file === 'nightly.yml')) {
+      const text = jobText(read(file), name)
+      const step = text.slice(text.indexOf(`      - name: ${gate}`))
+      const script = step.split('        run: |\n')[1].split(/\n(?!          )/)[0].replace(/^          /gm, '')
+      const env = { PATH: process.env.PATH, ...owner, EVENT: 'schedule', ACTOR: '', RELEASE_ACTORS: '' }
+      expect(spawnSync('bash', ['-e', '-c', script], { env, encoding: 'utf8' }).status, `${file} ${name}`).toBe(0)
+      expect(spawnSync('bash', ['-e', '-c', script], { env: { ...env, REF: 'refs/heads/agent/branch' }, encoding: 'utf8' }).status, `${file} ${name}`).toBe(1)
+    }
+  })
+})
+
+it('keeps the scheduled nightly copies aligned and watches every core check input', () => {
+  expect(fs.readFileSync('.forgejo/workflows/nightly.yml', 'utf8')).toBe(workflow)
+  expect(workflow).toMatch(/  schedule:\n    - cron: ['"]0 5 \* \* \*['"]/)
+  const core = fs.readFileSync('.forgejo/workflows/core.yml', 'utf8')
+  for (const event of ['push', 'pull_request']) {
+    const filters = core.match(new RegExp(`^  ${event}:\\n(?:    branches: .*\\n)?    paths:\\n((?:      - .*\\n)+)`, 'm'))[1]
+    expect(filters.trim().split('\n').map(line => line.trim())).toEqual([
+      '- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"',
+      '- ".forgejo/workflows/core*.yml"', '- "scripts/version.py"',
+      '- "src-tauri/Cargo.toml"', '- "src-tauri/Cargo.lock"',
+    ])
+  }
 })
