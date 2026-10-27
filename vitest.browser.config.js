@@ -5,6 +5,10 @@ import { defineConfig } from 'vitest/config'
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
+// The factory sandbox and the CI runners cap CPUs with a cgroup quota that
+// Node's os.availableParallelism() does not see.
+const maxWorkers = process.env.FACTORY_CPUS ? { maxWorkers: Number.parseInt(process.env.FACTORY_CPUS, 10) } : {}
+
 export default defineConfig({
   // Layout tests mount Svelte components in the real browser.
   plugins: [svelte()],
@@ -25,5 +29,6 @@ export default defineConfig({
       }),
       instances: [{ browser: 'chromium' }],
     },
+    ...maxWorkers,
   },
 })

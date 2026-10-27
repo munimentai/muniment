@@ -59,6 +59,7 @@ jobs:
             esac
           fi
           if [ "$admitted" != true ]; then
+            echo "REPOSITORY=$REPOSITORY EVENT=$EVENT REF=$REF ACTOR=$ACTOR RELEASE_REPOSITORY=$RELEASE_REPOSITORY" >&2
             echo '::error::The pins update runs only on schedule or from a CI_RELEASE_ACTORS dispatch of main in the CI_REPOSITORY repository.' >&2
             exit 1
           fi
