@@ -3,9 +3,11 @@ import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
+import * as routing from './ci-workflow.mjs'
 
 const root = process.cwd()
-const workflow = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8')
+const github = '.github/workflows/ci.yml'
+const workflow = fs.readFileSync(path.join(root, github), 'utf8')
 const job = (name, next) => workflow.slice(workflow.indexOf(`  ${name}:\n`), workflow.indexOf(`  ${next}:\n`))
 const changes = job('changes', 'smoke')
 const smoke = job('smoke', 'attach-fixtures-current')
@@ -26,27 +28,10 @@ const installerPaths = [
   'test/windows-installers.ps1',
 ]
 
-function classify(paths, event = 'pull_request', base = 'base') {
-  const script = changes.split('        run: |\n')[1].replace(/^ {10}/gm, '')
-  const output = execFileSync('bash', ['-eu', '-c', `
-    git() { printf '%s' "$CHANGED_PATHS"; }
-    GITHUB_OUTPUT=$(mktemp)
-    trap 'rm -f "$GITHUB_OUTPUT"' EXIT
-    ${script}
-    cat "$GITHUB_OUTPUT"
-  `], {
-    encoding: 'utf8',
-    timeout: 10000,
-    env: {
-      ...process.env,
-      GITHUB_EVENT_NAME: event,
-      BASE_SHA: base,
-      HEAD_SHA: 'head',
-      CHANGED_PATHS: paths.length ? `${paths.join('\n')}\n` : '',
-    },
-  })
-  return Object.fromEntries(output.trim().split('\n').map((line) => line.split('=')))
-}
+// Runs the mirror's own Classify changes script against a synthetic diff. The
+// stub git knows the base commit, so a push with a real base classifies.
+const classify = (paths, event = 'pull_request', base = 'base', mirror = github) =>
+  routing.classify(mirror, paths, { event, base })
 
 describe('PR gate shape', () => {
   it('classifies the diff in its own job and exposes the installer flag', () => {
@@ -136,7 +121,9 @@ describe('PR gate shape', () => {
 
   it('classifies a push against its base like a pull request', () => {
     expect(classify(['core/docs/a.md'], 'push')).toMatchObject({ desktop: 'false', installer: 'false',
-      core_shared: 'false', companion: 'false' })
+      docs_only: 'false', companion: 'false' })
+    expect(classify(['core/README.md'], 'push')).toMatchObject({ desktop: 'false', installer: 'false',
+      core_shared: 'false', companion: 'false', docs_only: 'true' })
     expect(classify(['src/App.svelte'], 'push')).toMatchObject({ desktop: 'true', installer: 'false', core_shared: 'false' })
     expect(changes).toContain('BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}')
   })
@@ -160,12 +147,23 @@ describe('Core path tiers', () => {
   const none = { desktop: 'false', installer: 'false', core_shared: 'false', companion: 'false',
     attach_fixtures: 'false', code_diff_fixtures: 'false' }
 
+  // core.yml checks these. They schedule core checks in CI.yml too, but no
+  // desktop, installer, companion or fixture lane.
   it.each([
-    'core/docs/core-boundary.md', 'core/README.md', 'core/deploy/runtime/publish.sh', 'core/deploy/runtime/Containerfile',
-    'core/scripts/release.py', 'core/ci/postgres.sh', 'core/test_support/socket_path.rs', 'core/Cargo.lock',
+    'core/docs/core-boundary.md', 'core/docs/tool-presentation.md', 'core/deploy/runtime/publish.sh',
+    'core/deploy/runtime/Containerfile', 'core/scripts/check-core-boundary.sh', 'core/scripts/check-core-boundary.py',
+    'core/scripts/release.py', 'core/ci/desktop-ci.sh', 'core/ci/postgres.sh', 'core/ci/rust-toolchain.sh',
+    'core/ci/server-cross-build.sh', 'core/ci/zig-toolchain.sh', 'core/test_support/socket_path.rs', 'core/Cargo.lock',
     '.forgejo/workflows/core.yml', '.forgejo/workflows/core-pins-update.yml',
-  ])('runs no desktop lane for %s alone', (file) => {
-    expect(classify([file])).toMatchObject(none)
+  ])('runs core support checks without a desktop lane for %s alone', (file) => {
+    for (const mirror of routing.mirrors) {
+      expect(classify([file], 'pull_request', 'base', mirror), mirror).toMatchObject({ desktop: 'false', installer: 'false',
+        companion: 'false', attach_fixtures: 'false', code_diff_fixtures: 'false', docs_only: 'false', release_only: 'false' })
+    }
+  })
+
+  it('keeps the core README documentation-only', () => {
+    expect(classify(['core/README.md'])).toMatchObject({ ...none, docs_only: 'true' })
   })
 
   it.each([
@@ -324,4 +322,22 @@ it.each(['linux', 'windows', 'macos'])('uses one VM and gates packaging on prefl
       expect(executed.includes(packaging)).toBe(failure === 'false')
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+it.each([
+  'core/docs/core-boundary.md', 'core/Cargo.lock', 'core/scripts/check-core-boundary.py', '.forgejo/workflows/core.yml',
+])('schedules the core boundary and a locked core workspace test for %s alone', (file) => {
+  // A package-scoped core test leaves the rest of the lockfile unresolved.
+  const workspaceWide = ({ command }) => /--workspace\b|--all\b/.test(command) || !/(?:^|\s)(?:-p|--package)\b/.test(command)
+  for (const mirror of routing.mirrors) {
+    for (const options of [{}, { event: 'push', base: 'a'.repeat(40) }]) {
+      const { outputs, scheduled } = routing.route(mirror, [file], { ...options, reuse: 'false' })
+      expect(outputs, mirror).toMatchObject({ docs_only: 'false', desktop: 'false', installer: 'false' })
+      expect(routing.boundaryChecks(scheduled).map((step) => step.name)).toEqual(['Public core boundary'])
+      expect(routing.coreWorkspaceTests(scheduled).filter(workspaceWide).map(({ lockfile, locked }) => ({ lockfile, locked })))
+        .toContainEqual({ lockfile: 'core/Cargo.lock', locked: true })
+      expect(routing.desktopPlatforms(scheduled)).toEqual([])
+      expect(routing.boundaryChecks(routing.route(mirror, [file], { ...options, reuse: 'true' }).scheduled)).toEqual([])
+    }
+  }
 })
