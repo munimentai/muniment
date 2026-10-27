@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Instant;
 
 mod common;
-use common::CI_WAIT;
+use common::{StopOnDrop, CI_WAIT};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -50,6 +50,7 @@ fn takes_over_the_endpoint_with_the_minted_nonce() {
     let test_timeout = CI_WAIT;
 
     thread::scope(|scope| {
+        let _stop = StopOnDrop(stop_tx.clone());
         let takeover = scope.spawn(|| {
             run_runtime_activation(
                 &runtime.0,
