@@ -134,8 +134,10 @@ gates:
     timeout_s: 14400
 
 budgets:
-  # Two long CI runs never compete for the desktop-ci slot.
-  concurrent_runs: 1
+  # Two sandboxes, so a gate run lands beside a long implement run. CI runs
+  # queue on the shared desktop-ci slot, and the lane serves every other
+  # task in turn, so no more than two.
+  concurrent_runs: 2
 
 sandbox:
   # The factory's desktop lane image holds the locked crates, the npm cache and
