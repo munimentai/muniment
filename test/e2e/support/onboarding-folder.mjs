@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { execFile } from 'node:child_process'
-import { appendFile } from 'node:fs/promises'
+import { appendFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { chooseFolder as chooseLinuxFolder } from './folder-dialog.mjs'
@@ -77,7 +77,8 @@ export async function chooseFolder(home, waitSeconds, title, rawDir, execute = r
     if (platform === 'linux') {
       await chooseLinuxFolder(home, waitSeconds, title, rawDir, execute)
     } else if (platform === 'darwin') {
-      await driveMacos(waitSeconds)
+      const diagnostics = await driveMacos(waitSeconds)
+      await appendFile(path.join(rawDir, 'folder-picker-trace.json'), `${JSON.stringify(diagnostics)}\n`)
     } else {
       await execute(path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
@@ -96,4 +97,12 @@ export async function chooseFolder(home, waitSeconds, title, rawDir, execute = r
     } catch {}
     throw new Error(message, { cause: error })
   }
+}
+
+// Prepare the empty fixture only; production Home scaffolding belongs to Save Home.
+export async function prepareIsolatedHome(home, create = mkdir) {
+  if (typeof home !== 'string' || !path.isAbsolute(home) || /[\u0000-\u001f\u007f]/.test(home)) {
+    throw new Error('The isolated Home needs an absolute folder path without control characters.')
+  }
+  await create(home, { recursive: true })
 }

@@ -396,21 +396,19 @@ pub(super) fn go_to_folder<A: AccessibilityActions>(
             if ax.string(&button, "AXRole").ok().as_deref() != Some("AXButton") {
                 return Err(WrongButtonRole);
             }
-            if !ax
-                .boolean(&button, "AXEnabled")
-                .map_err(|_| AttributeUnavailable)?
-            {
-                return Ok(None);
-            }
+            // The Go button can stay disabled until AXValue is entered. Resolve its
+            // identity now and require it to be enabled only immediately before pressing.
             (button, "AXPress")
         }
         None => {
             check_deadline()?;
             let actions = ax.action_names(&field).map_err(|_| AttributeUnavailable)?;
-            if !actions.iter().any(|action| action == "AXConfirm") {
-                return Ok(None);
-            }
-            (field.clone(), "AXConfirm")
+            let action = if actions.iter().any(|action| action == "AXConfirm") {
+                "AXConfirm"
+            } else {
+                "Return"
+            };
+            (field.clone(), action)
         }
     };
     // Keyboard focus must be positively inside this sheet: a scanned control of the sheet
@@ -556,8 +554,19 @@ pub(super) fn enter_and_commit<A: AccessibilityActions>(
     }
     check_deadline()?;
     // One commit. A repeated commit could act on the panel after the sheet closes.
-    ax.perform(&target.commit, target.action)
-        .map_err(|_| CommitFailed)?;
+    if target.action == "Return" {
+        if !return_fallback(ax, app, panel, &target, &mut check_deadline, &mut record)? {
+            return Err(KeyboardFocusLost);
+        }
+        record(NavigationEvent::stage("return_posted"));
+    } else {
+        if target.action == "AXPress" && ax.boolean(&target.commit, "AXEnabled").ok() != Some(true)
+        {
+            return Err(CommitFailed);
+        }
+        ax.perform(&target.commit, target.action)
+            .map_err(|_| CommitFailed)?;
+    }
     record(NavigationEvent::stage("go_committed"));
     let mut fallback = target.action == "AXConfirm";
     let mut waited = 0;
@@ -639,5 +648,5 @@ fn sheet_closed<A: Accessibility>(
         }
     }
     check_deadline()?;
-    Ok(!is_go_to_window(ax, sheet))
+    Ok(ax.boolean(sheet, "AXVisible").ok() == Some(false) || !is_go_to_window(ax, sheet))
 }

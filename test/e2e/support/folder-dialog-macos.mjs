@@ -44,6 +44,14 @@ export async function driveMacosFolder(waitSeconds, poll = () => browser.execute
         timer = setTimeout(() => reject(new Error('The NSOpenPanel timed out during the AppKit picker drive.')), waitSeconds * 1000)
       }),
     ])
+    // Snapshot after completion: the native trace survives panel cleanup.
+    return await Promise.race([
+      diagnose(),
+      new Promise((_, reject) => {
+        clearTimeout(timer)
+        timer = setTimeout(() => reject(new Error('The Home picker diagnostics timed out.')), 3000)
+      }),
+    ])
   } catch (error) {
     stopped = true
     clearTimeout(timer)
