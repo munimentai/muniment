@@ -452,3 +452,17 @@ describe('release job gate', () => {
     }
   })
 })
+
+it('keeps the scheduled nightly copies aligned and watches every core check input', () => {
+  expect(fs.readFileSync('.forgejo/workflows/nightly.yml', 'utf8')).toBe(workflow)
+  expect(workflow).toMatch(/  schedule:\n    - cron: ['"]0 5 \* \* \*['"]/)
+  const core = fs.readFileSync('.forgejo/workflows/core.yml', 'utf8')
+  for (const event of ['push', 'pull_request']) {
+    const filters = core.match(new RegExp(`^  ${event}:\\n(?:    branches: .*\\n)?    paths:\\n((?:      - .*\\n)+)`, 'm'))[1]
+    expect(filters.trim().split('\n').map(line => line.trim())).toEqual([
+      '- "core/**"', '- ".cargo/**"', '- "src-tauri/third-party/**"',
+      '- ".forgejo/workflows/core*.yml"', '- "scripts/version.py"',
+      '- "src-tauri/Cargo.toml"', '- "src-tauri/Cargo.lock"',
+    ])
+  }
+})

@@ -1,4 +1,5 @@
 # The factory sandbox image and every CI runner build with this toolchain.
 [toolchain]
 channel = "1.99.0"
-components = ["rustfmt", "clippy"]
+# CI installs rustfmt and clippy explicitly so cargo also works with minimal,
+# read-only toolchains in the sandbox.
