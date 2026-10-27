@@ -2291,14 +2291,21 @@ mod tests {
             "http://{}/v1/chat/completions",
             upstream.local_addr().unwrap()
         );
-        let hold = std::thread::spawn(move || upstream.accept().map(|(socket, _)| socket));
+        let (accepted, ready) = std::sync::mpsc::channel();
+        let (finish, release) = std::sync::mpsc::channel();
+        let hold = std::thread::spawn(move || {
+            let (socket, _) = upstream.accept().unwrap();
+            accepted.send(()).unwrap();
+            let _ = release.recv();
+            drop(socket);
+        });
         let (client, served) = connection();
         let request = super::super::subscription_probe::TransportRequest::new(
             crate::http::agent_builder().timeout_read(Duration::from_secs(60)),
             &url,
         );
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(200));
+        let disconnect = std::thread::spawn(move || {
+            ready.recv_timeout(Duration::from_secs(10)).unwrap();
             drop(client);
         });
         let started = std::time::Instant::now();
@@ -2313,7 +2320,9 @@ mod tests {
             Answer::Gone
         ));
         assert!(started.elapsed() < Duration::from_secs(10));
-        drop(hold);
+        disconnect.join().unwrap();
+        finish.send(()).unwrap();
+        hold.join().unwrap();
     }
 
     /// The clock every server test reads, so a day bucket never drifts.
@@ -3277,26 +3286,97 @@ mod tests {
         std::fs::remove_dir_all(agent).unwrap();
     }
 
-    /// Small windows, so a stall test ends in well under a second.
+    // These exercise real sockets and channel timeouts, not fixed_clock. The
+    // activity fake sends every 50 ms: the idle window leaves 20 scheduling
+    // opportunities, while the first-output window also covers connection setup.
     const QUICK: Stall = Stall {
-        first_output: Duration::from_millis(400),
-        idle: Duration::from_millis(250),
+        first_output: Duration::from_secs(2),
+        idle: Duration::from_secs(1),
     };
 
-    /// A stand-in provider that reads each request, counts it, and hands the
-    /// socket to `answer`, which writes what it likes and holds the line open.
+    #[derive(Default)]
+    struct Stop {
+        stopped: std::sync::Mutex<bool>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Stop {
+        fn until(&self, deadline: std::time::Instant) -> bool {
+            let stopped = self.stopped.lock().unwrap();
+            *self
+                .changed
+                .wait_timeout_while(
+                    stopped,
+                    deadline.saturating_duration_since(std::time::Instant::now()),
+                    |stopped| !*stopped,
+                )
+                .unwrap()
+                .0
+        }
+
+        fn finish(&self) {
+            *self.stopped.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+
+    struct ScriptedUpstream {
+        count: Arc<std::sync::atomic::AtomicUsize>,
+        stop: Arc<Stop>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl std::ops::Deref for ScriptedUpstream {
+        type Target = std::sync::atomic::AtomicUsize;
+
+        fn deref(&self) -> &Self::Target {
+            &self.count
+        }
+    }
+
+    impl Drop for ScriptedUpstream {
+        fn drop(&mut self) {
+            self.stop.finish();
+            self.worker.take().unwrap().join().unwrap();
+        }
+    }
+
+    /// Each fake owns its listener and joins every connection worker. A silent
+    /// response waits for teardown rather than leaving a sleeping thread behind.
     fn scripted_upstream(
-        answer: fn(&mut TcpStream),
-    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        answer: impl Fn(&mut TcpStream, usize, &Stop) + Send + Sync + 'static,
+    ) -> (String, ScriptedUpstream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let seen = Arc::clone(&count);
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
+        let stop = Arc::new(Stop::default());
+        let stopping = Arc::clone(&stop);
+        let answer = Arc::new(answer);
+        let worker = std::thread::spawn(move || {
+            let mut workers = Vec::new();
+            loop {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if stopping.until(std::time::Instant::now() + Duration::from_millis(10)) {
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(error) => panic!("accept fake request: {error}"),
+                };
                 let seen = Arc::clone(&seen);
-                std::thread::spawn(move || {
+                let stopping = Arc::clone(&stopping);
+                let answer = Arc::clone(&answer);
+                workers.push(std::thread::spawn(move || {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
                     let mut head = Vec::new();
                     let mut byte = [0_u8; 1];
                     while !head.ends_with(b"\r\n\r\n") {
@@ -3312,13 +3392,23 @@ mod tests {
                         .and_then(|value| value.trim().parse().ok())
                         .unwrap_or(0);
                     let mut body = vec![0_u8; length];
-                    let _ = stream.read_exact(&mut body);
-                    seen.fetch_add(1, Ordering::SeqCst);
-                    answer(&mut stream);
-                });
+                    stream.read_exact(&mut body).unwrap();
+                    let attempt = seen.fetch_add(1, Ordering::SeqCst);
+                    answer(&mut stream, attempt, &stopping);
+                }));
+            }
+            for worker in workers {
+                worker.join().unwrap();
             }
         });
-        (format!("http://127.0.0.1:{port}/v1"), count)
+        (
+            format!("http://127.0.0.1:{port}/v1"),
+            ScriptedUpstream {
+                count,
+                stop,
+                worker: Some(worker),
+            },
+        )
     }
 
     const STREAM_HEAD: &[u8] =
@@ -3329,8 +3419,13 @@ mod tests {
         let _ = stream.flush();
     }
 
-    fn silent(_: &mut TcpStream) {
-        std::thread::sleep(Duration::from_secs(5));
+    fn silent(_: &mut TcpStream, _: usize, stop: &Stop) {
+        let stopped = stop.stopped.lock().unwrap();
+        drop(
+            stop.changed
+                .wait_while(stopped, |stopped| !*stopped)
+                .unwrap(),
+        );
     }
 
     fn codex(id: &str, url: &str) -> Account {
@@ -3390,7 +3485,7 @@ mod tests {
             assert!(body.contains(&expected), "{body}");
             assert!(!body.contains("No eligible model"));
             assert!(elapsed >= QUICK.first_output);
-            assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+            assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
             assert_eq!(count.load(Ordering::SeqCst), 1);
             if streamed {
                 // A stream error, which the client reads as a failed model call.
@@ -3415,13 +3510,12 @@ mod tests {
         assert_eq!(status, 200);
         assert!(body.contains(&stalled(QUICK.first_output)), "{body}");
         assert_eq!(count.load(Ordering::SeqCst), 3);
-        assert!(elapsed < Duration::from_secs(6), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
 
         // A stall before output is one failure, and the next account serves.
-        fn answers(stream: &mut TcpStream) {
-            static FIRST: AtomicBool = AtomicBool::new(true);
-            if FIRST.swap(false, Ordering::SeqCst) {
-                return silent(stream);
+        fn answers(stream: &mut TcpStream, attempt: usize, stop: &Stop) {
+            if attempt == 0 {
+                return silent(stream, attempt, stop);
             }
             send(stream, STREAM_HEAD);
             send(
@@ -3440,21 +3534,21 @@ mod tests {
 
     #[test]
     fn a_provider_that_goes_silent_after_one_chunk_ends_the_stream_with_the_stall_error() {
-        fn chat(stream: &mut TcpStream) {
+        fn chat(stream: &mut TcpStream, attempt: usize, stop: &Stop) {
             send(stream, STREAM_HEAD);
             send(
                 stream,
                 b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
             );
-            silent(stream);
+            silent(stream, attempt, stop);
         }
-        fn native(stream: &mut TcpStream) {
+        fn native(stream: &mut TcpStream, attempt: usize, stop: &Stop) {
             send(stream, STREAM_HEAD);
             send(stream, b"data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"i1\",\"call_id\":\"c1\",\"name\":\"read\"}}\n\n");
-            silent(stream);
+            silent(stream, attempt, stop);
         }
         for (answer, subscription, first) in [
-            (chat as fn(&mut TcpStream), false, "partial"),
+            (chat as fn(&mut TcpStream, usize, &Stop), false, "partial"),
             (native, true, "c1"),
         ] {
             let (url, count) = scripted_upstream(answer);
@@ -3469,51 +3563,116 @@ mod tests {
             assert!(body.contains(&stalled(QUICK.idle)), "{body}");
             assert!(!body.contains("[DONE]"));
             assert!(elapsed >= QUICK.idle);
-            assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+            assert!(elapsed < Duration::from_secs(15), "{elapsed:?}");
             // Output reached the client, so the turn is never replayed.
             assert_eq!(count.load(Ordering::SeqCst), 1);
         }
     }
 
     #[test]
-    fn keep_alives_and_reasoning_hold_a_stream_open_past_the_stall_windows() {
-        fn chat(stream: &mut TcpStream) {
-            send(stream, STREAM_HEAD);
-            for _ in 0..12 {
-                std::thread::sleep(Duration::from_millis(100));
-                send(stream, b": keep-alive\n\n");
+    fn line_waits_switch_only_after_output_and_activity_is_not_expiration() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut lines = Lines {
+            lines: receiver,
+            stall: Stall {
+                first_output: Duration::ZERO,
+                idle: Duration::from_nanos(1),
+            },
+            answering: false,
+        };
+        assert!(matches!(lines.next(), Next::Stalled(after) if after == Duration::ZERO));
+        // Queued bytes win even when the wait is zero. Neither comments nor
+        // reasoning start output, but both restart the next wait.
+        for line in [": keep-alive\n", "data: reasoning\n", "\n"] {
+            sender.send(Some(line.to_owned())).unwrap();
+            assert!(matches!(lines.next(), Next::Line(received) if received == line));
+            assert!(!lines.answering);
+        }
+        assert!(matches!(lines.next(), Next::Stalled(after) if after == Duration::ZERO));
+        lines.answering = true;
+        sender.send(Some(": keep-alive\n".into())).unwrap();
+        assert!(matches!(lines.next(), Next::Line(_)));
+        assert!(matches!(lines.next(), Next::Stalled(after) if after == lines.stall.idle));
+        drop(sender);
+        assert!(matches!(lines.next(), Next::End));
+    }
+
+    /// Pace activity against a monotonic deadline. Cancellation wakes the fake
+    /// immediately on failure, and missed ticks never accumulate sleep drift.
+    fn activity(
+        stream: &mut TcpStream,
+        stop: &Stop,
+        duration: Duration,
+        write: impl Fn(&mut TcpStream),
+    ) {
+        let end = std::time::Instant::now() + duration;
+        loop {
+            write(stream);
+            let now = std::time::Instant::now();
+            if now >= end || stop.until((now + Duration::from_millis(50)).min(end)) {
+                return;
             }
+        }
+    }
+
+    #[test]
+    fn keep_alives_and_reasoning_hold_a_stream_open_past_the_stall_windows() {
+        fn chat(stream: &mut TcpStream, _: usize, stop: &Stop) {
+            send(stream, STREAM_HEAD);
+            activity(
+                stream,
+                stop,
+                QUICK.first_output + Duration::from_secs(1),
+                |stream| {
+                    send(stream, b": keep-alive\n\n");
+                },
+            );
             send(
                 stream,
                 b"data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n\n",
             );
-            for _ in 0..8 {
-                std::thread::sleep(Duration::from_millis(100));
-                send(stream, b": keep-alive\n\n");
-            }
+            activity(
+                stream,
+                stop,
+                QUICK.idle + Duration::from_secs(1),
+                |stream| {
+                    send(stream, b": keep-alive\n\n");
+                },
+            );
             send(
                 stream,
                 b"data: {\"choices\":[{\"delta\":{\"content\":\" answer\"}}]}\n\n",
             );
             send(stream, b"data: [DONE]\n\n");
         }
-        fn native(stream: &mut TcpStream) {
+        fn native(stream: &mut TcpStream, _: usize, stop: &Stop) {
             send(stream, STREAM_HEAD);
-            for _ in 0..12 {
-                std::thread::sleep(Duration::from_millis(100));
-                send(stream, b"data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"hm\"}\n\n");
-            }
+            activity(
+                stream,
+                stop,
+                QUICK.first_output + Duration::from_secs(1),
+                |stream| {
+                    send(stream, b"data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"hm\"}\n\n");
+                },
+            );
             send(
                 stream,
                 b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"late\"}\n\n",
             );
-            for _ in 0..8 {
-                std::thread::sleep(Duration::from_millis(100));
-                send(stream, b": keep-alive\n\n");
-            }
+            activity(
+                stream,
+                stop,
+                QUICK.idle + Duration::from_secs(1),
+                |stream| {
+                    send(stream, b": keep-alive\n\n");
+                },
+            );
             send(stream, b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n");
         }
-        for (answer, subscription) in [(chat as fn(&mut TcpStream), false), (native, true)] {
+        for (answer, subscription) in [
+            (chat as fn(&mut TcpStream, usize, &Stop), false),
+            (native, true),
+        ] {
             let (url, count) = scripted_upstream(answer);
             let accounts = if subscription {
                 vec![codex("s1", &url)]
