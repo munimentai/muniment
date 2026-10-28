@@ -9,7 +9,7 @@ use crate::runtime_eprintln as eprintln;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -681,10 +681,24 @@ fn require_queue_ack(response: &Value, command: &str) -> Result<(), String> {
     }
 }
 
-/// Pi must produce a reply event within 30 seconds of prompt submission.
-/// Prompt acknowledgments and unrelated lifecycle frames do not count.
-pub const FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
-pub const FIRST_EVENT_TIMEOUT_REASON: &str = "No reply arrived within 30 seconds. Try again.";
+/// How long Pi has to produce a reply event after prompt submission:
+/// `MUNIMENT_PI_FIRST_EVENT_TIMEOUT_S`, else 30 seconds. The runtime reads it
+/// once. Prompt acknowledgments and unrelated lifecycle frames do not count.
+pub fn first_event_timeout() -> Duration {
+    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| super::pi::pi_timeout_from_env(super::PI_FIRST_EVENT_TIMEOUT_ENV))
+}
+
+/// The failure reason of a run whose first reply event did not arrive in time.
+pub fn first_event_timeout_reason() -> &'static str {
+    static REASON: OnceLock<String> = OnceLock::new();
+    REASON.get_or_init(|| {
+        format!(
+            "No reply arrived within {} seconds. Try again.",
+            first_event_timeout().as_secs()
+        )
+    })
+}
 
 /// The titles of the dialogs among `frames` that nobody answered. Pi waits
 /// on such a dialog when an extension asks it before the prompt is accepted.
@@ -773,7 +787,7 @@ impl PiRunAdapter {
         mut consume: impl FnMut(&Self, &PiChatEvent) -> bool,
     ) -> Result<(Self, PiChatEvent), String> {
         let run_id = run_id.into();
-        let deadline = Instant::now() + FIRST_EVENT_TIMEOUT;
+        let deadline = Instant::now() + first_event_timeout();
         let adapter = Self {
             run_id: run_id.clone(),
             frames: Mutex::new(transport.subscribe()),
@@ -837,7 +851,10 @@ impl PiRunAdapter {
                 for title in unanswered_dialogs(&buffered) {
                     eprintln!("muniment-runtime: run_id={run_id} prompt_blocked_on={title:?}");
                 }
-                format!("Pi did not acknowledge the prompt within 30 seconds. {error}")
+                format!(
+                    "Pi did not acknowledge the prompt within {} seconds. {error}",
+                    first_event_timeout().as_secs()
+                )
             } else {
                 error
             }
@@ -980,7 +997,7 @@ impl PiRunAdapter {
                     }
                 }
                 Err(error) if error == "timed out waiting for Pi stream" => {}
-                Err(error) if error == FIRST_EVENT_TIMEOUT_REASON => return Err(error),
+                Err(error) if error == first_event_timeout_reason() => return Err(error),
                 Err(_) => break,
             }
         }
@@ -990,7 +1007,7 @@ impl PiRunAdapter {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            return Err(FIRST_EVENT_TIMEOUT_REASON.into());
+            return Err(first_event_timeout_reason().into());
         }
         let _ = self.cancel_and_drain(transport, Duration::from_secs(2));
         Err("Pi session binding failed".into())
@@ -1132,7 +1149,7 @@ impl PiRunAdapter {
         let timeout = if let Some(deadline) = *deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(FIRST_EVENT_TIMEOUT_REASON.into());
+                return Err(first_event_timeout_reason().into());
             }
             timeout.min(remaining)
         } else {
@@ -1155,7 +1172,7 @@ impl PiRunAdapter {
             mpsc::RecvTimeoutError::Timeout
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) =>
             {
-                FIRST_EVENT_TIMEOUT_REASON.to_string()
+                first_event_timeout_reason().to_string()
             }
             mpsc::RecvTimeoutError::Timeout => "timed out waiting for Pi stream".to_string(),
             mpsc::RecvTimeoutError::Disconnected => "Pi process stream ended".to_string(),
@@ -1575,6 +1592,16 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(500));
         assert_eq!(
             adapter.next(Duration::ZERO).unwrap_err(),
+            "No reply arrived within 30 seconds. Try again."
+        );
+    }
+
+    #[test]
+    fn the_first_event_bound_defaults_to_30_seconds() {
+        assert!(std::env::var_os("MUNIMENT_PI_FIRST_EVENT_TIMEOUT_S").is_none());
+        assert_eq!(first_event_timeout(), Duration::from_secs(30));
+        assert_eq!(
+            first_event_timeout_reason(),
             "No reply arrived within 30 seconds. Try again."
         );
     }

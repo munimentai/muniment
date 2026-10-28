@@ -35,8 +35,8 @@ use crate::run_events::{
     fail_with_open_effects as core_fail_with_open_effects, ChatEventSink, SharedStorage,
 };
 use crate::sidecar::pi_chat::{
-    ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, PiChatEvent, PiRunAdapter,
-    FIRST_EVENT_TIMEOUT_REASON,
+    first_event_timeout_reason, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest,
+    PiChatEvent, PiRunAdapter,
 };
 use crate::sidecar::{PiRpcTransport, SidecarStatus};
 use serde_json::{json, Value};
@@ -1248,7 +1248,7 @@ fn coordinate_work(
                     .map_err(|error| {
                         if journal_failed {
                             PreparedPromptError::Journal
-                        } else if error == FIRST_EVENT_TIMEOUT_REASON {
+                        } else if error == first_event_timeout_reason() {
                             PreparedPromptError::FirstEventTimeout
                         } else {
                             PreparedPromptError::Binding
@@ -1292,7 +1292,7 @@ fn coordinate_work(
                     &mut projector,
                     &run_id,
                     &mut seq,
-                    FIRST_EVENT_TIMEOUT_REASON,
+                    first_event_timeout_reason(),
                     subject.as_deref(),
                 );
                 engine.stop(runtime);
@@ -1784,7 +1784,7 @@ fn coordinate_work(
                 }
             }
             Ok(PiChatEvent::Interleaved | PiChatEvent::PromptAccepted) => {}
-            Err(error) if error == FIRST_EVENT_TIMEOUT_REASON => {
+            Err(error) if error == first_event_timeout_reason() => {
                 diagnostics.outcome = "unknown_no_first_event";
                 fail_with_open_effects(
                     &app,
@@ -1793,7 +1793,7 @@ fn coordinate_work(
                     &run_id,
                     &mut seq,
                     &mut open_effects,
-                    FIRST_EVENT_TIMEOUT_REASON,
+                    first_event_timeout_reason(),
                     subject.as_deref(),
                 );
                 engine.stop(runtime);

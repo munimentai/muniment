@@ -46,7 +46,7 @@ mod stdin_deadline {
     use muniment_core::run_events::{ChatEvent, ChatEventSink, ChatStorage};
     use muniment_core::run_preparation::{prepare_new_run_with_session_thread, SessionThreadStart};
     use muniment_core::session_thread::SessionThread;
-    use muniment_core::sidecar::pi_chat::FIRST_EVENT_TIMEOUT;
+    use muniment_core::sidecar::pi_chat::first_event_timeout;
     use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_ARTIFACT};
 
     const ARCHIVE: &[u8] = b"muniment-sidecar-test-stub\n";
@@ -74,7 +74,7 @@ mod stdin_deadline {
                 // Measure delivery here, not when the parent gets CPU time to read stderr.
                 // Readiness has its own budget. Allow five seconds for scheduler delay on loaded runners.
                 // This still rejects a second first-event timeout after a blocked stdin write.
-                let bound = FIRST_EVENT_TIMEOUT + Duration::from_secs(5);
+                let bound = first_event_timeout() + Duration::from_secs(5);
                 let elapsed = self
                     .ready
                     .lock()
@@ -82,7 +82,7 @@ mod stdin_deadline {
                     .expect("Pi never became ready.")
                     .elapsed();
                 assert!(
-                    elapsed >= FIRST_EVENT_TIMEOUT,
+                    elapsed >= first_event_timeout(),
                     "The shell failed early: {elapsed:?}."
                 );
                 assert!(elapsed <= bound, "Late shell failure: {elapsed:?}");

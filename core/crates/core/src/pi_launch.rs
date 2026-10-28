@@ -658,7 +658,8 @@ pub fn pi_launch_config_for_executable(
         }
     }
     // Extension loading precedes the first RPC response.
-    config.startup_timeout = std::time::Duration::from_secs(120);
+    config.startup_timeout =
+        crate::sidecar::pi_startup_timeout().max(std::time::Duration::from_secs(120));
     let agent = boundaries.agent_launch();
     // The prompt states what the assistant does; the facts state where it runs.
     let model = if grant.is_local() {
@@ -787,7 +788,7 @@ pub fn pi_launch_config_for_executable(
             .extend(LOCAL_MODE_ENV_REMOVE.iter().map(|name| (*name).to_owned()));
     } else {
         // Cloud setup must release the run before the shell's receipt deadline.
-        config.startup_timeout = std::time::Duration::from_secs(30);
+        config.startup_timeout = crate::sidecar::pi_startup_timeout();
         config.env_remove.push("OPENAI_API_KEY".into());
         config
             .env
