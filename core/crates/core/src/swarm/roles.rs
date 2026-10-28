@@ -6,12 +6,15 @@
 //! - **Full** members hold and relay everything.
 //! - A **worker** holds the content of the agents it runs: their directory
 //!   fields, threads, messages, approvals and run notices, and the leases
-//!   sealed to it. Of the rest it holds the fleet's metadata alone: the
-//!   members, the roster and each agent's directory entry. A record class
-//!   [`visibility`] does not name stays with full members, so a class a
-//!   later stage adds never reaches a worker by default.
+//!   sealed to it. It holds the ordinary threads it owns the same way: their
+//!   registration, summary, runs and posts, so a full member shows them and
+//!   steers them with a post. Of the rest it holds the fleet's metadata
+//!   alone: the members, the roster and each agent's directory entry. A
+//!   record class [`visibility`] does not name stays with full members, so
+//!   a class a later stage adds never reaches a worker by default.
 //! - A worker is a **leaf**. It sends only what it wrote, and a full member
-//!   takes from it only what it wrote about the agents it runs.
+//!   takes from it only what it wrote about the agents it runs and the
+//!   ordinary threads it owns.
 //! - A peer that has not proved a place in the roster over the channel it
 //!   uses gets the roster alone, and nothing it sends is taken in.
 
@@ -48,7 +51,7 @@ pub(super) struct Grant {
     pub(super) runtime_id: String,
     /// The agents whose primary runtime it is.
     pub(super) agents: BTreeSet<String>,
-    /// The threads of those agents.
+    /// The threads of those agents, and the ordinary threads it owns.
     pub(super) threads: BTreeSet<String>,
 }
 
@@ -88,7 +91,7 @@ fn visibility(row: &RecordRow) -> Visibility {
 
 impl Grant {
     /// The grant of the worker `runtime_id`: the agents the directory names
-    /// it primary of, and their threads.
+    /// it primary of, their threads, and the ordinary threads it owns.
     pub(super) fn of(inner: &Inner, runtime_id: &str) -> Result<Self, String> {
         let agents: BTreeSet<String> = directory::all(inner)?
             .into_iter()
@@ -97,12 +100,13 @@ impl Grant {
             .collect();
         let threads = sync::registrations(inner)?
             .into_iter()
-            .filter(|registration| {
-                registration.kind == "agent"
-                    && registration
-                        .agent_id
-                        .as_ref()
-                        .is_some_and(|agent| agents.contains(agent))
+            .filter(|registration| match registration.kind.as_str() {
+                "agent" => registration
+                    .agent_id
+                    .as_ref()
+                    .is_some_and(|agent| agents.contains(agent)),
+                sync::PLAIN => registration.owner_runtime.as_deref() == Some(runtime_id),
+                _ => false,
             })
             .map(|registration| registration.thread_id)
             .collect();
@@ -129,7 +133,8 @@ impl Grant {
     }
 
     /// Widens the grant by what the worker writes in `rows`: an agent it
-    /// creates, which no member held before, and the threads of its agents.
+    /// creates, which no member held before, the threads of its agents, and
+    /// an ordinary thread it registers as its own that no other member owns.
     fn with_writes(mut self, inner: &Inner, rows: &[RecordRow]) -> Self {
         for row in rows {
             let creates = row.class == directory::CLASS
@@ -160,13 +165,39 @@ impl Grant {
                 }
             }
         }
+        for row in rows {
+            let registers = row.class == sync::CLASS
+                && row.field == sync::REGISTRATION
+                && row.origin == self.runtime_id
+                && self.owns_plain(row)
+                && row
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| value["thread_id"] == row.key.as_str())
+                && sync::registration(inner, &row.key).is_none_or(|held| {
+                    held.kind == sync::PLAIN
+                        && held.owner_runtime.as_deref() == Some(self.runtime_id.as_str())
+                });
+            if registers {
+                self.threads.insert(row.key.clone());
+            }
+        }
         self
     }
 
+    /// Whether a thread row names an ordinary thread this worker owns.
+    fn owns_plain(&self, row: &RecordRow) -> bool {
+        row.value.as_ref().is_some_and(|value| {
+            value["owner_runtime"] == self.runtime_id.as_str()
+                && (row.field != sync::REGISTRATION || value["kind"] == sync::PLAIN)
+        })
+    }
+
     /// Whether the worker may write a row a full member takes in: its own
-    /// audit records, and the fields and thread registrations of the
-    /// agents it runs, as their primary. It may neither delete one of those
-    /// agents nor name another primary for it.
+    /// audit records, the fields and thread registrations of the agents it
+    /// runs, as their primary, and the registration and summary of each
+    /// ordinary thread it owns. It may neither delete one of those agents
+    /// nor name another primary for it, nor name another owner of a thread.
     fn writes_row(&self, inner: &Inner, row: &RecordRow) -> bool {
         if row.origin != self.runtime_id {
             return false;
@@ -189,7 +220,18 @@ impl Grant {
                             value["primary_runtime"] == self.runtime_id.as_str()
                         }))
             }
-            sync::CLASS => !row.field.is_empty() && self.holds_row(row),
+            sync::CLASS => {
+                let agent_thread = matches!(
+                    visibility(row),
+                    Visibility::Thread {
+                        agent_id: Some(_),
+                        ..
+                    }
+                );
+                !row.field.is_empty()
+                    && self.holds_row(row)
+                    && (agent_thread || self.owns_plain(row))
+            }
             _ => false,
         }
     }
