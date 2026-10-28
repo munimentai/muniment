@@ -90,7 +90,8 @@ jobs:
       DESKTOP_CI_SLOT_SECONDS: 7200
     strategy:
       fail-fast: false
-      max-parallel: 1
+      # The desktop-ci host has three VM slots, so the three builds run at once.
+      max-parallel: 3
       matrix:
         # Full matrix on schedule / platform=all; a single platform on a targeted dispatch.
         platform: ${{ fromJSON((github.event.inputs.platform == '' || github.event.inputs.platform == 'all') && '["linux","windows","macos"]' || format('["{0}"]', github.event.inputs.platform)) }}
@@ -455,7 +456,7 @@ jobs:
 
   macos-e2e:
     needs: [prepare, windows-e2e]
-    # The desktop-ci host permits one VM at a time. macOS starts only after the
+    # The E2E suites run one after another. macOS starts only after the
     # Windows case has completely finished, including its finalizer.
     if: >-
       !cancelled() && needs.prepare.result == 'success' &&
