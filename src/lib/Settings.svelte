@@ -14,7 +14,10 @@
   // this panel shows the picked page across the thread and rail. A page that
   // holds several parts, such as Data, shows each under its own head.
   import { onMount, setContext } from 'svelte'
-  const Appearance = () => import('./Appearance.svelte')
+  // Appearance rides with Settings. General opens it on the same click that
+  // swaps the page, and a second import leaves the Mode group past the
+  // click's wait when the window is busy.
+  import Appearance from './Appearance.svelte'
   const MemorySection = () => import('./MemorySection.svelte')
   const ModelsSection = () => import('./ModelsSection.svelte')
   const AccountSettings = () => import('./AccountSettings.svelte')
@@ -194,7 +197,7 @@
     {:else if page === 'general'}
       <PageHead intro="How Muniment looks, reads, tells time and notifies." />
       <SettingsPart id="appearance" title="Appearance" focus={part === 'appearance'}>
-        <SettingsSection load={Appearance} properties={{tauri}} />
+        <Appearance {tauri} />
       </SettingsPart>
       <SettingsPart id="language" title="Language" focus={part === 'language'}>
         <SettingsSection load={LanguageSection} properties={{tauri}} />
