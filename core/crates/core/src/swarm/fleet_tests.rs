@@ -15,15 +15,23 @@ use muniment_models::pi_models;
 
 pub(super) struct FleetHost {
     pub(super) session: Option<CloudSession>,
+    /// With a scope, replica threads land in the member's journal, and every
+    /// thread has a live run that takes steering input.
+    pub(super) scope: Option<ReplicaScope>,
+    /// The steering input the live runs took, as (thread, text).
+    pub(super) steered: Mutex<Vec<(String, String)>>,
 }
 
 impl SwarmHost for FleetHost {
     fn replica_scope(&self) -> Option<ReplicaScope> {
-        None
+        self.scope.clone()
     }
 
-    fn steer(&self, _thread_id: &str, _text: &str) -> Option<String> {
-        None
+    fn steer(&self, thread_id: &str, text: &str) -> Option<String> {
+        self.scope.as_ref()?;
+        let mut steered = lock(&self.steered);
+        steered.push((thread_id.to_owned(), text.to_owned()));
+        Some(format!("run-steered-{}", steered.len()))
     }
 
     fn answer_permission(
@@ -47,6 +55,7 @@ pub(super) struct Node {
     pub(super) id: String,
     pub(super) root: PathBuf,
     pub(super) cert: String,
+    pub(super) host: Arc<FleetHost>,
 }
 
 impl Drop for Node {
@@ -61,6 +70,34 @@ impl Node {
     }
 
     pub(super) fn with_session(name: &str, session: Option<CloudSession>) -> Self {
+        Self::with_host(
+            name,
+            FleetHost {
+                session,
+                scope: None,
+                steered: Mutex::default(),
+            },
+        )
+    }
+
+    /// A member whose journal takes replica threads and whose threads each
+    /// have a live run, as a desktop or a runtime that runs Pi holds them.
+    pub(super) fn scoped(name: &str) -> Self {
+        Self::with_host(
+            name,
+            FleetHost {
+                session: None,
+                scope: Some(ReplicaScope {
+                    workspace: "/workspace".into(),
+                    attach_profile: "test-profile".into(),
+                    subject: None,
+                }),
+                steered: Mutex::default(),
+            },
+        )
+    }
+
+    fn with_host(name: &str, host: FleetHost) -> Self {
         let root =
             std::env::temp_dir().join(format!("swarm-fleet-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -68,7 +105,8 @@ impl Node {
             journal: crate::journal::RunJournal::open(root.join("runs.sqlite3")).unwrap(),
             cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
         }));
-        let swarm = Swarm::open(&root, storage, Arc::new(FleetHost { session })).unwrap();
+        let host = Arc::new(host);
+        let swarm = Swarm::open(&root, storage, Arc::clone(&host) as Arc<dyn SwarmHost>).unwrap();
         let id = uuid::Uuid::now_v7().to_string();
         *lock(&swarm.inner.identity) = Some(Identity {
             access: None,
@@ -86,6 +124,7 @@ impl Node {
             id,
             root,
             cert,
+            host,
         }
     }
 
@@ -812,4 +851,237 @@ fn a_member_the_vault_refuses_takes_the_vaults_connections_as_leases() {
     assert_eq!(auth["openai"]["key"], "sk-from-a");
     assert_eq!(auth["anthropic"]["access"], "vault-access");
     assert!(auth["anthropic"].get("refresh").is_none());
+}
+
+fn journal_provenance() -> crate::journal::Provenance {
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert("attach_profile".into(), json!("test-profile"));
+    crate::journal::Provenance {
+        source: "test".into(),
+        source_version: "1".into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra,
+    }
+}
+
+impl Node {
+    /// Creates an ordinary thread here, titled, with one run of `prompt`,
+    /// and lets the scan register it as this member's own. Answers the
+    /// thread and the run.
+    fn ordinary_thread(&self, title: &str, prompt: &str) -> (String, String) {
+        let thread = uuid::Uuid::now_v7().to_string();
+        let run = uuid::Uuid::now_v7().to_string();
+        {
+            let mut storage = self.inner().storage.lock().unwrap();
+            let at = self.inner().now_text();
+            let journal = &mut storage.journal;
+            journal
+                .create_thread_with_id(&thread, "/workspace", &at, journal_provenance())
+                .unwrap();
+            journal
+                .append_thread_title_renamed(1, &thread, title, &at, &journal_provenance())
+                .unwrap();
+            journal
+                .append_new_run_in_thread(
+                    "/workspace",
+                    &thread,
+                    &crate::journal::EventEnvelope {
+                        event_id: uuid::Uuid::now_v7().to_string(),
+                        run_id: run.clone(),
+                        run_seq: 1,
+                        event_type: "user.prompt.submitted".into(),
+                        event_version: 1,
+                        envelope_version: 1,
+                        recorded_at: at.clone(),
+                        occurred_at: None,
+                        correlation_id: None,
+                        causation_id: None,
+                        payload: crate::journal::EventPayload::Inline {
+                            payload_json: json!({"prompt": prompt}),
+                        },
+                        provenance: journal_provenance(),
+                        extra: std::collections::BTreeMap::new(),
+                    },
+                )
+                .unwrap();
+        }
+        sync::scan_local(self.inner()).unwrap();
+        (thread, run)
+    }
+
+    fn holds_thread(&self, thread: &str) -> bool {
+        self.inner()
+            .storage
+            .lock()
+            .unwrap()
+            .journal
+            .thread_exists(thread)
+            .unwrap()
+    }
+
+    fn run_thread(&self, run: &str) -> Option<String> {
+        self.inner()
+            .storage
+            .lock()
+            .unwrap()
+            .journal
+            .run_thread_id(run)
+            .unwrap()
+    }
+
+    fn title(&self, thread: &str) -> Option<String> {
+        self.inner()
+            .storage
+            .lock()
+            .unwrap()
+            .journal
+            .summaries_of_threads(&[thread.to_owned()])
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|summary| summary.title)
+    }
+
+    fn posts(&self, thread: &str) -> Vec<Value> {
+        sync::posted_messages(&self.inner().storage, thread, 100).unwrap_or_default()
+    }
+}
+
+#[test]
+fn a_worker_owned_ordinary_thread_reaches_a_full_member_and_a_post_steers_it() {
+    let a = Node::scoped("desktop");
+    let w = Node::scoped("worker");
+    let v = Node::scoped("other-worker");
+    join(&w, &a, Role::Worker);
+    join(&v, &a, Role::Worker);
+    let links = [(&w, &a), (&v, &a)];
+    settle_links(&links);
+
+    let (thread, run) = w.ordinary_thread("Parser fix", "Fix the parser.");
+    sync::post_as(w.inner(), &thread, json!({"kind": "agent"}), "Tests pass.").unwrap();
+    let (own, _) = a.ordinary_thread("Desktop notes", "Plan the week.");
+    let (other, _) = v.ordinary_thread("Other task", "Write docs.");
+    settle_links(&links);
+
+    // The full member lists the worker's thread with its title, owner, run
+    // and posts, and holds its summary.
+    let registration = sync::registration(a.inner(), &thread).unwrap();
+    assert_eq!(registration.kind, sync::PLAIN);
+    assert_eq!(registration.owner_runtime.as_deref(), Some(w.id.as_str()));
+    assert_eq!(a.swarm.thread_owner(&thread), Some(w.id.clone()));
+    assert_eq!(a.swarm.is_replica_thread(&thread), Some(w.id.clone()));
+    assert_eq!(a.title(&thread).as_deref(), Some("Parser fix"));
+    assert_eq!(a.run_thread(&run), Some(thread.clone()));
+    assert_eq!(a.posts(&thread)[0]["text"], "Tests pass.");
+    assert_eq!(
+        sync::summary(a.inner(), &thread).unwrap().title,
+        "Parser fix"
+    );
+    assert!(a.holds_thread(&other));
+
+    // A worker holds neither the full member's thread nor another worker's.
+    for (worker, foreign) in [(&w, &own), (&w, &other), (&v, &thread), (&v, &own)] {
+        assert!(sync::registration(worker.inner(), foreign).is_none());
+        assert!(!worker.holds_thread(foreign));
+    }
+
+    // A post from the desktop steers the worker's live run, and the worker's
+    // consumption names that run on the desktop.
+    sync::post_operation(
+        a.inner(),
+        json!({"thread_id": thread, "text": "Keep the old API."}),
+    )
+    .unwrap();
+    settle_links(&links);
+    assert_eq!(
+        *lock(&w.host.steered),
+        vec![(thread.clone(), "Keep the old API.".to_owned())]
+    );
+    assert!(lock(&a.host.steered).is_empty());
+    let posted = a.posts(&thread);
+    let post = posted
+        .iter()
+        .find(|post| post["text"] == "Keep the old API.")
+        .unwrap();
+    assert_eq!(post["consumed"], true, "{post}");
+    assert_eq!(post["run_id"], "run-steered-1");
+    assert_eq!(post["origin_runtime"], a.id.as_str());
+
+    // A worker cannot claim the full member's thread as its own: a forged
+    // registration and summary change nothing there.
+    let mut forged = wire(&w.inner().build_exchange(&a.id).unwrap());
+    let clock = Hlc::at(i64::MAX / 4);
+    let row = |field: &str, value: Value| RecordRow {
+        class: sync::CLASS.into(),
+        key: own.clone(),
+        field: field.into(),
+        value: Some(value),
+        clock,
+        origin: w.id.clone(),
+        seq: 1_000_000,
+        rank: 0,
+        deleted: false,
+    };
+    forged.records = vec![
+        row(
+            sync::REGISTRATION,
+            json!({"thread_id": own, "kind": sync::PLAIN, "updated_at": "2999-01-01T00:00:00Z",
+                   "owner_runtime": w.id}),
+        ),
+        row(
+            "summary",
+            json!({"title": "Taken", "owner_runtime": w.id, "last_at": "2999-01-01T00:00:00Z"}),
+        ),
+    ];
+    a.inner().merge_exchange(&w.id, forged).unwrap();
+    assert_eq!(a.swarm.thread_owner(&own), Some(a.id.clone()));
+    assert_eq!(
+        sync::summary(a.inner(), &own).unwrap().title,
+        "Desktop notes"
+    );
+}
+
+#[test]
+fn a_removed_worker_threads_stay_readable() {
+    let a = Node::scoped("desktop");
+    let w = Node::scoped("worker");
+    join(&w, &a, Role::Worker);
+    settle_links(&[(&w, &a)]);
+    let (thread, run) = w.ordinary_thread("Release notes", "Draft the notes.");
+    sync::post_as(w.inner(), &thread, json!({"kind": "agent"}), "Drafted.").unwrap();
+    settle_links(&[(&w, &a)]);
+    assert_eq!(a.title(&thread).as_deref(), Some("Release notes"));
+
+    // The desktop ends the worker's membership, as a finished run leaves.
+    link::leave_runtime(a.inner(), &w.id).unwrap();
+    assert!(a.view().removed.contains(&w.id));
+    a.swarm.tick().unwrap();
+    settle_links(&[(&w, &a)]);
+    assert!(w.view().self_removed());
+
+    // What the worker writes afterwards never arrives.
+    sync::post_as(w.inner(), &thread, json!({"kind": "agent"}), "Too late.").unwrap();
+    settle_links(&[(&w, &a)]);
+
+    // The desktop still lists and reads the thread: title, owner, run and
+    // posts, up to the removal.
+    assert!(a.holds_thread(&thread));
+    assert_eq!(a.title(&thread).as_deref(), Some("Release notes"));
+    assert_eq!(a.swarm.thread_owner(&thread), Some(w.id.clone()));
+    assert_eq!(
+        sync::summary(a.inner(), &thread).unwrap().title,
+        "Release notes"
+    );
+    assert_eq!(a.run_thread(&run), Some(thread.clone()));
+    let texts: Vec<Value> = a
+        .posts(&thread)
+        .into_iter()
+        .map(|post| post["text"].clone())
+        .collect();
+    assert_eq!(texts, vec![json!("Drafted.")]);
+    // The worker keeps its own copy.
+    assert_eq!(w.posts(&thread).len(), 2);
 }
