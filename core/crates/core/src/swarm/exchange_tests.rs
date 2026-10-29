@@ -1062,3 +1062,112 @@ fn ordinary_threads_at_5000_with_50000_events_cost_little_per_tick() {
         changed.response_bytes,
     );
 }
+
+fn log_rows(node: &Node, thread: Option<&str>) -> i64 {
+    node.inner()
+        .store
+        .connect()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM log WHERE ?1 IS NULL OR thread_id=?1",
+            [thread],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn the_events_of_a_deleted_thread_stay_with_its_owner() {
+    let a = Node::scoped("a");
+    let threads = a.seed_journal_threads(40, 12);
+    a.inner().tick().unwrap();
+    // The owner deleted all but one thread, as the scan retires them: the
+    // registrations go and their index rows stay here.
+    let origin = a.inner().origin().unwrap();
+    for thread in &threads[1..] {
+        a.inner()
+            .store
+            .delete_record("threads", "thread_id", thread)
+            .unwrap();
+        a.inner()
+            .records
+            .delete(&origin, a.inner().now(), sync::CLASS, thread, 0, None)
+            .unwrap();
+    }
+
+    // A member that joins takes in the one registered thread, and the
+    // exchange settles instead of paging the deleted threads forever.
+    let b = Node::scoped("b");
+    let join = settle(&a, &b);
+    b.inner().tick().unwrap();
+    assert!(join.iter().all(|round| round
+        .request
+        .events
+        .iter()
+        .all(|event| event.thread_id == threads[0])));
+    assert_eq!(
+        log_rows(&b, Some(&threads[0])),
+        log_rows(&a, Some(&threads[0]))
+    );
+    assert_eq!(log_rows(&b, None), log_rows(&a, Some(&threads[0])));
+}
+
+#[test]
+fn a_link_to_a_peer_that_never_takes_a_page_stops_hurrying() {
+    let a = Node::scoped("a");
+    a.seed_journal_threads(40, 12);
+    a.inner().tick().unwrap();
+    // B holds no replica scope, so it takes in none of the events A pages
+    // and its thread clocks never move.
+    let b = Node::new("b");
+    let mut pacer = link::Pacer::default();
+    let mut at_once = 0;
+    let mut first_page = None;
+    for _ in 0..50 {
+        let round = round(&a, &b);
+        let page: Vec<(String, u64)> = round
+            .request
+            .events
+            .iter()
+            .map(|event| (event.thread_id.clone(), event.seq))
+            .collect();
+        assert!(round.request.more, "A always has more to send");
+        if first_page.is_none() && !page.is_empty() {
+            first_page = Some(page.clone());
+        }
+        if pacer.at_once(
+            round.request.more || round.response.more,
+            link::carried_key(&round.request, &round.response),
+        ) {
+            at_once += 1;
+        }
+    }
+    assert_eq!(log_rows(&b, None), 0);
+    // The same page goes over and over; the link hurries only until the
+    // first repeat and then exchanges at the poll interval.
+    assert!(first_page.is_some_and(|page| !page.is_empty()));
+    assert!(pacer.stalled());
+    assert!(at_once <= 3, "{at_once} of 50 exchanges went at once");
+
+    // A peer that takes in each page is never held back.
+    let c = Node::scoped("c");
+    let mut pacer = link::Pacer::default();
+    let rounds = settle_paced(&a, &c, &mut pacer);
+    assert!(rounds > 1);
+    assert_eq!(log_rows(&c, None), log_rows(&a, None));
+}
+
+/// Exchanges until neither side leaves anything out, and fails when
+/// `pacer` holds back a round that left items out. Answers the rounds.
+fn settle_paced(dialer: &Node, answerer: &Node, pacer: &mut link::Pacer) -> usize {
+    for count in 1..=400 {
+        let round = round(dialer, answerer);
+        let more = round.request.more || round.response.more;
+        let at_once = pacer.at_once(more, link::carried_key(&round.request, &round.response));
+        if !more {
+            return count;
+        }
+        assert!(at_once, "round {count} of a moving join was held back");
+    }
+    panic!("the exchange never settled");
+}

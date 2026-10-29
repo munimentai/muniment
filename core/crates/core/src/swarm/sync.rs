@@ -1062,17 +1062,19 @@ impl Window {
 
     /// Whether the peer takes the history of `thread_id`: every agent and
     /// group thread, and an ordinary thread the peer owns, someone pinned,
-    /// or that was active within the peer's window.
+    /// or that was active within the peer's window. A thread with no
+    /// registration, as one its owner deleted, goes to no peer: a member
+    /// takes in the events of registered threads alone.
     fn wants(
         &self,
         inner: &Inner,
         connection: &rusqlite::Connection,
         thread_id: &str,
     ) -> Result<bool, String> {
-        let Some(since) = &self.since else {
-            return Ok(true);
-        };
         let Some(registration) = registration(inner, thread_id) else {
+            return Ok(false);
+        };
+        let Some(since) = &self.since else {
             return Ok(true);
         };
         if registration.kind != PLAIN
