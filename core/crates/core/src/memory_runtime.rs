@@ -276,8 +276,10 @@ impl ApplicationMemoryRuntime {
             })
             .take(80)
             .collect();
+        // `.js` is CommonJS unless a parent package.json says otherwise, so
+        // `export` fails to parse. The file is written under a temporary directory.
         self.database_root
-            .join(format!("memory-search-extension-{name}.js"))
+            .join(format!("memory-search-extension-{name}.mjs"))
     }
 
     pub fn open_session_for_home(
