@@ -52,7 +52,8 @@ jobs:
           RELEASE_ACTORS: ${{ vars.CI_RELEASE_ACTORS }}
         run: |
           admitted=false
-          if [ -n "$RELEASE_REPOSITORY" ] && [ "$REPOSITORY" = "$RELEASE_REPOSITORY" ] && [ "$REF" = refs/heads/main ]; then
+          # A schedule run carries the bare branch name as its ref, a dispatch the full ref.
+          if [ -n "$RELEASE_REPOSITORY" ] && [ "$REPOSITORY" = "$RELEASE_REPOSITORY" ] && { [ "$REF" = refs/heads/main ] || [ "$REF" = main ]; }; then
             case "$EVENT" in
               schedule) admitted=true ;;
               workflow_dispatch) if [ -n "$ACTOR" ] && [[ " $RELEASE_ACTORS " == *" $ACTOR "* ]]; then admitted=true; fi ;;

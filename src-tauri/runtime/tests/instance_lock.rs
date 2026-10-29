@@ -142,15 +142,66 @@ fn waits_for_the_instance_lock_then_acquires_it_after_release() {
     let lock = filesystem.acquire_instance_lock().unwrap();
     let mut command = runtime.exit_after_lock_command(2_000);
     let mut child = command.stderr(Stdio::piped()).spawn().unwrap();
-
-    std::thread::sleep(Duration::from_millis(150));
-    assert!(child.try_wait().unwrap().is_none());
+    let mut stderr = child.stderr.take().unwrap();
+    // A fixed sleep loses the race when the child has not reached the lock
+    // yet: releasing early means it never waits, so stderr stays empty. Read
+    // until the wait line arrives, which also proves the child is blocked.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        let mut byte = [0];
+        let marker = b"waiting for the instance lock\n";
+        let found = loop {
+            match std::io::Read::read(&mut stderr, &mut byte) {
+                Ok(0) => break false,
+                Ok(_) => captured.push(byte[0]),
+                Err(error) => panic!("runtime stderr read failed: {error}"),
+            }
+            if captured
+                .windows(marker.len())
+                .any(|window| window == marker)
+            {
+                break true;
+            }
+        };
+        let _ = sender.send((found, captured));
+        stderr
+    });
+    let started = Instant::now();
+    let (found, captured) = loop {
+        match receiver.recv_timeout(Duration::from_millis(50)) {
+            Ok(ready) => break ready,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("runtime stderr reader stopped before the instance lock wait")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if started.elapsed() >= CI_WAIT {
+                    // Closing the child's pipes unblocks the reader, so the
+                    // timeout cannot leave a thread waiting on stderr.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = reader.join();
+                    panic!("runtime did not report the instance lock wait");
+                }
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "runtime exited before the instance lock wait"
+                );
+            }
+        }
+    };
+    child.stderr = Some(reader.join().unwrap());
+    assert!(
+        found && child.try_wait().unwrap().is_none(),
+        "runtime exited before the instance lock wait: {}",
+        String::from_utf8_lossy(&captured)
+    );
     drop(lock);
 
     let output = wait_for_exit(child, CI_WAIT);
     assert!(output.status.success());
     assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
+        String::from_utf8([&captured[..], &output.stderr].concat()).unwrap(),
         "muniment-runtime: waiting for the instance lock\n"
     );
 }

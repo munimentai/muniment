@@ -126,7 +126,7 @@ fn announce_post(inner: &Inner, thread_id: &str, payload: &Value, posted_at: &st
 /// The record class of thread registrations, kept in the `threads` table
 /// that the replication reads.
 pub(super) const CLASS: &str = "thread";
-const REGISTRATION: &str = "registration";
+pub(super) const REGISTRATION: &str = "registration";
 /// The record field of an ordinary thread's summary.
 const SUMMARY: &str = "summary";
 
