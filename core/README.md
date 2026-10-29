@@ -410,6 +410,13 @@ at most one in each thread. Queued agent runs start oldest first in their
 agent's primary thread when a place and the thread are free. An update drain
 records every live run, and the next start resumes each of them.
 
+Pi has 30 seconds to become ready for a cloud reply (120 for a local model)
+and 30 seconds to send the first reply event of a prompt. A host that starts
+Pi under load raises them with `MUNIMENT_PI_STARTUP_TIMEOUT_S` and
+`MUNIMENT_PI_FIRST_EVENT_TIMEOUT_S`: whole seconds from 5 to 900, read once
+at start. The runtime logs and ignores any other value. The failure reason
+names the seconds in force.
+
 ### Agent operations
 
 Both routes answer `agent.list` (`{}` → `{"agents", "primary_threads",

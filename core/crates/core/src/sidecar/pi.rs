@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, TryLockError};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, TryLockError};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use super::{ProbeOutcome, RestartPolicy, SidecarConfig, SidecarIo};
+use crate::runtime_eprintln as eprintln;
 
 pub const PI_NPM_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 pub const PI_VERSION: &str = super::pi_install::PI_ARTIFACT.version;
@@ -70,6 +71,49 @@ pub fn validate_pi_session(
     Ok((PiSessionLocator(locator.to_owned()), canonical))
 }
 
+/// The environment variable that sets, in whole seconds, how long Pi may take
+/// to become ready. A host that starts Pi under load raises it.
+pub const PI_STARTUP_TIMEOUT_ENV: &str = "MUNIMENT_PI_STARTUP_TIMEOUT_S";
+/// The environment variable that sets, in whole seconds, how long Pi may take
+/// to produce the first reply event of a prompt.
+pub const PI_FIRST_EVENT_TIMEOUT_ENV: &str = "MUNIMENT_PI_FIRST_EVENT_TIMEOUT_S";
+/// The Pi timeout a runtime uses when the environment names none.
+pub const DEFAULT_PI_TIMEOUT: Duration = Duration::from_secs(30);
+const PI_TIMEOUT_SECONDS: std::ops::RangeInclusive<u64> = 5..=900;
+
+/// A Pi timeout setting: whole seconds between 5 and 900.
+pub fn parse_pi_timeout(value: &str) -> Option<Duration> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|seconds| PI_TIMEOUT_SECONDS.contains(seconds))
+        .map(Duration::from_secs)
+}
+
+/// Reads the Pi timeout in `name`, else 30 seconds. A value outside the
+/// accepted range is logged and ignored.
+pub(super) fn pi_timeout_from_env(name: &str) -> Duration {
+    let Some(value) = std::env::var_os(name) else {
+        return DEFAULT_PI_TIMEOUT;
+    };
+    let value = value.to_string_lossy();
+    parse_pi_timeout(&value).unwrap_or_else(|| {
+        eprintln!(
+            "muniment-runtime: {name}={value:?} ignored; it takes whole seconds from 5 to 900, so Pi uses {}",
+            DEFAULT_PI_TIMEOUT.as_secs()
+        );
+        DEFAULT_PI_TIMEOUT
+    })
+}
+
+/// How long Pi may take to become ready: `MUNIMENT_PI_STARTUP_TIMEOUT_S`,
+/// else 30 seconds. The runtime reads it once.
+pub fn pi_startup_timeout() -> Duration {
+    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| pi_timeout_from_env(PI_STARTUP_TIMEOUT_ENV))
+}
+
 /// Builds either a new persistent Pi session or an explicit reopen. The
 /// session directory must already exist so ownership is established by the
 /// application before launch.
@@ -98,7 +142,7 @@ pub fn pi_sidecar_config(
     }
     config.restart = RestartPolicy::default();
     config.health_interval = Duration::from_secs(15);
-    config.startup_timeout = Duration::from_secs(30);
+    config.startup_timeout = pi_startup_timeout();
     config.shutdown_timeout = Duration::from_secs(2);
     Ok(config)
 }
@@ -503,4 +547,36 @@ pub fn pi_readiness_probe(
     timeout: Duration,
 ) -> impl Fn(&SidecarIo) -> Result<ProbeOutcome, String> + Send + Sync + 'static {
     PiRpcWiring::new().readiness_probe(timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pi_timeout_takes_whole_seconds_from_5_to_900() {
+        assert_eq!(parse_pi_timeout("5"), Some(Duration::from_secs(5)));
+        assert_eq!(parse_pi_timeout(" 180 "), Some(Duration::from_secs(180)));
+        assert_eq!(parse_pi_timeout("900"), Some(Duration::from_secs(900)));
+        for value in ["", "4", "901", "0", "-30", "30s", "1.5", "lots"] {
+            assert_eq!(parse_pi_timeout(value), None, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn pi_timeouts_default_to_30_seconds() {
+        let unset = "MUNIMENT_PI_TIMEOUT_TEST_UNSET";
+        std::env::remove_var(unset);
+        assert_eq!(pi_timeout_from_env(unset), Duration::from_secs(30));
+        let invalid = "MUNIMENT_PI_TIMEOUT_TEST_INVALID";
+        for value in ["2", "901", "soon"] {
+            std::env::set_var(invalid, value);
+            assert_eq!(pi_timeout_from_env(invalid), Duration::from_secs(30));
+        }
+        std::env::set_var(invalid, "240");
+        assert_eq!(pi_timeout_from_env(invalid), Duration::from_secs(240));
+        std::env::remove_var(invalid);
+        assert!(std::env::var_os("MUNIMENT_PI_STARTUP_TIMEOUT_S").is_none());
+        assert_eq!(pi_startup_timeout(), Duration::from_secs(30));
+    }
 }
