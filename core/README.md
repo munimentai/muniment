@@ -758,12 +758,14 @@ steering, gate answers and run starts through `SwarmHost`.
 - **Roles.** `swarm::roles` filters every exchange once as it leaves and
   once as it arrives, for every record class, thread, message and secret.
   A worker holds the directory fields, threads, messages, approvals and
-  run notices of the agents it runs, the leases sealed to it, and the
-  fleet's metadata: members, the roster and each agent's directory entry.
-  A record class the module does not name stays with full members. A
-  worker is a leaf: it sends only what it wrote, and a full member takes
-  from it only what it wrote about its own agents, never a deletion of one
-  or another primary for it. Its forwarded actions lose `agents.manage`
+  run notices of the agents it runs, the ordinary threads it owns with
+  their registration, summary, runs and posts, the leases sealed to it, and
+  the fleet's metadata: members, the roster and each agent's directory
+  entry. A record class the module does not name stays with full members.
+  A worker is a leaf: it sends only what it wrote, and a full member takes
+  from it only what it wrote about its own agents and ordinary threads,
+  never a deletion of one, another primary for an agent or another owner
+  for a thread. Its forwarded actions lose `agents.manage`
   and `runtime.admin`, and it receives only the acknowledgements of its
   own messages. A peer with no proven place in the roster gets the roster
   alone. An exchange to a worker carries `record_floor`, the record numbers
