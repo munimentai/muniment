@@ -260,6 +260,7 @@ fn run(
         );
         connected.store(true, Ordering::SeqCst);
         drop(inner);
+        let mut pacer = Pacer::default();
         loop {
             if stop.load(Ordering::SeqCst) {
                 connected.store(false, Ordering::SeqCst);
@@ -268,12 +269,12 @@ fn run(
             let Some(inner) = weak.upgrade() else {
                 return;
             };
-            match exchange_once(&inner, &runtime_id, &mut active) {
-                Ok(more) => {
+            match exchange_once(&inner, &runtime_id, &mut active, &mut pacer) {
+                Ok(at_once) => {
                     exchanges.fetch_add(1, Ordering::SeqCst);
                     let poll = *lock(&inner.poll);
                     drop(inner);
-                    if !more {
+                    if !at_once {
                         wait(&weak, poll, &stop);
                     }
                 }
@@ -297,9 +298,68 @@ fn run(
     }
 }
 
-/// Runs one exchange over `client` and answers whether either side left
-/// items out.
-fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Result<bool, String> {
+/// Paces a link's exchanges. One that left items out goes again at once,
+/// unless it carried the same items each way as the one before: the peer
+/// took in none of the page and lacks it still. That link waits for the
+/// poll interval or a wake like an idle one, so it cannot spin.
+#[derive(Default)]
+pub(super) struct Pacer {
+    last: Option<u64>,
+    stalled: bool,
+}
+
+impl Pacer {
+    /// Answers whether the next exchange goes at once after one whose
+    /// request and answer `key` names, of which either side left items
+    /// out when `more`.
+    pub(super) fn at_once(&mut self, more: bool, key: u64) -> bool {
+        self.stalled = more && self.last == Some(key);
+        self.last = Some(key);
+        more && !self.stalled
+    }
+
+    /// Whether the last two exchanges carried the same items.
+    pub(super) fn stalled(&self) -> bool {
+        self.stalled
+    }
+}
+
+/// A hash of the items one exchange carried each way: events, records,
+/// clocks, messages, content-store slices, roster entries and sealed
+/// secrets. The member records and their heartbeats do not count.
+pub(super) fn carried_key(request: &Exchange, answer: &Exchange) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for exchange in [request, answer] {
+        for event in &exchange.events {
+            (&event.thread_id, &event.origin, event.seq).hash(&mut hasher);
+        }
+        for row in &exchange.records {
+            (&row.origin, row.seq, &row.class, &row.key, &row.field).hash(&mut hasher);
+        }
+        exchange.clocks.hash(&mut hasher);
+        for blob in &exchange.blobs {
+            (&blob.hash, blob.offset).hash(&mut hasher);
+        }
+        for value in [
+            serde_json::to_vec(&exchange.messages),
+            serde_json::to_vec(&exchange.roster),
+            serde_json::to_vec(&exchange.sealed),
+        ] {
+            value.unwrap_or_default().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+/// Runs one exchange over `client` and answers whether the next one goes
+/// at once, by `pacer`.
+fn exchange_once(
+    inner: &Inner,
+    peer: &str,
+    client: &mut DesktopClient,
+    pacer: &mut Pacer,
+) -> Result<bool, String> {
     super::fleet::note_pinned(peer);
     let request = inner.build_exchange(peer)?;
     let sent_more = request.more;
@@ -325,6 +385,7 @@ fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Resul
         }
     }
     let more = answer.more;
+    let key = carried_key(&request, &answer);
     let name = answer.from.runtime_name.clone();
     super::ops::note_handed(inner, &request.messages);
     let kick = inner.merge_exchange(peer, answer)?;
@@ -340,7 +401,12 @@ fn exchange_once(inner: &Inner, peer: &str, client: &mut DesktopClient) -> Resul
     if kick {
         inner.host.kick_runs();
     }
-    Ok(sent_more || more)
+    let was_stalled = pacer.stalled();
+    let at_once = pacer.at_once(sent_more || more, key);
+    if pacer.stalled() != was_stalled {
+        inner.note_stalled(peer, pacer.stalled());
+    }
+    Ok(at_once)
 }
 
 /// Waits until every connected link ran two more exchanges, for tests.
@@ -763,7 +829,7 @@ pub(super) fn join(inner: &Arc<Inner>, body: Value) -> Result<Value, String> {
         "connected",
         None,
     )?;
-    exchange_once(inner, &runtime_id, &mut client)?;
+    exchange_once(inner, &runtime_id, &mut client, &mut Pacer::default())?;
     start(inner, &runtime_id, Some(client));
     inner.changed("members");
     let member = members_view(inner)?["members"]
