@@ -18,8 +18,9 @@ on:
   workflow_dispatch:
 
 # A PR refresh cancels only that PR. Each main run keeps its acceptance proof.
+# Forgejo leaves github.run_id empty, so a push groups by its commit instead.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Set CI_TOOLCHAIN_REVISION to sha256:<digest> of the native toolchain inventory.
