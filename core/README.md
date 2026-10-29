@@ -637,9 +637,12 @@ steering, gate answers and run starts through `SwarmHost`.
   sends `records` (the rows a peer's `record_vv` lacks), its own `record_vv`,
   and in `clocks` only the threads whose clock changed since the peer's
   `watermarks.ack`, with a digest of every clock each 10 minutes. Events go
-  for the threads whose clock changed since the last exchange and those the
-  peer still lacked, and the scan of the journal reads only the threads
-  that changed, with a full pass every 10 minutes. A peer that lacks a whole
+  for the registered threads whose clock changed since the last exchange and
+  those the peer still lacked, and the scan of the journal reads only the
+  threads that changed, with a full pass every 10 minutes. A link runs the
+  next exchange at once while either side left items out, unless the
+  exchange carried the same items as the one before; that link exchanges at
+  the poll interval and logs once that it stalled. A peer that lacks a whole
   origin or more than one exchange of rows also gets `snapshot` (`{"classes",
   "complete"}`), the sender's rows per class, for its progress. A member
   without `store/1` gets the full `directory`, `groups`, `threads` and
