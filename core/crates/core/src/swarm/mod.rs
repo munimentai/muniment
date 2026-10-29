@@ -304,6 +304,9 @@ struct PeerSync {
     export_epoch: u64,
     /// The record counts the peer sent while this runtime caught up.
     snapshot: Option<SnapshotMark>,
+    /// The link to the peer carried the same items twice in a row and
+    /// paces its exchanges at the poll interval.
+    stalled: bool,
 }
 
 /// What a member sent one peer and took in from it, for `swarm.members`
@@ -1406,11 +1409,31 @@ impl Inner {
         Ok(())
     }
 
-    /// Counts what an exchange carried and logs a large one.
+    /// Notes whether the link to `peer` stalled: it carried the same items
+    /// twice in a row, as when the peer takes in none of a page. A stalled
+    /// link logs once as it stalls and once as it moves again.
+    pub(super) fn note_stalled(&self, peer: &str, stalled: bool) {
+        lock(&self.peers)
+            .entry(peer.to_owned())
+            .or_default()
+            .stalled = stalled;
+        if stalled {
+            crate::runtime_eprintln!(
+                "muniment-runtime: swarm exchange stalled peer={peer}; the peer took in nothing of the last page, so the link exchanges at the poll interval"
+            );
+        } else {
+            crate::runtime_eprintln!("muniment-runtime: swarm exchange moving again peer={peer}");
+        }
+    }
+
+    /// Counts what an exchange carried and logs a large one, unless the
+    /// link to the peer stalled.
     fn note_sent(&self, peer: &str, wire: Wire, exchange: &Exchange, bytes: usize) {
-        let summary = {
+        let (summary, stalled) = {
             let mut peers = lock(&self.peers);
-            let stats = &mut peers.entry(peer.to_owned()).or_default().stats;
+            let sync = peers.entry(peer.to_owned()).or_default();
+            let stalled = sync.stalled;
+            let stats = &mut sync.stats;
             stats.exchanges += 1;
             stats.sent_bytes = bytes as u64;
             stats.max_sent_bytes = stats.max_sent_bytes.max(bytes as u64);
@@ -1418,13 +1441,14 @@ impl Inner {
             stats.clocks_sent += exchange.clocks.len() as u64;
             stats.events_sent += exchange.events.len() as u64;
             stats.store = wire == Wire::Store;
-            exchange
+            let summary = exchange
                 .watermarks
                 .as_ref()
                 .and_then(|watermarks| watermarks.digest.as_ref())
-                .map(|_| stats.clone())
+                .map(|_| stats.clone());
+            (summary, stalled)
         };
-        if bytes >= LOG_EXCHANGE_BYTES || exchange.more {
+        if !stalled && (bytes >= LOG_EXCHANGE_BYTES || exchange.more) {
             crate::runtime_eprintln!(
                 "muniment-runtime: swarm exchange peer={peer} wire={wire:?} bytes={bytes} records={} clocks={} events={} messages={} more={}",
                 exchange.records.len(),
