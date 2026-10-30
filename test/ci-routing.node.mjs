@@ -51,18 +51,19 @@ test('Every workflow keeps bounded checks separate from native and resource-heav
 
 test('Only stale checks for the same PR share cancellable groups.', () => {
   const scopes = [
-    ['ci', workflows['ci.yml']],
-    ['secret-scan', workflows['secret-scan.yml']],
-    ['artifact-store-checks', jobs(workflows['artifact-store.yml']).checks],
+    ['ci', workflows['ci.yml'], 'github.sha'],
+    ['secret-scan', workflows['secret-scan.yml'], 'github.run_id'],
+    ['artifact-store-checks', jobs(workflows['artifact-store.yml']).checks, 'github.run_id'],
   ]
   const groups = new Set()
-  for (const [prefix, scope] of scopes) {
+  for (const [prefix, scope, push] of scopes) {
     const group = scope.match(/group: (.+)/)[1]
-    assert.equal(group, `${prefix}-\${{ github.event_name }}-\${{ github.event.pull_request.number || github.run_id }}`)
+    const key = `\${{ github.event.pull_request.number || ${push} }}`
+    assert.equal(group, `${prefix}-\${{ github.event_name }}-${key}`)
     assert.match(scope, /cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/)
     const resolve = (pr, run, event = pr ? 'pull_request' : 'push') => group
       .replace('${{ github.event_name }}', event)
-      .replace('${{ github.event.pull_request.number || github.run_id }}', String(pr || run))
+      .replace(key, String(pr || run))
     assert.equal(resolve(12, 100), resolve(12, 101))
     assert.notEqual(resolve(12, 100), resolve(13, 101))
     assert.notEqual(resolve(undefined, 100), resolve(undefined, 101))
