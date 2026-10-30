@@ -129,10 +129,11 @@ test -f src-tauri/integration/src/lib.rs
 test -f src-tauri/cli/Cargo.toml
 test -f src-tauri/cli/src/main.rs
 grep -Fxq 'muniment-attach = { path = "../../core/crates/attach", default-features = false, features = ["client"] }' src-tauri/cli/Cargo.toml
-grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' "$ci"
-grep -Fq 'src-tauri/integration/*|src-tauri/integration/**)' "$ci"
-grep -Fq 'core/protocol-fixtures/*|core/protocol-fixtures/**)' "$ci"
-grep -Fq 'echo "companion=$companion" >> "$GITHUB_OUTPUT"' "$ci"
+grep -Fq 'src-tauri/cli/*|src-tauri/cli/**' scripts/ci/classify.sh
+grep -Fq 'src-tauri/integration/*|src-tauri/integration/**)' scripts/ci/classify.sh
+grep -Fq 'core/protocol-fixtures/*|core/protocol-fixtures/**)' scripts/ci/classify.sh
+grep -Fq 'scripts/ci/classify.sh "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"' "$ci"
+grep -Fq 'echo "companion=$companion"' scripts/ci/classify.sh
 grep -Fq "needs.changes.outputs.companion == 'true'" "$ci"
 grep -Fq 'cargo fmt --manifest-path src-tauri/Cargo.toml --package muniment-cli --package muniment-acp --check' "$ci"
 grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-cli --all-targets --locked -- -D warnings' "$ci"
@@ -230,4 +231,48 @@ if [ -n "${GITHUB_ACTIONS:-}" ] || [ "${MUNIMENT_SERVER_CROSS_BUILD:-}" = 1 ]; t
 else
   echo "smoke: aarch64 server cross-build runs on CI or with MUNIMENT_SERVER_CROSS_BUILD=1"
 fi
+# The classifier fixtures replay through the script, so a pattern drift fails smoke.
+test -x scripts/ci/classify.sh
+classify_stub=$(mktemp -d)
+cat > "$classify_stub/git" << 'EOF'
+#!/bin/sh
+if [ "$1" = cat-file ]; then
+  [ "$KNOWN_BASE" = yes ]
+  exit
+fi
+if [ "$1" = diff ]; then
+  printf '%s' "$CHANGED_PATHS"
+  exit
+fi
+echo "unexpected git $*" >&2
+exit 1
+EOF
+chmod +x "$classify_stub/git"
+restore_classify_stub() { rm -rf "$classify_stub"; }
+trap restore_classify_stub EXIT
+for classify_paths in test/fixtures/ci-classify/*.paths; do
+  classify_name=${classify_paths##*/}
+  classify_name=${classify_name%.paths}
+  classify_event=pull_request
+  classify_base=base
+  classify_known=yes
+  classify_changed=$(cat "$classify_paths")
+  if [ "${classify_name#event-}" != "$classify_name" ]; then
+    classify_event=$(sed -n '1s/^event //p' "$classify_paths")
+    classify_base=$(sed -n '2s/^base //p' "$classify_paths")
+    classify_known=$(sed -n '3s/^known //p' "$classify_paths")
+    classify_changed=$(sed -n '4,$p' "$classify_paths")
+  fi
+  if [ -n "$classify_changed" ]; then
+    classify_changed="$classify_changed
+"
+  fi
+  classify_actual=$(PATH="$classify_stub:$PATH" GITHUB_EVENT_NAME="$classify_event" KNOWN_BASE="$classify_known" CHANGED_PATHS="$classify_changed" scripts/ci/classify.sh "$classify_base" HEAD)
+  if [ "$classify_actual" != "$(cat "test/fixtures/ci-classify/$classify_name.out")" ]; then
+    printf 'classifier fixture mismatch: %s\n' "$classify_name" >&2
+    exit 1
+  fi
+done
+restore_classify_stub
+trap - EXIT
 echo "smoke OK"

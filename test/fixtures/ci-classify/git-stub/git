@@ -1,0 +1,12 @@
+#!/bin/sh
+# Lists CHANGED_PATHS as the diff and knows the base only when KNOWN_BASE=yes.
+if [ "$1" = cat-file ]; then
+  [ "$KNOWN_BASE" = yes ]
+  exit
+fi
+if [ "$1" = diff ]; then
+  printf '%s' "$CHANGED_PATHS"
+  exit
+fi
+echo "unexpected git $*" >&2
+exit 1

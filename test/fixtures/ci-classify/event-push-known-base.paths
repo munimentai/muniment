@@ -1,0 +1,4 @@
+event push
+base aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+known yes
+src/Widget.svelte

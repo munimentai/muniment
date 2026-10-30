@@ -8,6 +8,7 @@ import * as routing from './ci-workflow.mjs'
 const root = process.cwd()
 const github = '.github/workflows/ci.yml'
 const workflow = fs.readFileSync(path.join(root, github), 'utf8')
+const classifier = fs.readFileSync(path.join(root, 'scripts/ci/classify.sh'), 'utf8')
 const job = (name, next) => workflow.slice(workflow.indexOf(`  ${name}:\n`), workflow.indexOf(`  ${next}:\n`))
 const changes = job('changes', 'smoke')
 const smoke = job('smoke', 'attach-fixtures-current')
@@ -37,8 +38,10 @@ describe('PR gate shape', () => {
   it('classifies the diff in its own job and exposes the installer flag', () => {
     expect(changes).toContain('installer: ${{ steps.changes.outputs.installer }}')
     expect(changes).toContain('desktop: ${{ steps.changes.outputs.desktop }}')
-    expect(changes).toContain('echo "installer=$installer" >> "$GITHUB_OUTPUT"')
-    const lines = changes.split('\n')
+    expect(changes).toContain('scripts/ci/classify.sh "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"')
+    expect(changes).toContain('>> "$GITHUB_OUTPUT"')
+    expect(classifier).toContain('echo "installer=$installer"')
+    const lines = classifier.split('\n')
     const flag = lines.findLastIndex((line) => line.trim() === 'installer=true')
     expect(flag).toBeGreaterThan(0)
     let patternLine = flag - 1

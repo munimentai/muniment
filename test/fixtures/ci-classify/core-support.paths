@@ -1,0 +1,7 @@
+core/docs/boundary.md
+core/deploy/runtime/publish.sh
+core/scripts/release.py
+core/ci/desktop-ci.sh
+core/test_support/socket_path.rs
+core/Cargo.lock
+.forgejo/workflows/core.yml

@@ -1,0 +1,7 @@
+.github/lib/release-promotion.mjs
+.github/lib/release-promotion.test.js
+.github/lib/update-feed.mjs
+.github/lib/update-feed.test.js
+.github/lib/winget-manifest.mjs
+.github/lib/winget-manifest.test.js
+.github/lib/winget-release.mjs

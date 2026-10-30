@@ -1,0 +1,4 @@
+event workflow_dispatch
+base base
+known yes
+core/README.md

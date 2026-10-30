@@ -1,8 +1,9 @@
 // Runs the CI workflow's own Classify changes script and evaluates the job and
 // step conditions against its outputs, so routing tests read the scheduled
 // commands from the workflow instead of restating its rules.
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 export const mirrors = ['.github/workflows/ci.yml', '.forgejo/workflows/ci.yml']
@@ -166,33 +167,41 @@ export function evaluate(expression, context) {
   return truthy(result)
 }
 
-// Runs the workflow's Classify changes script with a stub git that lists
-// `paths` as the diff and knows `base` only when `knownBase` is true.
+// Runs the workflow's Classify changes step with a PATH git that lists
+// `paths` as the diff and knows `base` only when `knownBase` is true. The
+// stub is an executable, so the step's script call sees it too.
 export function classify(file, paths, { event = 'pull_request', base = 'base', knownBase = true } = {}) {
   const changes = parseWorkflow(file).find((job) => job.name === 'changes')
   const script = changes.steps.find((step) => step.name === 'Classify changes').run
-  const output = execFileSync('bash', ['-eu', '-c', `
-    git() {
-      if [ "$1" = cat-file ]; then [ "$KNOWN_BASE" = true ]; return; fi
-      printf '%s' "$CHANGED_PATHS"
-    }
-    GITHUB_OUTPUT=$(mktemp)
-    trap 'rm -f "$GITHUB_OUTPUT"' EXIT
-    ${script}
-    cat "$GITHUB_OUTPUT"
-  `], {
-    encoding: 'utf8',
-    timeout: 10000,
-    env: {
-      ...process.env,
-      GITHUB_EVENT_NAME: event,
-      BASE_SHA: base,
-      HEAD_SHA: 'head',
-      KNOWN_BASE: String(knownBase),
-      CHANGED_PATHS: paths.length ? `${paths.join('\n')}\n` : '',
-    },
-  })
-  return Object.fromEntries(output.trim().split('\n').map((line) => line.split('=')))
+  const stub = mkdtempSync(path.join(tmpdir(), 'muniment-ci-git-'))
+  writeFileSync(path.join(stub, 'git'), `#!/bin/sh
+if [ "$1" = cat-file ]; then [ "$KNOWN_BASE" = true ]; exit; fi
+printf '%s' "$CHANGED_PATHS"
+`)
+  chmodSync(path.join(stub, 'git'), 0o755)
+  try {
+    const output = execFileSync('bash', ['-eu', '-c', `
+      GITHUB_OUTPUT=$(mktemp)
+      trap 'rm -f "$GITHUB_OUTPUT"' EXIT
+      ${script}
+      cat "$GITHUB_OUTPUT"
+    `], {
+      encoding: 'utf8',
+      timeout: 10000,
+      env: {
+        ...process.env,
+        PATH: `${stub}${path.delimiter}${process.env.PATH}`,
+        GITHUB_EVENT_NAME: event,
+        BASE_SHA: base,
+        HEAD_SHA: 'head',
+        KNOWN_BASE: String(knownBase),
+        CHANGED_PATHS: paths.length ? `${paths.join('\n')}\n` : '',
+      },
+    })
+    return Object.fromEntries(output.trim().split('\n').map((line) => line.split('=')))
+  } finally {
+    rmSync(stub, { recursive: true, force: true })
+  }
 }
 
 const combinations = (matrix) => Object.entries(matrix).reduce((all, [key, values]) =>
