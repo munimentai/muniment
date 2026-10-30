@@ -1,0 +1,28 @@
+{
+  "id": "be581212a",
+  "name": "run failing test",
+  "command": "cd /home/factory/home/projects/work-checkout/core && TMPDIR=/tmp RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo cargo test --locked --features muniment-pins/cli -p muniment-runtime --test agent_runs -- --test-threads=1 2>&1 | tail -80",
+  "status": "completed",
+  "outputPath": ".muniment/tasks/01a18a46-fc64-74db-99d0-5c8f71b42fd3-1443/be581212a.output",
+  "cwd": "/home/factory/home/projects/work-checkout",
+  "startTime": 1793321351585,
+  "endTime": 1793321356962,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 1538,
+  "bytesWritten": 65,
+  "isAgent": false,
+  "surviveReload": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 1800,
+  "shellPolicy": {
+    "policy": "inherit",
+    "executable": "/bin/sh",
+    "argvPrefix": [
+      "-c"
+    ],
+    "dialect": "posix"
+  }
+}

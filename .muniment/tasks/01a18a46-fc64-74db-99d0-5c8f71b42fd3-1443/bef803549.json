@@ -1,0 +1,28 @@
+{
+  "id": "bef803549",
+  "name": "clippy boundary steering",
+  "command": "cd /home/factory/home/projects/work-checkout && export TMPDIR=/tmp RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$HOME/.cargo; (cd core && cargo clippy --workspace --all-targets --locked -- -D warnings > /tmp/clippy.log 2>&1; echo exit=$? >> /tmp/clippy.log); scripts/check-steering.sh . > /tmp/steer.log 2>&1; echo exit=$? >> /tmp/steer.log; scripts/check-core-boundary.sh > /tmp/boundary.log 2>&1; echo exit=$? >> /tmp/boundary.log",
+  "status": "completed",
+  "outputPath": ".muniment/tasks/01a18a46-fc64-74db-99d0-5c8f71b42fd3-1443/bef803549.output",
+  "cwd": "/home/factory/home/projects/work-checkout",
+  "startTime": 1793323278269,
+  "endTime": 1793326035385,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 3232,
+  "bytesWritten": 0,
+  "isAgent": false,
+  "surviveReload": false,
+  "notified": true,
+  "notifyOnCompletion": true,
+  "triggerOnCompletion": true,
+  "timeoutSeconds": 3600,
+  "shellPolicy": {
+    "policy": "inherit",
+    "executable": "/bin/sh",
+    "argvPrefix": [
+      "-c"
+    ],
+    "dialect": "posix"
+  }
+}
