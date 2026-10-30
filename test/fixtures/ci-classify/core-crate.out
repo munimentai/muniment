@@ -1,0 +1,10 @@
+release_tooling=false
+release_only=false
+docs_only=false
+companion=true
+attach_fixtures=false
+code_diff_fixtures=false
+desktop=false
+core_shared=true
+core_support=false
+installer=false

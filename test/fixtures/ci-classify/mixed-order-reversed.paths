@@ -1,0 +1,5 @@
+.github/lib/release-promotion.mjs
+test/windows-installers.ps1
+core/crates/example/src/lib.rs
+src/Widget.svelte
+README.md

@@ -1,0 +1,12 @@
+src-tauri/tauri.conf.json
+src-tauri/windows/per-machine.wxs
+src-tauri/packaging/notes.txt
+src-tauri/capabilities/default.json
+.github/build-linux.sh
+.github/build-windows-installers.mjs
+.github/lib/windows-signing.mjs
+.github/upload-nightly-assets.mjs
+.github/workflows/ci.yml
+.forgejo/workflows/ci.yml
+test/e2e/spec.js
+test/windows-installers.ps1

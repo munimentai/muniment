@@ -42,9 +42,11 @@ const keyInventory = { providers: [{ id: 'anthropic', name: 'Anthropic', source:
 // Settings opens from the sidebar control; a section name picks that section's nav button.
 const openSettings = async (section) => {
   await fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-  const dialog = await screen.findByRole('dialog', { name: 'Settings' })
+  // Settings and each of its pages load lazily, and a cold import on a loaded host outlasts the default 1 s query window.
+  await vi.dynamicImportSettled()
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })
   if (section) await fireEvent.click(within(screen.getByRole('navigation', { name: 'Settings sections' })).getByRole('button', { name: section }))
-  await vi.dynamicImportSettled(); await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument())
+  await vi.dynamicImportSettled(); await waitFor(() => expect(within(dialog).queryByText('Loading settings…')).not.toBeInTheDocument(), { timeout: 5000 })
   return dialog
 }
 const rowControlRules = new Map([...rowControlStyles
@@ -993,6 +995,7 @@ describe('workspace composer entry', () => {
     await waitFor(() => expect(composer).toHaveValue(''))
   })
 
+  // The 300-tool cases render every tool row in jsdom twice, which takes longer than the global test timeout on a loaded host.
   it.each([['chat', 0], ['request', 0], ['chat', 300], ['request', 300]])('restores a local reply when the %s socket reconnects first with %s tools', async (firstSocket, toolCount) => {
     localModeStatus = true
     let requestConnected = true
@@ -1052,7 +1055,7 @@ describe('workspace composer entry', () => {
     expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled()
     expect(invoke).not.toHaveBeenCalledWith('auth_status')
     expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', expect.anything())
-  })
+  }, 120_000)
 
   it('re-reads the open thread when the status poll reports the recovery', async () => {
     let finishRegistration
@@ -1558,7 +1561,7 @@ describe('workspace composer entry', () => {
     await fireEvent.click(settings)
     // Wait for the lazy import before the DOM query starts its timeout.
     await vi.dynamicImportSettled()
-    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })
     // The sidebar swaps its threads for the section list, and the foot keeps Settings as the current page.
     expect(settings).toHaveAttribute('aria-expanded', 'true')
     expect(settings).toHaveAttribute('aria-current', 'page')
@@ -1580,16 +1583,18 @@ describe('workspace composer entry', () => {
     expect(within(nav).getByRole('button', { name: 'Machines' }).querySelector('[data-icon=network]')).not.toBeNull()
     expect(within(nav).getByRole('button', { name: 'Models' })).toHaveAttribute('aria-current', 'true')
     expect(within(dialog).queryByRole('tablist', { name: 'Model settings' })).not.toBeInTheDocument()
-    expect(await within(dialog).findByRole('button', { name: 'Connect account' })).toBeInTheDocument()
+    // Each Settings page loads lazily, and a loaded host renders a lazy page slower than the default 1 s query window.
+    expect(await within(dialog).findByRole('button', { name: 'Connect account' }, { timeout: 5000 })).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Refresh models' })).toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'General' }))
     // Focus moves with the click, so no page but the open one keeps the focus outline.
     expect(document.activeElement).toBe(within(nav).getByRole('button', { name: 'General' }))
-    expect(await within(dialog).findByRole('group', { name: 'Mode' })).toBeInTheDocument()
+    await vi.dynamicImportSettled()
+    expect(await within(dialog).findByRole('group', { name: 'Mode' }, { timeout: 5000 })).toBeInTheDocument()
     expect(within(dialog).queryByText('Summarize older messages to make room. Full history stays saved.')).not.toBeInTheDocument()
     await fireEvent.click(within(nav).getByRole('button', { name: 'Data' }))
     await vi.dynamicImportSettled()
-    expect(await within(dialog).findByText('Summarize older messages to make room. Full history stays saved.')).toBeInTheDocument()
+    expect(await within(dialog).findByText('Summarize older messages to make room. Full history stays saved.', {}, { timeout: 5000 })).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Change workspace folder…' })).toBeInTheDocument()
     // The search narrows the sidebar to matching pages and names the matching parts under them.
     const search = within(document.getElementById('sidebar')).getByRole('searchbox', { name: 'Search settings' })
@@ -1599,10 +1604,12 @@ describe('workspace composer entry', () => {
     expect(within(nav).getAllByRole('button').map((button) => button.textContent)).toEqual(['Voice', 'Shortcut', 'Speech model', 'Transcription'])
     await fireEvent.click(within(nav).getByRole('button', { name: 'Shortcut' }))
     expect(within(nav).getByRole('button', { name: 'Voice' })).toHaveAttribute('aria-current', 'true')
-    expect(await within(dialog).findByRole('button', { name: /Change voice shortcut/ })).toBeInTheDocument()
+    await vi.dynamicImportSettled()
+    expect(await within(dialog).findByRole('button', { name: /Change voice shortcut/ }, { timeout: 5000 })).toBeInTheDocument()
     await fireEvent.input(search, { target: { value: '' } })
     await fireEvent.click(within(nav).getByRole('button', { name: 'Account' }))
-    expect(within(dialog).getByRole('button', { name: 'Sign in for cloud features' })).toBeInTheDocument()
+    await vi.dynamicImportSettled()
+    expect(await within(dialog).findByRole('button', { name: 'Sign in for cloud features' }, { timeout: 5000 })).toBeInTheDocument()
 
     await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
@@ -1618,14 +1625,17 @@ describe('workspace composer entry', () => {
     const shortcut = navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true }
 
     await fireEvent.keyDown(document, shortcut)
-    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    // Settings loads lazily, and a loaded host renders it slower than the default 1 s query window.
+    await vi.dynamicImportSettled()
+    expect(await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })).toBeInTheDocument()
     // Settings keeps the sidebar's state: a collapsed sidebar stays collapsed.
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
 
     await fireEvent.keyDown(document, shortcut)
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
     await fireEvent.keyDown(document, shortcut)
-    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    await vi.dynamicImportSettled()
+    expect(await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })).toBeInTheDocument()
     // A collapsed sidebar shows no Back to threads, so Escape closes Settings.
     await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
@@ -4504,8 +4514,10 @@ describe('Home onboarding', () => {
     firstRun()
     render(App)
     await fireEvent.click(await more())
-    const dialog = await screen.findByRole('dialog', { name: 'Settings' })
-    expect(await within(dialog).findByRole('heading', { name: 'Connect account' })).toBeInTheDocument()
+    // Settings and its Models page load lazily, and a cold import on a loaded host outlasts the default 1 s query window.
+    await vi.dynamicImportSettled()
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })
+    expect(await within(dialog).findByRole('heading', { name: 'Connect account' }, { timeout: 5000 })).toBeInTheDocument()
     expect(within(dialog).getByRole('searchbox', { name: 'Search providers' })).toBeInTheDocument()
   })
 
@@ -4518,7 +4530,9 @@ describe('Home onboarding', () => {
     const saved = SCAN_RETRY_DELAYS.splice(0, Infinity, 1)
     try {
       render(App)
-      await waitFor(() => expect(option('Ollama')).toBeDefined())
+      // The option renders after the retried scan resolves, which a loaded host reaches later than the default 1 s window.
+      await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_provider_scan')).toHaveLength(2), { timeout: 5000 })
+      await waitFor(() => expect(option('Ollama')).toBeDefined(), { timeout: 5000 })
       expect(screen.queryByText('Muniment could not look for local models.', { exact: false })).not.toBeInTheDocument()
       expect(invoke.mock.calls.filter(([command]) => command === 'onboarding_provider_scan')).toHaveLength(2)
     } finally { SCAN_RETRY_DELAYS.splice(0, Infinity, ...saved) }
@@ -5909,8 +5923,10 @@ describe('voice dictation', () => {
     expect(screen.getByRole('alert')).toHaveAttribute('data-composer-notice')
     expect(statusCalls).toBe(2)
     resolveStatus({ state: 'installing', completedBytes: 1, totalBytes: 2 })
-    const card = await screen.findByRole('region', { name: 'Voice dictation' })
-    await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.'))
+    // The next status read follows a 250 ms poll, and a loaded host renders the card slower than the default 1 s query window.
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(3), { timeout: 5000 })
+    const card = await screen.findByRole('region', { name: 'Voice dictation' }, { timeout: 5000 })
+    await waitFor(() => expect(within(card).getByRole('status')).toHaveTextContent('Cancelled.'), { timeout: 5000 })
     expect(statusCalls).toBe(3)
     expect(within(card).getByRole('alert')).toHaveTextContent('The speech model install could not be cancelled. Try again.')
     expect(within(card).getByRole('button', { name: 'Install' })).toBeEnabled()
@@ -6087,7 +6103,9 @@ describe('local file selection', () => {
     await screen.findByText('/chosen')
     const composer = await findWorkspaceComposer()
     await fireEvent.input(composer, {target:{value:'@onbo',selectionStart:5}})
-    await screen.findByRole('option', {name:'ONBOARDING.md'})
+    // The search runs after a debounce; a role query over the whole App DOM outlasts the default 1 s window on a loaded host.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_search_files', expect.objectContaining({query:'onbo'})), { timeout: 5000 })
+    await screen.findByRole('option', {name:'ONBOARDING.md'}, { timeout: 5000 })
     expect(invoke).toHaveBeenCalledWith('chat_search_files', expect.objectContaining({query:'onbo',directory:'/chosen'}))
     expect(screen.getByText('Files in /chosen')).toBeInTheDocument()
   })
@@ -6150,7 +6168,9 @@ describe('local file selection', () => {
     await fireEvent.input(composer, { target: { value: 'Read @iss' } })
     composer.setSelectionRange(9, 9)
     await fireEvent.click(composer)
-    await screen.findByRole('option', { name: 'ISSUES.md' })
+    // The search runs after a debounce; a role query over the whole App DOM outlasts the default 1 s window on a loaded host.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_search_files', expect.objectContaining({ query: 'iss' })), { timeout: 5000 })
+    await screen.findByRole('option', { name: 'ISSUES.md' }, { timeout: 5000 })
     await fireEvent.keyDown(composer, { key: 'Enter' })
     await waitFor(() => expect(composer).toHaveValue('Read @ISSUES.md '))
     expect(document.querySelector('.reference-overlay .mark .file-icon')).not.toBeNull()
@@ -6160,8 +6180,10 @@ describe('local file selection', () => {
     await fireEvent.input(composer, { target: { value: 'Read @ISSUES.md ' } })
     await tick()
     expect(document.querySelector('.reference-overlay .mark .file-icon')).toBeNull()
+    invoke.mockClear()
     await fireEvent.input(composer, { target: { value: '@iss', selectionStart: 4 } })
-    await screen.findByRole('option', { name: 'ISSUES.md' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_search_files', expect.objectContaining({ query: 'iss' })), { timeout: 5000 })
+    await screen.findByRole('option', { name: 'ISSUES.md' }, { timeout: 5000 })
     await fireEvent.keyDown(composer, { key: 'Escape' })
     expect(screen.queryByRole('listbox', { name: 'File suggestions' })).not.toBeInTheDocument()
   })
@@ -6407,7 +6429,9 @@ describe('history hydration', () => {
 
     await fireEvent.click(card.querySelector('summary'))
     await fireEvent.click(await within(card).findByRole('button', { name: 'Load changes' }))
-    expect(await screen.findByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    // CodeDiff loads lazily, and a loaded host renders it slower than the default 1 s query window.
+    await vi.dynamicImportSettled()
+    expect(await screen.findByLabelText('Code changes', {}, { timeout: 5000 })).toHaveAttribute('data-diff-id', 'fixture-modified')
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_run_detail')).toHaveLength(2)
   })
 })
@@ -6702,7 +6726,9 @@ describe('permission gates', () => {
 
     const title = await screen.findByText('Proposed file changes')
     const card = title.closest('.permission-card')
-    expect(await within(card).findByLabelText('Code changes')).toHaveAttribute('data-diff-id', 'fixture-modified')
+    // CodeDiff loads lazily, and a loaded host renders it slower than the default 1 s query window.
+    await vi.dynamicImportSettled()
+    expect(await within(card).findByLabelText('Code changes', {}, { timeout: 5000 })).toHaveAttribute('data-diff-id', 'fixture-modified')
     expect(within(card).getByText((_, element) => element.classList.contains('d2h-code-line-ctn')
       && element.textContent === 'Hello Muniment')).toBeInTheDocument()
     const approve = within(card).getByRole('button', { name: 'Apply' })

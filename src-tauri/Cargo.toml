@@ -20,7 +20,7 @@ resolver = "2"
 
 # A copy of the version in core/Cargo.toml, which scripts/version.py checks.
 [workspace.package]
-version = "0.4.1"
+version = "0.4.2"
 
 [build-dependencies]
 sha2 = "0.11"
