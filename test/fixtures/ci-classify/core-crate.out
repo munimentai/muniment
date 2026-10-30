@@ -8,3 +8,5 @@ desktop=false
 core_shared=true
 core_support=false
 installer=false
+windows=false
+macos=false

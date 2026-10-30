@@ -79,6 +79,8 @@ jobs:
       core_shared: ${{ steps.changes.outputs.core_shared }}
       core_support: ${{ steps.changes.outputs.core_support }}
       installer: ${{ steps.changes.outputs.installer }}
+      windows: ${{ steps.changes.outputs.windows }}
+      macos: ${{ steps.changes.outputs.macos }}
       release_tooling: ${{ steps.changes.outputs.release_tooling }}
       release_only: ${{ steps.changes.outputs.release_only }}
     steps:
@@ -362,9 +364,10 @@ jobs:
       - name: Check out desktop-CI budget helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # A change to the shared core crates alone checks the Tauri crate on Linux only.
+      # Linux checks every desktop and shared core change. Windows and macOS
+      # check only a change the classifier routes to that platform.
       - name: Check (${{ matrix.platform }}) via desktop-ci
-        if: needs.changes.outputs.desktop == 'true' || matrix.platform == 'linux'
+        if: matrix.platform == 'linux' || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true') || (matrix.platform == 'macos' && needs.changes.outputs.macos == 'true')
         env:
           PLATFORM: ${{ matrix.platform }}
           INSTALLER: ${{ needs.changes.outputs.installer }}

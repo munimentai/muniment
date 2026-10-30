@@ -251,11 +251,13 @@ for (const file of routing.mirrors) {
     for (const paths of [['src/App.svelte', 'core/Cargo.lock'], ['core/docs/core-boundary.md', 'src/App.svelte']]) {
       const { outputs, scheduled } = routing.route(file, paths)
       assert.equal(outputs.desktop, 'true')
-      assert.deepEqual(routing.desktopPlatforms(scheduled), ['linux', 'macos', 'windows'])
+      assert.deepEqual([outputs.windows, outputs.macos], ['false', 'false'], paths.join(' '))
+      assert.deepEqual(routing.desktopPlatforms(scheduled), ['linux'])
       assert.ok(routing.coreWorkspaceTests(scheduled).filter(workspaceTest).length > 0, paths.join(' '))
     }
     const shared = routing.route(file, ['core/crates/core/src/lib.rs'])
     assert.equal(shared.outputs.core_shared, 'true')
+    assert.deepEqual([shared.outputs.windows, shared.outputs.macos], ['false', 'false'])
     assert.deepEqual(routing.desktopPlatforms(shared.scheduled), ['linux'])
     const jobsFor = paths => new Set(routing.route(file, paths).scheduled.map(step => step.job))
     assert.ok(jobsFor(['core/protocol-fixtures/muniment-attach/1/hello.json']).has('attach-fixtures-current'))
@@ -269,8 +271,8 @@ for (const file of routing.mirrors) {
       { event: 'push', base: 'b'.repeat(40), knownBase: false }, { event: 'workflow_dispatch' },
     ]) {
       const { outputs, scheduled } = routing.route(file, ['core/README.md'], options)
-      assert.deepEqual([outputs.desktop, outputs.installer, outputs.core_shared, outputs.attach_fixtures, outputs.code_diff_fixtures],
-        ['true', 'true', 'true', 'true', 'true'], JSON.stringify(options))
+      assert.deepEqual([outputs.desktop, outputs.installer, outputs.core_shared, outputs.attach_fixtures, outputs.code_diff_fixtures,
+        outputs.windows, outputs.macos], ['true', 'true', 'true', 'true', 'true', 'true', 'true'], JSON.stringify(options))
       assert.deepEqual(routing.desktopPlatforms(scheduled), ['linux', 'macos', 'windows'])
       assert.ok(routing.boundaryChecks(scheduled).length > 0)
       assert.ok(routing.coreWorkspaceTests(scheduled).filter(workspaceTest).length > 0, JSON.stringify(options))
@@ -282,5 +284,36 @@ for (const file of routing.mirrors) {
     assert.deepEqual(routing.boundaryChecks(scheduled), [])
     assert.deepEqual(routing.cargoTests(scheduled), [])
     assert.deepEqual(routing.desktopPlatforms(scheduled), [])
+  })
+}
+
+const platformRoutes = [
+  [['src/lib/ModelAccounts.svelte'], 'false', 'false', ['linux']],
+  [['src-tauri/src/keychain_macos.c'], 'false', 'true', ['linux', 'macos']],
+  [['src-tauri/src/cef_windows.rs'], 'true', 'false', ['linux', 'windows']],
+  [['src-tauri/Cargo.lock'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['src-tauri/tauri.conf.json'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['src-tauri/windows/per-machine.wxs'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['src-tauri/packaging/notes.txt'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['src-tauri/capabilities/default.json'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['.github/build-linux.sh'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['.github/lib/windows-signing.mjs'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['test/e2e/spec.js'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['test/windows-installers.ps1'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['.github/workflows/ci.yml'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['.forgejo/workflows/ci.yml'], 'true', 'true', ['linux', 'macos', 'windows']],
+  [['core/crates/core/src/lib.rs'], 'false', 'false', ['linux']],
+]
+
+for (const file of routing.mirrors) {
+  test(`${file}: each native preflight runs only for a change routed to its platform.`, () => {
+    for (const [paths, windows, macos, platforms] of platformRoutes) {
+      const { outputs, scheduled } = routing.route(file, paths)
+      assert.deepEqual([outputs.windows, outputs.macos], [windows, macos], paths.join(' '))
+      assert.deepEqual(routing.desktopPlatforms(scheduled), platforms, paths.join(' '))
+    }
+    const dispatch = routing.route(file, ['src/lib/ModelAccounts.svelte'], { event: 'workflow_dispatch' })
+    assert.deepEqual([dispatch.outputs.windows, dispatch.outputs.macos], ['true', 'true'])
+    assert.deepEqual(routing.desktopPlatforms(dispatch.scheduled), ['linux', 'macos', 'windows'])
   })
 }
