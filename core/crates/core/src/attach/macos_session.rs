@@ -214,7 +214,26 @@ impl AdmissionDiagnostic {
     }
 
     fn record(&self, phase: &str, error: Option<&str>, closed_by: &str) {
+        // The desktop connects every minute or so. A usual admission writes
+        // nothing, so the log keeps failures, slow admissions and routes the
+        // code check did not match.
+        if error.is_none() && self.usual() {
+            return;
+        }
         self.record_envelope(self.envelope(phase, error, closed_by));
+    }
+
+    /// A desktop client whose code check matched and whose admission took
+    /// less than half its bound, with a code check under a second.
+    fn usual(&self) -> bool {
+        let admission = self.admission_started.elapsed();
+        matches!(self.route, MacosAttachConnectionRoute::DesktopClient { .. })
+            && self.code_check["matched"] == serde_json::json!(true)
+            && admission * 2 < self.bound
+            && self.code_check["elapsed_ms"]
+                .as_u64()
+                .is_none_or(|elapsed| elapsed < 1000)
+            && self.io_failure.borrow().is_none()
     }
 
     fn record_envelope(&self, envelope: serde_json::Value) {
@@ -819,6 +838,35 @@ mod tests {
                 assert!(envelope[field].is_number());
             }
         }
+    }
+
+    #[test]
+    fn a_usual_desktop_admission_writes_no_record_and_an_unusual_one_does() {
+        let usual = AdmissionDiagnostic::route(
+            &Reader(true),
+            &std::env::current_exe().unwrap(),
+            Duration::from_secs(5),
+        );
+        usual.record("desktop-handshake", None, "none");
+        assert!(usual.records.borrow().is_empty());
+        usual.record("desktop-handshake", Some("Timeout"), "runtime");
+        assert_eq!(usual.records.borrow().len(), 1);
+
+        let unmatched = AdmissionDiagnostic::route(
+            &Reader(false),
+            &std::env::current_exe().unwrap(),
+            Duration::from_secs(5),
+        );
+        unmatched.record("companion-route", None, "none");
+        assert_eq!(unmatched.records.borrow()[0]["phase"], "companion-route");
+
+        let slow = AdmissionDiagnostic::route(
+            &Reader(true),
+            &std::env::current_exe().unwrap(),
+            Duration::ZERO,
+        );
+        slow.record("desktop-handshake", None, "none");
+        assert_eq!(slow.records.borrow()[0]["phase"], "desktop-handshake");
     }
 
     #[test]
