@@ -123,7 +123,7 @@
           <h4>{@render mark(group)}{group.label}</h4>
           <ul>{#each group.shown as model (model.id)}{@render row(group, model)}{/each}</ul>
           <!-- With no decision model the router has no row of its own: its pooled models list under their providers. -->
-          {#if group.classifier && !group.models.length}<p class="support router-empty">Connect a decision model to route each message.</p>{/if}
+          {#if group.classifier && !group.models.length}<p class="support">Connect a decision model to route each message.</p>{/if}
           {#if group.legacy.length}
             <button type="button" class="quiet legacy-toggle" aria-expanded={open} onclick={() => toggleLegacy(group)}>
               <span class="legacy-text"><span>Legacy models</span><span class="legacy-count">{group.legacy.length} {group.legacy.length === 1 ? 'model' : 'models'}</span></span>

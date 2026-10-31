@@ -431,7 +431,7 @@
 {#snippet source(entry)}
   {@const thread = factThread(entry)}
   {@const title = titles.get(thread)}
-  <dd class="source">{sourceLabel(entry)}{#if title}{' · '}<button type="button" class="thread-link" aria-label={`Open ${title}`} onclick={() => openThread(thread)}>{title}</button>{/if}</dd>
+  <dd>{sourceLabel(entry)}{#if title}{' · '}<button type="button" class="thread-link" aria-label={`Open ${title}`} onclick={() => openThread(thread)}>{title}</button>{/if}</dd>
 {/snippet}
 {#snippet proposalRow(proposal)}
   {@const key = `pending:${proposal.id}`}
