@@ -3817,6 +3817,37 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row-title[data-unread]')).toMatch(/font-weight:\s*var\(--weight-semibold\)/)
   })
 
+  it('shows a loading line, no empty list and no new thread until the first thread read settles at launch', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }]
+    const summaries = deferred()
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries' && !args[0]?.cursor
+      ? summaries.promise.then(() => core(command, ...args))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const sidebar = await waitFor(() => { const node = document.getElementById('sidebar'); expect(node).not.toBeNull(); return node })
+    expect(await within(sidebar).findByRole('status')).toHaveTextContent('Loading threads…')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(within(sidebar).queryByText('No threads yet.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 1, name: 'New thread' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.queryByRole('region', { name: 'Start with' })).not.toBeInTheDocument()
+    summaries.resolve()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })).not.toHaveAttribute('aria-busy', 'true')
+    expect(within(sidebar).queryByText('Loading threads…')).not.toBeInTheDocument()
+    expect(within(sidebar).queryByText('No threads yet.')).not.toBeInTheDocument()
+  })
+
+  it('names an empty thread list once the first read finds no threads', async () => {
+    threadSummaryResult = []
+    render(App)
+    expect(await screen.findByText('No threads yet.')).toBeInTheDocument()
+    expect(screen.queryByText('Loading threads…')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'New thread' })).toBeInTheDocument()
+  })
+
   it('lights no result on a row until the first thread opens at launch, and never on the open thread', async () => {
     const at = '2026-07-28T11:55:00Z'
     threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }, { threadId: 'other', title: 'Other result', updatedAt: at, runtimeId: 'local' }]
