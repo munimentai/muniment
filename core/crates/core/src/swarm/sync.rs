@@ -1312,12 +1312,14 @@ fn local_provenance(scope: Option<&ReplicaScope>, attach_profile: &str) -> Prove
     }
 }
 
-/// Creates the replica of a registered thread under its own id.
+/// Creates the replica of a registered thread under its own id, at
+/// `created_at`: the time of the first event it holds. A replica created at
+/// the time its events arrive would list as newer than its last message.
 fn ensure_thread(
-    inner: &Inner,
     journal: &mut crate::journal::RunJournal,
     thread_id: &str,
     scope: Option<&ReplicaScope>,
+    created_at: &str,
 ) -> Result<bool, String> {
     if journal.thread_exists(thread_id).map_err(journal_error)? {
         return Ok(true);
@@ -1329,7 +1331,7 @@ fn ensure_thread(
         .create_thread_with_id(
             thread_id,
             &scope.workspace,
-            &inner.now_text(),
+            created_at,
             local_provenance(Some(scope), &scope.attach_profile),
         )
         .map_err(journal_error)?;
@@ -1474,7 +1476,9 @@ fn import_one(
 ) -> Result<Option<Logged>, String> {
     let mut storage = storage_lock(&inner.storage)?;
     let journal = &mut storage.journal;
-    if !ensure_thread(inner, journal, &event.thread_id, scope)? {
+    let now = inner.now_text();
+    let created_at = event.envelope["recorded_at"].as_str().unwrap_or(&now);
+    if !ensure_thread(journal, &event.thread_id, scope, created_at)? {
         return Ok(None);
     }
     let (_, thread_profile) = journal
@@ -1611,7 +1615,7 @@ pub(super) fn post(
     {
         let mut storage = storage_lock(&inner.storage)?;
         let journal = &mut storage.journal;
-        if !ensure_thread(inner, journal, thread_id, scope.as_ref())? {
+        if !ensure_thread(journal, thread_id, scope.as_ref(), &inner.now_text())? {
             return Err("Open Muniment and connect a model before posting.".into());
         }
         let profile = journal
@@ -1663,7 +1667,7 @@ fn append_local(
     let scope = inner.host.replica_scope();
     let mut storage = storage_lock(&inner.storage)?;
     let journal = &mut storage.journal;
-    if !ensure_thread(inner, journal, thread_id, scope.as_ref())? {
+    if !ensure_thread(journal, thread_id, scope.as_ref(), &inner.now_text())? {
         return Err("The thread is not on this runtime.".into());
     }
     let profile = journal

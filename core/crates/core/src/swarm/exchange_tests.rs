@@ -1171,3 +1171,62 @@ fn settle_paced(dialer: &Node, answerer: &Node, pacer: &mut link::Pacer) -> usiz
     }
     panic!("the exchange never settled");
 }
+
+#[test]
+fn a_replica_thread_takes_the_time_of_its_events_not_their_arrival() {
+    let b = Node::scoped("b");
+    let owner = uuid::Uuid::now_v7().to_string();
+    let thread = uuid::Uuid::now_v7().to_string();
+    assert!(sync::ensure_registration(
+        b.inner(),
+        &ThreadRegistration {
+            thread_id: thread.clone(),
+            kind: "agent".into(),
+            agent_id: Some(uuid::Uuid::now_v7().to_string()),
+            group_id: None,
+            updated_at: "2026-10-20T12:50:43Z".into(),
+            owner_runtime: Some(owner.clone()),
+        },
+    )
+    .unwrap());
+    // The owner posted days ago. The event arrives now.
+    let posted_at = "2026-10-20T12:51:00Z";
+    let message = uuid::Uuid::now_v7().to_string();
+    let envelope = crate::journal::ThreadEventEnvelope::new(
+        &message,
+        &thread,
+        crate::journal::replica::THREAD_MESSAGE_POSTED,
+        posted_at,
+        json!({
+            "message_id": message,
+            "author": {"kind": "agent"},
+            "text": "Morning report.",
+            "deps": {},
+            "origin_runtime": owner,
+        }),
+        provenance(),
+    );
+    sync::import(
+        b.inner(),
+        vec![ReplicatedEvent {
+            thread_id: thread.clone(),
+            origin: owner,
+            seq: 1,
+            kind: "thread".into(),
+            envelope: serde_json::to_value(&envelope).unwrap(),
+            prompt: None,
+        }],
+    )
+    .unwrap();
+    assert_eq!(b.posts(&thread), vec!["Morning report.".to_owned()]);
+    let summary = b
+        .inner()
+        .storage
+        .lock()
+        .unwrap()
+        .journal
+        .summaries_of_threads(&[thread])
+        .unwrap()
+        .remove(0);
+    assert_eq!(summary.updated_at, posted_at);
+}
