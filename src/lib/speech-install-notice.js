@@ -2,7 +2,7 @@
 // over the Voice button. While the model downloads, one notice with a progress
 // bar stays without a clock. Once the model is on disk it turns into the
 // installed notice, and a failed download turns into its failure with Try again.
-import { formatBytes, installStateWords } from './speech-install.js'
+import { composerInstallWords, formatBytes } from './speech-install.js'
 
 export const SPEECH_INSTALL_NOTICE = 'speech-install'
 
@@ -35,7 +35,7 @@ export function createSpeechInstallNotice({ notices, cancel, retry }) {
     }
     if (!downloading) return
     downloading = false
-    if (state === 'installed') notices.show({ id, cause: 'installed', text: installStateWords('installed'), placement: 'end', dismissLabel })
+    if (state === 'installed') notices.show({ id, cause: 'installed', text: composerInstallWords('installed'), placement: 'end', dismissLabel })
     else if (state === 'failed') notices.show({ id, cause: `failed ${attempt}`, text: status.message ?? 'The speech model could not be installed.', placement: 'end', action: { label: 'Try again', run: retry }, dismissLabel })
     else notices.withdraw(id)
   }

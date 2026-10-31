@@ -129,7 +129,7 @@
   import { firstRunError } from './lib/onboarding-diagnostics.js'
   import { relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
-  import { formatBytes, installStateWords } from './lib/speech-install.js'
+  import { composerInstallWords, formatBytes } from './lib/speech-install.js'
   import { createSpeechInstallNotice } from './lib/speech-install-notice.js'
   import { downloadsAllowed, installSpeechModel, resumeSpeechModel } from './lib/large-downloads.js'
   import RunMark from './lib/RunMark.svelte'
@@ -4166,7 +4166,7 @@
                 </dl>
               </details>
               <!-- The Install control states a missing model, so only a later state earns a line. -->
-              {#if speechInstallStatus && speechInstallStatus.state !== 'notInstalled'}<p role="status">{installStateWords(speechInstallStatus.state)}</p>{/if}
+              {#if speechInstallStatus && speechInstallStatus.state !== 'notInstalled'}<p role="status">{composerInstallWords(speechInstallStatus.state)}</p>{/if}
               {#if speechInstallStatus?.state === 'notInstalled' || speechInstallStatus?.state === 'cancelled' || speechInstallStatus?.state === 'failed'}
                 <button type="button" disabled={speechInstallPending} onclick={() => startSpeechInstall()}>Install</button>
               {/if}

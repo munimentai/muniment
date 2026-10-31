@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatBytes, installStateWords } from './speech-install.js'
+import { formatBytes, installStateWords, composerInstallWords } from './speech-install.js'
 
 describe('speech model install display', () => {
   it.each([
@@ -18,11 +18,16 @@ describe('speech model install display', () => {
   it.each([
     ['notInstalled', 'Not installed.'],
     ['installing', 'Installing.'],
-    ['installed', 'Installed. Press Voice again to dictate.'],
+    ['installed', 'Installed.'],
     ['cancelled', 'Cancelled.'],
     ['failed', 'Failed.'],
     ['unknown', 'Install state unavailable.'],
   ])('maps %s to words', (state, expected) => {
     expect(installStateWords(state)).toBe(expected)
+  })
+
+  it('points the composer back to Voice once the model is installed', () => {
+    expect(composerInstallWords('installed')).toBe('Installed. Press Voice again to dictate.')
+    expect(composerInstallWords('failed')).toBe('Failed.')
   })
 })
