@@ -54,6 +54,8 @@ pub fn resolve(
     if root.is_symlink() {
         return Err("The workspace root must not be a symbolic link.".into());
     }
+    crate::state_root::guard_owner_data(root, "a workspace folder");
+    crate::state_root::guard_owner_data(profile, "the workspace name index");
     fs::create_dir_all(profile).map_err(|e| e.to_string())?;
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let lock = fs::OpenOptions::new()

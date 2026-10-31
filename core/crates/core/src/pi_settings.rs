@@ -370,6 +370,7 @@ fn lock_with_stale(path: &Path, timeout: Duration, stale: Duration) -> io::Resul
 }
 
 pub fn store_pi_settings(path: &Path, artifact: PiArtifactDescriptor) -> io::Result<()> {
+    crate::state_root::guard_owner_data(path, "the agent settings");
     let parent = path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())

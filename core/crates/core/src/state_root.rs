@@ -51,11 +51,28 @@ pub fn home_directory_value() -> Option<OsString> {
     }
 }
 
+/// The state directory: the one `MUNIMENT_STATE_DIR` names, else
+/// `~/.muniment`. A test run that would reach the owner's real directory
+/// gets a temporary directory per process instead.
 pub fn state_directory() -> Option<PathBuf> {
-    state_directory_from(
-        std::env::var_os(STATE_DIRECTORY_OVERRIDE).as_deref(),
-        home_directory_value().as_deref(),
-    )
+    let override_value = std::env::var_os(STATE_DIRECTORY_OVERRIDE);
+    let state = state_directory_from(override_value.as_deref(), home_directory_value().as_deref());
+    // A test run that names no state directory and keeps the owner's home
+    // gets a temporary one. A test that sets a temporary home keeps its own.
+    let state = match state {
+        Some(state)
+            if is_test_run()
+                && absolute(override_value.as_deref()).is_none()
+                && is_owner_data(&state) =>
+        {
+            Some(test_state_directory())
+        }
+        state => state,
+    };
+    if let Some(state) = &state {
+        guard_owner_data(state, "the state directory");
+    }
+    state
 }
 
 pub fn agent_directory(state: &Path) -> PathBuf {
@@ -500,6 +517,69 @@ pub fn test_credentials_directory() -> PathBuf {
     std::env::temp_dir().join(format!("muniment-test-credentials-{}", std::process::id()))
 }
 
+/// The state directory a test run uses when `MUNIMENT_STATE_DIR` names none:
+/// one temporary directory per process.
+pub fn test_state_directory() -> PathBuf {
+    std::env::temp_dir()
+        .join(format!("muniment-test-state-{}", std::process::id()))
+        .join(STATE_DIRECTORY_NAME)
+}
+
+/// The Documents folder a test run uses in place of the owner's: one
+/// temporary directory per process, created on first use.
+pub fn test_documents_directory() -> PathBuf {
+    let directory = std::env::temp_dir()
+        .join(format!("muniment-test-documents-{}", std::process::id()))
+        .join("Documents");
+    let _ = fs::create_dir_all(&directory);
+    directory
+}
+
+/// The root of the owner's real data that holds `path`: the state directory
+/// or the default Home under Documents of the user the operating system
+/// names, whatever `HOME` says. The file system on macOS ignores case, so
+/// the match does too.
+fn owner_data_root(path: &Path) -> Option<PathBuf> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let home = crate::user_diagnostics::effective_user_home().ok()?;
+        let lower = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
+        let target = lower(path);
+        [
+            home.join(STATE_DIRECTORY_NAME),
+            home.join("Documents").join("muniment"),
+        ]
+        .into_iter()
+        .find(|root| target.starts_with(lower(root)))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Whether `path` lies in the owner's real state directory or default Home.
+pub fn is_owner_data(path: &Path) -> bool {
+    owner_data_root(path).is_some()
+}
+
+/// Stops a test run before it writes the owner's real state directory or the
+/// default Home under `~/Documents/muniment`.
+pub fn guard_owner_data(path: &Path, what: &str) {
+    if !is_test_run() {
+        return;
+    }
+    if let Some(root) = owner_data_root(path) {
+        panic!(
+            "A test tried to write {what} in {}, under the owner's {}. Tests set \
+             {STATE_DIRECTORY_OVERRIDE} or a temporary home.",
+            path.display(),
+            root.display()
+        );
+    }
+}
+
 /// The variable that names the directory the runtime logs go to in place of
 /// the platform's. A test that starts a runtime binary sets it for the child,
 /// which is no test run itself, and reads the child's log there.
@@ -560,6 +640,32 @@ mod log_guard_tests {
                 .join("Library/Logs/Muniment");
             let refused = std::panic::catch_unwind(|| super::guard_log_directory(&real));
             assert!(refused.is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod owner_data_guard_tests {
+    #[test]
+    fn a_test_run_keeps_state_and_home_in_temporary_directories() {
+        assert!(super::is_test_run());
+        let state = super::state_directory().unwrap();
+        assert!(!super::is_owner_data(&state), "{}", state.display());
+        assert!(super::test_state_directory().starts_with(std::env::temp_dir()));
+        assert!(super::test_documents_directory().is_dir());
+        super::guard_owner_data(&super::test_state_directory(), "a test");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            let home = crate::user_diagnostics::effective_user_home().unwrap();
+            for owned in [
+                home.join(".muniment/agent/settings.json"),
+                home.join("Documents/muniment/sessions/Untitled-0000000a"),
+                home.join("Documents/Muniment"),
+            ] {
+                let refused =
+                    std::panic::catch_unwind(|| super::guard_owner_data(&owned, "a test"));
+                assert!(refused.is_err(), "{}", owned.display());
+            }
         }
     }
 }

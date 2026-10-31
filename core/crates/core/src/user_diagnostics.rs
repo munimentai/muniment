@@ -3,11 +3,11 @@ use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::Path;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::path::PathBuf;
 
 /// Resolves the effective user's home from the OS user database.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn effective_user_home() -> io::Result<PathBuf> {
     use std::ffi::CStr;
     use std::os::unix::ffi::OsStringExt;
