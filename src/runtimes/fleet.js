@@ -218,8 +218,8 @@ function secretName(id, swarm, accounts) {
 }
 
 // A model or MCP connection's name from core's `fleet.credentials`
-// accounts: a sign-in by its provider, a router account by its label.
-// A connection the accounts do not list keeps its name.
+// accounts: a sign-in by its provider, a router account by its label, or
+// in words when the accounts do not list it. Any other name stays as core wrote it.
 const HARNESS_SIGN_IN = /^pi:(.+)$/
 function connectionName(name, accounts) {
   const text = String(name ?? '')
@@ -228,7 +228,7 @@ function connectionName(name, accounts) {
   const account = (accounts ?? []).find((entry) => entry.name === text)
   const harness = HARNESS_SIGN_IN.exec(text)
   if (harness) return providerName(account?.provider || harness[1])
-  if (text.startsWith('router:') && account?.label) return account.label
+  if (text.startsWith('router:')) return account?.label || 'a model account'
   const mcp = /^mcp(?:-oauth)?:(.+)$/.exec(text)
   if (mcp) return mcp[1]
   return account?.label || text

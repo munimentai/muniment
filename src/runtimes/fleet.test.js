@@ -148,8 +148,8 @@ describe('the audit log', () => {
     expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `vault:${LAPTOP}:${BOX}` } }, swarm).detail).toBe('Vault token of This computer for Build box')
     expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `handover:${LAPTOP}:router:a1b2` } }, swarm, accounts).detail).toBe('Sign-in handover of Work from This computer')
     expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:a1b2' } }, swarm, accounts).detail).toBe('Work')
-    // A connection the accounts do not list keeps its name.
-    expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:gone' } }, swarm, []).detail).toBe('router:gone')
+    // A router account the accounts do not list reads in words, never by its id.
+    expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:0193aa' } }, swarm, []).detail).toBe('a model account')
   })
 
   it('reads each entry in the direction the action went', () => {
