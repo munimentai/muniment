@@ -705,6 +705,7 @@ fn map_routines(
             proposed: true,
             last_poll: None,
             next_fire_at: None,
+            cut_short: false,
         };
         portable_routine(&mut routine);
         routine.proposed = true;

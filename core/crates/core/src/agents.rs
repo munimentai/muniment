@@ -674,6 +674,14 @@ pub(crate) fn save_definition(
                     });
             }
         }
+        // A cut prompt stays marked until a save changes it. The mark comes
+        // from the saved routine, never from the client.
+        routine.cut_short = previous
+            .into_iter()
+            .flat_map(|previous| &previous.routines)
+            .any(|saved| {
+                saved.id == routine.id && saved.cut_short && saved.prompt == routine.prompt
+            });
         // An enabled routine is not a proposal.
         if routine.enabled {
             routine.proposed = false;
@@ -1903,7 +1911,7 @@ mod tests {
     }
 
     #[test]
-    fn a_routine_an_older_extraction_cut_loads_on_whole_words() {
+    fn a_routine_an_older_extraction_cut_stays_runnable_and_marked_until_edited() {
         let (root_dir, profile) = profile();
         let id = uuid::Uuid::new_v4().to_string();
         let cut = "Search for recent Tauri news and deliver a three-bullet-poin";
@@ -1926,7 +1934,42 @@ mod tests {
         let routine = &agent.routines[0];
         assert_eq!(routine.id, "extract-cc22420970616a65");
         assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
-        assert_eq!(routine.prompt, "Search for recent Tauri news and deliver.");
+        assert_eq!(routine.prompt, format!("{cut}."));
+        assert!(routine.cut_short);
+        // A save that keeps the prompt keeps the mark, and a toggle is no edit.
+        let saved = save(&profile, agent.clone()).unwrap();
+        assert!(saved.routines[0].cut_short);
+        let toggled = save_routine(
+            &profile,
+            &id,
+            Routine {
+                enabled: false,
+                cut_short: false,
+                ..saved.routines[0].clone()
+            },
+        )
+        .unwrap();
+        assert!(toggled.cut_short);
+        assert!(get(&profile, &id).unwrap().routines[0].cut_short);
+        // The user's edit of the prompt clears it for good.
+        let edited = save_routine(
+            &profile,
+            &id,
+            Routine {
+                prompt: "Search for recent Tauri news and deliver a three-bullet-point briefing."
+                    .into(),
+                ..toggled
+            },
+        )
+        .unwrap();
+        assert!(!edited.cut_short);
+        let reloaded = get(&profile, &id).unwrap();
+        assert!(!reloaded.routines[0].cut_short);
+        assert!(
+            !fs::read_to_string(folder(&profile, &id).unwrap().join("agent.md"))
+                .unwrap()
+                .contains("cut_short")
+        );
         fs::remove_dir_all(root_dir).unwrap();
     }
 

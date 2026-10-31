@@ -79,6 +79,11 @@ pub struct Routine {
     /// disabled until accepted, and accepting clears the mark.
     #[serde(default, skip_serializing_if = "is_false")]
     pub proposed: bool,
+    /// An older extraction cut the prompt at the name limit and the agent's
+    /// instructions no longer hold the full sentence. The routine still runs
+    /// the cut prompt, and the user's next edit of its prompt clears the mark.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cut_short: bool,
     /// The last poll of an MCP routine. The runtime keeps it, and a save
     /// ignores the value it receives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -482,6 +487,7 @@ pub fn schedule_routine(schedule: &crate::agents::Schedule, tz: &str) -> Result<
         proposed: false,
         last_poll: None,
         next_fire_at: None,
+        cut_short: false,
     })
 }
 
@@ -751,6 +757,7 @@ mod tests {
             proposed: false,
             last_poll: None,
             next_fire_at: None,
+            cut_short: false,
         };
         validate_routine(&base).unwrap();
         let broken = |change: &dyn Fn(&mut Routine)| {
@@ -838,6 +845,7 @@ mod tests {
             proposed: false,
             last_poll: None,
             next_fire_at: None,
+            cut_short: false,
         };
         let prompt = routine_prompt(&routine);
         assert!(prompt.contains("Morning check"));
