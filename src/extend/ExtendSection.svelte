@@ -176,12 +176,12 @@
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
         {#if distinctPublisher(entry)}<p class="publisher">{entry.publisher}</p>{/if}
-        {#if entry.categories.length}<p class="category">{categoryLabel(entry.categories[0])}{#if entry.categories.length > 1}<span class="more-categories"> +{entry.categories.length - 1}<span class="visually-hidden">: {entry.categories.slice(1).map(categoryLabel).join(', ')}</span></span>{/if}</p>{/if}
+        {#if entry.categories.length}<p class="category">{categoryLabel(entry.categories[0])}{#if entry.categories.length > 1}<span class="more-categories">{` +${entry.categories.length - 1}`}<span class="visually-hidden">: {entry.categories.slice(1).map(categoryLabel).join(', ')}</span></span>{/if}</p>{/if}
         <div class="actions"><button type="button" class="details-link" aria-label="Details" onclick={() => showDetails(entry)}><LucideIcon name="info" size={16} variant="action" /></button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
-      <Group heading="Popular MCPs" plain>{@render cards(featured, 'Popular MCP servers')}</Group>
+      <Group heading="Popular MCP servers" plain>{@render cards(featured, 'Popular MCP servers')}</Group>
     {/if}
     <Group heading={featured.length ? 'More MCPs' : ''} label="MCP servers" plain>
       {@render cards(results, 'MCP catalog')}

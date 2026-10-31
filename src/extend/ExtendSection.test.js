@@ -37,12 +37,18 @@ it('previews a source before installing selected skills', async () => {
 
 it('shows twelve popular cards before the rest and supports name sorting', async () => {
   render(ExtendSection, {tauri:{invoke:vi.fn(async()=>({items:[]}))}})
-  expect(screen.getByLabelText('Popular MCP servers').querySelectorAll('article')).toHaveLength(12)
+  expect(screen.getByRole('heading', {name:'Popular MCP servers'})).toBeInTheDocument()
+  expect(screen.queryByText('Popular MCPs')).toBeNull()
+  const popular = document.querySelector('[aria-label="Popular MCP servers"]')
+  expect(popular.querySelectorAll('article')).toHaveLength(12)
+  // A card with more categories names the count after a space: `Creative +1`.
+  for (const more of popular.querySelectorAll('.more-categories')) expect(more.firstChild.textContent).toMatch(/^ \+\d+$/)
+  expect(popular.querySelectorAll('.more-categories').length).toBeGreaterThan(0)
   await fireEvent.click(screen.getByRole('button',{name:'Filters'}))
   expect(screen.getByRole('button', {name:'Sort: Popularity'})).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('button', {name:'Sort: Popularity'}))
   await fireEvent.click(screen.getByRole('menuitemradio', {name:'Name A–Z'}))
-  expect(screen.queryByLabelText('Popular MCP servers')).not.toBeInTheDocument()
+  expect(document.querySelector('[aria-label="Popular MCP servers"]')).toBeNull()
 })
 
 it('opens provider details inside the app and adds the server from the dialog', async () => {
