@@ -15,6 +15,8 @@ const RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD: &[u8] =
     b"event=runtime_service_registration_failed message=runtime service registration failed\n";
 const RUNTIME_SERVICE_START_FAILED_RECORD: &[u8] =
     b"event=runtime_service_start_failed message=runtime service start failed\n";
+const RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD: &[u8] =
+    b"event=runtime_service_requires_approval message=runtime service requires approval\n";
 
 /// What the start path did after a kickstart of an enabled service failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,7 +330,8 @@ fn diagnostic_record(activation: RuntimeServiceActivation) -> Option<&'static [u
     match activation {
         RuntimeServiceActivation::NotFound => Some(RUNTIME_SERVICE_NOT_FOUND_RECORD),
         RuntimeServiceActivation::Failed => Some(RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD),
-        RuntimeServiceActivation::Enabled | RuntimeServiceActivation::RequiresApproval => None,
+        RuntimeServiceActivation::RequiresApproval => Some(RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD),
+        RuntimeServiceActivation::Enabled => None,
     }
 }
 
@@ -503,8 +506,8 @@ fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
 }
 
 /// The shell's event for a start through the login service. A service the
-/// user turned off in Login Items needs approval, so the notice names Login
-/// Items, and only a job that never stays running falls back to the child.
+/// user turned off in Login Items needs approval. The owner then runs the
+/// runtime as the desktop's child, and the notice names Login Items.
 #[cfg(target_os = "macos")]
 fn login_service_event(start: LoginServiceStart) -> crate::runtime_owner::RuntimeEvent {
     use crate::runtime_owner::RuntimeEvent;
@@ -1689,11 +1692,14 @@ mod tests {
                     .as_slice()
             )
         );
-        assert_eq!(diagnostic_record(RuntimeServiceActivation::Enabled), None);
         assert_eq!(
             diagnostic_record(RuntimeServiceActivation::RequiresApproval),
-            None
+            Some(
+                b"event=runtime_service_requires_approval message=runtime service requires approval\n"
+                    .as_slice()
+            )
         );
+        assert_eq!(diagnostic_record(RuntimeServiceActivation::Enabled), None);
     }
 
     #[test]
@@ -1704,9 +1710,9 @@ mod tests {
         fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700)).unwrap();
 
         write_activation_diagnostic(&logs, RuntimeServiceActivation::Enabled).unwrap();
-        write_activation_diagnostic(&logs, RuntimeServiceActivation::RequiresApproval).unwrap();
         assert!(!logs.exists());
 
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::RequiresApproval).unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
         write_start_diagnostic(&logs, RuntimeStartOutcome::Requested).unwrap();
@@ -1714,6 +1720,7 @@ mod tests {
         assert_eq!(
             fs::read(logs.join("runtime.log")).unwrap(),
             [
+                RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD,
                 RUNTIME_SERVICE_NOT_FOUND_RECORD,
                 RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD,
                 RUNTIME_SERVICE_START_FAILED_RECORD,
@@ -2096,7 +2103,7 @@ mod tests {
     }
 
     #[test]
-    fn a_service_the_user_turned_off_asks_for_login_items_and_starts_no_child() {
+    fn a_service_the_user_turned_off_asks_for_login_items_and_requests_no_service_start() {
         // macOS reports a registration the user turned off in Login Items as
         // requiring approval, and a new registration as denied by the user.
         for (statuses, registration) in [

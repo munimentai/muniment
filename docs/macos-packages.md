@@ -19,9 +19,13 @@ and rechecks the status. An MDM package cannot register absent users.
 
 An `enabled` status permits a kick-start in that user's `gui/<uid>` domain
 when the attach endpoint is absent. A `requiresApproval` status or registration
-denial leaves the runtime inactive. The app explains the required approval and
-opens System Settings > General > Login Items on request. A `notFound` status
-or another registration error also leaves the service inactive.
+denial leaves the service inactive, and the app runs the bundled runtime as its
+own child, which stops when the app quits. A `requiresApproval` status writes
+`event=runtime_service_requires_approval` to `runtime.log`. A notice over the
+composer says scheduled agents run only while Muniment is open and opens System
+Settings > General > Login Items on request. An approval takes effect at the
+next launch. A `notFound` status or another registration error also leaves the
+service inactive.
 
 `launchd` applies a launch constraint to the bundle's `BundleProgram`.
 Background Task Management keeps one login item per app and agent, and that

@@ -93,16 +93,18 @@ fn start_requested(event: RuntimeEvent) -> bool {
 }
 
 /// Starts the runtime through the background service, and runs it as the
-/// desktop's child when the service never registers or never stays running.
-/// The flag is true when that child started, since the runtime then stops
-/// with the desktop.
+/// desktop's child when the service never registers, never stays running, or
+/// is turned off in Login Items. The flag is true when that child started,
+/// since the runtime then stops with the desktop.
 #[cfg(any(test, all(target_os = "macos", not(feature = "local-runtime"))))]
 fn start_with_fallback(
     service: impl FnOnce() -> RuntimeEvent,
     child: impl FnOnce() -> RuntimeEvent,
 ) -> (RuntimeEvent, bool) {
     match service() {
-        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
+        RuntimeEvent::RegistrationFailed
+        | RuntimeEvent::ServiceInactive
+        | RuntimeEvent::RequiresApproval => {
             let event = child();
             (event, event == RuntimeEvent::ChildStarted)
         }
@@ -331,8 +333,12 @@ impl RuntimeOwner {
         let revision = self.state.lock().unwrap().snapshot.revision;
         let requires_approval = query();
         self.update(app, |state| {
+            // A child runtime serves the app while Login Items keeps the
+            // service off, so the approval is a notice, not a blocking screen.
+            // An approval takes effect at the next start.
             if state.snapshot.revision != revision
                 || state.snapshot.busy
+                || state.snapshot.foreground_only
                 || state.snapshot.last_event == RuntimeEvent::Connected
             {
                 return;
@@ -861,6 +867,53 @@ mod tests {
         );
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
         assert_eq!(state.snapshot.cause, None);
+    }
+
+    #[test]
+    fn a_service_turned_off_in_login_items_runs_a_child_behind_a_non_blocking_notice() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let (event, foreground_only) = start_with_fallback(
+            || RuntimeEvent::RequiresApproval,
+            || RuntimeEvent::ChildStarted,
+        );
+        assert_eq!((event, foreground_only), (RuntimeEvent::ChildStarted, true));
+        owner.update(app.handle(), |state| {
+            state.service_started(event, foreground_only)
+        });
+        let now = Instant::now();
+        // Approval queries keep reporting the switch as off. Neither the
+        // starting child nor the connected one turns into the approval screen.
+        owner.poll_approval(app.handle(), || Some(true));
+        assert_eq!(
+            runtime_state(app.state()).last_event,
+            RuntimeEvent::ChildStarted
+        );
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((true, true), now, None, None, |_| vec![]);
+        });
+        let connected = runtime_state(app.state());
+        assert_eq!(connected.last_event, RuntimeEvent::Connected);
+        assert!(!connected.visible);
+        assert!(connected.foreground_only);
+        owner.poll_approval(app.handle(), || Some(true));
+        assert_eq!(runtime_state(app.state()), connected);
+        // A child that exits shows the outage, not the approval screen.
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((false, false), now, None, None, |_| vec![]);
+        });
+        owner.poll_approval(app.handle(), || Some(true));
+        let outage = runtime_state(app.state());
+        assert_eq!(outage.last_event, RuntimeEvent::Disconnected);
+        assert!(outage.foreground_only);
+        // An approval while the child runs waits for the next start.
+        owner.poll_approval(app.handle(), || Some(false));
+        assert_eq!(runtime_state(app.state()), outage);
+        assert_eq!(
+            serde_json::to_value(runtime_state(app.state())).unwrap()["foregroundOnly"],
+            true
+        );
     }
 
     #[test]
@@ -1542,6 +1595,7 @@ mod tests {
         for service in [
             RuntimeEvent::ServiceInactive,
             RuntimeEvent::RegistrationFailed,
+            RuntimeEvent::RequiresApproval,
         ] {
             let started = start_with_fallback(
                 || service,
@@ -1552,7 +1606,7 @@ mod tests {
             );
             assert_eq!(started, (RuntimeEvent::ChildStarted, true));
         }
-        assert_eq!(child_calls.get(), 2);
+        assert_eq!(child_calls.get(), 3);
         let mut state = Lifecycle::default();
         state.service_started(RuntimeEvent::ChildStarted, true);
         state.observe(true, false, Instant::now());
