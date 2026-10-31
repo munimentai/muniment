@@ -13,6 +13,9 @@ afterEach(() => {
 })
 
 const LONG = '/Users/mpruitt/Documents/muniment/sessions/Single-Word-Pong-Request/workspace'
+// What zsh writes as it starts under the terminal's own prompt: the partial
+// line mark, then the `$ ` prompt.
+const PROMPT = '\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m' + ' '.repeat(79) + '\r \r\r\x1b[0m\x1b[27m\x1b[24m\x1b[J$ \x1b[K\x1b[?2004h'
 const settle = async () => { await tick(); await new Promise((resolve) => requestAnimationFrame(resolve)); await new Promise((resolve) => setTimeout(resolve, 50)) }
 
 // The Terminal panel at `width` pixels, open on `path`, with a shell that
@@ -67,4 +70,36 @@ it('shows a short terminal path from its start with no hover name', async () => 
   expect(text.scrollWidth).toBeLessThanOrEqual(text.clientWidth)
   expect(line.dataset.cut).toBe('false')
   expect(getComputedStyle(line, '::after').content).toBe('none')
+})
+
+it('gives the shell the panel size it grew to while the shell started, so the prompt fits', async () => {
+  const target = document.createElement('div')
+  Object.assign(target.style, { position: 'absolute', left: '20px', top: '20px', width: '0px', height: '400px', display: 'flex', flexDirection: 'column' })
+  document.body.append(target)
+  const calls = []
+  let release
+  const started = new Promise((resolve) => { release = resolve })
+  const invoke = async (command, args) => {
+    calls.push([command, args])
+    if (command === 'workspace_folders') return [{ label: 'Session', path: '/tmp/work' }]
+    if (command === 'terminal_start') { await started; return 'session-1' }
+    if (command === 'terminal_read') return { bytes: [], exited: false }
+    return null
+  }
+  component = mount(TerminalWorkspace, { target, props: { tauri: { invoke } } })
+  await expect.poll(() => calls.some(([command]) => command === 'terminal_start')).toBe(true)
+  const narrow = calls.find(([command]) => command === 'terminal_start')[1]
+  // The panel finishes its slide before the shell answers with its id.
+  target.style.width = '600px'
+  await settle()
+  release()
+  await expect.poll(() => calls.filter(([command]) => command === 'terminal_resize').at(-1)?.[1]?.cols ?? 0).toBeGreaterThan(narrow.cols)
+  const sized = calls.filter(([command]) => command === 'terminal_resize').at(-1)[1]
+  expect(sized.id).toBe('session-1')
+  expect(sized.cols).toBeGreaterThan(20)
+})
+
+it('draws the shell prompt as soon as the terminal opens', async () => {
+  const { target } = await terminal(600, '/tmp/work', PROMPT)
+  await expect.poll(() => target.querySelector('.xterm-rows')?.textContent ?? '').toContain('$')
 })

@@ -63,6 +63,10 @@
       const next = await tauri.invoke('terminal_start', { path: cwd, cols: terminal.cols, rows: terminal.rows })
       if (!active) { await tauri.invoke('terminal_close', { id: next }); return }
       id = next; if (!hidden) terminal.focus(); void poll()
+      // The panel can grow while the shell starts, as it slides open, and a
+      // shell told a width too narrow for its prompt draws none. The shell
+      // takes the panel's size as soon as it has an id.
+      await resize()
     } catch (e) { if (active) error = String(e) }
     finally { starting = false }
   }
