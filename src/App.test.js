@@ -3749,10 +3749,10 @@ describe('thread name', () => {
     expect(appRules.get('input.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
     expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
-    // A row title that overflows fades at its end, one that fits shows whole, and the time keeps its width.
+    // A row title that overflows ends in an ellipsis, one that fits shows whole, and the time keeps its width.
     expect(appRules.get('.thread-row-title')).toMatch(/flex:\s*1 1 auto/)
+    expect(appRules.get('.thread-row-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).not.toMatch(/mask-image/)
-    expect(appRules.get('.thread-row-title[data-overflow="true"]')).toMatch(/mask-image:\s*linear-gradient\(to right, currentColor calc\(100% - 28px\), transparent\)/)
     expect(appRules.get('.thread-row time')).toMatch(/flex:\s*none/)
   })
 

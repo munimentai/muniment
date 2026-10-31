@@ -183,3 +183,48 @@ it('marks the Agents and Artifacts rows as the open row while their page shows, 
     for (const other of ['Agents', 'Artifacts'].filter((entry) => entry !== name)) expect(sidebar.querySelector(`button[aria-label="${other}"]`)).not.toHaveAttribute('aria-current')
   }
 })
+
+// Starts a new thread and sends its first message, whose reply stays running.
+async function sendFirstMessage(text) {
+  const core = window.__TAURI__.core.invoke
+  window.__TAURI__.core.invoke = async (command, payload) => {
+    if (command === 'chat_new_thread') return 'fresh-1'
+    if (command === 'chat_submit') return { runId: 'run-fresh', attachments: [] }
+    if (command === 'chat_current_thread') return 'fresh-1'
+    return core(command, payload)
+  }
+  await userEvent.click(document.querySelector('button[aria-label="New thread"]'))
+  await expect.poll(() => document.querySelector('textarea')).toBeTruthy()
+  await userEvent.click(document.querySelector('textarea'))
+  await userEvent.keyboard(text)
+  await userEvent.keyboard('{Enter}')
+  await expect.poll(() => document.querySelector('[data-fresh-thread]')).toBeTruthy()
+  return document.querySelector('[data-fresh-thread]')
+}
+
+it('ends a new thread row\'s long title in an ellipsis and names its machine and time while the first reply runs', async () => {
+  await mountWindow(true)
+  const row = await sendFirstMessage(`Plan a starship tour for a ${LONG}`)
+  const title = row.querySelector('.thread-row-title')
+  expect(getComputedStyle(title).textOverflow).toBe('ellipsis')
+  expect(title.scrollWidth).toBeGreaterThan(title.clientWidth)
+  // The meta line names the machine and the time, as a listed row's does.
+  const meta = row.querySelector('.thread-row-meta')
+  expect(meta).not.toBeNull()
+  expect(meta.textContent).toContain('This computer')
+  expect(meta.querySelector('time').textContent).toBe('now')
+  expect(row.querySelector('.status-ring')).not.toBeNull()
+  expect(rect(title).right).toBeLessThanOrEqual(rect(row).right)
+})
+
+it('keeps a new thread row on one line with its time on this computer alone', async () => {
+  await mountWindow(false)
+  const row = await sendFirstMessage(`Plan a starship tour for a ${LONG}`)
+  const title = row.querySelector('.thread-row-title')
+  expect(getComputedStyle(title).textOverflow).toBe('ellipsis')
+  expect(row.querySelector('.thread-row-meta')).toBeNull()
+  const time = row.querySelector('time')
+  expect(time.textContent).toBe('now')
+  expect(Math.abs(rect(title).top + rect(title).height / 2 - (rect(time).top + rect(time).height / 2))).toBeLessThan(2)
+  expect(rect(title).right).toBeLessThanOrEqual(rect(time).left)
+})

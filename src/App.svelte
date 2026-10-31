@@ -1081,6 +1081,12 @@
   // lists once it holds a draft, while its runtime thread is still fresh.
   const listedThreadId = $derived(freshThread && !agentChat?.record ? null : currentThreadId)
   const showFreshThread = $derived(freshThread && messages.length > 0 && !selectedAgent && !currentCreation && !threadSearch.trim())
+  // When the new thread's row first showed, the time its row names until its summary lists it.
+  let freshSince = $state('')
+  $effect(() => {
+    if (!showFreshThread) freshSince = ''
+    else if (!untrack(() => freshSince)) freshSince = new Date().toISOString()
+  })
   const sidebarRuns = $derived(runStates(activityRuns))
   // A result lights a row only once the window knows which thread it shows:
   // the open thread is read, and until the first thread opens at launch an
@@ -3715,8 +3721,8 @@
 
 {#snippet freshRow()}
   {#if showFreshThread}
-    {@const projectName = selectedProject ? sidebarProjectById[selectedProject]?.name : ''}
-    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined} data-accent-edge><div class="thread-row-body"><div class="thread-row-title">{currentThreadTitle}</div>{#if projectName}<span class="thread-row-meta"><span class="row-project">{projectName}</span></span>{/if}</div></li>
+    <!-- The new thread's row takes the body every row has, its machine and time, while its summary is not yet listed. -->
+    <li class="thread-row active-thread" data-fresh-thread aria-current="true" aria-keyshortcuts={freshThreadPosition >= 0 && freshThreadPosition < 9 ? threadRowShortcut(freshThreadPosition + 1) : undefined} data-accent-edge>{@render rowBody({ threadId: currentThreadId, title: currentThreadTitle, updatedAt: freshSince, runtimeId: composerRuntime, row: active ? { status: 'working', status_label: 'Working' } : undefined }, currentThreadTitle)}</li>
   {/if}
 {/snippet}
 
@@ -4764,8 +4770,7 @@
   .machine-dot[data-tone="active"] { background: var(--active); }
   .machine-dot[data-tone="warning"] { background: var(--warning); }
   .machine-dot[data-tone="danger"] { background: var(--danger); }
-  .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; }
-  .thread-row-title[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .title-thread-actions { flex: none; }
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
