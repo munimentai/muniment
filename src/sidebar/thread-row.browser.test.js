@@ -228,3 +228,15 @@ it('keeps a new thread row on one line with its time on this computer alone', as
   expect(Math.abs(rect(title).top + rect(title).height / 2 - (rect(time).top + rect(time).height / 2))).toBeLessThan(2)
   expect(rect(title).right).toBeLessThanOrEqual(rect(time).left)
 })
+
+it('ends the Agents and Artifacts labels in an ellipsis when the row is narrow', async () => {
+  await mountWindow(false)
+  for (const name of ['Agents', 'Artifacts']) {
+    const row = document.querySelector(`#sidebar button[aria-label="${name}"]`)
+    row.style.width = '56px'
+    const label = row.querySelector('span')
+    expect(label.scrollWidth).toBeGreaterThan(label.clientWidth)
+    expect(getComputedStyle(label).textOverflow).toBe('ellipsis')
+    expect(getComputedStyle(label).maskImage).toBe('none')
+  }
+})

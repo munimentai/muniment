@@ -4776,9 +4776,8 @@
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   /* A narrow sidebar shortens the first control, never its start. */
-  /* Sidebar labels overrun the way thread titles do: one line, faded over the last 28px. */
-  .side-action span { flex: 1; min-width: 0; white-space: nowrap; }
-  .side-action span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  /* Sidebar labels overrun the way thread titles do: one line that ends in an ellipsis. */
+  .side-action span { flex: 1; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }
   .side-action .side-count { flex: none; min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); line-height: 16px; text-align: center; }
   .settings-search { display: flex; align-items: center; gap: 6px; margin: 2px 6px 4px; padding: 0 8px; min-height: 28px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); }
   .settings-search:focus-within { border-color: var(--muted); }
