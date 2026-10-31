@@ -89,7 +89,7 @@
 <div data-panel="model-picker" data-panel-variant={embedded ? 'embedded' : 'overlay'} data-composer-panel={embedded ? undefined : ''} class="model-picker" class:embedded role={embedded ? 'group' : 'dialog'} aria-label="Model">
   <div class="picker-search">
     <LucideIcon name="search" variant="action" size={14} />
-    <input type="search" autocomplete="off" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
+    <input type="search" data-focus-frame autocomplete="off" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
     {#if !embedded}<PopupClose label="Close model selector" onclick={onclose} />{/if}
   </div>
   <div class="picker-body">
@@ -171,6 +171,8 @@
   .model-picker { width: min(420px, 100%); max-height: 60vh; display: flex; flex-direction: column; overflow: hidden; }
   .model-picker.embedded { width: 100%; height: 100%; max-height: none; background: transparent; }
   .picker-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
+  /* The row is the field's frame, so focus shows on its divider and the field draws no ring of its own. */
+  .picker-search:focus-within { border-bottom-color: var(--muted); }
   .picker-search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .picker-body { position: relative; flex: 1; min-height: 0; display: flex; }
   /* The provider column: full-color marks, the picked one on the hover fill with an ink edge. */

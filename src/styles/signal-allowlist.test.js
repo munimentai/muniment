@@ -137,10 +137,10 @@ describe('one focus ring', () => {
     expect(rules).toHaveLength(1)
     expect(rules[0][1]).toMatch(/outline:\s*1px solid var\(--focus-ring\) !important\s*;/)
     // A text field whose frame shows focus leaves the ring to it: the composer,
-    // the Settings search, the command palette and the launcher.
+    // the Settings search, the model search, the command palette and the launcher.
     expect(source).toMatch(/\[data-focus-frame\]:focus-visible\s*\{\s*outline:\s*0 !important;\s*\}/)
     const framed = COMPONENTS.filter((file) => /data-focus-frame/.test(markup(read(file))))
-    expect(framed).toEqual(['src/App.svelte', 'src/Launcher.svelte', 'src/sidebar/CommandPalette.svelte'])
+    expect(framed).toEqual(['src/App.svelte', 'src/Launcher.svelte', 'src/lib/ModelPicker.svelte', 'src/sidebar/CommandPalette.svelte'])
     // Menu items and options, and every control while the pointer leads, draw no ring.
     expect(source).toMatch(/:root\[data-pointer\] :focus-visible:not\(input, textarea, select, \[contenteditable\]\)\s*\{\s*outline:\s*0 !important;\s*\}/)
     expect(read('src/composer/ChatComposer.svelte')).toMatch(/\.composer:focus-within\s*\{[^}]*outline:\s*1px solid var\(--focus-edge\)/)

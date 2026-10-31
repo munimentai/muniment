@@ -19,7 +19,7 @@ export async function checkFocusRings(browser, baseUrl) {
           const element = document.activeElement
           if (!element || element === document.body) return null
           const style = getComputedStyle(element)
-          const host = element.matches('[data-focus-frame]') ? element.closest('.composer, .settings-search, .palette, .launcher') : null
+          const host = element.matches('[data-focus-frame]') ? element.closest('.composer, .settings-search, .picker-search, .palette, .launcher') : null
           const frame = host?.matches('.composer') ? getComputedStyle(host) : null
           return {
             name: `${element.tagName.toLowerCase()} ${element.getAttribute('aria-label') ?? element.textContent.trim().slice(0, 30)}`,
