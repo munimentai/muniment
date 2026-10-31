@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentColor } from '../lib/agent-avatar.js'
-import { attention, freshIndex, listedRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
+import { attention, freshIndex, listedRows, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
 
 function memoryStorage(values = {}) {
   return { getItem: (key) => values[key] ?? null, setItem: (key, value) => { values[key] = value }, values }
@@ -27,6 +27,18 @@ describe('sidebar model', () => {
     expect([...working]).toEqual(['a'])
     expect([...failed]).toEqual(['b'])
     expect([...since]).toEqual([['a', '2026-10-18T10:00:00Z']])
+  })
+
+  it('dates a row by its newest run once that run ends before the thread list reloads', () => {
+    const runs = runStates([
+      { thread_id: 'a', status: 'completed', created_at: '2026-10-18T07:00:00Z', updated_at: '2026-10-18T10:00:00Z' },
+      { thread_id: 'b', status: 'running', created_at: '2026-10-18T09:30:00Z', updated_at: '2026-10-18T09:31:00Z' },
+      { thread_id: 'c', status: 'completed', updated_at: '2026-10-18T08:00:00Z' },
+    ])
+    expect(rowTime({ threadId: 'a', updatedAt: '2026-10-18T07:00:00Z' }, runs, 'done')).toBe('2026-10-18T10:00:00Z')
+    expect(rowTime({ threadId: 'b', updatedAt: '2026-10-18T09:00:00Z' }, runs, 'working')).toBe('2026-10-18T09:30:00Z')
+    expect(rowTime({ threadId: 'c', updatedAt: '2026-10-18T09:00:00Z' }, runs, undefined)).toBe('2026-10-18T09:00:00Z')
+    expect(rowTime({ threadId: 'd', updatedAt: '2026-10-18T09:00:00Z' }, runs, undefined)).toBe('2026-10-18T09:00:00Z')
   })
 
   it('points each needs-you item at its thread or agent and leaves out offline machines and failed runs', () => {

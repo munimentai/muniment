@@ -129,7 +129,7 @@
   import { copyAnnouncement, copyConfirmed, copyFailure, copyLabel } from './lib/message-actions.js'
   import { onboardingLoadingState, onboardingSettingsState } from './lib/onboarding-state.js'
   import { firstRunError } from './lib/onboarding-diagnostics.js'
-  import { relativeTime } from './lib/relative-time.js'
+  import { minuteClock, relativeTime } from './lib/relative-time.js'
   import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_STORAGE_KEY, createSidebarResizeController, isNewThreadShortcut, isSettingsShortcut, isSidebarShortcut, newThreadShortcut, settingsShortcut, serializeSidebarCollapsed, sidebarShortcut, storedSidebarCollapsed, storedSidebarWidth, threadRowShortcut, threadRowShortcutPosition } from './lib/sidebar-state.js'
   import { composerInstallWords, formatBytes } from './lib/speech-install.js'
   import { createSpeechInstallNotice } from './lib/speech-install-notice.js'
@@ -142,7 +142,7 @@
   import ProjectPicker from './sidebar/ProjectPicker.svelte'
   import { SETTINGS_PAGE, isPaletteShortcut, paletteInput, paletteShortcut, settingsPages } from './sidebar/palette.js'
   import { layerLabel, sourceLine } from './sidebar/sources.js'
-  import { arrangeSidebar, emptySidebar, markRead, readMarks, runStates, shownRows, sidebarInput } from './sidebar/sidebar-model.js'
+  import { arrangeSidebar, emptySidebar, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput } from './sidebar/sidebar-model.js'
   import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -3714,11 +3714,11 @@
   {@const status = summary.row?.status}
   {@const ring = { status, label: summary.row?.status_label ?? '', key: `${summary.threadId}:${summary.row?.updated_at ?? summary.updatedAt ?? ''}` }}
   {@const unread = status === 'done' || status === 'failed' ? 'true' : undefined}
-  {@const at = (status === 'working' && sidebarRuns.since.get(summary.threadId)) || summary.updatedAt}
+  {@const at = rowTime(summary, sidebarRuns, status)}
   {#if lined}
-    <div class="thread-row-body"><div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><span class="thread-row-meta" id={rowId && `${rowId}-meta`}>{#if agent}<StatusRing {...ring}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner}>{#snippet icon()}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(owner)} size={12} /></StatusRing>{/snippet}</OwnerChip>{:else if machine}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(machine)} size={12} /></StatusRing><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{:else}<StatusRing {...ring} size={12} />{/if}<time datetime={at}>{relativeTime(at)}</time></span></div>
+    <div class="thread-row-body"><div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><span class="thread-row-meta" id={rowId && `${rowId}-meta`}>{#if agent}<StatusRing {...ring}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner}>{#snippet icon()}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(owner)} size={12} /></StatusRing>{/snippet}</OwnerChip>{:else if machine}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(machine)} size={12} /></StatusRing><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{:else}<StatusRing {...ring} size={12} />{/if}<time datetime={at}>{relativeTime(at, minuteClock())}</time></span></div>
   {:else}
-    <div class="thread-row-body" data-layout="single">{#if agent}<StatusRing {...ring} id={rowId && `${rowId}-lead`}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent visually-hidden" id={rowId && `${rowId}-agent`}>{agent.name}</span>{:else}<StatusRing {...ring} id={rowId && `${rowId}-lead`} />{/if}<div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><time id={rowId && `${rowId}-meta`} datetime={at}>{relativeTime(at)}</time></div>
+    <div class="thread-row-body" data-layout="single">{#if agent}<StatusRing {...ring} id={rowId && `${rowId}-lead`}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent visually-hidden" id={rowId && `${rowId}-agent`}>{agent.name}</span>{:else}<StatusRing {...ring} id={rowId && `${rowId}-lead`} />{/if}<div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><time id={rowId && `${rowId}-meta`} datetime={at}>{relativeTime(at, minuteClock())}</time></div>
   {/if}
 {/snippet}
 

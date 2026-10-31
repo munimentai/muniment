@@ -1,3 +1,19 @@
+import { createSubscriber } from 'svelte/reactivity'
+
+// One clock every relative time shares. A view that reads `minuteClock()`
+// redraws each tick while it shows, so `now` turns into `1m` with no reload.
+// The timer runs only while a view reads the clock.
+export const CLOCK_TICK_MS = 15_000
+const subscribe = createSubscriber((update) => {
+  const timer = setInterval(update, CLOCK_TICK_MS)
+  return () => clearInterval(timer)
+})
+
+export function minuteClock() {
+  subscribe()
+  return Date.now()
+}
+
 export function relativeTime(timestamp, now = new Date()) {
   const date = new Date(timestamp)
   if (Number.isNaN(date.getTime())) return ''
