@@ -886,6 +886,22 @@ pub fn ensure_primary(state: &mut State, id: &str) -> Option<String> {
     }
     thread
 }
+/// Drops a thread the journal no longer holds from every agent, so the
+/// agent's next run starts a new primary thread. Answers the agents whose
+/// primary thread it was.
+pub fn forget_thread(state: &mut State, thread: &str) -> Vec<String> {
+    state.threads.remove(thread);
+    let agents: Vec<String> = state
+        .primary_threads
+        .iter()
+        .filter(|(_, primary)| primary.as_str() == thread)
+        .map(|(agent, _)| agent.clone())
+        .collect();
+    for agent in &agents {
+        state.primary_threads.remove(agent);
+    }
+    agents
+}
 pub fn with_state<T>(
     profile: &Path,
     action: impl FnOnce(&mut State) -> Result<T, String>,

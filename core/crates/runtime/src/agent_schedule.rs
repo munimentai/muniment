@@ -21,6 +21,9 @@ pub const STUCK_CANCEL_REASON: &str =
 pub const UNATTENDED_DENY_REASON: &str =
     "Nobody answered in time, so Muniment denied the action and paused the run. Post in its thread to continue.";
 
+/// The message a run start answers when the journal rejects the thread.
+const THREAD_NOT_FOUND: &str = "The thread was not found.";
+
 /// How recently a client must have used the runtime for a run a person
 /// started to count as attended.
 const ATTENDED_WITHIN_SECONDS: i64 = 120;
@@ -417,6 +420,7 @@ impl RuntimeAttachState {
                     Ok(agents::ensure_primary(state, &agent.id))
                 })?,
             };
+            let thread = self.live_primary(&agent.id, thread)?;
             if let Some(thread) = &thread {
                 let thread_busy = registry.thread_run(thread).is_some()
                     || active.iter().any(|run| {
@@ -456,6 +460,13 @@ impl RuntimeAttachState {
                     run.lease_expires_at = None;
                 }
                 Err(error) => {
+                    let error = match run.thread_id.clone() {
+                        Some(thread) if error == THREAD_NOT_FOUND => {
+                            self.forget_agent_thread(&agent.id, &thread, "rejected_at_start")?;
+                            format!("{error} The agent's next run starts a new thread.")
+                        }
+                        _ => error,
+                    };
                     run.status = RunStatus::Failed;
                     run.lease_owner = None;
                     run.lease_expires_at = None;
@@ -465,6 +476,50 @@ impl RuntimeAttachState {
             store.save(&mut run)?;
             agents::mirror_run(profile, &run)?;
         }
+        Ok(())
+    }
+
+    /// Answers the thread a run of `agent_id` uses when the journal still
+    /// holds it. A thread the journal lacks or deleted leaves the agent's
+    /// state, and the run starts a new primary thread instead.
+    fn live_primary(
+        &self,
+        agent_id: &str,
+        thread: Option<String>,
+    ) -> Result<Option<String>, String> {
+        let Some(thread) = thread else {
+            return Ok(None);
+        };
+        let live = self
+            .agent_storage()
+            .lock()
+            .map_err(|_| "Conversation history is unavailable.".to_owned())?
+            .journal
+            .thread_exists(&thread)
+            .map_err(|error| format!("Conversation history could not be read: {error:?}"))?;
+        if live {
+            return Ok(Some(thread));
+        }
+        self.forget_agent_thread(agent_id, &thread, "missing_or_deleted")?;
+        Ok(None)
+    }
+
+    /// Drops a thread an agent cannot run in from the agent state and logs
+    /// why, so the agent's next run starts a new primary thread.
+    fn forget_agent_thread(
+        &self,
+        agent_id: &str,
+        thread: &str,
+        reason: &str,
+    ) -> Result<(), String> {
+        let primaries = agents::with_state(self.agent_profile(), |state| {
+            Ok(agents::forget_thread(state, thread))
+        })?;
+        muniment_core::runtime_eprintln!(
+            "agent_schedule: agent thread replaced agent={agent_id} thread={thread} \
+             reason={reason} primary_of={}",
+            primaries.join(",")
+        );
         Ok(())
     }
 

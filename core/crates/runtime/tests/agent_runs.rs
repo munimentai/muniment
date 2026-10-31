@@ -1195,3 +1195,81 @@ fn nobody_answers_an_unattended_gate_so_its_action_is_denied_and_the_run_pauses(
     assert_eq!(answered[0]["cancelled"], true);
     assert!(answered[0].get("confirmed").is_none());
 }
+
+#[test]
+fn an_agent_whose_primary_thread_was_deleted_runs_in_a_new_primary_thread() {
+    use muniment_core::journal::thread_mutation::{
+        append_thread_delete_now, delete_thread_with_creation_now,
+    };
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-deleted-primary", true, RuntimeHost::default());
+    let agent = setup.agent("Morning");
+    let provenance = muniment_core::journal::Provenance {
+        source: "test".into(),
+        source_version: "1".into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: Default::default(),
+    };
+    let run_once = || {
+        agents::queue_run(setup.profile(), &agent.id).unwrap();
+        let run = setup.store().latest(&agent.id).unwrap().unwrap();
+        setup.tick();
+        let started = setup.run(&run.id);
+        assert_eq!(started.status, RunStatus::Running, "{started:?}");
+        setup.finish(&run.id);
+        setup.tick();
+        assert_eq!(setup.run(&run.id).status, RunStatus::Completed);
+        started.thread_id.unwrap()
+    };
+    let primary = || agents::state(setup.profile()).unwrap().primary_threads[&agent.id].clone();
+
+    let first = run_once();
+    assert_eq!(primary(), first);
+    // The journal deletes the thread and the agent state still names it, as
+    // a delete before the state repair left it.
+    {
+        let storage = open_profile_storage(setup.profile()).unwrap();
+        append_thread_delete_now(
+            &mut storage.lock().unwrap().journal,
+            None,
+            &first,
+            &provenance,
+        )
+        .unwrap();
+    }
+    assert_eq!(primary(), first);
+
+    // The next run starts a new primary thread instead of `ThreadNotFound`.
+    let second = run_once();
+    assert_ne!(second, first);
+    assert_eq!(primary(), second);
+    assert!(!agents::state(setup.profile())
+        .unwrap()
+        .threads
+        .contains_key(&first));
+
+    // A thread delete drops the primary thread from the agent state at once.
+    {
+        let storage = open_profile_storage(setup.profile()).unwrap();
+        delete_thread_with_creation_now(
+            &mut storage.lock().unwrap().journal,
+            setup.profile(),
+            None,
+            &second,
+            &provenance,
+        )
+        .unwrap();
+    }
+    assert!(!agents::state(setup.profile())
+        .unwrap()
+        .primary_threads
+        .contains_key(&agent.id));
+    let third = run_once();
+    assert_ne!(third, second);
+    assert_eq!(primary(), third);
+}

@@ -125,6 +125,25 @@ pub fn delete_thread_with_creation_now(
     if creation {
         crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
     }
+    // An agent whose primary thread the user deletes starts a new one on its
+    // next run. The delete is committed, so a state error only logs.
+    let agent_thread = crate::agents::state(profile).is_ok_and(|state| {
+        state.threads.contains_key(thread_id)
+            || state
+                .primary_threads
+                .values()
+                .any(|primary| primary == thread_id)
+    });
+    if !agent_thread {
+        return Ok(());
+    }
+    if let Err(error) = crate::agents::with_state(profile, |state| {
+        Ok(crate::agents::forget_thread(state, thread_id))
+    }) {
+        crate::runtime_eprintln!(
+            "thread_delete: agent state not updated thread={thread_id} error={error}"
+        );
+    }
     Ok(())
 }
 

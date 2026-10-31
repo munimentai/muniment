@@ -201,7 +201,13 @@ where
             }
         }
         .map_err(|error| {
-            if requested_thread_id.is_some() && matches!(error, JournalError::InvalidEnvelope(_)) {
+            if let (Some(thread_id), JournalError::InvalidEnvelope(reason)) =
+                (requested_thread_id, &error)
+            {
+                crate::runtime_eprintln!(
+                    "run_start: thread rejected run={run_id} thread={thread_id} \
+                     workspace={workspace} reason={reason}"
+                );
                 "thread_not_found".to_owned()
             } else {
                 attachment_error()
