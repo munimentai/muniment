@@ -1280,3 +1280,23 @@ fn an_agent_whose_primary_thread_was_deleted_runs_in_a_new_primary_thread() {
     assert_ne!(third, second);
     assert_eq!(primary(), third);
 }
+
+#[test]
+fn run_now_starts_the_run_without_waiting_for_the_next_schedule_pass() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-run-now-kick", true, RuntimeHost::default());
+    setup.state.use_pi_artifact(setup.artifact);
+    setup.state.bind_swarm();
+    let agent = setup.agent("Prompt");
+    // No schedule pass runs in this test, so only the request itself can
+    // start the queued run.
+    let answer = permission_operation(&setup, "agent.run_now", json!({"id": agent.id})).unwrap();
+    let run_id = answer["run"]["id"].as_str().unwrap().to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && setup.run(&run_id).status == RunStatus::Queued {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_ne!(setup.run(&run_id).status, RunStatus::Queued);
+}

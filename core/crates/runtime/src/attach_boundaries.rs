@@ -1928,6 +1928,13 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         let answer =
             muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
                 .map_err(ProtocolError::invalid_request_with_reason)?;
+        // A person who asks for a run now waits for it, so the queue starts
+        // it at once instead of at its next pass.
+        if operation == muniment_core::attach::Operation::AgentRunNow {
+            if let Some(swarm) = &self.swarm {
+                swarm.kick_runs();
+            }
+        }
         // A saved agent's routine proposals are refined by a cheap model call
         // in the background; the deterministic ones are already saved.
         if matches!(operation.as_str(), "agent.save" | "agent.import_commit") {

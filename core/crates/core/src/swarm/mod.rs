@@ -556,6 +556,12 @@ impl Swarm {
         }
     }
 
+    /// Asks the host to start queued agent runs now instead of at its next
+    /// schedule pass.
+    pub fn kick_runs(&self) {
+        self.inner.host.kick_runs();
+    }
+
     /// When a client last used this runtime, as an RFC 3339 time.
     pub fn last_client_activity(&self) -> Option<String> {
         self.inner.store.meta("last_client_at").ok().flatten()
