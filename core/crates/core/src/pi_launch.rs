@@ -679,6 +679,20 @@ pub fn pi_launch_config_for_executable(
         model: model.clone(),
     };
     config.working_directory = facts.working_directory.clone();
+    // A reopened session follows its thread's folder when the folder moved.
+    if let (Some(locator), Some(directory)) = (reopen, config.working_directory.as_deref()) {
+        match crate::sidecar::retarget_pi_session(&session_root, locator, directory) {
+            Ok(true) => {
+                crate::runtime_eprintln!("muniment-runtime: pi_session cwd_retargeted=true")
+            }
+            Ok(false) => {}
+            Err(error) => {
+                crate::runtime_eprintln!(
+                    "muniment-runtime: pi_session cwd_retarget_failed error={error}"
+                )
+            }
+        }
+    }
     let mut prompt = crate::launch_facts::system_prompt_with_facts(SYSTEM_PROMPT, &facts);
     if let Some(profile) = session_root.parent() {
         if crate::home::configured_home(profile)

@@ -1022,6 +1022,90 @@ fn project_launch_uses_the_folder_after_rename_and_rejects_a_missing_folder() {
 }
 
 #[test]
+fn a_renamed_thread_folder_reopens_its_stored_session_in_the_new_folder() {
+    struct ThreadBoundary {
+        profile: PathBuf,
+    }
+    impl PiLaunchBoundaries for ThreadBoundary {
+        fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+            Ok(self.profile.join("sessions"))
+        }
+        fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+            None
+        }
+        fn local_default_model(&self) -> Option<String> {
+            Some("test/model".into())
+        }
+        fn prepare_pi_settings(
+            &self,
+            _: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+            _: &Path,
+        ) -> Result<(), PiLaunchError> {
+            Ok(())
+        }
+        fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+            muniment_core::projects::workspace(&self.profile, "thread-1")
+                .map(Some)
+                .map_err(|error| PiLaunchError::rejected("project_folder", error))
+        }
+    }
+    let root = temporary_directory();
+    let profile = root.join("profile");
+    let home = root.join("muniment");
+    muniment_core::home::confirm_home(&profile, &home).unwrap();
+    fs::create_dir_all(profile.join("sessions")).unwrap();
+    let boundary = ThreadBoundary {
+        profile: profile.clone(),
+    };
+    // The first reply runs in the untitled folder and Pi stores it.
+    let first = muniment_core::projects::workspace(&profile, "thread-1").unwrap();
+    assert!(first.ends_with("Untitled-thread1"));
+    let header = serde_json::json!({
+        "type": "session", "version": 3, "id": "s1", "cwd": first.to_string_lossy(),
+    });
+    let body = "{\"type\":\"message\",\"id\":\"m1\",\"text\":\"kept\"}\n";
+    let session = profile.join("sessions/session.jsonl");
+    fs::write(&session, format!("{header}\n{body}")).unwrap();
+    let (locator, _) = validate_pi_session(&profile.join("sessions"), "session.jsonl").unwrap();
+    // The title arrives and the folder takes it.
+    let renamed = muniment_core::workspace_names::resolve(
+        &profile,
+        &home.join("sessions"),
+        "thread-1",
+        Some("Favorite Color"),
+        None,
+    )
+    .unwrap();
+    assert!(!first.exists());
+    let config = pi_launch_config_for_executable(
+        &boundary,
+        "pi".into(),
+        &ChatGrant::local(),
+        Some(&locator),
+    )
+    .unwrap();
+    assert_eq!(config.working_directory.as_deref(), Some(renamed.as_path()));
+    let text = fs::read_to_string(&session).unwrap();
+    let (first_line, rest) = text.split_once('\n').unwrap();
+    let stored: serde_json::Value = serde_json::from_str(first_line).unwrap();
+    assert_eq!(stored["cwd"], renamed.to_string_lossy().as_ref());
+    assert_eq!(stored["id"], "s1");
+    assert_eq!(rest, body);
+    // A stored folder that still exists stays as Pi wrote it.
+    let elsewhere = root.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let header = serde_json::json!({"type": "session", "cwd": elsewhere.to_string_lossy()});
+    fs::write(&session, format!("{header}\n{body}")).unwrap();
+    pi_launch_config_for_executable(&boundary, "pi".into(), &ChatGrant::local(), Some(&locator))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(&session).unwrap(),
+        format!("{header}\n{body}")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn the_launch_prompt_opens_with_trusted_facts_most_recalled_first() {
     use muniment_core::memory_files::{fact_save_in, note_recalled, Fact, Trust};
     let root = temporary_directory();

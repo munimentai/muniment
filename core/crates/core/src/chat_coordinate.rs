@@ -917,6 +917,8 @@ fn coordinate_work(
                 &app,
                 &runtime.wiring,
                 working_directory.as_deref(),
+                readiness_status,
+                &diagnostics.stderr_tail(),
                 &cancelled,
             );
             diagnostics.readiness_failed(readiness_status, startup_timeout, &waiting_on);
@@ -928,6 +930,8 @@ fn coordinate_work(
             );
             let reason = if let StartupWait::Folder { access, folder } = waiting_on {
                 crate::folder_access::failure_reason(access, folder)
+            } else if waiting_on == StartupWait::MissingFolder {
+                MISSING_FOLDER_REASON.to_owned()
             } else if grant.is_local() {
                 match diagnostics.stderr_error() {
                     Some(error) => format!("Reply setup failed. {error}"),
@@ -2469,6 +2473,8 @@ pub(crate) enum StartupWait {
         access: crate::folder_access::FolderAccess,
         folder: Option<&'static str>,
     },
+    /// The folder Pi works in, or the one its stored session names, is gone.
+    MissingFolder,
     /// Pi asked a question through an extension and has no answer yet.
     Dialog(String),
     Unknown,
@@ -2482,31 +2488,65 @@ impl std::fmt::Display for StartupWait {
                 "folder_access access={access:?} folder={}",
                 folder.unwrap_or("other")
             ),
+            Self::MissingFolder => formatter.write_str("missing_working_folder"),
             Self::Dialog(request) => write!(formatter, "extension_request {request}"),
             Self::Unknown => formatter.write_str("unknown"),
         }
     }
 }
 
+/// What a run tells the user when the folder its thread works in is gone.
+pub(crate) const MISSING_FOLDER_REASON: &str =
+    "Muniment could not find the folder this thread works in, so the reply did not start. Try again.";
+
+/// The first line Pi writes when the working folder its stored session
+/// names does not exist.
+const PI_MISSING_SESSION_FOLDER: &str = "Stored session working directory does not exist";
+
 fn startup_waiting_on(
     app: &impl PiLaunchBoundaries,
     wiring: &crate::sidecar::PiRpcWiring,
     directory: Option<&std::path::Path>,
+    status: SidecarStatus,
+    stderr: &[String],
     cancelled: &AtomicBool,
 ) -> StartupWait {
+    startup_wait(
+        directory,
+        status,
+        stderr,
+        |directory| app.folder_access(directory, Duration::from_millis(500), cancelled),
+        || wiring.pending_request(),
+    )
+}
+
+/// Names what Pi waited on. A missing folder comes first. A consent prompt
+/// holds a Pi that is still starting, so a Pi that exited waited on no prompt.
+fn startup_wait(
+    directory: Option<&std::path::Path>,
+    status: SidecarStatus,
+    stderr: &[String],
+    access: impl FnOnce(&std::path::Path) -> crate::folder_access::FolderAccess,
+    pending: impl FnOnce() -> Option<String>,
+) -> StartupWait {
     use crate::folder_access::FolderAccess;
+    let stored_missing = stderr
+        .iter()
+        .any(|line| line.trim().starts_with(PI_MISSING_SESSION_FOLDER));
+    if stored_missing || directory.is_some_and(|directory| !directory.exists()) {
+        return StartupWait::MissingFolder;
+    }
     if let Some(directory) = directory {
-        let access = app.folder_access(directory, Duration::from_millis(500), cancelled);
-        if access != FolderAccess::Open {
+        let access = access(directory);
+        let held = access == FolderAccess::Waiting && status == SidecarStatus::Starting;
+        if access == FolderAccess::Denied || held {
             let folder = crate::state_root::home_directory_value().and_then(|home| {
                 crate::folder_access::protected_folder(directory, std::path::Path::new(&home))
             });
             return StartupWait::Folder { access, folder };
         }
     }
-    wiring
-        .pending_request()
-        .map_or(StartupWait::Unknown, StartupWait::Dialog)
+    pending().map_or(StartupWait::Unknown, StartupWait::Dialog)
 }
 
 /// What a reply that never became ready keeps as its detail: the bound, the
@@ -2626,6 +2666,78 @@ mod tests {
     use std::cell::RefCell;
     use std::io;
     use uuid::Uuid;
+
+    #[test]
+    fn a_missing_working_folder_is_named_and_never_blamed_on_a_consent_prompt() {
+        use crate::folder_access::FolderAccess;
+        let directory = std::env::temp_dir();
+        let missing = directory.join(format!("muniment-missing-{}", Uuid::new_v4()));
+        let held = |_: &std::path::Path| FolderAccess::Waiting;
+        let stored = vec![
+            format!(
+                "Stored session working directory does not exist: {}",
+                missing.display()
+            ),
+            "Session file: /profile/sessions/one.jsonl".to_owned(),
+        ];
+        // Pi exited because its stored folder is gone, while a late read still waits.
+        for status in [SidecarStatus::Restarting, SidecarStatus::Starting] {
+            assert_eq!(
+                startup_wait(Some(&directory), status, &stored, held, || None),
+                StartupWait::MissingFolder
+            );
+        }
+        // The folder Pi starts in is gone.
+        assert_eq!(
+            startup_wait(Some(&missing), SidecarStatus::Restarting, &[], held, || {
+                None
+            }),
+            StartupWait::MissingFolder
+        );
+        // A Pi that exited was not held by a prompt, so its own error stands.
+        assert_eq!(
+            startup_wait(
+                Some(&directory),
+                SidecarStatus::Restarting,
+                &[],
+                held,
+                || None
+            ),
+            StartupWait::Unknown
+        );
+        // A Pi still starting while macOS holds its folder waits on the prompt.
+        assert!(matches!(
+            startup_wait(Some(&directory), SidecarStatus::Starting, &[], held, || {
+                None
+            }),
+            StartupWait::Folder {
+                access: FolderAccess::Waiting,
+                ..
+            }
+        ));
+        assert!(matches!(
+            startup_wait(
+                Some(&directory),
+                SidecarStatus::Restarting,
+                &[],
+                |_: &std::path::Path| FolderAccess::Denied,
+                || None
+            ),
+            StartupWait::Folder {
+                access: FolderAccess::Denied,
+                ..
+            }
+        ));
+        let reason = MISSING_FOLDER_REASON;
+        assert!(
+            !reason.contains("macOS") && !reason.contains('/'),
+            "{reason}"
+        );
+        assert_eq!(
+            StartupWait::MissingFolder.to_string(),
+            "missing_working_folder"
+        );
+    }
 
     #[test]
     fn a_refused_credential_reads_as_the_step_that_fixes_it() {

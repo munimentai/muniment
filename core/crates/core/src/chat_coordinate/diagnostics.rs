@@ -70,6 +70,14 @@ impl RunDiagnostics {
         self.log_stderr();
     }
 
+    /// The last lines Pi wrote to stderr.
+    pub fn stderr_tail(&self) -> Vec<String> {
+        self.stderr
+            .as_ref()
+            .map(LineReader::stderr_tail)
+            .unwrap_or_default()
+    }
+
     /// The first `Error:` line Pi wrote, for a failure reason the shell shows.
     pub fn stderr_error(&self) -> Option<String> {
         self.stderr
