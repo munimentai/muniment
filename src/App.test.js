@@ -8934,7 +8934,7 @@ it('draws the machine, model, thinking level and permission mode menus with one 
   await findReadyWorkspaceComposer()
   const buttons = {
     machine: await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }),
-    model: await screen.findByRole('button', { name: 'Model: GPT 5.5' }),
+    model: await screen.findByRole('button', { name: 'Model: GPT-5.5' }),
     thinking: await screen.findByRole('button', { name: 'Thinking level: Medium' }),
     mode: await screen.findByRole('button', { name: 'Permission mode: Bypass permissions' }),
   }

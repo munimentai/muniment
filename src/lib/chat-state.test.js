@@ -256,7 +256,7 @@ describe('chat composer and projection', () => {
       capabilities: [{ name: 'search', version: '2' }],
       tools: [{ name: 'read', calls: 2, failed: 0 }],
     })).toEqual({ route: 'analysis/high', model: 'GLM 5.2', time: '4s' })
-    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'OpenAI Codex · GPT 5.5', time: '13s' })
+    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'OpenAI Codex · GPT-5.5', time: '13s' })
     expect(modelLabel('hf.co/lmstudio-community/Qwen3.5-4B-GGUF:Q4_K_M')).toBe('Hf.co · LM Studio Community · Qwen 3.5 4B GGUF:Q4 K M')
     expect(modelLabel('')).toBe(null)
   })
@@ -466,7 +466,7 @@ it('keeps a saved partial reply and calls a generic start failure an interruptio
 it('compares model and classifier usage in separate columns', () => {
   const receipt = { model: 'openai/gpt-5.6-luna', cost: '$0.002 est.', tokens: { input: 11736, output: 5 }, turns: 1, classifiers: [{ model: 'typesafe/jev-latest', cost: 0.000040, tokens: { input: 942, output: 151 } }] }
   expect(receiptUsageColumns(receipt)).toEqual([
-    { model: 'OpenAI · GPT 5.6 Luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
+    { model: 'OpenAI · GPT-5.6 Luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
     { model: 'TypeSafe · Jev Latest', cost: '$0.000040 est.', tokens: '942 in, 151 out' },
   ])
   expect(receiptRows(receipt)).toEqual([{ label: 'Turns', value: '1', route: false }])

@@ -18,6 +18,8 @@ export function modelLabel(value, names = null) {
     .replace(/\b[a-z][a-z\d.]*/gi, word => words[word.toLowerCase()]
       ?? (/^qwen\d/i.test(word) ? `Qwen ${word.slice(4)}` : word[0].toUpperCase() + word.slice(1)))
     .replace(/\b(\d+(?:\.\d+)?)b\b/gi, '$1B')
+    // OpenAI writes a numbered GPT with a hyphen, as the catalog does: GPT-6 Astra.
+    .replace(/\bGPT (?=\d)/g, 'GPT-')
   ).join(' · ')
 }
 

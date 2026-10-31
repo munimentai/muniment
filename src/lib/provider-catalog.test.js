@@ -122,7 +122,7 @@ describe('the model router in the picker', () => {
 
   it('lists a model once under its provider and routes it through the router when two accounts serve it', () => {
     const openai = pickerGroups(routed).find((group) => group.id === 'openai-codex')
-    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'GPT 5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
+    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'GPT-5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
     // One pooled account still needs the native router transport.
     const single = { ...routed, router_models: [{ id: 'fast', family: 'openai', model: 'gpt-5.5', accounts: 1 }] }
     expect(pickerGroups(single).find((group) => group.id === 'openai-codex').models[0]).toMatchObject({ provider: 'muniment-router', choice: 'fast', accounts: 1 })
@@ -155,12 +155,12 @@ describe('the model router in the picker', () => {
   })
 
   it('keeps the saved default when a row still saves it, and names the row in use', () => {
-    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
+    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT-5.5' })
     // Preserve a saved specific model when its pool becomes available.
-    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
-    expect(modelChipLabel(routed)).toBe('GPT 5.5')
+    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT-5.5' })
+    expect(modelChipLabel(routed)).toBe('GPT-5.5')
     // With no decision model, a missing default falls back to a pooled model, never to Automatic.
-    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
+    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT-5.5' })
   })
 })
 
@@ -229,7 +229,7 @@ it('names the router models the picker hides, so the router leaves them out of t
     default_provider: 'muniment-router', default_model: 'auto', hidden: ['muniment-router/openai/gpt-6-luna'], shown: [],
     router_models: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-luna', 'gpt-5.5'].map((model) => ({ id: `openai/${model}`, family: 'openai', model, accounts: 1 })),
   }
-  // GPT 5.6 Luna trails GPT 6 Luna in its family, and GPT 6 Luna is turned off.
+  // GPT-5.6 Luna trails GPT-6 Luna in its family, and GPT-6 Luna is turned off.
   expect(routerHidden(routed)).toEqual(['openai/gpt-5.6-luna', 'openai/gpt-6-luna'])
   expect(routerHidden({ ...routed, shown: ['muniment-router/openai/gpt-5.6-luna'] })).toEqual(['openai/gpt-6-luna'])
   expect(routerHidden(null)).toEqual([])

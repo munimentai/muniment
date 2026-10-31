@@ -62,7 +62,7 @@ it('keeps an older saved model in the current list and searches every provider',
   ], hidden: [], shown: [], default_provider: 'openai', default_model: 'gpt-5.6-luna' }
   render(ModelPicker, props(inventory, { current: { provider: 'openai', model: 'gpt-5.6-luna' } }))
   expect([...screen.getByRole('region', { name: 'OpenAI' }).querySelectorAll('.picker-row')].map((row) => row.dataset.model)).toEqual(['gpt-6-luna', 'gpt-5.6-luna'])
-  expect(screen.getByRole('button', { name: 'GPT 5.6 Luna' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'GPT-5.6 Luna' })).toHaveAttribute('aria-pressed', 'true')
   expect(within(screen.getByRole('region', { name: 'OpenAI' })).getByRole('button', { name: /Legacy models/ })).toHaveTextContent('1 model')
   await fireEvent.input(screen.getByRole('searchbox', { name: 'Search models' }), { target: { value: '4-8' } })
   expect(screen.getByRole('region', { name: 'Search results' })).toHaveTextContent('Claude Opus 4.8')
